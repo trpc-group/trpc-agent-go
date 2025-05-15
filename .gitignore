@@ -1,0 +1,13 @@
+# Ignore all files without extension
+*
+!*/
+!*.*
+
+.vscode/
+.idea/
+*.out
+*.log
+coverage.out
+coverage.html
+cover.html
+plan.md
