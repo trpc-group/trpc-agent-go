@@ -39,7 +39,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Print the response
-	log.Printf("Agent response: %s", resp.Content)
+	log.Infof("Agent response: %s", resp.Content)
 }
 ```
 
@@ -159,6 +159,57 @@ The framework includes robust parameter processing:
 2. **Parameter Inference**: Identifies primary parameters in ambiguous formats
 3. **Structured Parsing**: Handles JSON, key-value pairs, and more
 4. **Type Conversion**: Automatically converts values to expected types
+
+## Recent Improvements
+
+### Enhanced Parameter Validation and Error Handling
+
+We've recently implemented significant improvements to the tool parameter validation system:
+
+1. **Unified Schema System**
+   - Added a new robust schema package (`tool/schema`) for parameter validation
+   - Implemented full JSON Schema capabilities with better type handling
+   - Enhanced validation error messages to help guide LLMs in fixing parameter issues
+
+2. **Improved Action Selection**
+   - Enhanced native function calling support with better tool registration
+   - Improved fallback parsing with more robust text extraction
+   - Added comprehensive debugging logs for action selection
+
+3. **Better Type Conversion**
+   - Added support for complex nested data structures
+   - Implemented smarter type conversion for various formats (string → number, etc)
+   - Added default value handling for optional parameters
+
+4. **Detailed Error Reporting**
+   - Added context to validation errors to help debug parameter issues
+   - Implemented better error handling throughout the tool execution process
+   - Enhanced logging at key decision points
+
+These improvements make the agent significantly more reliable when interacting with tools, especially when dealing with complex parameter structures.
+
+## Using the Library
+
+To create and use agents:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// Create tools for your agent
+calculator := tool.NewCalculatorTool()
+
+// Create the agent
+agent := agent.NewReActAgent(
+    agent.WithTools([]tool.Tool{calculator}),
+    agent.WithModel(openaiModel),
+)
+
+// Run the agent
+response, err := agent.Run(ctx, "Calculate 1 + 2")
+```
 
 ## Contributing
 

@@ -260,4 +260,7 @@ func RegisterBasicTools() {
 
 	// Register HTTP client tool
 	_ = tool.DefaultRegistry.Register(NewHTTPClientTool())
+	
+	// Register final answer tool
+	_ = tool.DefaultRegistry.Register(NewFinalAnswerTool())
 }

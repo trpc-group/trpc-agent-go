@@ -43,6 +43,11 @@ func (m *mockModel) GenerateWithMessages(ctx context.Context, messages []*messag
 	}, nil
 }
 
+// SupportsToolCalls implements the model.Model interface
+func (m *mockModel) SupportsToolCalls() bool {
+	return false
+}
+
 // NewMockModel creates a new mock model for testing
 func NewMockModel() model.Model {
 	return &mockModel{

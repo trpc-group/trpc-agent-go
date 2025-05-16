@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/message"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // GenerationOptions contains options for model generation.
@@ -33,16 +34,23 @@ type GenerationOptions struct {
 
 	// EnableToolCalls indicates whether tool calls should be enabled for this request.
 	EnableToolCalls bool `json:"enable_tool_calls,omitempty"`
+
+	// FunctionCallingMode indicates how to handle function calls:
+	// - "auto": Model decides whether to call a function
+	// - "required": Force the model to call a function
+	// - "none": Disable function calling
+	FunctionCallingMode string `json:"function_calling_mode,omitempty"`
 }
 
 // DefaultOptions returns default generation options.
 func DefaultOptions() GenerationOptions {
 	return GenerationOptions{
-		Temperature:      0.7,
-		MaxTokens:        1024,
-		TopP:             1.0,
-		PresencePenalty:  0.0,
-		FrequencyPenalty: 0.0,
+		Temperature:         0.7,
+		MaxTokens:           1024,
+		TopP:                1.0,
+		PresencePenalty:     0.0,
+		FrequencyPenalty:    0.0,
+		FunctionCallingMode: "auto",
 	}
 }
 
@@ -74,6 +82,9 @@ type Response struct {
 
 	// Messages is a list of message responses (for chat models).
 	Messages []*message.Message `json:"messages,omitempty"`
+
+	// GeminiContent contains Gemini-specific response data.
+	GeminiContent *message.GeminiContent `json:"gemini_content,omitempty"`
 
 	// ToolCalls is a list of tool calls in the response.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
@@ -125,6 +136,9 @@ type ModelConfig struct {
 
 	// DefaultOptions are the default generation options for this model.
 	DefaultOptions GenerationOptions `json:"default_options,omitempty"`
+
+	// SupportsFunctionCalling indicates if the model supports function calling API.
+	SupportsFunctionCalling bool `json:"supports_function_calling,omitempty"`
 }
 
 // Model is the interface for all language models.
@@ -140,6 +154,9 @@ type Model interface {
 
 	// GenerateWithMessages generates a completion for the given messages.
 	GenerateWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (*Response, error)
+
+	// SupportsToolCalls returns true if the model supports tool calls.
+	SupportsToolCalls() bool
 }
 
 // StreamingModel is the interface for models that support streaming.
@@ -158,5 +175,147 @@ type ToolCallSupportingModel interface {
 	Model
 
 	// SetTools sets the tools available to the model.
+	// Deprecated: Use RegisterTools instead.
 	SetTools(tools []ToolDefinition) error
+
+	// RegisterTools registers tools with the model using the new schema-based API.
+	RegisterTools(tools []*tool.ToolDefinition) error
+}
+
+// ToolRegistrar abstracts the registration of tools with a model.
+type ToolRegistrar interface {
+	// RegisterTools registers tools with the target.
+	RegisterTools(tools []*tool.ToolDefinition) error
+}
+
+// BaseModel provides common functionality for model implementations.
+type BaseModel struct {
+	name            string
+	provider        string
+	defaultOptions  GenerationOptions
+	toolCallSupport bool
+}
+
+// NewBaseModel creates a new BaseModel.
+func NewBaseModel(name, provider string, options GenerationOptions) *BaseModel {
+	return &BaseModel{
+		name:           name,
+		provider:       provider,
+		defaultOptions: options,
+	}
+}
+
+// Name returns the name of the model.
+func (m *BaseModel) Name() string {
+	return m.name
+}
+
+// Provider returns the provider of the model.
+func (m *BaseModel) Provider() string {
+	return m.provider
+}
+
+// MergeOptions merges default options with provided options.
+func (m *BaseModel) MergeOptions(options GenerationOptions) GenerationOptions {
+	// Start with default options
+	merged := m.defaultOptions
+
+	// Override if non-zero values are provided
+	if options.Temperature > 0 {
+		merged.Temperature = options.Temperature
+	}
+
+	if options.MaxTokens > 0 {
+		merged.MaxTokens = options.MaxTokens
+	}
+
+	if options.TopP > 0 {
+		merged.TopP = options.TopP
+	}
+
+	if options.TopK > 0 {
+		merged.TopK = options.TopK
+	}
+
+	if options.PresencePenalty != 0 {
+		merged.PresencePenalty = options.PresencePenalty
+	}
+
+	if options.FrequencyPenalty != 0 {
+		merged.FrequencyPenalty = options.FrequencyPenalty
+	}
+
+	if len(options.StopSequences) > 0 {
+		merged.StopSequences = options.StopSequences
+	}
+
+	// These boolean options just override
+	merged.EnableToolCalls = options.EnableToolCalls
+
+	// Function calling mode has a default of "auto"
+	if options.FunctionCallingMode != "" {
+		merged.FunctionCallingMode = options.FunctionCallingMode
+	}
+
+	return merged
+}
+
+// SupportsToolCalls returns true if the model supports tool calls.
+func (m *BaseModel) SupportsToolCalls() bool {
+	return m.toolCallSupport
+}
+
+// SetSupportsToolCalls sets whether the model supports tool calls.
+func (m *BaseModel) SetSupportsToolCalls(supports bool) {
+	m.toolCallSupport = supports
+}
+
+// GeminiCompatibleModel is the interface for models that support Google Gemini content format.
+type GeminiCompatibleModel interface {
+	Model
+
+	// SupportsGeminiFormat indicates if the model supports Gemini content format.
+	SupportsGeminiFormat() bool
+
+	// GenerateWithGeminiMessages generates a response for messages in Gemini format.
+	GenerateWithGeminiMessages(ctx context.Context, messages []*message.GeminiContent, options GenerationOptions) (Response, error)
+}
+
+// GeminiCompatibleStreamingModel is the interface for streaming models that support Google Gemini content format.
+type GeminiCompatibleStreamingModel interface {
+	StreamingModel
+
+	// SupportsGeminiFormat indicates if the model supports Gemini content format.
+	SupportsGeminiFormat() bool
+
+	// GenerateStreamWithGeminiMessages generates a streaming response for messages in Gemini format.
+	GenerateStreamWithGeminiMessages(ctx context.Context, messages []*message.GeminiContent, options GenerationOptions) (<-chan Response, error)
+}
+
+// MockModel is a simple implementation for testing purposes.
+type MockModel struct {
+	ResponseText string
+}
+
+// NewMockModel creates a new mock model.
+func NewMockModel(responseText string) *MockModel {
+	return &MockModel{
+		ResponseText: responseText,
+	}
+}
+
+// GenerateWithMessages generates a response for the given messages.
+func (m *MockModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (Response, error) {
+	// Just return the predefined response
+	return Response{
+		Text: m.ResponseText,
+		Messages: []*message.Message{
+			message.NewAssistantMessage(m.ResponseText),
+		},
+	}, nil
+}
+
+// GenerateWithText generates a response for the given text.
+func (m *MockModel) GenerateWithText(ctx context.Context, text string, options GenerationOptions) (Response, error) {
+	return m.GenerateWithMessages(ctx, []*message.Message{message.NewUserMessage(text)}, options)
 }

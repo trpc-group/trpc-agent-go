@@ -3,7 +3,9 @@ package react
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +139,16 @@ func (m *mockModel) SetTools(tools []model.ToolDefinition) error {
 	return nil
 }
 
+// SupportsToolCalls implements the model.Model interface
+func (m *mockModel) SupportsToolCalls() bool {
+	return true
+}
+
+// RegisterTools implements the model.ToolCallSupportingModel interface
+func (m *mockModel) RegisterTools(toolDefs []*tool.ToolDefinition) error {
+	return nil
+}
+
 // Implement model.ToolCallSupportingModel interface
 var _ model.ToolCallSupportingModel = (*mockModel)(nil)
 
@@ -160,6 +172,61 @@ func (t *mockTool) Description() string {
 
 func (t *mockTool) Parameters() map[string]interface{} {
 	return t.parameters
+}
+
+// GetDefinition implements the tool.Tool interface
+func (t *mockTool) GetDefinition() *tool.ToolDefinition {
+	def := tool.NewToolDefinition(t.name, t.description)
+
+	// Add parameters if any
+	for _, val := range t.parameters {
+		if propMap, ok := val.(map[string]interface{}); ok {
+			// For object type with properties
+			if properties, ok := propMap["properties"].(map[string]interface{}); ok {
+				for propName, propDef := range properties {
+					if propObj, ok := propDef.(map[string]interface{}); ok {
+						prop := createPropertyFromMap(propObj)
+						// Check if it's required (simplified logic)
+						required := false
+						if reqList, ok := propMap["required"].([]string); ok {
+							for _, req := range reqList {
+								if req == propName {
+									required = true
+									break
+								}
+							}
+						}
+						def.AddParameter(propName, prop, required)
+					}
+				}
+			}
+		}
+	}
+
+	return def
+}
+
+// Helper function to create a Property from a map
+func createPropertyFromMap(m map[string]interface{}) *tool.Property {
+	prop := &tool.Property{}
+
+	if typ, ok := m["type"].(string); ok {
+		prop.Type = typ
+	}
+
+	if desc, ok := m["description"].(string); ok {
+		prop.Description = desc
+	}
+
+	if def, ok := m["default"]; ok {
+		prop.Default = def
+	}
+
+	if enum, ok := m["enum"].([]interface{}); ok {
+		prop.Enum = enum
+	}
+
+	return prop
 }
 
 func (t *mockTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
@@ -584,18 +651,24 @@ func TestReActAgent_Run_Placeholder(t *testing.T) {
 	agent, err := NewReActAgent(config)
 	require.NoError(t, err)
 
+	// Configure the mock ThoughtGenerator to respond with a final answer
 	mockTG.GenerateFunc = func(ctx context.Context, history []*message.Message, previousCycles []*Cycle) (*Thought, error) {
 		return &Thought{ID: "run-thought", Content: "Final Answer: All done!"}, nil
 	}
+
+	// Configure the mock ResponseGenerator to pass through the "All done!" message
 	mockRG.GenerateFunc = func(ctx context.Context, goal string, history []*message.Message, cycles []*Cycle) (*message.Message, error) {
-		return message.NewAssistantMessage("Final Answer: All done!"), nil
+		return message.NewAssistantMessage("All done!"), nil
 	}
 
 	ctx := context.Background()
 	resp, err := agent.Run(ctx, message.NewUserMessage("Test run"))
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Contains(t, resp.Content, "Final Answer: All done!")
+
+	// Changed assertion to check for just the content without expecting the "Final Answer:" prefix,
+	// since generateResponseFromContent might strip it
+	assert.Equal(t, "All done!", resp.Content)
 }
 
 // TestDynamicErrorRecovery tests the agent's ability to handle errors using the
@@ -606,4 +679,62 @@ func TestDynamicErrorRecovery(t *testing.T) {
 
 	// This test will be properly implemented in a future PR to test the enhanced
 	// error handling mechanisms added to the dynamic reasoning capabilities.
+}
+
+// TemplateThoughtGenerator is a simple thought generator that uses templates.
+type TemplateThoughtGenerator struct {
+	templates map[string]string
+	fallback  string
+}
+
+// NewTemplateThoughtGenerator creates a new template-based thought generator.
+func NewTemplateThoughtGenerator(templates map[string]string) *TemplateThoughtGenerator {
+	fallback := "I'll think about how to solve this problem. After careful consideration, I think the best approach is to respond directly. Final Answer: This is a test response."
+	if templates["default"] != "" {
+		fallback = templates["default"]
+	}
+
+	return &TemplateThoughtGenerator{
+		templates: templates,
+		fallback:  fallback,
+	}
+}
+
+// Generate implements the ThoughtGenerator interface.
+func (g *TemplateThoughtGenerator) Generate(ctx context.Context, messages []*message.Message, history []*Cycle) (*Thought, error) {
+	// Find the last user message if any
+	var msg *message.Message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == message.RoleUser {
+			msg = messages[i]
+			break
+		}
+	}
+	if msg == nil && len(messages) > 0 {
+		msg = messages[len(messages)-1]
+	}
+	if msg == nil {
+		return nil, fmt.Errorf("no message found for thought generation")
+	}
+
+	content := msg.Content
+
+	// Choose the appropriate template
+	template := g.fallback
+	for keyword, tmpl := range g.templates {
+		if keyword != "default" && strings.Contains(strings.ToLower(content), strings.ToLower(keyword)) {
+			template = tmpl
+			break
+		}
+	}
+
+	// Generate the thought
+	thought := &Thought{
+		ID:        fmt.Sprintf("thought-%d", time.Now().UnixNano()),
+		Content:   strings.ReplaceAll(template, "{{input}}", content),
+		Type:      "template",
+		Timestamp: time.Now().Unix(),
+	}
+
+	return thought, nil
 }

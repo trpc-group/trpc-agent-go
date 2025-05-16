@@ -57,6 +57,37 @@ func (t *mockTestTool) Execute(_ context.Context, _ map[string]interface{}) (*to
 	}, nil
 }
 
+func (t *mockTestTool) GetDefinition() *tool.ToolDefinition {
+	def := tool.NewToolDefinition(t.name, t.description)
+	
+	// Handle parameters if this is an object type with properties
+	if props, ok := t.parameters["properties"].(map[string]interface{}); ok {
+		for propName, propDef := range props {
+			if propObj, ok := propDef.(map[string]interface{}); ok {
+				prop := &tool.Property{
+					Type:        propObj["type"].(string),
+					Description: propObj["description"].(string),
+				}
+				
+				// Determine if the parameter is required
+				required := false
+				if reqList, ok := t.parameters["required"].([]string); ok {
+					for _, req := range reqList {
+						if req == propName {
+							required = true
+							break
+						}
+					}
+				}
+				
+				def.AddParameter(propName, prop, required)
+			}
+		}
+	}
+	
+	return def
+}
+
 // mockTestModel implements the model.Model interface for testing.
 type mockTestModel struct {
 	responseJSON string
@@ -94,6 +125,10 @@ func (m *mockTestModel) GetDefaultOptions() model.GenerationOptions {
 		Temperature: 0.7,
 		MaxTokens:   1000,
 	}
+}
+
+func (m *mockTestModel) SupportsToolCalls() bool {
+	return true
 }
 
 // mockWorkingMemory is a simple mock implementation of ReactWorkingMemory.

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // InMemoryCycleManager manages cycles in memory.
@@ -159,7 +161,7 @@ func (m *PersistentCycleManager) EndCycle(ctx context.Context) (*Cycle, error) {
 	if m.storage != nil {
 		if err := m.storage.StoreCycle(ctx, cycle); err != nil {
 			// Log the error but don't fail the operation
-			fmt.Printf("Warning: failed to persist cycle: %v\n", err)
+			log.Infof("Warning: failed to persist cycle: %v\n", err)
 		}
 	}
 
@@ -183,7 +185,7 @@ func (m *PersistentCycleManager) GetHistory(ctx context.Context) ([]*Cycle, erro
 	persistedCycles, err := m.storage.RetrieveCycles(ctx)
 	if err != nil {
 		// Log the error but return the in-memory cycles
-		fmt.Printf("Warning: failed to retrieve persisted cycles: %v\n", err)
+		log.Infof("Warning: failed to retrieve persisted cycles: %v\n", err)
 		return inMemoryCycles, nil
 	}
 

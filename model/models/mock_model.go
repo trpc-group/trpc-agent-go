@@ -8,6 +8,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // MockModel is a mock implementation of the Model interface for testing.
@@ -167,6 +168,20 @@ func (m *MockModel) SetTools(tools []model.ToolDefinition) error {
 		return fmt.Errorf("mock model does not support tool calls")
 	}
 	m.tools = tools
+	return nil
+}
+
+// SupportsToolCalls implements the model.Model interface.
+func (m *MockModel) SupportsToolCalls() bool {
+	return m.supportToolCalls
+}
+
+// RegisterTools implements the model.ToolCallSupportingModel interface.
+func (m *MockModel) RegisterTools(toolDefs []*tool.ToolDefinition) error {
+	if !m.supportToolCalls {
+		return fmt.Errorf("mock model does not support tool calls")
+	}
+	// We already have SetTools, so we'll just return nil here for compatibility
 	return nil
 }
 
