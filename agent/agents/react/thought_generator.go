@@ -50,12 +50,8 @@ func NewDefaultThoughtPromptStrategy() *DefaultThoughtPromptStrategy {
 // BuildThoughtPrompt builds a prompt for thought generation.
 func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, history []*Cycle, tools []tool.Tool, format ThoughtFormat) string {
 	var prompt strings.Builder
-	prompt.WriteString("Think through the following request step by step to determine the best action to take. " +
-		"Use the available tools to help you solve the problem. You have the following tools:\n\n")
-
-	for _, t := range tools {
-		prompt.WriteString(fmt.Sprintf("- %s: %s, parameters: %s\n", t.Name(), t.Description(), t.Parameters()))
-	}
+	prompt.WriteString("Think through the following request step by step to determine the best action to take " +
+		"or output 'Final Answer: your answer here' if you have gathered all necessary information. ")
 
 	prompt.WriteString("\nThought process format: ")
 	if format == ThoughtFormatStructured {
@@ -127,8 +123,8 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 			prompt.WriteString("IMPORTANT: You've made similar errors multiple times. Please carefully check parameter names and values.\n")
 		}
 	}
-	prompt.WriteString("\nNow, think step by step about how to respond to the user's query, making effective use of the available tools.\n")
-	prompt.WriteString("If you've already gathered all necessary information, consider providing a Final Answer at the end starting with 'Final Answer: '.\n")
+	prompt.WriteString("\nNow, think step by step about how to respond to the user's query, making effective use of the available tools or " +
+		"output 'Final Answer: your answer here' if you have gathered all necessary information.\n")
 	return prompt.String()
 }
 
@@ -147,38 +143,6 @@ func hasRepeatedErrors(history []*Cycle) bool {
 
 	// If more than half of the cycles have errors, consider it a pattern
 	return errorCount >= len(history)/2
-}
-
-// formatToolInput formats tool input as JSON for display.
-func formatToolInput(input map[string]interface{}) (string, error) {
-	if len(input) == 0 {
-		return "{}", nil
-	}
-
-	// Simple formatting for small inputs
-	parts := make([]string, 0, len(input))
-	for k, v := range input {
-		parts = append(parts, fmt.Sprintf(`"%s": %v`, k, formatValue(v)))
-	}
-
-	return "{" + strings.Join(parts, ", ") + "}", nil
-}
-
-// formatValue formats a value for display in JSON.
-func formatValue(v interface{}) string {
-	if v == nil {
-		return "null"
-	}
-
-	switch val := v.(type) {
-	case string:
-		return fmt.Sprintf(`"%s"`, val)
-	case bool, int, int64, float64, float32:
-		return fmt.Sprintf("%v", val)
-	default:
-		// For complex types, just use %v
-		return fmt.Sprintf("%v", val)
-	}
 }
 
 // NewLLMThoughtGenerator creates a new LLM-based thought generator.
@@ -235,13 +199,13 @@ func (g *LLMThoughtGenerator) Generate(
 	log.Debugf("Thought prompt: %s", promptText)
 
 	// Create a system message with instructions
-	sysMsg := message.NewSystemMessage(promptText)
+	userMsg := message.NewUserMessage(promptText)
 
 	// Generate the thought using the model
 	opts := model.DefaultOptions()
 	// Enable tool calls so the model can directly output structured tool calls if appropriate
 	opts.EnableToolCalls = g.model.SupportsToolCalls()
-	response, err := g.model.GenerateWithMessages(ctx, []*message.Message{sysMsg}, opts)
+	response, err := g.model.GenerateWithMessages(ctx, []*message.Message{userMsg}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("thought generation failed: %w", err)
 	}
