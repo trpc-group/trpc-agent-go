@@ -43,6 +43,11 @@ func (m *MockRegistryModel) GenerateWithMessages(ctx context.Context, messages [
 	}, nil
 }
 
+// SupportsToolCalls implements the Model interface
+func (m *MockRegistryModel) SupportsToolCalls() bool {
+	return false
+}
+
 func TestNewRegistry(t *testing.T) {
 	registry := NewRegistry()
 	if registry == nil {

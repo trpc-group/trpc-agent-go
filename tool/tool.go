@@ -19,7 +19,12 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]interface{}) (*Result, error)
 
 	// Parameters returns the JSON Schema describing the tool's parameters.
+	// Deprecated: Use GetDefinition instead for newer implementations.
 	Parameters() map[string]interface{}
+
+	// GetDefinition returns the tool definition with schema.
+	// If not implemented, falls back to Parameters().
+	GetDefinition() *ToolDefinition
 }
 
 // Result represents the result of a tool execution.
@@ -76,6 +81,7 @@ type BaseTool struct {
 	name        string
 	description string
 	parameters  map[string]interface{}
+	definition  *ToolDefinition
 }
 
 // NewBaseTool creates a new BaseTool.
@@ -84,6 +90,16 @@ func NewBaseTool(name, description string, parameters map[string]interface{}) *B
 		name:        name,
 		description: description,
 		parameters:  parameters,
+	}
+}
+
+// NewSchemaBasedTool creates a new BaseTool with a schema-based definition.
+func NewSchemaBasedTool(definition *ToolDefinition) *BaseTool {
+	return &BaseTool{
+		name:        definition.Name,
+		description: definition.Description,
+		parameters:  definition.ToJSONSchema(),
+		definition:  definition,
 	}
 }
 
@@ -102,9 +118,112 @@ func (t *BaseTool) Parameters() map[string]interface{} {
 	return t.parameters
 }
 
+// GetDefinition returns the tool definition.
+func (t *BaseTool) GetDefinition() *ToolDefinition {
+	if t.definition != nil {
+		return t.definition
+	}
+
+	// Try to convert from parameters if definition is not set
+	return ToolDefinitionFromParameters(t.name, t.description, t.parameters)
+}
+
 // Execute is a placeholder that must be implemented by the concrete tool.
 func (t *BaseTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	return nil, fmt.Errorf("Execute not implemented for BaseTool")
+}
+
+// ToolDefinitionFromParameters converts legacy parameters format to ToolDefinition.
+func ToolDefinitionFromParameters(name, description string, params map[string]interface{}) *ToolDefinition {
+	def := NewToolDefinition(name, description)
+
+	// Extract properties from JSON Schema
+	properties, _ := params["properties"].(map[string]interface{})
+	if properties == nil {
+		return def
+	}
+
+	// Extract required fields
+	var required []string
+	if req, ok := params["required"].([]interface{}); ok {
+		for _, r := range req {
+			if s, ok := r.(string); ok {
+				required = append(required, s)
+			}
+		}
+	} else if req, ok := params["required"].([]string); ok {
+		required = req
+	}
+
+	// Create a map for quick lookup of required parameters
+	requiredMap := make(map[string]bool)
+	for _, r := range required {
+		requiredMap[r] = true
+	}
+
+	// Add each property to the definition
+	for name, prop := range properties {
+		if propMap, ok := prop.(map[string]interface{}); ok {
+			// Create a property from the map
+			property := propertyFromMap(propMap)
+			def.AddParameter(name, property, requiredMap[name])
+		}
+	}
+
+	return def
+}
+
+// propertyFromMap creates a Property from a map representation.
+func propertyFromMap(propMap map[string]interface{}) *Property {
+	prop := &Property{}
+
+	// Set type
+	if typeStr, ok := propMap["type"].(string); ok {
+		prop.Type = typeStr
+	} else {
+		prop.Type = "string" // Default to string
+	}
+
+	// Set description
+	if desc, ok := propMap["description"].(string); ok {
+		prop.Description = desc
+	}
+
+	// Set default
+	if def, ok := propMap["default"]; ok {
+		prop.Default = def
+	}
+
+	// Set enum values
+	if enum, ok := propMap["enum"].([]interface{}); ok {
+		prop.Enum = enum
+	}
+
+	// Handle array items
+	if prop.Type == "array" {
+		if items, ok := propMap["items"].(map[string]interface{}); ok {
+			prop.Items = propertyFromMap(items)
+		}
+	}
+
+	// Handle object properties
+	if prop.Type == "object" {
+		if nestedProps, ok := propMap["properties"].(map[string]interface{}); ok {
+			prop.Properties = make(map[string]*Property)
+			for k, v := range nestedProps {
+				if propDef, ok := v.(map[string]interface{}); ok {
+					prop.Properties[k] = propertyFromMap(propDef)
+				}
+			}
+		}
+
+		// Handle additionalProperties
+		if addProps, ok := propMap["additionalProperties"].(bool); ok {
+			prop.AdditionalProperties = addProps
+		}
+	}
+
+	return prop
 }
 
 // ToolSet is a collection of tools identified by name.
@@ -152,6 +271,15 @@ func (ts *ToolSet) List() []Tool {
 	return tools
 }
 
+// GetToolDefinitions returns tool definitions for all tools in the set.
+func (ts *ToolSet) GetToolDefinitions() []*ToolDefinition {
+	defs := make([]*ToolDefinition, 0, len(ts.tools))
+	for _, tool := range ts.tools {
+		defs = append(defs, tool.GetDefinition())
+	}
+	return defs
+}
+
 // Names returns a list of all tool names in the set.
 func (ts *ToolSet) Names() []string {
 	names := make([]string, 0, len(ts.tools))
@@ -164,4 +292,4 @@ func (ts *ToolSet) Names() []string {
 // Size returns the number of tools in the set.
 func (ts *ToolSet) Size() int {
 	return len(ts.tools)
-} 
+}

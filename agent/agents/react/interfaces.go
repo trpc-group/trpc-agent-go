@@ -12,11 +12,13 @@ import (
 // Thought represents a reasoning step made by the ReAct agent.
 // It contains the agent's internal monologue or reasoning process.
 type Thought struct {
-	ID        string     `json:"id"`                   // Unique identifier for the thought.
-	Content   string     `json:"content"`              // The textual content of the reasoning trace.
-	Type      string     `json:"type,omitempty"`       // The type of thought (e.g., reasoning, planning).
-	PlanState *PlanState `json:"plan_state,omitempty"` // Current planning state for dynamic reasoning.
-	Timestamp int64      `json:"timestamp"`            // Unix timestamp of when the thought occurred.
+	ID              string     `json:"id"`                         // Unique identifier for the thought.
+	Content         string     `json:"content"`                    // The textual content of the reasoning trace.
+	Type            string     `json:"type,omitempty"`             // The type of thought (e.g., reasoning, planning).
+	PlanState       *PlanState `json:"plan_state,omitempty"`       // Current planning state for dynamic reasoning.
+	Timestamp       int64      `json:"timestamp"`                  // Unix timestamp of when the thought occurred.
+	SuggestedAction *Action    `json:"suggested_action,omitempty"` // Optional suggested action from the thought generator.
+	PreviousAction  *Action    `json:"previous_action,omitempty"`  // Previous action taken, to help avoid repetition.
 }
 
 // Action represents an action taken by the ReAct agent based on its thought process.

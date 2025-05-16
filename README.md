@@ -39,9 +39,9 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model/models"
@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Print the response
-	log.Printf("Agent response: %s", resp.Content)
+	log.Infof("Agent response: %s", resp.Content)
 }
 ```
 
@@ -159,6 +159,29 @@ The framework includes robust parameter processing:
 2. **Parameter Inference**: Identifies primary parameters in ambiguous formats
 3. **Structured Parsing**: Handles JSON, key-value pairs, and more
 4. **Type Conversion**: Automatically converts values to expected types
+
+## Using the Library
+
+To create and use agents:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// Create tools for your agent
+calculator := tool.NewCalculatorTool()
+
+// Create the agent
+agent := agent.NewReActAgent(
+    agent.WithTools([]tool.Tool{calculator}),
+    agent.WithModel(openaiModel),
+)
+
+// Run the agent
+response, err := agent.Run(ctx, "Calculate 1 + 2")
+```
 
 ## Contributing
 

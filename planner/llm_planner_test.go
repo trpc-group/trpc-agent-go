@@ -276,3 +276,8 @@ func (m *MockLLMWithResponse) GenerateWithMessages(ctx context.Context, messages
 	}
 	return m.Response, nil
 }
+
+// SupportsToolCalls implements the model.Model interface
+func (m *MockLLMWithResponse) SupportsToolCalls() bool {
+	return false
+}

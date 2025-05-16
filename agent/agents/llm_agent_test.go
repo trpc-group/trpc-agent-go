@@ -38,6 +38,11 @@ func (m *mockModel) GenerateWithMessages(ctx context.Context, messages []*messag
 	return m.mockResponse, nil
 }
 
+// SupportsToolCalls implements the model.Model interface
+func (m *mockModel) SupportsToolCalls() bool {
+	return false
+}
+
 func TestNewLLMAgent(t *testing.T) {
 	// Test with minimal config
 	mockMdl := &mockModel{

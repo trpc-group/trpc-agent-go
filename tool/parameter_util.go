@@ -4,6 +4,7 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -175,55 +176,55 @@ func ParseStructuredArgument(text string) (map[string]interface{}, error) {
 	// Try to parse as key-value pairs
 	// Try different separators and formats
 	formats := []struct {
-		lineSep      string
-		keyValueSep  string
-		valQuoted    bool
+		lineSep     string
+		keyValueSep string
+		valQuoted   bool
 	}{
-		{",", "=", false},   // key=value, key2=value2
-		{",", ":", false},   // key:value, key2:value2
-		{"\n", "=", false},  // key=value\nkey2=value2
-		{"\n", ":", false},  // key:value\nkey2:value2
-		{";", "=", false},   // key=value; key2=value2
-		{";", ":", false},   // key:value; key2:value2
+		{",", "=", false},  // key=value, key2=value2
+		{",", ":", false},  // key:value, key2:value2
+		{"\n", "=", false}, // key=value\nkey2=value2
+		{"\n", ":", false}, // key:value\nkey2:value2
+		{";", "=", false},  // key=value; key2=value2
+		{";", ":", false},  // key:value; key2:value2
 	}
-	
+
 	for _, format := range formats {
 		lines := strings.Split(text, format.lineSep)
 		if len(lines) < 2 && !strings.Contains(text, format.keyValueSep) {
 			continue
 		}
-		
+
 		tempResult := make(map[string]interface{})
 		success := true
-		
+
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
-			
+
 			parts := strings.SplitN(line, format.keyValueSep, 2)
 			if len(parts) != 2 {
 				success = false
 				break
 			}
-			
+
 			key := strings.TrimSpace(parts[0])
 			value := strings.TrimSpace(parts[1])
-			
+
 			// Remove quotes if present
 			if format.valQuoted && strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
 				value = value[1 : len(value)-1]
 			}
-			
+
 			tempResult[key] = value
 		}
-		
+
 		if success && len(tempResult) > 0 {
 			return tempResult, nil
 		}
 	}
-	
+
 	// If we can't parse structured data, return an error
 	return nil, fmt.Errorf("could not parse structured argument from text")
 }
@@ -233,10 +234,19 @@ func ParseStructuredArgument(text string) (map[string]interface{}, error) {
 func ConvertArgumentsToCorrectTypes(args map[string]interface{}, schema map[string]interface{}) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
+	// Check for nested structure with tool_name and tool_input pattern
+	if toolInput, hasToolInput := args["tool_input"].(map[string]interface{}); hasToolInput {
+		// If we have a nested structure, use the inner map
+		args = toolInput
+	}
+
 	properties, ok := schema["properties"].(map[string]interface{})
 	if !ok {
 		return args, nil
 	}
+
+	// Track conversion errors for better error reporting
+	var conversionErrors []string
 
 	for key, value := range args {
 		prop, ok := properties[key].(map[string]interface{})
@@ -254,13 +264,22 @@ func ConvertArgumentsToCorrectTypes(args map[string]interface{}, schema map[stri
 			continue
 		}
 
-		// Convert the value to the expected type
-		converted, err := convertToType(value, typeStr)
+		// Try to convert the value to the expected type
+		convertedValue, err := convertToType(value, typeStr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert %s: %w", key, err)
+			// Collect conversion errors but continue processing
+			conversionErrors = append(conversionErrors,
+				fmt.Sprintf("parameter '%s': %v", key, err))
+			// Preserve the original value
+			result[key] = value
+		} else {
+			result[key] = convertedValue
 		}
+	}
 
-		result[key] = converted
+	// If we had conversion errors, include them in the return error
+	if len(conversionErrors) > 0 {
+		return result, fmt.Errorf("type conversion errors: %s", strings.Join(conversionErrors, "; "))
 	}
 
 	return result, nil
@@ -274,7 +293,7 @@ func convertToType(value interface{}, targetType string) (interface{}, error) {
 		case "string":
 			return strValue, nil
 		case "number", "integer":
-			// Try to convert to a number
+			// First, try direct parsing with fmt.Sscanf
 			var numValue float64
 			if _, err := fmt.Sscanf(strValue, "%f", &numValue); err == nil {
 				if targetType == "integer" {
@@ -282,17 +301,37 @@ func convertToType(value interface{}, targetType string) (interface{}, error) {
 				}
 				return numValue, nil
 			}
+
+			// Next, try handling currency symbols and common patterns
+			cleanedValue := cleanNumberString(strValue)
+			if _, err := fmt.Sscanf(cleanedValue, "%f", &numValue); err == nil {
+				if targetType == "integer" {
+					return int(numValue), nil
+				}
+				return numValue, nil
+			}
+
 			return nil, fmt.Errorf("cannot convert %q to %s", strValue, targetType)
 		case "boolean":
 			lower := strings.ToLower(strValue)
-			if lower == "true" || lower == "yes" || lower == "1" {
+			switch lower {
+			case "true", "yes", "y", "1", "on", "enable", "enabled":
 				return true, nil
-			} else if lower == "false" || lower == "no" || lower == "0" {
+			case "false", "no", "n", "0", "off", "disable", "disabled":
 				return false, nil
+			default:
+				return nil, fmt.Errorf("cannot convert %q to boolean", strValue)
 			}
-			return nil, fmt.Errorf("cannot convert %q to boolean", strValue)
 		case "array":
-			// Split by commas
+			// Try to parse as JSON array first
+			if strings.HasPrefix(strValue, "[") && strings.HasSuffix(strValue, "]") {
+				var arrayValue []interface{}
+				if err := json.Unmarshal([]byte(strValue), &arrayValue); err == nil {
+					return arrayValue, nil
+				}
+			}
+
+			// Then try comma-separated values
 			items := strings.Split(strValue, ",")
 			result := make([]interface{}, len(items))
 			for i, item := range items {
@@ -305,10 +344,122 @@ func convertToType(value interface{}, targetType string) (interface{}, error) {
 			if err := json.Unmarshal([]byte(strValue), &result); err == nil {
 				return result, nil
 			}
+
+			// If it's not valid JSON, try to parse key-value pairs
+			// First as comma-separated pairs
+			if !strings.Contains(strValue, "{") && strings.Contains(strValue, ":") {
+				result = make(map[string]interface{})
+				pairs := strings.Split(strValue, ",")
+				for _, pair := range pairs {
+					parts := strings.SplitN(pair, ":", 2)
+					if len(parts) == 2 {
+						key := strings.TrimSpace(parts[0])
+						value := strings.TrimSpace(parts[1])
+						result[key] = value
+					}
+				}
+				if len(result) > 0 {
+					return result, nil
+				}
+			}
+
 			return nil, fmt.Errorf("cannot convert %q to object", strValue)
+		}
+	} else if numValue, ok := value.(float64); ok {
+		// Convert number types appropriately
+		switch targetType {
+		case "integer":
+			return int(numValue), nil
+		case "number":
+			return numValue, nil
+		case "string":
+			return fmt.Sprintf("%g", numValue), nil
+		case "boolean":
+			// 0 is false, anything else is true
+			return numValue != 0, nil
+		}
+	} else if intValue, ok := value.(int); ok {
+		// Convert integer types
+		switch targetType {
+		case "integer":
+			return intValue, nil
+		case "number":
+			return float64(intValue), nil
+		case "string":
+			return fmt.Sprintf("%d", intValue), nil
+		case "boolean":
+			return intValue != 0, nil
+		}
+	} else if boolValue, ok := value.(bool); ok {
+		// Convert boolean types
+		switch targetType {
+		case "boolean":
+			return boolValue, nil
+		case "string":
+			return fmt.Sprintf("%t", boolValue), nil
+		case "integer":
+			if boolValue {
+				return 1, nil
+			}
+			return 0, nil
+		case "number":
+			if boolValue {
+				return 1.0, nil
+			}
+			return 0.0, nil
+		}
+	} else if arrayValue, ok := value.([]interface{}); ok {
+		// Handle array values
+		switch targetType {
+		case "array":
+			return arrayValue, nil
+		case "string":
+			// Convert array to JSON string
+			bytes, err := json.Marshal(arrayValue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert array to string: %v", err)
+			}
+			return string(bytes), nil
+		}
+	} else if mapValue, ok := value.(map[string]interface{}); ok {
+		// Handle object/map values
+		switch targetType {
+		case "object":
+			return mapValue, nil
+		case "string":
+			// Convert map to JSON string
+			bytes, err := json.Marshal(mapValue)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert object to string: %v", err)
+			}
+			return string(bytes), nil
 		}
 	}
 
-	// If not a string or no conversion needed, return as-is
-	return value, nil
+	// If no specific conversion path, just return the original value and log a warning
+	return value, fmt.Errorf("no conversion available from %T to %s", value, targetType)
+}
+
+// cleanNumberString cleans a string representing a number by removing currency symbols and formatting
+func cleanNumberString(s string) string {
+	// Remove common currency symbols
+	currencySymbols := []string{"$", "€", "£", "¥", "₹", "₽", "₩", "₿", "฿"}
+	for _, symbol := range currencySymbols {
+		s = strings.ReplaceAll(s, symbol, "")
+	}
+
+	// Remove commas used as thousand separators and spaces
+	s = strings.ReplaceAll(s, ",", "")
+	s = strings.ReplaceAll(s, " ", "")
+
+	// Handle percentage values
+	if strings.HasSuffix(s, "%") {
+		// Convert percentage to decimal (e.g., "50%" -> "0.5")
+		s = strings.TrimSuffix(s, "%")
+		if val, err := strconv.ParseFloat(s, 64); err == nil {
+			return fmt.Sprintf("%f", val/100)
+		}
+	}
+
+	return s
 }

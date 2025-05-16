@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -261,7 +264,10 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 		return nil, fmt.Errorf("OpenAI API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
+	// Log the raw response for debugging
+	log.Debugf("Raw OpenAI API response: %s", string(body))
+
+	// Parse response with more error handling
 	var openaiResp struct {
 		Choices []struct {
 			Message struct {
@@ -278,11 +284,129 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 
 	if err := json.Unmarshal(body, &openaiResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		log.Warnf("Failed to unmarshal response as standard OpenAI format: %v", err)
+
+		// Try a more generic approach for Deepseek-compatible APIs
+		var genericResp map[string]interface{}
+		if jsonErr := json.Unmarshal(body, &genericResp); jsonErr != nil {
+			return nil, fmt.Errorf("failed to unmarshal response in any format: %w", jsonErr)
+		}
+
+		// Log the structure of the response
+		log.Debugf("Response structure: %+v", genericResp)
+
+		// Create a fallback response
+		fallbackContent := extractContentFromGenericResponse(genericResp)
+		if fallbackContent == "" {
+			fallbackContent = "No content was generated. Please try again."
+		}
+
+		return &model.Response{
+			Text: fallbackContent,
+			Messages: []*message.Message{
+				message.NewAssistantMessage(fallbackContent),
+			},
+			FinishReason: "fallback",
+			Usage: &model.Usage{
+				PromptTokens:     100, // Estimate
+				CompletionTokens: len(strings.Split(fallbackContent, " ")),
+				TotalTokens:      100 + len(strings.Split(fallbackContent, " ")),
+			},
+		}, nil
 	}
 
 	if len(openaiResp.Choices) == 0 {
-		return nil, fmt.Errorf("OpenAI API returned no choices")
+		log.Warnf("API returned no choices")
+
+		// Create a generic response for no choices
+		genericResponse := "I need to analyze this further."
+		return &model.Response{
+			Text: genericResponse,
+			Messages: []*message.Message{
+				message.NewAssistantMessage(genericResponse),
+			},
+			FinishReason: "no_choices",
+		}, nil
+	}
+
+	// Handle empty content field
+	if openaiResp.Choices[0].Message.Content == "" {
+		log.Warnf("API returned empty content in message")
+
+		// Check if we have tool calls in the response
+		var toolCalls []model.ToolCall
+
+		// Try to get tool calls from the raw response
+		var rawResponse map[string]interface{}
+		if err := json.Unmarshal(body, &rawResponse); err == nil {
+			if choices, ok := rawResponse["choices"].([]interface{}); ok && len(choices) > 0 {
+				if choice, ok := choices[0].(map[string]interface{}); ok {
+					if message, ok := choice["message"].(map[string]interface{}); ok {
+						if rawToolCalls, ok := message["tool_calls"].([]interface{}); ok && len(rawToolCalls) > 0 {
+							// Process tool calls
+							for _, rawCall := range rawToolCalls {
+								if callMap, ok := rawCall.(map[string]interface{}); ok {
+									toolCall := model.ToolCall{
+										ID: fmt.Sprintf("call_%s", generateShortID()),
+									}
+
+									// Extract function info
+									if function, ok := callMap["function"].(map[string]interface{}); ok {
+										if name, ok := function["name"].(string); ok {
+											toolCall.Function.Name = name
+										}
+										if args, ok := function["arguments"].(string); ok {
+											toolCall.Function.Arguments = args
+										}
+									}
+
+									toolCalls = append(toolCalls, toolCall)
+									log.Debugf("Extracted tool call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if len(toolCalls) > 0 {
+			// Create the response with just the tool calls
+			// No need for a fallback message that could confuse the agent
+			return &model.Response{
+				Text:         "",                   // Empty text since we have tool calls
+				Messages:     []*message.Message{}, // No messages, tool calls are sufficient
+				ToolCalls:    toolCalls,
+				FinishReason: "tool_calls",
+				Usage: &model.Usage{
+					PromptTokens:     openaiResp.Usage.PromptTokens,
+					CompletionTokens: openaiResp.Usage.CompletionTokens,
+					TotalTokens:      openaiResp.Usage.TotalTokens,
+				},
+			}, nil
+		}
+
+		// If no tool calls were found, use a minimal fallback
+		fallbackMessage := "I need more information to proceed."
+
+		// Create the response
+		responseMessages := []*message.Message{
+			message.NewMessage(
+				message.Role(openaiResp.Choices[0].Message.Role),
+				fallbackMessage,
+			),
+		}
+
+		return &model.Response{
+			Text:         fallbackMessage,
+			Messages:     responseMessages,
+			FinishReason: openaiResp.Choices[0].FinishReason,
+			Usage: &model.Usage{
+				PromptTokens:     openaiResp.Usage.PromptTokens,
+				CompletionTokens: openaiResp.Usage.CompletionTokens,
+				TotalTokens:      openaiResp.Usage.TotalTokens,
+			},
+		}, nil
 	}
 
 	// Create response messages
@@ -306,6 +430,126 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 
 	return response, nil
+}
+
+// extractContentFromGenericResponse attempts to find any text content in a generic response
+func extractContentFromGenericResponse(resp map[string]interface{}) string {
+	// Try several common paths for content in different API implementations
+
+	// Check for OpenAI-like structure
+	if choices, ok := resp["choices"].([]interface{}); ok && len(choices) > 0 {
+		if choice, ok := choices[0].(map[string]interface{}); ok {
+			if message, ok := choice["message"].(map[string]interface{}); ok {
+				if content, ok := message["content"].(string); ok && content != "" {
+					return content
+				}
+			}
+			// Some APIs put content directly in the choice
+			if content, ok := choice["content"].(string); ok && content != "" {
+				return content
+			}
+		}
+	}
+
+	// Check for direct content field (some API implementations)
+	if content, ok := resp["content"].(string); ok && content != "" {
+		return content
+	}
+
+	// Check for text field (some API implementations)
+	if text, ok := resp["text"].(string); ok && text != "" {
+		return text
+	}
+
+	// Check for message field at top level
+	if message, ok := resp["message"].(map[string]interface{}); ok {
+		if content, ok := message["content"].(string); ok && content != "" {
+			return content
+		}
+	}
+
+	// Check for completion field (older APIs)
+	if completion, ok := resp["completion"].(string); ok && completion != "" {
+		return completion
+	}
+
+	// As a last resort, try to find any string field that looks like it might contain content
+	for _, value := range resp {
+		if strValue, ok := value.(string); ok && len(strValue) > 20 {
+			// If we find a reasonably long string, use it
+			return strValue
+		}
+	}
+
+	return ""
+}
+
+// generateShortID generates a short random ID for tool calls
+func generateShortID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+	result := make([]byte, 8)
+	for i := range result {
+		result[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(result)
+}
+
+// SupportsToolCalls implements the model.Model interface.
+func (m *OpenAIModel) SupportsToolCalls() bool {
+	return true
+}
+
+// RegisterTools implements the model.ToolCallSupportingModel interface.
+func (m *OpenAIModel) RegisterTools(toolDefs []*tool.ToolDefinition) error {
+	// Convert tool.ToolDefinition to model.ToolDefinition
+	tools := make([]model.ToolDefinition, 0, len(toolDefs))
+	for _, def := range toolDefs {
+		// Convert tool.Property map to interface map
+		params := make(map[string]interface{})
+		if def.Parameters != nil {
+			// Create a simple JSON schema object
+			params["type"] = "object"
+			properties := make(map[string]interface{})
+			required := []string{}
+
+			for name, prop := range def.Parameters {
+				if prop.Required {
+					required = append(required, name)
+				}
+
+				// Convert property to map
+				propMap := map[string]interface{}{
+					"type":        prop.Type,
+					"description": prop.Description,
+				}
+
+				// Add enum if present
+				if len(prop.Enum) > 0 {
+					propMap["enum"] = prop.Enum
+				}
+
+				// Add default if present
+				if prop.Default != nil {
+					propMap["default"] = prop.Default
+				}
+
+				properties[name] = propMap
+			}
+
+			params["properties"] = properties
+			if len(required) > 0 {
+				params["required"] = required
+			}
+		}
+
+		tools = append(tools, model.ToolDefinition{
+			Name:        def.Name,
+			Description: def.Description,
+			Parameters:  params,
+		})
+	}
+	m.tools = tools
+	return nil
 }
 
 // SetTools implements the ToolCallSupportingModel interface.

@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,16 +18,13 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
-
-	// Add imports for the ReAct agent
 	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/models"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcptools "trpc.group/trpc-go/trpc-agent-go/tool/tools"
-
-	// Add imports for MCP
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -70,24 +67,83 @@ func NewCalculatorTool() *CalculatorTool {
 // Execute performs the arithmetic operation.
 func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
 	// Log tool invocation
-	log.Printf("Calculator tool called with args: %v", args)
+	log.Infof("Calculator tool called with args: %v", args)
+
+	// Normalize parameters - handle nested tool_input structure
+	normalizedParams := make(map[string]interface{})
+
+	// Extract from tool_input if present
+	if toolInput, hasToolInput := args["tool_input"]; hasToolInput {
+		if inputMap, isMap := toolInput.(map[string]interface{}); isMap {
+			// Map structure - copy all values
+			log.Infof("Found nested tool_input structure, extracting parameters")
+			for k, v := range inputMap {
+				normalizedParams[k] = v
+			}
+		} else if inputStr, isStr := toolInput.(string); isStr && inputStr != "" {
+			// String input - try to parse as JSON first
+			var jsonMap map[string]interface{}
+			if err := json.Unmarshal([]byte(inputStr), &jsonMap); err == nil {
+				log.Infof("Parsed tool_input JSON string into parameters")
+				for k, v := range jsonMap {
+					normalizedParams[k] = v
+				}
+			} else {
+				// Try to parse as a direct expression (e.g., "2+2")
+				log.Infof("Treating direct string input as expression: %s", inputStr)
+				normalizedParams["operation"] = "add" // Default operation
+
+				// Try to extract operation and operands from expression
+				if parts := extractExpressionParts(inputStr); parts.operation != "" {
+					normalizedParams["operation"] = parts.operation
+					normalizedParams["a"] = parts.a
+					if parts.b != nil {
+						normalizedParams["b"] = parts.b
+					}
+				}
+			}
+		}
+	}
+
+	// Add any direct arguments not in tool_input
+	for k, v := range args {
+		if k != "tool_name" && k != "tool_input" && normalizedParams[k] == nil {
+			normalizedParams[k] = v
+		}
+	}
+
+	// If still empty, check for a single parameter that might be the operation
+	if len(normalizedParams) == 0 && len(args) == 1 {
+		for _, v := range args {
+			if strValue, isStr := v.(string); isStr {
+				// Try to parse as a direct expression
+				if parts := extractExpressionParts(strValue); parts.operation != "" {
+					normalizedParams["operation"] = parts.operation
+					normalizedParams["a"] = parts.a
+					if parts.b != nil {
+						normalizedParams["b"] = parts.b
+					}
+				}
+			}
+		}
+	}
 
 	// Extract the operation
-	opInterface, ok := args["operation"]
+	opInterface, ok := normalizedParams["operation"]
 	if !ok {
-		log.Printf("Calculator tool error: operation is required")
+		log.Infof("Calculator tool error: operation is required")
 		return nil, fmt.Errorf("operation is required")
 	}
 	operation, ok := opInterface.(string)
 	if !ok {
-		log.Printf("Calculator tool error: operation must be a string")
-		return nil, fmt.Errorf("operation must be a string")
+		log.Infof("Calculator tool error: operation must be a string, got %T", opInterface)
+		return nil, fmt.Errorf("operation must be a string, got %T", opInterface)
 	}
 
 	// Extract the first operand
-	aInterface, ok := args["a"]
+	aInterface, ok := normalizedParams["a"]
 	if !ok {
-		log.Printf("Calculator tool error: a is required")
+		log.Infof("Calculator tool error: a is required")
 		return nil, fmt.Errorf("a is required")
 	}
 	var a float64
@@ -97,23 +153,19 @@ func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{
 	case int:
 		a = float64(v)
 	default:
-		log.Printf("Calculator tool error: a must be a number, got %T", aInterface)
-		return nil, fmt.Errorf("a must be a number")
+		log.Infof("Calculator tool error: a must be a number, got %T", aInterface)
+		return nil, fmt.Errorf("a must be a number, got %T", aInterface)
 	}
 
-	var result float64
-
-	switch operation {
-	case "sqrt":
-		result = float64(int(100*math.Sqrt(a))) / 100 // Simple square root with 2 decimal places
-		log.Printf("Calculator tool: sqrt(%f) = %f", a, result)
-	case "add":
-		// Extract second operand
-		bInterface, ok := args["b"]
+	// Helper function to extract the second operand for binary operations
+	extractSecondOperand := func(operation string) (float64, error) {
+		bInterface, ok := normalizedParams["b"]
 		if !ok {
-			log.Printf("Calculator tool error: b is required for addition")
-			return nil, fmt.Errorf("b is required for addition")
+			errMsg := fmt.Sprintf("b is required for %s", operation)
+			log.Infof("Calculator tool error: %s", errMsg)
+			return 0, fmt.Errorf(errMsg)
 		}
+
 		var b float64
 		switch v := bInterface.(type) {
 		case float64:
@@ -121,20 +173,146 @@ func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{
 		case int:
 			b = float64(v)
 		default:
-			log.Printf("Calculator tool error: b must be a number, got %T", bInterface)
-			return nil, fmt.Errorf("b must be a number")
+			errMsg := fmt.Sprintf("b must be a number, got %T", bInterface)
+			log.Infof("Calculator tool error: %s", errMsg)
+			return 0, fmt.Errorf(errMsg)
+		}
+		return b, nil
+	}
+
+	var result float64
+
+	switch operation {
+	case "sqrt":
+		result = float64(int(100*math.Sqrt(a))) / 100 // Simple square root with 2 decimal places
+		log.Infof("Calculator tool: sqrt(%f) = %f", a, result)
+	case "add":
+		b, err := extractSecondOperand("addition")
+		if err != nil {
+			return nil, err
 		}
 		result = a + b
-		log.Printf("Calculator tool: %f + %f = %f", a, b, result)
-	// Simplified implementation - just showing add and sqrt
+		log.Infof("Calculator tool: %f + %f = %f", a, b, result)
+	case "subtract":
+		b, err := extractSecondOperand("subtraction")
+		if err != nil {
+			return nil, err
+		}
+		result = a - b
+		log.Infof("Calculator tool: %f - %f = %f", a, b, result)
+	case "multiply":
+		b, err := extractSecondOperand("multiplication")
+		if err != nil {
+			return nil, err
+		}
+		result = a * b
+		log.Infof("Calculator tool: %f * %f = %f", a, b, result)
+	case "divide":
+		b, err := extractSecondOperand("division")
+		if err != nil {
+			return nil, err
+		}
+		if b == 0 {
+			log.Infof("Calculator tool error: division by zero")
+			return nil, fmt.Errorf("division by zero")
+		}
+		result = a / b
+		log.Infof("Calculator tool: %f / %f = %f", a, b, result)
+	case "power":
+		b, err := extractSecondOperand("power operation")
+		if err != nil {
+			return nil, err
+		}
+		result = math.Pow(a, b)
+		log.Infof("Calculator tool: %f ^ %f = %f", a, b, result)
 	default:
-		log.Printf("Calculator tool error: unsupported operation: %s", operation)
+		log.Infof("Calculator tool error: unsupported operation: %s", operation)
 		return nil, fmt.Errorf("unsupported operation: %s", operation)
 	}
 
 	// Log result
-	log.Printf("Calculator tool returning result: %f", result)
+	log.Infof("Calculator tool returning result: %f", result)
 	return tool.NewResult(result), nil
+}
+
+// expressionParts holds the parts of a parsed expression
+type expressionParts struct {
+	operation string
+	a         float64
+	b         *float64
+}
+
+// extractExpressionParts tries to parse an expression string into operation and operands
+func extractExpressionParts(expr string) expressionParts {
+	// Remove all whitespace
+	expr = strings.ReplaceAll(expr, " ", "")
+
+	// Check for common operators
+	if strings.Contains(expr, "+") {
+		parts := strings.Split(expr, "+")
+		if len(parts) == 2 {
+			a, errA := strconv.ParseFloat(parts[0], 64)
+			b, errB := strconv.ParseFloat(parts[1], 64)
+			if errA == nil && errB == nil {
+				bVal := b
+				return expressionParts{operation: "add", a: a, b: &bVal}
+			}
+		}
+	} else if strings.Contains(expr, "-") {
+		parts := strings.Split(expr, "-")
+		if len(parts) == 2 {
+			a, errA := strconv.ParseFloat(parts[0], 64)
+			b, errB := strconv.ParseFloat(parts[1], 64)
+			if errA == nil && errB == nil {
+				bVal := b
+				return expressionParts{operation: "subtract", a: a, b: &bVal}
+			}
+		}
+	} else if strings.Contains(expr, "*") {
+		parts := strings.Split(expr, "*")
+		if len(parts) == 2 {
+			a, errA := strconv.ParseFloat(parts[0], 64)
+			b, errB := strconv.ParseFloat(parts[1], 64)
+			if errA == nil && errB == nil {
+				bVal := b
+				return expressionParts{operation: "multiply", a: a, b: &bVal}
+			}
+		}
+	} else if strings.Contains(expr, "/") {
+		parts := strings.Split(expr, "/")
+		if len(parts) == 2 {
+			a, errA := strconv.ParseFloat(parts[0], 64)
+			b, errB := strconv.ParseFloat(parts[1], 64)
+			if errA == nil && errB == nil {
+				bVal := b
+				return expressionParts{operation: "divide", a: a, b: &bVal}
+			}
+		}
+	} else if strings.Contains(expr, "^") {
+		parts := strings.Split(expr, "^")
+		if len(parts) == 2 {
+			a, errA := strconv.ParseFloat(parts[0], 64)
+			b, errB := strconv.ParseFloat(parts[1], 64)
+			if errA == nil && errB == nil {
+				bVal := b
+				return expressionParts{operation: "power", a: a, b: &bVal}
+			}
+		}
+	} else if strings.HasPrefix(expr, "sqrt") {
+		// Try to extract the argument from sqrt(x)
+		argStart := strings.Index(expr, "(")
+		argEnd := strings.LastIndex(expr, ")")
+		if argStart != -1 && argEnd != -1 && argEnd > argStart {
+			arg := expr[argStart+1 : argEnd]
+			a, err := strconv.ParseFloat(arg, 64)
+			if err == nil {
+				return expressionParts{operation: "sqrt", a: a}
+			}
+		}
+	}
+
+	// Return empty if no match
+	return expressionParts{}
 }
 
 // TranslatorTool is a tool for translating text to different languages.
@@ -171,19 +349,79 @@ func NewTranslatorTool() *TranslatorTool {
 // Execute performs the translation.
 func (t *TranslatorTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
 	// Log tool invocation
-	log.Printf("Translator tool called with args: %v", args)
+	log.Infof("Translator tool called with args: %v", args)
+
+	// Normalize parameters to handle various input formats
+	normalizedParams := make(map[string]interface{})
+
+	// Extract from tool_input if present
+	if toolInput, hasToolInput := args["tool_input"]; hasToolInput {
+		if inputMap, isMap := toolInput.(map[string]interface{}); isMap {
+			// Map structure
+			log.Infof("Found nested tool_input structure, extracting parameters")
+			for k, v := range inputMap {
+				normalizedParams[k] = v
+			}
+		} else if inputStr, isStr := toolInput.(string); isStr && inputStr != "" {
+			// String input - try to parse as JSON first
+			var jsonMap map[string]interface{}
+			if err := json.Unmarshal([]byte(inputStr), &jsonMap); err == nil {
+				log.Infof("Parsed tool_input JSON string into parameters")
+				for k, v := range jsonMap {
+					normalizedParams[k] = v
+				}
+			} else {
+				// Direct string value - treat as text to translate
+				log.Infof("Using direct string as text to translate: %s", inputStr)
+				normalizedParams["text"] = inputStr
+
+				// Look for language indicator in the original args
+				for k, v := range args {
+					if (k == "target_language" || k == "to" || k == "language" ||
+						k == "language_code" || k == "target") && v != nil {
+						if langStr, ok := v.(string); ok {
+							normalizedParams["target_language"] = langStr
+							break
+						}
+					}
+				}
+
+				// If no language found, default to Spanish
+				if normalizedParams["target_language"] == nil {
+					normalizedParams["target_language"] = "es"
+				}
+			}
+		}
+	}
+
+	// Add any direct arguments not in tool_input
+	for k, v := range args {
+		if k != "tool_name" && k != "tool_input" && normalizedParams[k] == nil {
+			normalizedParams[k] = v
+		}
+	}
+
+	// If we have a single direct string parameter, treat as text to translate
+	if len(normalizedParams) == 0 && len(args) == 1 {
+		for _, v := range args {
+			if strValue, isStr := v.(string); isStr {
+				normalizedParams["text"] = strValue
+				normalizedParams["target_language"] = "es" // Default to Spanish
+			}
+		}
+	}
 
 	// Extract the text
-	text, ok := args["text"].(string)
+	text, ok := normalizedParams["text"].(string)
 	if !ok {
-		log.Printf("Translator tool error: text is required")
+		log.Infof("Translator tool error: text is required")
 		return nil, fmt.Errorf("text is required")
 	}
 
 	// Extract the target language
-	targetLang, ok := args["target_language"].(string)
+	targetLang, ok := normalizedParams["target_language"].(string)
 	if !ok {
-		log.Printf("Translator tool error: target_language is required")
+		log.Infof("Translator tool error: target_language is required")
 		return nil, fmt.Errorf("target_language is required")
 	}
 
@@ -217,7 +455,7 @@ func (t *TranslatorTool) Execute(ctx context.Context, args map[string]interface{
 	}
 
 	// Log result
-	log.Printf("Translator tool returning result: %v", result)
+	log.Infof("Translator tool returning result: %v", result)
 	return tool.NewJSONResult(result), nil
 }
 
@@ -259,12 +497,69 @@ func NewUnitConverterTool() *UnitConverterTool {
 // Execute performs the unit conversion.
 func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
 	// Log tool invocation
-	log.Printf("Unit converter tool called with args: %v", args)
+	log.Infof("Unit converter tool called with args: %v", args)
+
+	// Normalize parameters to handle various input formats
+	normalizedParams := make(map[string]interface{})
+
+	// Extract from tool_input if present
+	if toolInput, hasToolInput := args["tool_input"]; hasToolInput {
+		if inputMap, isMap := toolInput.(map[string]interface{}); isMap {
+			// Map structure
+			log.Infof("Found nested tool_input structure, extracting parameters")
+			for k, v := range inputMap {
+				normalizedParams[k] = v
+			}
+		} else if inputStr, isStr := toolInput.(string); isStr && inputStr != "" {
+			// String input - try to parse as JSON first
+			var jsonMap map[string]interface{}
+			if err := json.Unmarshal([]byte(inputStr), &jsonMap); err == nil {
+				log.Infof("Parsed tool_input JSON string into parameters")
+				for k, v := range jsonMap {
+					normalizedParams[k] = v
+				}
+			} else {
+				// Direct string value - try to parse as a conversion query
+				log.Infof("Trying to parse direct string as conversion query: %s", inputStr)
+
+				// Common patterns like "10 km to miles" or "25C to F"
+				parts := extractConversionParts(inputStr)
+				if parts.value != 0 {
+					normalizedParams["value"] = parts.value
+					normalizedParams["from_unit"] = parts.fromUnit
+					normalizedParams["to_unit"] = parts.toUnit
+					log.Infof("Parsed conversion query: %v %v to %v",
+						parts.value, parts.fromUnit, parts.toUnit)
+				}
+			}
+		}
+	}
+
+	// Add any direct arguments not in tool_input
+	for k, v := range args {
+		if k != "tool_name" && k != "tool_input" && normalizedParams[k] == nil {
+			normalizedParams[k] = v
+		}
+	}
+
+	// If we have a single direct string parameter, try to parse as conversion query
+	if len(normalizedParams) == 0 && len(args) == 1 {
+		for _, v := range args {
+			if strValue, isStr := v.(string); isStr {
+				parts := extractConversionParts(strValue)
+				if parts.value != 0 {
+					normalizedParams["value"] = parts.value
+					normalizedParams["from_unit"] = parts.fromUnit
+					normalizedParams["to_unit"] = parts.toUnit
+				}
+			}
+		}
+	}
 
 	// Extract the value
-	valueInterface, ok := args["value"]
+	valueInterface, ok := normalizedParams["value"]
 	if !ok {
-		log.Printf("Unit converter tool error: value is required")
+		log.Infof("Unit converter tool error: value is required")
 		return nil, fmt.Errorf("value is required")
 	}
 
@@ -275,20 +570,20 @@ func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interfa
 	case int:
 		value = float64(v)
 	default:
-		log.Printf("Unit converter tool error: value must be a number")
+		log.Infof("Unit converter tool error: value must be a number")
 		return nil, fmt.Errorf("value must be a number")
 	}
 
 	// Extract units
-	fromUnit, ok := args["from_unit"].(string)
+	fromUnit, ok := normalizedParams["from_unit"].(string)
 	if !ok {
-		log.Printf("Unit converter tool error: from_unit is required")
+		log.Infof("Unit converter tool error: from_unit is required")
 		return nil, fmt.Errorf("from_unit is required")
 	}
 
-	toUnit, ok := args["to_unit"].(string)
+	toUnit, ok := normalizedParams["to_unit"].(string)
 	if !ok {
-		log.Printf("Unit converter tool error: to_unit is required")
+		log.Infof("Unit converter tool error: to_unit is required")
 		return nil, fmt.Errorf("to_unit is required")
 	}
 
@@ -310,7 +605,7 @@ func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interfa
 		result = (value - 32) * 5 / 9
 		conversionFormula = "celsius = (fahrenheit - 32) * 5/9"
 	} else {
-		log.Printf("Unit converter tool error: unsupported conversion: %s to %s", fromUnit, toUnit)
+		log.Infof("Unit converter tool error: unsupported conversion: %s to %s", fromUnit, toUnit)
 		return nil, fmt.Errorf("unsupported conversion: %s to %s", fromUnit, toUnit)
 	}
 
@@ -327,8 +622,92 @@ func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interfa
 	}
 
 	// Log result
-	log.Printf("Unit converter tool returning result: %v", conversionResult)
+	log.Infof("Unit converter tool returning result: %v", conversionResult)
 	return tool.NewJSONResult(conversionResult), nil
+}
+
+// conversionParts holds parsed parts of a conversion request
+type conversionParts struct {
+	value    float64
+	fromUnit string
+	toUnit   string
+}
+
+// extractConversionParts tries to parse conversion requests like "10 km to miles"
+func extractConversionParts(query string) conversionParts {
+	// Check for patterns like "X unit to unit" or "X unit-unit"
+	query = strings.ToLower(query)
+
+	// Try regex pattern for "X unit to unit"
+	re := regexp.MustCompile(`(\d+\.?\d*)\s*([a-z]+)\s*(?:to|->|in)\s*([a-z]+)`)
+	matches := re.FindStringSubmatch(query)
+
+	if len(matches) == 4 {
+		value, err := strconv.ParseFloat(matches[1], 64)
+		if err != nil {
+			return conversionParts{}
+		}
+
+		fromUnit := normalizeUnit(matches[2])
+		toUnit := normalizeUnit(matches[3])
+
+		return conversionParts{
+			value:    value,
+			fromUnit: fromUnit,
+			toUnit:   toUnit,
+		}
+	}
+
+	// Try celsius/fahrenheit special cases
+	tempRe := regexp.MustCompile(`(\d+\.?\d*)\s*([cf])\s*(?:to|->|in)\s*([cf])`)
+	tempMatches := tempRe.FindStringSubmatch(query)
+
+	if len(tempMatches) == 4 {
+		value, err := strconv.ParseFloat(tempMatches[1], 64)
+		if err != nil {
+			return conversionParts{}
+		}
+
+		var fromUnit, toUnit string
+		if tempMatches[2] == "c" {
+			fromUnit = "celsius"
+		} else {
+			fromUnit = "fahrenheit"
+		}
+
+		if tempMatches[3] == "c" {
+			toUnit = "celsius"
+		} else {
+			toUnit = "fahrenheit"
+		}
+
+		return conversionParts{
+			value:    value,
+			fromUnit: fromUnit,
+			toUnit:   toUnit,
+		}
+	}
+
+	return conversionParts{}
+}
+
+// normalizeUnit converts abbreviations to full unit names
+func normalizeUnit(unit string) string {
+	unit = strings.TrimSpace(unit)
+
+	// Handle common abbreviations
+	switch unit {
+	case "km", "kilometer", "kilometers":
+		return "km"
+	case "mi", "mile", "miles":
+		return "miles"
+	case "c", "celsius", "celcius":
+		return "celsius"
+	case "f", "fahrenheit":
+		return "fahrenheit"
+	default:
+		return unit
+	}
 }
 
 // TextAnalysisTool provides text analysis capabilities.
@@ -366,34 +745,93 @@ func NewTextAnalysisTool() *TextAnalysisTool {
 // Execute performs the text analysis.
 func (t *TextAnalysisTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
 	// Log tool invocation
-	log.Printf("Text Analysis tool called with args: %v", args)
+	log.Infof("Text Analysis tool called with args: %v", args)
+
+	// Normalize parameters to handle various input formats
+	normalizedParams := make(map[string]interface{})
+
+	// Extract from tool_input if present
+	if toolInput, hasToolInput := args["tool_input"]; hasToolInput {
+		if inputMap, isMap := toolInput.(map[string]interface{}); isMap {
+			// Map structure
+			log.Infof("Found nested tool_input structure, extracting parameters")
+			for k, v := range inputMap {
+				normalizedParams[k] = v
+			}
+		} else if inputStr, isStr := toolInput.(string); isStr && inputStr != "" {
+			// String input - try to parse as JSON first
+			var jsonMap map[string]interface{}
+			if err := json.Unmarshal([]byte(inputStr), &jsonMap); err == nil {
+				log.Infof("Parsed tool_input JSON string into parameters")
+				for k, v := range jsonMap {
+					normalizedParams[k] = v
+				}
+			} else {
+				// Direct string value - treat as text to analyze
+				log.Infof("Using direct string as text to analyze: %s", inputStr)
+				normalizedParams["text"] = inputStr
+
+				// Try to infer analysis type from the original args
+				for k, v := range args {
+					if (k == "analysis_type" || k == "type" || k == "analyze_for") && v != nil {
+						if typeStr, ok := v.(string); ok {
+							normalizedParams["analysis_type"] = typeStr
+							break
+						}
+					}
+				}
+
+				// If no analysis type specified, default to word_count
+				if normalizedParams["analysis_type"] == nil {
+					normalizedParams["analysis_type"] = "word_count"
+				}
+			}
+		}
+	}
+
+	// Add any direct arguments not in tool_input
+	for k, v := range args {
+		if k != "tool_name" && k != "tool_input" && normalizedParams[k] == nil {
+			normalizedParams[k] = v
+		}
+	}
+
+	// If we have a single direct string parameter, treat as text to analyze
+	if len(normalizedParams) == 0 && len(args) == 1 {
+		for _, v := range args {
+			if strValue, isStr := v.(string); isStr {
+				normalizedParams["text"] = strValue
+				normalizedParams["analysis_type"] = "word_count" // Default type
+			}
+		}
+	}
 
 	// Extract the text
-	textInterface, ok := args["text"]
+	textInterface, ok := normalizedParams["text"]
 	if !ok {
-		log.Printf("Text Analysis tool error: text is required")
+		log.Infof("Text Analysis tool error: text is required")
 		return nil, fmt.Errorf("text is required")
 	}
 	text, ok := textInterface.(string)
 	if !ok {
-		log.Printf("Text Analysis tool error: text must be a string")
+		log.Infof("Text Analysis tool error: text must be a string")
 		return nil, fmt.Errorf("text must be a string")
 	}
 
 	if text == "" {
-		log.Printf("Text Analysis tool error: text cannot be empty")
+		log.Infof("Text Analysis tool error: text cannot be empty")
 		return nil, fmt.Errorf("text cannot be empty")
 	}
 
 	// Extract the analysis type
-	analysisTypeInterface, ok := args["analysis_type"]
+	analysisTypeInterface, ok := normalizedParams["analysis_type"]
 	if !ok {
-		log.Printf("Text Analysis tool error: analysis_type is required")
+		log.Infof("Text Analysis tool error: analysis_type is required")
 		return nil, fmt.Errorf("analysis_type is required")
 	}
 	analysisType, ok := analysisTypeInterface.(string)
 	if !ok {
-		log.Printf("Text Analysis tool error: analysis_type must be a string")
+		log.Infof("Text Analysis tool error: analysis_type must be a string")
 		return nil, fmt.Errorf("analysis_type must be a string")
 	}
 
@@ -412,7 +850,7 @@ func (t *TextAnalysisTool) Execute(ctx context.Context, args map[string]interfac
 			"character_count": len(text),
 			"sentence_count":  sentences,
 		}
-		log.Printf("Text Analysis tool: word count result for text: %v", result)
+		log.Infof("Text Analysis tool: word count result for text: %v", result)
 
 	case "sentiment":
 		// Simple sentiment analysis
@@ -443,7 +881,7 @@ func (t *TextAnalysisTool) Execute(ctx context.Context, args map[string]interfac
 			"positive_words": positiveCount,
 			"negative_words": negativeCount,
 		}
-		log.Printf("Text Analysis tool: sentiment analysis result: %v", result)
+		log.Infof("Text Analysis tool: sentiment analysis result: %v", result)
 
 	case "summary":
 		var summary string
@@ -461,15 +899,15 @@ func (t *TextAnalysisTool) Execute(ctx context.Context, args map[string]interfac
 			"original_length": len(text),
 			"summary_length":  len(summary),
 		}
-		log.Printf("Text Analysis tool: summary result (length %d → %d)", len(text), len(summary))
+		log.Infof("Text Analysis tool: summary result (length %d → %d)", len(text), len(summary))
 
 	default:
-		log.Printf("Text Analysis tool error: unsupported analysis type: %s", analysisType)
+		log.Infof("Text Analysis tool error: unsupported analysis type: %s", analysisType)
 		return nil, fmt.Errorf("unsupported analysis type: %s", analysisType)
 	}
 
 	// Log result
-	log.Printf("Text Analysis tool returning result: %v", result)
+	log.Infof("Text Analysis tool returning result: %v", result)
 	return tool.NewJSONResult(result), nil
 }
 
@@ -499,17 +937,30 @@ func (p *BasicTaskProcessor) Process(
 	}
 
 	// Log task start
-	log.Printf("Starting to process task %s with input: %s", taskID, text)
+	log.Infof("Starting to process task %s with input: %s", taskID, text)
 
-	// Check for API key (necessary for Gemini)
-	apiKey := os.Getenv("GOOGLE_API_KEY")
-	if apiKey == "" {
-		errorMsg := "GOOGLE_API_KEY environment variable is not set"
-		log.Println("Error:", errorMsg)
+	// Get model provider and name from environment
+	provider := os.Getenv("MODEL_PROVIDER")
+	modelName := os.Getenv("MODEL_NAME")
+
+	// Use default model if not specified
+	if provider == "" || modelName == "" {
+		defaultModel := GetDefaultModel()
+		provider = defaultModel.Provider
+		modelName = defaultModel.ModelName
+		log.Infof("Using default model: %s %s", provider, modelName)
+	}
+
+	// Create the model based on provider and name
+	llmModel, err := createModel(provider, modelName)
+	if err != nil {
+		errorMsg := fmt.Sprintf("Failed to create model: %v. Make sure the %s environment variable is set.",
+			err, GetModelAPIEnvVar(provider, modelName))
+		log.Infof("Error:", errorMsg)
 
 		// Update task status to failed with error message
 		errMsgParts := []protocol.Part{
-			protocol.NewTextPart("Failed to process task: Google API key is missing. Please set GOOGLE_API_KEY environment variable."),
+			protocol.NewTextPart(errorMsg),
 		}
 		errResponse := protocol.NewMessage(protocol.MessageRoleAgent, errMsgParts)
 
@@ -519,30 +970,8 @@ func (p *BasicTaskProcessor) Process(
 		return fmt.Errorf(errorMsg)
 	}
 
-	// Create Gemini model
-	geminiModel, err := models.NewGeminiModel(
-		"gemini-2.0-flash",
-		models.WithGeminiAPIKey(apiKey),
-		models.WithGeminiDefaultOptions(model.GenerationOptions{
-			Temperature:      0.1,
-			MaxTokens:        4096,
-			TopP:             0.90,
-			TopK:             32,
-			PresencePenalty:  0.1,
-			FrequencyPenalty: 0.1,
-			EnableToolCalls:  true,
-		}),
-	)
-	if err != nil {
-		log.Printf("Failed to create Gemini model: %v", err)
-		errorMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
-			protocol.NewTextPart(fmt.Sprintf("Failed to create Gemini model: %v", err)),
-		})
-		if err := handle.UpdateStatus(protocol.TaskStateFailed, &errorMsg); err != nil {
-			log.Printf("Failed to update task status: %v", err)
-		}
-		return fmt.Errorf("failed to create Gemini model: %w", err)
-	}
+	// Log which model we're using
+	log.Infof("Using %s model: %s", provider, modelName)
 
 	// Create all tools (combination of traditional and MCP tools)
 	calculatorTool := NewCalculatorTool()
@@ -564,13 +993,13 @@ func (p *BasicTaskProcessor) Process(
 	// Get MCP tools
 	mcpTools, err := mcpToolset.GetTools(ctx)
 	if err != nil {
-		log.Printf("Warning: failed to get MCP tools: %v", err)
+		log.Infof("Warning: failed to get MCP tools: %v", err)
 		// Continue without MCP tools
 		mcpTools = []tool.Tool{}
 	} else {
-		log.Printf("Retrieved %d MCP tools from toolset", len(mcpTools))
+		log.Infof("Retrieved %d MCP tools from toolset", len(mcpTools))
 		for _, t := range mcpTools {
-			log.Printf("MCP Tool: %s - %s", t.Name(), t.Description())
+			log.Infof("MCP Tool: %s - %s", t.Name(), t.Description())
 		}
 	}
 
@@ -589,22 +1018,22 @@ func (p *BasicTaskProcessor) Process(
 	defer func() {
 		if mcpToolset != nil {
 			if err := mcpToolset.Close(); err != nil {
-				log.Printf("Warning: failed to close MCP toolset: %v", err)
+				log.Infof("Warning: failed to close MCP toolset: %v", err)
 			} else {
-				log.Printf("Successfully closed MCP toolset")
+				log.Infof("Successfully closed MCP toolset")
 			}
 		}
 	}()
 
 	// Log the tools for debugging
-	log.Printf("Using %d tools in total", len(allTools))
+	log.Infof("Using %d tools in total", len(allTools))
 	for _, t := range allTools {
-		log.Printf("Registered tool: %s - %s", t.Name(), t.Description())
+		log.Infof("Registered tool: %s - %s", t.Name(), t.Description())
 		params, err := json.Marshal(t.Parameters())
 		if err != nil {
-			log.Printf("Error marshaling parameters for tool %s: %v", t.Name(), err)
+			log.Infof("Error marshaling parameters for tool %s: %v", t.Name(), err)
 		} else {
-			log.Printf("Tool %s parameters: %s", t.Name(), string(params))
+			log.Infof("Tool %s parameters: %s", t.Name(), string(params))
 		}
 	}
 
@@ -617,24 +1046,31 @@ func (p *BasicTaskProcessor) Process(
 			Parameters:  t.Parameters(),
 		})
 	}
-	if err := geminiModel.SetTools(toolDefs); err != nil {
-		log.Printf("Warning: failed to set tools on model: %v", err)
-		// Continue despite this warning
+
+	// Apply tools based on model type using type assertions
+	if toolCallModel, ok := llmModel.(model.ToolCallSupportingModel); ok {
+		if err := toolCallModel.SetTools(toolDefs); err != nil {
+			log.Infof("Warning: failed to set tools on model: %v", err)
+		}
+	} else {
+		log.Infof("Warning: model type %T doesn't support SetTools method", llmModel)
 	}
 
 	// Create ReAct agent components
+	thoughtPromptStrategy := react.NewDefaultThoughtPromptStrategy()
 	thoughtGenerator := react.NewLLMThoughtGenerator(
-		geminiModel,
-		react.NewDefaultThoughtPromptStrategy(allTools),
+		llmModel,
+		thoughtPromptStrategy,
+		react.ThoughtFormatFree,
 	)
 
 	actionSelector := react.NewLLMActionSelector(
-		geminiModel,
+		llmModel,
 		react.NewDefaultActionPromptStrategy(),
 	)
 
 	responseGenerator := react.NewLLMResponseGenerator(
-		geminiModel,
+		llmModel,
 		react.NewDefaultResponsePromptStrategy(true),
 	)
 
@@ -642,60 +1078,60 @@ func (p *BasicTaskProcessor) Process(
 
 	// Create the ReAct agent
 	reactAgent, err := react.NewReActAgent(react.ReActAgentConfig{
-		Name:              "GeminiReActAgent",
-		Description:       "A ReAct agent powered by Google's Gemini model with various tools",
-		Model:             geminiModel,
+		Name:              fmt.Sprintf("%sReActAgent", provider),
+		Description:       fmt.Sprintf("A ReAct agent powered by %s %s with various tools", provider, modelName),
+		Model:             llmModel,
 		Tools:             allTools,
 		ThoughtGenerator:  thoughtGenerator,
 		ActionSelector:    actionSelector,
 		ResponseGenerator: responseGenerator,
 		CycleManager:      cycleManager,
 		MaxIterations:     10,
-		ThoughtFormat:     react.FormatMarkdown,
+		ThoughtFormat:     react.ThoughtFormatFree,
 		EnableStreaming:   false,
 	})
 	if err != nil {
-		log.Printf("Failed to create ReAct agent: %v", err)
+		log.Infof("Failed to create ReAct agent: %v", err)
 		errorMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
 			protocol.NewTextPart(fmt.Sprintf("Failed to create ReAct agent: %v", err)),
 		})
 		if err := handle.UpdateStatus(protocol.TaskStateFailed, &errorMsg); err != nil {
-			log.Printf("Failed to update task status: %v", err)
+			log.Infof("Failed to update task status: %v", err)
 		}
 		return fmt.Errorf("failed to create ReAct agent: %w", err)
 	}
 
 	// Add debug log for agent creation
-	log.Printf("ReAct agent created successfully with model %s and %d tools",
-		geminiModel.Name(), len(allTools))
+	log.Infof("ReAct agent created successfully with model %s and %d tools",
+		llmModel.Name(), len(allTools))
 
 	// Status update - agent created and ready
 	stageMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
-		protocol.NewTextPart("Agent configured and processing your request..."),
+		protocol.NewTextPart(fmt.Sprintf("Agent configured with %s %s and processing your request...", provider, modelName)),
 	})
 	if err := handle.UpdateStatus(protocol.TaskStateWorking, &stageMsg); err != nil {
-		log.Printf("Failed to update status: %v", err)
+		log.Infof("Failed to update status: %v", err)
 	}
 
 	// Create a user message for the ReAct agent
 	userMsg := message.NewUserMessage(text)
 
 	// Run the ReAct agent with the user message
-	log.Printf("Running ReAct agent with user message: %s", text)
+	log.Infof("Running ReAct agent with user message: %s", text)
 	response, err := reactAgent.Run(ctx, userMsg)
 	if err != nil {
-		log.Printf("Agent execution failed: %v", err)
+		log.Infof("Agent execution failed: %v", err)
 		errorMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
 			protocol.NewTextPart(fmt.Sprintf("Agent execution failed: %v", err)),
 		})
 		if err := handle.UpdateStatus(protocol.TaskStateFailed, &errorMsg); err != nil {
-			log.Printf("Failed to update task status: %v", err)
+			log.Infof("Failed to update task status: %v", err)
 		}
 		return fmt.Errorf("agent execution failed: %w", err)
 	}
 
 	// Log agent response for debugging
-	log.Printf("Agent response: %s", response.Content)
+	log.Infof("Agent response: %s", response.Content)
 
 	// Add agent response
 	finalResponseMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
@@ -705,16 +1141,16 @@ func (p *BasicTaskProcessor) Process(
 	// Get the thought process history
 	cycles, err := reactAgent.GetHistory(ctx)
 	if err != nil {
-		log.Printf("Failed to get agent history: %v", err)
+		log.Infof("Failed to get agent history: %v", err)
 	} else {
-		log.Printf("Retrieved %d cycles from agent history", len(cycles))
+		log.Infof("Retrieved %d cycles from agent history", len(cycles))
 		for i, cycle := range cycles {
-			log.Printf("Cycle %d: Thought: %s", i+1, cycle.Thought.Content)
+			log.Infof("Cycle %d: Thought: %s", i+1, cycle.Thought.Content)
 			if cycle.Action != nil {
-				log.Printf("Cycle %d: Action: %s, Parameters: %v", i+1, cycle.Action.ToolName, cycle.Action.ToolInput)
+				log.Infof("Cycle %d: Action: %s, Parameters: %v", i+1, cycle.Action.ToolName, cycle.Action.ToolInput)
 			}
 			if cycle.Observation != nil {
-				log.Printf("Cycle %d: Observation: Error=%v, Output=%v", i+1, cycle.Observation.IsError, cycle.Observation.ToolOutput)
+				log.Infof("Cycle %d: Observation: Error=%v, Output=%v", i+1, cycle.Observation.IsError, cycle.Observation.ToolOutput)
 			}
 		}
 	}
@@ -755,7 +1191,7 @@ func (p *BasicTaskProcessor) Process(
 			Index: 0,
 		}
 		if err := handle.AddArtifact(thoughtArtifact); err != nil {
-			log.Printf("Failed to add thought artifact: %v", err)
+			log.Infof("Failed to add thought artifact: %v", err)
 		}
 	}
 
@@ -764,7 +1200,7 @@ func (p *BasicTaskProcessor) Process(
 		return fmt.Errorf("failed to complete task: %w", err)
 	}
 
-	log.Printf("Successfully completed task %s", taskID)
+	log.Infof("Successfully completed task %s", taskID)
 	return nil
 }
 
@@ -774,12 +1210,24 @@ func stringPtr(s string) *string {
 }
 
 func runServer(address string) {
+	// Get model provider and name
+	provider := os.Getenv("MODEL_PROVIDER")
+	modelName := os.Getenv("MODEL_NAME")
+
+	// Use default model if not specified
+	if provider == "" || modelName == "" {
+		defaultModel := GetDefaultModel()
+		provider = defaultModel.Provider
+		modelName = defaultModel.ModelName
+	}
+
 	// Create an agent card with metadata about the agent
-	desc := "An agent implementing the A2A protocol with various local tools and remote MCP tools"
+	desc := fmt.Sprintf("An agent implementing the A2A protocol with %s %s model and various local and remote tools",
+		strings.ToUpper(provider), modelName)
 	docURL := "https://github.com/yourusername/trpc-a2a-go/docs"
 
 	agentCard := server.AgentCard{
-		Name:             "A2A Example Agent with Multiple Tools and MCP Integration",
+		Name:             fmt.Sprintf("A2A Example Agent (%s %s)", strings.ToUpper(provider), modelName),
 		Description:      &desc,
 		URL:              "http://" + address + "/",
 		Version:          "1.0.0",
@@ -865,7 +1313,7 @@ func runServer(address string) {
 
 	// Start the server in a separate goroutine
 	go func() {
-		log.Printf("Starting A2A server on %s", address)
+		log.Infof("Starting A2A server on %s", address)
 		if err := a2aServer.Start(address); err != nil {
 			log.Fatalf("Failed to start A2A server: %v", err)
 		}
@@ -875,14 +1323,14 @@ func runServer(address string) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<-c
-	log.Println("Shutting down servers...")
+	log.Infof("Shutting down servers...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Stop the A2A server
 	if err := a2aServer.Stop(ctx); err != nil {
-		log.Printf("Error shutting down A2A server: %v", err)
+		log.Infof("Error shutting down A2A server: %v", err)
 	}
 }
 
@@ -906,15 +1354,15 @@ func runClient(agentURL, message string) {
 	}
 
 	// Send the task to the agent
-	fmt.Println("Sending task to agent...")
+	log.Infof("Sending task to agent...")
 	task, err := a2aClient.SendTasks(context.Background(), taskParams)
 	if err != nil {
 		log.Fatalf("Failed to send task: %v", err)
 	}
 
 	// Print the initial task state
-	fmt.Printf("Task ID: %s\n", task.ID)
-	fmt.Printf("Initial state: %s\n", task.Status.State)
+	log.Infof("Task ID: %s\n", task.ID)
+	log.Infof("Initial state: %s\n", task.Status.State)
 
 	// Poll for updates until the task is completed or failed
 	for task.Status.State != protocol.TaskStateCompleted &&
@@ -933,20 +1381,20 @@ func runClient(agentURL, message string) {
 			log.Fatalf("Failed to get task status: %v", err)
 		}
 
-		fmt.Printf("Task state: %s\n", task.Status.State)
+		log.Infof("Task state: %s\n", task.Status.State)
 
 		// Display any message
 		if task.Status.Message != nil {
 			for _, part := range task.Status.Message.Parts {
 				if textPart, ok := part.(protocol.TextPart); ok {
-					fmt.Printf("  > %s\n", textPart.Text)
+					log.Infof("  > %s\n", textPart.Text)
 				}
 			}
 		}
 	}
 
 	// Print the final result
-	fmt.Println("\nFinal Result:")
+	fmt.Printf("\nFinal Result:")
 	if task.Status.Message != nil {
 		fmt.Println("Agent response:")
 		for _, part := range task.Status.Message.Parts {
@@ -958,7 +1406,7 @@ func runClient(agentURL, message string) {
 
 	// Print any artifacts
 	if len(task.Artifacts) > 0 {
-		fmt.Println("\nArtifacts:")
+		fmt.Printf("\nArtifacts:")
 		for i, artifact := range task.Artifacts {
 			fmt.Printf("Artifact %d: %s\n", i+1, *artifact.Name)
 			fmt.Printf("Description: %s\n", *artifact.Description)
@@ -967,7 +1415,7 @@ func runClient(agentURL, message string) {
 					fmt.Printf("  %s\n", textPart.Text)
 				}
 			}
-			fmt.Println()
+			fmt.Printf("--------------------------------\n")
 		}
 	}
 }
@@ -992,55 +1440,222 @@ func runStreamExample(agentURL, message string) {
 	}
 
 	// Send the task with streaming
-	fmt.Println("Sending stream task to agent...")
+	log.Infof("Sending stream task to agent...")
 	eventsChan, err := a2aClient.StreamTask(context.Background(), taskParams)
 	if err != nil {
 		log.Fatalf("Failed to send streaming task: %v", err)
 	}
 
 	// Process events as they arrive
-	fmt.Println("Receiving events:")
+	log.Infof("Receiving events:")
 	for event := range eventsChan {
 		switch evt := event.(type) {
 		case protocol.TaskStatusUpdateEvent:
-			fmt.Printf("Status update: %s\n", evt.Status.State)
+			log.Infof("Status update: %s\n", evt.Status.State)
 			if evt.Status.Message != nil {
 				for _, part := range evt.Status.Message.Parts {
 					if textPart, ok := part.(protocol.TextPart); ok {
-						fmt.Printf("  > %s\n", textPart.Text)
+						log.Infof("  > %s\n", textPart.Text)
 					}
 				}
 			}
 		case protocol.TaskArtifactUpdateEvent:
-			fmt.Printf("\nArtifact update: %s\n", *evt.Artifact.Name)
-			fmt.Printf("Description: %s\n", *evt.Artifact.Description)
+			log.Infof("\nArtifact update: %s\n", *evt.Artifact.Name)
+			log.Infof("Description: %s\n", *evt.Artifact.Description)
 			for _, part := range evt.Artifact.Parts {
 				if textPart, ok := part.(protocol.TextPart); ok {
-					fmt.Printf("%s\n", textPart.Text)
+					log.Infof("%s\n", textPart.Text)
 				}
 			}
 		}
 
 		// Check if this is the final event
 		if event.IsFinal() {
-			fmt.Println("\nReceived final event")
+			log.Infof("\nReceived final event")
 			break
 		}
 	}
-	fmt.Println("Stream completed")
+	log.Infof("Stream completed")
+}
+
+// ModelInfo stores information about available models.
+type ModelInfo struct {
+	Provider  string
+	ModelName string
+	APIEnvVar string
+	IsDefault bool
+}
+
+// GetAvailableModels returns a list of all supported models.
+func GetAvailableModels() []ModelInfo {
+	return []ModelInfo{
+		// Gemini models
+		{Provider: "gemini", ModelName: "gemini-2.0-flash", APIEnvVar: "GOOGLE_API_KEY", IsDefault: true},
+		{Provider: "gemini", ModelName: "gemini-2.0-pro", APIEnvVar: "GOOGLE_API_KEY", IsDefault: false},
+		{Provider: "gemini", ModelName: "gemini-1.5-pro", APIEnvVar: "GOOGLE_API_KEY", IsDefault: false},
+		{Provider: "gemini", ModelName: "gemini-1.5-flash", APIEnvVar: "GOOGLE_API_KEY", IsDefault: false},
+
+		// OpenAI models
+		{Provider: "openai", ModelName: "gpt-4", APIEnvVar: "OPENAI_API_KEY", IsDefault: false},
+		{Provider: "openai", ModelName: "gpt-4-turbo", APIEnvVar: "OPENAI_API_KEY", IsDefault: false},
+		{Provider: "openai", ModelName: "gpt-3.5-turbo", APIEnvVar: "OPENAI_API_KEY", IsDefault: false},
+	}
+}
+
+// GetDefaultModel returns the default model configuration.
+func GetDefaultModel() ModelInfo {
+	models := GetAvailableModels()
+	for _, m := range models {
+		if m.IsDefault {
+			return m
+		}
+	}
+	// Fallback if no default is marked
+	return models[0]
+}
+
+// GetModelAPIEnvVar returns the API key environment variable name for a model provider.
+func GetModelAPIEnvVar(provider, modelName string) string {
+	for _, model := range GetAvailableModels() {
+		if model.Provider == provider && model.ModelName == modelName {
+			return model.APIEnvVar
+		}
+	}
+
+	// Default fallbacks
+	switch provider {
+	case "gemini":
+		return "GOOGLE_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	default:
+		return "UNKNOWN_API_KEY"
+	}
+}
+
+// createModel creates and configures the appropriate model based on provider and model name.
+func createModel(provider, modelName string) (model.Model, error) {
+	// Default options shared by all models
+	defaultOptions := model.GenerationOptions{
+		Temperature:      0.1,
+		MaxTokens:        4096,
+		TopP:             0.90,
+		PresencePenalty:  0.1,
+		FrequencyPenalty: 0.1,
+		EnableToolCalls:  true,
+	}
+
+	switch provider {
+	case "gemini":
+		// Check for Gemini API key
+		geminiAPIKey := os.Getenv("GOOGLE_API_KEY")
+		if geminiAPIKey == "" {
+			return nil, fmt.Errorf("GOOGLE_API_KEY environment variable is not set")
+		}
+
+		// Create options list
+		opts := []models.GeminiModelOption{
+			models.WithGeminiAPIKey(geminiAPIKey),
+			models.WithGeminiDefaultOptions(defaultOptions),
+		}
+
+		// Create Gemini model
+		geminiModel, err := models.NewGeminiModel(
+			modelName,
+			opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Gemini model: %w", err)
+		}
+		return geminiModel, nil
+
+	case "openai":
+		// Check for OpenAI API key
+		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
+		if openaiAPIKey == "" {
+			return nil, fmt.Errorf("OPENAI_API_KEY environment variable is not set")
+		}
+
+		// Create options list
+		opts := []models.OpenAIModelOption{
+			models.WithOpenAIAPIKey(openaiAPIKey),
+			models.WithOpenAIDefaultOptions(defaultOptions),
+		}
+
+		// Add custom URL if provided
+		openaiBaseURL := os.Getenv("OPENAI_BASE_URL")
+		if openaiBaseURL != "" {
+			opts = append(opts, models.WithOpenAIBaseURL(openaiBaseURL))
+		}
+
+		// Create OpenAI model
+		openaiModel := models.NewOpenAIModel(
+			modelName,
+			opts...,
+		)
+		return openaiModel, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported model provider: %s", provider)
+	}
 }
 
 func main() {
-	// Parse command-line flags
+	// Command line flags
 	serverMode := flag.Bool("server", true, "Run in server mode")
-	streamMode := flag.Bool("stream", false, "Use streaming API in client mode")
 	address := flag.String("address", "localhost:8080", "Server address (host:port)")
-	message := flag.String("message", "Hello, A2A agent! Can you translate this to Spanish and calculate the square root of 25?", "Message to send in client mode")
 	mcpAddress := flag.String("mcp-address", "localhost:3000", "MCP server address (host:port)")
-
+	message := flag.String("message", "Hello, A2A agent! Can you translate this to Spanish and calculate the square root of 25?", "Message to send in client mode")
+	modelName := flag.String("model-name", "gemini-2.0-flash", "Model name to use")
+	modelProvider := flag.String("model-provider", "gemini", "Model provider (gemini, openai)")
+	openaiBaseURL := flag.String("openai-url", "https://api.openai.com/v1", "Base URL for OpenAI API")
+	useStreaming := flag.Bool("stream", false, "Use streaming API in client mode")
+	listModels := flag.Bool("list-models", false, "List all available models and exit")
+	debug := flag.Bool("debug", false, "Enable debug logging")
+	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error, fatal)")
 	flag.Parse()
 
+	// Configure logging
+	if *debug {
+		// Debug flag takes precedence over log-level
+		log.SetLevel(log.LevelDebug)
+		log.Infof("Debug logging enabled")
+	} else {
+		// Otherwise use the specified log level
+		log.SetLevel(*logLevel)
+		log.Infof("Log level set to %s", *logLevel)
+	}
+
+	// List models if requested
+	if *listModels {
+		log.Infof("Available models:")
+		log.Infof("-----------------------------")
+		log.Infof("%-10s %-30s %-20s %s\n", "PROVIDER", "MODEL", "API ENV VAR", "DEFAULT")
+		log.Infof("-----------------------------")
+
+		for _, m := range GetAvailableModels() {
+			defaultStr := ""
+			if m.IsDefault {
+				defaultStr = "✓"
+			}
+			log.Infof("%-10s %-30s %-20s %s\n", m.Provider, m.ModelName, m.APIEnvVar, defaultStr)
+		}
+		log.Infof("\nTo use a specific model: --model-provider=<provider> --model-name=<model-name>")
+		return
+	}
+
+	// Set model selection in environment for the process to access
+	os.Setenv("MODEL_PROVIDER", *modelProvider)
+	os.Setenv("MODEL_NAME", *modelName)
+
+	// Set OpenAI URL in environment
+	os.Setenv("OPENAI_BASE_URL", *openaiBaseURL)
+
 	if *serverMode {
+		log.Infof("Using model provider: %s, model: %s", *modelProvider, *modelName)
+		if *modelProvider == "openai" && *openaiBaseURL != "https://api.openai.com/v1" {
+			log.Infof("Using custom OpenAI URL: %s", *openaiBaseURL)
+		}
 		// Start the MCP server in a separate goroutine
 		go runMCPServer(*mcpAddress)
 
@@ -1049,7 +1664,7 @@ func main() {
 	} else {
 		// Run the client
 		agentURL := fmt.Sprintf("http://%s/", *address)
-		if *streamMode {
+		if *useStreaming {
 			runStreamExample(agentURL, *message)
 		} else {
 			runClient(agentURL, *message)
@@ -1488,7 +2103,7 @@ func runMCPServer(address string) {
 	}
 
 	// Start the server
-	log.Printf("Starting MCP server on %s", address)
+	log.Infof("Starting MCP server on %s", address)
 	if err := mcpServer.Start(); err != nil {
 		log.Fatalf("MCP server failed: %v", err)
 	}

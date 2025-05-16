@@ -72,23 +72,21 @@ func (ts *MCPToolset) GetTools(ctx context.Context) ([]tool.Tool, error) {
 		return nil, fmt.Errorf("failed to create MCP session: %w", err)
 	}
 
-	// List available tools
-	toolsResult, err := client.ListTools(ctx)
+	// Use the createMCPTools function to get tools
+	tools, err := createMCPTools(ctx, client, ts.sessionMgr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list MCP tools: %w", err)
+		return nil, err
 	}
 
-	// Convert MCP tools to agent tools
-	tools := make([]tool.Tool, 0, len(toolsResult.Tools))
-
-	for _, mcpTool := range toolsResult.Tools {
-		// Apply filter if one is set
-		if ts.toolFilter != nil && !ts.toolFilter(mcpTool.Name) {
-			continue
+	// Apply filter if one is set
+	if ts.toolFilter != nil {
+		filteredTools := make([]tool.Tool, 0)
+		for _, t := range tools {
+			if ts.toolFilter(t.Name()) {
+				filteredTools = append(filteredTools, t)
+			}
 		}
-
-		// Create an MCPTool wrapper
-		tools = append(tools, NewMCPTool(mcpTool, client, ts.sessionMgr))
+		return filteredTools, nil
 	}
 
 	return tools, nil
@@ -114,4 +112,37 @@ func (ts *MCPToolset) AddToToolSet(ctx context.Context, toolSet *tool.ToolSet) e
 	}
 
 	return nil
+}
+
+// Create MCPTool for each MCP tool
+func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPSessionManager) ([]tool.Tool, error) {
+	// List available tools from MCP client
+	toolsResult, err := mcpClient.ListTools(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list MCP tools: %w", err)
+	}
+
+	// Create MCPTool wrappers
+	var tools []tool.Tool
+	for _, mcpTool := range toolsResult.Tools {
+		// Create parameters as a tool schema
+		schema := convertSchemaToParameters(mcpTool.InputSchema)
+
+		// Create executor function
+		executor := tool.NewFunctionExecutor(func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+			result, err := mcpClient.CallTool(ctx, mcpTool.Name, args)
+			if err != nil {
+				return nil, err
+			}
+			if result.IsError {
+				return nil, fmt.Errorf("MCP tool returned error: %v", result.Content)
+			}
+			return extractResultContent(result.Content), nil
+		})
+
+		// Create the MCPTool
+		tools = append(tools, NewMCPTool(mcpTool, mcpClient, sessionMgr, schema, executor))
+	}
+
+	return tools, nil
 }
