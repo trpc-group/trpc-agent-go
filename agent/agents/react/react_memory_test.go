@@ -20,7 +20,7 @@ func TestReactMemoryWrapper(t *testing.T) {
 
 	// Test that it implements both Memory and ReactMemory interfaces
 	var _ memory.Memory = wrapper
-	var _ ReactMemory = wrapper
+	var _ Memory = wrapper
 
 	// Create context
 	ctx := context.Background()
@@ -42,7 +42,7 @@ func TestReactMemoryWrapper(t *testing.T) {
 	assert.Empty(t, steps)
 
 	// Create a step
-	step := &ReactStep{
+	step := &Step{
 		Thought: "I need to test this",
 		Action:  "test",
 		ActionParams: map[string]interface{}{

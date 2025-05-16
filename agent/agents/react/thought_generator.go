@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -49,27 +50,11 @@ func NewDefaultThoughtPromptStrategy() *DefaultThoughtPromptStrategy {
 // BuildThoughtPrompt builds a prompt for thought generation.
 func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, history []*Cycle, tools []tool.Tool, format ThoughtFormat) string {
 	var prompt strings.Builder
-
 	prompt.WriteString("Think through the following request step by step to determine the best action to take. " +
 		"Use the available tools to help you solve the problem. You have the following tools:\n\n")
 
-	// List available tools
-	schemaProcessor := tool.NewSchemaProcessor(tools)
 	for _, t := range tools {
-		prompt.WriteString(fmt.Sprintf("- %s: %s\n", t.Name(), t.Description()))
-
-		// Add example parameters if available
-		params, err := schemaProcessor.GetParametersForTool(t.Name())
-		if err == nil && len(params) > 0 {
-			prompt.WriteString("  Parameters:\n")
-			for _, param := range params {
-				required := ""
-				if param.Required {
-					required = " (required)"
-				}
-				prompt.WriteString(fmt.Sprintf("  - %s: %s%s\n", param.Name, param.Description, required))
-			}
-		}
+		prompt.WriteString(fmt.Sprintf("- %s: %s, parameters: %s\n", t.Name(), t.Description(), t.Parameters()))
 	}
 
 	prompt.WriteString("\nThought process format: ")
@@ -86,29 +71,35 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 
 	// PROMINENTLY include the previous cycle observations
 	if len(history) > 0 {
-		prompt.WriteString("\n=== PREVIOUS ACTIONS AND OBSERVATIONS ===\n")
+		prompt.WriteString("\n=== PREVIOUS THOUGHTS AND ACTIONS, OBSERVATIONS ===\n")
 		prompt.WriteString("Remember to carefully review these past actions and particularly any error messages to avoid repeating mistakes.\n\n")
-		
+
 		for i, cycle := range history {
 			if cycle.Action != nil {
 				// Format the tool input nicely
 				inputJSON, _ := json.MarshalIndent(cycle.Action.ToolInput, "", "  ")
-				
+
 				prompt.WriteString(fmt.Sprintf("Step %d:\n", i+1))
+
+				// Add previous thought if available
+				if cycle.Thought != nil {
+					prompt.WriteString(fmt.Sprintf("Previous Thought: %s\n", cycle.Thought.Content))
+				}
+
 				prompt.WriteString(fmt.Sprintf("Tool Used: %s\n", cycle.Action.ToolName))
 				prompt.WriteString(fmt.Sprintf("Input Parameters: %s\n", string(inputJSON)))
-				
+
 				// Extract and format observation content clearly
 				if cycle.Observation != nil {
 					if cycle.Observation.IsError {
 						if errMsg, ok := cycle.Observation.ToolOutput["error"]; ok {
 							prompt.WriteString(fmt.Sprintf("RESULT - ERROR: %v\n", errMsg))
-							
+
 							// Provide extra guidance on common error types
 							errString := fmt.Sprintf("%v", errMsg)
-							if strings.Contains(strings.ToLower(errString), "required") && 
-							   strings.Contains(strings.ToLower(errString), "location") {
-								prompt.WriteString("→ Hint: You must use exact parameter names. For weather lookups, use 'location' parameter with city name.\n")
+							if strings.Contains(strings.ToLower(errString), "required") &&
+								strings.Contains(strings.ToLower(errString), "location") {
+								prompt.WriteString("→ Hint: You must use exact parameter names.\n")
 							} else if strings.Contains(strings.ToLower(errString), "not found") {
 								prompt.WriteString("→ Hint: Check that you're using the correct tool name and parameters.\n")
 							}
@@ -128,23 +119,16 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 				prompt.WriteString("\n")
 			}
 		}
-		
-		prompt.WriteString("=== END OF PREVIOUS ACTIONS AND OBSERVATIONS ===\n\n")
-		
+
+		prompt.WriteString("=== END OF PREVIOUS THOUGHTS AND ACTIONS, OBSERVATIONS ===\n\n")
+
 		// Add specific guidance based on history analysis
 		if hasRepeatedErrors(history) {
 			prompt.WriteString("IMPORTANT: You've made similar errors multiple times. Please carefully check parameter names and values.\n")
-			
-			// If we can identify a specific parameter name error, add specific guidance
-			if paramNameError := identifyParameterNameError(history); paramNameError != "" {
-				prompt.WriteString(paramNameError + "\n")
-			}
 		}
 	}
-
 	prompt.WriteString("\nNow, think step by step about how to respond to the user's query, making effective use of the available tools.\n")
-	prompt.WriteString("If you've already gathered all necessary information, consider providing a Final Answer.\n")
-
+	prompt.WriteString("If you've already gathered all necessary information, consider providing a Final Answer at the end starting with 'Final Answer: '.\n")
 	return prompt.String()
 }
 
@@ -153,39 +137,16 @@ func hasRepeatedErrors(history []*Cycle) bool {
 	if len(history) < 2 {
 		return false
 	}
-	
+
 	errorCount := 0
 	for _, cycle := range history {
 		if cycle.Observation != nil && cycle.Observation.IsError {
 			errorCount++
 		}
 	}
-	
+
 	// If more than half of the cycles have errors, consider it a pattern
 	return errorCount >= len(history)/2
-}
-
-// Helper function to identify specific parameter name errors
-func identifyParameterNameError(history []*Cycle) string {
-	for i := len(history) - 1; i >= 0; i-- {
-		cycle := history[i]
-		if cycle.Observation != nil && cycle.Observation.IsError && cycle.Action != nil {
-			if errMsg, ok := cycle.Observation.ToolOutput["error"].(string); ok {
-				errLower := strings.ToLower(errMsg)
-				
-				// Check for common parameter name errors
-				if strings.Contains(errLower, "location") && strings.Contains(errLower, "required") {
-					// Check if they're using wrong parameter names
-					if _, hasCity := cycle.Action.ToolInput["city"]; hasCity {
-						return "Note: Use 'location' parameter instead of 'city' for weather lookups."
-					} else if _, hasCityName := cycle.Action.ToolInput["city_name"]; hasCityName {
-						return "Note: Use 'location' parameter instead of 'city_name' for weather lookups."
-					}
-				}
-			}
-		}
-	}
-	return ""
 }
 
 // formatToolInput formats tool input as JSON for display.
@@ -230,7 +191,12 @@ func NewLLMThoughtGenerator(model model.Model, strategy ThoughtPromptStrategy, f
 }
 
 // Generate generates a thought using an LLM.
-func (g *LLMThoughtGenerator) Generate(ctx context.Context, messages []*message.Message, history []*Cycle) (*Thought, error) {
+func (g *LLMThoughtGenerator) Generate(
+	ctx context.Context,
+	messages []*message.Message,
+	history []*Cycle,
+	tools []tool.Tool,
+) (*Thought, error) {
 	if g.model == nil {
 		return nil, fmt.Errorf("model is required for thought generation")
 	}
@@ -250,10 +216,6 @@ func (g *LLMThoughtGenerator) Generate(ctx context.Context, messages []*message.
 		return nil, fmt.Errorf("no message found for thought generation")
 	}
 
-	// Get the tools from the first cycle if available, or use empty slice
-	var tools []tool.Tool
-	// We'll use the tools inferred from elsewhere instead
-	
 	// Find the previous action from the last cycle, if available
 	var previousAction *Action
 	if len(history) > 0 {
@@ -270,63 +232,52 @@ func (g *LLMThoughtGenerator) Generate(ctx context.Context, messages []*message.
 	} else {
 		promptText = fmt.Sprintf("Think about how to respond to this: %s", msg.Content)
 	}
+	log.Debugf("Thought prompt: %s", promptText)
 
 	// Create a system message with instructions
 	sysMsg := message.NewSystemMessage(promptText)
 
 	// Generate the thought using the model
 	opts := model.DefaultOptions()
-	// We're not asking for tool calls in thought generation phase - this is handled by ActionSelector
-	opts.EnableToolCalls = false
+	// Enable tool calls so the model can directly output structured tool calls if appropriate
+	opts.EnableToolCalls = g.model.SupportsToolCalls()
 	response, err := g.model.GenerateWithMessages(ctx, []*message.Message{sysMsg}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("thought generation failed: %w", err)
 	}
 
-	// Extract the text from the response
-	thoughtText := ""
-	if len(response.Messages) > 0 && response.Messages[0].Content != "" {
-		thoughtText = response.Messages[0].Content
-	} else if response.Text != "" {
-		thoughtText = response.Text
-	} else if len(response.ToolCalls) > 0 {
-		// Handle cases where model returns empty content but has tool calls
-		// This is common with OpenAI-compatible models
-		var toolCallsText strings.Builder
-		toolCallsText.WriteString("I need to use a tool to answer this question. ")
-		
-		for i, toolCall := range response.ToolCalls {
-			if i > 0 {
-				toolCallsText.WriteString("\n\n")
-			}
-			toolCallsText.WriteString(fmt.Sprintf("I'll use the %s tool", toolCall.Function.Name))
-			
-			if toolCall.Function.Arguments != "" && toolCall.Function.Arguments != "{}" {
-				toolCallsText.WriteString(fmt.Sprintf(" with these parameters: %s", toolCall.Function.Arguments))
-			}
-			toolCallsText.WriteString(".")
-		}
-		
-		thoughtText = toolCallsText.String()
-	} else {
-		return nil, fmt.Errorf("model returned empty response for thought generation")
-	}
-
 	// Create a structured Thought object
 	thought := &Thought{
 		ID:             fmt.Sprintf("thought-%d", time.Now().UnixNano()),
-		Content:        thoughtText,
+		Content:        response.Text,
 		Type:           "reasoning",
 		Timestamp:      time.Now().Unix(),
 		PreviousAction: previousAction,
 	}
 
+	log.Infof("Thought: %s, tool calls: %v", thought.Content, response.ToolCalls)
+
+	// If the model provided structured tool calls, attach them to the thought
+	if len(response.ToolCalls) > 0 {
+		toolCall := response.ToolCalls[0] // Use the first tool call
+
+		// Parse arguments if possible
+		var toolInput map[string]interface{}
+		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolInput); err == nil {
+			thought.SuggestedAction = &Action{
+				ID:        fmt.Sprintf("action-%d", time.Now().UnixNano()),
+				ThoughtID: thought.ID,
+				ToolName:  toolCall.Function.Name,
+				ToolInput: toolInput,
+				Timestamp: time.Now().Unix(),
+			}
+		}
+	}
 	// For structured thoughts, parse the plan state if present
 	if g.format == ThoughtFormatStructured {
 		// PlanState parsing logic would go here
 		// For example, extracting goals, tasks, or structured information from the thought
 	}
-
 	return thought, nil
 }
 
@@ -362,7 +313,7 @@ func (g *RuleBasedThoughtGenerator) Generate(ctx context.Context, messages []*me
 	}
 
 	content := msg.Content
-	
+
 	// Find the previous action from the last cycle, if available
 	var previousAction *Action
 	if len(history) > 0 {

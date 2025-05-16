@@ -125,9 +125,6 @@ func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPS
 	// Create MCPTool wrappers
 	var tools []tool.Tool
 	for _, mcpTool := range toolsResult.Tools {
-		// Create parameters as a tool schema
-		schema := convertSchemaToParameters(mcpTool.InputSchema)
-
 		// Create executor function
 		executor := tool.NewFunctionExecutor(func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			result, err := mcpClient.CallTool(ctx, mcpTool.Name, args)
@@ -141,7 +138,7 @@ func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPS
 		})
 
 		// Create the MCPTool
-		tools = append(tools, NewMCPTool(mcpTool, mcpClient, sessionMgr, schema, executor))
+		tools = append(tools, NewMCPTool(mcpTool, mcpClient, sessionMgr, executor))
 	}
 
 	return tools, nil

@@ -19,7 +19,7 @@ const (
 // BaseReactMemory provides a basic implementation of the ReactMemory interface.
 type BaseReactMemory struct {
 	*memory.BaseMemory
-	steps []*ReactStep
+	steps []*Step
 	mutex sync.RWMutex
 }
 
@@ -27,7 +27,7 @@ type BaseReactMemory struct {
 func NewBaseReactMemory() *BaseReactMemory {
 	return &BaseReactMemory{
 		BaseMemory: memory.NewBaseMemory(),
-		steps:      make([]*ReactStep, 0),
+		steps:      make([]*Step, 0),
 	}
 }
 
@@ -42,7 +42,7 @@ func (m *BaseReactMemory) Store(ctx context.Context, msg *message.Message) error
 	if msg.Metadata != nil {
 		if stepData, ok := msg.Metadata[ReactStepMetadataKey]; ok {
 			// Try to unmarshal the step data
-			var step ReactStep
+			var step Step
 
 			switch v := stepData.(type) {
 			case string:
@@ -62,7 +62,7 @@ func (m *BaseReactMemory) Store(ctx context.Context, msg *message.Message) error
 				if err := json.Unmarshal(data, &step); err != nil {
 					return fmt.Errorf("failed to unmarshal ReactStep from metadata map: %w", err)
 				}
-			case *ReactStep:
+			case *Step:
 				step = *v
 			}
 
@@ -75,7 +75,7 @@ func (m *BaseReactMemory) Store(ctx context.Context, msg *message.Message) error
 }
 
 // StoreStep stores a ReAct step.
-func (m *BaseReactMemory) StoreStep(ctx context.Context, step *ReactStep) error {
+func (m *BaseReactMemory) StoreStep(ctx context.Context, step *Step) error {
 	if step == nil {
 		return nil
 	}
@@ -88,18 +88,18 @@ func (m *BaseReactMemory) StoreStep(ctx context.Context, step *ReactStep) error 
 }
 
 // RetrieveSteps retrieves all ReAct steps.
-func (m *BaseReactMemory) RetrieveSteps(ctx context.Context) ([]*ReactStep, error) {
+func (m *BaseReactMemory) RetrieveSteps(ctx context.Context) ([]*Step, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
 	// Make a copy to avoid race conditions
-	steps := make([]*ReactStep, len(m.steps))
+	steps := make([]*Step, len(m.steps))
 	copy(steps, m.steps)
 	return steps, nil
 }
 
 // LastStep retrieves the most recent ReAct step.
-func (m *BaseReactMemory) LastStep(ctx context.Context) (*ReactStep, error) {
+func (m *BaseReactMemory) LastStep(ctx context.Context) (*Step, error) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
@@ -121,14 +121,14 @@ func (m *BaseReactMemory) Clear(ctx context.Context) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	m.steps = make([]*ReactStep, 0)
+	m.steps = make([]*Step, 0)
 	return nil
 }
 
 // ReactMemoryWrapper wraps a regular Memory implementation to add ReactMemory capabilities.
 type ReactMemoryWrapper struct {
 	memory.Memory
-	steps []*ReactStep
+	steps []*Step
 	mutex sync.RWMutex
 }
 
@@ -136,7 +136,7 @@ type ReactMemoryWrapper struct {
 func NewReactMemoryWrapper(mem memory.Memory) *ReactMemoryWrapper {
 	return &ReactMemoryWrapper{
 		Memory: mem,
-		steps:  make([]*ReactStep, 0),
+		steps:  make([]*Step, 0),
 	}
 }
 
@@ -150,7 +150,7 @@ func (w *ReactMemoryWrapper) Store(ctx context.Context, msg *message.Message) er
 	// Extract ReactStep data if present
 	if msg.Metadata != nil {
 		if stepData, ok := msg.Metadata[ReactStepMetadataKey]; ok {
-			var step ReactStep
+			var step Step
 
 			switch v := stepData.(type) {
 			case string:
@@ -169,7 +169,7 @@ func (w *ReactMemoryWrapper) Store(ctx context.Context, msg *message.Message) er
 				if err := json.Unmarshal(data, &step); err != nil {
 					return fmt.Errorf("failed to unmarshal ReactStep from metadata map: %w", err)
 				}
-			case *ReactStep:
+			case *Step:
 				step = *v
 			}
 
@@ -181,7 +181,7 @@ func (w *ReactMemoryWrapper) Store(ctx context.Context, msg *message.Message) er
 }
 
 // StoreStep stores a ReAct step.
-func (w *ReactMemoryWrapper) StoreStep(ctx context.Context, step *ReactStep) error {
+func (w *ReactMemoryWrapper) StoreStep(ctx context.Context, step *Step) error {
 	if step == nil {
 		return nil
 	}
@@ -194,17 +194,17 @@ func (w *ReactMemoryWrapper) StoreStep(ctx context.Context, step *ReactStep) err
 }
 
 // RetrieveSteps retrieves all ReAct steps.
-func (w *ReactMemoryWrapper) RetrieveSteps(ctx context.Context) ([]*ReactStep, error) {
+func (w *ReactMemoryWrapper) RetrieveSteps(ctx context.Context) ([]*Step, error) {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
-	steps := make([]*ReactStep, len(w.steps))
+	steps := make([]*Step, len(w.steps))
 	copy(steps, w.steps)
 	return steps, nil
 }
 
 // LastStep retrieves the most recent ReAct step.
-func (w *ReactMemoryWrapper) LastStep(ctx context.Context) (*ReactStep, error) {
+func (w *ReactMemoryWrapper) LastStep(ctx context.Context) (*Step, error) {
 	w.mutex.RLock()
 	defer w.mutex.RUnlock()
 
@@ -224,12 +224,12 @@ func (w *ReactMemoryWrapper) Clear(ctx context.Context) error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	w.steps = make([]*ReactStep, 0)
+	w.steps = make([]*Step, 0)
 	return nil
 }
 
 // CreateReactStepMessage creates a message that contains a ReAct step in its metadata.
-func CreateReactStepMessage(step *ReactStep, role message.Role) (*message.Message, error) {
+func CreateReactStepMessage(step *Step, role message.Role) (*message.Message, error) {
 	if step == nil {
 		return nil, fmt.Errorf("step cannot be nil")
 	}

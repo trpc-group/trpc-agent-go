@@ -31,7 +31,7 @@ type Action struct {
 	Timestamp int64                  `json:"timestamp"`  // Unix timestamp of when the action was initiated.
 }
 
-// Observation represents the outcome or result obtained from executing an action.
+// CycleObservation represents the outcome or result obtained from executing an action.
 // This is typically the output from a tool call.
 // Renamed to CycleObservation to avoid conflict with the Observation struct in react_agent.go
 // which represents the tool feedback itself.
@@ -113,7 +113,12 @@ type CycleManager interface {
 // on the current state and history.
 type ThoughtGenerator interface {
 	// Generate generates the next thought.
-	Generate(ctx context.Context, history []*message.Message, previousCycles []*Cycle) (*Thought, error)
+	Generate(
+		ctx context.Context,
+		messages []*message.Message,
+		history []*Cycle,
+		tools []tool.Tool,
+	) (*Thought, error)
 }
 
 // ActionSelector defines the interface for selecting the next action based on

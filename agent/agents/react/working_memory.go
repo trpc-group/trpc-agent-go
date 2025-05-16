@@ -47,7 +47,7 @@ type WorkingMemoryItem struct {
 // ReactWorkingMemory extends the ReactMemory interface to provide a more
 // sophisticated memory system for ReAct agents to maintain context effectively.
 type ReactWorkingMemory interface {
-	ReactMemory
+	Memory
 
 	// StoreItem adds or updates an item in working memory.
 	StoreItem(ctx context.Context, item *WorkingMemoryItem) error
@@ -457,18 +457,18 @@ func (m *BaseReactWorkingMemory) Clear(ctx context.Context) error {
 
 // ReactWorkingMemoryWrapper wraps a ReactMemory to add working memory capabilities.
 type ReactWorkingMemoryWrapper struct {
-	ReactMemory
+	Memory
 	items     map[string]*WorkingMemoryItem
 	itemsMu   sync.RWMutex
 	indexByID map[string]*WorkingMemoryItem
 }
 
 // NewReactWorkingMemoryWrapper creates a wrapper that adds working memory to any ReactMemory.
-func NewReactWorkingMemoryWrapper(mem ReactMemory) *ReactWorkingMemoryWrapper {
+func NewReactWorkingMemoryWrapper(mem Memory) *ReactWorkingMemoryWrapper {
 	return &ReactWorkingMemoryWrapper{
-		ReactMemory: mem,
-		items:       make(map[string]*WorkingMemoryItem),
-		indexByID:   make(map[string]*WorkingMemoryItem),
+		Memory:    mem,
+		items:     make(map[string]*WorkingMemoryItem),
+		indexByID: make(map[string]*WorkingMemoryItem),
 	}
 }
 
@@ -746,7 +746,7 @@ func (w *ReactWorkingMemoryWrapper) GetContext(ctx context.Context) string {
 // Clear empties the memory.
 func (w *ReactWorkingMemoryWrapper) Clear(ctx context.Context) error {
 	// Clear the wrapped ReactMemory
-	if err := w.ReactMemory.Clear(ctx); err != nil {
+	if err := w.Memory.Clear(ctx); err != nil {
 		return err
 	}
 

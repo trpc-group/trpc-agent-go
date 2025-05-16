@@ -502,57 +502,11 @@ func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interfa
 	// Normalize parameters to handle various input formats
 	normalizedParams := make(map[string]interface{})
 
-	// Extract from tool_input if present
-	if toolInput, hasToolInput := args["tool_input"]; hasToolInput {
-		if inputMap, isMap := toolInput.(map[string]interface{}); isMap {
-			// Map structure
-			log.Infof("Found nested tool_input structure, extracting parameters")
-			for k, v := range inputMap {
-				normalizedParams[k] = v
-			}
-		} else if inputStr, isStr := toolInput.(string); isStr && inputStr != "" {
-			// String input - try to parse as JSON first
-			var jsonMap map[string]interface{}
-			if err := json.Unmarshal([]byte(inputStr), &jsonMap); err == nil {
-				log.Infof("Parsed tool_input JSON string into parameters")
-				for k, v := range jsonMap {
-					normalizedParams[k] = v
-				}
-			} else {
-				// Direct string value - try to parse as a conversion query
-				log.Infof("Trying to parse direct string as conversion query: %s", inputStr)
-
-				// Common patterns like "10 km to miles" or "25C to F"
-				parts := extractConversionParts(inputStr)
-				if parts.value != 0 {
-					normalizedParams["value"] = parts.value
-					normalizedParams["from_unit"] = parts.fromUnit
-					normalizedParams["to_unit"] = parts.toUnit
-					log.Infof("Parsed conversion query: %v %v to %v",
-						parts.value, parts.fromUnit, parts.toUnit)
-				}
-			}
-		}
-	}
-
 	// Add any direct arguments not in tool_input
 	for k, v := range args {
-		if k != "tool_name" && k != "tool_input" && normalizedParams[k] == nil {
-			normalizedParams[k] = v
-		}
-	}
-
-	// If we have a single direct string parameter, try to parse as conversion query
-	if len(normalizedParams) == 0 && len(args) == 1 {
-		for _, v := range args {
-			if strValue, isStr := v.(string); isStr {
-				parts := extractConversionParts(strValue)
-				if parts.value != 0 {
-					normalizedParams["value"] = parts.value
-					normalizedParams["from_unit"] = parts.fromUnit
-					normalizedParams["to_unit"] = parts.toUnit
-				}
-			}
+		normalizedParams[k] = v
+		if k != "value" {
+			v = normalizeUnit(v.(string))
 		}
 	}
 
@@ -1056,39 +1010,14 @@ func (p *BasicTaskProcessor) Process(
 		log.Infof("Warning: model type %T doesn't support SetTools method", llmModel)
 	}
 
-	// Create ReAct agent components
-	thoughtPromptStrategy := react.NewDefaultThoughtPromptStrategy()
-	thoughtGenerator := react.NewLLMThoughtGenerator(
-		llmModel,
-		thoughtPromptStrategy,
-		react.ThoughtFormatFree,
-	)
-
-	actionSelector := react.NewLLMActionSelector(
-		llmModel,
-		react.NewDefaultActionPromptStrategy(),
-	)
-
-	responseGenerator := react.NewLLMResponseGenerator(
-		llmModel,
-		react.NewDefaultResponsePromptStrategy(true),
-	)
-
-	cycleManager := react.NewInMemoryCycleManager()
-
 	// Create the ReAct agent
-	reactAgent, err := react.NewReActAgent(react.ReActAgentConfig{
-		Name:              fmt.Sprintf("%sReActAgent", provider),
-		Description:       fmt.Sprintf("A ReAct agent powered by %s %s with various tools", provider, modelName),
-		Model:             llmModel,
-		Tools:             allTools,
-		ThoughtGenerator:  thoughtGenerator,
-		ActionSelector:    actionSelector,
-		ResponseGenerator: responseGenerator,
-		CycleManager:      cycleManager,
-		MaxIterations:     10,
-		ThoughtFormat:     react.ThoughtFormatFree,
-		EnableStreaming:   false,
+	reactAgent, err := react.NewAgent(react.AgentConfig{
+		Name:            fmt.Sprintf("%sAgent", provider),
+		Description:     fmt.Sprintf("A ReAct agent powered by %s %s with various tools", provider, modelName),
+		Model:           llmModel,
+		Tools:           allTools,
+		MaxIterations:   10,
+		EnableStreaming: false,
 	})
 	if err != nil {
 		log.Infof("Failed to create ReAct agent: %v", err)
@@ -1752,9 +1681,9 @@ func runMCPServer(address string) {
 			// Return result
 			return &mcp.CallToolResult{Content: []mcp.Content{mcp.NewTextContent(string(resultJSON))}}, nil
 		},
-		mcp.WithDescription("Gets detailed weather information for a specified location. Just provide the city name as input - no coordinates needed."),
+		mcp.WithDescription("Gets detailed weather information for a specified location."),
 		mcp.WithString("location",
-			mcp.Description("The city or location name to get weather information for (e.g., 'Tokyo', 'New York', 'London')"),
+			mcp.Description("The location name to get weather information for (e.g., 'Tokyo', 'New York', 'London')"),
 		),
 	)
 	if err := mcpServer.RegisterTool(weatherTool); err != nil {
