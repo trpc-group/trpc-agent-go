@@ -253,6 +253,15 @@ func (g *LLMThoughtGenerator) Generate(ctx context.Context, messages []*message.
 	// Get the tools from the first cycle if available, or use empty slice
 	var tools []tool.Tool
 	// We'll use the tools inferred from elsewhere instead
+	
+	// Find the previous action from the last cycle, if available
+	var previousAction *Action
+	if len(history) > 0 {
+		lastCycle := history[len(history)-1]
+		if lastCycle != nil && lastCycle.Action != nil {
+			previousAction = lastCycle.Action
+		}
+	}
 
 	// Build the prompt for thought generation
 	promptText := ""
@@ -305,10 +314,11 @@ func (g *LLMThoughtGenerator) Generate(ctx context.Context, messages []*message.
 
 	// Create a structured Thought object
 	thought := &Thought{
-		ID:        fmt.Sprintf("thought-%d", time.Now().UnixNano()),
-		Content:   thoughtText,
-		Type:      "reasoning",
-		Timestamp: time.Now().Unix(),
+		ID:             fmt.Sprintf("thought-%d", time.Now().UnixNano()),
+		Content:        thoughtText,
+		Type:           "reasoning",
+		Timestamp:      time.Now().Unix(),
+		PreviousAction: previousAction,
 	}
 
 	// For structured thoughts, parse the plan state if present
@@ -352,6 +362,15 @@ func (g *RuleBasedThoughtGenerator) Generate(ctx context.Context, messages []*me
 	}
 
 	content := msg.Content
+	
+	// Find the previous action from the last cycle, if available
+	var previousAction *Action
+	if len(history) > 0 {
+		lastCycle := history[len(history)-1]
+		if lastCycle != nil && lastCycle.Action != nil {
+			previousAction = lastCycle.Action
+		}
+	}
 
 	// Select the template based on keywords
 	template := g.fallback
@@ -367,10 +386,11 @@ func (g *RuleBasedThoughtGenerator) Generate(ctx context.Context, messages []*me
 
 	// Create the thought
 	thought := &Thought{
-		ID:        fmt.Sprintf("thought-%d", time.Now().UnixNano()),
-		Content:   thoughtText,
-		Type:      "rule_based",
-		Timestamp: time.Now().Unix(),
+		ID:             fmt.Sprintf("thought-%d", time.Now().UnixNano()),
+		Content:        thoughtText,
+		Type:           "rule_based",
+		Timestamp:      time.Now().Unix(),
+		PreviousAction: previousAction,
 	}
 
 	return thought, nil

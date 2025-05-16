@@ -56,8 +56,8 @@ func (s *DefaultActionPromptStrategy) BuildActionPrompt(thought *Thought, tools 
 	prompt.WriteString("\nYour thought was:\n")
 	prompt.WriteString(thought.Content)
 	prompt.WriteString("\n\nYou must respond in the following format or output Finished if you have no more actions to take:\n")
-	prompt.WriteString("1. JSON Format (preferred):\n")
-	prompt.WriteString("{\n   \"tool_name\": \"example_tool\",\n  \"tool_input\": {\n    \"param1\": \"value1\",\n    \"param2\": 42\n  }\n}\n")
+	prompt.WriteString("JSON Format:\n")
+	prompt.WriteString("```json\n{\n   \"tool_name\": \"example_tool\",\n  \"tool_input\": {\n    \"param1\": \"value1\",\n    \"param2\": 42\n  }\n}\n```\n")
 	return prompt.String()
 }
 
@@ -318,7 +318,8 @@ func parseActionFromText(thoughtID string, actionText string, matchingTool tool.
 		// If we have a matching tool, try to create an action directly
 		if matchingTool != nil {
 			var toolInput map[string]interface{}
-			if err := json.Unmarshal([]byte(blockContent), &toolInput); err == nil {
+			err := json.Unmarshal([]byte(blockContent), &toolInput)
+			if err == nil {
 				log.Debugf("Successfully parsed JSON block as tool input: %v", toolInput)
 
 				// Convert arguments to correct types if possible
@@ -344,9 +345,8 @@ func parseActionFromText(thoughtID string, actionText string, matchingTool tool.
 				log.Debugf("Created action from JSON block: %s with input: %v",
 					action.ToolName, action.ToolInput)
 				return action, nil
-			} else {
-				log.Debugf("Failed to parse JSON block: %v", err)
 			}
+			log.Debugf("Failed to parse JSON block: %v", err)
 		}
 	}
 
@@ -1064,187 +1064,6 @@ func parseFormatWithDirectToolInput(toolData map[string]interface{}, tools []too
 	return action, true
 }
 
-// inferActionFromThought provides a mechanism to infer an action from the thought
-func inferActionFromThought(thought *Thought, tools []tool.Tool) *Action {
-	// No thought to work with
-	if thought == nil || thought.Content == "" {
-		return nil
-	}
-
-	// Scan through the thought for mentions of tools and action indicators
-	thoughtText := strings.ToLower(thought.Content)
-
-	// Common patterns that suggest tool usage
-	toolMentionPatterns := []string{
-		"I will use the `(.*?)` tool",
-		"use the `(.*?)` tool",
-		"use the (.*?) tool",
-		"using the (.*?) tool",
-		"I will use (.*?) to",
-		"use (.*?) to",
-		"using (.*?) to",
-		"call (.*?) with",
-		"call the (.*?) tool",
-	}
-
-	// Try to find a tool mention
-	mentionedTools := make(map[string]int)
-
-	// Count tool mentions
-	for _, toolName := range scanForToolNames(thoughtText, tools, toolMentionPatterns) {
-		mentionedTools[toolName]++
-	}
-
-	// If we found mentioned tools, use the most mentioned one
-	if len(mentionedTools) > 0 {
-		// Find the most mentioned tool
-		var bestToolName string
-		var maxMentions int
-		for toolName, mentions := range mentionedTools {
-			if mentions > maxMentions {
-				bestToolName = toolName
-				maxMentions = mentions
-			}
-		}
-
-		// Find the actual tool
-		var selectedTool tool.Tool
-		for _, t := range tools {
-			if strings.EqualFold(t.Name(), bestToolName) {
-				selectedTool = t
-				break
-			}
-		}
-
-		if selectedTool != nil {
-			// Try to extract parameter values for the selected tool
-			params := inferParametersFromThought(thoughtText, selectedTool)
-
-			// Create action
-			return &Action{
-				ID:        fmt.Sprintf("inferred-action-%d", time.Now().UnixNano()),
-				ThoughtID: thought.ID,
-				ToolName:  selectedTool.Name(),
-				ToolInput: params,
-				Timestamp: time.Now().Unix(),
-			}
-		}
-	}
-
-	// Fallback to any explicitly mentioned tools
-	for _, t := range tools {
-		if strings.Contains(thoughtText, strings.ToLower(t.Name())) {
-			// Tool is mentioned, try to extract parameters
-			params := inferParametersFromThought(thoughtText, t)
-
-			return &Action{
-				ID:        fmt.Sprintf("inferred-action-%d", time.Now().UnixNano()),
-				ThoughtID: thought.ID,
-				ToolName:  t.Name(),
-				ToolInput: params,
-				Timestamp: time.Now().Unix(),
-			}
-		}
-	}
-
-	return nil
-}
-
-// scanForToolNames searches for tool name mentions in text using provided patterns
-func scanForToolNames(text string, tools []tool.Tool, patterns []string) []string {
-	var result []string
-
-	// Check each pattern
-	for _, pattern := range patterns {
-		re := regexp.MustCompile("(?i)" + pattern)
-		matches := re.FindAllStringSubmatch(text, -1)
-
-		for _, match := range matches {
-			if len(match) > 1 {
-				extractedName := strings.TrimSpace(match[1])
-
-				// Check against known tools
-				for _, t := range tools {
-					toolName := strings.ToLower(t.Name())
-					extractedLower := strings.ToLower(extractedName)
-
-					// Check for exact match or partial match
-					if toolName == extractedLower ||
-						strings.Contains(toolName, extractedLower) ||
-						strings.Contains(extractedLower, toolName) {
-						result = append(result, t.Name())
-						break
-					}
-				}
-			}
-		}
-	}
-
-	return result
-}
-
-// inferParametersFromThought tries to extract parameter values from the thought text
-func inferParametersFromThought(text string, t tool.Tool) map[string]interface{} {
-	params := make(map[string]interface{})
-
-	// Get parameter schema
-	schema := t.Parameters()
-	if schema == nil {
-		return params
-	}
-
-	// Extract properties
-	properties, ok := schema["properties"].(map[string]interface{})
-	if !ok {
-		return params
-	}
-
-	// For each parameter, try to find values in the text
-	for paramName, prop := range properties {
-		propMap, ok := prop.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// Get description and type
-		description, _ := propMap["description"].(string)
-		paramType, _ := propMap["type"].(string)
-
-		// For location-related parameters, regardless of tool type
-		if isLocationParameter(paramName, description) {
-			// Look for common city names in the text
-			cityPattern := `(?i)(in|for|at|about) (?:the )?(?:city of )?["']?([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)["']?`
-			re := regexp.MustCompile(cityPattern)
-			matches := re.FindStringSubmatch(text)
-
-			if len(matches) > 2 {
-				params[paramName] = matches[2]
-			}
-		}
-
-		// For numerical parameters
-		if paramType == "number" || paramType == "integer" {
-			// Look for numbers related to this parameter
-			numberPattern := fmt.Sprintf(`(?i)%s[^\d]*?(\d+(?:\.\d+)?)`, paramName)
-			re := regexp.MustCompile(numberPattern)
-			matches := re.FindStringSubmatch(text)
-
-			if len(matches) > 1 {
-				// Try to convert to number
-				if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
-					if paramType == "integer" {
-						params[paramName] = int(val)
-					} else {
-						params[paramName] = val
-					}
-				}
-			}
-		}
-	}
-
-	return params
-}
-
 // extractJSON extracts JSON from a string that might contain other text.
 func extractJSON(text string) string {
 	log.Debugf("Attempting to extract JSON from text")
@@ -1299,29 +1118,4 @@ func extractJSON(text string) string {
 
 	log.Debugf("Extracted valid JSON: %s", potentialJSON)
 	return potentialJSON
-}
-
-// isLocationParameter checks if a parameter appears to be location-related
-func isLocationParameter(paramName string, description string) bool {
-	// Check parameter name for location-related terms
-	locationTerms := []string{"location", "place", "city", "address", "destination", "where", "country"}
-
-	paramNameLower := strings.ToLower(paramName)
-	descriptionLower := strings.ToLower(description)
-
-	// Check if parameter name contains any location terms
-	for _, term := range locationTerms {
-		if strings.Contains(paramNameLower, term) {
-			return true
-		}
-	}
-
-	// Check if description contains any location terms
-	for _, term := range locationTerms {
-		if strings.Contains(descriptionLower, term) {
-			return true
-		}
-	}
-
-	return false
 }
