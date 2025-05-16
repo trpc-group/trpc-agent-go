@@ -8,7 +8,6 @@ import (
 	"math"
 	"os"
 	"os/signal"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -578,71 +577,6 @@ func (t *UnitConverterTool) Execute(ctx context.Context, args map[string]interfa
 	// Log result
 	log.Infof("Unit converter tool returning result: %v", conversionResult)
 	return tool.NewJSONResult(conversionResult), nil
-}
-
-// conversionParts holds parsed parts of a conversion request
-type conversionParts struct {
-	value    float64
-	fromUnit string
-	toUnit   string
-}
-
-// extractConversionParts tries to parse conversion requests like "10 km to miles"
-func extractConversionParts(query string) conversionParts {
-	// Check for patterns like "X unit to unit" or "X unit-unit"
-	query = strings.ToLower(query)
-
-	// Try regex pattern for "X unit to unit"
-	re := regexp.MustCompile(`(\d+\.?\d*)\s*([a-z]+)\s*(?:to|->|in)\s*([a-z]+)`)
-	matches := re.FindStringSubmatch(query)
-
-	if len(matches) == 4 {
-		value, err := strconv.ParseFloat(matches[1], 64)
-		if err != nil {
-			return conversionParts{}
-		}
-
-		fromUnit := normalizeUnit(matches[2])
-		toUnit := normalizeUnit(matches[3])
-
-		return conversionParts{
-			value:    value,
-			fromUnit: fromUnit,
-			toUnit:   toUnit,
-		}
-	}
-
-	// Try celsius/fahrenheit special cases
-	tempRe := regexp.MustCompile(`(\d+\.?\d*)\s*([cf])\s*(?:to|->|in)\s*([cf])`)
-	tempMatches := tempRe.FindStringSubmatch(query)
-
-	if len(tempMatches) == 4 {
-		value, err := strconv.ParseFloat(tempMatches[1], 64)
-		if err != nil {
-			return conversionParts{}
-		}
-
-		var fromUnit, toUnit string
-		if tempMatches[2] == "c" {
-			fromUnit = "celsius"
-		} else {
-			fromUnit = "fahrenheit"
-		}
-
-		if tempMatches[3] == "c" {
-			toUnit = "celsius"
-		} else {
-			toUnit = "fahrenheit"
-		}
-
-		return conversionParts{
-			value:    value,
-			fromUnit: fromUnit,
-			toUnit:   toUnit,
-		}
-	}
-
-	return conversionParts{}
 }
 
 // normalizeUnit converts abbreviations to full unit names
