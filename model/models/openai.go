@@ -4,6 +4,7 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -185,7 +186,7 @@ func (m *OpenAIModel) Generate(ctx context.Context, prompt string, options model
 // GenerateWithMessages generates a completion for the given messages.
 func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options model.GenerationOptions) (*model.Response, error) {
 	if m.apiKey == "" {
-		return nil, fmt.Errorf("OpenAI API key is required")
+		return nil, errors.New("OpenAI API key is required")
 	}
 
 	mergedOptions := m.mergeOptions(options)
@@ -267,12 +268,20 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	// Log the raw response for debugging
 	log.Debugf("Raw OpenAI API response: %s", string(body))
 
-	// Parse response with more error handling
-	var openaiResp struct {
+	// Define a comprehensive struct that captures both content and tool calls
+	type OpenAIResponse struct {
 		Choices []struct {
 			Message struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -283,10 +292,12 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 		} `json:"usage"`
 	}
 
+	// Try to parse the response using the comprehensive struct
+	var openaiResp OpenAIResponse
 	if err := json.Unmarshal(body, &openaiResp); err != nil {
-		log.Warnf("Failed to unmarshal response as standard OpenAI format: %v", err)
+		log.Warnf("Failed to unmarshal response as comprehensive format: %v", err)
 
-		// Try a more generic approach for Deepseek-compatible APIs
+		// Try a more generic approach for different API implementations
 		var genericResp map[string]interface{}
 		if jsonErr := json.Unmarshal(body, &genericResp); jsonErr != nil {
 			return nil, fmt.Errorf("failed to unmarshal response in any format: %w", jsonErr)
@@ -329,98 +340,44 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 		}, nil
 	}
 
-	// Handle empty content field
-	if openaiResp.Choices[0].Message.Content == "" {
-		log.Warnf("API returned empty content in message")
+	// Extract content and role
+	content := openaiResp.Choices[0].Message.Content
+	role := openaiResp.Choices[0].Message.Role
 
-		// Check if we have tool calls in the response
-		var toolCalls []model.ToolCall
-
-		// Try to get tool calls from the raw response
-		var rawResponse map[string]interface{}
-		if err := json.Unmarshal(body, &rawResponse); err == nil {
-			if choices, ok := rawResponse["choices"].([]interface{}); ok && len(choices) > 0 {
-				if choice, ok := choices[0].(map[string]interface{}); ok {
-					if message, ok := choice["message"].(map[string]interface{}); ok {
-						if rawToolCalls, ok := message["tool_calls"].([]interface{}); ok && len(rawToolCalls) > 0 {
-							// Process tool calls
-							for _, rawCall := range rawToolCalls {
-								if callMap, ok := rawCall.(map[string]interface{}); ok {
-									toolCall := model.ToolCall{
-										ID: fmt.Sprintf("call_%s", generateShortID()),
-									}
-
-									// Extract function info
-									if function, ok := callMap["function"].(map[string]interface{}); ok {
-										if name, ok := function["name"].(string); ok {
-											toolCall.Function.Name = name
-										}
-										if args, ok := function["arguments"].(string); ok {
-											toolCall.Function.Arguments = args
-										}
-									}
-
-									toolCalls = append(toolCalls, toolCall)
-									log.Debugf("Extracted tool call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if len(toolCalls) > 0 {
-			// Create the response with just the tool calls
-			// No need for a fallback message that could confuse the agent
-			return &model.Response{
-				Text:         "",                   // Empty text since we have tool calls
-				Messages:     []*message.Message{}, // No messages, tool calls are sufficient
-				ToolCalls:    toolCalls,
-				FinishReason: "tool_calls",
-				Usage: &model.Usage{
-					PromptTokens:     openaiResp.Usage.PromptTokens,
-					CompletionTokens: openaiResp.Usage.CompletionTokens,
-					TotalTokens:      openaiResp.Usage.TotalTokens,
+	// Extract tool calls if present
+	var toolCalls []model.ToolCall
+	if len(openaiResp.Choices[0].Message.ToolCalls) > 0 {
+		for _, call := range openaiResp.Choices[0].Message.ToolCalls {
+			toolCall := model.ToolCall{
+				ID: call.ID,
+				Function: model.FunctionCall{
+					Name:      call.Function.Name,
+					Arguments: call.Function.Arguments,
 				},
-			}, nil
+			}
+			// Generate ID if not provided by API
+			if toolCall.ID == "" {
+				toolCall.ID = fmt.Sprintf("call_%s", generateShortID())
+			}
+			toolCalls = append(toolCalls, toolCall)
+			log.Debugf("Extracted tool call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
 		}
-
-		// If no tool calls were found, use a minimal fallback
-		fallbackMessage := "I need more information to proceed."
-
-		// Create the response
-		responseMessages := []*message.Message{
-			message.NewMessage(
-				message.Role(openaiResp.Choices[0].Message.Role),
-				fallbackMessage,
-			),
-		}
-
-		return &model.Response{
-			Text:         fallbackMessage,
-			Messages:     responseMessages,
-			FinishReason: openaiResp.Choices[0].FinishReason,
-			Usage: &model.Usage{
-				PromptTokens:     openaiResp.Usage.PromptTokens,
-				CompletionTokens: openaiResp.Usage.CompletionTokens,
-				TotalTokens:      openaiResp.Usage.TotalTokens,
-			},
-		}, nil
 	}
 
-	// Create response messages
-	responseMessages := []*message.Message{
-		message.NewMessage(
-			message.Role(openaiResp.Choices[0].Message.Role),
-			openaiResp.Choices[0].Message.Content,
-		),
+	// Create response messages (if we have content)
+	var responseMessages []*message.Message
+	if content != "" {
+		responseMessages = append(responseMessages, message.NewMessage(
+			message.Role(role),
+			content,
+		))
 	}
 
-	// Create model response
+	// Create model response combining both content and tool calls
 	response := &model.Response{
-		Text:         openaiResp.Choices[0].Message.Content,
+		Text:         content,
 		Messages:     responseMessages,
+		ToolCalls:    toolCalls,
 		FinishReason: openaiResp.Choices[0].FinishReason,
 		Usage: &model.Usage{
 			PromptTokens:     openaiResp.Usage.PromptTokens,

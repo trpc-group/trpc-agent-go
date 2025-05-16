@@ -23,16 +23,26 @@ type MCPTool struct {
 }
 
 // NewMCPTool creates a new MCP tool.
-func NewMCPTool(mcpTool mcp.Tool, mcpClient *mcp.Client, sessionMgr *MCPSessionManager, schema map[string]interface{}, executor tool.Executor) *MCPTool {
-	// Convert MCP tool schema to JSON Schema for the tool parameters
-	params := convertSchemaToParameters(mcpTool.InputSchema)
-
+func NewMCPTool(
+	mcpTool mcp.Tool,
+	mcpClient *mcp.Client,
+	sessionMgr *MCPSessionManager,
+	executor tool.Executor,
+) *MCPTool {
+	var params map[string]interface{}
+	bs, err := json.Marshal(mcpTool.RawInputSchema)
+	if err != nil {
+		log.Errorf("Failed to marshal MCP tool input schema: %v", err)
+	}
+	if err := json.Unmarshal(bs, &params); err != nil {
+		log.Errorf("Failed to unmarshal MCP tool input schema: %v", err)
+	}
+	log.Debugf("MCP tool %s parameters: %v", mcpTool.Name, params)
 	return &MCPTool{
 		BaseTool:   *tool.NewBaseTool(mcpTool.Name, mcpTool.Description, params),
 		mcpTool:    mcpTool,
 		mcpClient:  mcpClient,
 		sessionMgr: sessionMgr,
-		schema:     schema,
 		executor:   executor,
 	}
 }
@@ -112,10 +122,7 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (*to
 		}
 	}
 
-	// STEP 4: Apply parameter name normalization (e.g., city→location)
-	normalizedParams = mapParameterNames(normalizedParams, t.mcpTool.Name)
-
-	// STEP 5: Validate parameters against the schema
+	// STEP 4: Validate parameters against the schema
 	if err := validateAgainstSchema(normalizedParams, t.Parameters()); err != nil {
 		log.Warnf("Parameter validation failed: %v", err)
 
@@ -129,37 +136,6 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (*to
 				if _, exists := normalizedParams[param]; !exists {
 					normalizedParams[param] = value
 					log.Infof("Inferred missing parameter '%s' from context: %v", param, value)
-				}
-			}
-
-			// One more attempt: extract relevant values from the original query if present in the context
-			if hasEmptyRequiredParams(normalizedParams, t.Parameters()) {
-				query := extractQueryFromContext(ctx)
-				if query != "" {
-					// Try to extract entities from the query based on parameter types
-					if props, ok := t.Parameters()["properties"].(map[string]interface{}); ok {
-						for paramName, propDef := range props {
-							if normalizedParams[paramName] != nil {
-								continue // Skip if already has a value
-							}
-
-							if propMap, ok := propDef.(map[string]interface{}); ok {
-								propType, _ := propMap["type"].(string)
-								if propType == "string" {
-									// For parameters that might represent locations
-									if stringsContainFragment(paramName, []string{"location", "place", "city"}) {
-										locations := extractLocationsFromQuery(query)
-										if len(locations) > 0 {
-											normalizedParams[paramName] = locations[0]
-											log.Infof("Extracted location '%s' from query for parameter '%s'",
-												locations[0], paramName)
-											continue
-										}
-									}
-								}
-							}
-						}
-					}
 				}
 			}
 
@@ -332,68 +308,6 @@ func extractParameterInfoFromError(contents []mcp.Content) string {
 	return ""
 }
 
-// convertSchemaToParameters converts a schema to a JSON Schema for tool parameters.
-func convertSchemaToParameters(schema interface{}) map[string]interface{} {
-	// Create a basic JSON Schema structure
-	params := map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-		"required":   []string{},
-	}
-
-	if schemaMap, ok := schema.(map[string]interface{}); ok {
-		// Process properties
-		if props, ok := schemaMap["properties"].(map[string]interface{}); ok {
-			properties := params["properties"].(map[string]interface{})
-
-			// Enhanced property mapping with better type handling
-			for propName, propValue := range props {
-				if propObj, ok := propValue.(map[string]interface{}); ok {
-					// Create a cleaned property definition
-					cleanProp := map[string]interface{}{}
-
-					// Copy relevant fields
-					if propType, ok := propObj["type"]; ok {
-						cleanProp["type"] = propType
-					}
-					if description, ok := propObj["description"]; ok {
-						cleanProp["description"] = description
-					}
-					if format, ok := propObj["format"]; ok {
-						cleanProp["format"] = format
-					}
-					if enum, ok := propObj["enum"]; ok {
-						cleanProp["enum"] = enum
-					}
-					if defaultValue, ok := propObj["default"]; ok {
-						cleanProp["default"] = defaultValue
-					}
-
-					properties[propName] = cleanProp
-				} else {
-					// If not an object, just include it as-is
-					properties[propName] = propValue
-				}
-			}
-		}
-
-		// Process required fields
-		if required, ok := schemaMap["required"].([]interface{}); ok {
-			requiredParams := make([]string, 0, len(required))
-			for _, req := range required {
-				if reqStr, ok := req.(string); ok {
-					requiredParams = append(requiredParams, reqStr)
-				}
-			}
-			params["required"] = requiredParams
-		} else if required, ok := schemaMap["required"].([]string); ok {
-			params["required"] = required
-		}
-	}
-
-	return params
-}
-
 // extractResultContent extracts content from the MCP tool result.
 func extractResultContent(contents []mcp.Content) interface{} {
 	if len(contents) == 0 {
@@ -463,46 +377,6 @@ func inferParameterName(toolName string, schema map[string]interface{}) string {
 	return "input" // Generic default for all tools
 }
 
-// mapParameterNames applies common parameter name mappings based on parameter semantics
-func mapParameterNames(args map[string]interface{}, toolName string) map[string]interface{} {
-	// Clone the args to avoid modifying the original
-	result := make(map[string]interface{}, len(args))
-	for k, v := range args {
-		result[k] = v
-	}
-
-	// Define canonical parameter names and their common aliases
-	// This approach focuses on parameter semantics rather than tool categories
-	paramAliases := map[string][]string{
-		// Location-related parameters
-		"location": {"city", "city_name", "place", "location_name", "address", "destination"},
-
-		// Query-related parameters
-		"query": {"term", "keyword", "search", "find", "text", "question", "content", "search_term"},
-
-		// Value-related parameters
-		"value": {"amount", "number", "quantity", "data", "input"},
-	}
-
-	// Apply mappings based on parameter semantics
-	for canonicalName, aliases := range paramAliases {
-		// Check if the canonical parameter is already present
-		if _, hasCanonical := result[canonicalName]; !hasCanonical {
-			// Look for aliases in the arguments
-			for _, alias := range aliases {
-				if aliasValue, hasAlias := args[alias]; hasAlias {
-					result[canonicalName] = aliasValue
-					delete(result, alias)
-					log.Infof("Mapped parameter '%s' to canonical name '%s'", alias, canonicalName)
-					break // Stop after finding the first match for this canonical name
-				}
-			}
-		}
-	}
-
-	return result
-}
-
 // hasEmptyRequiredParams checks if any required parameters are missing
 func hasEmptyRequiredParams(args map[string]interface{}, schema map[string]interface{}) bool {
 	if properties, ok := schema["properties"].(map[string]interface{}); ok {
@@ -547,41 +421,16 @@ func hasEmptyRequiredParams(args map[string]interface{}, schema map[string]inter
 // inferParametersFromContext extracts relevant parameters from context
 func inferParametersFromContext(ctx context.Context, toolName string, schema map[string]interface{}) map[string]interface{} {
 	params := make(map[string]interface{})
-
 	// Extract query from context if available
 	query := extractQueryFromContext(ctx)
 	if query == "" {
 		return params
 	}
-
 	// Get required parameters from schema
 	requiredParams := getRequiredParamsFromSchema(schema)
 	if len(requiredParams) == 0 {
 		return params
 	}
-
-	// Try to extract potential entities from query based on schema's parameter types
-	if props, ok := schema["properties"].(map[string]interface{}); ok {
-		// Check each required parameter to see if we can infer its value
-		for _, paramName := range requiredParams {
-			if prop, ok := props[paramName]; ok {
-				if propMap, ok := prop.(map[string]interface{}); ok {
-					// Handle string parameters
-					if propType, ok := propMap["type"].(string); ok && propType == "string" {
-						// Check if parameter name suggests it might be a location
-						if stringsContainFragment(paramName, []string{"location", "place", "city", "where"}) {
-							locations := extractLocationsFromQuery(query)
-							if len(locations) > 0 {
-								params[paramName] = locations[0]
-								continue
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
 	return params
 }
 
@@ -647,42 +496,6 @@ func extractLocationsFromQuery(query string) []string {
 	}
 
 	return locations
-}
-
-// findLocationParameterName finds the parameter that likely represents a location
-func findLocationParameterName(schema map[string]interface{}) string {
-	locationParams := []string{"location", "city", "place", "address", "destination"}
-
-	if properties, ok := schema["properties"].(map[string]interface{}); ok {
-		// First check for exact matches
-		for _, name := range locationParams {
-			if _, exists := properties[name]; exists {
-				return name
-			}
-		}
-
-		// Then check for partial matches
-		for paramName := range properties {
-			paramLower := strings.ToLower(paramName)
-			for _, locParam := range locationParams {
-				if strings.Contains(paramLower, locParam) {
-					return paramName
-				}
-			}
-		}
-
-		// If no matches, return the first string parameter
-		for paramName, paramSchema := range properties {
-			if paramDef, ok := paramSchema.(map[string]interface{}); ok {
-				if paramType, ok := paramDef["type"].(string); ok && paramType == "string" {
-					return paramName
-				}
-			}
-		}
-	}
-
-	// Fallback to "location" as a default
-	return "location"
 }
 
 // getRequiredParamsFromSchema extracts required parameters from a schema

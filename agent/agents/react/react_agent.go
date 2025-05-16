@@ -99,8 +99,8 @@ func NewErrorObservation(err error, toolName string) *Observation {
 	}
 }
 
-// ReactStep represents a single step in the ReAct thought process.
-type ReactStep struct {
+// Step represents a single step in the ReAct thought process.
+type Step struct {
 	// Thought is the reasoning trace.
 	Thought string `json:"thought,omitempty"`
 
@@ -114,22 +114,22 @@ type ReactStep struct {
 	Observation *Observation `json:"observation,omitempty"`
 }
 
-// ReactMemory extends the base memory to store ReAct-specific information.
-type ReactMemory interface {
+// Memory extends the base memory to store ReAct-specific information.
+type Memory interface {
 	memory.Memory
 
 	// StoreStep stores a ReAct step.
-	StoreStep(ctx context.Context, step *ReactStep) error
+	StoreStep(ctx context.Context, step *Step) error
 
 	// RetrieveSteps retrieves all ReAct steps.
-	RetrieveSteps(ctx context.Context) ([]*ReactStep, error)
+	RetrieveSteps(ctx context.Context) ([]*Step, error)
 
 	// LastStep retrieves the most recent ReAct step.
-	LastStep(ctx context.Context) (*ReactStep, error)
+	LastStep(ctx context.Context) (*Step, error)
 }
 
-// ReActAgentConfig contains configuration for a ReAct agent.
-type ReActAgentConfig struct {
+// AgentConfig contains configuration for a ReAct agent.
+type AgentConfig struct {
 	// Name of the agent.
 	Name string `json:"name"`
 
@@ -173,22 +173,22 @@ type ReActAgentConfig struct {
 	CycleManager CycleManager
 }
 
-// ReActAgent is an agent that implements the ReAct paradigm.
-type ReActAgent struct {
+// Agent is an agent that implements the ReAct paradigm.
+type Agent struct {
 	*agents.LLMAgent
 	maxIterations        int
-	reactMemory          ReactMemory
+	reactMemory          Memory
 	thoughtGenerator     ThoughtGenerator
 	actionSelector       ActionSelector
 	responseGenerator    ResponseGenerator
 	cycleManager         CycleManager
 	mu                   sync.RWMutex
 	currentMaxIterations int
-	config               ReActAgentConfig
+	config               AgentConfig
 }
 
-// NewReActAgent creates a new ReAct agent.
-func NewReActAgent(config ReActAgentConfig) (*ReActAgent, error) {
+// NewAgent creates a new ReAct agent.
+func NewAgent(config AgentConfig) (*Agent, error) {
 	// Validate required components
 	if err := validateReactAgentConfig(config); err != nil {
 		return nil, err
@@ -206,7 +206,7 @@ func NewReActAgent(config ReActAgentConfig) (*ReActAgent, error) {
 	// Create or wrap ReactMemory
 	reactMem := createReactMemory(config.Memory)
 
-	return &ReActAgent{
+	return &Agent{
 		LLMAgent:             llmAgent,
 		maxIterations:        config.MaxIterations,
 		reactMemory:          reactMem,
@@ -220,51 +220,52 @@ func NewReActAgent(config ReActAgentConfig) (*ReActAgent, error) {
 }
 
 // validateReactAgentConfig validates the configuration for a ReAct agent.
-func validateReactAgentConfig(config ReActAgentConfig) error {
+func validateReactAgentConfig(config AgentConfig) error {
 	if config.Model == nil {
 		return ErrModelRequired
 	}
-
-	if len(config.Tools) == 0 {
-		return ErrNoToolsProvided
-	}
-
-	if config.ThoughtGenerator == nil {
-		return ErrThoughtGeneratorRequired
-	}
-
-	if config.ActionSelector == nil {
-		return ErrActionSelectorRequired
-	}
-
-	if config.ResponseGenerator == nil {
-		return ErrResponseGeneratorRequired
-	}
-
-	if config.CycleManager == nil {
-		return ErrCycleManagerRequired
-	}
-
 	return nil
 }
 
 // setDefaultConfigValues sets default values for optional configuration fields.
-func setDefaultConfigValues(config ReActAgentConfig) ReActAgentConfig {
-	// Set default max iterations if not specified
+func setDefaultConfigValues(config AgentConfig) AgentConfig {
 	if config.MaxIterations <= 0 {
 		config.MaxIterations = 10
 	}
-
-	// Create default system prompt if not provided
 	if config.SystemPrompt == "" {
 		config.SystemPrompt = buildDefaultSystemPrompt(config.Tools)
 	}
-
+	if config.ThoughtGenerator == nil {
+		thoughtPromptStrategy := NewDefaultThoughtPromptStrategy()
+		config.ThoughtGenerator = NewLLMThoughtGenerator(
+			config.Model,
+			thoughtPromptStrategy,
+			ThoughtFormatFree,
+		)
+	}
+	if config.ActionSelector == nil {
+		config.ActionSelector = NewLLMActionSelector(
+			config.Model,
+			NewDefaultActionPromptStrategy(),
+		)
+	}
+	if config.ResponseGenerator == nil {
+		config.ResponseGenerator = NewLLMResponseGenerator(
+			config.Model,
+			NewDefaultResponsePromptStrategy(true),
+		)
+	}
+	if config.CycleManager == nil {
+		config.CycleManager = NewInMemoryCycleManager()
+	}
+	if config.ThoughtFormat == "" {
+		config.ThoughtFormat = ThoughtFormatFree
+	}
 	return config
 }
 
 // createLLMAgent creates an LLMAgent from the provided configuration.
-func createLLMAgent(config ReActAgentConfig) (*agents.LLMAgent, error) {
+func createLLMAgent(config AgentConfig) (*agents.LLMAgent, error) {
 	llmConfig := agents.LLMAgentConfig{
 		Name:               config.Name,
 		Description:        config.Description,
@@ -280,9 +281,9 @@ func createLLMAgent(config ReActAgentConfig) (*agents.LLMAgent, error) {
 }
 
 // createReactMemory creates or wraps a ReactMemory from the provided Memory.
-func createReactMemory(mem memory.Memory) ReactMemory {
+func createReactMemory(mem memory.Memory) Memory {
 	// If memory already implements ReactMemory, use it directly
-	if rm, ok := mem.(ReactMemory); ok {
+	if rm, ok := mem.(Memory); ok {
 		return rm
 	}
 
@@ -296,22 +297,22 @@ func createReactMemory(mem memory.Memory) ReactMemory {
 }
 
 // GetModel returns the model of the agent.
-func (a *ReActAgent) GetModel() model.Model {
+func (a *Agent) GetModel() model.Model {
 	return a.LLMAgent.GetModel()
 }
 
 // Tools returns the tools available to the agent.
-func (a *ReActAgent) Tools() []tool.Tool {
+func (a *Agent) Tools() []tool.Tool {
 	return a.config.Tools
 }
 
 // GetTools returns the tools available to the agent (alias for Tools() for IReActAgent interface).
-func (a *ReActAgent) GetTools() []tool.Tool {
+func (a *Agent) GetTools() []tool.Tool {
 	return a.Tools()
 }
 
 // Run executes the ReAct agent.
-func (a *ReActAgent) Run(ctx context.Context, msg *message.Message) (*message.Message, error) {
+func (a *Agent) Run(ctx context.Context, msg *message.Message) (*message.Message, error) {
 	a.mu.Lock()
 	a.currentMaxIterations = a.maxIterations
 	a.mu.Unlock()
@@ -367,7 +368,7 @@ func (a *ReActAgent) Run(ctx context.Context, msg *message.Message) (*message.Me
 // processSingleCycle handles a single cycle of the ReAct agent.
 // Returns the thought, a possible response message, a flag indicating if the loop should break,
 // and any error that occurred.
-func (a *ReActAgent) processSingleCycle(
+func (a *Agent) processSingleCycle(
 	ctx context.Context,
 	msg *message.Message,
 	tools []tool.Tool,
@@ -381,7 +382,7 @@ func (a *ReActAgent) processSingleCycle(
 
 	// Generate thought
 	log.Debugf("Generating thought (cycle %d)", cycleIndex+1)
-	thought, err := a.thoughtGenerator.Generate(ctx, []*message.Message{msg}, cycles)
+	thought, err := a.thoughtGenerator.Generate(ctx, []*message.Message{msg}, cycles, tools)
 	if err != nil {
 		log.Errorf("Failed to generate thought: %v", err)
 		return nil, nil, false, fmt.Errorf("failed to generate thought: %w", err)
@@ -395,7 +396,7 @@ func (a *ReActAgent) processSingleCycle(
 	}
 
 	// Check if thought contains a final answer directly
-	if containsFinalAnswer(thought.Content) {
+	if containsFinalAnswer(thought) {
 		log.Infof("Thought contains final answer, returning it directly")
 		finalResponse := message.NewAssistantMessage(extractFinalAnswer(thought.Content))
 		return thought, finalResponse, true, nil
@@ -439,7 +440,7 @@ func (a *ReActAgent) processSingleCycle(
 
 // handleFinalAnswerAction processes a final_answer action.
 // Returns the thought, response message, whether to break the loop, and any error.
-func (a *ReActAgent) handleFinalAnswerAction(
+func (a *Agent) handleFinalAnswerAction(
 	ctx context.Context,
 	thought *Thought,
 	action *Action,
@@ -477,7 +478,7 @@ func (a *ReActAgent) handleFinalAnswerAction(
 
 // executeToolAction finds and executes a tool based on the given action.
 // Returns an observation and any error that occurred.
-func (a *ReActAgent) executeToolAction(ctx context.Context, action *Action) (*CycleObservation, error) {
+func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleObservation, error) {
 	// Find the tool
 	selectedTool, found := a.findTool(action.ToolName)
 	if !found {
@@ -560,8 +561,12 @@ func (a *ReActAgent) executeToolAction(ctx context.Context, action *Action) (*Cy
 // Helper functions for detecting final answers
 
 // containsFinalAnswer checks if thought content contains explicit final answer markers.
-func containsFinalAnswer(content string) bool {
-	lowerContent := strings.ToLower(content)
+func containsFinalAnswer(thought *Thought) bool {
+	if thought.SuggestedAction != nil && thought.SuggestedAction.ToolName == "final_answer" {
+		return true
+	}
+
+	lowerContent := strings.ToLower(thought.Content)
 
 	// Common final answer patterns
 	patterns := []string{
@@ -625,7 +630,7 @@ func hasFinalAnswer(thought string) bool {
 }
 
 // generateResponseFromContent generates a response from the given content.
-func (a *ReActAgent) generateResponseFromContent(ctx context.Context, content string) (*message.Message, error) {
+func (a *Agent) generateResponseFromContent(ctx context.Context, content string) (*message.Message, error) {
 	// Extract the final answer part if present
 	answer := content
 	if idx := strings.Index(strings.ToLower(content), "final answer:"); idx != -1 {
@@ -639,7 +644,7 @@ func (a *ReActAgent) generateResponseFromContent(ctx context.Context, content st
 }
 
 // generateResponseFromCycles generates a response using all the available cycles.
-func (a *ReActAgent) generateResponseFromCycles(ctx context.Context) (*message.Message, error) {
+func (a *Agent) generateResponseFromCycles(ctx context.Context) (*message.Message, error) {
 	// Get all cycles
 	cycles, err := a.cycleManager.GetHistory(ctx)
 	if err != nil {
@@ -668,7 +673,7 @@ func (a *ReActAgent) generateResponseFromCycles(ctx context.Context) (*message.M
 }
 
 // generateSummaryFromObservations creates a summary response from all observations in the cycles.
-func (a *ReActAgent) generateSummaryFromObservations(cycles []*Cycle) (*message.Message, error) {
+func (a *Agent) generateSummaryFromObservations(cycles []*Cycle) (*message.Message, error) {
 	var summary strings.Builder
 	summary.WriteString("Based on my analysis:\n\n")
 
@@ -691,7 +696,7 @@ func (a *ReActAgent) generateSummaryFromObservations(cycles []*Cycle) (*message.
 }
 
 // extractContentFromObservation extracts the content from an observation.
-func (a *ReActAgent) extractContentFromObservation(observation *CycleObservation) string {
+func (a *Agent) extractContentFromObservation(observation *CycleObservation) string {
 	if observation.IsError {
 		if errMsg, ok := observation.ToolOutput["error"]; ok {
 			return fmt.Sprintf("%v", errMsg)
@@ -776,7 +781,7 @@ func stringsApproximatelyEqual(s1, s2 string, threshold float64) bool {
 }
 
 // generateFinalAnswerFromRepeatingCalls generates a final answer when the agent is stuck in a loop.
-func (a *ReActAgent) generateFinalAnswerFromRepeatingCalls(ctx context.Context, cycles []*Cycle) (*message.Message, error) {
+func (a *Agent) generateFinalAnswerFromRepeatingCalls(ctx context.Context, cycles []*Cycle) (*message.Message, error) {
 	// Find the last successful cycle
 	lastSuccessfulCycle := a.findLastSuccessfulCycle(cycles)
 	if lastSuccessfulCycle == nil {
@@ -794,7 +799,7 @@ func (a *ReActAgent) generateFinalAnswerFromRepeatingCalls(ctx context.Context, 
 }
 
 // findLastSuccessfulCycle finds the last cycle with a successful tool execution.
-func (a *ReActAgent) findLastSuccessfulCycle(cycles []*Cycle) *Cycle {
+func (a *Agent) findLastSuccessfulCycle(cycles []*Cycle) *Cycle {
 	for i := len(cycles) - 1; i >= 0; i-- {
 		if cycles[i].Observation != nil && !cycles[i].Observation.IsError {
 			return cycles[i]
@@ -804,7 +809,7 @@ func (a *ReActAgent) findLastSuccessfulCycle(cycles []*Cycle) *Cycle {
 }
 
 // generateToolSpecificResponse creates a response tailored to the specific tool that was used.
-func (a *ReActAgent) generateToolSpecificResponse(toolName string, observationStr string) string {
+func (a *Agent) generateToolSpecificResponse(toolName string, observationStr string) string {
 	switch toolName {
 	case "calculator":
 		return fmt.Sprintf("The result of the calculation is %s.", observationStr)
@@ -814,7 +819,7 @@ func (a *ReActAgent) generateToolSpecificResponse(toolName string, observationSt
 }
 
 // RunAsync processes the given message asynchronously and returns a channel of events.
-func (a *ReActAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *event.Event, error) {
+func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *event.Event, error) {
 	eventCh := make(chan *event.Event)
 
 	// Reset the current max iterations
@@ -842,7 +847,7 @@ func (a *ReActAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan
 }
 
 // registerToolsWithModel registers tools with the model if it supports tool calls.
-func (a *ReActAgent) registerToolsWithModel() {
+func (a *Agent) registerToolsWithModel() {
 	if toolModel, ok := a.GetModel().(model.ToolCallSupportingModel); ok && toolModel.SupportsToolCalls() {
 		var toolDefs []*tool.ToolDefinition
 		for _, t := range a.Tools() {
@@ -856,7 +861,7 @@ func (a *ReActAgent) registerToolsWithModel() {
 }
 
 // runAsyncLoop is the main loop for asynchronous reasoning cycles.
-func (a *ReActAgent) runAsyncLoop(
+func (a *Agent) runAsyncLoop(
 	ctx context.Context,
 	msg *message.Message,
 	cycles []*Cycle,
@@ -894,7 +899,7 @@ func (a *ReActAgent) runAsyncLoop(
 
 // processSingleAsyncCycle processes a single cycle in the async execution mode.
 // Returns whether to continue with more cycles and any error that occurred.
-func (a *ReActAgent) processSingleAsyncCycle(
+func (a *Agent) processSingleAsyncCycle(
 	ctx context.Context,
 	msg *message.Message,
 	cycles []*Cycle,
@@ -902,7 +907,7 @@ func (a *ReActAgent) processSingleAsyncCycle(
 ) (bool, error) {
 	// Generate a thought based on the input
 	userMsgs := []*message.Message{msg}
-	thought, err := a.thoughtGenerator.Generate(ctx, userMsgs, cycles)
+	thought, err := a.thoughtGenerator.Generate(ctx, userMsgs, cycles, a.Tools())
 	if err != nil {
 		return false, fmt.Errorf("failed to generate thought: %w", err)
 	}
@@ -955,7 +960,7 @@ func (a *ReActAgent) processSingleAsyncCycle(
 
 // handleAsyncFinalThought handles a thought that contains a final answer.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) handleAsyncFinalThought(
+func (a *Agent) handleAsyncFinalThought(
 	ctx context.Context,
 	thought *Thought,
 	eventCh chan<- *event.Event,
@@ -971,7 +976,7 @@ func (a *ReActAgent) handleAsyncFinalThought(
 
 // handleAsyncRepeatingTools handles the case when the agent has repeated the same tool call multiple times.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) handleAsyncRepeatingTools(
+func (a *Agent) handleAsyncRepeatingTools(
 	ctx context.Context,
 	cycles []*Cycle,
 	eventCh chan<- *event.Event,
@@ -987,7 +992,7 @@ func (a *ReActAgent) handleAsyncRepeatingTools(
 
 // handleAsyncActionError handles errors that occur when selecting an action.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) handleAsyncActionError(
+func (a *Agent) handleAsyncActionError(
 	ctx context.Context,
 	thought *Thought,
 	actionErr error,
@@ -1005,7 +1010,7 @@ func (a *ReActAgent) handleAsyncActionError(
 }
 
 // emitAndRecordAction emits an action event and records the action.
-func (a *ReActAgent) emitAndRecordAction(
+func (a *Agent) emitAndRecordAction(
 	ctx context.Context,
 	action *Action,
 	eventCh chan<- *event.Event,
@@ -1023,7 +1028,7 @@ func (a *ReActAgent) emitAndRecordAction(
 
 // executeAsyncTool executes a tool and handles the result asynchronously.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) executeAsyncTool(
+func (a *Agent) executeAsyncTool(
 	ctx context.Context,
 	selectedTool tool.Tool,
 	action *Action,
@@ -1040,7 +1045,7 @@ func (a *ReActAgent) executeAsyncTool(
 
 // handleAsyncToolError handles errors that occur during tool execution.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) handleAsyncToolError(
+func (a *Agent) handleAsyncToolError(
 	ctx context.Context,
 	action *Action,
 	execErr error,
@@ -1086,7 +1091,7 @@ func (a *ReActAgent) handleAsyncToolError(
 
 // handleAsyncToolSuccess handles successful tool execution.
 // Returns whether to continue execution and any error.
-func (a *ReActAgent) handleAsyncToolSuccess(
+func (a *Agent) handleAsyncToolSuccess(
 	ctx context.Context,
 	action *Action,
 	result *tool.Result,
@@ -1121,14 +1126,14 @@ func (a *ReActAgent) handleAsyncToolSuccess(
 }
 
 // MaxIterations returns the maximum number of ReAct cycles.
-func (a *ReActAgent) MaxIterations() int {
+func (a *Agent) MaxIterations() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.currentMaxIterations
 }
 
 // SetMaxIterations sets the maximum number of ReAct cycles.
-func (a *ReActAgent) SetMaxIterations(maxIterations int) {
+func (a *Agent) SetMaxIterations(maxIterations int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if maxIterations > 0 {
@@ -1137,37 +1142,37 @@ func (a *ReActAgent) SetMaxIterations(maxIterations int) {
 }
 
 // RecordAction records an action via the cycle manager.
-func (a *ReActAgent) RecordAction(ctx context.Context, action *Action) error {
+func (a *Agent) RecordAction(ctx context.Context, action *Action) error {
 	return a.cycleManager.RecordAction(ctx, action)
 }
 
 // RecordObservation records an observation via the cycle manager.
-func (a *ReActAgent) RecordObservation(ctx context.Context, observation *CycleObservation) error {
+func (a *Agent) RecordObservation(ctx context.Context, observation *CycleObservation) error {
 	return a.cycleManager.RecordObservation(ctx, observation)
 }
 
 // EndCycle ends the current cycle via the cycle manager.
-func (a *ReActAgent) EndCycle(ctx context.Context) (*Cycle, error) {
+func (a *Agent) EndCycle(ctx context.Context) (*Cycle, error) {
 	return a.cycleManager.EndCycle(ctx)
 }
 
 // GetHistory retrieves cycle history from the cycle manager.
-func (a *ReActAgent) GetHistory(ctx context.Context) ([]*Cycle, error) {
+func (a *Agent) GetHistory(ctx context.Context) ([]*Cycle, error) {
 	return a.cycleManager.GetHistory(ctx)
 }
 
 // CurrentCycle gets the current cycle from the cycle manager.
-func (a *ReActAgent) CurrentCycle(ctx context.Context) (*Cycle, error) {
+func (a *Agent) CurrentCycle(ctx context.Context) (*Cycle, error) {
 	return a.cycleManager.CurrentCycle(ctx)
 }
 
 // Ensure ReActAgent implements IReActAgent.
-var _ IReActAgent = (*ReActAgent)(nil)
+var _ IReActAgent = (*Agent)(nil)
 
 // RunReActCycle executes a single Thought-Action-Observation cycle.
 // It takes the current conversation history and returns the updated history
 // including the new thought, action, and observation.
-func (a *ReActAgent) RunReActCycle(ctx context.Context, history []*message.Message) (*Cycle, []*message.Message, error) {
+func (a *Agent) RunReActCycle(ctx context.Context, history []*message.Message) (*Cycle, []*message.Message, error) {
 	// Get current cycles for thought generation
 	cycles, err := a.cycleManager.GetHistory(ctx)
 	if err != nil {
@@ -1192,7 +1197,7 @@ func (a *ReActAgent) RunReActCycle(ctx context.Context, history []*message.Messa
 
 // generateAndRecordThought generates a thought and records it in a new cycle.
 // Returns the cycle, updated history, whether to return early, and any error.
-func (a *ReActAgent) generateAndRecordThought(
+func (a *Agent) generateAndRecordThought(
 	ctx context.Context,
 	history []*message.Message,
 	cycles []*Cycle,
@@ -1204,7 +1209,7 @@ func (a *ReActAgent) generateAndRecordThought(
 	}
 
 	// Generate a thought based on the input
-	thought, err := a.thoughtGenerator.Generate(ctx, history, cycles)
+	thought, err := a.thoughtGenerator.Generate(ctx, history, cycles, a.Tools())
 	if err != nil {
 		return nil, history, false, fmt.Errorf("failed to generate thought: %w", err)
 	}
@@ -1232,16 +1237,14 @@ func (a *ReActAgent) generateAndRecordThought(
 			log.Warnf("Failed to end cycle for final answer: %v", endErr)
 			// Continue anyway as we have the response
 		}
-
 		return cycle, updatedHistory, true, nil
 	}
-
 	return cycle, history, false, nil
 }
 
 // selectAndRecordAction selects an action based on the thought and records it.
 // Returns the action, updated history, whether to return early, and any error.
-func (a *ReActAgent) selectAndRecordAction(
+func (a *Agent) selectAndRecordAction(
 	ctx context.Context,
 	cycle *Cycle,
 	history []*message.Message,
@@ -1274,7 +1277,7 @@ func (a *ReActAgent) selectAndRecordAction(
 
 // executeActionAndRecordObservation executes an action and records the observation.
 // Returns the updated cycle, updated history, and any error.
-func (a *ReActAgent) executeActionAndRecordObservation(
+func (a *Agent) executeActionAndRecordObservation(
 	ctx context.Context,
 	action *Action,
 	history []*message.Message,
@@ -1322,7 +1325,7 @@ func (a *ReActAgent) executeActionAndRecordObservation(
 
 // createObservationFromToolExecution executes a tool and creates an observation.
 // Returns the observation, observation content string, and any error.
-func (a *ReActAgent) createObservationFromToolExecution(
+func (a *Agent) createObservationFromToolExecution(
 	ctx context.Context,
 	tool tool.Tool,
 	action *Action,
@@ -1361,7 +1364,7 @@ func (a *ReActAgent) createObservationFromToolExecution(
 }
 
 // findTool finds a tool by name.
-func (a *ReActAgent) findTool(name string) (tool.Tool, bool) {
+func (a *Agent) findTool(name string) (tool.Tool, bool) {
 	for _, t := range a.Tools() {
 		if t.Name() == name {
 			return t, true
