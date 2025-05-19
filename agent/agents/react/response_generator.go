@@ -52,30 +52,14 @@ func (s *DefaultResponsePromptStrategy) BuildResponsePrompt(userQuery string, hi
 			if cycle.Thought != nil {
 				prompt.WriteString(fmt.Sprintf("- Thought: %s\n", cycle.Thought.Content))
 			}
-
-			if cycle.Action != nil {
-				prompt.WriteString(fmt.Sprintf("- Action: %s\n", cycle.Action.ToolName))
-				prompt.WriteString(fmt.Sprintf("- Action Input: %v\n", cycle.Action.ToolInput))
-			}
-
-			if cycle.Observation != nil {
-				if cycle.Observation.IsError {
-					promptVal, ok := cycle.Observation.ToolOutput["error"]
-					if ok {
-						prompt.WriteString(fmt.Sprintf("- Observation: Error - %v\n", promptVal))
-					} else {
-						prompt.WriteString("- Observation: An error occurred.\n")
-					}
-				} else {
-					promptVal, ok := cycle.Observation.ToolOutput["output"]
-					if ok {
-						prompt.WriteString(fmt.Sprintf("- Observation: %v\n", promptVal))
-					} else {
-						prompt.WriteString("- Observation: Tool execution was successful.\n")
-					}
+			if cycle.Actions != nil {
+				for i, action := range cycle.Actions {
+					observation := cycle.Observations[i]
+					prompt.WriteString(fmt.Sprintf("- Action: %s\n", action.ToolName))
+					prompt.WriteString(fmt.Sprintf("- Action Input: %v\n", action.ToolInput))
+					prompt.WriteString(fmt.Sprintf("- Observation: %v\n", observation.ToolOutput))
 				}
 			}
-
 			prompt.WriteString("\n")
 		}
 	} else if len(cycles) > 0 {
@@ -87,9 +71,10 @@ func (s *DefaultResponsePromptStrategy) BuildResponsePrompt(userQuery string, hi
 			prompt.WriteString("\n\n")
 		}
 	}
-
-	prompt.WriteString("Based on this information, provide a direct and helpful response to the user's query. The response should be in a conversational tone and should not mention the thought process, actions, or observations explicitly unless necessary for explanation.\n")
-
+	prompt.WriteString(`Based on this information, provide a direct and helpful response to the user's query. 
+The response should be in a conversational tone and should not mention the thought process, actions, or 
+observations explicitly unless necessary for explanation.
+`)
 	return prompt.String()
 }
 

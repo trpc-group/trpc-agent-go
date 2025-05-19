@@ -1002,76 +1002,12 @@ func (p *BasicTaskProcessor) Process(
 	finalResponseMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
 		protocol.NewTextPart(response.Content),
 	})
-
-	// Get the thought process history
-	cycles, err := reactAgent.GetHistory(ctx)
-	if err != nil {
-		log.Infof("Failed to get agent history: %v", err)
-	} else {
-		log.Infof("Retrieved %d cycles from agent history", len(cycles))
-		for i, cycle := range cycles {
-			log.Infof("Cycle %d: Thought: %s", i+1, cycle.Thought.Content)
-			if cycle.Action != nil {
-				log.Infof("Cycle %d: Action: %s, Parameters: %v", i+1, cycle.Action.ToolName, cycle.Action.ToolInput)
-			}
-			if cycle.Observation != nil {
-				log.Infof("Cycle %d: Observation: Error=%v, Output=%v", i+1, cycle.Observation.IsError, cycle.Observation.ToolOutput)
-			}
-		}
-	}
-
-	// Add thought process as an artifact
-	if len(cycles) > 0 {
-		thoughtText := "Agent Thought Process:\n\n"
-
-		for i, cycle := range cycles {
-			thoughtText += fmt.Sprintf("--- Cycle %d ---\n", i+1)
-			thoughtText += fmt.Sprintf("Thought: %s\n\n", cycle.Thought.Content)
-
-			if cycle.Action != nil {
-				thoughtText += fmt.Sprintf("Action: %s\n", cycle.Action.ToolName)
-				thoughtText += fmt.Sprintf("Parameters: %v\n\n", cycle.Action.ToolInput)
-			}
-
-			if cycle.Observation != nil {
-				thoughtText += "Observation: "
-				if cycle.Observation.IsError {
-					thoughtText += fmt.Sprintf("Error: %v\n", cycle.Observation.ToolOutput)
-				} else if output, ok := cycle.Observation.ToolOutput["output"]; ok {
-					thoughtText += fmt.Sprintf("%v\n", output)
-				} else {
-					thoughtText += fmt.Sprintf("%v\n", cycle.Observation.ToolOutput)
-				}
-			}
-			thoughtText += "----------------\n\n"
-		}
-
-		// Add the thought process as an artifact
-		thoughtArtifact := protocol.Artifact{
-			Name:        stringPtr("agent-thought-process"),
-			Description: stringPtr("Detailed record of the agent's reasoning process"),
-			Parts: []protocol.Part{
-				protocol.NewTextPart(thoughtText),
-			},
-			Index: 0,
-		}
-		if err := handle.AddArtifact(thoughtArtifact); err != nil {
-			log.Infof("Failed to add thought artifact: %v", err)
-		}
-	}
-
 	// Complete the task with the response message
 	if err := handle.UpdateStatus(protocol.TaskStateCompleted, &finalResponseMsg); err != nil {
 		return fmt.Errorf("failed to complete task: %w", err)
 	}
-
 	log.Infof("Successfully completed task %s", taskID)
 	return nil
-}
-
-// Helper function to get a string pointer
-func stringPtr(s string) *string {
-	return &s
 }
 
 func runServer(address string) {
@@ -1522,7 +1458,7 @@ func main() {
 
 	if *useRunner {
 		// Use direct runner mode
-		runRunnerExample(*address, *modelProvider, *modelName, *openaiBaseURL, *runnerAsync, *runnerTimeout)
+		runRunnerExample(*address, *modelProvider, *modelName, *runnerAsync, *runnerTimeout)
 	} else if *serverMode {
 		log.Infof("Using model provider: %s, model: %s", *modelProvider, *modelName)
 		if *modelProvider == "openai" && *openaiBaseURL != "https://api.openai.com/v1" {
@@ -2002,7 +1938,7 @@ func getCorrelationDescription(rSquared float64) string {
 }
 
 // runRunnerExample demonstrates using the runner package directly without A2A.
-func runRunnerExample(address, modelProvider, modelName, openaiURL string, useAsync bool, timeoutSeconds int) {
+func runRunnerExample(address, modelProvider, modelName string, useAsync bool, timeoutSeconds int) {
 	log.Infof("Running direct runner example")
 	log.Infof("  Model provider: %s", modelProvider)
 	log.Infof("  Model name: %s", modelName)

@@ -216,19 +216,23 @@ func (s *ContextAwareToolSelector) buildContextAwarePrompt(
 				prompt.WriteString(fmt.Sprintf("Thought: %s\n\n", cycle.Thought.Content))
 			}
 
-			if cycle.Action != nil {
-				prompt.WriteString(fmt.Sprintf("Tool Selected: %s\n", cycle.Action.ToolName))
-				inputJSON, err := json.MarshalIndent(cycle.Action.ToolInput, "", "  ")
-				if err == nil {
-					prompt.WriteString(fmt.Sprintf("Parameters: %s\n", string(inputJSON)))
+			if cycle.Actions != nil {
+				for _, action := range cycle.Actions {
+					prompt.WriteString(fmt.Sprintf("Tool Selected: %s\n", action.ToolName))
+					inputJSON, err := json.MarshalIndent(action.ToolInput, "", "  ")
+					if err == nil {
+						prompt.WriteString(fmt.Sprintf("Parameters: %s\n", string(inputJSON)))
+					}
 				}
 			}
 
-			if cycle.Observation != nil {
-				if cycle.Observation.IsError {
-					prompt.WriteString(fmt.Sprintf("Error: %s\n", getErrorMessage(cycle.Observation)))
-				} else {
-					prompt.WriteString(fmt.Sprintf("Result: %s\n", getSuccessMessage(cycle.Observation)))
+			if cycle.Observations != nil {
+				for _, observation := range cycle.Observations {
+					if observation.IsError {
+						prompt.WriteString(fmt.Sprintf("Error: %s\n", getErrorMessage(observation)))
+					} else {
+						prompt.WriteString(fmt.Sprintf("Result: %s\n", getSuccessMessage(observation)))
+					}
 				}
 			}
 

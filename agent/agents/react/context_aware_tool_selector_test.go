@@ -59,7 +59,7 @@ func (t *mockTestTool) Execute(_ context.Context, _ map[string]interface{}) (*to
 
 func (t *mockTestTool) GetDefinition() *tool.ToolDefinition {
 	def := tool.NewToolDefinition(t.name, t.description)
-	
+
 	// Handle parameters if this is an object type with properties
 	if props, ok := t.parameters["properties"].(map[string]interface{}); ok {
 		for propName, propDef := range props {
@@ -68,7 +68,7 @@ func (t *mockTestTool) GetDefinition() *tool.ToolDefinition {
 					Type:        propObj["type"].(string),
 					Description: propObj["description"].(string),
 				}
-				
+
 				// Determine if the parameter is required
 				required := false
 				if reqList, ok := t.parameters["required"].([]string); ok {
@@ -79,12 +79,12 @@ func (t *mockTestTool) GetDefinition() *tool.ToolDefinition {
 						}
 					}
 				}
-				
+
 				def.AddParameter(propName, prop, required)
 			}
 		}
 	}
-	
+
 	return def
 }
 
@@ -279,10 +279,10 @@ func TestContextAwareToolSelector_WithCycleContext(t *testing.T) {
 	err := cycleManager.StartCycle(context.Background(), previousThought)
 	require.NoError(t, err)
 
-	err = cycleManager.RecordAction(context.Background(), previousAction)
+	err = cycleManager.RecordActions(context.Background(), []*Action{previousAction})
 	require.NoError(t, err)
 
-	err = cycleManager.RecordObservation(context.Background(), previousObservation)
+	err = cycleManager.RecordObservations(context.Background(), []*CycleObservation{previousObservation})
 	require.NoError(t, err)
 
 	_, err = cycleManager.EndCycle(context.Background())
