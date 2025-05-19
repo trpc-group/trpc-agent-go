@@ -394,6 +394,7 @@ func (a *Agent) processSingleCycle(
 		log.Errorf("Failed to start cycle: %v", err)
 		return nil, nil, false, fmt.Errorf("failed to start cycle: %w", err)
 	}
+	defer a.cycleManager.EndCycle(ctx)
 
 	// Check if thought contains a final answer directly
 	if containsFinalAnswer(thought) {
@@ -617,16 +618,6 @@ func extractFinalAnswer(content string) string {
 
 	// Fallback to returning the whole thought
 	return content
-}
-
-// hasFinalAnswer checks if a thought contains a final answer.
-func hasFinalAnswer(thought string) bool {
-	thoughtLower := strings.ToLower(thought)
-
-	return strings.Contains(thoughtLower, "final answer") ||
-		strings.Contains(thoughtLower, "final response") ||
-		strings.Contains(thoughtLower, "my answer is") ||
-		(strings.Contains(thoughtLower, "answer:") && !strings.Contains(thoughtLower, "need more information"))
 }
 
 // generateResponseFromContent generates a response from the given content.
@@ -876,7 +867,7 @@ func (a *Agent) runAsyncLoop(
 		}
 
 		// Process a single async cycle
-		shouldContinue, err := a.processSingleAsyncCycle(ctx, msg, cycles, eventCh)
+		shouldContinue, err := a.processSingleAsyncCycle(ctx, msg, eventCh)
 		if err != nil {
 			eventCh <- event.NewErrorEvent(err, 500)
 			return
@@ -902,11 +893,16 @@ func (a *Agent) runAsyncLoop(
 func (a *Agent) processSingleAsyncCycle(
 	ctx context.Context,
 	msg *message.Message,
-	cycles []*Cycle,
 	eventCh chan<- *event.Event,
 ) (bool, error) {
 	// Generate a thought based on the input
 	userMsgs := []*message.Message{msg}
+	log.Infof("Generating thought for message: %s", msg.Content)
+	cycles, err := a.GetHistory(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to get cycle history: %w", err)
+	}
+
 	thought, err := a.thoughtGenerator.Generate(ctx, userMsgs, cycles, a.Tools())
 	if err != nil {
 		return false, fmt.Errorf("failed to generate thought: %w", err)
@@ -916,10 +912,10 @@ func (a *Agent) processSingleAsyncCycle(
 	eventCh <- event.NewCustomEvent("thinking", thought.Content)
 
 	// Record the thought
-	err = a.cycleManager.StartCycle(ctx, thought)
-	if err != nil {
+	if err = a.cycleManager.StartCycle(ctx, thought); err != nil {
 		return false, fmt.Errorf("failed to start cycle: %w", err)
 	}
+	defer a.cycleManager.EndCycle(ctx)
 
 	// Update cycles
 	cycle, err := a.cycleManager.CurrentCycle(ctx)
@@ -929,7 +925,7 @@ func (a *Agent) processSingleAsyncCycle(
 	cycles = append(cycles, cycle)
 
 	// If the thought contains a final answer, stop and return it
-	if hasFinalAnswer(thought.Content) {
+	if containsFinalAnswer(thought) {
 		return a.handleAsyncFinalThought(ctx, thought, eventCh)
 	}
 
@@ -948,6 +944,11 @@ func (a *Agent) processSingleAsyncCycle(
 	// Emit and record the action
 	a.emitAndRecordAction(ctx, action, eventCh)
 
+	// Special handling for final_answer action
+	if action.ToolName == "final_answer" {
+		return a.handleAsyncFinalAnswerAction(ctx, action, eventCh)
+	}
+
 	// Execute the action
 	selectedTool, found := a.findTool(action.ToolName)
 	if !found {
@@ -958,6 +959,45 @@ func (a *Agent) processSingleAsyncCycle(
 	return a.executeAsyncTool(ctx, selectedTool, action, eventCh)
 }
 
+// handleFinalAnswerAction processes a final_answer action.
+// Returns the thought, response message, whether to break the loop, and any error.
+func (a *Agent) handleAsyncFinalAnswerAction(
+	ctx context.Context,
+	action *Action,
+	eventCh chan<- *event.Event,
+) (bool, error) {
+	content, ok := action.ToolInput["content"].(string)
+	if !ok {
+		content = "I've completed my analysis."
+	}
+	log.Infof("Final answer action detected, returning response to user")
+	finalResponse := message.NewAssistantMessage(content)
+	eventCh <- event.NewMessageEvent(finalResponse)
+
+	// Create a successful observation for the final answer
+	observation := &CycleObservation{
+		ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+		ActionID: action.ID,
+		ToolOutput: map[string]interface{}{
+			"output": content,
+		},
+		IsError:   false,
+		Timestamp: time.Now().Unix(),
+	}
+
+	// Record the observation
+	if err := a.cycleManager.RecordObservation(ctx, observation); err != nil {
+		log.Warnf("Failed to record final answer observation: %v", err)
+	}
+
+	// End the cycle
+	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
+		log.Warnf("Failed to end cycle after final answer: %v", err)
+	}
+
+	return true, nil
+}
+
 // handleAsyncFinalThought handles a thought that contains a final answer.
 // Returns whether to continue execution and any error.
 func (a *Agent) handleAsyncFinalThought(
@@ -965,8 +1005,9 @@ func (a *Agent) handleAsyncFinalThought(
 	thought *Thought,
 	eventCh chan<- *event.Event,
 ) (bool, error) {
+	answer := extractFinalAnswer(thought.Content)
 	// Generate a final response
-	finalResp, err := a.generateResponseFromContent(ctx, thought.Content)
+	finalResp, err := a.generateResponseFromContent(ctx, answer)
 	if err != nil {
 		return false, fmt.Errorf("failed to generate final response: %w", err)
 	}
@@ -1227,9 +1268,9 @@ func (a *Agent) generateAndRecordThought(
 	}
 
 	// If the thought contains a final answer, stop and return it
-	if hasFinalAnswer(thought.Content) {
+	if containsFinalAnswer(thought) {
 		// Add the thought to history as a message
-		respMsg := message.NewAssistantMessage(thought.Content)
+		respMsg := message.NewAssistantMessage(extractFinalAnswer(thought.Content))
 		updatedHistory := append(history, respMsg)
 
 		// End the cycle before returning

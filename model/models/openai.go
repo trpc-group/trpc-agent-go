@@ -266,7 +266,7 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 
 	// Log the raw response for debugging
-	log.Debugf("Raw OpenAI API response: %s", string(body))
+	log.Debugf("### Raw OpenAI API response ###\n%s\n### End of raw OpenAI API response ###", string(body))
 
 	// Define a comprehensive struct that captures both content and tool calls
 	type OpenAIResponse struct {

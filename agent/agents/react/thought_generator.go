@@ -61,9 +61,9 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 	}
 
 	// Add user query
-	prompt.WriteString("\nUser query: ")
+	prompt.WriteString("\nUser query: \n=== Start of user query ===\n")
 	prompt.WriteString(msg.Content)
-	prompt.WriteString("\n")
+	prompt.WriteString("\n=== End of user query ===\n")
 
 	// PROMINENTLY include the previous cycle observations
 	if len(history) > 0 {
@@ -75,7 +75,7 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 				// Format the tool input nicely
 				inputJSON, _ := json.MarshalIndent(cycle.Action.ToolInput, "", "  ")
 
-				prompt.WriteString(fmt.Sprintf("Step %d:\n", i+1))
+				prompt.WriteString(fmt.Sprintf("\n--- Start of Histroy %d ---\n", i+1))
 
 				// Add previous thought if available
 				if cycle.Thought != nil {
@@ -113,6 +113,7 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 					prompt.WriteString("RESULT: No observation recorded for this action.\n")
 				}
 				prompt.WriteString("\n")
+				prompt.WriteString(fmt.Sprintf("--- End of Histroy %d ---\n", i+1))
 			}
 		}
 
@@ -123,8 +124,9 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(msg *message.Message, 
 			prompt.WriteString("IMPORTANT: You've made similar errors multiple times. Please carefully check parameter names and values.\n")
 		}
 	}
-	prompt.WriteString("\nNow, think step by step about how to respond to the user's query, making effective use of the available tools or " +
-		"output 'Final Answer: your answer here' if you have gathered all necessary information.\n")
+	prompt.WriteString("\nNow, if you have gathered all necessary information from the previous thoughts to answer the user's last query (which is the Current message), " +
+		"output the answer according to the following format exactly: 'Final Answer: your answer here'.\n" +
+		"Otherwise, think step by step about how to respond to the user's query, making effective use of the available tools.\n")
 	return prompt.String()
 }
 
@@ -196,7 +198,7 @@ func (g *LLMThoughtGenerator) Generate(
 	} else {
 		promptText = fmt.Sprintf("Think about how to respond to this: %s", msg.Content)
 	}
-	log.Debugf("Thought prompt: %s", promptText)
+	log.Debugf("### Thought prompt ###\n%s\n### End of thought prompt ###", promptText)
 
 	// Create a system message with instructions
 	userMsg := message.NewUserMessage(promptText)
@@ -218,8 +220,6 @@ func (g *LLMThoughtGenerator) Generate(
 		Timestamp:      time.Now().Unix(),
 		PreviousAction: previousAction,
 	}
-
-	log.Infof("Thought: %s, tool calls: %v", thought.Content, response.ToolCalls)
 
 	// If the model provided structured tool calls, attach them to the thought
 	if len(response.ToolCalls) > 0 {
