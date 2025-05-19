@@ -147,8 +147,6 @@ func (g *LLMThoughtGenerator) Generate(
 
 	// Generate the thought using the model
 	opts := model.DefaultOptions()
-	// Enable tool calls so the model can directly output structured tool calls if appropriate
-	opts.EnableToolCalls = g.model.SupportsToolCalls()
 	response, err := g.model.GenerateWithMessages(ctx, []*message.Message{userMsg}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("thought generation failed: %w", err)

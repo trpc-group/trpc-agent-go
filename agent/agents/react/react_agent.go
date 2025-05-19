@@ -275,8 +275,16 @@ func createLLMAgent(config AgentConfig) (*agents.LLMAgent, error) {
 		Tools:              config.Tools,
 		EnableStreaming:    config.EnableStreaming,
 	}
-
+	config.Model.SetTools(convertToolsToToolDefinitions(config.Tools))
 	return agents.NewLLMAgent(llmConfig)
+}
+
+func convertToolsToToolDefinitions(tools []tool.Tool) []*tool.ToolDefinition {
+	toolDefs := make([]*tool.ToolDefinition, len(tools))
+	for i, t := range tools {
+		toolDefs[i] = t.GetDefinition()
+	}
+	return toolDefs
 }
 
 // createReactMemory creates or wraps a ReactMemory from the provided Memory.
@@ -520,17 +528,7 @@ func (a *Agent) executeMultipleToolActions(ctx context.Context, actions []*Actio
 		log.Errorf("Failed to record observations: %v", err)
 		return nil, fmt.Errorf("failed to record observations: %w", err)
 	}
-
-	// Check if any errors occurred during execution
-	var firstError error
-	for _, err := range errors {
-		if err != nil {
-			firstError = err
-			break
-		}
-	}
-
-	return observations, firstError
+	return observations, nil
 }
 
 // handleFinalAnswerAction processes a final_answer action.
@@ -805,9 +803,6 @@ func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *eve
 	a.currentMaxIterations = a.maxIterations
 	a.mu.Unlock()
 
-	// Register tools with model if it supports function calling
-	a.registerToolsWithModel()
-
 	// Get current cycles for thought generation
 	cycles, err := a.cycleManager.GetHistory(ctx)
 	if err != nil {
@@ -822,20 +817,6 @@ func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *eve
 	}()
 
 	return eventCh, nil
-}
-
-// registerToolsWithModel registers tools with the model if it supports tool calls.
-func (a *Agent) registerToolsWithModel() {
-	if toolModel, ok := a.GetModel().(model.ToolCallSupportingModel); ok && toolModel.SupportsToolCalls() {
-		var toolDefs []*tool.ToolDefinition
-		for _, t := range a.Tools() {
-			toolDefs = append(toolDefs, t.GetDefinition())
-		}
-
-		if err := toolModel.RegisterTools(toolDefs); err != nil {
-			log.Infof("Warning: failed to register tools with model: %v", err)
-		}
-	}
 }
 
 // runAsyncLoop is the main loop for asynchronous reasoning cycles.

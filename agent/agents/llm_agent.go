@@ -83,21 +83,6 @@ func NewLLMAgent(config LLMAgentConfig) (*LLMAgent, error) {
 				return nil, fmt.Errorf("failed to add tool: %w", err)
 			}
 		}
-
-		// If model supports tool calls, register the tools with the model
-		if tcModel, ok := config.Model.(model.ToolCallSupportingModel); ok {
-			toolDefs := make([]model.ToolDefinition, 0, len(config.Tools))
-			for _, t := range config.Tools {
-				toolDefs = append(toolDefs, model.ToolDefinition{
-					Name:        t.Name(),
-					Description: t.Description(),
-					Parameters:  t.Parameters(),
-				})
-			}
-			if err := tcModel.SetTools(toolDefs); err != nil {
-				return nil, fmt.Errorf("failed to set tools on model: %w", err)
-			}
-		}
 	}
 
 	// Create base agent config
@@ -142,54 +127,6 @@ func (a *LLMAgent) Run(ctx context.Context, msg *message.Message) (*message.Mess
 	opts := model.DefaultOptions()
 	opts.EnableToolCalls = a.toolSet != nil && len(a.tools) > 0
 
-	// Convert history to Gemini format if the model supports it
-	if geminiModel, ok := a.model.(model.GeminiCompatibleModel); ok && geminiModel.SupportsGeminiFormat() {
-		geminiHistory := make([]*message.GeminiContent, 0, len(history))
-		for _, msg := range history {
-			geminiHistory = append(geminiHistory, msg.ToGeminiContent())
-		}
-		response, err := geminiModel.GenerateWithGeminiMessages(ctx, geminiHistory, opts)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate response with Gemini format: %w", err)
-		}
-		
-		if response.GeminiContent != nil {
-			assistantMsg := message.FromGeminiContent(response.GeminiContent)
-			
-			// Store the model's response in memory
-			if err := a.memory.Store(ctx, assistantMsg); err != nil {
-				return nil, fmt.Errorf("failed to store response: %w", err)
-			}
-			
-			return assistantMsg, nil
-		}
-		
-		// If no GeminiContent but we have Text, create a message from it
-		if response.Text != "" {
-			assistantMsg := message.NewAssistantMessage(response.Text)
-			
-			// Store the model's response in memory
-			if err := a.memory.Store(ctx, assistantMsg); err != nil {
-				return nil, fmt.Errorf("failed to store response: %w", err)
-			}
-			
-			return assistantMsg, nil
-		}
-		
-		// If we get here, try to use response.Messages
-		if len(response.Messages) > 0 {
-			assistantMsg := response.Messages[0]
-			
-			// Store the model's response in memory
-			if err := a.memory.Store(ctx, assistantMsg); err != nil {
-				return nil, fmt.Errorf("failed to store response: %w", err)
-			}
-			
-			return assistantMsg, nil
-		}
-	}
-
-	// Fallback to standard model interface
 	response, err := a.model.GenerateWithMessages(ctx, history, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate response: %w", err)
@@ -268,85 +205,6 @@ func (a *LLMAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *
 		opts := model.DefaultOptions()
 		opts.EnableToolCalls = a.toolSet != nil && len(a.tools) > 0
 
-		// Check if model supports Gemini format
-		if geminiStreamingModel, ok := streamingModel.(model.GeminiCompatibleStreamingModel); ok && geminiStreamingModel.SupportsGeminiFormat() {
-			// Convert history to Gemini format
-			geminiHistory := make([]*message.GeminiContent, 0, len(history))
-			for _, msg := range history {
-				geminiHistory = append(geminiHistory, msg.ToGeminiContent())
-			}
-			
-			responseCh, err := geminiStreamingModel.GenerateStreamWithGeminiMessages(ctx, geminiHistory, opts)
-			if err != nil {
-				eventCh <- event.NewErrorEvent(err, 500)
-				return
-			}
-			
-			// Accumulate the full response
-			var fullResponse *message.Message
-			var responseText string
-			
-			// Process streaming responses
-			for response := range responseCh {
-				if response.GeminiContent != nil {
-					chunk := message.FromGeminiContent(response.GeminiContent)
-					
-					// Send stream event
-					eventCh <- event.NewStreamEvent(chunk.Content)
-					
-					// Update full response
-					if fullResponse == nil {
-						fullResponse = chunk
-					} else {
-						fullResponse.Content += chunk.Content
-					}
-				} else if len(response.Messages) > 0 {
-					// Handle standard message format
-					chunk := response.Messages[0]
-					
-					// Send stream event
-					eventCh <- event.NewStreamEvent(chunk.Content)
-					
-					// Update full response
-					if fullResponse == nil {
-						fullResponse = chunk
-					} else {
-						fullResponse.Content += chunk.Content
-					}
-				} else if response.Text != "" {
-					// If we get text, accumulate it
-					responseText += response.Text
-					
-					// Send stream event
-					eventCh <- event.NewStreamEvent(response.Text)
-				}
-			}
-			
-			// If we have a full response, store it and send a message event
-			if fullResponse != nil {
-				if err := a.memory.Store(ctx, fullResponse); err != nil {
-					eventCh <- event.NewErrorEvent(fmt.Errorf("failed to store response: %w", err), 500)
-					return
-				}
-				eventCh <- event.NewMessageEvent(fullResponse)
-			} else if responseText != "" {
-				// If we only accumulated text, create a message
-				assistantMsg := message.NewAssistantMessage(responseText)
-				if err := a.memory.Store(ctx, assistantMsg); err != nil {
-					eventCh <- event.NewErrorEvent(fmt.Errorf("failed to store response: %w", err), 500)
-					return
-				}
-				eventCh <- event.NewMessageEvent(assistantMsg)
-			} else {
-				// Empty response
-				assistantMsg := message.NewAssistantMessage("No response generated")
-				eventCh <- event.NewMessageEvent(assistantMsg)
-			}
-			
-			return
-		}
-
-		// Fallback to standard streaming
 		responseCh, err := streamingModel.GenerateStreamWithMessages(ctx, history, opts)
 		if err != nil {
 			eventCh <- event.NewErrorEvent(err, 500)
