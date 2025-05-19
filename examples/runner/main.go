@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -22,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/models"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcptools "trpc.group/trpc-go/trpc-agent-go/tool/tools"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -1412,6 +1414,10 @@ func main() {
 	listModels := flag.Bool("list-models", false, "List all available models and exit")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error, fatal)")
+	useRunner := flag.Bool("runner", false, "Use direct runner mode instead of A2A server")
+	runnerAsync := flag.Bool("runner-async", false, "Use async mode with the runner")
+	runnerTimeout := flag.Int("runner-timeout", 30, "Timeout in seconds for the runner")
+	multiTurnChat := flag.Bool("chat", false, "Enable multi-turn interactive chat with the agent")
 	flag.Parse()
 
 	// Configure logging
@@ -1450,7 +1456,10 @@ func main() {
 	// Set OpenAI URL in environment
 	os.Setenv("OPENAI_BASE_URL", *openaiBaseURL)
 
-	if *serverMode {
+	if *useRunner {
+		// Use direct runner mode
+		runRunnerExample(*address, *modelProvider, *modelName, *runnerAsync, *runnerTimeout)
+	} else if *serverMode {
 		log.Infof("Using model provider: %s, model: %s", *modelProvider, *modelName)
 		if *modelProvider == "openai" && *openaiBaseURL != "https://api.openai.com/v1" {
 			log.Infof("Using custom OpenAI URL: %s", *openaiBaseURL)
@@ -1463,9 +1472,15 @@ func main() {
 	} else {
 		// Run the client
 		agentURL := fmt.Sprintf("http://%s/", *address)
-		if *useStreaming {
+
+		if *multiTurnChat {
+			// Run multi-turn interactive chat client
+			runMultiTurnClient(agentURL, *message, *useStreaming)
+		} else if *useStreaming {
+			// Run single-turn streaming client
 			runStreamExample(agentURL, *message)
 		} else {
+			// Run single-turn synchronous client
 			runClient(agentURL, *message)
 		}
 	}
@@ -1920,4 +1935,495 @@ func getCorrelationDescription(rSquared float64) string {
 		return "weak fit"
 	}
 	return "very weak fit"
+}
+
+// runRunnerExample demonstrates using the runner package directly without A2A.
+func runRunnerExample(address, modelProvider, modelName string, useAsync bool, timeoutSeconds int) {
+	log.Infof("Running direct runner example")
+	log.Infof("  Model provider: %s", modelProvider)
+	log.Infof("  Model name: %s", modelName)
+	log.Infof("  Async mode: %t", useAsync)
+	log.Infof("  Timeout: %d seconds", timeoutSeconds)
+
+	// Create context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Setup signal handling for graceful shutdown
+	signalCh := make(chan os.Signal, 1)
+	signal.Notify(signalCh, os.Interrupt)
+	go func() {
+		sig := <-signalCh
+		log.Infof("Received signal: %v", sig)
+		cancel()
+	}()
+
+	// Create agent with tools
+	model, err := createModel(modelProvider, modelName)
+	if err != nil {
+		log.Fatalf("Failed to create model: %v", err)
+	}
+
+	// Create tools
+	calculatorTool := NewCalculatorTool()
+	translatorTool := NewTranslatorTool()
+	unitConverterTool := NewUnitConverterTool()
+	textAnalysisTool := NewTextAnalysisTool()
+
+	var tools []tool.Tool
+	tools = append(tools, calculatorTool, translatorTool, unitConverterTool, textAnalysisTool)
+
+	// Start MCP server in the background
+	go func() {
+		runMCPServer("localhost:3000")
+	}()
+
+	// Create a ReAct agent
+	reactAgent, err := react.NewAgent(react.AgentConfig{
+		Name:            "RunnerExampleAgent",
+		Description:     "A ReAct agent that showcases the runner package",
+		Model:           model,
+		Tools:           tools,
+		MaxIterations:   10,
+		EnableStreaming: useAsync,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create ReAct agent: %v", err)
+	}
+
+	// Configure the runner
+	config := runner.Config{
+		MaxConcurrent: 5,
+		Timeout:       time.Duration(timeoutSeconds) * time.Second,
+		RetryCount:    1,
+		BufferSize:    10,
+	}
+
+	// Create and start the runner
+	baseRunner := runner.NewBaseRunner("example-runner", reactAgent, config, nil)
+	if err := baseRunner.Start(ctx); err != nil {
+		log.Fatalf("Failed to start runner: %v", err)
+	}
+	defer func() {
+		if err := baseRunner.Stop(ctx); err != nil {
+			log.Errorf("Failed to stop runner: %v", err)
+		}
+	}()
+
+	log.Infof("Runner started successfully")
+
+	runRunnerWithA2A(ctx, baseRunner, address, modelProvider, modelName)
+}
+
+// RunnerTaskProcessor is a task processor that uses a runner
+type RunnerTaskProcessor struct {
+	runner *runner.BaseRunner
+}
+
+// Process implements the TaskProcessor interface
+func (p *RunnerTaskProcessor) Process(
+	ctx context.Context,
+	taskID string,
+	initialMsg protocol.Message,
+	handle taskmanager.TaskHandle,
+) error {
+	// Update task status to working
+	if err := handle.UpdateStatus(protocol.TaskStateWorking, nil); err != nil {
+		return fmt.Errorf("failed to update task status to working: %w", err)
+	}
+
+	// Extract text from message parts
+	var text string
+	for _, part := range initialMsg.Parts {
+		if textPart, ok := part.(protocol.TextPart); ok {
+			text = textPart.Text
+			break
+		}
+	}
+
+	log.Infof("Processing task %s with runner: %s", taskID, text)
+
+	// Since the TaskHandle interface doesn't provide a way to get conversation history,
+	// we'll implement a simpler approach using message context markers
+
+	// Check if the message contains a conversation marker
+	var userMsg *message.Message
+	if strings.Contains(text, "Previously in our conversation:") ||
+		strings.Contains(text, "Conversation history:") {
+		// Message already contains history context
+		userMsg = message.NewUserMessage(text)
+		log.Infof("Message appears to contain conversation history")
+	} else {
+		// No history, just use the message directly
+		userMsg = message.NewUserMessage(text)
+	}
+
+	// Send status update
+	statusMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+		protocol.NewTextPart("Processing your request with the runner..."),
+	})
+	if err := handle.UpdateStatus(protocol.TaskStateWorking, &statusMsg); err != nil {
+		log.Infof("Failed to update status: %v", err)
+	}
+
+	// Run asynchronously to support streaming
+	eventCh, err := p.runner.RunAsync(ctx, *userMsg)
+	if err != nil {
+		log.Infof("Runner execution failed: %v", err)
+		errorMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+			protocol.NewTextPart(fmt.Sprintf("Runner execution failed: %v", err)),
+		})
+		if err := handle.UpdateStatus(protocol.TaskStateFailed, &errorMsg); err != nil {
+			log.Infof("Failed to update task status: %v", err)
+		}
+		return fmt.Errorf("runner execution failed: %w", err)
+	}
+
+	// Create a buffer for the full response
+	var responseBuilder strings.Builder
+
+	// Process events
+	for event := range eventCh {
+		if event.Type == "message" {
+			if msg, ok := event.Data.(*message.Message); ok && msg != nil {
+				log.Infof("Received message event: %s", msg.Content)
+
+				// Append to the full response
+				responseBuilder.WriteString(msg.Content)
+
+				// Send intermediate update for streaming
+				updateMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+					protocol.NewTextPart(msg.Content),
+				})
+				if err := handle.UpdateStatus(protocol.TaskStateWorking, &updateMsg); err != nil {
+					log.Infof("Failed to send streaming update: %v", err)
+				}
+			}
+		} else if event.Type == "error" {
+			errStr, _ := event.GetMetadata("error")
+			log.Infof("Received error event: %v", errStr)
+
+			// Send error to client
+			errMsg := fmt.Sprintf("Error during processing: %v", errStr)
+			errorMessage := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+				protocol.NewTextPart(errMsg),
+			})
+			if err := handle.UpdateStatus(protocol.TaskStateWorking, &errorMessage); err != nil {
+				log.Infof("Failed to update error status: %v", err)
+			}
+		}
+	}
+
+	// Send the final response
+	finalResponse := responseBuilder.String()
+	if finalResponse == "" {
+		finalResponse = "No response generated by the runner."
+	}
+
+	finalMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+		protocol.NewTextPart(finalResponse),
+	})
+
+	if err := handle.UpdateStatus(protocol.TaskStateCompleted, &finalMsg); err != nil {
+		log.Infof("Failed to send final response: %v", err)
+		return fmt.Errorf("failed to complete task: %w", err)
+	}
+
+	log.Infof("Successfully completed task %s", taskID)
+	return nil
+}
+
+// runRunnerWithA2A wraps the runner in an A2A server
+func runRunnerWithA2A(ctx context.Context, baseRunner *runner.BaseRunner, address string, modelProvider, modelName string) {
+	// Create an agent card with metadata
+	desc := fmt.Sprintf("A runner-backed agent using %s %s model with various tools",
+		strings.ToUpper(modelProvider), modelName)
+
+	agentCard := server.AgentCard{
+		Name:        fmt.Sprintf("Runner Agent (%s %s)", strings.ToUpper(modelProvider), modelName),
+		Description: &desc,
+		URL:         "http://" + address + "/",
+		Version:     "1.0.0",
+		Capabilities: server.AgentCapabilities{
+			Streaming:              true,
+			PushNotifications:      false,
+			StateTransitionHistory: true,
+		},
+		Skills: []server.AgentSkill{
+			{
+				ID:   "calculator",
+				Name: "Math Operations",
+				Examples: []string{
+					"Calculate the square root of 16",
+					"Add 5 and 10",
+				},
+			},
+			{
+				ID:   "translator",
+				Name: "Text Translation",
+				Examples: []string{
+					"Translate 'hello world' to Spanish",
+					"Translate this text to French",
+				},
+			},
+			{
+				ID:   "unit-converter",
+				Name: "Unit Conversion",
+				Examples: []string{
+					"Convert 10 kilometers to miles",
+					"Convert 25 celsius to fahrenheit",
+				},
+			},
+			{
+				ID:   "text-analysis",
+				Name: "Text Analysis",
+				Examples: []string{
+					"Analyze the word count in this text",
+					"Analyze the sentiment of this message",
+				},
+			},
+		},
+	}
+
+	// Create task processor that uses our runner
+	taskProcessor := &RunnerTaskProcessor{runner: baseRunner}
+
+	// Create an in-memory task manager
+	taskManager, err := taskmanager.NewMemoryTaskManager(taskProcessor)
+	if err != nil {
+		log.Fatalf("Failed to create task manager: %v", err)
+	}
+
+	// Create the A2A server
+	a2aServer, err := server.NewA2AServer(agentCard, taskManager)
+	if err != nil {
+		log.Fatalf("Failed to create A2A server: %v", err)
+	}
+
+	// Start the server
+	log.Infof("Starting Runner A2A server on %s", address)
+	log.Infof("You can connect to this server using the A2A client")
+	log.Infof("Example: ./a2a_example -server=false -address=%s -message=\"Your message here\"", address)
+	log.Infof("Example with streaming: ./a2a_example -server=false -stream -address=%s -message=\"Your message here\"", address)
+
+	// Start the server in a separate goroutine
+	go func() {
+		if err := a2aServer.Start(address); err != nil {
+			log.Fatalf("Failed to start A2A server: %v", err)
+		}
+	}()
+
+	// Wait for context to be done (e.g., SIGINT)
+	<-ctx.Done()
+	log.Infof("Shutting down Runner A2A server...")
+
+	// Create a context with timeout for graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	// Stop the A2A server
+	if err := a2aServer.Stop(shutdownCtx); err != nil {
+		log.Infof("Error shutting down A2A server: %v", err)
+	}
+}
+
+// runMultiTurnClient runs an interactive chat session with the agent
+func runMultiTurnClient(agentURL string, initialMessage string, useStreaming bool) {
+	// Create a new A2A client
+	a2aClient, err := client.NewA2AClient(agentURL)
+	if err != nil {
+		log.Fatalf("Failed to create A2A client: %v", err)
+	}
+
+	// Maintain conversation history
+	var conversationHistory []string
+
+	// Add initial user message if provided
+	if initialMessage != "" {
+		conversationHistory = append(conversationHistory, fmt.Sprintf("User: %s", initialMessage))
+	}
+
+	// Interactive chat loop
+	fmt.Println("\n=== Multi-turn Chat with A2A Agent ===")
+	fmt.Printf("Connected to: %s\n", agentURL)
+	fmt.Println("Type 'exit' or 'quit' to end the conversation.")
+
+	// Input reader
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		// If we have no messages yet, prompt for the first one
+		if len(conversationHistory) == 0 {
+			fmt.Print("\nYou: ")
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				log.Fatalf("Error reading input: %v", err)
+			}
+
+			// Trim whitespace
+			input = strings.TrimSpace(input)
+
+			// Check for exit commands
+			if strings.ToLower(input) == "exit" || strings.ToLower(input) == "quit" {
+				fmt.Println("Goodbye!")
+				return
+			}
+
+			// Add user message to history
+			conversationHistory = append(conversationHistory, fmt.Sprintf("User: %s", input))
+		}
+
+		// Get the latest user input (should be at the end of the history)
+		latestUserInput := ""
+		for i := len(conversationHistory) - 1; i >= 0; i-- {
+			if strings.HasPrefix(conversationHistory[i], "User: ") {
+				latestUserInput = strings.TrimPrefix(conversationHistory[i], "User: ")
+				break
+			}
+		}
+
+		// Create the message with conversation history included in the text
+		var messageText string
+		if len(conversationHistory) > 1 {
+			messageText = "Conversation history:\n"
+			// Add all but the latest message to the history
+			for i := 0; i < len(conversationHistory)-1; i++ {
+				messageText += conversationHistory[i] + "\n"
+			}
+			messageText += "\nCurrent message: " + latestUserInput
+		} else {
+			// First message, no history
+			messageText = latestUserInput
+		}
+
+		// Create the message for the A2A protocol
+		msg := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{
+			protocol.NewTextPart(messageText),
+		})
+
+		// Create task parameters
+		taskParams := protocol.SendTaskParams{
+			ID:      fmt.Sprintf("chat-task-%d", time.Now().UnixNano()),
+			Message: msg,
+		}
+
+		// Process the user message - either streaming or regular
+		var agentResponse string
+
+		if useStreaming {
+			agentResponse = handleStreamingChatWithHistory(a2aClient, taskParams)
+		} else {
+			agentResponse = handleSyncChatWithHistory(a2aClient, taskParams)
+		}
+
+		// Add agent response to conversation history
+		if agentResponse != "" {
+			conversationHistory = append(conversationHistory, fmt.Sprintf("Agent: %s", agentResponse))
+		}
+
+		// Prompt for next message
+		fmt.Print("\nYou: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			log.Fatalf("Error reading input: %v", err)
+		}
+
+		// Trim whitespace
+		input = strings.TrimSpace(input)
+
+		// Check for exit commands
+		if strings.ToLower(input) == "exit" || strings.ToLower(input) == "quit" {
+			fmt.Println("Goodbye!")
+			return
+		}
+
+		// Add new user message to history
+		conversationHistory = append(conversationHistory, fmt.Sprintf("User: %s", input))
+	}
+}
+
+// handleStreamingChatWithHistory processes a chat message with streaming, returns the agent's response as string
+func handleStreamingChatWithHistory(a2aClient *client.A2AClient, taskParams protocol.SendTaskParams) string {
+	// Send the streaming request
+	eventsChan, err := a2aClient.StreamTask(context.Background(), taskParams)
+	if err != nil {
+		log.Fatalf("Failed to send streaming task: %v", err)
+	}
+
+	// Variables to track streaming state
+	var responseBuilder strings.Builder
+	fmt.Print("\nAgent: ")
+
+	// Process events as they arrive
+	for event := range eventsChan {
+		switch evt := event.(type) {
+		case protocol.TaskStatusUpdateEvent:
+			if evt.Status.Message != nil {
+				for _, part := range evt.Status.Message.Parts {
+					if textPart, ok := part.(protocol.TextPart); ok {
+						// Only print and collect new content (to avoid duplicates in streaming)
+						responseText := textPart.Text
+
+						// Print each chunk as it arrives
+						fmt.Print(responseText)
+
+						// Add to the total response
+						responseBuilder.WriteString(responseText)
+					}
+				}
+			}
+		case protocol.TaskArtifactUpdateEvent:
+			// If there are artifacts, we'll just note this in the console for now
+			fmt.Print("\n[Received artifact: " + *evt.Artifact.Name + "]")
+		}
+	}
+
+	// Return the final response
+	return responseBuilder.String()
+}
+
+// handleSyncChatWithHistory processes a chat message synchronously, returns the agent's response as string
+func handleSyncChatWithHistory(a2aClient *client.A2AClient, taskParams protocol.SendTaskParams) string {
+	// Send the task to the agent
+	task, err := a2aClient.SendTasks(context.Background(), taskParams)
+	if err != nil {
+		log.Fatalf("Failed to send task: %v", err)
+	}
+
+	fmt.Print("\nAgent: ")
+
+	// Poll for updates until the task is completed or failed
+	for task.Status.State != protocol.TaskStateCompleted &&
+		task.Status.State != protocol.TaskStateFailed &&
+		task.Status.State != protocol.TaskStateCanceled {
+
+		time.Sleep(500 * time.Millisecond)
+
+		// Get the current task state
+		taskQuery := protocol.TaskQueryParams{
+			ID: task.ID,
+		}
+
+		task, err = a2aClient.GetTasks(context.Background(), taskQuery)
+		if err != nil {
+			log.Fatalf("Failed to get task status: %v", err)
+		}
+	}
+
+	// Print and collect the agent's response
+	var responseBuilder strings.Builder
+
+	if task.Status.Message != nil {
+		for _, part := range task.Status.Message.Parts {
+			if textPart, ok := part.(protocol.TextPart); ok {
+				// Print to console
+				fmt.Print(textPart.Text)
+
+				// Add to response builder
+				responseBuilder.WriteString(textPart.Text)
+			}
+		}
+	}
+
+	return responseBuilder.String()
 }

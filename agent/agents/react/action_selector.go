@@ -17,8 +17,8 @@ import (
 
 // LLMActionSelector selects actions using an LLM.
 type LLMActionSelector struct {
-	model     model.Model
-	prompting ActionPromptStrategy
+	model          model.Model
+	promptStrategy ActionPromptStrategy
 }
 
 // ActionPromptStrategy represents a strategy for prompting action selection.
@@ -62,234 +62,96 @@ func (s *DefaultActionPromptStrategy) BuildActionPrompt(thought *Thought, tools 
 }
 
 // NewLLMActionSelector creates a new LLM-based action selector.
-func NewLLMActionSelector(model model.Model, prompting ActionPromptStrategy) *LLMActionSelector {
+func NewLLMActionSelector(model model.Model, promptStrategy ActionPromptStrategy) *LLMActionSelector {
 	return &LLMActionSelector{
-		model:     model,
-		prompting: prompting,
+		model:          model,
+		promptStrategy: promptStrategy,
 	}
 }
 
-// Select selects an action based on the thought.
-func (s *LLMActionSelector) Select(ctx context.Context, thought *Thought, tools []tool.Tool) (*Action, error) {
-	// If thought has a suggested action, try to use it
-	if thought.SuggestedAction != nil {
-		// Validate the tool name
-		var matchingTool tool.Tool
-		for _, t := range tools {
-			if t.Name() == thought.SuggestedAction.ToolName {
-				matchingTool = t
-				break
-			}
-		}
-
-		if matchingTool == nil {
-			log.Warnf("Suggested tool '%s' not found in available tools", thought.SuggestedAction.ToolName)
-		} else {
-			// Use the suggested action directly
-			action := &Action{
-				ID:        fmt.Sprintf("action-%d", time.Now().UnixNano()),
-				ThoughtID: thought.ID,
-				ToolName:  thought.SuggestedAction.ToolName,
-				ToolInput: thought.SuggestedAction.ToolInput,
-				Timestamp: time.Now().Unix(),
-			}
-			log.Infof("Using suggested action from thought: %s", action.ToolName)
-			return action, nil
-		}
+// parseAction parses an Action from a model response and thought ID.
+func parseAction(response string, thoughtID string) (*Action, error) {
+	// Implementation would parse the response text to extract tool name and parameters
+	// This is a placeholder implementation
+	if response == "" {
+		return nil, fmt.Errorf("empty response")
 	}
 
-	// Build prompt using the prompting strategy
-	prompt := s.prompting.BuildActionPrompt(thought, tools)
+	// In a real implementation, we would parse the response text to extract tool calls
+	// For now, just return an error to indicate we couldn't parse an action
+	return nil, fmt.Errorf("no tool calls found in response")
+}
+
+// Select selects one or more actions based on the thought using an LLM.
+// It can return multiple actions when the model returns multiple tool calls.
+func (s *LLMActionSelector) Select(ctx context.Context, thought *Thought, tools []tool.Tool) ([]*Action, error) {
+	// If a suggested action exists in the thought, use it as a single action
+	if len(thought.SuggestedActions) > 0 {
+		return thought.SuggestedActions, nil
+	}
+
+	// Generate a prompt for the action selection
+	prompt := s.promptStrategy.BuildActionPrompt(thought, tools)
 
 	// Create model message
 	messages := []*message.Message{
 		message.NewUserMessage(prompt),
 	}
 
-	// Setup model options
+	// Setup model options for tool calling
 	opts := model.GenerationOptions{
-		Temperature:      0.0,
-		MaxTokens:        250,
-		FrequencyPenalty: 0.0,
-		PresencePenalty:  0.0,
-		TopP:             1.0,
-		EnableToolCalls:  s.model.SupportsToolCalls(),
+		Temperature:     0.0,
+		MaxTokens:       250,
+		EnableToolCalls: true,
 	}
 
-	// Find if there's a matching tool mentioned in the thought
-	var matchingTool tool.Tool
-	for _, t := range tools {
-		// Check if thought mentions the tool name
-		if strings.Contains(strings.ToLower(thought.Content), strings.ToLower(t.Name())) {
-			matchingTool = t
-			log.Debugf("Found matching tool in thought: %s", t.Name())
-			break
-		}
-	}
-
-	log.Debugf("Sending action selection prompt to model %s with EnableToolCalls=%v",
-		s.model.Name(), opts.EnableToolCalls)
+	// Call the model to get tool calls
 	response, err := s.model.GenerateWithMessages(ctx, messages, opts)
 	if err != nil {
-		log.Errorf("Failed to generate action selection: %v", err)
-		return nil, fmt.Errorf("failed to generate action selection: %w", err)
+		return nil, fmt.Errorf("failed to generate actions: %w", err)
 	}
 
-	log.Debugf("Got response from model with %d tool calls", len(response.ToolCalls))
-
-	// Check if the model indicated it's finished and wants to provide a final response
-	if response.Text != "" {
-		respLower := strings.ToLower(response.Text)
-		if strings.Contains(respLower, "finished") ||
-			strings.Contains(respLower, "no more actions") ||
-			strings.Contains(respLower, "final answer") {
-			log.Infof("LLM indicated it's finished with actions and wants to provide a summary")
-
-			// Generate a summary response from the model
-			summaryPrompt := fmt.Sprintf(
-				"Based on the information gathered, please provide a concise final answer to the user's query. User query was related to: %s",
-				thought.Content)
-
-			summaryMessages := []*message.Message{
-				message.NewUserMessage(summaryPrompt),
+	// Check if the response has tool calls
+	if len(response.ToolCalls) > 0 {
+		// Convert each tool call to an Action
+		actions := make([]*Action, 0, len(response.ToolCalls))
+		for _, tc := range response.ToolCalls {
+			// Parse parameters from the tool call
+			var params map[string]interface{}
+			if err := json.Unmarshal([]byte(tc.Function.Arguments), &params); err != nil {
+				log.Warnf("Failed to parse tool call arguments: %v, args: %s", err, tc.Function.Arguments)
+				continue
 			}
 
-			summaryOpts := model.GenerationOptions{
-				Temperature:      0.0,
-				MaxTokens:        500,
-				FrequencyPenalty: 0.0,
-				PresencePenalty:  0.0,
-				TopP:             1.0,
-				EnableToolCalls:  false, // No tool calls needed for summary
-			}
-
-			// Get the summary from the model
-			summaryResponse, summaryErr := s.model.GenerateWithMessages(ctx, summaryMessages, summaryOpts)
-			if summaryErr != nil {
-				log.Warnf("Failed to generate summary, using thought content: %v", summaryErr)
-				// Create a special "finished" action that will be recognized by the agent
-				action := &Action{
-					ID:        fmt.Sprintf("final-answer-%d", time.Now().UnixNano()),
-					ThoughtID: thought.ID,
-					ToolName:  "final_answer",
-					ToolInput: map[string]interface{}{
-						"content": thought.Content,
-					},
-					Timestamp: time.Now().Unix(),
-				}
-				return action, nil
-			}
-
-			summaryText := ""
-			if len(summaryResponse.Messages) > 0 {
-				summaryText = summaryResponse.Messages[0].Content
-			} else if summaryResponse.Text != "" {
-				summaryText = summaryResponse.Text
-			} else {
-				summaryText = thought.Content
-			}
-
-			// Create a special "finished" action that will be recognized by the agent
+			// Create the action
 			action := &Action{
-				ID:        fmt.Sprintf("final-answer-%d", time.Now().UnixNano()),
+				ID:        fmt.Sprintf("action-%d", time.Now().UnixNano()),
 				ThoughtID: thought.ID,
-				ToolName:  "final_answer",
-				ToolInput: map[string]interface{}{
-					"content": summaryText,
-				},
+				ToolName:  tc.Function.Name,
+				ToolInput: params,
 				Timestamp: time.Now().Unix(),
 			}
-			return action, nil
+			actions = append(actions, action)
+		}
+
+		if len(actions) > 0 {
+			return actions, nil
 		}
 	}
 
-	// Extract the tool call from the response
-	// If we have a tool call, use it directly
-	// Otherwise try to parse from the text
-	if len(response.ToolCalls) > 0 {
-		// Use the first tool call
-		toolCall := response.ToolCalls[0]
-		log.Debugf("Found tool call: %s(%s)", toolCall.Function.Name, toolCall.Function.Arguments)
-
-		// Find the matching tool
-		var matchingTool tool.Tool
-		for _, t := range tools {
-			if t.Name() == toolCall.Function.Name {
-				matchingTool = t
-				log.Debugf("Found matching tool: %s", t.Name())
-				break
-			}
-		}
-
-		if matchingTool == nil {
-			log.Warnf("No matching tool found for '%s'", toolCall.Function.Name)
-			return nil, fmt.Errorf("tool '%s' not found", toolCall.Function.Name)
-		}
-
-		// Parse the arguments
-		var toolInput map[string]interface{}
-		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolInput); err != nil {
-			log.Errorf("Failed to parse tool arguments: %v", err)
-			return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
-		}
-
-		// Try to parse direct string input first (for OpenAI-compatible models)
-		if len(toolInput) == 1 {
-			// Create a synthetic structure with tool_name and tool_input
-			syntheticInput := map[string]interface{}{
-				"tool_name":  toolCall.Function.Name,
-				"tool_input": toolCall.Function.Arguments, // Use the raw arguments string
-			}
-			if action, success := parseFormatWithDirectToolInput(syntheticInput, tools); success {
-				// Set the thought ID
-				action.ThoughtID = thought.ID
-				return action, nil
-			}
-		}
-
-		// Validate and convert parameters
-		validatedInput, err := tool.ValidateParameters(toolInput, matchingTool)
-		if err != nil {
-			log.Warnf("Parameter validation failed: %v", err)
-			return nil, fmt.Errorf("parameter validation for tool '%s' failed: %w",
-				matchingTool.Name(), err)
-		}
-
-		log.Debugf("Successfully validated parameters for tool '%s'", matchingTool.Name())
-		toolInput = validatedInput
-
-		// Create the action
-		action := &Action{
-			ID:        fmt.Sprintf("action-%d", time.Now().UnixNano()),
-			ThoughtID: thought.ID,
-			ToolName:  matchingTool.Name(),
-			ToolInput: toolInput,
-			Timestamp: time.Now().Unix(),
-		}
-
-		log.Debugf("Selected action from tool call: %s with input: %v", action.ToolName, action.ToolInput)
-		return action, nil
+	// If no tool calls, try to parse from text
+	respText := response.Text
+	if respText == "" && len(response.Messages) > 0 {
+		respText = response.Messages[0].Content
 	}
 
-	// No direct tool calls, try to parse from text content
-	log.Debugf("No tool calls found in model response, falling back to text parsing")
-	if response.Text == "" && len(response.Messages) > 0 {
-		response.Text = response.Messages[0].Content
-		log.Debugf("Using content from first message: length=%d", len(response.Text))
-	}
-	if response.Text == "" {
-		return nil, fmt.Errorf("model returned empty response")
-	}
-
-	// Try to parse the action from the text response
-	action, err := parseActionFromText(thought.ID, response.Text, matchingTool, tools)
+	// Try to parse action from text
+	action, err := parseActionFromText(thought.ID, respText, nil, tools)
 	if err != nil {
-		log.Errorf("Failed to parse action from response: %v", err)
-		return nil, fmt.Errorf("failed to parse action from response: %w", err)
+		return nil, fmt.Errorf("failed to parse action: %w", err)
 	}
 
-	log.Debugf("Successfully parsed action from text: %s with input: %v", action.ToolName, action.ToolInput)
-	return action, nil
+	return []*Action{action}, nil
 }
 
 // parseActionFromText contains the logic for parsing actions from text responses

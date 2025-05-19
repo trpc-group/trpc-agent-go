@@ -192,24 +192,28 @@ func (s *DynamicPlanningPromptStrategy) BuildThoughtPrompt(
 			if cycle.Thought != nil {
 				prompt.WriteString(fmt.Sprintf("- Thought: %s\n", cycle.Thought.Content))
 			}
-			if cycle.Action != nil {
-				prompt.WriteString(fmt.Sprintf("- Action: %s\n", cycle.Action.ToolName))
-				prompt.WriteString(fmt.Sprintf("- Action Input: %v\n", cycle.Action.ToolInput))
+			if cycle.Actions != nil {
+				for _, action := range cycle.Actions {
+					prompt.WriteString(fmt.Sprintf("- Action: %s\n", action.ToolName))
+					prompt.WriteString(fmt.Sprintf("- Action Input: %v\n", action.ToolInput))
+				}
 			}
-			if cycle.Observation != nil {
-				if cycle.Observation.IsError {
-					promptVal, ok := cycle.Observation.ToolOutput["error"]
-					if ok {
-						prompt.WriteString(fmt.Sprintf("- Observation: Error - %v\n", promptVal))
+			if cycle.Observations != nil {
+				for _, observation := range cycle.Observations {
+					if observation.IsError {
+						promptVal, ok := observation.ToolOutput["error"]
+						if ok {
+							prompt.WriteString(fmt.Sprintf("- Observation: Error - %v\n", promptVal))
+						} else {
+							prompt.WriteString("- Observation: An error occurred.\n")
+						}
 					} else {
-						prompt.WriteString("- Observation: An error occurred.\n")
-					}
-				} else {
-					promptVal, ok := cycle.Observation.ToolOutput["output"]
-					if ok {
-						prompt.WriteString(fmt.Sprintf("- Observation: %v\n", promptVal))
-					} else {
-						prompt.WriteString("- Observation: Tool execution was successful.\n")
+						promptVal, ok := observation.ToolOutput["output"]
+						if ok {
+							prompt.WriteString(fmt.Sprintf("- Observation: %v\n", promptVal))
+						} else {
+							prompt.WriteString("- Observation: Tool execution was successful.\n")
+						}
 					}
 				}
 			}
@@ -425,19 +429,21 @@ func extractPlanState(cycles []*Cycle) *PlanState {
 		}
 
 		// Check for error mentions
-		if cycle.Observation != nil && cycle.Observation.IsError {
-			errMsg := ""
-			if promptVal, ok := cycle.Observation.ToolOutput["error"]; ok {
-				errMsg = fmt.Sprintf("%v", promptVal)
-			} else {
-				errMsg = "An error occurred"
-			}
+		for _, observation := range cycle.Observations {
+			if observation.IsError {
+				errMsg := ""
+				if promptVal, ok := observation.ToolOutput["error"]; ok {
+					errMsg = fmt.Sprintf("%v", promptVal)
+				} else {
+					errMsg = "An error occurred"
+				}
 
-			planState.LastError = &ErrorInfo{
-				Step:      planState.CurrentStepIndex,
-				Message:   errMsg,
-				Source:    "tool_execution",
-				Timestamp: cycle.Observation.Timestamp,
+				planState.LastError = &ErrorInfo{
+					Step:      planState.CurrentStepIndex,
+					Message:   errMsg,
+					Source:    "tool_execution",
+					Timestamp: observation.Timestamp,
+				}
 			}
 		}
 

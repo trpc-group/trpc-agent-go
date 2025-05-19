@@ -42,29 +42,31 @@ func (m *InMemoryCycleManager) StartCycle(ctx context.Context, thought *Thought)
 	return nil
 }
 
-// RecordAction records an action for the current cycle.
-func (m *InMemoryCycleManager) RecordAction(ctx context.Context, action *Action) error {
+// RecordActions records one or more actions for the current cycle.
+func (m *InMemoryCycleManager) RecordActions(ctx context.Context, actions []*Action) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.currentCycle == nil {
-		return fmt.Errorf("no active cycle to record action for")
+		return fmt.Errorf("no active cycle to record actions for")
 	}
 
-	m.currentCycle.Action = action
+	// Add all actions to the Actions array
+	m.currentCycle.Actions = append(m.currentCycle.Actions, actions...)
 	return nil
 }
 
-// RecordObservation records an observation for the current cycle.
-func (m *InMemoryCycleManager) RecordObservation(ctx context.Context, observation *CycleObservation) error {
+// RecordObservations records one or more observations for the current cycle.
+func (m *InMemoryCycleManager) RecordObservations(ctx context.Context, observations []*CycleObservation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.currentCycle == nil {
-		return fmt.Errorf("no active cycle to record observation for")
+		return fmt.Errorf("no active cycle to record observations for")
 	}
 
-	m.currentCycle.Observation = observation
+	// Add all observations to the Observations array
+	m.currentCycle.Observations = append(m.currentCycle.Observations, observations...)
 	return nil
 }
 
@@ -140,14 +142,14 @@ func (m *PersistentCycleManager) StartCycle(ctx context.Context, thought *Though
 	return m.inMemory.StartCycle(ctx, thought)
 }
 
-// RecordAction records an action for the current cycle.
-func (m *PersistentCycleManager) RecordAction(ctx context.Context, action *Action) error {
-	return m.inMemory.RecordAction(ctx, action)
+// RecordActions records one or more actions for the current cycle.
+func (m *PersistentCycleManager) RecordActions(ctx context.Context, actions []*Action) error {
+	return m.inMemory.RecordActions(ctx, actions)
 }
 
-// RecordObservation records an observation for the current cycle.
-func (m *PersistentCycleManager) RecordObservation(ctx context.Context, observation *CycleObservation) error {
-	return m.inMemory.RecordObservation(ctx, observation)
+// RecordObservations records one or more observations for the current cycle.
+func (m *PersistentCycleManager) RecordObservations(ctx context.Context, observations []*CycleObservation) error {
+	return m.inMemory.RecordObservations(ctx, observations)
 }
 
 // EndCycle ends the current cycle, adds it to the history, and persists it.

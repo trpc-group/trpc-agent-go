@@ -12,13 +12,12 @@ import (
 // Thought represents a reasoning step made by the ReAct agent.
 // It contains the agent's internal monologue or reasoning process.
 type Thought struct {
-	ID              string     `json:"id"`                         // Unique identifier for the thought.
-	Content         string     `json:"content"`                    // The textual content of the reasoning trace.
-	Type            string     `json:"type,omitempty"`             // The type of thought (e.g., reasoning, planning).
-	PlanState       *PlanState `json:"plan_state,omitempty"`       // Current planning state for dynamic reasoning.
-	Timestamp       int64      `json:"timestamp"`                  // Unix timestamp of when the thought occurred.
-	SuggestedAction *Action    `json:"suggested_action,omitempty"` // Optional suggested action from the thought generator.
-	PreviousAction  *Action    `json:"previous_action,omitempty"`  // Previous action taken, to help avoid repetition.
+	ID               string     `json:"id"`                          // Unique identifier for the thought.
+	Content          string     `json:"content"`                     // The textual content of the reasoning trace.
+	Type             string     `json:"type,omitempty"`              // The type of thought (e.g., reasoning, planning).
+	PlanState        *PlanState `json:"plan_state,omitempty"`        // Current planning state for dynamic reasoning.
+	Timestamp        int64      `json:"timestamp"`                   // Unix timestamp of when the thought occurred.
+	SuggestedActions []*Action  `json:"suggested_actions,omitempty"` // Optional suggested actions from the thought generator.
 }
 
 // Action represents an action taken by the ReAct agent based on its thought process.
@@ -51,11 +50,13 @@ type Cycle struct {
 	// Thought is the reasoning trace.
 	Thought *Thought `json:"thought,omitempty"`
 
-	// Action is the selected action to execute.
-	Action *Action `json:"action,omitempty"`
+	// Actions is the list of selected actions to execute.
+	// Multiple actions can be executed in parallel within a single cycle.
+	Actions []*Action `json:"actions,omitempty"`
 
-	// Observation is the result of executing the action.
-	Observation *CycleObservation `json:"observation,omitempty"`
+	// Observations is the list of results from executing actions.
+	// Each observation corresponds to an action in the Actions list.
+	Observations []*CycleObservation `json:"observations,omitempty"`
 
 	// StartTime is when the cycle started (Unix timestamp).
 	StartTime int64 `json:"start_time"`
@@ -81,10 +82,12 @@ type IReActAgent interface {
 	// SetMaxIterations sets the maximum number of ReAct cycles.
 	SetMaxIterations(maxIterations int)
 
-	// RecordAction records the action taken within the current cycle.
-	RecordAction(ctx context.Context, action *Action) error
-	// RecordObservation records the observation received for the current action.
-	RecordObservation(ctx context.Context, observation *CycleObservation) error
+	// RecordActions records multiple actions taken within the current cycle.
+	RecordActions(ctx context.Context, actions []*Action) error
+
+	// RecordObservations records multiple observations received for the current actions.
+	RecordObservations(ctx context.Context, observations []*CycleObservation) error
+
 	// EndCycle completes the current ReAct cycle.
 	EndCycle(ctx context.Context) (*Cycle, error)
 	// GetHistory retrieves the history of all completed cycles.
@@ -97,10 +100,13 @@ type IReActAgent interface {
 type CycleManager interface {
 	// StartCycle initiates a new ReAct cycle.
 	StartCycle(ctx context.Context, thought *Thought) error
-	// RecordAction records the action taken within the current cycle.
-	RecordAction(ctx context.Context, action *Action) error
-	// RecordObservation records the observation received for the current action.
-	RecordObservation(ctx context.Context, observation *CycleObservation) error
+
+	// RecordActions records multiple actions taken within the current cycle.
+	RecordActions(ctx context.Context, actions []*Action) error
+
+	// RecordObservations records multiple observations received for the current actions.
+	RecordObservations(ctx context.Context, observations []*CycleObservation) error
+
 	// EndCycle completes the current ReAct cycle.
 	EndCycle(ctx context.Context) (*Cycle, error)
 	// GetHistory retrieves the history of all completed cycles.
@@ -124,8 +130,8 @@ type ThoughtGenerator interface {
 // ActionSelector defines the interface for selecting the next action based on
 // the current thought.
 type ActionSelector interface {
-	// Select selects the action to take based on the thought.
-	Select(ctx context.Context, thought *Thought, availableTools []tool.Tool) (*Action, error)
+	// Select selects one or more actions to take based on the thought.
+	Select(ctx context.Context, thought *Thought, availableTools []tool.Tool) ([]*Action, error)
 }
 
 // ResponseGenerator defines the interface for generating the final response

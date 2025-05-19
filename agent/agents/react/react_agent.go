@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -375,7 +374,7 @@ func (a *Agent) processSingleCycle(
 	cycleIndex int,
 ) (*Thought, *message.Message, bool, error) {
 	// Get updated cycle count
-	cycles, err := a.cycleManager.GetHistory(ctx)
+	cycles, err := a.GetHistory(ctx)
 	if err != nil {
 		log.Warnf("Failed to get cycle history: %v", err)
 	}
@@ -394,6 +393,7 @@ func (a *Agent) processSingleCycle(
 		log.Errorf("Failed to start cycle: %v", err)
 		return nil, nil, false, fmt.Errorf("failed to start cycle: %w", err)
 	}
+	defer a.cycleManager.EndCycle(ctx)
 
 	// Check if thought contains a final answer directly
 	if containsFinalAnswer(thought) {
@@ -402,40 +402,135 @@ func (a *Agent) processSingleCycle(
 		return thought, finalResponse, true, nil
 	}
 
-	// Select action
-	log.Debugf("Selecting action for thought: %s", thought.ID)
-	action, err := a.actionSelector.Select(ctx, thought, tools)
+	// Select multiple actions
+	log.Debugf("Selecting actions for thought: %s", thought.ID)
+	actions, err := a.actionSelector.Select(ctx, thought, tools)
 	if err != nil {
-		log.Errorf("Failed to select action: %v", err)
-		return nil, nil, false, fmt.Errorf("failed to select action: %w", err)
+		log.Errorf("Failed to select actions: %v", err)
+		return nil, nil, false, fmt.Errorf("failed to select actions: %w", err)
 	}
 
-	// Record the action
-	if err := a.cycleManager.RecordAction(ctx, action); err != nil {
-		log.Errorf("Failed to record action: %v", err)
-		return nil, nil, false, fmt.Errorf("failed to record action: %w", err)
+	// Record the actions
+	if err := a.cycleManager.RecordActions(ctx, actions); err != nil {
+		log.Errorf("Failed to record actions: %v", err)
+		return nil, nil, false, fmt.Errorf("failed to record actions: %w", err)
 	}
 
-	// Special handling for final_answer action
-	if action.ToolName == "final_answer" {
-		return a.handleFinalAnswerAction(ctx, thought, action)
+	// Handle final_answer actions if present
+	for _, action := range actions {
+		if action.ToolName == "final_answer" {
+			return a.handleFinalAnswerAction(ctx, thought, action)
+		}
 	}
 
-	// Find and execute the tool
-	_, err = a.executeToolAction(ctx, action)
+	// Execute all tools in parallel
+	_, err = a.executeMultipleToolActions(ctx, actions)
 	if err != nil {
 		return thought, nil, false, err
 	}
+	return thought, nil, false, nil
+}
 
-	// Check for cycles or patterns that indicate we should stop
-	updatedCycles, _ := a.cycleManager.GetHistory(ctx)
-	if isRepeatingToolCalls(updatedCycles) {
-		log.Infof("Detected repetitive actions, generating final answer")
-		finalResponse, _ := a.generateFinalAnswerFromRepeatingCalls(ctx, updatedCycles)
-		return thought, finalResponse, true, nil
+// executeMultipleToolActions executes multiple tools in parallel.
+// Returns the collected observations and any error that occurred.
+func (a *Agent) executeMultipleToolActions(ctx context.Context, actions []*Action) ([]*CycleObservation, error) {
+	if len(actions) == 0 {
+		return nil, nil
 	}
 
-	return thought, nil, false, nil
+	// If only one action, use the existing single tool execution
+	if len(actions) == 1 {
+		obs, err := a.executeToolAction(ctx, actions[0])
+		if err != nil {
+			return nil, err
+		}
+		return []*CycleObservation{obs}, nil
+	}
+
+	// Execute multiple tools in parallel
+	log.Infof("Executing %d tools in parallel", len(actions))
+
+	// Create wait group to synchronize goroutines
+	var wg sync.WaitGroup
+	observations := make([]*CycleObservation, len(actions))
+	errors := make([]error, len(actions))
+
+	// Launch a goroutine for each tool
+	for i, action := range actions {
+		wg.Add(1)
+		go func(idx int, act *Action) {
+			defer wg.Done()
+
+			// Find the tool
+			selectedTool, found := a.findTool(act.ToolName)
+			if !found {
+				log.Errorf("Tool '%s' not found", act.ToolName)
+
+				// Create error observation
+				observations[idx] = &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"error": fmt.Sprintf("tool %s not found", act.ToolName),
+					},
+					IsError:   true,
+					Timestamp: time.Now().Unix(),
+				}
+				return
+			}
+
+			// Execute the tool
+			log.Debugf("Executing tool '%s' with input: %v", selectedTool.Name(), act.ToolInput)
+			result, err := selectedTool.Execute(ctx, act.ToolInput)
+
+			// Create observation based on result or error
+			if err != nil {
+				// Tool execution resulted in an error
+				log.Warnf("Tool execution failed: %v", err)
+				observations[idx] = &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"error": err.Error(),
+					},
+					IsError:   true,
+					Timestamp: time.Now().Unix(),
+				}
+				errors[idx] = err
+			} else {
+				// Tool executed successfully
+				observations[idx] = &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"output": result.Output,
+					},
+					IsError:   false,
+					Timestamp: time.Now().Unix(),
+				}
+			}
+		}(i, action)
+	}
+
+	// Wait for all tool executions to complete
+	wg.Wait()
+
+	// Record all observations at once
+	if err := a.cycleManager.RecordObservations(ctx, observations); err != nil {
+		log.Errorf("Failed to record observations: %v", err)
+		return nil, fmt.Errorf("failed to record observations: %w", err)
+	}
+
+	// Check if any errors occurred during execution
+	var firstError error
+	for _, err := range errors {
+		if err != nil {
+			firstError = err
+			break
+		}
+	}
+
+	return observations, firstError
 }
 
 // handleFinalAnswerAction processes a final_answer action.
@@ -464,7 +559,7 @@ func (a *Agent) handleFinalAnswerAction(
 	}
 
 	// Record the observation
-	if err := a.cycleManager.RecordObservation(ctx, observation); err != nil {
+	if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
 		log.Warnf("Failed to record final answer observation: %v", err)
 	}
 
@@ -496,7 +591,7 @@ func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleOb
 		}
 
 		// Record the observation
-		if err := a.cycleManager.RecordObservation(ctx, observation); err != nil {
+		if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
 			log.Errorf("Failed to record observation: %v", err)
 			return nil, fmt.Errorf("failed to record observation: %w", err)
 		}
@@ -543,7 +638,7 @@ func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleOb
 
 	// Record the observation
 	log.Debugf("Recording observation")
-	if err := a.cycleManager.RecordObservation(ctx, observation); err != nil {
+	if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
 		log.Errorf("Failed to record observation: %v", err)
 		return nil, fmt.Errorf("failed to record observation: %w", err)
 	}
@@ -562,7 +657,7 @@ func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleOb
 
 // containsFinalAnswer checks if thought content contains explicit final answer markers.
 func containsFinalAnswer(thought *Thought) bool {
-	if thought.SuggestedAction != nil && thought.SuggestedAction.ToolName == "final_answer" {
+	if len(thought.SuggestedActions) > 0 && thought.SuggestedActions[0].ToolName == "final_answer" {
 		return true
 	}
 
@@ -619,16 +714,6 @@ func extractFinalAnswer(content string) string {
 	return content
 }
 
-// hasFinalAnswer checks if a thought contains a final answer.
-func hasFinalAnswer(thought string) bool {
-	thoughtLower := strings.ToLower(thought)
-
-	return strings.Contains(thoughtLower, "final answer") ||
-		strings.Contains(thoughtLower, "final response") ||
-		strings.Contains(thoughtLower, "my answer is") ||
-		(strings.Contains(thoughtLower, "answer:") && !strings.Contains(thoughtLower, "need more information"))
-}
-
 // generateResponseFromContent generates a response from the given content.
 func (a *Agent) generateResponseFromContent(ctx context.Context, content string) (*message.Message, error) {
 	// Extract the final answer part if present
@@ -678,15 +763,16 @@ func (a *Agent) generateSummaryFromObservations(cycles []*Cycle) (*message.Messa
 	summary.WriteString("Based on my analysis:\n\n")
 
 	for i, cycle := range cycles {
-		if cycle.Observation != nil {
-			content := a.extractContentFromObservation(cycle.Observation)
+		for idx, observation := range cycle.Observations {
+			action := cycle.Actions[idx]
+			content := a.extractContentFromObservation(observation)
 
-			if cycle.Action != nil {
-				summary.WriteString(fmt.Sprintf("%d. For %s, I found: %s\n",
-					i+1, cycle.Action.ToolName, content))
+			if action != nil {
+				summary.WriteString(fmt.Sprintf("%d. Observation %d for %s: %s\n",
+					i+1, idx+1, action.ToolName, content))
 			} else {
-				summary.WriteString(fmt.Sprintf("%d. I found: %s\n",
-					i+1, content))
+				summary.WriteString(fmt.Sprintf("%d. Observation %d: %s\n",
+					i+1, idx+1, content))
 			}
 		}
 	}
@@ -708,114 +794,6 @@ func (a *Agent) extractContentFromObservation(observation *CycleObservation) str
 		return fmt.Sprintf("%v", output)
 	}
 	return "Tool executed successfully"
-}
-
-// isRepeatingToolCalls checks if the last 3 cycles are using the same tool with the same parameters.
-func isRepeatingToolCalls(cycles []*Cycle) bool {
-	if len(cycles) < 3 {
-		return false
-	}
-
-	// Get the last 3 cycles
-	lastThree := cycles[len(cycles)-3:]
-
-	// Check if they all have actions
-	for _, cycle := range lastThree {
-		if cycle.Action == nil {
-			return false
-		}
-	}
-
-	// Check if they all use the same tool
-	toolName := lastThree[0].Action.ToolName
-	for _, cycle := range lastThree[1:] {
-		if cycle.Action.ToolName != toolName {
-			return false
-		}
-	}
-
-	// Check if the parameters are similar
-	firstInput := fmt.Sprintf("%v", lastThree[0].Action.ToolInput)
-	for _, cycle := range lastThree[1:] {
-		currentInput := fmt.Sprintf("%v", cycle.Action.ToolInput)
-		if !stringsApproximatelyEqual(firstInput, currentInput, 0.8) {
-			return false
-		}
-	}
-
-	return true
-}
-
-// stringsApproximatelyEqual checks if two strings are approximately equal.
-// It uses a simple approach based on string length and character similarity.
-func stringsApproximatelyEqual(s1, s2 string, threshold float64) bool {
-	// Simple implementation - just check if they're mostly the same length
-	// and have mostly the same characters
-	if len(s1) == 0 || len(s2) == 0 {
-		return len(s1) == len(s2)
-	}
-
-	// If one string is much longer than the other, they're not similar
-	maxLen := float64(max(len(s1), len(s2)))
-	lenDiff := math.Abs(float64(len(s1) - len(s2)))
-	if lenDiff/maxLen > (1 - threshold) {
-		return false
-	}
-
-	// Count shared characters (simplified approach)
-	s1Chars := make(map[rune]int)
-	for _, c := range s1 {
-		s1Chars[c]++
-	}
-
-	sharedChars := 0
-	for _, c := range s2 {
-		if s1Chars[c] > 0 {
-			sharedChars++
-			s1Chars[c]--
-		}
-	}
-
-	similarity := float64(sharedChars) / float64(len(s2))
-	return similarity >= threshold
-}
-
-// generateFinalAnswerFromRepeatingCalls generates a final answer when the agent is stuck in a loop.
-func (a *Agent) generateFinalAnswerFromRepeatingCalls(ctx context.Context, cycles []*Cycle) (*message.Message, error) {
-	// Find the last successful cycle
-	lastSuccessfulCycle := a.findLastSuccessfulCycle(cycles)
-	if lastSuccessfulCycle == nil {
-		// No successful observations, generate a generic response
-		return message.NewAssistantMessage("I've been trying to solve this but haven't been able to get a successful result."), nil
-	}
-
-	// Extract observation content
-	observationStr := a.extractContentFromObservation(lastSuccessfulCycle.Observation)
-
-	// Generate a tool-specific response
-	finalAnswer := a.generateToolSpecificResponse(lastSuccessfulCycle.Action.ToolName, observationStr)
-
-	return message.NewAssistantMessage(finalAnswer), nil
-}
-
-// findLastSuccessfulCycle finds the last cycle with a successful tool execution.
-func (a *Agent) findLastSuccessfulCycle(cycles []*Cycle) *Cycle {
-	for i := len(cycles) - 1; i >= 0; i-- {
-		if cycles[i].Observation != nil && !cycles[i].Observation.IsError {
-			return cycles[i]
-		}
-	}
-	return nil
-}
-
-// generateToolSpecificResponse creates a response tailored to the specific tool that was used.
-func (a *Agent) generateToolSpecificResponse(toolName string, observationStr string) string {
-	switch toolName {
-	case "calculator":
-		return fmt.Sprintf("The result of the calculation is %s.", observationStr)
-	default:
-		return fmt.Sprintf("After analyzing the request, I used the %s tool and found that the result is: %s", toolName, observationStr)
-	}
 }
 
 // RunAsync processes the given message asynchronously and returns a channel of events.
@@ -876,7 +854,7 @@ func (a *Agent) runAsyncLoop(
 		}
 
 		// Process a single async cycle
-		shouldContinue, err := a.processSingleAsyncCycle(ctx, msg, cycles, eventCh)
+		shouldContinue, err := a.processSingleAsyncCycle(ctx, msg, eventCh)
 		if err != nil {
 			eventCh <- event.NewErrorEvent(err, 500)
 			return
@@ -902,11 +880,15 @@ func (a *Agent) runAsyncLoop(
 func (a *Agent) processSingleAsyncCycle(
 	ctx context.Context,
 	msg *message.Message,
-	cycles []*Cycle,
 	eventCh chan<- *event.Event,
 ) (bool, error) {
 	// Generate a thought based on the input
 	userMsgs := []*message.Message{msg}
+	cycles, err := a.GetHistory(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to get cycle history: %w", err)
+	}
+
 	thought, err := a.thoughtGenerator.Generate(ctx, userMsgs, cycles, a.Tools())
 	if err != nil {
 		return false, fmt.Errorf("failed to generate thought: %w", err)
@@ -916,10 +898,10 @@ func (a *Agent) processSingleAsyncCycle(
 	eventCh <- event.NewCustomEvent("thinking", thought.Content)
 
 	// Record the thought
-	err = a.cycleManager.StartCycle(ctx, thought)
-	if err != nil {
+	if err = a.cycleManager.StartCycle(ctx, thought); err != nil {
 		return false, fmt.Errorf("failed to start cycle: %w", err)
 	}
+	defer a.cycleManager.EndCycle(ctx)
 
 	// Update cycles
 	cycle, err := a.cycleManager.CurrentCycle(ctx)
@@ -929,33 +911,279 @@ func (a *Agent) processSingleAsyncCycle(
 	cycles = append(cycles, cycle)
 
 	// If the thought contains a final answer, stop and return it
-	if hasFinalAnswer(thought.Content) {
+	if containsFinalAnswer(thought) {
 		return a.handleAsyncFinalThought(ctx, thought, eventCh)
 	}
 
-	// Check for repeated calculations - if we've done the same calculation repeatedly,
-	// assume we have our answer and should stop
-	if len(cycles) >= 3 && isRepeatingToolCalls(cycles) {
-		return a.handleAsyncRepeatingTools(ctx, cycles, eventCh)
-	}
-
-	// Select an action based on the thought
-	action, err := a.actionSelector.Select(ctx, thought, a.Tools())
+	// Select actions for the thought
+	log.Debugf("Selecting actions for thought: %s", thought.ID)
+	actions, err := a.actionSelector.Select(ctx, thought, a.Tools())
 	if err != nil {
 		return a.handleAsyncActionError(ctx, thought, err, eventCh)
 	}
 
-	// Emit and record the action
-	a.emitAndRecordAction(ctx, action, eventCh)
-
-	// Execute the action
-	selectedTool, found := a.findTool(action.ToolName)
-	if !found {
-		return false, fmt.Errorf("tool %s not found", action.ToolName)
+	// Record the actions
+	if err := a.cycleManager.RecordActions(ctx, actions); err != nil {
+		log.Errorf("Failed to record actions: %v", err)
+		return false, fmt.Errorf("failed to record actions: %w", err)
 	}
 
-	// Execute the tool
-	return a.executeAsyncTool(ctx, selectedTool, action, eventCh)
+	// Emit events for each action
+	for _, action := range actions {
+		a.emitActionEvent(action, eventCh)
+
+		// Special handling for final_answer action
+		if action.ToolName == "final_answer" {
+			return a.handleAsyncFinalAnswerAction(ctx, action, eventCh)
+		}
+	}
+
+	// Execute all tools in parallel
+	observations, err := a.executeAsyncMultipleTools(ctx, actions, eventCh)
+	if err != nil {
+		// If an error occurred but we still have observations, continue
+		if len(observations) > 0 {
+			return true, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+// emitActionEvent emits an event for an action.
+func (a *Agent) emitActionEvent(action *Action, eventCh chan<- *event.Event) {
+	// Emit an action event - use custom event for tool usage
+	actionJSON, _ := json.Marshal(action.ToolInput)
+	toolEvent := event.NewEvent(event.TypeTool, nil)
+	toolEvent.SetMetadata("tool_name", action.ToolName)
+	toolEvent.SetMetadata("input", string(actionJSON))
+	eventCh <- toolEvent
+}
+
+// executeAsyncMultipleTools executes multiple tools in parallel asynchronously.
+// It emits events for each observation and returns all observations and any error.
+func (a *Agent) executeAsyncMultipleTools(
+	ctx context.Context,
+	actions []*Action,
+	eventCh chan<- *event.Event,
+) ([]*CycleObservation, error) {
+	if len(actions) == 0 {
+		return nil, nil
+	}
+
+	// If only one action, execute it directly
+	if len(actions) == 1 {
+		action := actions[0]
+		selectedTool, found := a.findTool(action.ToolName)
+		if !found {
+			log.Errorf("Tool '%s' not found", action.ToolName)
+
+			// Create error observation
+			observationContent := fmt.Sprintf("Error: tool %s not found", action.ToolName)
+			observation := &CycleObservation{
+				ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+				ActionID: action.ID,
+				ToolOutput: map[string]interface{}{
+					"error": observationContent,
+				},
+				IsError:   true,
+				Timestamp: time.Now().Unix(),
+			}
+
+			// Emit an observation event
+			observationEvent := event.NewCustomEvent("observation", observationContent)
+			eventCh <- observationEvent
+
+			// Record the observation
+			if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
+				return []*CycleObservation{observation}, fmt.Errorf("failed to record observation: %w", err)
+			}
+
+			return []*CycleObservation{observation}, nil
+		}
+
+		// Execute the tool and handle result
+		result, err := selectedTool.Execute(ctx, action.ToolInput)
+
+		var observation *CycleObservation
+		var observationContent string
+
+		if err != nil {
+			// Create error observation
+			observationContent = fmt.Sprintf("Error: %v", err)
+			observation = &CycleObservation{
+				ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+				ActionID: action.ID,
+				ToolOutput: map[string]interface{}{
+					"error": observationContent,
+				},
+				IsError:   true,
+				Timestamp: time.Now().Unix(),
+			}
+		} else {
+			// Create success observation
+			observationContent = result.String()
+			observation = &CycleObservation{
+				ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+				ActionID: action.ID,
+				ToolOutput: map[string]interface{}{
+					"output": observationContent,
+				},
+				IsError:   false,
+				Timestamp: time.Now().Unix(),
+			}
+		}
+
+		// Emit an observation event
+		observationEvent := event.NewCustomEvent("observation", observationContent)
+		eventCh <- observationEvent
+
+		// Record the observation
+		if recordErr := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); recordErr != nil {
+			return []*CycleObservation{observation}, fmt.Errorf("failed to record observation: %w", recordErr)
+		}
+
+		return []*CycleObservation{observation}, err
+	}
+
+	// Execute multiple tools in parallel
+	log.Infof("Executing %d tools in parallel asynchronously", len(actions))
+
+	// Create wait group to synchronize goroutines
+	var wg sync.WaitGroup
+	observations := make([]*CycleObservation, len(actions))
+	errors := make([]error, len(actions))
+
+	// Launch a goroutine for each tool
+	for i, action := range actions {
+		wg.Add(1)
+		go func(idx int, act *Action) {
+			defer wg.Done()
+
+			// Find the tool
+			selectedTool, found := a.findTool(act.ToolName)
+			if !found {
+				log.Errorf("Tool '%s' not found", act.ToolName)
+
+				// Create error observation
+				observationContent := fmt.Sprintf("Error: tool %s not found", act.ToolName)
+				observation := &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"error": observationContent,
+					},
+					IsError:   true,
+					Timestamp: time.Now().Unix(),
+				}
+
+				// Emit an observation event
+				observationEvent := event.NewCustomEvent("observation", observationContent)
+				eventCh <- observationEvent
+
+				observations[idx] = observation
+				return
+			}
+
+			// Execute the tool
+			log.Debugf("Executing tool '%s' with input: %v", selectedTool.Name(), act.ToolInput)
+			result, err := selectedTool.Execute(ctx, act.ToolInput)
+
+			// Create observation based on result or error
+			var observationContent string
+			if err != nil {
+				// Tool execution resulted in an error
+				log.Warnf("Tool execution failed: %v", err)
+				observationContent = fmt.Sprintf("Error: %v", err)
+				observations[idx] = &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"error": observationContent,
+					},
+					IsError:   true,
+					Timestamp: time.Now().Unix(),
+				}
+				errors[idx] = err
+			} else {
+				// Tool executed successfully
+				observationContent = result.String()
+				observations[idx] = &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: act.ID,
+					ToolOutput: map[string]interface{}{
+						"output": observationContent,
+					},
+					IsError:   false,
+					Timestamp: time.Now().Unix(),
+				}
+			}
+
+			// Emit an observation event
+			observationEvent := event.NewCustomEvent("observation", observationContent)
+			eventCh <- observationEvent
+		}(i, action)
+	}
+
+	// Wait for all tool executions to complete
+	wg.Wait()
+
+	// Record all observations at once
+	if err := a.cycleManager.RecordObservations(ctx, observations); err != nil {
+		log.Errorf("Failed to record observations: %v", err)
+		return observations, fmt.Errorf("failed to record observations: %w", err)
+	}
+
+	// Check if any errors occurred during execution
+	var firstError error
+	for _, err := range errors {
+		if err != nil {
+			firstError = err
+			break
+		}
+	}
+
+	return observations, firstError
+}
+
+// handleFinalAnswerAction processes a final_answer action.
+// Returns the thought, response message, whether to break the loop, and any error.
+func (a *Agent) handleAsyncFinalAnswerAction(
+	ctx context.Context,
+	action *Action,
+	eventCh chan<- *event.Event,
+) (bool, error) {
+	content, ok := action.ToolInput["content"].(string)
+	if !ok {
+		content = "I've completed my analysis."
+	}
+	log.Infof("Final answer action detected, returning response to user")
+	finalResponse := message.NewAssistantMessage(content)
+	eventCh <- event.NewMessageEvent(finalResponse)
+
+	// Create a successful observation for the final answer
+	observation := &CycleObservation{
+		ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+		ActionID: action.ID,
+		ToolOutput: map[string]interface{}{
+			"output": content,
+		},
+		IsError:   false,
+		Timestamp: time.Now().Unix(),
+	}
+
+	// Record the observation
+	if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
+		log.Warnf("Failed to record final answer observation: %v", err)
+	}
+
+	// End the cycle
+	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
+		log.Warnf("Failed to end cycle after final answer: %v", err)
+	}
+
+	return false, nil
 }
 
 // handleAsyncFinalThought handles a thought that contains a final answer.
@@ -965,26 +1193,11 @@ func (a *Agent) handleAsyncFinalThought(
 	thought *Thought,
 	eventCh chan<- *event.Event,
 ) (bool, error) {
+	answer := extractFinalAnswer(thought.Content)
 	// Generate a final response
-	finalResp, err := a.generateResponseFromContent(ctx, thought.Content)
+	finalResp, err := a.generateResponseFromContent(ctx, answer)
 	if err != nil {
 		return false, fmt.Errorf("failed to generate final response: %w", err)
-	}
-	eventCh <- event.NewMessageEvent(finalResp)
-	return false, nil // Stop processing more cycles
-}
-
-// handleAsyncRepeatingTools handles the case when the agent has repeated the same tool call multiple times.
-// Returns whether to continue execution and any error.
-func (a *Agent) handleAsyncRepeatingTools(
-	ctx context.Context,
-	cycles []*Cycle,
-	eventCh chan<- *event.Event,
-) (bool, error) {
-	log.Infof("Detected repeating tool calls, stopping cycle and generating final answer")
-	finalResp, err := a.generateFinalAnswerFromRepeatingCalls(ctx, cycles)
-	if err != nil {
-		return false, fmt.Errorf("failed to generate final answer: %w", err)
 	}
 	eventCh <- event.NewMessageEvent(finalResp)
 	return false, nil // Stop processing more cycles
@@ -1009,122 +1222,6 @@ func (a *Agent) handleAsyncActionError(
 	return false, nil // Stop processing more cycles
 }
 
-// emitAndRecordAction emits an action event and records the action.
-func (a *Agent) emitAndRecordAction(
-	ctx context.Context,
-	action *Action,
-	eventCh chan<- *event.Event,
-) error {
-	// Emit an action event - use custom event for tool usage
-	actionJSON, _ := json.Marshal(action.ToolInput)
-	toolEvent := event.NewEvent(event.TypeTool, nil)
-	toolEvent.SetMetadata("tool_name", action.ToolName)
-	toolEvent.SetMetadata("input", string(actionJSON))
-	eventCh <- toolEvent
-
-	// Record the action
-	return a.cycleManager.RecordAction(ctx, action)
-}
-
-// executeAsyncTool executes a tool and handles the result asynchronously.
-// Returns whether to continue execution and any error.
-func (a *Agent) executeAsyncTool(
-	ctx context.Context,
-	selectedTool tool.Tool,
-	action *Action,
-	eventCh chan<- *event.Event,
-) (bool, error) {
-	result, err := selectedTool.Execute(ctx, action.ToolInput)
-	if err != nil {
-		return a.handleAsyncToolError(ctx, action, err, eventCh)
-	}
-
-	// Process successful tool execution
-	return a.handleAsyncToolSuccess(ctx, action, result, eventCh)
-}
-
-// handleAsyncToolError handles errors that occur during tool execution.
-// Returns whether to continue execution and any error.
-func (a *Agent) handleAsyncToolError(
-	ctx context.Context,
-	action *Action,
-	execErr error,
-	eventCh chan<- *event.Event,
-) (bool, error) {
-	// If the tool execution fails, record the error and use it as the observation
-	observationContent := fmt.Sprintf("Error: %v", execErr)
-	observation := &CycleObservation{
-		ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
-		ActionID: action.ID,
-		ToolOutput: map[string]interface{}{
-			"error": observationContent,
-		},
-		IsError:   true,
-		Timestamp: time.Now().Unix(),
-	}
-
-	// Emit an observation event
-	observationEvent := event.NewCustomEvent("observation", observationContent)
-	eventCh <- observationEvent
-
-	// Record the observation
-	if recordErr := a.cycleManager.RecordObservation(ctx, observation); recordErr != nil {
-		return false, fmt.Errorf("failed to record observation: %w", recordErr)
-	}
-
-	// End the current cycle even after an error
-	log.Debugf("Ending current cycle after tool error")
-	if _, endErr := a.cycleManager.EndCycle(ctx); endErr != nil {
-		return false, fmt.Errorf("failed to end cycle after tool error: %w", endErr)
-	}
-
-	// Generate a direct error response for specific error types
-	if strings.Contains(execErr.Error(), "unsupported operation") {
-		directResponse := fmt.Sprintf("The calculator doesn't support the '%s' operation. The calculator supports these operations: add, subtract, multiply, divide, sqrt, and power.", action.ToolInput["operation"])
-		eventCh <- event.NewMessageEvent(message.NewAssistantMessage(directResponse))
-		return false, nil // Stop processing more cycles
-	}
-
-	// Continue to next iteration for other types of errors
-	return true, nil
-}
-
-// handleAsyncToolSuccess handles successful tool execution.
-// Returns whether to continue execution and any error.
-func (a *Agent) handleAsyncToolSuccess(
-	ctx context.Context,
-	action *Action,
-	result *tool.Result,
-	eventCh chan<- *event.Event,
-) (bool, error) {
-	// Create an observation from the result
-	observationContent := result.String()
-	observation := &CycleObservation{
-		ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
-		ActionID: action.ID,
-		ToolOutput: map[string]interface{}{
-			"output": observationContent,
-		},
-		Timestamp: time.Now().Unix(),
-	}
-
-	// Emit an observation event
-	observationEvent := event.NewCustomEvent("observation", observationContent)
-	eventCh <- observationEvent
-
-	// Record the observation
-	if err := a.cycleManager.RecordObservation(ctx, observation); err != nil {
-		return false, fmt.Errorf("failed to record observation: %w", err)
-	}
-
-	// End the current cycle
-	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
-		return false, fmt.Errorf("failed to end cycle: %w", err)
-	}
-
-	return true, nil // Continue processing more cycles
-}
-
 // MaxIterations returns the maximum number of ReAct cycles.
 func (a *Agent) MaxIterations() int {
 	a.mu.RLock()
@@ -1139,16 +1236,6 @@ func (a *Agent) SetMaxIterations(maxIterations int) {
 	if maxIterations > 0 {
 		a.currentMaxIterations = maxIterations
 	}
-}
-
-// RecordAction records an action via the cycle manager.
-func (a *Agent) RecordAction(ctx context.Context, action *Action) error {
-	return a.cycleManager.RecordAction(ctx, action)
-}
-
-// RecordObservation records an observation via the cycle manager.
-func (a *Agent) RecordObservation(ctx context.Context, observation *CycleObservation) error {
-	return a.cycleManager.RecordObservation(ctx, observation)
 }
 
 // EndCycle ends the current cycle via the cycle manager.
@@ -1185,14 +1272,73 @@ func (a *Agent) RunReActCycle(ctx context.Context, history []*message.Message) (
 		return cycle, updatedHistory, err
 	}
 
-	// Select and record action
-	action, updatedHistory, shouldReturn, err := a.selectAndRecordAction(ctx, cycle, history)
+	// Select and record actions
+	actions, updatedHistory, shouldReturn, err := a.selectAndRecordAction(ctx, cycle, history)
 	if shouldReturn || err != nil {
 		return cycle, updatedHistory, err
 	}
 
-	// Execute action and record observation
-	return a.executeActionAndRecordObservation(ctx, action, history)
+	// Execute actions and record observations
+	return a.executeActionsAndRecordObservations(ctx, actions, history)
+}
+
+// executeActionsAndRecordObservations executes multiple actions and records their observations.
+// Returns the updated cycle, updated history, and any error.
+func (a *Agent) executeActionsAndRecordObservations(
+	ctx context.Context,
+	actions []*Action,
+	history []*message.Message,
+) (*Cycle, []*message.Message, error) {
+	// If there are no actions, just return
+	if len(actions) == 0 {
+		return nil, history, fmt.Errorf("no actions to execute")
+	}
+
+	// Execute multiple actions in parallel
+	observations, err := a.executeMultipleToolActions(ctx, actions)
+	if err != nil {
+		// End the cycle before returning error
+		a.cycleManager.EndCycle(ctx)
+		return nil, history, fmt.Errorf("failed to execute actions: %w", err)
+	}
+
+	// End the current cycle
+	updatedCycle, endErr := a.cycleManager.EndCycle(ctx)
+	if endErr != nil {
+		return nil, history, fmt.Errorf("failed to end cycle: %w", endErr)
+	}
+
+	// Add each observation to history as messages
+	updatedHistory := history
+	for i, obs := range observations {
+		action := actions[i]
+		actionName := action.ToolName
+
+		// If action name wasn't found, use a generic one
+		if actionName == "" {
+			actionName = "tool"
+		}
+
+		// Create tool message
+		toolMsg := message.NewToolMessage(actionName)
+
+		// Set content based on observation
+		if obs.IsError {
+			if errContent, ok := obs.ToolOutput["error"].(string); ok {
+				toolMsg.Content = errContent
+			} else {
+				toolMsg.Content = fmt.Sprintf("%v", obs.ToolOutput["error"])
+			}
+		} else {
+			if output, ok := obs.ToolOutput["output"].(string); ok {
+				toolMsg.Content = output
+			} else {
+				toolMsg.Content = fmt.Sprintf("%v", obs.ToolOutput["output"])
+			}
+		}
+		updatedHistory = append(updatedHistory, toolMsg)
+	}
+	return updatedCycle, updatedHistory, nil
 }
 
 // generateAndRecordThought generates a thought and records it in a new cycle.
@@ -1227,9 +1373,9 @@ func (a *Agent) generateAndRecordThought(
 	}
 
 	// If the thought contains a final answer, stop and return it
-	if hasFinalAnswer(thought.Content) {
+	if containsFinalAnswer(thought) {
 		// Add the thought to history as a message
-		respMsg := message.NewAssistantMessage(thought.Content)
+		respMsg := message.NewAssistantMessage(extractFinalAnswer(thought.Content))
 		updatedHistory := append(history, respMsg)
 
 		// End the cycle before returning
@@ -1248,12 +1394,12 @@ func (a *Agent) selectAndRecordAction(
 	ctx context.Context,
 	cycle *Cycle,
 	history []*message.Message,
-) (*Action, []*message.Message, bool, error) {
-	// Select an action based on the thought
-	action, err := a.actionSelector.Select(ctx, cycle.Thought, a.Tools())
+) ([]*Action, []*message.Message, bool, error) {
+	// Select actions based on the thought
+	actions, err := a.actionSelector.Select(ctx, cycle.Thought, a.Tools())
 	if err != nil {
-		// If we fail to select an action, create a response with error info
-		errorMsg := fmt.Sprintf("Failed to select action: %v", err)
+		// If we fail to select actions, create a response with error info
+		errorMsg := fmt.Sprintf("Failed to select actions: %v", err)
 		respMsg := message.NewAssistantMessage(errorMsg)
 		updatedHistory := append(history, respMsg)
 
@@ -1265,62 +1411,14 @@ func (a *Agent) selectAndRecordAction(
 		return nil, updatedHistory, true, nil
 	}
 
-	// Record the action
-	if err := a.cycleManager.RecordAction(ctx, action); err != nil {
+	// Record the actions
+	if err := a.cycleManager.RecordActions(ctx, actions); err != nil {
 		// End the cycle before returning error
 		a.cycleManager.EndCycle(ctx)
-		return nil, history, false, fmt.Errorf("failed to record action: %w", err)
+		return nil, history, false, fmt.Errorf("failed to record actions: %w", err)
 	}
 
-	return action, history, false, nil
-}
-
-// executeActionAndRecordObservation executes an action and records the observation.
-// Returns the updated cycle, updated history, and any error.
-func (a *Agent) executeActionAndRecordObservation(
-	ctx context.Context,
-	action *Action,
-	history []*message.Message,
-) (*Cycle, []*message.Message, error) {
-	// Find the tool
-	selectedTool, found := a.findTool(action.ToolName)
-	if !found {
-		// End the cycle before returning error
-		a.cycleManager.EndCycle(ctx)
-		return nil, history, fmt.Errorf("tool %s not found", action.ToolName)
-	}
-
-	// Execute the tool and create observation
-	observation, observationContent, err := a.createObservationFromToolExecution(ctx, selectedTool, action)
-
-	// Record the observation
-	if recordErr := a.cycleManager.RecordObservation(ctx, observation); recordErr != nil {
-		// End the cycle before returning error
-		a.cycleManager.EndCycle(ctx)
-		return nil, history, fmt.Errorf("failed to record observation: %w", recordErr)
-	}
-
-	// End the current cycle
-	updatedCycle, endErr := a.cycleManager.EndCycle(ctx)
-	if endErr != nil {
-		return nil, history, fmt.Errorf("failed to end cycle: %w", endErr)
-	}
-
-	// Add the observation to history as a message
-	toolMsg := message.NewToolMessage(action.ToolName)
-	toolMsg.Content = observationContent
-	updatedHistory := append(history, toolMsg)
-
-	// Special handling for calculator errors
-	if err != nil && strings.Contains(err.Error(), "unsupported operation") {
-		// Add a helpful assistant message about the unsupported operation
-		helpMsg := message.NewAssistantMessage(
-			fmt.Sprintf("The calculator doesn't support the '%s' operation. The calculator supports these operations: add, subtract, multiply, divide, sqrt, and power.",
-				action.ToolInput["operation"]))
-		updatedHistory = append(updatedHistory, helpMsg)
-	}
-
-	return updatedCycle, updatedHistory, nil
+	return actions, history, false, nil
 }
 
 // createObservationFromToolExecution executes a tool and creates an observation.
@@ -1359,7 +1457,10 @@ func (a *Agent) createObservationFromToolExecution(
 			Timestamp: time.Now().Unix(),
 		}
 	}
-
+	// Record the observation
+	if recordErr := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); recordErr != nil {
+		return nil, "", fmt.Errorf("failed to record observation: %w", recordErr)
+	}
 	return observation, observationContent, err
 }
 
@@ -1399,4 +1500,14 @@ func findLatestUserMessage(messages []*message.Message) *message.Message {
 		}
 	}
 	return nil
+}
+
+// RecordActions records multiple actions via the cycle manager.
+func (a *Agent) RecordActions(ctx context.Context, actions []*Action) error {
+	return a.cycleManager.RecordActions(ctx, actions)
+}
+
+// RecordObservations records multiple observations via the cycle manager.
+func (a *Agent) RecordObservations(ctx context.Context, observations []*CycleObservation) error {
+	return a.cycleManager.RecordObservations(ctx, observations)
 }
