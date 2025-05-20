@@ -6,21 +6,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
 
 // Common errors.
 var (
-	ErrAgentNotFound  = errors.New("agent not found")
-	ErrRunnerNotFound = errors.New("runner not found")
-	ErrContextDone    = errors.New("context done")
-	ErrInvalidConfig  = errors.New("invalid configuration")
+	ErrAgentNotFound   = errors.New("agent not found")
+	ErrRunnerNotFound  = errors.New("runner not found")
+	ErrContextDone     = errors.New("context done")
+	ErrInvalidConfig   = errors.New("invalid configuration")
+	ErrSessionNotFound = errors.New("session not found")
 )
 
 // Runner defines the interface for agent execution components.
@@ -40,24 +42,29 @@ type Runner interface {
 
 	// Name returns the name of the runner.
 	Name() string
+
+	// New session management methods
+	RunWithSession(ctx context.Context, sessionID string, input message.Message) (*message.Message, error)
+	RunAsyncWithSession(ctx context.Context, sessionID string, input message.Message) (<-chan *event.Event, error)
+
+	// Session management methods
+	CreateSession(ctx context.Context) (string, error)
+	GetSession(ctx context.Context, sessionID string) (memory.Session, error)
+	DeleteSession(ctx context.Context, sessionID string) error
+	ListSessions(ctx context.Context) ([]string, error)
 }
 
 // BaseRunner provides a common implementation for runners.
 type BaseRunner struct {
 	name   string
 	agent  agent.Agent
-	logger *slog.Logger
 	config Config
 	mu     sync.RWMutex
 	active bool
 }
 
 // NewBaseRunner creates a new base runner.
-func NewBaseRunner(name string, agent agent.Agent, config Config, logger *slog.Logger) *BaseRunner {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
+func NewBaseRunner(name string, agent agent.Agent, config Config) *BaseRunner {
 	if name == "" && agent != nil {
 		name = fmt.Sprintf("runner-%s", agent.Name())
 	} else if name == "" {
@@ -71,7 +78,6 @@ func NewBaseRunner(name string, agent agent.Agent, config Config, logger *slog.L
 	return &BaseRunner{
 		name:   name,
 		agent:  agent,
-		logger: logger,
 		config: config,
 		active: false,
 	}
@@ -87,7 +93,7 @@ func (r *BaseRunner) Start(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Info("Starting runner", "name", r.name)
+	log.Infof("Starting runner. name: %s", r.name)
 	r.active = true
 	return nil
 }
@@ -97,7 +103,7 @@ func (r *BaseRunner) Stop(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.logger.Info("Stopping runner", "name", r.name)
+	log.Infof("Stopping runner. name: %s", r.name)
 	r.active = false
 	return nil
 }
@@ -127,15 +133,15 @@ func (r *BaseRunner) Run(ctx context.Context, input message.Message) (*message.M
 	// Process metrics and timing
 	startTime := time.Now()
 	defer func() {
-		r.logger.Debug("Agent run completed",
-			"runner", r.name,
-			"agent", agent.Name(),
-			"duration_ms", time.Since(startTime).Milliseconds(),
+		log.Debugf("Agent run completed. runner: %s, agent: %s, duration_ms: %d",
+			r.name,
+			agent.Name(),
+			time.Since(startTime).Milliseconds(),
 		)
 	}()
 
 	// Run the agent
-	r.logger.Debug("Running agent", "runner", r.name, "agent", agent.Name())
+	log.Debugf("Running agent. runner: %s, agent: %s", r.name, agent.Name())
 
 	// Create a copy of the input to pass to the agent
 	inputCopy := input
@@ -159,9 +165,9 @@ func (r *BaseRunner) RunAsync(ctx context.Context, input message.Message) (<-cha
 
 	// Process metrics and timing
 	startTime := time.Now()
-	r.logger.Debug("Running agent asynchronously",
-		"runner", r.name,
-		"agent", agent.Name(),
+	log.Debugf("Running agent asynchronously. runner: %s, agent: %s",
+		r.name,
+		agent.Name(),
 	)
 
 	// Create a copy of the input to pass to the agent

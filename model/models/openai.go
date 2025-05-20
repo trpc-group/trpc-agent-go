@@ -227,7 +227,6 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 
 	// Add tools if needed
-	log.Debugf("mergedOptions: %v, tools: %v", mergedOptions, m.tools)
 	if mergedOptions.EnableToolCalls && len(m.tools) > 0 {
 		tools := make([]map[string]interface{}, 0, len(m.tools))
 		for _, tool := range m.tools {

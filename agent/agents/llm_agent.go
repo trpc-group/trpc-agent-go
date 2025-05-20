@@ -3,11 +3,13 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -207,22 +209,57 @@ func (a *LLMAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *
 
 		responseCh, err := streamingModel.GenerateStreamWithMessages(ctx, history, opts)
 		if err != nil {
+			log.Errorf("Failed to get streaming response from model: %v", err)
 			eventCh <- event.NewErrorEvent(err, 500)
 			return
 		}
 
+		log.Debugf("Stream started from model, waiting for responses...")
+
 		// Accumulate the full response
 		var fullResponse *message.Message
 		var responseText string
+		var sequence int = 0 // Add sequence counter
 
 		// Process streaming responses
 		for response := range responseCh {
-			if response != nil && len(response.Messages) > 0 {
+			if response != nil && len(response.ToolCalls) > 0 {
+				// Handle tool calls
+				for _, toolCall := range response.ToolCalls {
+					// Create and send a tool call event
+					toolCallEvent := event.NewStreamToolCallEvent(
+						toolCall.Function.Name,
+						toolCall.Function.Arguments,
+						toolCall.ID,
+					)
+					eventCh <- toolCallEvent
+
+					// If we have a toolset, try to execute the tool
+					if a.toolSet != nil {
+						tool, found := a.toolSet.Get(toolCall.Function.Name)
+						if found {
+							// Parse the arguments
+							var params map[string]interface{}
+							if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err == nil {
+								// Execute the tool and send the result
+								result, err := tool.Execute(ctx, params)
+								toolResultEvent := event.NewStreamToolResultEvent(
+									toolCall.Function.Name,
+									result,
+									err,
+								)
+								eventCh <- toolResultEvent
+							}
+						}
+					}
+				}
+			} else if response != nil && len(response.Messages) > 0 {
 				// If we get a complete message, use it
 				chunk := response.Messages[0]
 
-				// Send stream event
-				eventCh <- event.NewStreamEvent(chunk.Content)
+				// Send stream chunk event directly instead of stream event
+				eventCh <- event.NewStreamChunkEvent(chunk.Content, sequence)
+				sequence++ // Increment sequence
 
 				// Update full response
 				if fullResponse == nil {
@@ -234,8 +271,9 @@ func (a *LLMAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *
 				// If we get text, accumulate it
 				responseText += response.Text
 
-				// Send stream event
-				eventCh <- event.NewStreamEvent(response.Text)
+				// Send stream chunk event directly instead of stream event
+				eventCh <- event.NewStreamChunkEvent(response.Text, sequence)
+				sequence++ // Increment sequence
 			}
 		}
 

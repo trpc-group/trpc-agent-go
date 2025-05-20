@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -193,12 +195,9 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		"presence_penalty":  mergedOptions.PresencePenalty,
 		"stream":            true,
 	}
-
 	if len(mergedOptions.StopSequences) > 0 {
 		reqBody["stop"] = mergedOptions.StopSequences
 	}
-
-	// Add tools if needed
 	if mergedOptions.EnableToolCalls && len(m.tools) > 0 {
 		tools := make([]map[string]interface{}, 0, len(m.tools))
 		for _, tool := range m.tools {
@@ -219,7 +218,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request body: %w", err)
 	}
-
+	log.Debugf("=== OpenAI Streaming Request Body ===\n%s\n=== End of OpenAI Streaming Request Body ===\n", string(jsonBody))
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		m.baseURL+defaultOpenAIChatEndpoint, strings.NewReader(string(jsonBody)))
@@ -241,6 +240,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		// Send request
 		resp, err := m.client.Do(req)
 		if err != nil {
+			log.Errorf("OpenAI API request failed: %v", err)
 			respCh <- &model.Response{
 				FinishReason: "error",
 				Text:         fmt.Sprintf("Error: %v", err),
@@ -250,15 +250,18 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			log.Errorf("OpenAI API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 			respCh <- &model.Response{
 				FinishReason: "error",
-				Text:         fmt.Sprintf("OpenAI API returned status %d", resp.StatusCode),
+				Text:         fmt.Sprintf("OpenAI API returned status %d: %s", resp.StatusCode, string(bodyBytes)),
 			}
 			return
 		}
-
 		// Process the stream
 		reader := bufio.NewReader(resp.Body)
+		// Add state for tracking tool calls
+		toolCallsBuffer := make(map[int]*model.ToolCall)
 		for {
 			// Check if context is done
 			select {
@@ -281,6 +284,8 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 				continue
 			}
 
+			log.Debugf("Received line: %s", line)
+
 			// Skip the "data: " prefix
 			if !strings.HasPrefix(line, "data: ") {
 				continue
@@ -299,8 +304,16 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 			var streamResp struct {
 				Choices []struct {
 					Delta struct {
-						Role    string `json:"role,omitempty"`
-						Content string `json:"content,omitempty"`
+						Role      string `json:"role,omitempty"`
+						Content   string `json:"content,omitempty"`
+						ToolCalls []struct {
+							Index    int    `json:"index"`
+							ID       string `json:"id"`
+							Function struct {
+								Name      string `json:"name"`
+								Arguments string `json:"arguments"`
+							} `json:"function"`
+						} `json:"tool_calls,omitempty"`
 					} `json:"delta"`
 					FinishReason string `json:"finish_reason,omitempty"`
 				} `json:"choices"`
@@ -308,11 +321,75 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 
 			if err := json.Unmarshal([]byte(data), &streamResp); err != nil {
 				// Skip malformed JSON
+				log.Errorf("Failed to unmarshal OpenAI stream response: %v", err)
+				continue
+			}
+			if len(streamResp.Choices) == 0 {
 				continue
 			}
 
-			if len(streamResp.Choices) == 0 {
-				continue
+			// Check for tool calls in the delta and accumulate them
+			if len(streamResp.Choices[0].Delta.ToolCalls) > 0 {
+				for _, call := range streamResp.Choices[0].Delta.ToolCalls {
+					// Check if this is a new tool call (with ID) or continuation of existing one
+					if call.ID != "" {
+						// This is a new tool call (first chunk)
+						toolCallsBuffer[call.Index] = &model.ToolCall{
+							ID:   call.ID,
+							Type: "function",
+							Function: model.FunctionCall{
+								Name:      call.Function.Name,
+								Arguments: call.Function.Arguments,
+							},
+						}
+						log.Debugf("Initializing new tool call buffer for Index: %d, ID: %s", call.Index, call.ID)
+					} else if existingCall, exists := toolCallsBuffer[call.Index]; exists {
+						// This is a continuation chunk for an existing tool call
+						// Append to name and arguments
+						if call.Function.Name != "" {
+							existingCall.Function.Name += call.Function.Name
+						}
+						if call.Function.Arguments != "" {
+							existingCall.Function.Arguments += call.Function.Arguments
+						}
+						log.Debugf("Updated tool call buffer for Index %d: name=%s, args=%s",
+							call.Index,
+							existingCall.Function.Name,
+							existingCall.Function.Arguments)
+					} else {
+						log.Warnf("Received continuation for unknown tool call at index %d - this shouldn't happen", call.Index)
+					}
+				}
+			}
+
+			// Send completed tool calls if we have a tool_calls finish reason
+			if streamResp.Choices[0].FinishReason == "tool_calls" {
+				// Convert the buffered tool calls to a slice
+				var completedToolCalls []model.ToolCall
+				for _, toolCall := range toolCallsBuffer {
+					// Attempt to validate JSON for debugging
+					if toolCall.Function.Arguments != "" {
+						var jsonTest map[string]interface{}
+						if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &jsonTest); err != nil {
+							log.Warnf("Completed tool call has invalid JSON arguments: %v", err)
+						} else {
+							log.Debugf("Valid JSON arguments in completed tool call: %+v", jsonTest)
+						}
+					}
+
+					completedToolCalls = append(completedToolCalls, *toolCall)
+				}
+
+				if len(completedToolCalls) > 0 {
+					log.Debugf("Sending %d completed tool calls", len(completedToolCalls))
+					respCh <- &model.Response{
+						ToolCalls:    completedToolCalls,
+						FinishReason: "tool_calls",
+					}
+				}
+
+				// Clear the buffer after sending
+				toolCallsBuffer = make(map[int]*model.ToolCall)
 			}
 
 			// Only send non-empty content
@@ -328,10 +405,10 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 				}
 			}
 
-			// If we have a finish reason, we're done
-			if streamResp.Choices[0].FinishReason != "" {
+			// If we have a stop finish reason, we're done
+			if streamResp.Choices[0].FinishReason == "stop" {
 				respCh <- &model.Response{
-					FinishReason: streamResp.Choices[0].FinishReason,
+					FinishReason: "stop",
 				}
 				return
 			}

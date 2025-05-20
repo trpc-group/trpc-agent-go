@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model/models"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -23,12 +26,18 @@ type AgentRequest struct {
 
 // AgentResponse represents a response from the agent.
 type AgentResponse struct {
-	Message string                   `json:"message"`
-	Steps   []map[string]interface{} `json:"steps,omitempty"`
+	Message   string                   `json:"message"`
+	Steps     []map[string]interface{} `json:"steps,omitempty"`
+	SessionID string                   `json:"session_id,omitempty"`
+}
+
+// SessionData holds conversation data for a session
+type SessionData struct {
+	Messages []*message.Message
+	mutex    sync.Mutex
 }
 
 func main() {
-	log.SetLevel(log.LevelDebug)
 	modelName := flag.String("model-name", "gpt-3.5-turbo", "The model to use")
 	openaiURL := flag.String("openai-url", "https://api.openai.com/v1", "The OpenAI API URL")
 	flag.Parse()
@@ -46,11 +55,27 @@ func main() {
 		models.WithOpenAIBaseURL(*openaiURL),
 	)
 
+	// Set up React agent
+	registry := tool.NewRegistry()
+	registry.Register(calculatorTool)
+	registry.Register(weatherTool)
+
+	// Create session manager
+	sessionManager := session.NewMemoryManager(
+		session.WithExpiration(24 * time.Hour),
+	)
+
 	agentConfig := react.AgentConfig{
-		Name:          "Basic Example Agent",
-		Description:   "A simple agent that can perform calculations and check weather",
-		Model:         llm,
-		Tools:         []tool.Tool{calculatorTool, weatherTool},
+		Name:        "Basic Example Agent",
+		Description: "A simple agent that can perform calculations and check weather",
+		Model:       llm,
+		Tools:       []tool.Tool{calculatorTool, weatherTool},
+		SystemPrompt: `You are a helpful assistant that can perform calculations and check weather.
+You have access to the following tools:
+- calculator: Performs basic arithmetic operations
+- weather: Gets weather information for a location
+
+Always think carefully about which tool to use based on the user's request.`,
 		MaxIterations: 5,
 	}
 
@@ -58,6 +83,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create agent: %v", err)
 	}
+
+	// Map to store session data
+	sessions := make(map[string]*SessionData)
+	var sessionsMutex sync.RWMutex
 
 	// HTTP handler for agent requests
 	http.HandleFunc("/api/agent", func(w http.ResponseWriter, r *http.Request) {
@@ -72,21 +101,59 @@ func main() {
 			return
 		}
 
+		// Get or create session
+		sessionID := r.Header.Get("X-Session-ID")
+		sess, err := sessionManager.Get(r.Context(), sessionID)
+		if err != nil {
+			log.Errorf("Session error: %v", err)
+			http.Error(w, "Session error", http.StatusInternalServerError)
+			return
+		}
+
+		// Get session data
+		sessionsMutex.RLock()
+		sessionData, exists := sessions[sess.ID()]
+		sessionsMutex.RUnlock()
+
+		if !exists {
+			sessionData = &SessionData{
+				Messages: make([]*message.Message, 0),
+			}
+			sessionsMutex.Lock()
+			sessions[sess.ID()] = sessionData
+			sessionsMutex.Unlock()
+		}
+
 		// Create user message
 		userMsg := message.NewUserMessage(req.Message)
 
+		// Add message to history and create context for agent
+		sessionData.mutex.Lock()
+		sessionData.Messages = append(sessionData.Messages, userMsg)
+		history := make([]*message.Message, len(sessionData.Messages))
+		copy(history, sessionData.Messages)
+		sessionData.mutex.Unlock()
+
+		// Create context with history
+		ctx := context.Background()
+
 		// Run the agent
 		log.Infof("Running agent with message: %s", req.Message)
-		resp, err := agent.Run(context.Background(), userMsg)
+		resp, err := agent.Run(ctx, userMsg)
 		if err != nil {
 			log.Errorf("Agent error: %v", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
+		// Add response to history
+		sessionData.mutex.Lock()
+		sessionData.Messages = append(sessionData.Messages, message.NewAssistantMessage(resp.Content))
+		sessionData.mutex.Unlock()
+
 		// Get reasoning steps if available
 		var steps []map[string]interface{}
-		cycles, _ := agent.GetHistory(context.Background())
+		cycles, _ := agent.GetHistory(ctx)
 		for _, cycle := range cycles {
 			step := map[string]interface{}{
 				"thought": cycle.Thought.Content,
@@ -136,15 +203,21 @@ func main() {
 			steps = append(steps, step)
 		}
 
-		// Return response
+		// Return response with session ID
 		response := AgentResponse{
-			Message: resp.Content,
-			Steps:   steps,
+			Message:   resp.Content,
+			Steps:     steps,
+			SessionID: sess.ID(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response)
 	})
+
+	// Serve static files
+	http.Handle("/", http.FileServer(http.Dir("./examples/basic/static")))
+
+	// Start server
 	port := 8080
 	log.Infof("Starting server on port %d", port)
 	log.Infof("Open http://localhost:%d in your browser", port)
