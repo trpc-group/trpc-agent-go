@@ -31,7 +31,6 @@ import (
 var (
 	// Command line flags
 	port          = flag.Int("port", 8080, "HTTP server port")
-	modelName     = flag.String("model-name", "gpt-3.5-turbo", "OpenAI model name")
 	openaiBaseURL = flag.String("openai-url", "https://api.openai.com/v1", "OpenAI API base URL")
 	logLevel      = flag.String("level", "debug", "Log level (debug, info, warn, error, fatal)")
 	mcpPort       = flag.Int("mcp-port", 3000, "MCP server port")
@@ -57,14 +56,22 @@ func main() {
 	if openAIKey == "" {
 		log.Fatal("OpenAI API key is required. Set it with -api_key flag or OPENAI_API_KEY env var")
 	}
+	modelName := os.Getenv("OPENAI_MODEL_NAME")
+	if modelName == "" {
+		log.Fatal("OpenAI model name is required. Set it with -model-name flag or OPENAI_MODEL_NAME env var")
+	}
+	openaiBaseURL := os.Getenv("OPENAI_BASE_URL")
+	if openaiBaseURL == "" {
+		log.Fatal("OpenAI base URL is required. Set it with -openai-url flag or OPENAI_BASE_URL env var")
+	}
 
 	// Create the OpenAI streaming model
 	llmModel := models.NewOpenAIStreamingModel(
-		*modelName,
+		modelName,
 		models.WithOpenAIAPIKey(openAIKey),
-		models.WithOpenAIBaseURL(*openaiBaseURL),
+		models.WithOpenAIBaseURL(openaiBaseURL),
 	)
-	log.Infof("Using streaming model. model: %s, base_url: %s", *modelName, *openaiBaseURL)
+	log.Infof("Using streaming model. model: %s, base_url: %s", modelName, openaiBaseURL)
 
 	// Create the agent
 	agentConfig := react.AgentConfig{
