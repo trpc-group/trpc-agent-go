@@ -127,6 +127,20 @@ type ThoughtGenerator interface {
 	) (*Thought, error)
 }
 
+// StreamingThoughtGenerator extends ThoughtGenerator with streaming support.
+type StreamingThoughtGenerator interface {
+	ThoughtGenerator
+
+	// GenerateStream streams the thought generation process, sending partial thoughts
+	// through the returned channel.
+	GenerateStream(
+		ctx context.Context,
+		messages []*message.Message,
+		history []*Cycle,
+		tools []tool.Tool,
+	) (<-chan *Thought, error)
+}
+
 // ActionSelector defines the interface for selecting the next action based on
 // the current thought.
 type ActionSelector interface {

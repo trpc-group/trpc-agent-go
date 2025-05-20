@@ -196,34 +196,3 @@ func TestOpenAIStreamingModel_GenerateStreamWithMessagesWithMockServer(t *testin
 		t.Errorf("Expected finish reason to be 'stop', got '%s'", finishReason)
 	}
 }
-
-func TestOpenAIStreamingModel_SetTools(t *testing.T) {
-	m := NewOpenAIStreamingModel("gpt-4")
-	tools := []model.ToolDefinition{
-		{
-			Name:        "test-tool",
-			Description: "A test tool",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"foo": map[string]interface{}{
-						"type": "string",
-					},
-				},
-			},
-		},
-	}
-
-	err := m.SetTools(tools)
-	if err != nil {
-		t.Errorf("Unexpected error setting tools: %v", err)
-	}
-
-	// Verify the tools were set
-	if len(m.tools) != 1 {
-		t.Errorf("Expected 1 tool, got %d", len(m.tools))
-	}
-	if m.tools[0].Name != "test-tool" {
-		t.Errorf("Expected tool name to be test-tool, got %s", m.tools[0].Name)
-	}
-}

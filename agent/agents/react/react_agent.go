@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	sessionctx "trpc.group/trpc-go/trpc-agent-go/session/context"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -228,20 +229,44 @@ func validateReactAgentConfig(config AgentConfig) error {
 
 // setDefaultConfigValues sets default values for optional configuration fields.
 func setDefaultConfigValues(config AgentConfig) AgentConfig {
+	log.Debugf("Setting default config values. model_type=%T, streaming_enabled=%v",
+		config.Model, config.EnableStreaming)
+
 	if config.MaxIterations <= 0 {
 		config.MaxIterations = 10
 	}
 	if config.SystemPrompt == "" {
 		config.SystemPrompt = buildDefaultSystemPrompt(config.Tools)
 	}
+
+	// Set up the thought generator - use streaming if supported
 	if config.ThoughtGenerator == nil {
+
 		thoughtPromptStrategy := NewDefaultThoughtPromptStrategy()
-		config.ThoughtGenerator = NewLLMThoughtGenerator(
-			config.Model,
-			thoughtPromptStrategy,
-			ThoughtFormatFree,
-		)
+
+		// Check if the model supports streaming for thought generation
+		if streamingModel, ok := config.Model.(model.StreamingModel); ok && config.EnableStreaming {
+			// Use streaming thought generator
+			log.Debugf("Creating StreamingLLMThoughtGenerator with model %T", config.Model)
+			config.ThoughtGenerator = NewStreamingLLMThoughtGenerator(
+				streamingModel,
+				thoughtPromptStrategy,
+				ThoughtFormatFree,
+			)
+			log.Debugf("Using StreamingLLMThoughtGenerator with model %T", config.Model)
+		} else {
+			// Use standard thought generator
+			log.Debugf("Creating LLMThoughtGenerator with model %T", config.Model)
+			config.ThoughtGenerator = NewLLMThoughtGenerator(
+				config.Model,
+				thoughtPromptStrategy,
+				ThoughtFormatFree,
+			)
+		}
+	} else {
+		log.Debugf("Using user-provided ThoughtGenerator: %T", config.ThoughtGenerator)
 	}
+
 	if config.ActionSelector == nil {
 		config.ActionSelector = NewLLMActionSelector(
 			config.Model,
@@ -275,8 +300,16 @@ func createLLMAgent(config AgentConfig) (*agents.LLMAgent, error) {
 		Tools:              config.Tools,
 		EnableStreaming:    config.EnableStreaming,
 	}
-
+	config.Model.SetTools(convertToolsToToolDefinitions(config.Tools))
 	return agents.NewLLMAgent(llmConfig)
+}
+
+func convertToolsToToolDefinitions(tools []tool.Tool) []*tool.ToolDefinition {
+	toolDefs := make([]*tool.ToolDefinition, len(tools))
+	for i, t := range tools {
+		toolDefs[i] = t.GetDefinition()
+	}
+	return toolDefs
 }
 
 // createReactMemory creates or wraps a ReactMemory from the provided Memory.
@@ -310,58 +343,151 @@ func (a *Agent) GetTools() []tool.Tool {
 	return a.Tools()
 }
 
-// Run executes the ReAct agent.
+// Run processes the given message and returns a response.
 func (a *Agent) Run(ctx context.Context, msg *message.Message) (*message.Message, error) {
+	// Reset the current max iterations
 	a.mu.Lock()
 	a.currentMaxIterations = a.maxIterations
 	a.mu.Unlock()
 
-	log.Infof("Starting ReAct agent execution")
+	// Extract history from context or metadata
+	var history []*message.Message
 
-	// Get tools
-	tools := a.Tools()
-	if len(tools) == 0 {
-		log.Errorf("No tools available")
-		return nil, fmt.Errorf("no tools available")
+	// Check if we have a session context
+	if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+		// Use history from session context
+		history = sessCtx.History()
+		log.Debugf("Using history from session context with %d messages", len(history))
+	} else if msg.Metadata != nil {
+		// Fallback to message metadata
+		if historyData, ok := msg.Metadata["history"]; ok {
+			if historyMessages, ok := historyData.([]*message.Message); ok {
+				history = historyMessages
+				log.Debugf("Using history from message metadata with %d messages", len(history))
+			}
+		}
 	}
 
-	// Initialize vars
-	var latestThought *Thought
-	var finalResponse *message.Message
+	// Check if we have streaming model support
+	streamingModel, ok := a.GetModel().(model.StreamingModel)
+	if ok && a.config.EnableStreaming {
+		log.Debugf("Using streaming mode with model %T", a.GetModel())
 
-	// Main agent loop - continue until we reach max cycles or encounter a terminating condition
+		// Create event channel and process in streaming mode
+		eventCh := make(chan *event.Event, 10)
+		go func() {
+			defer close(eventCh)
+			a.runStreamingMode(ctx, msg, eventCh, streamingModel)
+		}()
+
+		// Process events to build final message
+		var finalContent strings.Builder
+		for evt := range eventCh {
+			switch evt.Type {
+			case event.TypeMessage:
+				if message, ok := evt.Data.(*message.Message); ok {
+					return message, nil
+				}
+			case event.TypeStreamEnd:
+				if content, ok := evt.GetMetadata("content"); ok {
+					if contentStr, ok := content.(string); ok {
+						finalContent.WriteString(contentStr)
+					}
+				}
+			case event.TypeError:
+				if errStr, ok := evt.GetMetadata("error"); ok {
+					if errMsg, ok := errStr.(string); ok {
+						return nil, fmt.Errorf("%s", errMsg)
+					}
+				}
+			}
+		}
+
+		// If we reached here with content, create a message
+		if finalContent.Len() > 0 {
+			return message.NewAssistantMessage(finalContent.String()), nil
+		}
+
+		// Fallback to non-streaming if something went wrong
+		log.Warnf("Streaming execution didn't produce a result, falling back to standard execution")
+	}
+
+	// Standard non-streaming execution
+	log.Debugf("Using standard mode with model %T", a.GetModel())
+	var thought *Thought
+	var actionResult *message.Message
+	var done bool
+	var err error
+
 	for i := 0; i < a.MaxIterations(); i++ {
-		log.Debugf("Starting cycle %d of %d", i+1, a.MaxIterations())
+		// Process a single reasoning cycle
+		thought, actionResult, done, err = a.processSingleCycle(ctx, msg, a.Tools(), i)
 
-		// Process a single cycle
-		thought, response, shouldBreak, err := a.processSingleCycle(ctx, msg, tools, i)
 		if err != nil {
+			log.Errorf("Error in reasoning cycle %d: %v", i, err)
 			return nil, err
 		}
 
-		latestThought = thought
+		if done {
+			// If we have an action result, return it
+			if actionResult != nil {
+				return actionResult, nil
+			}
 
-		if response != nil {
-			finalResponse = response
+			// Otherwise, generate a response from the thought content
+			return a.generateResponseFromContent(ctx, thought.Content)
 		}
-
-		if shouldBreak {
-			break
-		}
 	}
 
-	// If we have a final response, return it
-	if finalResponse != nil {
-		return finalResponse, nil
-	}
-
-	// If we reached this point without a response, generate one from the last thought or cycles
-	if latestThought != nil {
-		return message.NewAssistantMessage(latestThought.Content), nil
-	}
-
-	// Fallback to generating a response from all cycles
+	// If we've reached the maximum number of iterations, generate a response
+	// based on all the information we've gathered so far.
 	return a.generateResponseFromCycles(ctx)
+}
+
+// RunAsync processes the given message asynchronously and sends events through the channel.
+func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event)
+
+	// Reset the current max iterations
+	a.mu.Lock()
+	a.currentMaxIterations = a.maxIterations
+	a.mu.Unlock()
+
+	go func() {
+		defer close(eventCh)
+
+		// Check if we have a session context with history
+		if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+			log.Debugf("Found session context with ID: %s and %d message(s)",
+				sessCtx.SessionID(), len(sessCtx.History()))
+		}
+		// Check if we have streaming model support
+		streamingModel, ok := a.GetModel().(model.StreamingModel)
+		// Check if thought generator supports streaming
+		streamingThoughtGen, supportsStreamingThoughts := a.thoughtGenerator.(StreamingThoughtGenerator)
+		if ok && a.config.EnableStreaming {
+			// Check if we have streaming thought generator support
+			if supportsStreamingThoughts {
+				// Get messages with history if available
+				var messages []*message.Message
+
+				// Process history from session context
+				if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+					messages = append(messages, sessCtx.History()...)
+				}
+				// Add current message
+				messages = append(messages, msg)
+				a.runStreamingWithThoughtGenerator(ctx, messages, streamingThoughtGen, eventCh)
+				return
+			}
+			a.runStreamingMode(ctx, msg, eventCh, streamingModel)
+			return
+		}
+		// Fall back to standard async loop if not streaming
+		a.runAsyncLoop(ctx, msg, eventCh)
+	}()
+
+	return eventCh, nil
 }
 
 // processSingleCycle handles a single cycle of the ReAct agent.
@@ -388,7 +514,6 @@ func (a *Agent) processSingleCycle(
 	}
 
 	// Record the thought and start new cycle
-	log.Debugf("Recording thought and starting new cycle")
 	if err = a.cycleManager.StartCycle(ctx, thought); err != nil {
 		log.Errorf("Failed to start cycle: %v", err)
 		return nil, nil, false, fmt.Errorf("failed to start cycle: %w", err)
@@ -403,7 +528,6 @@ func (a *Agent) processSingleCycle(
 	}
 
 	// Select multiple actions
-	log.Debugf("Selecting actions for thought: %s", thought.ID)
 	actions, err := a.actionSelector.Select(ctx, thought, tools)
 	if err != nil {
 		log.Errorf("Failed to select actions: %v", err)
@@ -520,17 +644,7 @@ func (a *Agent) executeMultipleToolActions(ctx context.Context, actions []*Actio
 		log.Errorf("Failed to record observations: %v", err)
 		return nil, fmt.Errorf("failed to record observations: %w", err)
 	}
-
-	// Check if any errors occurred during execution
-	var firstError error
-	for _, err := range errors {
-		if err != nil {
-			firstError = err
-			break
-		}
-	}
-
-	return observations, firstError
+	return observations, nil
 }
 
 // handleFinalAnswerAction processes a final_answer action.
@@ -564,8 +678,10 @@ func (a *Agent) handleFinalAnswerAction(
 	}
 
 	// End the cycle
-	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
-		log.Warnf("Failed to end cycle after final answer: %v", err)
+	_, endErr := a.cycleManager.EndCycle(ctx)
+	if endErr != nil {
+		log.Errorf("Failed to end cycle: %v", endErr)
+		return nil, nil, false, fmt.Errorf("failed to end cycle: %w", endErr)
 	}
 
 	return thought, finalResponse, true, nil
@@ -595,13 +711,6 @@ func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleOb
 			log.Errorf("Failed to record observation: %v", err)
 			return nil, fmt.Errorf("failed to record observation: %w", err)
 		}
-
-		// End the cycle
-		if _, err := a.cycleManager.EndCycle(ctx); err != nil {
-			log.Errorf("Failed to end cycle: %v", err)
-			return nil, fmt.Errorf("failed to end cycle: %w", err)
-		}
-
 		return observation, nil
 	}
 
@@ -642,14 +751,6 @@ func (a *Agent) executeToolAction(ctx context.Context, action *Action) (*CycleOb
 		log.Errorf("Failed to record observation: %v", err)
 		return nil, fmt.Errorf("failed to record observation: %w", err)
 	}
-
-	// End the current cycle
-	log.Debugf("Ending current cycle")
-	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
-		log.Errorf("Failed to end cycle: %v", err)
-		return nil, fmt.Errorf("failed to end cycle: %w", err)
-	}
-
 	return observation, nil
 }
 
@@ -784,65 +885,633 @@ func (a *Agent) generateSummaryFromObservations(cycles []*Cycle) (*message.Messa
 // extractContentFromObservation extracts the content from an observation.
 func (a *Agent) extractContentFromObservation(observation *CycleObservation) string {
 	if observation.IsError {
-		if errMsg, ok := observation.ToolOutput["error"]; ok {
+		if errMsg, ok := observation.ToolOutput["error"].(string); ok {
 			return fmt.Sprintf("%v", errMsg)
 		}
 		return "An error occurred"
 	}
 
-	if output, ok := observation.ToolOutput["output"]; ok {
+	if output, ok := observation.ToolOutput["output"].(string); ok {
 		return fmt.Sprintf("%v", output)
 	}
 	return "Tool executed successfully"
 }
 
-// RunAsync processes the given message asynchronously and returns a channel of events.
-func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *event.Event, error) {
-	eventCh := make(chan *event.Event)
+// runStreamingMode processes the given message in streaming mode.
+func (a *Agent) runStreamingMode(
+	ctx context.Context,
+	msg *message.Message,
+	eventCh chan<- *event.Event,
+	streamingModel model.StreamingModel,
+) {
+	// Get messages including history if available
+	var messages []*message.Message
 
-	// Reset the current max iterations
-	a.mu.Lock()
-	a.currentMaxIterations = a.maxIterations
-	a.mu.Unlock()
-
-	// Register tools with model if it supports function calling
-	a.registerToolsWithModel()
-
-	// Get current cycles for thought generation
-	cycles, err := a.cycleManager.GetHistory(ctx)
-	if err != nil {
-		log.Infof("Warning: failed to get cycle history: %v", err)
-		// Continue with empty history if retrieval fails
-		cycles = []*Cycle{}
+	// Check if we have a session context with history
+	if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+		// Use history from session context
+		history := sessCtx.History()
+		if len(history) > 0 {
+			messages = append(messages, history...)
+		}
+		log.Debugf("Using history from session context with %d messages", len(history))
+	} else if msg.Metadata != nil {
+		// Fallback to message metadata for history
+		if historyData, ok := msg.Metadata["history"]; ok {
+			if historyMessages, ok := historyData.([]*message.Message); ok {
+				messages = append(messages, historyMessages...)
+				log.Debugf("Using history from message metadata with %d messages", len(historyMessages))
+			}
+		}
 	}
 
-	go func() {
-		defer close(eventCh)
-		a.runAsyncLoop(ctx, msg, cycles, eventCh)
-	}()
+	// Always include the current message
+	messages = append(messages, msg)
 
-	return eventCh, nil
+	// Check if the thought generator supports streaming
+	if streamingThoughtGenerator, ok := a.thoughtGenerator.(StreamingThoughtGenerator); ok {
+		log.Debugf("Using streaming thought generator")
+		a.runStreamingWithThoughtGenerator(ctx, messages, streamingThoughtGenerator, eventCh)
+		return
+	}
+
+	// Fallback to using the model's streaming capability directly
+	log.Debugf("Falling back to model streaming (thought generator doesn't support streaming)")
+
+	// Set up streaming generation options
+	options := model.DefaultOptions()
+	options.MaxTokens = 4096
+	options.EnableToolCalls = true
+
+	// Start streaming generation
+	log.Debugf("Starting streaming generation with %d messages", len(messages))
+	responseCh, err := streamingModel.GenerateStreamWithMessages(ctx, messages, options)
+	if err != nil {
+		log.Errorf("Failed to start streaming generation: %v", err)
+		eventCh <- event.NewErrorEvent(err, 500)
+		return
+	}
+
+	// Variables to track streaming state
+	var contentBuffer strings.Builder
+
+	// Start a new cycle for this streaming session
+	thought := &Thought{
+		ID:        fmt.Sprintf("thought-%d", time.Now().UnixNano()),
+		Content:   "",
+		Timestamp: time.Now().Unix(),
+	}
+
+	if err := a.cycleManager.StartCycle(ctx, thought); err != nil {
+		log.Errorf("Failed to start cycle: %v", err)
+		eventCh <- event.NewErrorEvent(fmt.Errorf("failed to start cycle: %w", err), 500)
+		return
+	}
+	defer a.cycleManager.EndCycle(ctx)
+
+	// Process the stream
+	for response := range responseCh {
+		// Check for errors
+		if response.FinishReason == "error" {
+			log.Errorf("Error in streaming response: %s", response.Text)
+			eventCh <- event.NewErrorEvent(fmt.Errorf("model error: %s", response.Text), 500)
+			return
+		}
+
+		// Handle tool calls
+		if len(response.ToolCalls) > 0 {
+			log.Debugf("Received %d tool calls", len(response.ToolCalls))
+			for _, toolCall := range response.ToolCalls {
+				// Create an action from the tool call
+				action := &Action{
+					ID:        fmt.Sprintf("action-%d", time.Now().UnixNano()),
+					ToolName:  toolCall.Function.Name,
+					ToolInput: parseToolInput(toolCall.Function.Arguments),
+					ThoughtID: thought.ID,
+					Timestamp: time.Now().Unix(),
+				}
+
+				// Record the action
+				if err := a.cycleManager.RecordActions(ctx, []*Action{action}); err != nil {
+					log.Errorf("Failed to record action: %v", err)
+					continue
+				}
+
+				// Emit tool call event
+				eventCh <- event.NewStreamToolCallEvent(
+					toolCall.Function.Name,
+					toolCall.Function.Arguments,
+					toolCall.ID,
+				)
+
+				// Execute the tool
+				result, err := a.executeToolInStream(ctx, &toolCall)
+
+				// Create observation
+				observation := &CycleObservation{
+					ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+					ActionID: action.ID,
+					ToolOutput: map[string]interface{}{
+						"result": result,
+					},
+					IsError:   err != nil,
+					Timestamp: time.Now().Unix(),
+				}
+
+				// Record observation
+				if err := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); err != nil {
+					log.Errorf("Failed to record observation: %v", err)
+				}
+
+				// Emit the tool result
+				eventCh <- event.NewStreamToolResultEvent(
+					toolCall.Function.Name,
+					result,
+					err,
+				)
+			}
+			continue // Skip to next chunk after processing tool calls
+		}
+
+		// Handle content chunks
+		if response.Text != "" {
+			contentBuffer.WriteString(response.Text)
+			thought.Content = contentBuffer.String()
+
+			// Update thought content by ending the current cycle and starting a new one with the updated content
+			if _, err := a.cycleManager.EndCycle(ctx); err != nil {
+				log.Errorf("Failed to end cycle for content update: %v", err)
+			}
+
+			// Start a new cycle with updated content
+			thought = &Thought{
+				ID:        fmt.Sprintf("thought-%d", time.Now().UnixNano()),
+				Content:   contentBuffer.String(),
+				Timestamp: time.Now().Unix(),
+			}
+
+			if err := a.cycleManager.StartCycle(ctx, thought); err != nil {
+				log.Errorf("Failed to start new cycle with updated content: %v", err)
+			}
+		}
+
+		// Handle completion
+		if response.FinishReason == "stop" {
+			// Create the final message
+			finalContent := contentBuffer.String()
+			finalMsg := message.NewAssistantMessage(finalContent)
+
+			// If the thought contains a final answer, handle it
+			if containsFinalAnswer(thought) {
+				finalAnswer := extractFinalAnswer(finalContent)
+				finalMsg = message.NewAssistantMessage(finalAnswer)
+			}
+
+			// Send complete message
+			eventCh <- event.NewMessageEvent(finalMsg)
+
+			// Send stream end event
+			eventCh <- event.NewStreamEndEvent(finalContent)
+			return
+		}
+	}
 }
 
-// registerToolsWithModel registers tools with the model if it supports tool calls.
-func (a *Agent) registerToolsWithModel() {
-	if toolModel, ok := a.GetModel().(model.ToolCallSupportingModel); ok && toolModel.SupportsToolCalls() {
-		var toolDefs []*tool.ToolDefinition
-		for _, t := range a.Tools() {
-			toolDefs = append(toolDefs, t.GetDefinition())
+// runStreamingWithThoughtGenerator processes the given message using the streaming thought generator.
+func (a *Agent) runStreamingWithThoughtGenerator(
+	ctx context.Context,
+	messages []*message.Message,
+	thoughtGenerator StreamingThoughtGenerator,
+	eventCh chan<- *event.Event,
+) {
+	// Reset the current max iterations
+	a.mu.Lock()
+	maxIters := a.maxIterations
+	a.currentMaxIterations = maxIters
+	a.mu.Unlock()
+
+	// Send streaming start event
+	eventCh <- event.NewStreamStartEvent("streaming_session")
+
+	// Get initial cycle history
+	cycles, err := a.GetHistory(ctx)
+	if err != nil {
+		log.Errorf("STREAMING DIAGNOSIS - Failed to get cycle history: %v", err)
+		eventCh <- event.NewErrorEvent(fmt.Errorf("failed to get cycle history: %w", err), 500)
+		return
+	}
+
+	// Create a parent context for the session that can be canceled
+	sessionCtx, cancelSession := context.WithCancel(ctx)
+	defer cancelSession()
+
+	var contentBuffer strings.Builder
+	iterCount := 0
+
+	// Main ReAct loop: Think → Act → Observe
+	for iterCount < maxIters {
+		// Check if parent context was canceled
+		if ctx.Err() != nil {
+			log.Infof("STREAMING DIAGNOSIS - Context cancelled, stopping stream")
+			eventCh <- event.NewErrorEvent(ctx.Err(), 500)
+			return
+		}
+		// Generate a thought
+		thought, err := a.generateStreamingThought(sessionCtx, messages, cycles, thoughtGenerator, iterCount, eventCh)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Normal cancellation, just return
+				return
+			}
+			log.Errorf("STREAMING DIAGNOSIS - Failed to generate thought: %v", err)
+			// Don't send error, continue to next iteration or finish
+			iterCount++
+			continue
+		}
+		// If no thought was generated, move to next iteration
+		if thought == nil {
+			iterCount++
+			continue
 		}
 
-		if err := toolModel.RegisterTools(toolDefs); err != nil {
-			log.Infof("Warning: failed to register tools with model: %v", err)
+		// Update content buffer for potential final response
+		contentBuffer.Reset()
+		contentBuffer.WriteString(thought.Content)
+
+		// Handle final answer in thought content
+		if containsFinalAnswer(thought) {
+			a.handleFinalAnswer(sessionCtx, thought, eventCh)
+			return
+		}
+
+		// Process actions if present
+		if len(thought.SuggestedActions) > 0 {
+			// Check for final answer in actions
+			if a.handleStreamingFinalAnswerAction(sessionCtx, thought.SuggestedActions, eventCh) {
+				return
+			}
+
+			// Execute tools and get observations
+			cycle, observations := a.executeToolsAndRecordObservations(
+				sessionCtx,
+				thought,
+				thought.SuggestedActions,
+				eventCh,
+			)
+
+			// If we got a valid cycle back, update history
+			if cycle != nil {
+				cycles = append(cycles, cycle)
+
+				// Add tool outputs to message history for next iteration
+				messages = a.appendToolMessagesToHistory(messages, observations, thought.SuggestedActions)
+			}
+		} else {
+			// No actions but still need to end the cycle
+			cycle, err := a.finishCycleWithoutActions(sessionCtx)
+			if err == nil && cycle != nil {
+				cycles = append(cycles, cycle)
+			}
+		}
+
+		// Increment counter for next iteration
+		iterCount++
+	}
+
+	// If we've reached max iterations without a final answer, generate one from buffer
+	finalContent := contentBuffer.String()
+	finalMsg := message.NewAssistantMessage(finalContent)
+	eventCh <- event.NewMessageEvent(finalMsg)
+	eventCh <- event.NewStreamEndEvent(finalMsg.Content)
+}
+
+// handleStreamingFinalAnswerAction checks if any actions are final_answer actions and handles them.
+// Returns true if a final answer was found and handled.
+func (a *Agent) handleStreamingFinalAnswerAction(
+	ctx context.Context,
+	actions []*Action,
+	eventCh chan<- *event.Event,
+) bool {
+	for _, action := range actions {
+		if action.ToolName == "final_answer" {
+			// Try to get the answer content
+			finalAnswerContent, ok := action.ToolInput["answer"].(string)
+			if !ok {
+				// Fall back to "content" field
+				finalAnswerContent, ok = action.ToolInput["content"].(string)
+				if !ok {
+					finalAnswerContent = "I've completed my analysis."
+				}
+			}
+
+			log.Debugf("STREAMING DIAGNOSIS - Final answer found: %s", finalAnswerContent)
+			finalMsg := message.NewAssistantMessage(finalAnswerContent)
+			eventCh <- event.NewMessageEvent(finalMsg)
+			eventCh <- event.NewStreamEndEvent(finalMsg.Content)
+			return true
 		}
 	}
+	return false
+}
+
+// generateStreamingThought creates a new streaming thought generation and waits for a complete thought.
+// Returns the thought or an error if generation fails.
+func (a *Agent) generateStreamingThought(
+	ctx context.Context,
+	messages []*message.Message,
+	cycles []*Cycle,
+	thoughtGenerator StreamingThoughtGenerator,
+	iterationNum int,
+	eventCh chan<- *event.Event,
+) (*Thought, error) {
+	// Create context for this thought generation that can be canceled
+	thoughtCtx, cancelThought := context.WithCancel(ctx)
+	defer cancelThought()
+
+	thoughtCh, err := thoughtGenerator.GenerateStream(thoughtCtx, messages, cycles, a.Tools())
+	if err != nil {
+		return nil, fmt.Errorf("failed to start streaming thought generation: %w", err)
+	}
+
+	// Variables to track the latest thought and content
+	var latestThought *Thought
+	var combinedContent strings.Builder
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+
+	// Collect streaming thoughts until we get a complete thought or timeout
+	for {
+		select {
+		case newThought, ok := <-thoughtCh:
+			if !ok {
+				// Channel closed, return the latest thought if available
+				if latestThought == nil {
+					return nil, fmt.Errorf("thought channel closed without producing a thought")
+				}
+
+				// Update the content with combined content
+				if combinedContent.Len() > 0 {
+					latestThought.Content = combinedContent.String()
+				}
+
+				// Record the thought by starting a new cycle
+				if err := a.cycleManager.StartCycle(thoughtCtx, latestThought); err != nil {
+					return nil, fmt.Errorf("failed to start cycle: %w", err)
+				}
+				return latestThought, nil
+			}
+
+			// Update latest thought and add content
+			if newThought != nil {
+				latestThought = newThought
+
+				// Add the content to our combined buffer and stream it
+				if newThought.Content != "" {
+					combinedContent.WriteString(newThought.Content)
+					eventCh <- event.NewStreamChunkEvent(newThought.Content, iterationNum)
+				}
+
+				// If we have actions, we can return this thought
+				if len(newThought.SuggestedActions) > 0 {
+					// Make sure the content is fully updated
+					if combinedContent.Len() > 0 {
+						latestThought.Content = combinedContent.String()
+					}
+
+					// Record the thought by starting a new cycle
+					if err := a.cycleManager.StartCycle(thoughtCtx, latestThought); err != nil {
+						return nil, fmt.Errorf("failed to start cycle: %w", err)
+					}
+
+					// We have a complete thought with actions, so drain remaining items and return
+					go a.drainThoughtChannel(thoughtCh)
+					return latestThought, nil
+				}
+			}
+
+			// Reset the timeout since we received a thought
+			if !timeout.Stop() {
+				<-timeout.C
+			}
+			timeout.Reset(30 * time.Second)
+
+		case <-timeout.C:
+			// Timeout - drain channel and continue
+			go a.drainThoughtChannel(thoughtCh)
+
+			// If we have a partial thought, return it
+			if latestThought != nil {
+				// Update content if needed
+				if combinedContent.Len() > 0 {
+					latestThought.Content = combinedContent.String()
+				}
+
+				// Record the thought by starting a new cycle
+				if err := a.cycleManager.StartCycle(thoughtCtx, latestThought); err != nil {
+					return nil, fmt.Errorf("failed to start cycle: %w", err)
+				}
+
+				return latestThought, nil
+			}
+
+			return nil, fmt.Errorf("timeout waiting for thought generation")
+
+		case <-ctx.Done():
+			// Parent context canceled
+			go a.drainThoughtChannel(thoughtCh)
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// drainThoughtChannel safely consumes and discards all items from the thought channel.
+// This ensures the goroutine producing thoughts doesn't leak.
+func (a *Agent) drainThoughtChannel(thoughtCh <-chan *Thought) {
+	for range thoughtCh {
+		// Just drain the channel
+	}
+}
+
+// handleFinalAnswer extracts and sends a final answer from a thought's content.
+func (a *Agent) handleFinalAnswer(
+	ctx context.Context,
+	thought *Thought,
+	eventCh chan<- *event.Event,
+) {
+	// Extract the final answer and create a message
+	finalAnswer := extractFinalAnswer(thought.Content)
+	finalMsg := message.NewAssistantMessage(finalAnswer)
+
+	// End the cycle (ignoring errors)
+	a.cycleManager.EndCycle(ctx)
+
+	// Send the final message
+	eventCh <- event.NewMessageEvent(finalMsg)
+	eventCh <- event.NewStreamEndEvent(finalMsg.Content)
+}
+
+// Note: We're using handleStreamingFinalAnswerAction for this functionality
+
+// executeToolsAndRecordObservations executes the tools specified by the actions and records
+// observations. Returns the cycle and observations.
+func (a *Agent) executeToolsAndRecordObservations(
+	ctx context.Context,
+	thought *Thought,
+	actions []*Action,
+	eventCh chan<- *event.Event,
+) (*Cycle, []*CycleObservation) {
+	log.Debugf("STREAMING DIAGNOSIS - Processing %d actions", len(actions))
+
+	// Record the actions
+	if err := a.cycleManager.RecordActions(ctx, actions); err != nil {
+		log.Errorf("STREAMING DIAGNOSIS - Failed to record actions: %v", err)
+		return nil, nil
+	}
+
+	// Filter out final_answer actions (already handled)
+	var toolActions []*Action
+	for _, action := range actions {
+		if action.ToolName != "final_answer" {
+			toolActions = append(toolActions, action)
+		}
+	}
+
+	// Skip if no tool actions remain
+	if len(toolActions) == 0 {
+		cycle, err := a.cycleManager.EndCycle(ctx)
+		if err != nil {
+			log.Errorf("STREAMING DIAGNOSIS - Failed to end cycle: %v", err)
+			return nil, nil
+		}
+		return cycle, nil
+	}
+
+	// Execute tools and collect observations
+	observations := make([]*CycleObservation, 0, len(toolActions))
+
+	for _, action := range toolActions {
+		observation, err := a.executeToolAction(ctx, action)
+		if err != nil {
+			log.Errorf("STREAMING DIAGNOSIS - Tool execution error: %v", err)
+			// Create error observation
+			errorObs := &CycleObservation{
+				ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
+				ActionID: action.ID,
+				ToolOutput: map[string]interface{}{
+					"error": err.Error(),
+				},
+				IsError:   true,
+				Timestamp: time.Now().Unix(),
+			}
+			observations = append(observations, errorObs)
+
+			// Send error event to client
+			eventCh <- event.NewStreamToolResultEvent(
+				action.ToolName,
+				&tool.Result{
+					Output: err.Error(),
+				},
+				err,
+			)
+		} else if observation != nil {
+			observations = append(observations, observation)
+
+			// Send success event to client
+			var result *tool.Result
+			if output, ok := observation.ToolOutput["output"].(string); ok {
+				result = &tool.Result{
+					Output: output,
+				}
+			} else {
+				result = &tool.Result{
+					Output: fmt.Sprintf("%v", observation.ToolOutput["output"]),
+				}
+			}
+
+			eventCh <- event.NewStreamToolResultEvent(
+				action.ToolName,
+				result,
+				nil,
+			)
+		}
+	}
+	// Record observations
+	if len(observations) > 0 {
+		if err := a.cycleManager.RecordObservations(ctx, observations); err != nil {
+			log.Errorf("STREAMING DIAGNOSIS - Failed to record observations: %v", err)
+		}
+	}
+	// End current cycle
+	cycle, err := a.cycleManager.EndCycle(ctx)
+	if err != nil {
+		log.Errorf("STREAMING DIAGNOSIS - Failed to end cycle: %v", err)
+		return nil, observations
+	}
+	return cycle, observations
+}
+
+// finishCycleWithoutActions ends the current cycle for a thought that has no actions.
+func (a *Agent) finishCycleWithoutActions(
+	ctx context.Context,
+) (*Cycle, error) {
+	// End the cycle
+	cycle, err := a.cycleManager.EndCycle(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to end cycle: %w", err)
+	}
+	return cycle, nil
+}
+
+// appendToolMessagesToHistory adds tool observation messages to message history
+// for the next iteration.
+func (a *Agent) appendToolMessagesToHistory(
+	messages []*message.Message,
+	observations []*CycleObservation,
+	actions []*Action,
+) []*message.Message {
+	// Map of action ID to name for quick lookup
+	actionMap := make(map[string]string)
+	for _, action := range actions {
+		actionMap[action.ID] = action.ToolName
+	}
+	// Create new slice without modifying original
+	updatedMsgs := make([]*message.Message, len(messages))
+	copy(updatedMsgs, messages)
+	// Add each observation as a tool message
+	for _, obs := range observations {
+		var toolMsg *message.Message
+		var toolContent string
+		// Get action name for this observation
+		actionName := actionMap[obs.ActionID]
+		if actionName == "" {
+			actionName = "unknown_tool"
+		}
+		// Format the content from observation
+		if obs.IsError {
+			if errStr, ok := obs.ToolOutput["error"].(string); ok {
+				toolContent = errStr
+			} else {
+				toolContent = fmt.Sprintf("%v", obs.ToolOutput["error"])
+			}
+		} else {
+			if outStr, ok := obs.ToolOutput["output"].(string); ok {
+				toolContent = outStr
+			} else {
+				toolContent = fmt.Sprintf("%v", obs.ToolOutput["output"])
+			}
+		}
+		// Create tool message and add to history
+		toolMsg = message.NewToolMessage(actionName)
+		toolMsg.Content = toolContent
+		updatedMsgs = append(updatedMsgs, toolMsg)
+	}
+	return updatedMsgs
 }
 
 // runAsyncLoop is the main loop for asynchronous reasoning cycles.
 func (a *Agent) runAsyncLoop(
 	ctx context.Context,
 	msg *message.Message,
-	cycles []*Cycle,
 	eventCh chan<- *event.Event,
 ) {
 	// Begin the reasoning cycle
@@ -1179,8 +1848,10 @@ func (a *Agent) handleAsyncFinalAnswerAction(
 	}
 
 	// End the cycle
-	if _, err := a.cycleManager.EndCycle(ctx); err != nil {
-		log.Warnf("Failed to end cycle after final answer: %v", err)
+	_, endErr := a.cycleManager.EndCycle(ctx)
+	if endErr != nil {
+		log.Errorf("Failed to end cycle: %v", endErr)
+		return false, fmt.Errorf("failed to end cycle: %w", endErr)
 	}
 
 	return false, nil
@@ -1421,49 +2092,6 @@ func (a *Agent) selectAndRecordAction(
 	return actions, history, false, nil
 }
 
-// createObservationFromToolExecution executes a tool and creates an observation.
-// Returns the observation, observation content string, and any error.
-func (a *Agent) createObservationFromToolExecution(
-	ctx context.Context,
-	tool tool.Tool,
-	action *Action,
-) (*CycleObservation, string, error) {
-	// Execute the tool
-	result, err := tool.Execute(ctx, action.ToolInput)
-	var observationContent string
-
-	// Create observation based on result or error
-	var observation *CycleObservation
-	if err != nil {
-		// If the tool execution fails, record the error
-		observationContent = fmt.Sprintf("Error: %v", err)
-		observation = &CycleObservation{
-			ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
-			ActionID: action.ID,
-			ToolOutput: map[string]interface{}{
-				"error": observationContent,
-			},
-			IsError:   true,
-			Timestamp: time.Now().Unix(),
-		}
-	} else {
-		observationContent = result.String()
-		observation = &CycleObservation{
-			ID:       fmt.Sprintf("obs-%d", time.Now().UnixNano()),
-			ActionID: action.ID,
-			ToolOutput: map[string]interface{}{
-				"output": observationContent,
-			},
-			Timestamp: time.Now().Unix(),
-		}
-	}
-	// Record the observation
-	if recordErr := a.cycleManager.RecordObservations(ctx, []*CycleObservation{observation}); recordErr != nil {
-		return nil, "", fmt.Errorf("failed to record observation: %w", recordErr)
-	}
-	return observation, observationContent, err
-}
-
 // findTool finds a tool by name.
 func (a *Agent) findTool(name string) (tool.Tool, bool) {
 	for _, t := range a.Tools() {
@@ -1510,4 +2138,40 @@ func (a *Agent) RecordActions(ctx context.Context, actions []*Action) error {
 // RecordObservations records multiple observations via the cycle manager.
 func (a *Agent) RecordObservations(ctx context.Context, observations []*CycleObservation) error {
 	return a.cycleManager.RecordObservations(ctx, observations)
+}
+
+// parseToolInput parses JSON arguments from a tool call into a map.
+func parseToolInput(jsonStr string) map[string]interface{} {
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		log.Errorf("Failed to parse tool input JSON: %v", err)
+		return make(map[string]interface{})
+	}
+	return result
+}
+
+// executeToolInStream executes a tool from a streaming model tool call.
+func (a *Agent) executeToolInStream(ctx context.Context, toolCall *model.ToolCall) (*tool.Result, error) {
+	// Find the tool by name
+	selectedTool, found := a.findTool(toolCall.Function.Name)
+	if !found {
+		return &tool.Result{
+			Output: fmt.Sprintf("Error: tool %s not found", toolCall.Function.Name),
+		}, fmt.Errorf("tool %s not found", toolCall.Function.Name)
+	}
+
+	// Parse the arguments
+	toolInput := parseToolInput(toolCall.Function.Arguments)
+
+	// Execute the tool
+	log.Debugf("Executing streaming tool '%s' with input: %v", selectedTool.Name(), toolInput)
+	result, err := selectedTool.Execute(ctx, toolInput)
+	if err != nil {
+		log.Errorf("Failed to execute streaming tool: %v", err)
+		return &tool.Result{
+			Output: fmt.Sprintf("Error executing tool: %v", err),
+		}, err
+	}
+
+	return result, nil
 }

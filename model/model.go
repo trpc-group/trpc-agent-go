@@ -51,6 +51,7 @@ func DefaultOptions() GenerationOptions {
 		PresencePenalty:     0.0,
 		FrequencyPenalty:    0.0,
 		FunctionCallingMode: "auto",
+		EnableToolCalls:     true,
 	}
 }
 
@@ -108,18 +109,6 @@ type Usage struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
-// ToolDefinition represents a tool that can be called by the model.
-type ToolDefinition struct {
-	// Name is the name of the tool.
-	Name string `json:"name"`
-
-	// Description is a description of what the tool does.
-	Description string `json:"description"`
-
-	// Parameters is a JSON Schema object describing the parameters of the tool.
-	Parameters map[string]interface{} `json:"parameters"`
-}
-
 // ModelConfig contains configuration for a model.
 type ModelConfig struct {
 	// Name is the model name (e.g., "gpt-4", "gemini-pro").
@@ -155,8 +144,8 @@ type Model interface {
 	// GenerateWithMessages generates a completion for the given messages.
 	GenerateWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (*Response, error)
 
-	// SupportsToolCalls returns true if the model supports tool calls.
-	SupportsToolCalls() bool
+	// SetTools sets the tools for the model.
+	SetTools(tools []*tool.ToolDefinition)
 }
 
 // StreamingModel is the interface for models that support streaming.
@@ -168,18 +157,6 @@ type StreamingModel interface {
 
 	// GenerateStreamWithMessages streams a completion for the given messages.
 	GenerateStreamWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (<-chan *Response, error)
-}
-
-// ToolCallSupportingModel is the interface for models that support tool calls.
-type ToolCallSupportingModel interface {
-	Model
-
-	// SetTools sets the tools available to the model.
-	// Deprecated: Use RegisterTools instead.
-	SetTools(tools []ToolDefinition) error
-
-	// RegisterTools registers tools with the model using the new schema-based API.
-	RegisterTools(tools []*tool.ToolDefinition) error
 }
 
 // ToolRegistrar abstracts the registration of tools with a model.
@@ -268,28 +245,6 @@ func (m *BaseModel) SupportsToolCalls() bool {
 // SetSupportsToolCalls sets whether the model supports tool calls.
 func (m *BaseModel) SetSupportsToolCalls(supports bool) {
 	m.toolCallSupport = supports
-}
-
-// GeminiCompatibleModel is the interface for models that support Google Gemini content format.
-type GeminiCompatibleModel interface {
-	Model
-
-	// SupportsGeminiFormat indicates if the model supports Gemini content format.
-	SupportsGeminiFormat() bool
-
-	// GenerateWithGeminiMessages generates a response for messages in Gemini format.
-	GenerateWithGeminiMessages(ctx context.Context, messages []*message.GeminiContent, options GenerationOptions) (Response, error)
-}
-
-// GeminiCompatibleStreamingModel is the interface for streaming models that support Google Gemini content format.
-type GeminiCompatibleStreamingModel interface {
-	StreamingModel
-
-	// SupportsGeminiFormat indicates if the model supports Gemini content format.
-	SupportsGeminiFormat() bool
-
-	// GenerateStreamWithGeminiMessages generates a streaming response for messages in Gemini format.
-	GenerateStreamWithGeminiMessages(ctx context.Context, messages []*message.GeminiContent, options GenerationOptions) (<-chan Response, error)
 }
 
 // MockModel is a simple implementation for testing purposes.

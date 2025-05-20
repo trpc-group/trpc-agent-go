@@ -2,6 +2,8 @@ package runner
 
 import (
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Config defines configuration options for runners.
@@ -21,6 +23,9 @@ type Config struct {
 	// BufferSize is the size of event channels.
 	BufferSize int `json:"buffer_size"`
 
+	// SessionOptions contains configuration for session management.
+	SessionOptions session.Options `json:"session_options,omitempty"`
+
 	// Custom contains additional custom configuration.
 	Custom map[string]interface{} `json:"custom,omitempty"`
 }
@@ -33,7 +38,10 @@ func DefaultConfig() Config {
 		RetryCount:    3,
 		RetryDelay:    time.Second,
 		BufferSize:    100,
-		Custom:        make(map[string]interface{}),
+		SessionOptions: session.Options{
+			Expiration: 24 * time.Hour, // Default 24-hour session expiration
+		},
+		Custom: make(map[string]interface{}),
 	}
 }
 
@@ -59,6 +67,18 @@ func (c Config) WithRetry(count int, delay time.Duration) Config {
 // WithBufferSize sets the buffer size for event channels.
 func (c Config) WithBufferSize(size int) Config {
 	c.BufferSize = size
+	return c
+}
+
+// WithSessionOptions sets the session options.
+func (c Config) WithSessionOptions(options session.Options) Config {
+	c.SessionOptions = options
+	return c
+}
+
+// WithSessionExpiration sets the session expiration duration.
+func (c Config) WithSessionExpiration(duration time.Duration) Config {
+	c.SessionOptions.Expiration = duration
 	return c
 }
 

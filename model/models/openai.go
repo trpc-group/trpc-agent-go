@@ -32,7 +32,7 @@ type OpenAIModel struct {
 	baseURL        string
 	client         *http.Client
 	defaultOptions model.GenerationOptions
-	tools          []model.ToolDefinition
+	tools          []*tool.ToolDefinition
 }
 
 // OpenAIModelOption is a function that configures an OpenAIModel.
@@ -66,6 +66,13 @@ func WithOpenAIDefaultOptions(options model.GenerationOptions) OpenAIModelOption
 	}
 }
 
+// WithOpenAITools sets the tools for the OpenAI model.
+func WithOpenAITools(tools []*tool.ToolDefinition) OpenAIModelOption {
+	return func(m *OpenAIModel) {
+		m.tools = tools
+	}
+}
+
 // NewOpenAIModel creates a new OpenAIModel with the given options.
 func NewOpenAIModel(name string, opts ...OpenAIModelOption) *OpenAIModel {
 	m := &OpenAIModel{
@@ -74,12 +81,15 @@ func NewOpenAIModel(name string, opts ...OpenAIModelOption) *OpenAIModel {
 		client:         &http.Client{Timeout: defaultOpenAITimeout},
 		defaultOptions: model.DefaultOptions(),
 	}
-
 	for _, opt := range opts {
 		opt(m)
 	}
-
 	return m
+}
+
+// SetTools sets the tools for the OpenAI model.
+func (m *OpenAIModel) SetTools(tools []*tool.ToolDefinition) {
+	m.tools = tools
 }
 
 // Name returns the name of the model.
@@ -449,70 +459,6 @@ func generateShortID() string {
 		result[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(result)
-}
-
-// SupportsToolCalls implements the model.Model interface.
-func (m *OpenAIModel) SupportsToolCalls() bool {
-	return true
-}
-
-// RegisterTools implements the model.ToolCallSupportingModel interface.
-func (m *OpenAIModel) RegisterTools(toolDefs []*tool.ToolDefinition) error {
-	// Convert tool.ToolDefinition to model.ToolDefinition
-	tools := make([]model.ToolDefinition, 0, len(toolDefs))
-	for _, def := range toolDefs {
-		// Convert tool.Property map to interface map
-		params := make(map[string]interface{})
-		if def.Parameters != nil {
-			// Create a simple JSON schema object
-			params["type"] = "object"
-			properties := make(map[string]interface{})
-			required := []string{}
-
-			for name, prop := range def.Parameters {
-				if prop.Required {
-					required = append(required, name)
-				}
-
-				// Convert property to map
-				propMap := map[string]interface{}{
-					"type":        prop.Type,
-					"description": prop.Description,
-				}
-
-				// Add enum if present
-				if len(prop.Enum) > 0 {
-					propMap["enum"] = prop.Enum
-				}
-
-				// Add default if present
-				if prop.Default != nil {
-					propMap["default"] = prop.Default
-				}
-
-				properties[name] = propMap
-			}
-
-			params["properties"] = properties
-			if len(required) > 0 {
-				params["required"] = required
-			}
-		}
-
-		tools = append(tools, model.ToolDefinition{
-			Name:        def.Name,
-			Description: def.Description,
-			Parameters:  params,
-		})
-	}
-	m.tools = tools
-	return nil
-}
-
-// SetTools implements the ToolCallSupportingModel interface.
-func (m *OpenAIModel) SetTools(tools []model.ToolDefinition) error {
-	m.tools = tools
-	return nil
 }
 
 // mergeOptions merges the provided options with the default options.

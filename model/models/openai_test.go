@@ -67,37 +67,6 @@ func TestOpenAIModel_MergeOptions(t *testing.T) {
 	}
 }
 
-func TestOpenAIModel_SetTools(t *testing.T) {
-	m := NewOpenAIModel("gpt-4")
-	tools := []model.ToolDefinition{
-		{
-			Name:        "test-tool",
-			Description: "A test tool",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"foo": map[string]interface{}{
-						"type": "string",
-					},
-				},
-			},
-		},
-	}
-
-	err := m.SetTools(tools)
-	if err != nil {
-		t.Errorf("Unexpected error setting tools: %v", err)
-	}
-
-	// Verify the tools were set
-	if len(m.tools) != 1 {
-		t.Errorf("Expected 1 tool, got %d", len(m.tools))
-	}
-	if m.tools[0].Name != "test-tool" {
-		t.Errorf("Expected tool name to be test-tool, got %s", m.tools[0].Name)
-	}
-}
-
 func TestOpenAIModel_GenerateWithMockServer(t *testing.T) {
 	// Create a mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

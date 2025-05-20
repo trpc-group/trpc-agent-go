@@ -48,6 +48,13 @@ func WithGeminiDefaultOptions(options model.GenerationOptions) GeminiModelOption
 	}
 }
 
+// WithGeminiTools sets the tools for the Gemini model.
+func WithGeminiTools(tools []*tool.ToolDefinition) GeminiModelOption {
+	return func(m *GeminiModel) {
+		m.tools = tools
+	}
+}
+
 // NewGeminiModel creates a new GeminiModel with the given options.
 func NewGeminiModel(name string, opts ...GeminiModelOption) (*GeminiModel, error) {
 	m := &GeminiModel{
@@ -344,54 +351,6 @@ func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*mess
 		FinishReason: finishReason,
 		ToolCalls:    toolCalls,
 	}, nil
-}
-
-// SetTools implements the model.ToolCallSupportingModel interface.
-func (m *GeminiModel) SetTools(tools []model.ToolDefinition) error {
-	// Convert model.ToolDefinition to tool.ToolDefinition
-	var toolDefs []*tool.ToolDefinition
-	for _, t := range tools {
-		def := tool.NewToolDefinition(t.Name, t.Description)
-
-		// Convert parameters to Properties
-		for name, paramSchema := range t.Parameters {
-			if propObj, ok := paramSchema.(map[string]interface{}); ok {
-				prop := propertyFromMap(propObj)
-
-				// Check if this parameter is required
-				required := false
-				if reqList, ok := t.Parameters["required"].([]interface{}); ok {
-					for _, req := range reqList {
-						if reqStr, ok := req.(string); ok && reqStr == name {
-							required = true
-							break
-						}
-					}
-				}
-
-				def.AddParameter(name, prop, required)
-			}
-		}
-
-		toolDefs = append(toolDefs, def)
-	}
-
-	return m.RegisterTools(toolDefs)
-}
-
-// RegisterTools implements the model.ToolCallSupportingModel interface.
-func (m *GeminiModel) RegisterTools(tools []*tool.ToolDefinition) error {
-	m.tools = tools
-
-	if m.genModel != nil && len(tools) > 0 {
-		m.genModel.Tools = []*genai.Tool{
-			{
-				FunctionDeclarations: convertToolsToGeminiFunctions(tools),
-			},
-		}
-	}
-
-	return nil
 }
 
 // propertyFromMap creates a Property from a map representation.

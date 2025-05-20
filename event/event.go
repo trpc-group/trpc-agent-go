@@ -27,10 +27,15 @@ const (
 
 // Additional event types for specialized agents
 const (
-	TypeStream        = "stream"
-	TypeLoopIteration = "loop_iteration"
-	TypeAgentStart    = "agent_start"
-	TypeAgentEnd      = "agent_end"
+	TypeStream           = "stream"
+	TypeLoopIteration    = "loop_iteration"
+	TypeAgentStart       = "agent_start"
+	TypeAgentEnd         = "agent_end"
+	TypeStreamStart      = "stream_start"
+	TypeStreamChunk      = "stream_chunk"
+	TypeStreamToolCall   = "stream_tool_call"
+	TypeStreamToolResult = "stream_tool_result"
+	TypeStreamEnd        = "stream_end"
 )
 
 // Event represents an event in the ADK system.
@@ -164,5 +169,53 @@ func NewAgentEndEvent(agentName string, index int) *Event {
 	event := NewEvent(TypeAgentEnd, nil)
 	event.SetMetadata("agent_name", agentName)
 	event.SetMetadata("index", index)
+	return event
+}
+
+// NewStreamStartEvent creates a new stream start event.
+func NewStreamStartEvent(sessionID string) *Event {
+	event := NewEvent(TypeStreamStart, nil)
+	event.SetMetadata("session_id", sessionID)
+	return event
+}
+
+// NewStreamChunkEvent creates a new stream chunk event.
+func NewStreamChunkEvent(content string, sequence int) *Event {
+	event := NewEvent(TypeStreamChunk, nil)
+	event.SetMetadata("content", content)
+	event.SetMetadata("sequence", sequence)
+	return event
+}
+
+// NewStreamToolCallEvent creates a new stream tool call event.
+func NewStreamToolCallEvent(name string, arguments string, id string) *Event {
+	event := NewEvent(TypeStreamToolCall, map[string]interface{}{
+		"name":      name,
+		"arguments": arguments,
+		"id":        id,
+	})
+	return event
+}
+
+// NewStreamToolResultEvent creates a new stream tool result event.
+func NewStreamToolResultEvent(name string, result interface{}, err error) *Event {
+	var errStr string
+	if err != nil {
+		errStr = err.Error()
+	}
+
+	event := NewEvent(TypeStreamToolResult, map[string]interface{}{
+		"name":   name,
+		"result": result,
+		"error":  errStr,
+	})
+	return event
+}
+
+// NewStreamEndEvent creates a new stream end event.
+func NewStreamEndEvent(completeText string) *Event {
+	event := NewEvent(TypeStreamEnd, map[string]interface{}{
+		"complete_text": completeText,
+	})
 	return event
 }
