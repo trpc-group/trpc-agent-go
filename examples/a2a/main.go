@@ -871,7 +871,7 @@ func (p *BasicTaskProcessor) Process(
 
 	// Set up MCP tools using the existing MCPToolset
 	mcpParams := mcptools.MCPServerParams{
-		Type: mcptools.ConnectionTypeHTTP,
+		Type: mcptools.ConnectionTypeSSE,
 		URL:  "http://localhost:3000/mcp", // MCP server URL
 	}
 
@@ -923,25 +923,6 @@ func (p *BasicTaskProcessor) Process(
 		} else {
 			log.Infof("Tool %s parameters: %s", t.Name(), string(params))
 		}
-	}
-
-	// Set up the tools in the model
-	toolDefs := make([]model.ToolDefinition, 0, len(allTools))
-	for _, t := range allTools {
-		toolDefs = append(toolDefs, model.ToolDefinition{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Parameters:  t.Parameters(),
-		})
-	}
-
-	// Apply tools based on model type using type assertions
-	if toolCallModel, ok := llmModel.(model.ToolCallSupportingModel); ok {
-		if err := toolCallModel.SetTools(toolDefs); err != nil {
-			log.Infof("Warning: failed to set tools on model: %v", err)
-		}
-	} else {
-		log.Infof("Warning: model type %T doesn't support SetTools method", llmModel)
 	}
 
 	// Create the ReAct agent

@@ -16,8 +16,8 @@ const (
 	// ConnectionTypeStdio represents a stdio-based MCP server connection.
 	ConnectionTypeStdio ConnectionType = "stdio"
 
-	// ConnectionTypeHTTP represents an HTTP-based MCP server connection.
-	ConnectionTypeHTTP ConnectionType = "http"
+	// ConnectionTypeSSE represents an HTTP-based MCP server connection.
+	ConnectionTypeSSE ConnectionType = "http"
 )
 
 // MCPServerParams contains parameters for the MCP server connection.
@@ -70,7 +70,7 @@ func (m *MCPSessionManager) CreateSession(ctx context.Context) (*mcp.Client, err
 	}
 
 	switch m.params.Type {
-	case ConnectionTypeHTTP:
+	case ConnectionTypeSSE:
 		// Create HTTP client
 		if m.params.URL == "" {
 			return nil, fmt.Errorf("URL is required for HTTP connection")

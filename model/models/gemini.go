@@ -104,6 +104,11 @@ func (m *GeminiModel) Provider() string {
 	return "google"
 }
 
+// SetTools sets the tools for the Gemini model.
+func (m *GeminiModel) SetTools(tools []*tool.ToolDefinition) {
+	m.tools = tools
+}
+
 // Generate generates a completion for the given prompt.
 func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model.GenerationOptions) (*model.Response, error) {
 	mergedOptions := m.MergeOptions(options)
