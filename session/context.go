@@ -1,5 +1,4 @@
-// Package context provides session context for agent applications.
-package context
+package session
 
 import (
 	"context"

@@ -11,7 +11,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionctx "trpc.group/trpc-go/trpc-agent-go/session/context"
 )
 
 // SessionRunner extends BaseRunner with session management capabilities.
@@ -78,7 +77,7 @@ func (r *SessionRunner) RunWithSession(ctx context.Context, sessionID string, in
 	inputWithContext.Metadata["session_id"] = sessionID
 
 	// Create a session context that wraps the Go context
-	sessCtx := sessionctx.NewContext(ctx, sessionID, messages)
+	sessCtx := session.NewContext(ctx, sessionID, messages)
 
 	// Create a timeout context if specified in config
 	var runCtx context.Context
@@ -166,7 +165,7 @@ func (r *SessionRunner) RunAsyncWithSession(ctx context.Context, sessionID strin
 	inputWithContext.Metadata["session_id"] = sessionID
 
 	// Create a session context that wraps the Go context
-	sessCtx := sessionctx.NewContext(ctx, sessionID, messages)
+	sessCtx := session.NewContext(ctx, sessionID, messages)
 
 	// Create an event channel
 	eventCh := make(chan *event.Event, r.config.BufferSize)

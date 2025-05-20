@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	sessionctx "trpc.group/trpc-go/trpc-agent-go/session/context"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -354,7 +354,7 @@ func (a *Agent) Run(ctx context.Context, msg *message.Message) (*message.Message
 	var history []*message.Message
 
 	// Check if we have a session context
-	if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+	if sessCtx := session.FromContext(ctx); sessCtx != nil {
 		// Use history from session context
 		history = sessCtx.History()
 		log.Debugf("Using history from session context with %d messages", len(history))
@@ -457,7 +457,7 @@ func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *eve
 		defer close(eventCh)
 
 		// Check if we have a session context with history
-		if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+		if sessCtx := session.FromContext(ctx); sessCtx != nil {
 			log.Debugf("Found session context with ID: %s and %d message(s)",
 				sessCtx.SessionID(), len(sessCtx.History()))
 		}
@@ -472,7 +472,7 @@ func (a *Agent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *eve
 				var messages []*message.Message
 
 				// Process history from session context
-				if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+				if sessCtx := session.FromContext(ctx); sessCtx != nil {
 					messages = append(messages, sessCtx.History()...)
 				}
 				// Add current message
@@ -908,7 +908,7 @@ func (a *Agent) runStreamingMode(
 	var messages []*message.Message
 
 	// Check if we have a session context with history
-	if sessCtx := sessionctx.FromContext(ctx); sessCtx != nil {
+	if sessCtx := session.FromContext(ctx); sessCtx != nil {
 		// Use history from session context
 		history := sessCtx.History()
 		if len(history) > 0 {
