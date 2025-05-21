@@ -20,7 +20,9 @@ Inside one terminal, run the session server:
 
 ```bash
 export OPENAI_API_KEY=your_openai_api_key_here
-go run . -openai-url="https://your-openai-url" --model-name="deepseek-v3" 
+export OPENAI_BASE_URL=https://your-openai-url
+export OPENAI_MODEL_NAME=deepseek-v3
+go run . 
 ```
 
 In another terminal, run the client:
