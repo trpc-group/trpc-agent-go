@@ -13,7 +13,7 @@ import (
 	"google.golang.org/api/option"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 const (

@@ -5,29 +5,28 @@ import (
 	"fmt"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-
+	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/memory"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	session2 "trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 // SessionRunner extends BaseRunner with session management capabilities.
 type SessionRunner struct {
 	*BaseRunner
-	sessionManager session2.Manager
+	sessionManager session.Manager
 }
 
 // NewSessionRunner creates a new session-aware runner.
-func NewSessionRunner(name string, a agent.Agent, config Config, sessionManager session2.Manager) *SessionRunner {
+func NewSessionRunner(name string, a agent.Agent, config Config, sessionManager session.Manager) *SessionRunner {
 	baseRunner := NewBaseRunner(name, a, config)
 
 	// If no session manager provided, create an in-memory one
 	if sessionManager == nil {
-		sessionManager = session2.NewMemoryManager(
-			session2.WithExpiration(config.SessionOptions.Expiration),
+		sessionManager = session.NewMemoryManager(
+			session.WithExpiration(config.SessionOptions.Expiration),
 		)
 	}
 
@@ -78,7 +77,7 @@ func (r *SessionRunner) RunWithSession(ctx context.Context, sessionID string, in
 	inputWithContext.Metadata["session_id"] = sessionID
 
 	// Create a session context that wraps the Go context
-	sessCtx := session2.NewContext(ctx, sessionID, messages)
+	sessCtx := session.NewContext(ctx, sessionID, messages)
 
 	// Create a timeout context if specified in config
 	var runCtx context.Context
@@ -166,7 +165,7 @@ func (r *SessionRunner) RunAsyncWithSession(ctx context.Context, sessionID strin
 	inputWithContext.Metadata["session_id"] = sessionID
 
 	// Create a session context that wraps the Go context
-	sessCtx := session2.NewContext(ctx, sessionID, messages)
+	sessCtx := session.NewContext(ctx, sessionID, messages)
 
 	// Create an event channel
 	eventCh := make(chan *event.Event, r.config.BufferSize)

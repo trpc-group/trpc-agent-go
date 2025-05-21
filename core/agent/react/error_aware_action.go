@@ -9,7 +9,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 // ErrorAwareActionSelector selects actions with built-in error recovery strategies.

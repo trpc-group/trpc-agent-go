@@ -10,7 +10,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 // DynamicReasoningThoughtGenerator enhances thought generation with dynamic planning

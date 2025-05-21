@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/memory"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 var (

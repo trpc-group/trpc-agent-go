@@ -1,4 +1,4 @@
-// Package agents provides specialized agent implementations.
+// Package agent provides specialized agent implementations.
 package agent
 
 import (
@@ -10,9 +10,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/memory"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var (

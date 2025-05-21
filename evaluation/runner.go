@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-
+	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 )
 

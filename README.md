@@ -45,7 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model/models"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 func main() {

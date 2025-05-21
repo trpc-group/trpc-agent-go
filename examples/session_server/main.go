@@ -18,17 +18,14 @@ import (
 
 	"net/http"
 
-	mcp "trpc.group/trpc-go/trpc-mcp-go"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent/react"
-
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-
 	"trpc.group/trpc-go/trpc-agent-go/api"
-	model2 "trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	runner2 "trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
-	session2 "trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 var (
@@ -69,10 +66,10 @@ func main() {
 	}
 
 	// Create the OpenAI streaming model
-	llmModel := model2.NewOpenAIStreamingModel(
+	llmModel := model.NewOpenAIStreamingModel(
 		modelName,
-		model2.WithOpenAIAPIKey(openAIKey),
-		model2.WithOpenAIBaseURL(openaiBaseURL),
+		model.WithOpenAIAPIKey(openAIKey),
+		model.WithOpenAIBaseURL(openaiBaseURL),
 	)
 	log.Infof("Using streaming model. model: %s, base_url: %s", modelName, openaiBaseURL)
 
@@ -89,18 +86,18 @@ func main() {
 	}
 
 	// Create in-memory session manager
-	sessionManager := session2.NewMemoryManager(
-		session2.WithExpiration(24 * time.Hour),
+	sessionManager := session.NewMemoryManager(
+		session.WithExpiration(24 * time.Hour),
 	)
 	log.Info("Using in-memory session storage")
 
 	// Create runner configuration
-	runnerConfig := runner2.DefaultConfig().
+	runnerConfig := runner.DefaultConfig().
 		WithTimeout(2 * time.Minute).
 		WithSessionExpiration(24 * time.Hour)
 
 	// Create session-aware runner
-	sessionRunner := runner2.NewSessionRunner("chat-runner", myAgent, runnerConfig, sessionManager)
+	sessionRunner := runner.NewSessionRunner("chat-runner", myAgent, runnerConfig, sessionManager)
 
 	// Start the runner
 	if err := sessionRunner.Start(ctx); err != nil {

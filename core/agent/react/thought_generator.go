@@ -10,8 +10,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // ThoughtFormat specifies the format for reasoning traces.

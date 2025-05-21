@@ -11,14 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent/react"
-
+	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	session2 "trpc.group/trpc-go/trpc-agent-go/orchestration/session"
-
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 // AgentRequest represents a request to the agent.
@@ -63,8 +61,8 @@ func main() {
 	registry.Register(weatherTool)
 
 	// Create session manager
-	sessionManager := session2.NewMemoryManager(
-		session2.WithExpiration(24 * time.Hour),
+	sessionManager := session.NewMemoryManager(
+		session.WithExpiration(24 * time.Hour),
 	)
 
 	agentConfig := react.AgentConfig{

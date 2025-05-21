@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (

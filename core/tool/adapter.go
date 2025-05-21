@@ -3,8 +3,8 @@ package tool
 import (
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/schema"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool/schema"
 )
 
 // ConvertDefinitionToSchema converts a ToolDefinition to a schema.ParameterSchema.

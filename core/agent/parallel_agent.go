@@ -1,4 +1,4 @@
-// Package agents provides specialized agent implementations.
+// Package agent provides specialized agent implementations.
 package agent
 
 import (
