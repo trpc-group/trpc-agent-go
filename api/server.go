@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 )
 
 // Server provides REST API endpoints for the agent framework.

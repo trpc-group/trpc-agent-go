@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/react"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
+	session2 "trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -61,8 +63,8 @@ func main() {
 	registry.Register(weatherTool)
 
 	// Create session manager
-	sessionManager := session.NewMemoryManager(
-		session.WithExpiration(24 * time.Hour),
+	sessionManager := session2.NewMemoryManager(
+		session2.WithExpiration(24 * time.Hour),
 	)
 
 	agentConfig := react.AgentConfig{

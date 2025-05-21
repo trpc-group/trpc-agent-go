@@ -5,7 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"trpc.group/trpc-go/trpc-agent-go/message"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
 )
 
 // Type represents the type of an event.

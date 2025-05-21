@@ -6,7 +6,8 @@ import (
 	"log/slog"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/message"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
 )
 
 // Runner defines an interface for running agents during evaluation.
