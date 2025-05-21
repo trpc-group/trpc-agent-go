@@ -1,4 +1,4 @@
-package models
+package model
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestOpenAIModel_Name(t *testing.T) {
@@ -27,7 +26,7 @@ func TestOpenAIModel_Provider(t *testing.T) {
 
 func TestOpenAIModel_GenerateWithoutAPIKey(t *testing.T) {
 	m := NewOpenAIModel("gpt-4")
-	_, err := m.Generate(context.Background(), "Hello", model.DefaultOptions())
+	_, err := m.Generate(context.Background(), "Hello", DefaultOptions())
 	if err == nil {
 		t.Error("Expected error when API key is not set")
 	}
@@ -37,7 +36,7 @@ func TestOpenAIModel_GenerateWithMessagesWithoutAPIKey(t *testing.T) {
 	m := NewOpenAIModel("gpt-4")
 	_, err := m.GenerateWithMessages(context.Background(), []*message.Message{
 		message.NewUserMessage("Hello"),
-	}, model.DefaultOptions())
+	}, DefaultOptions())
 	if err == nil {
 		t.Error("Expected error when API key is not set")
 	}
@@ -48,13 +47,13 @@ func TestOpenAIModel_MergeOptions(t *testing.T) {
 	defaultOpts := m.defaultOptions
 
 	// Test with empty options (should get defaults)
-	mergedOptions := m.mergeOptions(model.GenerationOptions{})
+	mergedOptions := m.mergeOptions(GenerationOptions{})
 	if mergedOptions.Temperature != defaultOpts.Temperature {
 		t.Errorf("Expected temperature to be %f, got %f", defaultOpts.Temperature, mergedOptions.Temperature)
 	}
 
 	// Test overriding values
-	customOpts := model.GenerationOptions{
+	customOpts := GenerationOptions{
 		Temperature: 0.5,
 		MaxTokens:   100,
 	}
@@ -103,7 +102,7 @@ func TestOpenAIModel_GenerateWithMockServer(t *testing.T) {
 	)
 
 	// Generate a response
-	resp, err := m.Generate(context.Background(), "Hello", model.DefaultOptions())
+	resp, err := m.Generate(context.Background(), "Hello", DefaultOptions())
 	if err != nil {
 		t.Fatalf("Unexpected error generating response: %v", err)
 	}
@@ -168,7 +167,7 @@ func TestOpenAIModel_GenerateWithMessagesWithMockServer(t *testing.T) {
 	resp, err := m.GenerateWithMessages(
 		context.Background(),
 		[]*message.Message{message.NewUserMessage("Hello")},
-		model.DefaultOptions(),
+		DefaultOptions(),
 	)
 	if err != nil {
 		t.Fatalf("Unexpected error generating response: %v", err)

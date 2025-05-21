@@ -1,4 +1,4 @@
-package agents
+package agent
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
+
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
 
@@ -20,11 +20,11 @@ func TestNewSequentialAgent(t *testing.T) {
 		mockAgent2.On("Name").Return("Agent2").Maybe()
 
 		config := SequentialAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestSequentialAgent",
 				Description: "A test sequential agent",
 			},
-			Agents: []agent.Agent{mockAgent1, mockAgent2},
+			Agents: []Agent{mockAgent1, mockAgent2},
 		}
 
 		agent, err := NewSequentialAgent(config)
@@ -36,11 +36,11 @@ func TestNewSequentialAgent(t *testing.T) {
 
 	t.Run("returns error when no agents provided", func(t *testing.T) {
 		config := SequentialAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestSequentialAgent",
 				Description: "A test sequential agent",
 			},
-			Agents: []agent.Agent{},
+			Agents: []Agent{},
 		}
 
 		agent, err := NewSequentialAgent(config)
@@ -69,11 +69,11 @@ func TestSequentialAgent_Run(t *testing.T) {
 
 		// Create sequential agent
 		config := SequentialAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestSequentialAgent",
 				Description: "A test sequential agent",
 			},
-			Agents: []agent.Agent{mockAgent1, mockAgent2},
+			Agents: []Agent{mockAgent1, mockAgent2},
 		}
 
 		sequentialAgent, err := NewSequentialAgent(config)
@@ -102,11 +102,11 @@ func TestSequentialAgent_Run(t *testing.T) {
 
 		// Create sequential agent
 		config := SequentialAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestSequentialAgent",
 				Description: "A test sequential agent",
 			},
-			Agents: []agent.Agent{mockAgent1, mockAgent2},
+			Agents: []Agent{mockAgent1, mockAgent2},
 		}
 
 		sequentialAgent, err := NewSequentialAgent(config)

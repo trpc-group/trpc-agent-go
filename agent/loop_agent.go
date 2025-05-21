@@ -1,11 +1,10 @@
-package agents
+package agent
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
@@ -24,10 +23,10 @@ type TerminationCondition func(iteration int, response *message.Message) bool
 // LoopAgentConfig contains configuration for a Loop agent.
 type LoopAgentConfig struct {
 	// Base configuration for the agent.
-	agent.BaseAgentConfig
+	BaseAgentConfig
 
 	// Agent to execute in the loop.
-	InnerAgent agent.Agent
+	InnerAgent Agent
 
 	// Termination condition for the loop.
 	TerminationCondition TerminationCondition
@@ -45,8 +44,8 @@ type LoopAgentConfig struct {
 
 // LoopAgent is an agent that repeatedly executes another agent until a termination condition is met.
 type LoopAgent struct {
-	*agent.BaseAgent
-	innerAgent           agent.Agent
+	*BaseAgent
+	innerAgent           Agent
 	terminationCondition TerminationCondition
 	maxIterations        int
 	preProcess           func(iteration int, msg *message.Message) *message.Message
@@ -75,7 +74,7 @@ func NewLoopAgent(config LoopAgentConfig) (*LoopAgent, error) {
 	}
 
 	return &LoopAgent{
-		BaseAgent:            agent.NewBaseAgent(config.BaseAgentConfig),
+		BaseAgent:            NewBaseAgent(config.BaseAgentConfig),
 		innerAgent:           config.InnerAgent,
 		terminationCondition: config.TerminationCondition,
 		maxIterations:        config.MaxIterations,

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent/agents"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -175,7 +175,7 @@ type AgentConfig struct {
 
 // Agent is an agent that implements the ReAct paradigm.
 type Agent struct {
-	*agents.LLMAgent
+	*agent.LLMAgent
 	maxIterations        int
 	reactMemory          Memory
 	thoughtGenerator     ThoughtGenerator
@@ -289,8 +289,8 @@ func setDefaultConfigValues(config AgentConfig) AgentConfig {
 }
 
 // createLLMAgent creates an LLMAgent from the provided configuration.
-func createLLMAgent(config AgentConfig) (*agents.LLMAgent, error) {
-	llmConfig := agents.LLMAgentConfig{
+func createLLMAgent(config AgentConfig) (*agent.LLMAgent, error) {
+	llmConfig := agent.LLMAgentConfig{
 		Name:               config.Name,
 		Description:        config.Description,
 		Model:              config.Model,
@@ -301,7 +301,7 @@ func createLLMAgent(config AgentConfig) (*agents.LLMAgent, error) {
 		EnableStreaming:    config.EnableStreaming,
 	}
 	config.Model.SetTools(convertToolsToToolDefinitions(config.Tools))
-	return agents.NewLLMAgent(llmConfig)
+	return agent.NewLLMAgent(llmConfig)
 }
 
 func convertToolsToToolDefinitions(tools []tool.Tool) []*tool.ToolDefinition {

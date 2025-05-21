@@ -1,11 +1,10 @@
-package agents
+package agent
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
@@ -18,19 +17,19 @@ var (
 // SequentialAgentConfig contains configuration for a Sequential agent.
 type SequentialAgentConfig struct {
 	// Base configuration for the agent.
-	agent.BaseAgentConfig
+	BaseAgentConfig
 
 	// Agents to execute in sequence.
-	Agents []agent.Agent
+	Agents []Agent
 
 	// ContinueOnError determines whether to continue execution if an agent returns an error.
 	ContinueOnError bool
 
 	// PreProcess is an optional function that pre-processes the message before passing it to each agent.
-	PreProcess func(index int, agent agent.Agent, msg *message.Message) *message.Message
+	PreProcess func(index int, agent Agent, msg *message.Message) *message.Message
 
 	// PostProcess is an optional function that post-processes the response from each agent.
-	PostProcess func(index int, agent agent.Agent, msg *message.Message) *message.Message
+	PostProcess func(index int, agent Agent, msg *message.Message) *message.Message
 
 	// IncludeIntermediateResults determines whether to include intermediate results in metadata.
 	IncludeIntermediateResults bool
@@ -38,11 +37,11 @@ type SequentialAgentConfig struct {
 
 // SequentialAgent is an agent that executes multiple agents in sequence.
 type SequentialAgent struct {
-	*agent.BaseAgent
-	agents                     []agent.Agent
+	*BaseAgent
+	agents                     []Agent
 	continueOnError            bool
-	preProcess                 func(index int, agent agent.Agent, msg *message.Message) *message.Message
-	postProcess                func(index int, agent agent.Agent, msg *message.Message) *message.Message
+	preProcess                 func(index int, agent Agent, msg *message.Message) *message.Message
+	postProcess                func(index int, agent Agent, msg *message.Message) *message.Message
 	includeIntermediateResults bool
 }
 
@@ -53,7 +52,7 @@ func NewSequentialAgent(config SequentialAgentConfig) (*SequentialAgent, error) 
 	}
 
 	return &SequentialAgent{
-		BaseAgent:                  agent.NewBaseAgent(config.BaseAgentConfig),
+		BaseAgent:                  NewBaseAgent(config.BaseAgentConfig),
 		agents:                     config.Agents,
 		continueOnError:            config.ContinueOnError,
 		preProcess:                 config.PreProcess,

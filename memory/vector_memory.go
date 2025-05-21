@@ -1,5 +1,5 @@
 // Package memories provides specialized implementations of memory systems.
-package memories
+package memory
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"sort"
 	"sync"
 
-	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
 
@@ -35,7 +34,7 @@ type VectorEntry struct {
 
 // VectorMemory extends the base memory with vector embeddings for semantic search.
 type VectorMemory struct {
-	memory.BaseMemory
+	BaseMemory
 	provider   EmbeddingProvider
 	entries    []VectorEntry
 	mutex      sync.RWMutex
@@ -63,7 +62,7 @@ func NewVectorMemory(provider EmbeddingProvider, options *VectorMemoryOptions) *
 	}
 
 	return &VectorMemory{
-		BaseMemory: *memory.NewBaseMemory(),
+		BaseMemory: *NewBaseMemory(),
 		provider:   provider,
 		entries:    make([]VectorEntry, 0),
 		autoEmbed:  options.AutoEmbed,

@@ -1,4 +1,4 @@
-package tools
+package tool
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestCalculatorTool_Execute(t *testing.T) {
@@ -132,7 +130,7 @@ func TestCalculatorTool_Execute(t *testing.T) {
 
 func TestCalculatorTool_Schema(t *testing.T) {
 	calcTool := NewCalculatorTool()
-	var iTool tool.Tool = calcTool
+	var iTool Tool = calcTool
 
 	name := iTool.Name()
 	description := iTool.Description()
@@ -308,7 +306,7 @@ func TestHTTPClientTool_Execute_PostSuccess(t *testing.T) {
 
 func TestHTTPClientTool_Schema(t *testing.T) {
 	clientTool := NewHTTPClientTool()
-	var iTool tool.Tool = clientTool
+	var iTool Tool = clientTool
 
 	name := iTool.Name()
 	parameters := iTool.Parameters()

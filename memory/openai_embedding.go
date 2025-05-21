@@ -1,4 +1,4 @@
-package memories
+package memory
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 const (
 	defaultOpenAIModel = "text-embedding-ada-002"
 	defaultTimeout     = 30 * time.Second
-	defaultDimensions  = 1536  // For text-embedding-ada-002
+	defaultDimensions  = 1536 // For text-embedding-ada-002
 )
 
 var (
@@ -39,11 +39,11 @@ type OpenAIEmbeddingProvider struct {
 
 // OpenAIEmbeddingOptions configures the OpenAI embedding provider.
 type OpenAIEmbeddingOptions struct {
-	Model       string
-	BaseURL     string
-	Timeout     time.Duration
-	Dimensions  int
-	RateLimit   time.Duration // Time between requests, used for rate limiting
+	Model      string
+	BaseURL    string
+	Timeout    time.Duration
+	Dimensions int
+	RateLimit  time.Duration // Time between requests, used for rate limiting
 }
 
 // NewOpenAIEmbeddingProvider creates a new OpenAI embedding provider.
@@ -146,7 +146,7 @@ func (p *OpenAIEmbeddingProvider) Embed(ctx context.Context, text string) ([]flo
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: status code %d, response: %s", 
+		return nil, fmt.Errorf("%w: status code %d, response: %s",
 			ErrOpenAIRequest, resp.StatusCode, string(body))
 	}
 
@@ -225,7 +225,7 @@ func (p *OpenAIEmbeddingProvider) BatchEmbed(ctx context.Context, texts []string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("%w: status code %d, response: %s", 
+		return nil, fmt.Errorf("%w: status code %d, response: %s",
 			ErrOpenAIRequest, resp.StatusCode, string(body))
 	}
 
@@ -251,4 +251,4 @@ func (p *OpenAIEmbeddingProvider) BatchEmbed(ctx context.Context, texts []string
 	}
 
 	return embeddings, nil
-} 
+}

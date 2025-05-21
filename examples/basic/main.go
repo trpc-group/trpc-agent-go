@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
+	"trpc.group/trpc-go/trpc-agent-go/agent/react"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model/models"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -49,10 +49,10 @@ func main() {
 	if apiKey == "" {
 		log.Fatalf("No OpenAI API key found")
 	}
-	llm := models.NewOpenAIModel(
+	llm := model.NewOpenAIModel(
 		*modelName,
-		models.WithOpenAIAPIKey(apiKey),
-		models.WithOpenAIBaseURL(*openaiURL),
+		model.WithOpenAIAPIKey(apiKey),
+		model.WithOpenAIBaseURL(*openaiURL),
 	)
 
 	// Set up React agent

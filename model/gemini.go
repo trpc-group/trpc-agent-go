@@ -1,5 +1,5 @@
 // Package models provides implementations of the model interface.
-package models
+package model
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/generative-ai-go/genai"
 	"google.golang.org/api/option"
+
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -23,7 +23,7 @@ const (
 
 // GeminiModel implements the Model interface for Google's Gemini API.
 type GeminiModel struct {
-	*model.BaseModel
+	*BaseModel
 	apiKey   string
 	client   *genai.Client
 	genModel *genai.GenerativeModel
@@ -41,10 +41,10 @@ func WithGeminiAPIKey(apiKey string) GeminiModelOption {
 }
 
 // WithGeminiDefaultOptions sets the default generation options for the Gemini model.
-func WithGeminiDefaultOptions(options model.GenerationOptions) GeminiModelOption {
+func WithGeminiDefaultOptions(options GenerationOptions) GeminiModelOption {
 	return func(m *GeminiModel) {
 		// Use the MergeOptions method instead of direct field access
-		m.BaseModel = model.NewBaseModel(m.BaseModel.Name(), m.BaseModel.Provider(), options)
+		m.BaseModel = NewBaseModel(m.BaseModel.Name(), m.BaseModel.Provider(), options)
 	}
 }
 
@@ -58,7 +58,7 @@ func WithGeminiTools(tools []*tool.ToolDefinition) GeminiModelOption {
 // NewGeminiModel creates a new GeminiModel with the given options.
 func NewGeminiModel(name string, opts ...GeminiModelOption) (*GeminiModel, error) {
 	m := &GeminiModel{
-		BaseModel: model.NewBaseModel(name, "google", model.DefaultOptions()),
+		BaseModel: NewBaseModel(name, "google", DefaultOptions()),
 	}
 
 	for _, opt := range opts {
@@ -110,7 +110,7 @@ func (m *GeminiModel) SetTools(tools []*tool.ToolDefinition) {
 }
 
 // Generate generates a completion for the given prompt.
-func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model.GenerationOptions) (*model.Response, error) {
+func (m *GeminiModel) Generate(ctx context.Context, prompt string, options GenerationOptions) (*Response, error) {
 	mergedOptions := m.MergeOptions(options)
 
 	// Apply generation parameters
@@ -145,7 +145,7 @@ func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model
 	completionTokens := len(strings.Split(responseText, " "))
 
 	// Check for function calls
-	var toolCalls []model.ToolCall
+	var toolCalls []ToolCall
 	if resp.Candidates[0].Content.Parts != nil {
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if funcPart, ok := part.(*genai.FunctionCall); ok {
@@ -155,10 +155,10 @@ func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model
 					argsJSON = []byte("{}")
 				}
 
-				toolCall := model.ToolCall{
+				toolCall := ToolCall{
 					ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
 					Type: "function",
-					Function: model.FunctionCall{
+					Function: FunctionCall{
 						Name:      funcPart.Name,
 						Arguments: string(argsJSON),
 					},
@@ -168,9 +168,9 @@ func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model
 		}
 	}
 
-	return &model.Response{
+	return &Response{
 		Text: responseText,
-		Usage: &model.Usage{
+		Usage: &Usage{
 			PromptTokens:     promptTokens,
 			CompletionTokens: completionTokens,
 			TotalTokens:      promptTokens + completionTokens,
@@ -181,7 +181,7 @@ func (m *GeminiModel) Generate(ctx context.Context, prompt string, options model
 }
 
 // GenerateWithMessages generates a completion for the given messages.
-func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options model.GenerationOptions) (*model.Response, error) {
+func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (*Response, error) {
 	mergedOptions := m.MergeOptions(options)
 
 	// Apply generation parameters
@@ -311,7 +311,7 @@ func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	responseMsg := message.NewAssistantMessage(responseText)
 
 	// Check for function calls
-	var toolCalls []model.ToolCall
+	var toolCalls []ToolCall
 	for _, part := range resp.Candidates[0].Content.Parts {
 		if funcPart, ok := part.(*genai.FunctionCall); ok {
 			// Convert the arguments map to a JSON string
@@ -320,10 +320,10 @@ func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*mess
 				argsJSON = []byte("{}")
 			}
 
-			toolCall := model.ToolCall{
+			toolCall := ToolCall{
 				ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
 				Type: "function",
-				Function: model.FunctionCall{
+				Function: FunctionCall{
 					Name:      funcPart.Name,
 					Arguments: string(argsJSON),
 				},
@@ -345,10 +345,10 @@ func (m *GeminiModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 	completionTokens := len(strings.Split(responseText, " "))
 
-	return &model.Response{
+	return &Response{
 		Text:     responseText,
 		Messages: []*message.Message{responseMsg},
-		Usage: &model.Usage{
+		Usage: &Usage{
 			PromptTokens:     promptTokens,
 			CompletionTokens: completionTokens,
 			TotalTokens:      promptTokens + completionTokens,
@@ -496,7 +496,7 @@ func getRequiredProperties(prop *tool.Property) []string {
 }
 
 // applyGenerationParams applies the generation parameters to the model.
-func applyGenerationParams(model *genai.GenerativeModel, options model.GenerationOptions) {
+func applyGenerationParams(model *genai.GenerativeModel, options GenerationOptions) {
 	// Set temperature
 	temp := float32(options.Temperature)
 	model.Temperature = &temp
@@ -529,7 +529,7 @@ func (m *GeminiModel) SupportsGeminiFormat() bool {
 }
 
 // GenerateWithGeminiMessages generates a response for messages in Gemini format.
-func (m *GeminiModel) GenerateWithGeminiMessages(ctx context.Context, geminiContents []*message.GeminiContent, options model.GenerationOptions) (model.Response, error) {
+func (m *GeminiModel) GenerateWithGeminiMessages(ctx context.Context, geminiContents []*message.GeminiContent, options GenerationOptions) (Response, error) {
 	mergedOptions := m.MergeOptions(options)
 
 	// Apply generation parameters
@@ -572,21 +572,21 @@ func (m *GeminiModel) GenerateWithGeminiMessages(ctx context.Context, geminiCont
 	// Generate response
 	resp, err := m.genModel.GenerateContent(ctx, parts...)
 	if err != nil {
-		return model.Response{}, fmt.Errorf("Gemini API request failed: %w", err)
+		return Response{}, fmt.Errorf("Gemini API request failed: %w", err)
 	}
 
 	// Process response and convert to non-pointer response
 	result, err := processGeminiResponse(resp)
 	if err != nil {
-		return model.Response{}, err
+		return Response{}, err
 	}
 	return *result, nil
 }
 
 // GenerateStreamWithGeminiMessages streams a completion for messages in Gemini format.
-func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, geminiContents []*message.GeminiContent, options model.GenerationOptions) (<-chan model.Response, error) {
+func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, geminiContents []*message.GeminiContent, options GenerationOptions) (<-chan Response, error) {
 	// Create response channel - for non-pointer responses
-	responseCh := make(chan model.Response, 10)
+	responseCh := make(chan Response, 10)
 
 	mergedOptions := m.MergeOptions(options)
 
@@ -640,7 +640,7 @@ func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, gemi
 					break
 				}
 				// Send error response
-				errResp := model.Response{
+				errResp := Response{
 					Text: fmt.Sprintf("Error: %v", err),
 				}
 				responseCh <- errResp
@@ -650,7 +650,7 @@ func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, gemi
 			// Process response chunks
 			response, err := processGeminiResponse(resp)
 			if err != nil {
-				errResp := model.Response{
+				errResp := Response{
 					Text: fmt.Sprintf("Error processing response: %v", err),
 				}
 				responseCh <- errResp
@@ -675,7 +675,7 @@ func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, gemi
 				responseCh <- *response
 			} else {
 				// In case of nil response, send empty response
-				responseCh <- model.Response{}
+				responseCh <- Response{}
 			}
 		}
 	}()
@@ -684,7 +684,7 @@ func (m *GeminiModel) GenerateStreamWithGeminiMessages(ctx context.Context, gemi
 }
 
 // Helper function to process Gemini API responses
-func processGeminiResponse(resp *genai.GenerateContentResponse) (*model.Response, error) {
+func processGeminiResponse(resp *genai.GenerateContentResponse) (*Response, error) {
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
 		return nil, fmt.Errorf("empty response from Gemini API")
 	}
@@ -707,7 +707,7 @@ func processGeminiResponse(resp *genai.GenerateContentResponse) (*model.Response
 	completionTokens := len(strings.Split(responseText, " "))
 
 	// Check for function calls
-	var toolCalls []model.ToolCall
+	var toolCalls []ToolCall
 	if resp.Candidates[0].Content.Parts != nil {
 		for _, part := range resp.Candidates[0].Content.Parts {
 			if funcPart, ok := part.(*genai.FunctionCall); ok {
@@ -717,10 +717,10 @@ func processGeminiResponse(resp *genai.GenerateContentResponse) (*model.Response
 					argsJSON = []byte("{}")
 				}
 
-				toolCall := model.ToolCall{
+				toolCall := ToolCall{
 					ID:   fmt.Sprintf("call_%d", time.Now().UnixNano()),
 					Type: "function",
-					Function: model.FunctionCall{
+					Function: FunctionCall{
 						Name:      funcPart.Name,
 						Arguments: string(argsJSON),
 					},
@@ -734,10 +734,10 @@ func processGeminiResponse(resp *genai.GenerateContentResponse) (*model.Response
 	assistantMsg := message.NewAssistantMessage(responseText)
 
 	// Create response object
-	response := &model.Response{
+	response := &Response{
 		Text:     responseText,
 		Messages: []*message.Message{assistantMsg},
-		Usage: &model.Usage{
+		Usage: &Usage{
 			CompletionTokens: completionTokens,
 			TotalTokens:      completionTokens, // Prompt tokens unknown in streaming
 		},

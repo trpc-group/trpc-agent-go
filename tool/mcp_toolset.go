@@ -1,11 +1,10 @@
 // Package tools provides implementation of various tools.
-package tools
+package tool
 
 import (
 	"context"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -65,7 +64,7 @@ func WithToolNames(names ...string) MCPToolsetOption {
 }
 
 // GetTools gets all available MCP tools.
-func (ts *MCPToolset) GetTools(ctx context.Context) ([]tool.Tool, error) {
+func (ts *MCPToolset) GetTools(ctx context.Context) ([]Tool, error) {
 	// Create a client session
 	client, err := ts.sessionMgr.CreateSession(ctx)
 	if err != nil {
@@ -80,7 +79,7 @@ func (ts *MCPToolset) GetTools(ctx context.Context) ([]tool.Tool, error) {
 
 	// Apply filter if one is set
 	if ts.toolFilter != nil {
-		filteredTools := make([]tool.Tool, 0)
+		filteredTools := make([]Tool, 0)
 		for _, t := range tools {
 			if ts.toolFilter(t.Name()) {
 				filteredTools = append(filteredTools, t)
@@ -99,7 +98,7 @@ func (ts *MCPToolset) Close() error {
 }
 
 // AddToToolSet adds all MCP tools to the given tool set.
-func (ts *MCPToolset) AddToToolSet(ctx context.Context, toolSet *tool.ToolSet) error {
+func (ts *MCPToolset) AddToToolSet(ctx context.Context, toolSet *ToolSet) error {
 	tools, err := ts.GetTools(ctx)
 	if err != nil {
 		return err
@@ -115,7 +114,7 @@ func (ts *MCPToolset) AddToToolSet(ctx context.Context, toolSet *tool.ToolSet) e
 }
 
 // Create MCPTool for each MCP tool
-func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPSessionManager) ([]tool.Tool, error) {
+func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPSessionManager) ([]Tool, error) {
 	// List available tools from MCP client
 	toolsResult, err := mcpClient.ListTools(ctx)
 	if err != nil {
@@ -123,10 +122,10 @@ func createMCPTools(ctx context.Context, mcpClient *mcp.Client, sessionMgr *MCPS
 	}
 
 	// Create MCPTool wrappers
-	var tools []tool.Tool
+	var tools []Tool
 	for _, mcpTool := range toolsResult.Tools {
 		// Create executor function
-		executor := tool.NewFunctionExecutor(func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+		executor := NewFunctionExecutor(func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
 			result, err := mcpClient.CallTool(ctx, mcpTool.Name, args)
 			if err != nil {
 				return nil, err

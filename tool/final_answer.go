@@ -1,11 +1,10 @@
-package tools
+package tool
 
 import (
 	"context"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // FinalAnswerTool represents a special tool to provide a final answer.
@@ -47,7 +46,7 @@ func (t *FinalAnswerTool) Parameters() map[string]interface{} {
 }
 
 // Execute executes the final answer tool.
-func (t *FinalAnswerTool) Execute(ctx context.Context, params map[string]interface{}) (*tool.Result, error) {
+func (t *FinalAnswerTool) Execute(ctx context.Context, params map[string]interface{}) (*Result, error) {
 	content, ok := params["content"].(string)
 	if !ok {
 		return nil, fmt.Errorf("content must be a string")
@@ -56,21 +55,21 @@ func (t *FinalAnswerTool) Execute(ctx context.Context, params map[string]interfa
 	log.Infof("Final answer received: %s", content)
 
 	// Create a result with the final answer
-	result := tool.NewResult(content)
+	result := NewResult(content)
 	result.ContentType = "text/plain"
-	
+
 	// Add metadata
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]interface{})
 	}
 	result.Metadata["is_final_answer"] = true
-	
+
 	return result, nil
 }
 
 // GetDefinition returns the tool definition.
-func (t *FinalAnswerTool) GetDefinition() *tool.ToolDefinition {
-	def := tool.NewToolDefinition(t.Name(), t.Description())
-	def.AddParameter("content", tool.NewStringProperty("The final answer content to present to the user", nil, true), true)
+func (t *FinalAnswerTool) GetDefinition() *ToolDefinition {
+	def := NewToolDefinition(t.Name(), t.Description())
+	def.AddParameter("content", NewStringProperty("The final answer content to present to the user", nil, true), true)
 	return def
-} 
+}

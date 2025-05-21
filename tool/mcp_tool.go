@@ -1,5 +1,5 @@
 // Package tools provides implementation of various tools.
-package tools
+package tool
 
 import (
 	"context"
@@ -7,19 +7,19 @@ import (
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // MCPTool is a tool that wraps an MCP tool.
 type MCPTool struct {
-	tool.BaseTool
+	BaseTool
 	mcpTool    mcp.Tool
 	mcpClient  *mcp.Client
 	sessionMgr *MCPSessionManager
 	schema     map[string]interface{}
-	executor   tool.Executor
+	executor   Executor
 }
 
 // NewMCPTool creates a new MCP tool.
@@ -27,7 +27,7 @@ func NewMCPTool(
 	mcpTool mcp.Tool,
 	mcpClient *mcp.Client,
 	sessionMgr *MCPSessionManager,
-	executor tool.Executor,
+	executor Executor,
 ) *MCPTool {
 	var params map[string]interface{}
 	bs, err := json.Marshal(mcpTool.RawInputSchema)
@@ -39,7 +39,7 @@ func NewMCPTool(
 	}
 	log.Debugf("MCP tool %s parameters: %v", mcpTool.Name, params)
 	return &MCPTool{
-		BaseTool:   *tool.NewBaseTool(mcpTool.Name, mcpTool.Description, params),
+		BaseTool:   *NewBaseTool(mcpTool.Name, mcpTool.Description, params),
 		mcpTool:    mcpTool,
 		mcpClient:  mcpClient,
 		sessionMgr: sessionMgr,
@@ -48,7 +48,7 @@ func NewMCPTool(
 }
 
 // Execute executes the MCP tool.
-func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
+func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	// Log the tool call
 	log.Infof("Executing MCP tool %s with arguments: %v\n", t.Name(), args)
 
@@ -192,7 +192,7 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]interface{}) (*to
 	log.Infof("MCP tool %s execution successful: %v\n", t.Name(), output)
 
 	// Return the result
-	return tool.NewJSONResult(output), nil
+	return NewJSONResult(output), nil
 }
 
 // validateAgainstSchema validates arguments against the tool's schema

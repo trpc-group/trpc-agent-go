@@ -1,5 +1,5 @@
 // Package models provides implementations of the model interface.
-package models
+package model
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -31,7 +30,7 @@ type OpenAIModel struct {
 	apiKey         string
 	baseURL        string
 	client         *http.Client
-	defaultOptions model.GenerationOptions
+	defaultOptions GenerationOptions
 	tools          []*tool.ToolDefinition
 }
 
@@ -60,7 +59,7 @@ func WithOpenAIClient(client *http.Client) OpenAIModelOption {
 }
 
 // WithOpenAIDefaultOptions sets the default generation options for the OpenAI model.
-func WithOpenAIDefaultOptions(options model.GenerationOptions) OpenAIModelOption {
+func WithOpenAIDefaultOptions(options GenerationOptions) OpenAIModelOption {
 	return func(m *OpenAIModel) {
 		m.defaultOptions = options
 	}
@@ -79,7 +78,7 @@ func NewOpenAIModel(name string, opts ...OpenAIModelOption) *OpenAIModel {
 		name:           name,
 		baseURL:        defaultOpenAIBaseURL,
 		client:         &http.Client{Timeout: defaultOpenAITimeout},
-		defaultOptions: model.DefaultOptions(),
+		defaultOptions: DefaultOptions(),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -103,7 +102,7 @@ func (m *OpenAIModel) Provider() string {
 }
 
 // Generate generates a completion for the given prompt.
-func (m *OpenAIModel) Generate(ctx context.Context, prompt string, options model.GenerationOptions) (*model.Response, error) {
+func (m *OpenAIModel) Generate(ctx context.Context, prompt string, options GenerationOptions) (*Response, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
@@ -180,10 +179,10 @@ func (m *OpenAIModel) Generate(ctx context.Context, prompt string, options model
 	}
 
 	// Create model response
-	response := &model.Response{
+	response := &Response{
 		Text:         openaiResp.Choices[0].Text,
 		FinishReason: openaiResp.Choices[0].FinishReason,
-		Usage: &model.Usage{
+		Usage: &Usage{
 			PromptTokens:     openaiResp.Usage.PromptTokens,
 			CompletionTokens: openaiResp.Usage.CompletionTokens,
 			TotalTokens:      openaiResp.Usage.TotalTokens,
@@ -194,7 +193,7 @@ func (m *OpenAIModel) Generate(ctx context.Context, prompt string, options model
 }
 
 // GenerateWithMessages generates a completion for the given messages.
-func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options model.GenerationOptions) (*model.Response, error) {
+func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (*Response, error) {
 	if m.apiKey == "" {
 		return nil, errors.New("OpenAI API key is required")
 	}
@@ -322,13 +321,13 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 			fallbackContent = "No content was generated. Please try again."
 		}
 
-		return &model.Response{
+		return &Response{
 			Text: fallbackContent,
 			Messages: []*message.Message{
 				message.NewAssistantMessage(fallbackContent),
 			},
 			FinishReason: "fallback",
-			Usage: &model.Usage{
+			Usage: &Usage{
 				PromptTokens:     100, // Estimate
 				CompletionTokens: len(strings.Split(fallbackContent, " ")),
 				TotalTokens:      100 + len(strings.Split(fallbackContent, " ")),
@@ -341,7 +340,7 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 
 		// Create a generic response for no choices
 		genericResponse := "I need to analyze this further."
-		return &model.Response{
+		return &Response{
 			Text: genericResponse,
 			Messages: []*message.Message{
 				message.NewAssistantMessage(genericResponse),
@@ -355,12 +354,12 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	role := openaiResp.Choices[0].Message.Role
 
 	// Extract tool calls if present
-	var toolCalls []model.ToolCall
+	var toolCalls []ToolCall
 	if len(openaiResp.Choices[0].Message.ToolCalls) > 0 {
 		for _, call := range openaiResp.Choices[0].Message.ToolCalls {
-			toolCall := model.ToolCall{
+			toolCall := ToolCall{
 				ID: call.ID,
-				Function: model.FunctionCall{
+				Function: FunctionCall{
 					Name:      call.Function.Name,
 					Arguments: call.Function.Arguments,
 				},
@@ -384,12 +383,12 @@ func (m *OpenAIModel) GenerateWithMessages(ctx context.Context, messages []*mess
 	}
 
 	// Create model response combining both content and tool calls
-	response := &model.Response{
+	response := &Response{
 		Text:         content,
 		Messages:     responseMessages,
 		ToolCalls:    toolCalls,
 		FinishReason: openaiResp.Choices[0].FinishReason,
-		Usage: &model.Usage{
+		Usage: &Usage{
 			PromptTokens:     openaiResp.Usage.PromptTokens,
 			CompletionTokens: openaiResp.Usage.CompletionTokens,
 			TotalTokens:      openaiResp.Usage.TotalTokens,
@@ -462,7 +461,7 @@ func generateShortID() string {
 }
 
 // mergeOptions merges the provided options with the default options.
-func (m *OpenAIModel) mergeOptions(options model.GenerationOptions) model.GenerationOptions {
+func (m *OpenAIModel) mergeOptions(options GenerationOptions) GenerationOptions {
 	result := m.defaultOptions
 
 	// Only override non-zero values

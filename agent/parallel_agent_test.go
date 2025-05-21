@@ -1,4 +1,4 @@
-package agents
+package agent
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
@@ -62,7 +62,7 @@ func TestNewParallelAgent(t *testing.T) {
 		config := ParallelAgentConfig{
 			Name:        "TestParallelAgent",
 			Description: "A test parallel agent",
-			Agents:      []agent.Agent{mockAgent1, mockAgent2},
+			Agents:      []Agent{mockAgent1, mockAgent2},
 		}
 
 		agent, err := NewParallelAgent(config)
@@ -76,7 +76,7 @@ func TestNewParallelAgent(t *testing.T) {
 		config := ParallelAgentConfig{
 			Name:        "TestParallelAgent",
 			Description: "A test parallel agent",
-			Agents:      []agent.Agent{},
+			Agents:      []Agent{},
 		}
 
 		agent, err := NewParallelAgent(config)
@@ -103,7 +103,7 @@ func TestParallelAgent_Run(t *testing.T) {
 		config := ParallelAgentConfig{
 			Name:        "TestParallelAgent",
 			Description: "A test parallel agent",
-			Agents:      []agent.Agent{mockAgent1, mockAgent2},
+			Agents:      []Agent{mockAgent1, mockAgent2},
 		}
 
 		parallelAgent, err := NewParallelAgent(config)
@@ -139,7 +139,7 @@ func TestParallelAgent_Run(t *testing.T) {
 		config := ParallelAgentConfig{
 			Name:        "TestParallelAgent",
 			Description: "A test parallel agent",
-			Agents:      []agent.Agent{mockAgent1, mockAgent2},
+			Agents:      []Agent{mockAgent1, mockAgent2},
 		}
 
 		parallelAgent, err := NewParallelAgent(config)

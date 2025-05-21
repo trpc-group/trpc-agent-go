@@ -1,5 +1,5 @@
 // Package models provides implementations of the model interface.
-package models
+package model
 
 import (
 	"bufio"
@@ -12,7 +12,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // OpenAIStreamingModel implements the StreamingModel interface for OpenAI.
@@ -29,7 +28,7 @@ func NewOpenAIStreamingModel(name string, opts ...OpenAIModelOption) *OpenAIStre
 }
 
 // GenerateStream streams a completion for the given prompt.
-func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string, options model.GenerationOptions) (<-chan *model.Response, error) {
+func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string, options GenerationOptions) (<-chan *Response, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
@@ -70,7 +69,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 	req.Header.Set("Accept", "text/event-stream")
 
 	// Create response channel
-	respCh := make(chan *model.Response)
+	respCh := make(chan *Response)
 
 	// Send request and process stream
 	go func() {
@@ -79,7 +78,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 		// Send request
 		resp, err := m.client.Do(req)
 		if err != nil {
-			respCh <- &model.Response{
+			respCh <- &Response{
 				FinishReason: "error",
 				Text:         fmt.Sprintf("Error: %v", err),
 			}
@@ -88,7 +87,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			respCh <- &model.Response{
+			respCh <- &Response{
 				FinishReason: "error",
 				Text:         fmt.Sprintf("OpenAI API returned status %d", resp.StatusCode),
 			}
@@ -127,7 +126,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 
 			// Check for stream end
 			if data == "[DONE]" {
-				respCh <- &model.Response{
+				respCh <- &Response{
 					FinishReason: "stop",
 				}
 				return
@@ -151,7 +150,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 			}
 
 			// Send the response chunk
-			respCh <- &model.Response{
+			respCh <- &Response{
 				Text:         streamResp.Choices[0].Text,
 				FinishReason: streamResp.Choices[0].FinishReason,
 			}
@@ -167,7 +166,7 @@ func (m *OpenAIStreamingModel) GenerateStream(ctx context.Context, prompt string
 }
 
 // GenerateStreamWithMessages streams a completion for the given messages.
-func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, messages []*message.Message, options model.GenerationOptions) (<-chan *model.Response, error) {
+func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, messages []*message.Message, options GenerationOptions) (<-chan *Response, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("OpenAI API key is required")
 	}
@@ -231,7 +230,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 	req.Header.Set("Accept", "text/event-stream")
 
 	// Create response channel
-	respCh := make(chan *model.Response)
+	respCh := make(chan *Response)
 
 	// Send request and process stream
 	go func() {
@@ -241,7 +240,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		resp, err := m.client.Do(req)
 		if err != nil {
 			log.Errorf("OpenAI API request failed: %v", err)
-			respCh <- &model.Response{
+			respCh <- &Response{
 				FinishReason: "error",
 				Text:         fmt.Sprintf("Error: %v", err),
 			}
@@ -252,7 +251,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			log.Errorf("OpenAI API returned status %d: %s", resp.StatusCode, string(bodyBytes))
-			respCh <- &model.Response{
+			respCh <- &Response{
 				FinishReason: "error",
 				Text:         fmt.Sprintf("OpenAI API returned status %d: %s", resp.StatusCode, string(bodyBytes)),
 			}
@@ -261,7 +260,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 		// Process the stream
 		reader := bufio.NewReader(resp.Body)
 		// Add state for tracking tool calls
-		toolCallsBuffer := make(map[int]*model.ToolCall)
+		toolCallsBuffer := make(map[int]*ToolCall)
 		for {
 			// Check if context is done
 			select {
@@ -294,7 +293,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 
 			// Check for stream end
 			if data == "[DONE]" {
-				respCh <- &model.Response{
+				respCh <- &Response{
 					FinishReason: "stop",
 				}
 				return
@@ -334,10 +333,10 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 					// Check if this is a new tool call (with ID) or continuation of existing one
 					if call.ID != "" {
 						// This is a new tool call (first chunk)
-						toolCallsBuffer[call.Index] = &model.ToolCall{
+						toolCallsBuffer[call.Index] = &ToolCall{
 							ID:   call.ID,
 							Type: "function",
-							Function: model.FunctionCall{
+							Function: FunctionCall{
 								Name:      call.Function.Name,
 								Arguments: call.Function.Arguments,
 							},
@@ -365,7 +364,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 			// Send completed tool calls if we have a tool_calls finish reason
 			if streamResp.Choices[0].FinishReason == "tool_calls" {
 				// Convert the buffered tool calls to a slice
-				var completedToolCalls []model.ToolCall
+				var completedToolCalls []ToolCall
 				for _, toolCall := range toolCallsBuffer {
 					// Attempt to validate JSON for debugging
 					if toolCall.Function.Arguments != "" {
@@ -382,14 +381,14 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 
 				if len(completedToolCalls) > 0 {
 					log.Debugf("Sending %d completed tool calls", len(completedToolCalls))
-					respCh <- &model.Response{
+					respCh <- &Response{
 						ToolCalls:    completedToolCalls,
 						FinishReason: "tool_calls",
 					}
 				}
 
 				// Clear the buffer after sending
-				toolCallsBuffer = make(map[int]*model.ToolCall)
+				toolCallsBuffer = make(map[int]*ToolCall)
 			}
 
 			// Only send non-empty content
@@ -399,7 +398,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 					streamResp.Choices[0].Delta.Content,
 				)
 
-				respCh <- &model.Response{
+				respCh <- &Response{
 					Text:     streamResp.Choices[0].Delta.Content,
 					Messages: []*message.Message{respMsg},
 				}
@@ -407,7 +406,7 @@ func (m *OpenAIStreamingModel) GenerateStreamWithMessages(ctx context.Context, m
 
 			// If we have a stop finish reason, we're done
 			if streamResp.Choices[0].FinishReason == "stop" {
-				respCh <- &model.Response{
+				respCh <- &Response{
 					FinishReason: "stop",
 				}
 				return

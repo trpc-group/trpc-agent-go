@@ -1,11 +1,10 @@
 // Package llmflow provides flows for working with language models.
-package llmflow
+package flow
 
 import (
 	"context"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/flow"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -13,7 +12,7 @@ import (
 // LLMFlow is a flow that processes messages using a language model.
 // It takes a message, passes it to a model, and returns the model's response.
 type LLMFlow struct {
-	flow.BaseFlow
+	BaseFlow
 	model          model.Model
 	streamingModel model.StreamingModel
 	streaming      bool
@@ -46,7 +45,7 @@ func NewLLMFlow(name, description string, mdl model.Model, options ...LLMFlowOpt
 	}
 
 	flow := &LLMFlow{
-		BaseFlow:       *flow.NewBaseFlow(name, description),
+		BaseFlow:       *NewBaseFlow(name, description),
 		model:          mdl,
 		streamingModel: streamingModel,
 		streaming:      false, // default to non-streaming

@@ -1,4 +1,4 @@
-package models
+package model
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestOpenAIStreamingModel_Name(t *testing.T) {
@@ -28,7 +27,7 @@ func TestOpenAIStreamingModel_Provider(t *testing.T) {
 
 func TestOpenAIStreamingModel_GenerateStreamWithoutAPIKey(t *testing.T) {
 	m := NewOpenAIStreamingModel("gpt-4")
-	_, err := m.GenerateStream(context.Background(), "Hello", model.DefaultOptions())
+	_, err := m.GenerateStream(context.Background(), "Hello", DefaultOptions())
 	if err == nil {
 		t.Error("Expected error when API key is not set")
 	}
@@ -38,7 +37,7 @@ func TestOpenAIStreamingModel_GenerateStreamWithMessagesWithoutAPIKey(t *testing
 	m := NewOpenAIStreamingModel("gpt-4")
 	_, err := m.GenerateStreamWithMessages(context.Background(), []*message.Message{
 		message.NewUserMessage("Hello"),
-	}, model.DefaultOptions())
+	}, DefaultOptions())
 	if err == nil {
 		t.Error("Expected error when API key is not set")
 	}
@@ -93,7 +92,7 @@ func TestOpenAIStreamingModel_GenerateStreamWithMockServer(t *testing.T) {
 	)
 
 	// Generate a streaming response
-	respCh, err := m.GenerateStream(context.Background(), "Hello", model.DefaultOptions())
+	respCh, err := m.GenerateStream(context.Background(), "Hello", DefaultOptions())
 	if err != nil {
 		t.Fatalf("Unexpected error generating response: %v", err)
 	}
@@ -171,7 +170,7 @@ func TestOpenAIStreamingModel_GenerateStreamWithMessagesWithMockServer(t *testin
 	respCh, err := m.GenerateStreamWithMessages(
 		context.Background(),
 		[]*message.Message{message.NewUserMessage("Hello")},
-		model.DefaultOptions(),
+		DefaultOptions(),
 	)
 	if err != nil {
 		t.Fatalf("Unexpected error generating response: %v", err)

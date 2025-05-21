@@ -1,12 +1,11 @@
 // Package agents provides specialized agent implementations.
-package agents
+package agent
 
 import (
 	"context"
 	"fmt"
 	"sync"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
@@ -20,13 +19,13 @@ type ParallelAgentConfig struct {
 	Description string `json:"description"`
 
 	// Agents to run in parallel.
-	Agents []agent.Agent `json:"agents"`
+	Agents []Agent `json:"agents"`
 }
 
 // ParallelAgent executes multiple agents concurrently.
 type ParallelAgent struct {
-	*agent.BaseAgent
-	agents []agent.Agent
+	*BaseAgent
+	agents []Agent
 }
 
 // NewParallelAgent creates a new parallel agent.
@@ -36,13 +35,13 @@ func NewParallelAgent(config ParallelAgentConfig) (*ParallelAgent, error) {
 	}
 
 	// Create base agent config
-	baseConfig := agent.BaseAgentConfig{
+	baseConfig := BaseAgentConfig{
 		Name:        config.Name,
 		Description: config.Description,
 	}
 
 	return &ParallelAgent{
-		BaseAgent: agent.NewBaseAgent(baseConfig),
+		BaseAgent: NewBaseAgent(baseConfig),
 		agents:    config.Agents,
 	}, nil
 }
@@ -56,7 +55,7 @@ func (a *ParallelAgent) Run(ctx context.Context, msg *message.Message) (*message
 	// Execute all agents in parallel
 	for i, ag := range a.agents {
 		wg.Add(1)
-		go func(index int, agent agent.Agent) {
+		go func(index int, agent Agent) {
 			defer wg.Done()
 			resp, err := agent.Run(ctx, msg)
 			responses[index] = resp

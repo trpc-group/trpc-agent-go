@@ -1,5 +1,5 @@
 // Package tools provides implementations of common tools.
-package tools
+package tool
 
 import (
 	"context"
@@ -11,13 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // CalculatorTool is a tool for performing basic arithmetic operations.
 type CalculatorTool struct {
-	tool.BaseTool
+	BaseTool
 }
 
 // NewCalculatorTool creates a new calculator tool.
@@ -43,7 +41,7 @@ func NewCalculatorTool() *CalculatorTool {
 	}
 
 	return &CalculatorTool{
-		BaseTool: *tool.NewBaseTool(
+		BaseTool: *NewBaseTool(
 			"calculator",
 			"Performs basic arithmetic operations like add, subtract, multiply, divide, and power",
 			parameters,
@@ -52,7 +50,7 @@ func NewCalculatorTool() *CalculatorTool {
 }
 
 // Execute performs the arithmetic operation.
-func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
+func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	// Extract and validate the operation
 	operation, ok := args["operation"].(string)
 	if !ok {
@@ -95,7 +93,7 @@ func (t *CalculatorTool) Execute(ctx context.Context, args map[string]interface{
 		output = strconv.FormatFloat(result, 'f', 0, 64)
 	}
 
-	return tool.NewResult(output), nil
+	return NewResult(output), nil
 }
 
 // getNumberArg extracts a number argument from the args map.
@@ -129,7 +127,7 @@ func getNumberArg(args map[string]interface{}, name string) (float64, error) {
 
 // HTTPClientTool is a tool for making HTTP requests.
 type HTTPClientTool struct {
-	tool.BaseTool
+	BaseTool
 	client *http.Client
 }
 
@@ -166,7 +164,7 @@ func NewHTTPClientTool() *HTTPClientTool {
 	}
 
 	return &HTTPClientTool{
-		BaseTool: *tool.NewBaseTool(
+		BaseTool: *NewBaseTool(
 			"http_client",
 			"Makes HTTP requests to specified URLs",
 			parameters,
@@ -178,7 +176,7 @@ func NewHTTPClientTool() *HTTPClientTool {
 }
 
 // Execute makes an HTTP request.
-func (t *HTTPClientTool) Execute(ctx context.Context, args map[string]interface{}) (*tool.Result, error) {
+func (t *HTTPClientTool) Execute(ctx context.Context, args map[string]interface{}) (*Result, error) {
 	// Extract URL (required)
 	url, ok := args["url"].(string)
 	if !ok || url == "" {
@@ -236,7 +234,7 @@ func (t *HTTPClientTool) Execute(ctx context.Context, args map[string]interface{
 	}
 
 	// Create result
-	result := tool.NewResult(string(responseBody))
+	result := NewResult(string(responseBody))
 	result.Metadata = map[string]interface{}{
 		"status_code":    resp.StatusCode,
 		"status":         resp.Status,
@@ -256,11 +254,11 @@ func (t *HTTPClientTool) Execute(ctx context.Context, args map[string]interface{
 // RegisterBasicTools registers all basic tools with the default registry.
 func RegisterBasicTools() {
 	// Register calculator tool
-	_ = tool.DefaultRegistry.Register(NewCalculatorTool())
+	_ = DefaultRegistry.Register(NewCalculatorTool())
 
 	// Register HTTP client tool
-	_ = tool.DefaultRegistry.Register(NewHTTPClientTool())
-	
+	_ = DefaultRegistry.Register(NewHTTPClientTool())
+
 	// Register final answer tool
-	_ = tool.DefaultRegistry.Register(NewFinalAnswerTool())
+	_ = DefaultRegistry.Register(NewFinalAnswerTool())
 }

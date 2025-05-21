@@ -1,4 +1,4 @@
-package agents
+package agent
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
+
 	"trpc.group/trpc-go/trpc-agent-go/message"
 )
 
@@ -17,7 +17,7 @@ func TestNewLoopAgent(t *testing.T) {
 		mockAgent.On("Name").Return("MockAgent")
 
 		config := LoopAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestLoopAgent",
 				Description: "A test loop agent",
 			},
@@ -35,7 +35,7 @@ func TestNewLoopAgent(t *testing.T) {
 
 	t.Run("returns error when no inner agent provided", func(t *testing.T) {
 		config := LoopAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestLoopAgent",
 				Description: "A test loop agent",
 			},
@@ -59,7 +59,7 @@ func TestLoopAgent_Run(t *testing.T) {
 
 		// Create a loop agent with a termination condition that never triggers
 		config := LoopAgentConfig{
-			BaseAgentConfig: agent.BaseAgentConfig{
+			BaseAgentConfig: BaseAgentConfig{
 				Name:        "TestLoopAgent",
 				Description: "A test loop agent",
 			},

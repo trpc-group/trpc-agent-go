@@ -1,4 +1,4 @@
-package memories
+package memory
 
 import (
 	"context"

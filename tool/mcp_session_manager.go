@@ -1,5 +1,5 @@
 // Package tools provides implementation of various tools.
-package tools
+package tool
 
 import (
 	"context"

@@ -1,5 +1,5 @@
 // Package agents provides specialized agent implementations.
-package agents
+package agent
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -50,7 +49,7 @@ type LLMAgentConfig struct {
 
 // LLMAgent is an agent that uses a language model to generate responses.
 type LLMAgent struct {
-	*agent.BaseAgent
+	*BaseAgent
 	model           model.Model
 	memory          memory.Memory
 	maxHistory      int
@@ -88,13 +87,13 @@ func NewLLMAgent(config LLMAgentConfig) (*LLMAgent, error) {
 	}
 
 	// Create base agent config
-	baseConfig := agent.BaseAgentConfig{
+	baseConfig := BaseAgentConfig{
 		Name:        config.Name,
 		Description: config.Description,
 	}
 
 	return &LLMAgent{
-		BaseAgent:       agent.NewBaseAgent(baseConfig),
+		BaseAgent:       NewBaseAgent(baseConfig),
 		model:           config.Model,
 		memory:          config.Memory,
 		maxHistory:      config.MaxHistoryMessages,
