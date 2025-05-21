@@ -109,8 +109,8 @@ type Usage struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
-// ModelConfig contains configuration for a model.
-type ModelConfig struct {
+// Config contains configuration for a model.
+type Config struct {
 	// Name is the model name (e.g., "gpt-4", "gemini-pro").
 	Name string `json:"name"`
 

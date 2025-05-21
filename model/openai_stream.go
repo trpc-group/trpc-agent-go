@@ -1,4 +1,4 @@
-// Package models provides implementations of the model interface.
+// Package model provides implementations of the model interface.
 package model
 
 import (

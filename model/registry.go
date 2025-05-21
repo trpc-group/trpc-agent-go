@@ -9,21 +9,21 @@ import (
 // Registry is a registry of model configurations and instances.
 type Registry struct {
 	mu            sync.RWMutex
-	configs       map[string]*ModelConfig
+	configs       map[string]*Config
 	models        map[string]Model
-	defaultConfig *ModelConfig
+	defaultConfig *Config
 }
 
 // NewRegistry creates a new model registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		configs: make(map[string]*ModelConfig),
+		configs: make(map[string]*Config),
 		models:  make(map[string]Model),
 	}
 }
 
 // RegisterConfig registers a model configuration.
-func (r *Registry) RegisterConfig(config *ModelConfig) error {
+func (r *Registry) RegisterConfig(config *Config) error {
 	if config == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
@@ -64,7 +64,7 @@ func (r *Registry) RegisterModel(model Model) error {
 }
 
 // GetConfig returns a model configuration by name.
-func (r *Registry) GetConfig(name string) (*ModelConfig, bool) {
+func (r *Registry) GetConfig(name string) (*Config, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -82,7 +82,7 @@ func (r *Registry) GetModel(name string) (Model, bool) {
 }
 
 // GetDefaultConfig returns the default model configuration.
-func (r *Registry) GetDefaultConfig() (*ModelConfig, bool) {
+func (r *Registry) GetDefaultConfig() (*Config, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -107,11 +107,11 @@ func (r *Registry) SetDefaultConfig(name string) error {
 }
 
 // ListConfigs returns a list of all registered model configurations.
-func (r *Registry) ListConfigs() []*ModelConfig {
+func (r *Registry) ListConfigs() []*Config {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	configs := make([]*ModelConfig, 0, len(r.configs))
+	configs := make([]*Config, 0, len(r.configs))
 	for _, config := range r.configs {
 		configs = append(configs, config)
 	}
@@ -149,4 +149,4 @@ func (r *Registry) HasConfig(name string) bool {
 }
 
 // DefaultRegistry is the global model registry.
-var DefaultRegistry = NewRegistry() 
+var DefaultRegistry = NewRegistry()
