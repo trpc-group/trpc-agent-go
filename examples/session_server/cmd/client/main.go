@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/message"
 )
 
 var (
@@ -71,8 +73,8 @@ func NewSession(serverURL string) (*ClientSession, error) {
 }
 
 // SendMessage sends a message to the server and returns the response
-func (s *ClientSession) SendMessage(message string, useStream bool) (string, error) {
-	requestBody, err := json.Marshal(Request{Message: message})
+func (s *ClientSession) SendMessage(msg string, useStream bool) (string, error) {
+	requestBody, err := json.Marshal(Request{Message: msg})
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -161,16 +163,18 @@ func (s *ClientSession) SendMessage(message string, useStream bool) (string, err
 	}
 
 	// For non-streaming response
-	var response Response
+	type nonStreamingResponse struct {
+		Message message.Message `json:"message"`
+	}
+
+	var response nonStreamingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
-
 	// Print the response for non-streaming mode
-	fmt.Print(response.Message)
+	fmt.Print(response.Message.Content)
 	fmt.Println()
-
-	return response.Message, nil
+	return response.Message.Content, nil
 }
 
 func main() {
