@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // MockAgent is a mock implementation of the agent.Agent interface for testing.

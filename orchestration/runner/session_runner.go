@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/memory"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )

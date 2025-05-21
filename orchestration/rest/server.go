@@ -1,5 +1,5 @@
-// Package api provides a RESTful API for the agent framework.
-package api
+// Package rest provides a RESTful API for the agent framework.
+package rest
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 )
 

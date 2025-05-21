@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // ParallelAgentConfig contains configuration for a parallel agent.

@@ -18,11 +18,11 @@ import (
 
 	"net/http"
 
-	"trpc.group/trpc-go/trpc-agent-go/api"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/rest"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -106,7 +106,7 @@ func main() {
 	defer sessionRunner.Stop(context.Background())
 
 	// Create API server
-	server := api.NewServer(sessionRunner)
+	server := rest.NewServer(sessionRunner)
 
 	// Create HTTP server
 	httpServer := &http.Server{

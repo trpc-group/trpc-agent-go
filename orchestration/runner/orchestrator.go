@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // ExecutionMode defines how an orchestrator executes its runners.

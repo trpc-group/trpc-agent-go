@@ -4,8 +4,8 @@ package agent
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // Agent is the interface that all agents must implement.

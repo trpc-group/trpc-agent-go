@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 var (
