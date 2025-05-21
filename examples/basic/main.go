@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model/models"
-	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 // AgentRequest represents a request to the agent.
@@ -49,10 +49,10 @@ func main() {
 	if apiKey == "" {
 		log.Fatalf("No OpenAI API key found")
 	}
-	llm := models.NewOpenAIModel(
+	llm := model.NewOpenAIModel(
 		*modelName,
-		models.WithOpenAIAPIKey(apiKey),
-		models.WithOpenAIBaseURL(*openaiURL),
+		model.WithOpenAIAPIKey(apiKey),
+		model.WithOpenAIBaseURL(*openaiURL),
 	)
 
 	// Set up React agent

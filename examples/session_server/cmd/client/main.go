@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
 )
 
 var (

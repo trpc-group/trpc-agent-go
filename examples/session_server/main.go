@@ -18,14 +18,13 @@ import (
 
 	"net/http"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
-	"trpc.group/trpc-go/trpc-agent-go/api"
+	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model/models"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	mcptools "trpc.group/trpc-go/trpc-agent-go/tool/tools"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/rest"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -67,10 +66,10 @@ func main() {
 	}
 
 	// Create the OpenAI streaming model
-	llmModel := models.NewOpenAIStreamingModel(
+	llmModel := model.NewOpenAIStreamingModel(
 		modelName,
-		models.WithOpenAIAPIKey(openAIKey),
-		models.WithOpenAIBaseURL(openaiBaseURL),
+		model.WithOpenAIAPIKey(openAIKey),
+		model.WithOpenAIBaseURL(openaiBaseURL),
 	)
 	log.Infof("Using streaming model. model: %s, base_url: %s", modelName, openaiBaseURL)
 
@@ -107,7 +106,7 @@ func main() {
 	defer sessionRunner.Stop(context.Background())
 
 	// Create API server
-	server := api.NewServer(sessionRunner)
+	server := rest.NewServer(sessionRunner)
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -153,13 +152,13 @@ func getAllTools(ctx context.Context) []tool.Tool {
 	unitConverterTool := NewUnitConverterTool()
 
 	// Set up MCP tools using the existing MCPToolset
-	mcpParams := mcptools.MCPServerParams{
-		Type: mcptools.ConnectionTypeSSE,
+	mcpParams := tool.MCPServerParams{
+		Type: tool.ConnectionTypeSSE,
 		URL:  "http://localhost:3000/mcp", // MCP server URL
 	}
 
 	// Create the MCP toolset with the session manager
-	mcpToolset := mcptools.NewMCPToolset(mcpParams)
+	mcpToolset := tool.NewMCPToolset(mcpParams)
 
 	// Get MCP tools
 	mcpTools, err := mcpToolset.GetTools(ctx)

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
 )
 
 // mockAgent implements the Agent interface for testing.

@@ -17,13 +17,12 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
-	"trpc.group/trpc-go/trpc-agent-go/agent/agents/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/models"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	mcptools "trpc.group/trpc-go/trpc-agent-go/tool/tools"
+	mcptools "trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -1334,13 +1333,13 @@ func createModel(provider, modelName string) (model.Model, error) {
 		}
 
 		// Create options list
-		opts := []models.GeminiModelOption{
-			models.WithGeminiAPIKey(geminiAPIKey),
-			models.WithGeminiDefaultOptions(defaultOptions),
+		opts := []model.GeminiModelOption{
+			model.WithGeminiAPIKey(geminiAPIKey),
+			model.WithGeminiDefaultOptions(defaultOptions),
 		}
 
 		// Create Gemini model
-		geminiModel, err := models.NewGeminiModel(
+		geminiModel, err := model.NewGeminiModel(
 			modelName,
 			opts...,
 		)
@@ -1357,19 +1356,19 @@ func createModel(provider, modelName string) (model.Model, error) {
 		}
 
 		// Create options list
-		opts := []models.OpenAIModelOption{
-			models.WithOpenAIAPIKey(openaiAPIKey),
-			models.WithOpenAIDefaultOptions(defaultOptions),
+		opts := []model.OpenAIModelOption{
+			model.WithOpenAIAPIKey(openaiAPIKey),
+			model.WithOpenAIDefaultOptions(defaultOptions),
 		}
 
 		// Add custom URL if provided
 		openaiBaseURL := os.Getenv("OPENAI_BASE_URL")
 		if openaiBaseURL != "" {
-			opts = append(opts, models.WithOpenAIBaseURL(openaiBaseURL))
+			opts = append(opts, model.WithOpenAIBaseURL(openaiBaseURL))
 		}
 
 		// Create OpenAI model
-		openaiModel := models.NewOpenAIModel(
+		openaiModel := model.NewOpenAIModel(
 			modelName,
 			opts...,
 		)
