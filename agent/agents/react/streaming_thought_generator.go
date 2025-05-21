@@ -65,7 +65,6 @@ func (g *StreamingLLMThoughtGenerator) GenerateStream(
 	history []*Cycle,
 	tools []tool.Tool,
 ) (<-chan *Thought, error) {
-	log.Debugf("STREAMING DIAGNOSIS - StreamingLLMThoughtGenerator.GenerateStream starting")
 	if g.model == nil {
 		log.Errorf("STREAMING DIAGNOSIS - StreamingLLMThoughtGenerator has nil model!")
 		return nil, fmt.Errorf("streaming model is required for thought generation")
@@ -144,7 +143,7 @@ func (g *StreamingLLMThoughtGenerator) GenerateStream(
 			// Handle tool calls in the stream
 			if len(response.ToolCalls) > 0 {
 				log.Debugf("StreamingLLMThoughtGenerator: Processing %d tool calls", len(response.ToolCalls))
-				thought := &Thought{
+				thought = &Thought{
 					ID:               thoughtID,
 					Content:          response.Text,
 					Type:             "reasoning",

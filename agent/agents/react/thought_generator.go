@@ -57,6 +57,8 @@ func (s *DefaultThoughtPromptStrategy) BuildThoughtPrompt(
 	var prompt strings.Builder
 	prompt.WriteString("Think through the following request step by step to determine the best action to take " +
 		"or output 'Final Answer: your answer here' if you have gathered all necessary information. ")
+	prompt.WriteString("When using tools, carefully examine their input parameters (names, types, and required formats) " +
+		"and expected output formats to ensure correct usage. ")
 
 	prompt.WriteString("\nThought process format: ")
 	if format == ThoughtFormatStructured {
