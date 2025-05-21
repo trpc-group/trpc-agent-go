@@ -1154,7 +1154,6 @@ func (a *Agent) runStreamingWithThoughtGenerator(
 			// Execute tools and get observations
 			cycle, observations := a.executeToolsAndRecordObservations(
 				sessionCtx,
-				thought,
 				thought.SuggestedActions,
 				eventCh,
 			)
@@ -1356,7 +1355,6 @@ func (a *Agent) handleFinalAnswer(
 // observations. Returns the cycle and observations.
 func (a *Agent) executeToolsAndRecordObservations(
 	ctx context.Context,
-	thought *Thought,
 	actions []*Action,
 	eventCh chan<- *event.Event,
 ) (*Cycle, []*CycleObservation) {
@@ -1390,6 +1388,11 @@ func (a *Agent) executeToolsAndRecordObservations(
 	observations := make([]*CycleObservation, 0, len(toolActions))
 
 	for _, action := range toolActions {
+		eventCh <- event.NewStreamToolCallEvent(
+			action.ToolName,
+			action.RawArgs,
+			action.ID,
+		)
 		observation, err := a.executeToolAction(ctx, action)
 		if err != nil {
 			log.Errorf("STREAMING DIAGNOSIS - Tool execution error: %v", err)

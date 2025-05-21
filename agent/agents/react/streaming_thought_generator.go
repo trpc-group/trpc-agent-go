@@ -162,6 +162,7 @@ func (g *StreamingLLMThoughtGenerator) GenerateStream(
 							ThoughtID: thoughtID,
 							ToolName:  toolCall.Function.Name,
 							ToolInput: toolInput,
+							RawArgs:   toolCall.Function.Arguments,
 							Timestamp: time.Now().Unix(),
 						})
 					} else {

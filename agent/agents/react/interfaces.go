@@ -28,6 +28,7 @@ type Action struct {
 	ToolName  string                 `json:"tool_name"`  // Name of the tool to be called.
 	ToolInput map[string]interface{} `json:"tool_input"` // Input parameters for the tool.
 	Timestamp int64                  `json:"timestamp"`  // Unix timestamp of when the action was initiated.
+	RawArgs   string                 `json:"raw_args"`   // Raw arguments for the tool.
 }
 
 // CycleObservation represents the outcome or result obtained from executing an action.
