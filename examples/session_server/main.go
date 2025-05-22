@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -15,8 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
