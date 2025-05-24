@@ -165,8 +165,6 @@ func sendStreamingRequest(serverURL, message string) error {
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Cache-Control", "no-cache")
 
-	fmt.Println("Connecting to server...")
-
 	// Send the request
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -181,8 +179,6 @@ func sendStreamingRequest(serverURL, message string) error {
 		errorMsg, _ := io.ReadAll(limitedReader)
 		return fmt.Errorf("server returned error: %s - %s", resp.Status, string(errorMsg))
 	}
-
-	fmt.Println("Connected. Waiting for response...")
 
 	// Process the streaming response
 	reader := bufio.NewReader(resp.Body)
@@ -219,10 +215,6 @@ func sendStreamingRequest(serverURL, message string) error {
 		case "ping":
 			// Just a heartbeat - ignore
 			continue
-		case "start":
-			fmt.Print("Generating response... ")
-			// Clear terminal line and move cursor to start
-			fmt.Print("\r\033[K")
 		case "chunk":
 			// Print the chunk and add to full content
 			if streamResp.Content != "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
@@ -61,6 +62,33 @@ func NewModelNode(m model.Model, name, description string, opts ...ModelNodeOpti
 	return node
 }
 
+// prepareMessages creates a list of messages for the model from the input message
+func (n *ModelNode) prepareMessages(ctx context.Context, input *message.Message) ([]*message.Message, error) {
+	messages := []*message.Message{}
+
+	// Add system message if provided
+	if n.system != "" {
+		messages = append(messages, message.NewSystemMessage(n.system))
+	}
+
+	// Check if input has full_messages metadata
+	if fullMsgs, ok := input.GetMetadata("full_messages"); ok {
+		if msgs, ok := fullMsgs.([]*message.Message); ok {
+			return msgs, nil
+		}
+	}
+
+	// Add the input message
+	messages = append(messages, input)
+
+	// Add prompt if provided
+	if n.prompt != "" {
+		messages = append(messages, message.NewUserMessage(n.prompt))
+	}
+
+	return messages, nil
+}
+
 // Process implements the Node interface.
 func (n *ModelNode) Process(ctx context.Context, input *message.Message) (*message.Message, error) {
 	// Create a conversation
@@ -98,53 +126,44 @@ func (n *ModelNode) Process(ctx context.Context, input *message.Message) (*messa
 func (n *ModelNode) ProcessStream(ctx context.Context, input *message.Message) (<-chan *event.Event, error) {
 	eventCh := make(chan *event.Event, 10)
 
-	// Check if model supports streaming
-	streamingModel, ok := n.model.(model.StreamingModel)
-	if !ok {
-		// If model doesn't support streaming, use regular process and simulate streaming
+	// Prepare messages from the input
+	messages, err := n.prepareMessages(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare messages: %w", err)
+	}
+
+	// Check if the model supports streaming
+	streamingModel, supportsStreaming := n.model.(model.StreamingModel)
+	if !supportsStreaming {
+		// If the model doesn't support streaming, use the regular process function
+		// and simulate streaming with the result
+		msg, err := n.Process(ctx, input)
+		if err != nil {
+			close(eventCh)
+			return nil, err
+		}
+
 		go func() {
 			defer close(eventCh)
 
 			// Signal stream start
 			eventCh <- event.NewStreamStartEvent("")
 
-			// Process normally
-			result, err := n.Process(ctx, input)
-			if err != nil {
-				eventCh <- event.NewErrorEvent(err, 500)
-				return
-			}
+			// Send the full message
+			eventCh <- event.NewMessageEvent(msg)
 
-			// Send the result as a message event
-			eventCh <- event.NewMessageEvent(result)
-
-			// Signal stream end
-			eventCh <- event.NewStreamEndEvent(result.Content)
+			// Signal stream end with the complete text
+			eventCh <- event.NewStreamEndEvent(msg.Content)
 		}()
 
 		return eventCh, nil
 	}
 
-	// Create a conversation
-	messages := []*message.Message{}
-
-	// Add system message if provided
-	if n.system != "" {
-		messages = append(messages, message.NewSystemMessage(n.system))
-	}
-
-	// Add the input message
-	messages = append(messages, input)
-
-	// Add prompt if provided
-	if n.prompt != "" {
-		messages = append(messages, message.NewUserMessage(n.prompt))
-	}
-
-	// Start streaming response generation
+	// For streaming models, stream the response chunks
 	responseCh, err := streamingModel.GenerateStreamWithMessages(ctx, messages, n.options)
 	if err != nil {
-		return nil, fmt.Errorf("streaming model generation failed: %w", err)
+		close(eventCh)
+		return nil, fmt.Errorf("failed to generate stream: %w", err)
 	}
 
 	// Stream the responses as events
@@ -156,6 +175,8 @@ func (n *ModelNode) ProcessStream(ctx context.Context, input *message.Message) (
 
 		var lastMsg *message.Message
 		var sequence int
+		var fullContent strings.Builder
+		var toolCalls []model.ToolCall
 
 		for resp := range responseCh {
 			// Create a message from the response
@@ -166,13 +187,11 @@ func (n *ModelNode) ProcessStream(ctx context.Context, input *message.Message) (
 				msg = message.NewAssistantMessage(resp.Text)
 			}
 
-			if lastMsg == nil {
-				eventCh <- event.NewMessageEvent(msg)
-			}
-
+			// Only send the delta (new content) rather than the full message each time
 			delta := msg.Content
 			if delta != "" {
 				eventCh <- event.NewStreamChunkEvent(delta, sequence)
+				fullContent.WriteString(delta)
 				sequence++
 			}
 
@@ -180,6 +199,7 @@ func (n *ModelNode) ProcessStream(ctx context.Context, input *message.Message) (
 
 			// Check for tool calls
 			for _, toolCall := range resp.ToolCalls {
+				toolCalls = append(toolCalls, toolCall)
 				eventCh <- event.NewStreamToolCallEvent(
 					toolCall.Function.Name,
 					toolCall.Function.Arguments,
@@ -188,9 +208,25 @@ func (n *ModelNode) ProcessStream(ctx context.Context, input *message.Message) (
 			}
 		}
 
+		outMsg := message.NewAssistantMessage(fullContent.String())
+		outMsg.ID = lastMsg.ID
+		outMsg.Role = lastMsg.Role
+		outMsg.CreatedAt = lastMsg.CreatedAt
+		outMsg.Metadata = lastMsg.Metadata
+		// Merge input metadata with the message metadata.
+		if input.Metadata != nil {
+			for k, v := range input.Metadata {
+				outMsg.Metadata[k] = v
+			}
+		}
+		if len(toolCalls) > 0 {
+			outMsg.SetMetadata("tool_calls", toolCalls)
+		}
+		eventCh <- event.NewMessageEvent(outMsg)
+
 		// Signal stream end
 		if lastMsg != nil {
-			eventCh <- event.NewStreamEndEvent(lastMsg.Content)
+			eventCh <- event.NewStreamEndEvent(fullContent.String())
 		} else {
 			eventCh <- event.NewStreamEndEvent("")
 		}
@@ -380,7 +416,7 @@ func (n *AgentNode) Process(ctx context.Context, input *message.Message) (*messa
 		return nil, fmt.Errorf("failed to create agent graph runner: %w", err)
 	}
 
-	// Execute the graph
+	// Execute the graph with default options
 	return runner.Execute(ctx, input)
 }
 
@@ -395,8 +431,9 @@ func (n *AgentNode) ProcessStream(ctx context.Context, input *message.Message) (
 		return nil, fmt.Errorf("failed to create agent graph runner: %w", err)
 	}
 
-	// Execute the graph with streaming
-	return runner.streamGraph(ctx, input)
+	// Execute the graph with streaming and default options
+	opts := DefaultRunOptions()
+	return runner.streamGraph(ctx, input, opts)
 }
 
 // SupportsStreaming implements the Node interface.
