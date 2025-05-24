@@ -328,7 +328,7 @@ func Router(
 				return nil, fmt.Errorf("failed to create runner for subgraph: %w", err)
 			}
 
-			// Execute the subgraph
+			// Execute the subgraph with default loop options
 			return runner.Execute(ctx, input)
 		}).WithInfo(fmt.Sprintf("subgraph_%s", routeName), fmt.Sprintf("Executes the %s subgraph", routeName)))
 
