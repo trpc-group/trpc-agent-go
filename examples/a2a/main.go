@@ -20,9 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/react"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/message"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	mcptools "trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/message"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	mcptools "trpc.group/trpc-go/trpc-agent-go/core/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
