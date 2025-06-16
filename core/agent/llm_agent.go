@@ -4,23 +4,16 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
-	"trpc.group/trpc-go/trpc-agent-go/core/memory"
 	"trpc.group/trpc-go/trpc-agent-go/core/message"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/log"
-)
-
-var (
-	// ErrModelRequired is returned when an LLM agent is initialized without a model.
-	ErrModelRequired = errors.New("model is required for LLM agent")
 )
 
 // LLMAgentConfig contains configuration for an LLM agent.
+// This is a simplified, clean configuration structure.
 type LLMAgentConfig struct {
 	// Name of the agent.
 	Name string `json:"name"`
@@ -31,48 +24,26 @@ type LLMAgentConfig struct {
 	// Model to use for generating responses.
 	Model model.Model
 
-	// Memory system to use for storing conversation history.
-	Memory memory.Memory
-
-	// MaxHistoryMessages is the maximum number of messages to include in context.
-	MaxHistoryMessages int
-
 	// System prompt to use for the model.
 	SystemPrompt string
 
 	// Tools available to the agent.
 	Tools []tool.Tool
-
-	// EnableStreaming determines if the agent should stream responses.
-	EnableStreaming bool
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
+// This is a complete rewrite with Content-first approach.
 type LLMAgent struct {
 	*BaseAgent
-	model           model.Model
-	memory          memory.Memory
-	maxHistory      int
-	systemPrompt    string
-	tools           []tool.Tool
-	toolSet         *tool.ToolSet
-	enableStreaming bool
+	model        model.Model
+	systemPrompt string
+	toolSet      *tool.ToolSet
 }
 
 // NewLLMAgent creates a new LLM agent.
 func NewLLMAgent(config LLMAgentConfig) (*LLMAgent, error) {
 	if config.Model == nil {
-		return nil, ErrModelRequired
-	}
-
-	// Create default memory if none provided
-	if config.Memory == nil {
-		config.Memory = memory.NewBaseMemory()
-	}
-
-	// Set default max history if not specified
-	if config.MaxHistoryMessages <= 0 {
-		config.MaxHistoryMessages = 10
+		return nil, fmt.Errorf("model is required for LLM agent")
 	}
 
 	// Create tool set if tools are provided
@@ -93,228 +64,237 @@ func NewLLMAgent(config LLMAgentConfig) (*LLMAgent, error) {
 	}
 
 	return &LLMAgent{
-		BaseAgent:       NewBaseAgent(baseConfig),
-		model:           config.Model,
-		memory:          config.Memory,
-		maxHistory:      config.MaxHistoryMessages,
-		systemPrompt:    config.SystemPrompt,
-		tools:           config.Tools,
-		toolSet:         toolSet,
-		enableStreaming: config.EnableStreaming,
+		BaseAgent:    NewBaseAgent(baseConfig),
+		model:        config.Model,
+		systemPrompt: config.SystemPrompt,
+		toolSet:      toolSet,
 	}, nil
 }
 
-// Run processes the given message using the LLM and returns a response.
-func (a *LLMAgent) Run(ctx context.Context, msg *message.Message) (*message.Message, error) {
-	// Store the incoming message in memory
-	if err := a.memory.Store(ctx, msg); err != nil {
-		return nil, fmt.Errorf("failed to store message: %w", err)
+// Process processes the given content using the LLM and returns a response.
+// This is a simplified implementation focusing on core functionality.
+func (a *LLMAgent) Process(ctx context.Context, content *event.Content) (*event.Content, error) {
+	// Extract text from input content
+	inputText := content.GetText()
+	if inputText == "" {
+		return nil, fmt.Errorf("no text content provided")
 	}
 
-	// Retrieve conversation history
-	history, err := a.getConversationHistory(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve conversation history: %w", err)
-	}
-
-	// Add system message if set
-	if a.systemPrompt != "" {
-		// Insert system message at the beginning
-		sysMsg := message.NewSystemMessage(a.systemPrompt)
-		history = append([]*message.Message{sysMsg}, history...)
-	}
-
-	// Generate response from model
+	// Generate response from model using message-based approach
+	// Use GenerateWithMessages for better compatibility with modern APIs
 	opts := model.DefaultOptions()
-	opts.EnableToolCalls = a.toolSet != nil && len(a.tools) > 0
 
-	response, err := a.model.GenerateWithMessages(ctx, history, opts)
+	// Enable tool calls if we have tools
+	if a.toolSet != nil && a.toolSet.Size() > 0 {
+		opts.EnableToolCalls = true
+		// Set tool definitions in the model
+		toolDefinitions := a.toolSet.GetToolDefinitions()
+		a.model.SetTools(toolDefinitions)
+	}
+
+	// Prepare messages array with system prompt and user input
+	messages := []*message.Message{}
+
+	// Add system message if we have a system prompt
+	if a.systemPrompt != "" {
+		messages = append(messages, message.NewSystemMessage(a.systemPrompt))
+	}
+
+	// Add user message
+	messages = append(messages, message.NewUserMessage(inputText))
+
+	response, err := a.model.GenerateWithMessages(ctx, messages, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate response: %w", err)
 	}
 
-	// Process response
-	if response != nil && len(response.Messages) > 0 {
-		assistantMsg := response.Messages[0]
+	// Create response content
+	responseContent := event.NewTextContent(response.Text)
 
-		// Store the model's response in memory
-		if err := a.memory.Store(ctx, assistantMsg); err != nil {
-			return nil, fmt.Errorf("failed to store response: %w", err)
-		}
-
-		return assistantMsg, nil
-	}
-
-	// If no messages in response but we have text, create a message
-	if response != nil && response.Text != "" {
-		assistantMsg := message.NewAssistantMessage(response.Text)
-
-		// Store the model's response in memory
-		if err := a.memory.Store(ctx, assistantMsg); err != nil {
-			return nil, fmt.Errorf("failed to store response: %w", err)
-		}
-
-		return assistantMsg, nil
-	}
-
-	// Empty response
-	assistantMsg := message.NewAssistantMessage("No response generated")
-	return assistantMsg, nil
+	return responseContent, nil
 }
 
-// RunAsync processes the given message asynchronously using the LLM and streaming.
-func (a *LLMAgent) RunAsync(ctx context.Context, msg *message.Message) (<-chan *event.Event, error) {
+// ProcessAsync processes the given content asynchronously using the LLM.
+// This implementation handles the complete LLM + tool workflow.
+func (a *LLMAgent) ProcessAsync(ctx context.Context, content *event.Content) (<-chan *event.Event, error) {
 	// Create channel for events
 	eventCh := make(chan *event.Event, 10)
-
-	// If streaming is not enabled or model doesn't support it, fall back to default implementation
-	if !a.enableStreaming {
-		return a.BaseAgent.RunAsync(ctx, msg)
-	}
-
-	streamingModel, ok := a.model.(model.StreamingModel)
-	if !ok {
-		// Fall back to non-streaming implementation
-		return a.BaseAgent.RunAsync(ctx, msg)
-	}
 
 	// Process in a goroutine
 	go func() {
 		defer close(eventCh)
 
-		// Store the incoming message in memory
-		if err := a.memory.Store(ctx, msg); err != nil {
-			eventCh <- event.NewErrorEvent(err, 500)
-			return
-		}
-
-		// Retrieve conversation history
-		history, err := a.getConversationHistory(ctx)
-		if err != nil {
-			eventCh <- event.NewErrorEvent(err, 500)
-			return
-		}
-
-		// Add system message if set
-		if a.systemPrompt != "" {
-			// Insert system message at the beginning
-			sysMsg := message.NewSystemMessage(a.systemPrompt)
-			history = append([]*message.Message{sysMsg}, history...)
-		}
-
-		// Generate streaming response from model
-		opts := model.DefaultOptions()
-		opts.EnableToolCalls = a.toolSet != nil && len(a.tools) > 0
-
-		responseCh, err := streamingModel.GenerateStreamWithMessages(ctx, history, opts)
-		if err != nil {
-			log.Errorf("Failed to get streaming response from model: %v", err)
-			eventCh <- event.NewErrorEvent(err, 500)
-			return
-		}
-
-		log.Debugf("Stream started from model, waiting for responses...")
-
-		// Accumulate the full response
-		var fullResponse *message.Message
-		var responseText string
-		var sequence int = 0 // Add sequence counter
-
-		// Process streaming responses
-		for response := range responseCh {
-			if response != nil && len(response.ToolCalls) > 0 {
-				// Handle tool calls
-				for _, toolCall := range response.ToolCalls {
-					// Create and send a tool call event
-					toolCallEvent := event.NewStreamToolCallEvent(
-						toolCall.Function.Name,
-						toolCall.Function.Arguments,
-						toolCall.ID,
-					)
-					eventCh <- toolCallEvent
-
-					// If we have a toolset, try to execute the tool
-					if a.toolSet != nil {
-						tool, found := a.toolSet.Get(toolCall.Function.Name)
-						if found {
-							// Parse the arguments
-							var params map[string]interface{}
-							if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err == nil {
-								// Execute the tool and send the result
-								result, err := tool.Execute(ctx, params)
-								toolResultEvent := event.NewStreamToolResultEvent(
-									toolCall.Function.Name,
-									result,
-									err,
-								)
-								eventCh <- toolResultEvent
-							}
-						}
-					}
-				}
-			} else if response != nil && len(response.Messages) > 0 {
-				// If we get a complete message, use it
-				chunk := response.Messages[0]
-
-				// Send stream chunk event directly instead of stream event
-				eventCh <- event.NewStreamChunkEvent(chunk.Content, sequence)
-				sequence++ // Increment sequence
-
-				// Update full response
-				if fullResponse == nil {
-					fullResponse = chunk
-				} else {
-					fullResponse.Content += chunk.Content
-				}
-			} else if response != nil && response.Text != "" {
-				// If we get text, accumulate it
-				responseText += response.Text
-
-				// Send stream chunk event directly instead of stream event
-				eventCh <- event.NewStreamChunkEvent(response.Text, sequence)
-				sequence++ // Increment sequence
-			}
-		}
-
-		// If we have a full response, store it and send a message event
-		if fullResponse != nil {
-			if err := a.memory.Store(ctx, fullResponse); err != nil {
-				eventCh <- event.NewErrorEvent(fmt.Errorf("failed to store response: %w", err), 500)
+		// Handle potential tool calls in the input
+		if content.HasFunctionCalls() {
+			// Process tool calls first
+			if err := a.processFunctionCalls(ctx, content, eventCh); err != nil {
+				errorContent := event.NewTextContent("Tool execution error: " + err.Error())
+				errorEvent := event.NewEvent(a.Name(), errorContent)
+				errorEvent.SetMetadata("error", err.Error())
+				eventCh <- errorEvent
 				return
 			}
-			eventCh <- event.NewMessageEvent(fullResponse)
-		} else if responseText != "" {
-			// If we only accumulated text, create a message
-			assistantMsg := message.NewAssistantMessage(responseText)
-			if err := a.memory.Store(ctx, assistantMsg); err != nil {
-				eventCh <- event.NewErrorEvent(fmt.Errorf("failed to store response: %w", err), 500)
-				return
-			}
-			eventCh <- event.NewMessageEvent(assistantMsg)
-		} else {
-			// Empty response
-			assistantMsg := message.NewAssistantMessage("No response generated")
-			eventCh <- event.NewMessageEvent(assistantMsg)
+		}
+
+		// Process the content with LLM
+		if err := a.processWithLLM(ctx, content, eventCh); err != nil {
+			errorContent := event.NewTextContent("LLM processing error: " + err.Error())
+			errorEvent := event.NewEvent(a.Name(), errorContent)
+			errorEvent.SetMetadata("error", err.Error())
+			eventCh <- errorEvent
+			return
 		}
 	}()
 
 	return eventCh, nil
 }
 
-// getConversationHistory retrieves recent conversation history from memory.
-func (a *LLMAgent) getConversationHistory(ctx context.Context) ([]*message.Message, error) {
-	// Retrieve all messages from memory
-	messages, err := a.memory.Retrieve(ctx)
+// processWithLLM processes content with the LLM and handles tool calls in the response.
+func (a *LLMAgent) processWithLLM(ctx context.Context, content *event.Content, eventCh chan<- *event.Event) error {
+	// Extract text from input content
+	inputText := content.GetText()
+	if inputText == "" {
+		return fmt.Errorf("no text content provided")
+	}
+
+	// Generate response from model using message-based approach
+	opts := model.DefaultOptions()
+
+	// Enable tool calls if we have tools
+	if a.toolSet != nil && a.toolSet.Size() > 0 {
+		opts.EnableToolCalls = true
+		// Set tool definitions in the model
+		toolDefinitions := a.toolSet.GetToolDefinitions()
+		a.model.SetTools(toolDefinitions)
+	}
+
+	// Prepare messages array with system prompt and user input
+	messages := []*message.Message{}
+
+	// Add system message if we have a system prompt
+	if a.systemPrompt != "" {
+		messages = append(messages, message.NewSystemMessage(a.systemPrompt))
+	}
+
+	// Add user message
+	messages = append(messages, message.NewUserMessage(inputText))
+
+	response, err := a.model.GenerateWithMessages(ctx, messages, opts)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to generate response: %w", err)
 	}
 
-	// Limit to max history if needed
-	if len(messages) > a.maxHistory {
-		messages = messages[len(messages)-a.maxHistory:]
+	// Check if the response contains tool calls
+	if len(response.ToolCalls) > 0 {
+		// Process each tool call
+		for _, toolCall := range response.ToolCalls {
+			// Convert model.ToolCall to event.FunctionCall
+			funcCall := &event.FunctionCall{
+				Name: toolCall.Function.Name,
+				ID:   toolCall.ID,
+			}
+
+			// Parse arguments JSON string to map
+			args, err := a.parseToolArguments(toolCall.Function.Arguments)
+			if err != nil {
+				return fmt.Errorf("failed to parse tool arguments: %w", err)
+			}
+			funcCall.Arguments = args
+
+			// Send tool call event
+			toolCallEvent := event.NewToolCallEvent(a.Name(), funcCall)
+			eventCh <- toolCallEvent
+
+			// Execute the tool if we have it
+			if a.toolSet != nil {
+				tool, exists := a.toolSet.Get(toolCall.Function.Name)
+				if exists {
+					result, err := tool.Execute(ctx, args)
+					if err != nil {
+						return fmt.Errorf("tool execution failed for %s: %w", toolCall.Function.Name, err)
+					}
+
+					// Create function response
+					funcResponse := &event.FunctionResponse{
+						Name:   toolCall.Function.Name,
+						Result: result.Output,
+						ID:     toolCall.ID,
+					}
+
+					// Send tool response event
+					responseEvent := event.NewToolResponseEvent(a.Name(), funcResponse)
+					eventCh <- responseEvent
+
+					// Generate follow-up response incorporating tool result
+					followUpMessages := append(messages, message.NewAssistantMessage(""))
+					followUpMessages = append(followUpMessages, message.NewUserMessage(fmt.Sprintf("Tool %s returned: %s. Please provide a response incorporating this result.", toolCall.Function.Name, result.Output)))
+
+					finalResponse, err := a.model.GenerateWithMessages(ctx, followUpMessages, model.DefaultOptions())
+					if err != nil {
+						return fmt.Errorf("failed to generate follow-up response: %w", err)
+					}
+
+					// Send final response
+					finalContent := event.NewTextContent(finalResponse.Text)
+					finalEvent := event.NewEvent(a.Name(), finalContent)
+					eventCh <- finalEvent
+				} else {
+					return fmt.Errorf("tool not found: %s", toolCall.Function.Name)
+				}
+			}
+		}
+	} else {
+		// No tool calls, just send the text response
+		responseContent := event.NewTextContent(response.Text)
+		responseEvent := event.NewEvent(a.Name(), responseContent)
+		eventCh <- responseEvent
 	}
 
-	return messages, nil
+	return nil
+}
+
+// parseToolArguments parses JSON string arguments into a map.
+func (a *LLMAgent) parseToolArguments(jsonArgs string) (map[string]interface{}, error) {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonArgs), &args); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON arguments: %w", err)
+	}
+	return args, nil
+}
+
+// processFunctionCalls processes function calls in the content.
+func (a *LLMAgent) processFunctionCalls(ctx context.Context, content *event.Content, eventCh chan<- *event.Event) error {
+	if a.toolSet == nil {
+		return fmt.Errorf("no tools available for function calls")
+	}
+
+	functionCalls := content.GetFunctionCalls()
+	for _, call := range functionCalls {
+		// Get the tool
+		tool, exists := a.toolSet.Get(call.Name)
+		if !exists {
+			return fmt.Errorf("tool not found: %s", call.Name)
+		}
+
+		// Execute the tool
+		result, err := tool.Execute(ctx, call.Arguments)
+		if err != nil {
+			return fmt.Errorf("tool execution failed for %s: %w", call.Name, err)
+		}
+
+		// Create function response
+		response := &event.FunctionResponse{
+			Name:   call.Name,
+			Result: result.Output,
+			ID:     call.ID,
+		}
+
+		// Send tool response event
+		responseEvent := event.NewToolResponseEvent(a.Name(), response)
+		eventCh <- responseEvent
+	}
+
+	return nil
 }
 
 // GetModel returns the model used by this agent.
@@ -322,17 +302,17 @@ func (a *LLMAgent) GetModel() model.Model {
 	return a.model
 }
 
-// GetMemory returns the memory used by this agent.
-func (a *LLMAgent) GetMemory() memory.Memory {
-	return a.memory
-}
-
-// GetSystemPrompt returns the system prompt used by this agent.
+// GetSystemPrompt returns the system prompt.
 func (a *LLMAgent) GetSystemPrompt() string {
 	return a.systemPrompt
 }
 
-// GetToolSet returns the tool set used by this agent.
+// GetToolSet returns the tool set.
 func (a *LLMAgent) GetToolSet() *tool.ToolSet {
 	return a.toolSet
+}
+
+// HasTools returns true if the agent has tools available.
+func (a *LLMAgent) HasTools() bool {
+	return a.toolSet != nil && a.toolSet.Size() > 0
 }

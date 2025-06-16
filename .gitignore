@@ -11,6 +11,8 @@ coverage.out
 coverage.html
 cover.html
 plan*.md
+PR*.md
+pr*.md
 claude3.7.sh
 dpskv3.sh
 .cursorignore
