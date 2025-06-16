@@ -425,7 +425,12 @@ func convertToolsToGeminiFunctions(tools []*tool.ToolDefinition) []*genai.Functi
 
 		// Add each parameter to the schema
 		for name, prop := range tool.Parameters {
-			schema.Properties[name] = convertPropertyToGeminiSchema(prop)
+			if propMap, ok := prop.(map[string]interface{}); ok {
+				// Convert from map to Property first
+				property := propertyFromMap(propMap)
+				schema.Properties[name] = convertPropertyToGeminiSchema(property)
+			}
+			// For now, only handle map[string]interface{} case for minimal implementation
 		}
 
 		funcs = append(funcs, &genai.FunctionDeclaration{

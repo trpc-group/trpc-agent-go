@@ -14,7 +14,7 @@ type Event struct {
 	ID        string  `json:"id"`
 	Timestamp float64 `json:"timestamp"`
 
-	// Content-first design (adk-python style)
+	// Content-first design for rich message structure
 	Author  string   `json:"author"`  // "user" | agent name
 	Content *Content `json:"content"` // Required - all events have content
 
