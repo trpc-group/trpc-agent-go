@@ -32,10 +32,12 @@ func createRealModel() (model.Model, error) {
 
 	switch *modelProvider {
 	case "openai":
-		// Use the OpenAI model implementation from existing code
-		openaiModel := model.NewOpenAIModel(*modelName,
+		defaultOptions := model.DefaultOptions()
+		defaultOptions.PresencePenalty = 1
+		openaiModel := model.NewOpenAIStreamingModel(*modelName,
 			model.WithOpenAIAPIKey(apiKey),
 			model.WithOpenAIBaseURL(*openaiURL),
+			model.WithOpenAIDefaultOptions(defaultOptions),
 		)
 		return openaiModel, nil
 	default:
