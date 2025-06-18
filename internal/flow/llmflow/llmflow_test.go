@@ -8,8 +8,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/flow"
 )
 
 // mockRequestProcessor for testing
@@ -119,8 +119,8 @@ func TestFlow_Run(t *testing.T) {
 
 	// Collect events
 	var events []*event.Event
-	for evt := range eventChan {
-		events = append(events, evt)
+	for e := range eventChan {
+		events = append(events, e)
 		if len(events) >= 3 { // Expect: preprocessing, LLM response, postprocessing
 			break
 		}
@@ -183,8 +183,8 @@ func TestFlow_NoModel(t *testing.T) {
 
 	// Collect events and expect an error event
 	var events []*event.Event
-	for evt := range eventChan {
-		events = append(events, evt)
+	for e := range eventChan {
+		events = append(events, e)
 	}
 
 	// Should have exactly one error event
@@ -232,8 +232,8 @@ func TestFlow_ModelError(t *testing.T) {
 
 	// If no immediate error, collect events
 	var events []*event.Event
-	for evt := range eventChan {
-		events = append(events, evt)
+	for e := range eventChan {
+		events = append(events, e)
 	}
 
 	// Should have no LLM response events since model fails
@@ -272,8 +272,8 @@ func TestFlow_NoProcessors(t *testing.T) {
 
 	// Collect events
 	var events []*event.Event
-	for evt := range eventChan {
-		events = append(events, evt)
+	for e := range eventChan {
+		events = append(events, e)
 	}
 
 	// Should have only LLM response event (no processor events)

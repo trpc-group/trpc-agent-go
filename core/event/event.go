@@ -63,8 +63,8 @@ func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event 
 	}
 }
 
-// NewFromResponse creates a new Event from a model Response.
-func NewFromResponse(invocationID, author string, response *model.Response) *Event {
+// NewResponseEvent creates a new Event from a model Response.
+func NewResponseEvent(invocationID, author string, response *model.Response) *Event {
 	return &Event{
 		Response:     response,
 		ID:           uuid.New().String(),

@@ -7,8 +7,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/flow"
 )
 
 // Flow provides the basic flow implementation.
@@ -103,7 +103,7 @@ func (f *Flow) runOneStep(
 	// 3. Process streaming responses.
 	for response := range responseChan {
 		// Create event from response using the clean constructor.
-		llmEvent := event.NewFromResponse(invocation.InvocationID, invocation.AgentName, response)
+		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
 
 		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
 

@@ -9,7 +9,6 @@ import (
 )
 
 // Invocation represents the context for a flow execution.
-// This is a minimal version - can be expanded later.
 type Invocation struct {
 	// AgentName is the name of the agent that is being invoked.
 	AgentName string
