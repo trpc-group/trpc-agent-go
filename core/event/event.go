@@ -46,7 +46,7 @@ func New(invocationID, author string, opts ...Option) *Event {
 
 // NewErrorEvent creates a new error Event with the specified error details.
 // This provides a clean way to create error events without manual field assignment.
-func NewErrorEvent(invocationID, author string, errorType, errorMessage string) *Event {
+func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event {
 	return &Event{
 		Response: &model.Response{
 			Object: "error",
