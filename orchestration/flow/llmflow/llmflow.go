@@ -28,23 +28,23 @@ func New(requestProcessors []flow.RequestProcessor, responseProcessors []flow.Re
 
 // Run executes the flow in a loop until completion.
 func (f *Flow) Run(ctx context.Context, invocation *flow.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 10) // Buffered channel for events
+	eventChan := make(chan *event.Event, 10) // Buffered channel for events.
 
 	go func() {
 		defer close(eventChan)
 
 		for {
-			// Check if context is cancelled
+			// Check if context is cancelled.
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
 
-			// Run one step (one LLM call cycle)
+			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
-				// Send error event through channel instead of just logging
+				// Send error event through channel instead of just logging.
 				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
@@ -60,12 +60,12 @@ func (f *Flow) Run(ctx context.Context, invocation *flow.Invocation) (<-chan *ev
 				return
 			}
 
-			// Exit conditions
+			// Exit conditions.
 			if lastEvent == nil || f.isFinalResponse(lastEvent) {
 				break
 			}
 
-			// Check for invocation end
+			// Check for invocation end.
 			if invocation.EndInvocation {
 				break
 			}
@@ -84,30 +84,30 @@ func (f *Flow) runOneStep(
 ) (*event.Event, error) {
 	var lastEvent *event.Event
 
-	// Initialize empty LLM request
+	// Initialize empty LLM request.
 	llmRequest := &model.Request{}
 
-	// 1. Preprocess (prepare request)
+	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
 
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
 
-	// 2. Call LLM (get response channel)
+	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Process streaming responses
+	// 3. Process streaming responses.
 	for response := range responseChan {
-		// Create event from response using the clean constructor
+		// Create event from response using the clean constructor.
 		llmEvent := event.NewFromResponse(invocation.InvocationID, invocation.AgentName, response)
 
 		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
 
-		// Send the LLM response event
+		// Send the LLM response event.
 		lastEvent = llmEvent
 		select {
 		case eventChan <- llmEvent:
@@ -118,7 +118,7 @@ func (f *Flow) runOneStep(
 		// 4. Postprocess each response
 		f.postprocess(ctx, invocation, response, eventChan)
 
-		// Check context cancellation
+		// Check context cancellation.
 		select {
 		case <-ctx.Done():
 			return lastEvent, ctx.Err()
@@ -175,7 +175,7 @@ func (f *Flow) postprocess(
 		return
 	}
 
-	// Run response processors - they send events directly to the channel
+	// Run response processors - they send events directly to the channel.
 	for _, processor := range f.responseProcessors {
 		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
 	}

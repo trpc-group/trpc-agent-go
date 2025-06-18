@@ -31,13 +31,11 @@ type Flow interface {
 // RequestProcessor processes LLM requests before they are sent to the model.
 type RequestProcessor interface {
 	// ProcessRequest processes the request and sends events directly to the provided channel.
-	// This is more efficient than returning a separate channel.
 	ProcessRequest(ctx context.Context, invocation *Invocation, req *model.Request, ch chan<- *event.Event)
 }
 
 // ResponseProcessor processes LLM responses after they are received from the model.
 type ResponseProcessor interface {
 	// ProcessResponse processes the response and sends events directly to the provided channel.
-	// This is more efficient than returning a separate channel and creates duality with RequestProcessor.
 	ProcessResponse(ctx context.Context, invocation *Invocation, rsp *model.Response, ch chan<- *event.Event)
 }
