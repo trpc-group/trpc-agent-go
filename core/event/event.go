@@ -64,7 +64,6 @@ func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event 
 }
 
 // NewFromResponse creates a new Event from a model Response.
-// This follows the Python ADK pattern of merging response data into events.
 func NewFromResponse(invocationID, author string, response *model.Response) *Event {
 	return &Event{
 		Response:     response,
