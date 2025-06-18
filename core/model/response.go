@@ -39,6 +39,23 @@ type Usage struct {
 }
 
 // Response is the response from the model.
+//
+// Error Handling Note:
+// The Error field in this struct represents API-level errors that occur
+// after successful communication with the model service. This is different
+// from function-level errors returned by GenerateContent(), which indicate
+// system-level failures that prevent communication entirely.
+//
+// Examples of Response.Error:
+// - API rate limit exceeded
+// - Content filtered by safety systems
+// - Model-specific processing errors
+// - Streaming connection errors
+//
+// Examples of function-level errors:
+// - Invalid request parameters
+// - Network connectivity issues
+// - Authentication failures
 type Response struct {
 	// ID is the unique identifier for this response.
 	ID string `json:"id"`
@@ -61,7 +78,9 @@ type Response struct {
 	// SystemFingerprint is a unique identifier for the backend configuration.
 	SystemFingerprint *string `json:"system_fingerprint,omitempty"`
 
-	// Error contains error information if the request failed.
+	// Error contains API-level error information if the request failed.
+	// This is nil for successful responses.
+	// Note: This is different from function-level errors returned by GenerateContent().
 	Error *ResponseError `json:"error,omitempty"`
 
 	// Timestamp when this response chunk was received (for streaming).
