@@ -10,15 +10,19 @@ import (
 
 // Event represents an event in conversation between agents and users.
 type Event struct {
-	// Embed model.Response for all LLM response functionality.
+	// Response is the base struct for all LLM response functionality.
 	model.Response
 
-	// Event-specific fields
+	// InvocationID is the invocation ID of the event.
 	InvocationID string `json:"invocationId"`
-	Author       string `json:"author"`
 
-	// Override the ID and Timestamp with Event-specific behavior
-	ID        string  `json:"id"`
+	// Author is the author of the event.
+	Author string `json:"author"`
+
+	// ID is the unique identifier of the event.
+	ID string `json:"id"`
+
+	// Timestamp is the timestamp of the event.
 	Timestamp float64 `json:"timestamp"`
 }
 
