@@ -13,18 +13,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 )
 
+const defaultChannelBufferSize = 256
+
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
-	client  openai.Client
-	name    string
-	baseURL string
-	apiKey  string
+	client            openai.Client
+	name              string
+	baseURL           string
+	apiKey            string
+	channelBufferSize int
 }
 
 // Options contains configuration options for creating a Model.
 type Options struct {
-	APIKey  string
-	BaseURL string // Optional: for OpenAI-compatible APIs
+	APIKey            string
+	BaseURL           string // Optional: for OpenAI-compatible APIs
+	ChannelBufferSize int    // Buffer size for response channels (default: 256)
 }
 
 // New creates a new OpenAI-like model.
@@ -41,11 +45,18 @@ func New(name string, opts Options) *Model {
 
 	client := openai.NewClient(clientOpts...)
 
+	// Set default channel buffer size if not specified.
+	channelBufferSize := opts.ChannelBufferSize
+	if channelBufferSize <= 0 {
+		channelBufferSize = defaultChannelBufferSize
+	}
+
 	return &Model{
-		client:  client,
-		name:    name,
-		baseURL: opts.BaseURL,
-		apiKey:  opts.APIKey,
+		client:            client,
+		name:              name,
+		baseURL:           opts.BaseURL,
+		apiKey:            opts.APIKey,
+		channelBufferSize: channelBufferSize,
 	}
 }
 
@@ -58,7 +69,7 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
-	responseChan := make(chan *model.Response, 10)
+	responseChan := make(chan *model.Response, m.channelBufferSize)
 
 	// Convert our request format to OpenAI format.
 	chatRequest := openai.ChatCompletionNewParams{

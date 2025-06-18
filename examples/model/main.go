@@ -27,12 +27,14 @@ func main() {
 	fmt.Printf("- Base URL: %s\n", baseURL)
 	fmt.Printf("- Model Name: %s\n", modelName)
 	fmt.Printf("- API Key: %s***\n", maskAPIKey(apiKey))
+	fmt.Printf("- Channel Buffer Size: 512\n")
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance using the new package structure.
 	llm := openailike.New(modelName, openailike.Options{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
+		APIKey:            apiKey,
+		BaseURL:           baseURL,
+		ChannelBufferSize: 512, // Custom buffer size for high-throughput scenarios.
 	})
 
 	ctx := context.Background()

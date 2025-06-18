@@ -98,7 +98,7 @@ func TestFlow_Run(t *testing.T) {
 	respProcessor := &mockResponseProcessor{ShouldGenerateEvent: true}
 
 	// Create a new flow with processors
-	f := New([]flow.RequestProcessor{reqProcessor}, []flow.ResponseProcessor{respProcessor})
+	f := New([]flow.RequestProcessor{reqProcessor}, []flow.ResponseProcessor{respProcessor}, Options{})
 
 	// Create invocation context
 	invocation := &flow.Invocation{
@@ -136,8 +136,8 @@ func TestFlow_Run(t *testing.T) {
 	hasLLMResponse := false
 	hasPostprocessing := false
 
-	for _, evt := range events {
-		switch evt.Object {
+	for _, e := range events {
+		switch e.Object {
 		case "preprocessing":
 			hasPreprocessing = true
 		case "chat.completion":
@@ -160,7 +160,7 @@ func TestFlow_Run(t *testing.T) {
 
 func TestFlow_NoModel(t *testing.T) {
 	// Create a new flow with no processors
-	f := New(nil, nil)
+	f := New(nil, nil, Options{})
 
 	// Create invocation context without model
 	invocation := &flow.Invocation{
@@ -209,7 +209,7 @@ func TestFlow_NoModel(t *testing.T) {
 
 func TestFlow_ModelError(t *testing.T) {
 	// Create a new flow with no processors
-	f := New(nil, nil)
+	f := New(nil, nil, Options{})
 
 	// Create invocation context with error model
 	invocation := &flow.Invocation{
@@ -238,8 +238,8 @@ func TestFlow_ModelError(t *testing.T) {
 
 	// Should have no LLM response events since model fails
 	hasLLMResponse := false
-	for _, evt := range events {
-		if evt.Object == "chat.completion" {
+	for _, e := range events {
+		if e.Object == "chat.completion" {
 			hasLLMResponse = true
 		}
 	}
@@ -251,7 +251,7 @@ func TestFlow_ModelError(t *testing.T) {
 
 func TestFlow_NoProcessors(t *testing.T) {
 	// Create a new flow with no processors
-	f := New(nil, nil)
+	f := New(nil, nil, Options{})
 
 	// Create invocation context
 	invocation := &flow.Invocation{
@@ -287,7 +287,7 @@ func TestFlow_NoProcessors(t *testing.T) {
 }
 
 func TestFlow_Interfaces(t *testing.T) {
-	f := New(nil, nil)
+	f := New(nil, nil, Options{})
 
 	// Test that Flow implements the flow.Flow interface
 	var _ flow.Flow = f

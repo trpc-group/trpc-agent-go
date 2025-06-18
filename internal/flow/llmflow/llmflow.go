@@ -11,24 +11,43 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
+const defaultChannelBufferSize = 256
+
+// Options contains configuration options for creating a Flow.
+type Options struct {
+	ChannelBufferSize int // Buffer size for event channels (default: 256)
+}
+
 // Flow provides the basic flow implementation.
 type Flow struct {
 	requestProcessors  []flow.RequestProcessor
 	responseProcessors []flow.ResponseProcessor
+	channelBufferSize  int
 }
 
 // New creates a new basic flow instance with the provided processors.
 // Processors are immutable after creation.
-func New(requestProcessors []flow.RequestProcessor, responseProcessors []flow.ResponseProcessor) *Flow {
+func New(
+	requestProcessors []flow.RequestProcessor,
+	responseProcessors []flow.ResponseProcessor,
+	opts Options,
+) *Flow {
+	// Set default channel buffer size if not specified.
+	channelBufferSize := opts.ChannelBufferSize
+	if channelBufferSize <= 0 {
+		channelBufferSize = defaultChannelBufferSize
+	}
+
 	return &Flow{
 		requestProcessors:  requestProcessors,
 		responseProcessors: responseProcessors,
+		channelBufferSize:  channelBufferSize,
 	}
 }
 
 // Run executes the flow in a loop until completion.
 func (f *Flow) Run(ctx context.Context, invocation *flow.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 10) // Buffered channel for events.
+	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
 	go func() {
 		defer close(eventChan)
