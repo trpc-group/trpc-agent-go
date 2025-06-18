@@ -17,15 +17,15 @@ type mockRequestProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *mockRequestProcessor) ProcessRequest(ctx context.Context, invocationCtx *flow.InvocationContext, request *model.Request, eventChan chan<- *event.Event) {
+func (m *mockRequestProcessor) ProcessRequest(ctx context.Context, invocation *flow.Invocation, request *model.Request, eventChan chan<- *event.Event) {
 	// Just send an event if requested, don't modify the request for now
 	if m.ShouldGenerateEvent {
-		if invocationCtx == nil {
-			log.Errorf("invocationCtx is nil")
+		if invocation == nil {
+			log.Errorf("invocation is nil")
 			return
 		}
 
-		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
+		evt := event.New(invocation.InvocationID, invocation.AgentName)
 		evt.Object = "preprocessing"
 
 		select {
@@ -42,9 +42,9 @@ type mockResponseProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *mockResponseProcessor) ProcessResponse(ctx context.Context, invocationCtx *flow.InvocationContext, response *model.Response, eventChan chan<- *event.Event) {
+func (m *mockResponseProcessor) ProcessResponse(ctx context.Context, invocation *flow.Invocation, response *model.Response, eventChan chan<- *event.Event) {
 	if m.ShouldGenerateEvent {
-		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
+		evt := event.New(invocation.InvocationID, invocation.AgentName)
 		evt.Object = "postprocessing"
 
 		select {
@@ -101,7 +101,7 @@ func TestFlow_Run(t *testing.T) {
 	f := New([]flow.RequestProcessor{reqProcessor}, []flow.ResponseProcessor{respProcessor})
 
 	// Create invocation context
-	invocationCtx := &flow.InvocationContext{
+	invocation := &flow.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: false},
@@ -112,7 +112,7 @@ func TestFlow_Run(t *testing.T) {
 	defer cancel()
 
 	// Run the flow
-	eventChan, err := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocation)
 	if err != nil {
 		t.Fatalf("Flow.Run() failed: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestFlow_NoModel(t *testing.T) {
 	f := New(nil, nil)
 
 	// Create invocation context without model
-	invocationCtx := &flow.InvocationContext{
+	invocation := &flow.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        nil, // No model - should return error
@@ -174,7 +174,7 @@ func TestFlow_NoModel(t *testing.T) {
 	defer cancel()
 
 	// Run the flow - should return error event
-	eventChan, err := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocation)
 	if err != nil {
 		// This is expected since we have no model
 		t.Logf("Expected error when no model: %v", err)
@@ -212,7 +212,7 @@ func TestFlow_ModelError(t *testing.T) {
 	f := New(nil, nil)
 
 	// Create invocation context with error model
-	invocationCtx := &flow.InvocationContext{
+	invocation := &flow.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: true},
@@ -223,7 +223,7 @@ func TestFlow_ModelError(t *testing.T) {
 	defer cancel()
 
 	// Run the flow
-	eventChan, err := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocation)
 	if err != nil {
 		// This is expected since model will error
 		t.Logf("Expected error from model: %v", err)
@@ -254,7 +254,7 @@ func TestFlow_NoProcessors(t *testing.T) {
 	f := New(nil, nil)
 
 	// Create invocation context
-	invocationCtx := &flow.InvocationContext{
+	invocation := &flow.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: false},
@@ -265,7 +265,7 @@ func TestFlow_NoProcessors(t *testing.T) {
 	defer cancel()
 
 	// Run the flow
-	eventChan, err := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocation)
 	if err != nil {
 		t.Fatalf("Flow.Run() failed: %v", err)
 	}
