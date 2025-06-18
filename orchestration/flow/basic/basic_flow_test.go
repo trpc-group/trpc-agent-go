@@ -22,7 +22,7 @@ func (m *MockRequestProcessor) ProcessRequest(ctx context.Context, invocationCtx
 	request.Messages = append(request.Messages, model.NewUserMessage("Test message from processor"))
 
 	if m.ShouldGenerateEvent {
-		evt := event.NewEvent(invocationCtx.InvocationID, invocationCtx.AgentName)
+		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
 		evt.Object = "preprocessing"
 
 		select {
@@ -36,17 +36,21 @@ func (m *MockRequestProcessor) ProcessRequest(ctx context.Context, invocationCtx
 
 // MockResponseProcessor for testing
 type MockResponseProcessor struct {
-	ShouldError bool
+	ShouldGenerateEvent bool
 }
 
-func (m *MockResponseProcessor) ProcessResponse(ctx context.Context, invocationCtx *flow.InvocationContext, response *model.Response) ([]*event.Event, error) {
-	if m.ShouldError {
-		return nil, errors.New("mock processor error")
-	}
+func (m *MockResponseProcessor) ProcessResponse(ctx context.Context, invocationCtx *flow.InvocationContext, response *model.Response, eventChan chan<- *event.Event) {
+	if m.ShouldGenerateEvent {
+		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
+		evt.Object = "postprocessing"
 
-	evt := event.NewEvent(invocationCtx.InvocationID, invocationCtx.AgentName)
-	evt.Object = "postprocessing"
-	return []*event.Event{evt}, nil
+		select {
+		case eventChan <- evt:
+			log.Debugf("MockResponseProcessor sent event")
+		case <-ctx.Done():
+			log.Debugf("MockResponseProcessor cancelled")
+		}
+	}
 }
 
 // MockModel for testing
@@ -91,7 +95,7 @@ func TestFlow_Run(t *testing.T) {
 
 	// Add processors
 	f.AddRequestProcessor(&MockRequestProcessor{ShouldGenerateEvent: true})
-	f.AddResponseProcessor(&MockResponseProcessor{ShouldError: false})
+	f.AddResponseProcessor(&MockResponseProcessor{ShouldGenerateEvent: true})
 
 	// Create invocation context
 	invocationCtx := &flow.InvocationContext{
@@ -105,7 +109,10 @@ func TestFlow_Run(t *testing.T) {
 	defer cancel()
 
 	// Run the flow
-	eventChan := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocationCtx)
+	if err != nil {
+		t.Fatalf("Flow.Run() failed: %v", err)
+	}
 
 	// Collect events
 	var events []*event.Event
@@ -152,11 +159,47 @@ func TestFlow_NoModel(t *testing.T) {
 	// Create a new flow
 	f := New()
 
-	// Create invocation context without model (mock mode)
+	// Create invocation context without model
 	invocationCtx := &flow.InvocationContext{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
-		Model:        nil, // No model - should use mock
+		Model:        nil, // No model - should return error
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Run the flow - should return error
+	eventChan, err := f.Run(ctx, invocationCtx)
+	if err != nil {
+		// This is expected since we have no model
+		t.Logf("Expected error when no model: %v", err)
+		return
+	}
+
+	// If no immediate error, the error should happen during execution
+	// Collect events and see if flow terminates due to error
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+	}
+
+	// Should have no events since callLLM fails
+	if len(events) > 0 {
+		t.Errorf("Expected no events when no model available, got %d", len(events))
+	}
+}
+
+func TestFlow_ModelError(t *testing.T) {
+	// Create a new flow
+	f := New()
+
+	// Create invocation context with error model
+	invocationCtx := &flow.InvocationContext{
+		AgentName:    "test-agent",
+		InvocationID: "test-invocation-123",
+		Model:        &MockModel{ShouldError: true},
 	}
 
 	// Create context with timeout
@@ -164,26 +207,29 @@ func TestFlow_NoModel(t *testing.T) {
 	defer cancel()
 
 	// Run the flow
-	eventChan := f.Run(ctx, invocationCtx)
+	eventChan, err := f.Run(ctx, invocationCtx)
+	if err != nil {
+		// This is expected since model will error
+		t.Logf("Expected error from model: %v", err)
+		return
+	}
 
-	// Collect events
+	// If no immediate error, collect events
 	var events []*event.Event
 	for evt := range eventChan {
 		events = append(events, evt)
 	}
 
-	// Should have at least one mock event
-	if len(events) == 0 {
-		t.Error("Expected at least one event in mock mode")
+	// Should have no LLM response events since model fails
+	hasLLMResponse := false
+	for _, evt := range events {
+		if evt.Object == "chat.completion" {
+			hasLLMResponse = true
+		}
 	}
 
-	// Check mock event
-	mockEvent := events[0]
-	if mockEvent.Model != "mock" {
-		t.Errorf("Expected mock model, got %s", mockEvent.Model)
-	}
-	if mockEvent.Object != "chat.completion" {
-		t.Errorf("Expected chat.completion object, got %s", mockEvent.Object)
+	if hasLLMResponse {
+		t.Error("Should not have LLM response when model errors")
 	}
 }
 

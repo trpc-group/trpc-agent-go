@@ -22,7 +22,8 @@ type InvocationContext struct {
 // Flow is the interface that all flows must implement.
 type Flow interface {
 	// Run executes the flow and yields events as they occur.
-	Run(ctx context.Context, invocationCtx *InvocationContext) <-chan *event.Event
+	// Returns the event channel and any setup error.
+	Run(ctx context.Context, invocationCtx *InvocationContext) (<-chan *event.Event, error)
 }
 
 // RequestProcessor processes LLM requests before they are sent to the model.
@@ -34,9 +35,9 @@ type RequestProcessor interface {
 
 // ResponseProcessor processes LLM responses after they are received from the model.
 type ResponseProcessor interface {
-	// ProcessResponse processes the response and may generate additional events.
-	// Returns events to be yielded by the flow.
-	ProcessResponse(ctx context.Context, invocationCtx *InvocationContext, response *model.Response) ([]*event.Event, error)
+	// ProcessResponse processes the response and sends events directly to the provided channel.
+	// This is more efficient than returning a separate channel and creates duality with RequestProcessor.
+	ProcessResponse(ctx context.Context, invocationCtx *InvocationContext, response *model.Response, eventChan chan<- *event.Event)
 }
 
 // ProcessorRegistry manages request and response processors.

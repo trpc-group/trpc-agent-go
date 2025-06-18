@@ -3,6 +3,7 @@ package basic
 
 import (
 	"context"
+	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -18,10 +19,7 @@ type Flow struct {
 
 // New creates a new basic flow instance.
 func New() *Flow {
-	return &Flow{
-		requestProcessors:  make([]flow.RequestProcessor, 0),
-		responseProcessors: make([]flow.ResponseProcessor, 0),
-	}
+	return &Flow{}
 }
 
 // AddRequestProcessor adds a request processor.
@@ -45,7 +43,7 @@ func (f *Flow) GetResponseProcessors() []flow.ResponseProcessor {
 }
 
 // Run executes the flow in a loop until completion.
-func (f *Flow) Run(ctx context.Context, invocationCtx *flow.InvocationContext) <-chan *event.Event {
+func (f *Flow) Run(ctx context.Context, invocationCtx *flow.InvocationContext) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, 10) // Buffered channel for events
 
 	go func() {
@@ -60,7 +58,11 @@ func (f *Flow) Run(ctx context.Context, invocationCtx *flow.InvocationContext) <
 			}
 
 			// Run one step (one LLM call cycle)
-			lastEvent := f.runOneStep(ctx, invocationCtx, eventChan)
+			lastEvent, err := f.runOneStep(ctx, invocationCtx, eventChan)
+			if err != nil {
+				log.Errorf("Flow step failed for agent %s: %v", invocationCtx.AgentName, err)
+				return
+			}
 
 			// Exit conditions
 			if lastEvent == nil || f.isFinalResponse(lastEvent) {
@@ -74,12 +76,12 @@ func (f *Flow) Run(ctx context.Context, invocationCtx *flow.InvocationContext) <
 		}
 	}()
 
-	return eventChan
+	return eventChan, nil
 }
 
 // runOneStep executes one step of the flow (one LLM call cycle).
 // Returns the last event generated, or nil if no events.
-func (f *Flow) runOneStep(ctx context.Context, invocationCtx *flow.InvocationContext, eventChan chan<- *event.Event) *event.Event {
+func (f *Flow) runOneStep(ctx context.Context, invocationCtx *flow.InvocationContext, eventChan chan<- *event.Event) (*event.Event, error) {
 	var lastEvent *event.Event
 
 	// Initialize empty LLM request at the beginning (following Python pattern: llm_request = LlmRequest())
@@ -89,32 +91,43 @@ func (f *Flow) runOneStep(ctx context.Context, invocationCtx *flow.InvocationCon
 	f.preprocess(ctx, invocationCtx, llmRequest, eventChan)
 
 	if invocationCtx.EndInvocation {
-		return lastEvent
+		return lastEvent, nil
 	}
 
-	// 2. Call LLM (core model interaction)
-	if llmEvent := f.callLLM(ctx, invocationCtx, llmRequest); llmEvent != nil {
+	// 2. Call LLM (get response channel)
+	responseChan, err := f.callLLM(ctx, invocationCtx, llmRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Process streaming responses
+	for response := range responseChan {
+		// Create event from response
+		llmEvent := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
+		llmEvent.Response = *response
+
+		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocationCtx.AgentName, response.Done)
+
+		// Send the LLM response event
 		lastEvent = llmEvent
 		select {
 		case eventChan <- llmEvent:
 		case <-ctx.Done():
-			return lastEvent
+			return lastEvent, ctx.Err()
+		}
+
+		// 4. Postprocess each response
+		f.postprocess(ctx, invocationCtx, response, eventChan)
+
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return lastEvent, ctx.Err()
+		default:
 		}
 	}
 
-	// 3. Postprocess (handle response)
-	if postprocessEvents := f.postprocess(ctx, invocationCtx, lastEvent); len(postprocessEvents) > 0 {
-		for _, evt := range postprocessEvents {
-			lastEvent = evt
-			select {
-			case eventChan <- evt:
-			case <-ctx.Done():
-				return lastEvent
-			}
-		}
-	}
-
-	return lastEvent
+	return lastEvent, nil
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -126,93 +139,33 @@ func (f *Flow) preprocess(ctx context.Context, invocationCtx *flow.InvocationCon
 }
 
 // callLLM performs the actual LLM call using core/model.
-func (f *Flow) callLLM(ctx context.Context, invocationCtx *flow.InvocationContext, llmRequest *model.Request) *event.Event {
+func (f *Flow) callLLM(ctx context.Context, invocationCtx *flow.InvocationContext, llmRequest *model.Request) (<-chan *model.Response, error) {
 	if invocationCtx.Model == nil {
-		// Create a simple response event when no model is available
-		llmEvent := event.NewEvent(invocationCtx.InvocationID, invocationCtx.AgentName)
-		llmEvent.Object = "chat.completion"
-		llmEvent.Model = "mock"
-		llmEvent.Done = true
-		log.Debugf("Using mock model for agent %s", invocationCtx.AgentName)
-		return llmEvent
+		return nil, errors.New("no model available for LLM call")
 	}
 
-	// Ensure request has some basic messages if empty after preprocessing
-	if len(llmRequest.Messages) == 0 {
-		llmRequest.Messages = []model.Message{
-			model.NewSystemMessage("You are a helpful assistant."),
-			model.NewUserMessage("Hello, how can you help me?"),
-		}
-		log.Debugf("Added default messages to empty request for agent %s", invocationCtx.AgentName)
-	}
-
-	// Set default model if not specified
-	if llmRequest.Model == "" {
-		llmRequest.Model = "gpt-3.5-turbo"
-	}
-
-	// Set streaming if not specified
-	if !llmRequest.Stream {
-		llmRequest.Stream = true
-	}
-
-	log.Debugf("Calling LLM for agent %s with model %s", invocationCtx.AgentName, llmRequest.Model)
+	log.Debugf("Calling LLM for agent %s", invocationCtx.AgentName)
 
 	// Call the model
 	responseChan, err := invocationCtx.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
-		// Create error event by populating the embedded Response fields directly
-		errorEvent := event.NewEvent(invocationCtx.InvocationID, invocationCtx.AgentName)
-		errorEvent.Object = "error"
-		errorEvent.Done = true
-		errorEvent.Error = &model.ResponseError{
-			Type:    "llm_call_error",
-			Message: err.Error(),
-		}
 		log.Errorf("LLM call failed for agent %s: %v", invocationCtx.AgentName, err)
-		return errorEvent
+		return nil, err
 	}
 
-	var lastEvent *event.Event
-
-	// Process streaming responses
-	for response := range responseChan {
-		llmEvent := event.NewEvent(invocationCtx.InvocationID, invocationCtx.AgentName)
-
-		// Directly populate the embedded model.Response fields
-		llmEvent.Response = *response
-
-		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocationCtx.AgentName, response.Done)
-		lastEvent = llmEvent
-
-		// For streaming, we only return the final complete response
-		if response.Done {
-			break
-		}
-	}
-
-	return lastEvent
+	return responseChan, nil
 }
 
 // postprocess handles post-LLM call processing using response processors.
-func (f *Flow) postprocess(ctx context.Context, invocationCtx *flow.InvocationContext, llmEvent *event.Event) []*event.Event {
-	if llmEvent == nil {
-		return nil
+func (f *Flow) postprocess(ctx context.Context, invocationCtx *flow.InvocationContext, llmResponse *model.Response, eventChan chan<- *event.Event) {
+	if llmResponse == nil {
+		return
 	}
 
-	var allEvents []*event.Event
-
-	// Run response processors
+	// Run response processors - they send events directly to the channel
 	for _, processor := range f.responseProcessors {
-		events, err := processor.ProcessResponse(ctx, invocationCtx, &llmEvent.Response)
-		if err != nil {
-			log.Errorf("Response processor failed for agent %s: %v", invocationCtx.AgentName, err)
-			continue
-		}
-		allEvents = append(allEvents, events...)
+		processor.ProcessResponse(ctx, invocationCtx, llmResponse, eventChan)
 	}
-
-	return allEvents
 }
 
 // isFinalResponse determines if the event represents a final response.
