@@ -23,17 +23,17 @@ type Event struct {
 	ID string `json:"id"`
 
 	// Timestamp is the timestamp of the event.
-	Timestamp float64 `json:"timestamp"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Option is a function that can be used to configure the Event.
 type Option func(*Event)
 
-// NewEvent creates a new Event with generated ID and timestamp.
-func NewEvent(invocationID, author string, opts ...Option) *Event {
+// New creates a new Event with generated ID and timestamp.
+func New(invocationID, author string, opts ...Option) *Event {
 	e := &Event{
 		ID:           uuid.New().String(),
-		Timestamp:    float64(time.Now().Unix()),
+		Timestamp:    time.Now(),
 		InvocationID: invocationID,
 		Author:       author,
 	}
