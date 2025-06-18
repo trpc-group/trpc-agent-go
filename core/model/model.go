@@ -1,7 +1,45 @@
-// Package model provides interfaces and implementations for working with LLMs.
+// Package model provides interfaces for working with LLMs.
 package model
 
+import "context"
+
 // Model is the interface for all language models.
+//
+// Error Handling Strategy:
+// This interface uses a dual-layer error handling approach:
+//
+// 1. Function-level errors (returned as `error`):
+//   - System-level failures that prevent communication
+//   - Examples: nil request, network issues, invalid parameters
+//   - These prevent the channel from being created or used
+//
+// 2. Response-level errors (Response.Error field):
+//   - API-level errors returned by the model service
+//   - Examples: API rate limits, content filtering, model errors
+//   - These are delivered through the response channel as structured errors
+//
+// Usage pattern:
+//
+//	responseChan, err := model.GenerateContent(ctx, request)
+//	if err != nil {
+//	    // Handle system-level errors (cannot communicate)
+//	    return fmt.Errorf("failed to generate content: %w", err)
+//	}
+//
+//	for response := range responseChan {
+//	    if response.Error != nil {
+//	        // Handle API-level errors (communication succeeded, but API returned error)
+//	        return fmt.Errorf("API error: %s", response.Error.Message)
+//	    }
+//	    // Process successful response...
+//	}
 type Model interface {
-	// TODO: Implement model interface.
+	// GenerateContent generates content from the given request.
+	//
+	// Returns:
+	// - A channel of Response objects for streaming results
+	// - An error for system-level failures (prevents communication)
+	//
+	// The Response objects may contain their own Error field for API-level errors.
+	GenerateContent(ctx context.Context, request *Request) (<-chan *Response, error)
 }
