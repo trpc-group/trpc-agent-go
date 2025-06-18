@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.9
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/openai/openai-go v1.5.0
 	go.uber.org/zap v1.27.0
 )
