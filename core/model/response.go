@@ -8,6 +8,7 @@ import (
 const (
 	ErrorTypeStreamError = "stream_error"
 	ErrorTypeAPIError    = "api_error"
+	ErrorTypeFlowError   = "flow_error"
 )
 
 // Choice represents a single completion choice.

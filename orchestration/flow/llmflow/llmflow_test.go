@@ -1,4 +1,4 @@
-package basic
+package llmflow
 
 import (
 	"context"
@@ -12,53 +12,56 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/flow"
 )
 
-// MockRequestProcessor for testing
-type MockRequestProcessor struct {
+// mockRequestProcessor for testing
+type mockRequestProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *MockRequestProcessor) ProcessRequest(ctx context.Context, invocationCtx *flow.InvocationContext, request *model.Request, eventChan chan<- *event.Event) {
-	// Add a test message to the request
-	request.Messages = append(request.Messages, model.NewUserMessage("Test message from processor"))
-
+func (m *mockRequestProcessor) ProcessRequest(ctx context.Context, invocationCtx *flow.InvocationContext, request *model.Request, eventChan chan<- *event.Event) {
+	// Just send an event if requested, don't modify the request for now
 	if m.ShouldGenerateEvent {
+		if invocationCtx == nil {
+			log.Errorf("invocationCtx is nil")
+			return
+		}
+
 		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
 		evt.Object = "preprocessing"
 
 		select {
 		case eventChan <- evt:
-			log.Debugf("MockRequestProcessor sent event")
+			log.Debugf("mockRequestProcessor sent event")
 		case <-ctx.Done():
-			log.Debugf("MockRequestProcessor cancelled")
+			log.Debugf("mockRequestProcessor cancelled")
 		}
 	}
 }
 
-// MockResponseProcessor for testing
-type MockResponseProcessor struct {
+// mockResponseProcessor for testing
+type mockResponseProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *MockResponseProcessor) ProcessResponse(ctx context.Context, invocationCtx *flow.InvocationContext, response *model.Response, eventChan chan<- *event.Event) {
+func (m *mockResponseProcessor) ProcessResponse(ctx context.Context, invocationCtx *flow.InvocationContext, response *model.Response, eventChan chan<- *event.Event) {
 	if m.ShouldGenerateEvent {
 		evt := event.New(invocationCtx.InvocationID, invocationCtx.AgentName)
 		evt.Object = "postprocessing"
 
 		select {
 		case eventChan <- evt:
-			log.Debugf("MockResponseProcessor sent event")
+			log.Debugf("mockResponseProcessor sent event")
 		case <-ctx.Done():
-			log.Debugf("MockResponseProcessor cancelled")
+			log.Debugf("mockResponseProcessor cancelled")
 		}
 	}
 }
 
-// MockModel for testing
-type MockModel struct {
+// mockModel for testing
+type mockModel struct {
 	ShouldError bool
 }
 
-func (m *MockModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
 	if m.ShouldError {
 		return nil, errors.New("mock model error")
 	}
@@ -90,18 +93,18 @@ func (m *MockModel) GenerateContent(ctx context.Context, request *model.Request)
 }
 
 func TestFlow_Run(t *testing.T) {
-	// Create a new flow
-	f := New()
+	// Create processors
+	reqProcessor := &mockRequestProcessor{ShouldGenerateEvent: true}
+	respProcessor := &mockResponseProcessor{ShouldGenerateEvent: true}
 
-	// Add processors
-	f.AddRequestProcessor(&MockRequestProcessor{ShouldGenerateEvent: true})
-	f.AddResponseProcessor(&MockResponseProcessor{ShouldGenerateEvent: true})
+	// Create a new flow with processors
+	f := New([]flow.RequestProcessor{reqProcessor}, []flow.ResponseProcessor{respProcessor})
 
 	// Create invocation context
 	invocationCtx := &flow.InvocationContext{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
-		Model:        &MockModel{ShouldError: false},
+		Model:        &mockModel{ShouldError: false},
 	}
 
 	// Create context with timeout
@@ -156,8 +159,8 @@ func TestFlow_Run(t *testing.T) {
 }
 
 func TestFlow_NoModel(t *testing.T) {
-	// Create a new flow
-	f := New()
+	// Create a new flow with no processors
+	f := New(nil, nil)
 
 	// Create invocation context without model
 	invocationCtx := &flow.InvocationContext{
@@ -170,7 +173,7 @@ func TestFlow_NoModel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Run the flow - should return error
+	// Run the flow - should return error event
 	eventChan, err := f.Run(ctx, invocationCtx)
 	if err != nil {
 		// This is expected since we have no model
@@ -178,28 +181,41 @@ func TestFlow_NoModel(t *testing.T) {
 		return
 	}
 
-	// If no immediate error, the error should happen during execution
-	// Collect events and see if flow terminates due to error
+	// Collect events and expect an error event
 	var events []*event.Event
 	for evt := range eventChan {
 		events = append(events, evt)
 	}
 
-	// Should have no events since callLLM fails
-	if len(events) > 0 {
-		t.Errorf("Expected no events when no model available, got %d", len(events))
+	// Should have exactly one error event
+	if len(events) != 1 {
+		t.Errorf("Expected 1 error event when no model available, got %d", len(events))
+		return
+	}
+
+	// Verify it's an error event
+	errorEvent := events[0]
+	if errorEvent.Object != "error" {
+		t.Errorf("Expected error object, got %s", errorEvent.Object)
+	}
+	if errorEvent.Error == nil {
+		t.Error("Expected error field to be set")
+	} else if errorEvent.Error.Type != model.ErrorTypeFlowError {
+		t.Errorf("Expected flow error type %s, got %s", model.ErrorTypeFlowError, errorEvent.Error.Type)
+	} else if errorEvent.Error.Message != "no model available for LLM call" {
+		t.Errorf("Expected specific error message, got %s", errorEvent.Error.Message)
 	}
 }
 
 func TestFlow_ModelError(t *testing.T) {
-	// Create a new flow
-	f := New()
+	// Create a new flow with no processors
+	f := New(nil, nil)
 
 	// Create invocation context with error model
 	invocationCtx := &flow.InvocationContext{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
-		Model:        &MockModel{ShouldError: true},
+		Model:        &mockModel{ShouldError: true},
 	}
 
 	// Create context with timeout
@@ -233,34 +249,46 @@ func TestFlow_ModelError(t *testing.T) {
 	}
 }
 
-func TestFlow_ProcessorRegistry(t *testing.T) {
-	f := New()
+func TestFlow_NoProcessors(t *testing.T) {
+	// Create a new flow with no processors
+	f := New(nil, nil)
 
-	// Test adding processors
-	reqProcessor := &MockRequestProcessor{}
-	respProcessor := &MockResponseProcessor{}
-
-	f.AddRequestProcessor(reqProcessor)
-	f.AddResponseProcessor(respProcessor)
-
-	// Test getting processors
-	reqProcessors := f.GetRequestProcessors()
-	respProcessors := f.GetResponseProcessors()
-
-	if len(reqProcessors) != 1 {
-		t.Errorf("Expected 1 request processor, got %d", len(reqProcessors))
+	// Create invocation context
+	invocationCtx := &flow.InvocationContext{
+		AgentName:    "test-agent",
+		InvocationID: "test-invocation-123",
+		Model:        &mockModel{ShouldError: false},
 	}
-	if len(respProcessors) != 1 {
-		t.Errorf("Expected 1 response processor, got %d", len(respProcessors))
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Run the flow
+	eventChan, err := f.Run(ctx, invocationCtx)
+	if err != nil {
+		t.Fatalf("Flow.Run() failed: %v", err)
+	}
+
+	// Collect events
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+	}
+
+	// Should have only LLM response event (no processor events)
+	if len(events) != 1 {
+		t.Errorf("Expected 1 event (LLM response), got %d", len(events))
+	}
+
+	if events[0].Object != "chat.completion" {
+		t.Errorf("Expected chat.completion object, got %s", events[0].Object)
 	}
 }
 
 func TestFlow_Interfaces(t *testing.T) {
-	f := New()
+	f := New(nil, nil)
 
 	// Test that Flow implements the flow.Flow interface
 	var _ flow.Flow = f
-
-	// Test that Flow implements ProcessorRegistry interface
-	var _ flow.ProcessorRegistry = f
 }

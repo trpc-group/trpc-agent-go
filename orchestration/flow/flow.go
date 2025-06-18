@@ -11,12 +11,14 @@ import (
 // InvocationContext represents the context for a flow execution.
 // This is a minimal version - can be expanded later.
 type InvocationContext struct {
-	AgentName     string
-	InvocationID  string
+	// AgentName is the name of the agent that is being invoked.
+	AgentName string
+	// InvocationID is the ID of the invocation.
+	InvocationID string
+	// EndInvocation is a flag that indicates if the invocation is complete.
 	EndInvocation bool
-	Session       interface{} // Can be defined later
-	UserContent   interface{} // Can be defined later
-	Model         model.Model // LLM model instance
+	// Model is the model that is being used for the invocation.
+	Model model.Model
 }
 
 // Flow is the interface that all flows must implement.
@@ -30,27 +32,12 @@ type Flow interface {
 type RequestProcessor interface {
 	// ProcessRequest processes the request and sends events directly to the provided channel.
 	// This is more efficient than returning a separate channel.
-	ProcessRequest(ctx context.Context, invocationCtx *InvocationContext, request *model.Request, eventChan chan<- *event.Event)
+	ProcessRequest(ctx context.Context, ic *InvocationContext, req *model.Request, ch chan<- *event.Event)
 }
 
 // ResponseProcessor processes LLM responses after they are received from the model.
 type ResponseProcessor interface {
 	// ProcessResponse processes the response and sends events directly to the provided channel.
 	// This is more efficient than returning a separate channel and creates duality with RequestProcessor.
-	ProcessResponse(ctx context.Context, invocationCtx *InvocationContext, response *model.Response, eventChan chan<- *event.Event)
-}
-
-// ProcessorRegistry manages request and response processors.
-type ProcessorRegistry interface {
-	// AddRequestProcessor adds a request processor.
-	AddRequestProcessor(processor RequestProcessor)
-
-	// AddResponseProcessor adds a response processor.
-	AddResponseProcessor(processor ResponseProcessor)
-
-	// GetRequestProcessors returns all registered request processors.
-	GetRequestProcessors() []RequestProcessor
-
-	// GetResponseProcessors returns all registered response processors.
-	GetResponseProcessors() []ResponseProcessor
+	ProcessResponse(ctx context.Context, ic *InvocationContext, rsp *model.Response, ch chan<- *event.Event)
 }
