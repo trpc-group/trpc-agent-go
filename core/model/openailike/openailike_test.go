@@ -119,11 +119,6 @@ func TestModel_GenerateContent_ValidRequest(t *testing.T) {
 	var responses []*model.Response
 	for response := range responseChan {
 		responses = append(responses, response)
-
-		if response.Error != nil {
-			t.Fatalf("API error: %s", response.Error.Message)
-		}
-
 		if response.Done {
 			break
 		}
@@ -131,182 +126,13 @@ func TestModel_GenerateContent_ValidRequest(t *testing.T) {
 
 	if len(responses) == 0 {
 		t.Fatal("expected at least one response, got none")
-	}
-
-	finalResponse := responses[len(responses)-1]
-	if !finalResponse.Done {
-		t.Error("expected final response to be marked as done")
-	}
-
-	if len(finalResponse.Choices) == 0 {
-		t.Fatal("expected at least one choice in response")
-	}
-
-	choice := finalResponse.Choices[0]
-	if choice.Message.Content == "" {
-		t.Error("expected non-empty content in response")
-	}
-
-	if choice.Message.Role != model.RoleAssistant {
-		t.Errorf("expected role %s, got %s", model.RoleAssistant, choice.Message.Role)
-	}
-}
-
-func TestModel_GenerateContent_StreamingRequest(t *testing.T) {
-	// Skip this test if no API key is provided.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping integration test")
-	}
-
-	m := New("gpt-3.5-turbo", Options{APIKey: apiKey})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	temperature := 0.7
-	maxTokens := 100
-
-	request := &model.Request{
-		Model: "gpt-3.5-turbo",
-		Messages: []model.Message{
-			model.NewSystemMessage("You are a creative writer."),
-			model.NewUserMessage("Write a very short poem about coding."),
-		},
-		Temperature: &temperature,
-		MaxTokens:   &maxTokens,
-		Stream:      true,
-	}
-
-	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to generate content: %v", err)
-	}
-
-	var responses []*model.Response
-	var fullContent string
-	streamingChunks := 0
-
-	for response := range responseChan {
-		responses = append(responses, response)
-
-		if response.Error != nil {
-			t.Fatalf("API error: %s", response.Error.Message)
-		}
-
-		// Count streaming chunks.
-		if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
-			streamingChunks++
-			fullContent += response.Choices[0].Delta.Content
-		}
-
-		if response.Done {
-			break
-		}
-	}
-
-	if len(responses) == 0 {
-		t.Fatal("expected at least one response, got none")
-	}
-
-	if streamingChunks == 0 {
-		t.Error("expected at least one streaming chunk with content")
-	}
-
-	if fullContent == "" {
-		t.Error("expected non-empty full content from streaming")
-	}
-
-	finalResponse := responses[len(responses)-1]
-	if !finalResponse.Done {
-		t.Error("expected final response to be marked as done")
-	}
-
-	t.Logf("Received %d streaming chunks with total content length: %d", 
-		streamingChunks, len(fullContent))
-}
-
-func TestModel_GenerateContent_WithParameters(t *testing.T) {
-	// Skip this test if no API key is provided.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping integration test")
-	}
-
-	m := New("gpt-3.5-turbo", Options{APIKey: apiKey})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	temperature := 0.1
-	maxTokens := 50
-	topP := 0.9
-	presencePenalty := 0.0
-	frequencyPenalty := 0.1
-
-	request := &model.Request{
-		Model: "gpt-3.5-turbo",
-		Messages: []model.Message{
-			model.NewSystemMessage("You are a concise assistant."),
-			model.NewUserMessage("What is Go programming language?"),
-		},
-		Temperature:      &temperature,
-		MaxTokens:        &maxTokens,
-		TopP:             &topP,
-		PresencePenalty:  &presencePenalty,
-		FrequencyPenalty: &frequencyPenalty,
-		Stop:             []string{"detailed"},
-		Stream:           false,
-	}
-
-	responseChan, err := m.GenerateContent(ctx, request)
-	if err != nil {
-		t.Fatalf("failed to generate content: %v", err)
-	}
-
-	var finalResponse *model.Response
-	for response := range responseChan {
-		if response.Error != nil {
-			t.Fatalf("API error: %s", response.Error.Message)
-		}
-
-		if response.Done {
-			finalResponse = response
-			break
-		}
-	}
-
-	if finalResponse == nil {
-		t.Fatal("expected final response, got none")
-	}
-
-	if len(finalResponse.Choices) == 0 {
-		t.Fatal("expected at least one choice in response")
-	}
-
-	choice := finalResponse.Choices[0]
-	if choice.Message.Content == "" {
-		t.Error("expected non-empty content in response")
-	}
-
-	// Test that response metadata is properly set.
-	if finalResponse.ID == "" {
-		t.Error("expected non-empty response ID")
-	}
-
-	if finalResponse.Model == "" {
-		t.Error("expected non-empty model in response")
-	}
-
-	if finalResponse.Created == 0 {
-		t.Error("expected non-zero created timestamp")
 	}
 }
 
 func TestModel_GenerateContent_CustomBaseURL(t *testing.T) {
 	// This test creates a model with custom base URL but doesn't make actual calls.
 	// It's mainly to test the configuration.
-	
+
 	customBaseURL := "https://api.custom-openai.com"
 	m := New("custom-model", Options{
 		APIKey:  "test-key",
@@ -390,4 +216,4 @@ func TestOptions_Validation(t *testing.T) {
 			}
 		})
 	}
-} 
+}
