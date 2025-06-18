@@ -39,8 +39,8 @@ func main() {
 
 	// Create an LLMAgent with configuration.
 	llmAgent := llmagent.New(llmagent.Options{
-		Name:              "demo-llm-agent",
-		ChannelBufferSize: 20,
+		Name:               "demo-llm-agent",
+		ChannelBufferSize:  20,
 		RequestProcessors:  []flow.RequestProcessor{},  // No custom processors for this demo.
 		ResponseProcessors: []flow.ResponseProcessor{}, // No custom processors for this demo.
 	})
@@ -69,16 +69,16 @@ func main() {
 	eventCount := 0
 	for event := range eventChan {
 		eventCount++
-		
+
 		fmt.Printf("\n--- Event %d ---\n", eventCount)
 		fmt.Printf("ID: %s\n", event.ID)
 		fmt.Printf("Author: %s\n", event.Author)
 		fmt.Printf("InvocationID: %s\n", event.InvocationID)
-		
+
 		if event.Error != nil {
 			fmt.Printf("Error: %s (Type: %s)\n", event.Error.Message, event.Error.Type)
 		}
-		
+
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 			if choice.Message.Content != "" {
@@ -91,16 +91,16 @@ func main() {
 				fmt.Printf("Finish Reason: %s\n", *choice.FinishReason)
 			}
 		}
-		
+
 		if event.Usage != nil {
 			fmt.Printf("Token Usage - Prompt: %d, Completion: %d, Total: %d\n",
 				event.Usage.PromptTokens,
 				event.Usage.CompletionTokens,
 				event.Usage.TotalTokens)
 		}
-		
+
 		fmt.Printf("Done: %t\n", event.Done)
-		
+
 		if event.Done {
 			break
 		}
@@ -108,7 +108,7 @@ func main() {
 
 	fmt.Printf("\n=== Execution Complete ===\n")
 	fmt.Printf("Total events processed: %d\n", eventCount)
-	
+
 	if eventCount == 0 {
 		fmt.Println("No events were generated. This might indicate:")
 		fmt.Println("- No request processors provided (agent had nothing to request)")
@@ -132,4 +132,4 @@ func maskAPIKey(apiKey string) string {
 		return "***"
 	}
 	return apiKey[:3]
-} 
+}
