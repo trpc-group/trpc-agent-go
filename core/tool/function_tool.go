@@ -46,9 +46,9 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 // It unmarshals the given arguments into the tool's arguments placeholder,
 // then calls the underlying function with these arguments.
 // Returns the result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) Call(ctx context.Context, args []byte) (any, error) {
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
-	if err := ft.unmarshaler.Unmarshal(args, &input); err != nil {
+	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
 	}
 	return ft.fn(input), nil
