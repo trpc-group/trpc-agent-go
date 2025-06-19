@@ -4,9 +4,6 @@ package tool
 import (
 	"context"
 	"encoding/json"
-
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // FunctionTool implements the Tool interface for executing functions with arguments.
@@ -30,19 +27,17 @@ func NewFunctionTool[I, O any](name, description string, fn func(I) O) *Function
 	return &FunctionTool[I, O]{name: name, description: description, fn: fn}
 }
 
-// Run executes the function tool with the provided arguments.
+// Call calls the function tool with the provided arguments.
 // It unmarshals the given arguments into the tool's arguments placeholder,
 // then calls the underlying function with these arguments.
 // Returns the result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) Run(ctx context.Context, args Arguments) (any, error) {
-	var argumentsPlaceholder I
-	err := json.Unmarshal(args, &argumentsPlaceholder)
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, args json.RawMessage) (any, error) {
+	var input I
+	err := json.Unmarshal(args, &input)
 	if err != nil {
 		return nil, err
 	}
-	result := ft.fn(argumentsPlaceholder)
-	log.Info(result)
-	return result, nil
+	return ft.fn(input), nil
 }
 
 // Declaration returns a pointer to a Declaration struct that describes the FunctionTool,
@@ -51,15 +46,6 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
 		Name:        "FunctionTool",
 		Description: "A tool that executes a function with provided arguments.",
-		Arguments:   Arguments{},
+		Arguments:   json.RawMessage{},
 	}
-}
-
-// Combine modifies the provided request to include the current FunctionTool.
-// It returns the updated request, the tool itself, and an error if any occurred during the process.
-// In this placeholder implementation, the request is returned unmodified along with the tool and a nil error.
-func (ft *FunctionTool[I, O]) Combine(req *model.Request) (*model.Request, Tool, error) {
-	// This is a placeholder implementation.
-	// In a real implementation, you would modify the request to include this tool.
-	return req, ft, nil
 }

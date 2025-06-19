@@ -4,19 +4,15 @@ package tool
 import (
 	"context"
 	"encoding/json"
-
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
 )
 
 // Tool defines the core interface that all tools must implement.
 type Tool interface {
-	// Run executes the tool with the provided context and arguments.
+	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
-	Run(ctx context.Context, args json.RawMessage) (any, error)
+	Call(ctx context.Context, args json.RawMessage) (any, error)
 	// Declaration returns the metadata describing the tool.
 	Declaration() *Declaration
-	// Combine merges the tool with a given request, possibly returning a new request and tool.
-	Combine(*model.Request) (*model.Request, Tool, error)
 }
 
 // Declaration describes the metadata of a tool, such as its name, description, and expected arguments.

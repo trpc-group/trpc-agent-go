@@ -7,13 +7,13 @@ import (
 )
 
 // Helper function to create Arguments from any struct.
-func toArguments(t *testing.T, v any) Arguments {
+func toArguments(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("failed to marshal: %v", err)
 	}
-	return Arguments(b)
+	return json.RawMessage(b)
 }
 
 func TestFunctionTool_Run_Success(t *testing.T) {
@@ -29,7 +29,7 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	input := Args{A: 2, B: 3}
 	args := toArguments(t, input)
 
-	result, err := tool.Run(context.Background(), args)
+	result, err := tool.Call(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
