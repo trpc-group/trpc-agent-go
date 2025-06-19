@@ -1,9 +1,13 @@
 package agent
 
-import "trpc.group/trpc-go/trpc-agent-go/core/model"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
+)
 
 // Invocation represents the context for a flow execution.
 type Invocation struct {
+	// Agent is the agent that is being invoked.
+	Agent Agent
 	// AgentName is the name of the agent that is being invoked.
 	AgentName string
 	// InvocationID is the ID of the invocation.
@@ -12,4 +16,11 @@ type Invocation struct {
 	EndInvocation bool
 	// Model is the model that is being used for the invocation.
 	Model model.Model
+	// Message is the message that is being sent to the agent.
+	Message model.Message
+	// RunOptions is the options for the Run method.
+	RunOptions RunOptions
 }
+
+// RunOptions is the options for the Run method.
+type RunOptions struct{}
