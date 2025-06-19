@@ -31,10 +31,9 @@ func NewFunctionTool[I, O any](name, description string, fn func(I) O) *Function
 // It unmarshals the given arguments into the tool's arguments placeholder,
 // then calls the underlying function with these arguments.
 // Returns the result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) Call(ctx context.Context, args json.RawMessage) (any, error) {
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, args []byte) (any, error) {
 	var input I
-	err := json.Unmarshal(args, &input)
-	if err != nil {
+	if err := json.Unmarshal(args, &input); err != nil {
 		return nil, err
 	}
 	return ft.fn(input), nil
@@ -46,6 +45,5 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
 		Name:        "FunctionTool",
 		Description: "A tool that executes a function with provided arguments.",
-		Arguments:   json.RawMessage{},
 	}
 }
