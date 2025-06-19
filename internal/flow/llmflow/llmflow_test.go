@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -17,7 +18,7 @@ type mockRequestProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *mockRequestProcessor) ProcessRequest(ctx context.Context, invocation *flow.Invocation, request *model.Request, eventChan chan<- *event.Event) {
+func (m *mockRequestProcessor) ProcessRequest(ctx context.Context, invocation *agent.Invocation, request *model.Request, eventChan chan<- *event.Event) {
 	// Just send an event if requested, don't modify the request for now
 	if m.ShouldGenerateEvent {
 		if invocation == nil {
@@ -42,7 +43,7 @@ type mockResponseProcessor struct {
 	ShouldGenerateEvent bool
 }
 
-func (m *mockResponseProcessor) ProcessResponse(ctx context.Context, invocation *flow.Invocation, response *model.Response, eventChan chan<- *event.Event) {
+func (m *mockResponseProcessor) ProcessResponse(ctx context.Context, invocation *agent.Invocation, response *model.Response, eventChan chan<- *event.Event) {
 	if m.ShouldGenerateEvent {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
 		evt.Object = "postprocessing"
@@ -101,7 +102,7 @@ func TestFlow_Run(t *testing.T) {
 	f := New([]flow.RequestProcessor{reqProcessor}, []flow.ResponseProcessor{respProcessor}, Options{})
 
 	// Create invocation context
-	invocation := &flow.Invocation{
+	invocation := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: false},
@@ -163,7 +164,7 @@ func TestFlow_NoModel(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	// Create invocation context without model
-	invocation := &flow.Invocation{
+	invocation := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        nil, // No model - should return error
@@ -212,7 +213,7 @@ func TestFlow_ModelError(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	// Create invocation context with error model
-	invocation := &flow.Invocation{
+	invocation := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: true},
@@ -254,7 +255,7 @@ func TestFlow_NoProcessors(t *testing.T) {
 	f := New(nil, nil, Options{})
 
 	// Create invocation context
-	invocation := &flow.Invocation{
+	invocation := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-invocation-123",
 		Model:        &mockModel{ShouldError: false},

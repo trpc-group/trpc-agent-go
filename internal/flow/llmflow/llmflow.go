@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -46,7 +47,7 @@ func New(
 }
 
 // Run executes the flow in a loop until completion.
-func (f *Flow) Run(ctx context.Context, invocation *flow.Invocation) (<-chan *event.Event, error) {
+func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, f.channelBufferSize) // Configurable buffered channel for events.
 
 	go func() {
@@ -98,7 +99,7 @@ func (f *Flow) Run(ctx context.Context, invocation *flow.Invocation) (<-chan *ev
 // Returns the last event generated, or nil if no events.
 func (f *Flow) runOneStep(
 	ctx context.Context,
-	invocation *flow.Invocation,
+	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
@@ -151,7 +152,7 @@ func (f *Flow) runOneStep(
 // preprocess handles pre-LLM call preparation using request processors.
 func (f *Flow) preprocess(
 	ctx context.Context,
-	invocation *flow.Invocation,
+	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	eventChan chan<- *event.Event,
 ) {
@@ -164,7 +165,7 @@ func (f *Flow) preprocess(
 // callLLM performs the actual LLM call using core/model.
 func (f *Flow) callLLM(
 	ctx context.Context,
-	invocation *flow.Invocation,
+	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (<-chan *model.Response, error) {
 	if invocation.Model == nil {
@@ -186,7 +187,7 @@ func (f *Flow) callLLM(
 // postprocess handles post-LLM call processing using response processors.
 func (f *Flow) postprocess(
 	ctx context.Context,
-	invocation *flow.Invocation,
+	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
