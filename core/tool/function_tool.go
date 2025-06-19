@@ -4,12 +4,14 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 )
 
 // FunctionTool implements the Tool interface for executing functions with arguments.
 type FunctionTool[I, O any] struct {
 	name        string
 	description string
+	arguments   map[string]*Schema
 	fn          func(I) O
 	unmarshaler unmarshaler
 }
@@ -34,7 +36,10 @@ type FunctionToolConfig struct {
 // Returns:
 //   - A pointer to the newly created FunctionTool.
 func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTool[I, O] {
-	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}}
+	var empty I
+	schema := generateJSONSchema(reflect.TypeOf(empty))
+
+	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, arguments: schema.Properties}
 }
 
 // Call calls the function tool with the provided arguments.
@@ -53,8 +58,9 @@ func (ft *FunctionTool[I, O]) Call(ctx context.Context, args []byte) (any, error
 // including its name, description, and expected arguments.
 func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
-		Name:        "FunctionTool",
-		Description: "A tool that executes a function with provided arguments.",
+		Name:        ft.name,
+		Description: ft.description,
+		Arguments:   ft.arguments,
 	}
 }
 
