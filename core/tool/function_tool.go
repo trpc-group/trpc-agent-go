@@ -11,6 +11,16 @@ type FunctionTool[I, O any] struct {
 	name        string
 	description string
 	fn          func(I) O
+	unmarshaler unmarshaler
+}
+
+// FunctionToolConfig contains configuration options for a FunctionTool.
+type FunctionToolConfig struct {
+	// Name is the name of the tool. If empty, the function name will be used.
+	Name string
+
+	// Description describes what the tool does.
+	Description string
 }
 
 // NewFunctionTool creates and returns a new instance of FunctionTool with the specified
@@ -23,8 +33,8 @@ type FunctionTool[I, O any] struct {
 //
 // Returns:
 //   - A pointer to the newly created FunctionTool.
-func NewFunctionTool[I, O any](name, description string, fn func(I) O) *FunctionTool[I, O] {
-	return &FunctionTool[I, O]{name: name, description: description, fn: fn}
+func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTool[I, O] {
+	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}}
 }
 
 // Call calls the function tool with the provided arguments.
@@ -33,7 +43,7 @@ func NewFunctionTool[I, O any](name, description string, fn func(I) O) *Function
 // Returns the result of the function execution or an error if unmarshalling fails.
 func (ft *FunctionTool[I, O]) Call(ctx context.Context, args []byte) (any, error) {
 	var input I
-	if err := json.Unmarshal(args, &input); err != nil {
+	if err := ft.unmarshaler.Unmarshal(args, &input); err != nil {
 		return nil, err
 	}
 	return ft.fn(input), nil
@@ -46,4 +56,15 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 		Name:        "FunctionTool",
 		Description: "A tool that executes a function with provided arguments.",
 	}
+}
+
+type unmarshaler interface {
+	Unmarshal([]byte, any) error
+}
+
+type jsonUnmarshaler struct{}
+
+// Unmarshal unmarshals JSON data into the provided interface.
+func (j *jsonUnmarshaler) Unmarshal(data []byte, v any) error {
+	return json.Unmarshal(data, v)
 }

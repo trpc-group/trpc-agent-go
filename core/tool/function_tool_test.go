@@ -24,7 +24,10 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	fn := func(args Args) int {
 		return args.A + args.B
 	}
-	tool := NewFunctionTool[Args]("adder", "adds two numbers", fn)
+	tool := NewFunctionTool[Args](fn, FunctionToolConfig{
+		Name:        "SumFunction",
+		Description: "Calculates the sum of two integers.",
+	})
 
 	input := Args{A: 2, B: 3}
 	args := toArguments(t, input)
