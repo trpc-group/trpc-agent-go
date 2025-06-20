@@ -83,14 +83,15 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model, modelName strin
 	maxTokens := 1000
 
 	request := &model.Request{
-		Model: modelName,
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a helpful assistant."),
 			model.NewUserMessage("Tell me a short joke about programming."),
 		},
-		Temperature: &temperature,
-		MaxTokens:   &maxTokens,
-		Stream:      false,
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      false,
+		},
 	}
 
 	responseChan, err := llm.GenerateContent(ctx, request)
@@ -133,14 +134,15 @@ func streamingExample(ctx context.Context, llm *openai.Model, modelName string) 
 	maxTokens := 500
 
 	request := &model.Request{
-		Model: modelName,
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a creative storyteller."),
 			model.NewUserMessage("Write a short story about a robot learning to paint."),
 		},
-		Temperature: &temperature,
-		MaxTokens:   &maxTokens,
-		Stream:      true,
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      true,
+		},
 	}
 
 	responseChan, err := llm.GenerateContent(ctx, request)
@@ -184,15 +186,16 @@ func advancedExample(ctx context.Context, llm *openai.Model, modelName string) e
 	topP := 0.9
 
 	request := &model.Request{
-		Model: modelName,
 		Messages: []model.Message{
 			model.NewSystemMessage("You are an expert software engineer with deep knowledge of Go programming."),
 			model.NewUserMessage("Explain the benefits of using channels in Go for concurrency."),
 		},
-		Temperature: &temperature,
-		MaxTokens:   &maxTokens,
-		TopP:        &topP,
-		Stream:      false,
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			TopP:        &topP,
+			Stream:      false,
+		},
 	}
 
 	fmt.Println("Sending advanced request with custom parameters:")
@@ -278,15 +281,16 @@ func parameterTestingExample(ctx context.Context, llm *openai.Model, modelName s
 		fmt.Printf("\n--- %s (%s) ---\n", test.name, test.description)
 
 		request := &model.Request{
-			Model: modelName,
 			Messages: []model.Message{
 				model.NewSystemMessage("You are a helpful assistant."),
 				model.NewUserMessage("Write a haiku about technology."),
 			},
-			Temperature: test.temperature,
-			MaxTokens:   test.maxTokens,
-			TopP:        test.topP,
-			Stream:      false,
+			GenerationConfig: model.GenerationConfig{
+				Temperature: test.temperature,
+				MaxTokens:   test.maxTokens,
+				TopP:        test.topP,
+				Stream:      false,
+			},
 		}
 
 		if err := testRequest(ctx, llm, request, test.description); err != nil {

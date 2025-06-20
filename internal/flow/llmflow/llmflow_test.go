@@ -75,7 +75,7 @@ func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request)
 			ID:      "test-response-id",
 			Object:  "chat.completion",
 			Created: time.Now().Unix(),
-			Model:   request.Model,
+			Model:   "test-model",
 			Choices: []model.Choice{
 				{
 					Message: model.NewAssistantMessage("Hello! This is a test response."),

@@ -132,7 +132,7 @@ func TestMessage_JSON(t *testing.T) {
 
 	// Test that the message can be marshaled to JSON
 	expected := `{"role":"user","content":"Test message"}`
-	
+
 	// We're not testing JSON marshaling directly here since it's built-in
 	// but we can test that the struct tags are correct by checking field values
 	if msg.Role != RoleUser {
@@ -141,7 +141,7 @@ func TestMessage_JSON(t *testing.T) {
 	if msg.Content != "Test message" {
 		t.Errorf("Message.Content = %v, want %v", msg.Content, "Test message")
 	}
-	
+
 	_ = expected // Suppress unused variable warning
 }
 
@@ -154,7 +154,6 @@ func TestRequest_Validation(t *testing.T) {
 		{
 			name: "valid basic request",
 			request: &Request{
-				Model: "gpt-3.5-turbo",
 				Messages: []Message{
 					NewUserMessage("Hello"),
 				},
@@ -162,19 +161,8 @@ func TestRequest_Validation(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "empty model",
-			request: &Request{
-				Model: "",
-				Messages: []Message{
-					NewUserMessage("Hello"),
-				},
-			},
-			wantErr: false, // Model validation might be done elsewhere
-		},
-		{
 			name: "empty messages",
 			request: &Request{
-				Model:    "gpt-3.5-turbo",
 				Messages: []Message{},
 			},
 			wantErr: false, // Message validation might be done elsewhere
@@ -182,18 +170,19 @@ func TestRequest_Validation(t *testing.T) {
 		{
 			name: "with optional parameters",
 			request: &Request{
-				Model: "gpt-3.5-turbo",
 				Messages: []Message{
 					NewSystemMessage("You are helpful"),
 					NewUserMessage("Hello"),
 				},
-				MaxTokens:        intPtr(100),
-				Temperature:      floatPtr(0.7),
-				TopP:             floatPtr(0.9),
-				PresencePenalty:  floatPtr(0.1),
-				FrequencyPenalty: floatPtr(0.1),
-				Stop:             []string{"END"},
-				Stream:           true,
+				GenerationConfig: GenerationConfig{
+					MaxTokens:        intPtr(100),
+					Temperature:      floatPtr(0.7),
+					TopP:             floatPtr(0.9),
+					PresencePenalty:  floatPtr(0.1),
+					FrequencyPenalty: floatPtr(0.1),
+					Stop:             []string{"END"},
+					Stream:           true,
+				},
 			},
 			wantErr: false,
 		},
@@ -217,4 +206,4 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
-} 
+}

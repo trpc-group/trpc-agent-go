@@ -73,7 +73,7 @@ func (m *Model) GenerateContent(
 
 	// Convert our request format to OpenAI format.
 	chatRequest := openai.ChatCompletionNewParams{
-		Model:    shared.ChatModel(request.Model), // Use shared.ChatModel
+		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
 	}
 

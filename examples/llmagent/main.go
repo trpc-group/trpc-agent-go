@@ -9,8 +9,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 )
 
 func main() {
@@ -31,28 +31,40 @@ func main() {
 	fmt.Println()
 
 	// Create a model instance.
-	model := openai.New(modelName, openai.Options{
+	modelInstance := openai.New(modelName, openai.Options{
 		APIKey:            apiKey,
 		BaseURL:           baseURL,
 		ChannelBufferSize: 50, // Larger buffer for agent use.
 	})
 
-	// Create an LLMAgent with configuration.
-	llmAgent := llmagent.New(llmagent.Options{
-		Name:               "demo-llm-agent",
-		ChannelBufferSize:  20,
-		RequestProcessors:  []flow.RequestProcessor{},  // No custom processors for this demo.
-		ResponseProcessors: []flow.ResponseProcessor{}, // No custom processors for this demo.
-	})
+	// Create generation config.
+	genConfig := model.GenerationConfig{
+		MaxTokens:   intPtr(1000),
+		Temperature: floatPtr(0.7),
+		Stream:      true,
+	}
 
-	fmt.Printf("Created LLMAgent: %s\n", llmAgent.Name())
+	name := "demo-llm-agent"
+	// Create an LLMAgent with configuration.
+	llmAgent := llmagent.New(
+		name,
+		llmagent.Options{
+			Model:             modelInstance,
+			Description:       "A helpful AI assistant for demonstrations",
+			Instruction:       "Be helpful, concise, and informative in your responses",
+			SystemPrompt:      "You are a helpful assistant designed to demonstrate the LLMAgent capabilities",
+			GenerationConfig:  genConfig,
+			ChannelBufferSize: 20,
+		},
+	)
 
 	// Create an invocation context.
 	invocation := &agent.Invocation{
-		AgentName:     llmAgent.Name(),
+		AgentName:     name,
 		InvocationID:  "demo-invocation-001",
 		EndInvocation: false,
-		Model:         model,
+		Model:         modelInstance,
+		Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"),
 	}
 
 	// Run the agent.
@@ -111,9 +123,9 @@ func main() {
 
 	if eventCount == 0 {
 		fmt.Println("No events were generated. This might indicate:")
-		fmt.Println("- No request processors provided (agent had nothing to request)")
 		fmt.Println("- Model configuration issues")
-		fmt.Println("- Consider adding request processors for actual LLM interactions")
+		fmt.Println("- Network connectivity problems")
+		fmt.Println("- Check the logs for more details")
 	}
 }
 
@@ -132,4 +144,14 @@ func maskAPIKey(apiKey string) string {
 		return "***"
 	}
 	return apiKey[:3]
+}
+
+// intPtr returns a pointer to the given int value.
+func intPtr(i int) *int {
+	return &i
+}
+
+// floatPtr returns a pointer to the given float64 value.
+func floatPtr(f float64) *float64 {
+	return &f
 }

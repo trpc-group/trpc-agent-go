@@ -101,14 +101,15 @@ func TestModel_GenerateContent_ValidRequest(t *testing.T) {
 	maxTokens := 50
 
 	request := &model.Request{
-		Model: "gpt-3.5-turbo",
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a helpful assistant."),
 			model.NewUserMessage("Say hello in exactly 3 words."),
 		},
-		Temperature: &temperature,
-		MaxTokens:   &maxTokens,
-		Stream:      false,
+		GenerationConfig: model.GenerationConfig{
+			Temperature: &temperature,
+			MaxTokens:   &maxTokens,
+			Stream:      false,
+		},
 	}
 
 	responseChan, err := m.GenerateContent(ctx, request)
@@ -146,11 +147,12 @@ func TestModel_GenerateContent_CustomBaseURL(t *testing.T) {
 	// Test that the model can be created without errors.
 	ctx := context.Background()
 	request := &model.Request{
-		Model: "custom-model",
 		Messages: []model.Message{
 			model.NewUserMessage("test"),
 		},
-		Stream: false,
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
 	}
 
 	// This will likely fail due to invalid API key/URL, but should not panic.

@@ -55,14 +55,8 @@ func NewAssistantMessage(content string) Message {
 	}
 }
 
-// Request is the request to the model.
-type Request struct {
-	// Model specifies which model to use (e.g., "gpt-4", "gpt-3.5-turbo").
-	Model string `json:"model"`
-
-	// Messages is the conversation history.
-	Messages []Message `json:"messages"`
-
+// GenerationConfig contains configuration for text generation.
+type GenerationConfig struct {
 	// MaxTokens is the maximum number of tokens to generate.
 	MaxTokens *int `json:"max_tokens,omitempty"`
 
@@ -83,4 +77,13 @@ type Request struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+}
+
+// Request is the request to the model.
+type Request struct {
+	// Messages is the conversation history.
+	Messages []Message `json:"messages"`
+
+	// GenerationConfig contains the generation parameters.
+	GenerationConfig `json:",inline"`
 }
