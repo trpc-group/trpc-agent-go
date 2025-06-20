@@ -3,6 +3,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/openai/openai-go/shared"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const defaultChannelBufferSize = 256
@@ -75,6 +77,7 @@ func (m *Model) GenerateContent(
 	chatRequest := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
+		Tools:    m.convertTools(request.Tools),
 	}
 
 	// Set optional parameters if provided.
@@ -162,6 +165,21 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 		}
 	}
 
+	return result
+}
+
+func (m *Model) convertTools(tools []model.Tool) []openai.ChatCompletionToolParam {
+	result := make([]openai.ChatCompletionToolParam, len(tools))
+	for i, tool := range tools {
+		result[i] = openai.ChatCompletionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        tool.Function.Name,
+				Strict:      openai.Bool(tool.Function.Strict),
+				Description: openai.String(tool.Function.Description),
+				Parameters:  openai.FunctionParameters(tool.Function.Parameters),
+			},
+		}
+	}
 	return result
 }
 
@@ -283,11 +301,26 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
+			toolCallsConverted := make([]model.Tool, len(choice.Message.ToolCalls))
+			for j, toolCall := range choice.Message.ToolCalls {
+				toolCallsConverted[j] = model.Tool{
+					ID:   toolCall.ID,
+					Type: string(toolCall.Type),
+					Function: model.FunctionDefinitionParam{
+						Name: toolCall.Function.Name,
+					},
+				}
+				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolCallsConverted[j].Function.Parameters); err != nil {
+					log.Errorf("failed to unmarshal tool call arguments: %v", err)
+				}
+			}
+
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),
 				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: choice.Message.Content,
+					Role:      model.RoleAssistant,
+					Content:   choice.Message.Content,
+					ToolCalls: toolCallsConverted,
 				},
 			}
 
