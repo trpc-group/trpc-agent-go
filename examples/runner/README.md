@@ -24,9 +24,16 @@ The example supports the following environment variables:
 
 | Variable | Description | Default Value |
 |----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `MODEL_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
-| `MODEL_NAME` | Name of the model to use | `gpt-4o-mini` |
+| `OPENAI_API_KEY` | API key for the model service (required, automatically read by OpenAI SDK) | `` |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK) | `https://api.openai.com/v1` |
+
+**Note**: `OPENAI_API_KEY` and `OPENAI_BASE_URL` are automatically read by the OpenAI SDK. You don't need to manually read these environment variables in your code. The SDK handles this automatically when creating the client.
+
+## Command Line Arguments
+
+| Argument | Description | Default Value |
+|----------|-------------|---------------|
+| `-model` | Name of the model to use | `gpt-4o-mini` |
 
 ## Usage
 
@@ -42,16 +49,15 @@ go run main.go
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-export MODEL_BASE_URL="https://api.openai.com/v1"
-export MODEL_NAME="gpt-4"
-go run main.go
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+go run main.go -model gpt-4
 ```
 
 ### Using environment variables inline
 
 ```bash
 cd examples/runner
-OPENAI_API_KEY="your-api-key" MODEL_BASE_URL="https://api.openai.com/v1" MODEL_NAME="gpt-4o-mini" go run main.go
+OPENAI_API_KEY="your-api-key" OPENAI_BASE_URL="https://api.openai.com/v1" go run main.go -model gpt-4o-mini
 ```
 
 ## Architecture

@@ -4,9 +4,9 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
@@ -16,26 +16,18 @@ import (
 )
 
 func main() {
-	// Read configuration from environment variables.
-	baseURL := getEnv("MODEL_BASE_URL", "https://api.openai.com/v1")
-	modelName := getEnv("MODEL_NAME", "gpt-4o-mini")
-	apiKey := getEnv("OPENAI_API_KEY", "")
-
-	// Validate required environment variables.
-	if apiKey == "" {
-		log.Fatal("OPENAI_API_KEY environment variable is required")
-	}
+	// Read configuration from command line flags.
+	modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
+	flag.Parse()
 
 	fmt.Printf("Creating Runner with configuration:\n")
-	fmt.Printf("- Base URL: %s\n", baseURL)
-	fmt.Printf("- Model Name: %s\n", modelName)
-	fmt.Printf("- API Key: %s***\n", maskAPIKey(apiKey))
+	fmt.Printf("- Model Name: %s\n", *modelName)
+	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
 	fmt.Println()
 
 	// 1. Create OpenAI-like model.
-	modelInstance := openai.New(modelName, openai.Options{
-		APIKey:            apiKey,
-		BaseURL:           baseURL,
+	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
+	modelInstance := openai.New(*modelName, openai.Options{
 		ChannelBufferSize: 512, // Custom buffer size for high-throughput scenarios.
 	})
 
@@ -182,23 +174,6 @@ func main() {
 	}
 
 	fmt.Println("=== Demo Complete ===")
-}
-
-// getEnv gets an environment variable with a default value.
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-// maskAPIKey masks the API key for logging purposes.
-func maskAPIKey(apiKey string) string {
-	if len(apiKey) <= 6 {
-		return "***"
-	}
-	return apiKey[:3]
 }
 
 // Helper functions for creating pointers to primitive types.
