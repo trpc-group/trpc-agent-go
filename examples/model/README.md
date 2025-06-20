@@ -12,9 +12,16 @@ The example supports the following environment variables:
 
 | Variable | Description | Default Value |
 |----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `MODEL_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
-| `MODEL_NAME` | Name of the model to use | `gpt-4o-mini` |
+| `OPENAI_API_KEY` | API key for the model service (required, automatically read by OpenAI SDK) | `` |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK) | `https://api.openai.com/v1` |
+
+**Note**: `OPENAI_API_KEY` and `OPENAI_BASE_URL` are automatically read by the OpenAI SDK. You don't need to manually read these environment variables in your code. The SDK handles this automatically when creating the client.
+
+## Command Line Arguments
+
+| Argument | Description | Default Value |
+|----------|-------------|---------------|
+| `-model` | Name of the model to use | `gpt-4o-mini` |
 
 ## Running the Example
 
@@ -25,22 +32,28 @@ cd examples/model
 go run main.go
 ```
 
+### Using custom model:
+
+```bash
+cd examples/model
+go run main.go -model gpt-4
+```
+
 ### Using custom environment variables:
 
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
-export MODEL_BASE_URL="https://api.openai.com/v1"
-export MODEL_NAME="gpt-4o-mini"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
 
 cd examples/model
-go run main.go
+go run main.go -model gpt-4o-mini
 ```
 
 ### Using environment variables inline:
 
 ```bash
 cd examples/model
-OPENAI_API_KEY="your-api-key" MODEL_BASE_URL="https://api.openai.com/v1" MODEL_NAME="gpt-4o-mini" go run main.go
+OPENAI_API_KEY="your-api-key" OPENAI_BASE_URL="https://api.openai.com/v1" go run main.go -model gpt-4o-mini
 ```
 
 ## Example Output
@@ -65,19 +78,20 @@ import (
 )
 
 // Create a new model instance
+// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
 llm := openai.New(modelName, openai.Options{
-    APIKey:  apiKey,
-    BaseURL: baseURL,
+    ChannelBufferSize: 512, // Optional: configure buffer size
 })
 
 // Use the model
 request := &model.Request{
-    Model: modelName,
     Messages: []model.Message{
         model.NewSystemMessage("You are a helpful assistant."),
         model.NewUserMessage("Hello!"),
     },
-    Stream: false,
+    GenerationConfig: model.GenerationConfig{
+        Stream: false,
+    },
 }
 
 responseChan, err := llm.GenerateContent(ctx, request)
