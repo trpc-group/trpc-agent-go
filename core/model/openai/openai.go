@@ -3,6 +3,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/openai/openai-go/shared"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const defaultChannelBufferSize = 256
@@ -75,6 +78,7 @@ func (m *Model) GenerateContent(
 	chatRequest := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
+		Tools:    m.convertTools(request.Tools),
 	}
 
 	// Set optional parameters if provided.
@@ -162,6 +166,32 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 		}
 	}
 
+	return result
+}
+
+func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
+	var result []openai.ChatCompletionToolParam
+	for _, tool := range tools {
+		declaration := tool.Declaration()
+		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
+		schemaBytes, err := json.Marshal(declaration.InputSchema)
+		if err != nil {
+			log.Errorf("failed to marshal tool schema for %s: %v", declaration.Name, err)
+			continue
+		}
+		var parameters shared.FunctionParameters
+		if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
+			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
+			continue
+		}
+		result = append(result, openai.ChatCompletionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        declaration.Name,
+				Description: openai.String(declaration.Description),
+				Parameters:  parameters,
+			},
+		})
+	}
 	return result
 }
 
@@ -283,11 +313,24 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
+			toolCallsConverted := make([]model.ToolCall, len(choice.Message.ToolCalls))
+			for j, toolCall := range choice.Message.ToolCalls {
+				toolCallsConverted[j] = model.ToolCall{
+					ID:   toolCall.ID,
+					Type: string(toolCall.Type),
+					Function: model.FunctionDefinitionParam{
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
+					},
+				}
+			}
+
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),
 				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: choice.Message.Content,
+					Role:      model.RoleAssistant,
+					Content:   choice.Message.Content,
+					ToolCalls: toolCallsConverted,
 				},
 			}
 

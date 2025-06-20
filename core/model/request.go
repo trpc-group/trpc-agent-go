@@ -1,5 +1,7 @@
 package model
 
+import "trpc.group/trpc-go/trpc-agent-go/core/tool"
+
 // Role represents the role of a message author.
 type Role string
 
@@ -8,6 +10,7 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 // String returns the string representation of the role.
@@ -27,8 +30,10 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role    Role   `json:"role"`    // The role of the message author
-	Content string `json:"content"` // The message content
+	Role      Role       `json:"role"`                // The role of the message author
+	Content   string     `json:"content"`             // The message content
+	ToolID    string     `json:"id,omitempty"`        // Optional ID for the message
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"` // Optional tools associated with the message
 }
 
 // NewSystemMessage creates a new system message.
@@ -52,6 +57,14 @@ func NewAssistantMessage(content string) Message {
 	return Message{
 		Role:    RoleAssistant,
 		Content: content,
+	}
+}
+
+func NewToolCallMessage(content string, id string) Message {
+	return Message{
+		Role:    RoleTool,
+		Content: content,
+		ToolID:  id,
 	}
 }
 
@@ -86,4 +99,34 @@ type Request struct {
 
 	// GenerationConfig contains the generation parameters.
 	GenerationConfig `json:",inline"`
+
+	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
+}
+
+// ToolCall represents a call to a tool (function) in the model response.
+type ToolCall struct {
+	// Type of the tool. Currently, only `function` is supported.
+	Type string `json:"type"`
+	// Function definition for the tool
+	Function FunctionDefinitionParam `json:"function,omitempty"`
+	// The ID of the tool call returned by the model.
+	ID string `json:"id,omitempty"`
+}
+
+type FunctionDefinitionParam struct {
+	// The name of the function to be called. Must be a-z, A-Z, 0-9, or contain
+	// underscores and dashes, with a maximum length of 64.
+	Name string `json:"name"`
+	// Whether to enable strict schema adherence when generating the function call. If
+	// set to true, the model will follow the exact schema defined in the `parameters`
+	// field. Only a subset of JSON Schema is supported when `strict` is `true`. Learn
+	// more about Structured Outputs in the
+	// [function calling guide](docs/guides/function-calling).
+	Strict bool `json:"strict,omitempty"`
+	// A description of what the function does, used by the model to choose when and
+	// how to call the function.
+	Description string `json:"description,omitempty"`
+
+	// Optional arguments to pass to the function, json-encoded.
+	Arguments []byte `json:"arguments,omitempty"`
 }
