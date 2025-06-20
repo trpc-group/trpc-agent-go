@@ -100,8 +100,8 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 	t.Run("struct with fields", func(t *testing.T) {
 		result := generateJSONSchema(reflect.TypeOf(TestStruct{}))
 
-		if result.Type != "" {
-			t.Errorf("expected empty type for struct, got %s", result.Type)
+		if result.Type != "object" {
+			t.Errorf("expected object type for struct, got %s", result.Type)
 		}
 
 		if len(result.Properties) != 3 {

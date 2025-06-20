@@ -24,8 +24,8 @@ type Declaration struct {
 	// Description explains the tool's purpose and functionality
 	Description string `json:"description"`
 
-	// Arguments defines the expected arguments for the tool in JSON schema format.
-	Arguments map[string]*Schema `json:"arguments"`
+	// InputSchema defines the expected input for the tool in JSON schema format.
+	InputSchema *Schema `json:"inputSchema"`
 }
 
 // Schema represents the structure of JSON Schema used for defining arguments and responses.
@@ -47,7 +47,7 @@ type Schema struct {
 
 // generateJSONSchema generates a basic JSON schema from a reflect.Type.
 func generateJSONSchema(t reflect.Type) *Schema {
-	schema := &Schema{}
+	schema := &Schema{Type: "object"}
 
 	// Handle different kinds of types.
 	switch t.Kind() {

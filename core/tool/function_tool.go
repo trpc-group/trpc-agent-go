@@ -11,7 +11,7 @@ import (
 type FunctionTool[I, O any] struct {
 	name        string
 	description string
-	arguments   map[string]*Schema
+	inputSchema *Schema
 	fn          func(I) O
 	unmarshaler unmarshaler
 }
@@ -39,7 +39,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 	var empty I
 	schema := generateJSONSchema(reflect.TypeOf(empty))
 
-	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, arguments: schema.Properties}
+	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
 }
 
 // Call calls the function tool with the provided arguments.
@@ -60,7 +60,7 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
 		Name:        ft.name,
 		Description: ft.description,
-		Arguments:   ft.arguments,
+		InputSchema: ft.inputSchema,
 	}
 }
 
