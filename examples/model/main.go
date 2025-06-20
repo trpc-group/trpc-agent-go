@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openailike"
+	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance using the new package structure.
-	llm := openailike.New(modelName, openailike.Options{
+	llm := openai.New(modelName, openai.Options{
 		APIKey:            apiKey,
 		BaseURL:           baseURL,
 		ChannelBufferSize: 512, // Custom buffer size for high-throughput scenarios.
@@ -78,7 +78,7 @@ func maskAPIKey(apiKey string) string {
 }
 
 // nonStreamingExample demonstrates non-streaming usage.
-func nonStreamingExample(ctx context.Context, llm *openailike.Model, modelName string) error {
+func nonStreamingExample(ctx context.Context, llm *openai.Model, modelName string) error {
 	temperature := 0.7
 	maxTokens := 1000
 
@@ -128,7 +128,7 @@ func nonStreamingExample(ctx context.Context, llm *openailike.Model, modelName s
 }
 
 // streamingExample demonstrates streaming usage.
-func streamingExample(ctx context.Context, llm *openailike.Model, modelName string) error {
+func streamingExample(ctx context.Context, llm *openai.Model, modelName string) error {
 	temperature := 0.8
 	maxTokens := 500
 
@@ -178,7 +178,7 @@ func streamingExample(ctx context.Context, llm *openailike.Model, modelName stri
 }
 
 // advancedExample demonstrates advanced parameters and conversation.
-func advancedExample(ctx context.Context, llm *openailike.Model, modelName string) error {
+func advancedExample(ctx context.Context, llm *openai.Model, modelName string) error {
 	temperature := 0.3
 	maxTokens := 1000
 	topP := 0.9
@@ -241,7 +241,7 @@ func advancedExample(ctx context.Context, llm *openailike.Model, modelName strin
 }
 
 // parameterTestingExample demonstrates various parameter combinations.
-func parameterTestingExample(ctx context.Context, llm *openailike.Model, modelName string) error {
+func parameterTestingExample(ctx context.Context, llm *openai.Model, modelName string) error {
 	fmt.Println("Testing different parameter combinations...")
 
 	tests := []struct {
@@ -298,7 +298,7 @@ func parameterTestingExample(ctx context.Context, llm *openailike.Model, modelNa
 }
 
 // testRequest sends a request and displays the response.
-func testRequest(ctx context.Context, llm *openailike.Model, request *model.Request, description string) error {
+func testRequest(ctx context.Context, llm *openai.Model, request *model.Request, description string) error {
 	responseChan, err := llm.GenerateContent(ctx, request)
 	if err != nil {
 		return fmt.Errorf("failed to generate content: %w", err)

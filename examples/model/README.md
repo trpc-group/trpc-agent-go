@@ -61,11 +61,11 @@ The example demonstrates the new package structure:
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/core/model"
-    "trpc.group/trpc-go/trpc-agent-go/core/model/openailike"
+    "trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 )
 
 // Create a new model instance
-llm := openailike.New(modelName, openailike.Options{
+llm := openai.New(modelName, openai.Options{
     APIKey:  apiKey,
     BaseURL: baseURL,
 })
