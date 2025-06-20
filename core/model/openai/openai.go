@@ -1,5 +1,5 @@
-// Package openailike provides OpenAI-compatible model implementations.
-package openailike
+// Package openai provides OpenAI-compatible model implementations.
+package openai
 
 import (
 	"context"

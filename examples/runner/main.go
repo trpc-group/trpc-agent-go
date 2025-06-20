@@ -11,7 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openailike"
+	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 )
 
@@ -33,7 +33,7 @@ func main() {
 	fmt.Println()
 
 	// 1. Create OpenAI-like model.
-	modelInstance := openailike.New(modelName, openailike.Options{
+	modelInstance := openai.New(modelName, openai.Options{
 		APIKey:            apiKey,
 		BaseURL:           baseURL,
 		ChannelBufferSize: 512, // Custom buffer size for high-throughput scenarios.

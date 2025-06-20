@@ -1,4 +1,4 @@
-package openailike
+package openai
 
 import (
 	"context"
