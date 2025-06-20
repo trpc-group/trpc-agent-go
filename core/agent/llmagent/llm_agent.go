@@ -6,6 +6,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -37,6 +38,7 @@ type LLMAgent struct {
 	systemPrompt string
 	genConfig    model.GenerationConfig
 	flow         flow.Flow
+	tools        []tool.Tool // Tools supported by the agent
 }
 
 // New creates a new LLMAgent with the given options.
@@ -109,4 +111,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 
 	// Use the underlying flow to execute the agent logic.
 	return a.flow.Run(ctx, invocation)
+}
+
+func (a *LLMAgent) Tools() []tool.Tool {
+	return a.tools
 }
