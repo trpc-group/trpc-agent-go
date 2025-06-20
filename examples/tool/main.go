@@ -3,12 +3,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 func main() {
@@ -64,6 +66,11 @@ func maskAPIKey(apiKey string) string {
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
+	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
+		Name:        "get_weather",
+		Description: "Get weather at the given location",
+	})
+
 	request := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
@@ -73,31 +80,11 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			Temperature: &temperature,
 			MaxTokens:   &maxTokens,
 			Stream:      false,
-			Tools: []model.Tool{
-				{
-					Type: "function",
-					Function: model.FunctionDefinitionParam{
-						Name:        "get_weather",
-						Description: "Get weather at the given location",
-						Parameters: model.FunctionParameters{
-							"type": "object",
-							"properties": map[string]interface{}{
-								"location": map[string]string{
-									"type": "string",
-								},
-							},
-							"required": []string{"location"},
-						},
-					},
-				},
-			},
+		},
+		Tools: map[string]tool.Tool{
+			"get_weather": getWeatherTool,
 		},
 	}
-	// getWeatherTool := tool.NewFunctionTool(getWeatherX, tool.FunctionToolConfig{
-	// 	Name:        "get_weather",
-	// 	Description: "Get weather at the given location",
-	// })
-	// getWeatherTool.Declaration().InputSchema.Properties
 
 	responseChan, err := llm.GenerateContent(ctx, request)
 	if err != nil {
@@ -120,13 +107,19 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 				fmt.Println("Tool calls:")
 				for _, toolCall := range toolCalls {
 					if toolCall.Function.Name == "get_weather" {
-						location := toolCall.Function.Parameters["location"].(string)
 						// Simulate getting weather data
-						weatherData := getWeather(location)
-
+						location := toolCall.Function.Arguments
+						weatherData, err := getWeatherTool.Call(context.Background(), location)
+						if err != nil {
+							return fmt.Errorf("failed to call tool: %w", err)
+						}
+						bts, err := json.Marshal(weatherData)
+						if err != nil {
+							return fmt.Errorf("failed to marshal weather data: %w", err)
+						}
 						// Print the weather data
-						fmt.Printf("CallTool at local: Weather in %s: %s\n", location, weatherData)
-						request.Messages = append(request.Messages, model.NewToolCallMessage(weatherData, toolCall.ID))
+						fmt.Printf("CallTool at local: Weather in %s: %s\n", location, bts)
+						request.Messages = append(request.Messages, model.NewToolCallMessage(string(bts), toolCall.ID))
 					}
 				}
 			}
@@ -162,10 +155,6 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	return nil
 }
 
-func getWeather(location string) string {
-	return "Sunny, 25°C"
-}
-
 type getWeatherInput struct {
 	Location string `json:"location"`
 }
@@ -173,7 +162,7 @@ type getWeatherOutput struct {
 	Weather string `json:"weather"`
 }
 
-func getWeatherX(i getWeatherInput) getWeatherOutput {
+func getWeather(i getWeatherInput) getWeatherOutput {
 	// In a real implementation, this function would call a weather API
 	return getWeatherOutput{Weather: "Sunny, 25°C"}
 }

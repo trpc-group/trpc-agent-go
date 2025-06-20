@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/shared"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -168,17 +169,28 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 	return result
 }
 
-func (m *Model) convertTools(tools []model.Tool) []openai.ChatCompletionToolParam {
-	result := make([]openai.ChatCompletionToolParam, len(tools))
-	for i, tool := range tools {
-		result[i] = openai.ChatCompletionToolParam{
-			Function: openai.FunctionDefinitionParam{
-				Name:        tool.Function.Name,
-				Strict:      openai.Bool(tool.Function.Strict),
-				Description: openai.String(tool.Function.Description),
-				Parameters:  openai.FunctionParameters(tool.Function.Parameters),
-			},
+func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
+	var result []openai.ChatCompletionToolParam
+	for _, tool := range tools {
+		declaration := tool.Declaration()
+		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
+		schemaBytes, err := json.Marshal(declaration.InputSchema)
+		if err != nil {
+			log.Errorf("failed to marshal tool schema for %s: %v", declaration.Name, err)
+			continue
 		}
+		var parameters shared.FunctionParameters
+		if err := json.Unmarshal(schemaBytes, &parameters); err != nil {
+			log.Errorf("failed to unmarshal tool schema for %s: %v", declaration.Name, err)
+			continue
+		}
+		result = append(result, openai.ChatCompletionToolParam{
+			Function: openai.FunctionDefinitionParam{
+				Name:        declaration.Name,
+				Description: openai.String(declaration.Description),
+				Parameters:  parameters,
+			},
+		})
 	}
 	return result
 }
@@ -301,17 +313,15 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
-			toolCallsConverted := make([]model.Tool, len(choice.Message.ToolCalls))
+			toolCallsConverted := make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
-				toolCallsConverted[j] = model.Tool{
+				toolCallsConverted[j] = model.ToolCall{
 					ID:   toolCall.ID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
-						Name: toolCall.Function.Name,
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
 					},
-				}
-				if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &toolCallsConverted[j].Function.Parameters); err != nil {
-					log.Errorf("failed to unmarshal tool call arguments: %v", err)
 				}
 			}
 

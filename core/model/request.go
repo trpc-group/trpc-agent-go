@@ -1,5 +1,7 @@
 package model
 
+import "trpc.group/trpc-go/trpc-agent-go/core/tool"
+
 // Role represents the role of a message author.
 type Role string
 
@@ -28,10 +30,10 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role      Role   `json:"role"`                // The role of the message author
-	Content   string `json:"content"`             // The message content
-	ToolID    string `json:"id,omitempty"`        // Optional ID for the message
-	ToolCalls []Tool `json:"toolCalls,omitempty"` // Optional tools associated with the message
+	Role      Role       `json:"role"`                // The role of the message author
+	Content   string     `json:"content"`             // The message content
+	ToolID    string     `json:"id,omitempty"`        // Optional ID for the message
+	ToolCalls []ToolCall `json:"toolCalls,omitempty"` // Optional tools associated with the message
 }
 
 // NewSystemMessage creates a new system message.
@@ -88,9 +90,6 @@ type GenerationConfig struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-
-	// A list of tools the model may call. Currently, only functions are supported as a tool.
-	Tools []Tool `json:"tools,omitempty"`
 }
 
 // Request is the request to the model.
@@ -100,10 +99,12 @@ type Request struct {
 
 	// GenerationConfig contains the generation parameters.
 	GenerationConfig `json:",inline"`
+
+	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }
 
-// Tool represents a tool that can be used in the request.
-type Tool struct {
+// ToolCall represents a call to a tool (function) in the model response.
+type ToolCall struct {
 	// Type of the tool. Currently, only `function` is supported.
 	Type string `json:"type"`
 	// Function definition for the tool
@@ -125,14 +126,7 @@ type FunctionDefinitionParam struct {
 	// A description of what the function does, used by the model to choose when and
 	// how to call the function.
 	Description string `json:"description,omitempty"`
-	// The parameters the functions accepts, described as a JSON Schema object. See the
-	// [guide](https://platform.openai.com/docs/guides/function-calling) for examples,
-	// and the
-	// [JSON Schema reference](https://json-schema.org/understanding-json-schema/) for
-	// documentation about the format.
-	//
-	// Omitting `parameters` defines a function with an empty parameter list.
-	Parameters FunctionParameters `json:"parameters,omitempty"`
-}
 
-type FunctionParameters map[string]any
+	// Optional arguments to pass to the function, json-encoded.
+	Arguments []byte `json:"arguments,omitempty"`
+}

@@ -82,7 +82,7 @@ func TestUsage_Structure(t *testing.T) {
 func TestResponse_Structure(t *testing.T) {
 	now := time.Now()
 	systemFingerprint := "fp_test_123"
-	
+
 	response := Response{
 		ID:      "chatcmpl-123",
 		Object:  "chat.completion",
@@ -133,7 +133,7 @@ func TestResponse_Structure(t *testing.T) {
 func TestResponseError_Structure(t *testing.T) {
 	param := "max_tokens"
 	code := "invalid_value"
-	
+
 	err := ResponseError{
 		Message: "Invalid parameter value",
 		Type:    ErrorTypeAPIError,
@@ -157,7 +157,7 @@ func TestResponseError_Structure(t *testing.T) {
 
 func TestResponse_WithError(t *testing.T) {
 	now := time.Now()
-	
+
 	response := Response{
 		Error: &ResponseError{
 			Message: "API error occurred",
@@ -181,7 +181,7 @@ func TestResponse_WithError(t *testing.T) {
 
 func TestResponse_StreamingResponse(t *testing.T) {
 	now := time.Now()
-	
+
 	// Simulate a streaming response chunk
 	streamChunk := Response{
 		ID:      "chatcmpl-stream-123",
@@ -258,4 +258,4 @@ func TestResponse_MultipleChoices(t *testing.T) {
 	if response.Choices[1].Message.Content != "Second choice" {
 		t.Errorf("Second choice content = %v, want %v", response.Choices[1].Message.Content, "Second choice")
 	}
-} 
+}
