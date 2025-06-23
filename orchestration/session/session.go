@@ -8,6 +8,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 )
 
+// StateMap is a map of state key-value pairs.
 type StateMap map[string]interface{}
 
 // Session is the interface that all sessions must implement.
