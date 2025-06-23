@@ -49,7 +49,7 @@ func New(invocationID, author string, opts ...Option) *Event {
 func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event {
 	return &Event{
 		Response: &model.Response{
-			Object: "error",
+			Object: model.ObjectTypeError,
 			Done:   true,
 			Error: &model.ResponseError{
 				Type:    errorType,

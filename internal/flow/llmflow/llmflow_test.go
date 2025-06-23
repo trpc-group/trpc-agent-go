@@ -196,7 +196,7 @@ func TestFlow_NoModel(t *testing.T) {
 
 	// Verify it's an error event
 	errorEvent := events[0]
-	if errorEvent.Object != "error" {
+	if errorEvent.Object != model.ObjectTypeError {
 		t.Errorf("Expected error object, got %s", errorEvent.Object)
 	}
 	if errorEvent.Error == nil {
