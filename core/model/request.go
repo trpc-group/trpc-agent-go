@@ -111,6 +111,9 @@ type ToolCall struct {
 	Function FunctionDefinitionParam `json:"function,omitempty"`
 	// The ID of the tool call returned by the model.
 	ID string `json:"id,omitempty"`
+
+	// Index is the index of the tool call in the message for streaming responses.
+	Index *int `json:"index,omitempty"`
 }
 
 type FunctionDefinitionParam struct {

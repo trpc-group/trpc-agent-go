@@ -224,11 +224,28 @@ func (m *Model) handleStreamingResponse(
 					Index: int(choice.Index),
 				}
 
+				toolCallsConverted := make([]model.ToolCall, len(choice.Delta.ToolCalls))
+				for j, toolCall := range choice.Delta.ToolCalls {
+					toolCallsConverted[j] = model.ToolCall{
+						ID:   toolCall.ID,
+						Type: string(toolCall.Type), // Convert constant to string
+						Function: model.FunctionDefinitionParam{
+							Name:      toolCall.Function.Name,
+							Arguments: []byte(toolCall.Function.Arguments),
+						},
+					}
+					// if toolCall.Index != 0 {
+					index := int(toolCall.Index)
+					toolCallsConverted[j].Index = &index
+					// }
+				}
+
 				// Handle delta content - Content is a plain string.
-				if choice.Delta.Content != "" {
+				if choice.Delta.Content != "" || len(toolCallsConverted) > 0 {
 					response.Choices[i].Delta = model.Message{
-						Role:    model.RoleAssistant,
-						Content: choice.Delta.Content,
+						Role:      model.RoleAssistant,
+						Content:   choice.Delta.Content,
+						ToolCalls: toolCallsConverted,
 					}
 				}
 
