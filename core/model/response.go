@@ -11,6 +11,11 @@ const (
 	ErrorTypeFlowError   = "flow_error"
 )
 
+// Object type constants for Response.Object field.
+const (
+	ObjectTypeError = "error"
+)
+
 // Choice represents a single completion choice.
 type Choice struct {
 	// Index is the index of the choice.
