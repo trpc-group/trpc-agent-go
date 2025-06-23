@@ -10,22 +10,22 @@ const (
 
 // State maintains the current value and the pending-commit delta.
 type State struct {
-	// value stores the current committed state
-	value StateMap
-	// delta stores the pending changes that haven't been committed
-	delta StateMap
+	// Value stores the current committed state
+	Value StateMap
+	// Delta stores the pending changes that haven't been committed
+	Delta StateMap
 }
 
 // NewState creates a new empty State.
 func NewState() *State {
 	return &State{
-		value: make(StateMap),
-		delta: make(StateMap),
+		Value: make(StateMap),
+		Delta: make(StateMap),
 	}
 }
 
 // Set sets the value of a key in the state.
 func (s *State) Set(key string, value interface{}) {
-	s.value[key] = value
-	s.delta[key] = value
+	s.Value[key] = value
+	s.Delta[key] = value
 }
