@@ -160,6 +160,14 @@ func (f *Flow) preprocess(
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
 	}
+
+	// Add tool to the request
+	if invocation.Agent != nil {
+		for _, t := range invocation.Agent.Tools() {
+			llmRequest.Tools[t.Declaration().Name] = t
+		}
+	}
+
 }
 
 // callLLM performs the actual LLM call using core/model.
