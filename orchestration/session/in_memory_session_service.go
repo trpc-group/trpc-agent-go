@@ -18,19 +18,17 @@ const (
 
 var _ Service = (*InMemorySessionService)(nil)
 
-// MemorySessionBucket is a bucket for storing sessions, it store sessions of one agent/app.
-type MemorySessionBucket struct {
-	mu       sync.RWMutex
-	sessions map[string]map[string]*Session
-	// userState stores user-level state organized by user_id -> key -> value
+// InMemorySessionBucket is a bucket for storing sessions, it store sessions of one agent/app.
+type InMemorySessionBucket struct {
+	mu        sync.RWMutex
+	sessions  map[string]map[string]*Session
 	userState map[string]StateMap
-	// appState stores app-level state organized by key -> value
-	appState StateMap
+	appState  StateMap
 }
 
-// NewMemorySessionBucket creates a new memory session bucket.
-func NewMemorySessionBucket() *MemorySessionBucket {
-	return &MemorySessionBucket{
+// NewInMemorySessionBucket creates a new memory session bucket.
+func NewInMemorySessionBucket() *InMemorySessionBucket {
+	return &InMemorySessionBucket{
 		sessions:  make(map[string]map[string]*Session),
 		userState: make(map[string]StateMap),
 		appState:  make(StateMap),
@@ -40,32 +38,32 @@ func NewMemorySessionBucket() *MemorySessionBucket {
 // InMemorySessionService provides an in-memory implementation of SessionService.
 type InMemorySessionService struct {
 	mu      sync.RWMutex
-	buckets map[string]*MemorySessionBucket
+	buckets map[string]*InMemorySessionBucket
 }
 
 // NewInMemorySessionService creates a new in-memory session service.
 func NewInMemorySessionService() *InMemorySessionService {
-	inMemorySessionService := &InMemorySessionService{
-		buckets: make(map[string]*MemorySessionBucket),
+	service := &InMemorySessionService{
+		buckets: make(map[string]*InMemorySessionBucket),
 	}
 
-	defaultBucket := &MemorySessionBucket{
+	defaultBucket := &InMemorySessionBucket{
 		sessions:  make(map[string]map[string]*Session),
 		userState: make(map[string]StateMap),
 		appState:  make(StateMap),
 	}
-	inMemorySessionService.buckets[""] = defaultBucket
-	return inMemorySessionService
+	service.buckets[""] = defaultBucket
+	return service
 }
 
-func (s *InMemorySessionService) checkBucketExists(appName string) (*MemorySessionBucket, bool) {
+func (s *InMemorySessionService) checkBucketExists(appName string) (*InMemorySessionBucket, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	bucket, ok := s.buckets[appName]
 	return bucket, ok
 }
 
-func (s *InMemorySessionService) getOrCreateBucket(appName string) *MemorySessionBucket {
+func (s *InMemorySessionService) getOrCreateBucket(appName string) *InMemorySessionBucket {
 	s.mu.RLock()
 	bucket, ok := s.buckets[appName]
 	if ok {
@@ -80,7 +78,7 @@ func (s *InMemorySessionService) getOrCreateBucket(appName string) *MemorySessio
 		s.mu.Unlock()
 		return bucket
 	}
-	bucket = NewMemorySessionBucket()
+	bucket = NewInMemorySessionBucket()
 	s.buckets[appName] = bucket
 	s.mu.Unlock()
 	return bucket
