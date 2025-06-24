@@ -11,6 +11,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
+var testServiceOpts = ServiceOpts{}
+
 func TestNewSessionService(t *testing.T) {
 	tests := []struct {
 		name string
@@ -24,7 +26,7 @@ func TestNewSessionService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService()
+			service := NewSessionService(testServiceOpts)
 
 			assert.Equal(t, tt.want, service != nil)
 
@@ -102,7 +104,7 @@ func TestCreateSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService()
+			service := NewSessionService(testServiceOpts)
 			ctx := context.Background()
 
 			key := session.SessionKey{
@@ -127,7 +129,7 @@ func TestCreateSession(t *testing.T) {
 }
 
 func TestGetSession(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 	ctx := context.Background()
 
 	// Setup: create test sessions
@@ -308,7 +310,7 @@ func TestListSessions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Fresh service for each test
-			testService := NewSessionService()
+			testService := NewSessionService(testServiceOpts)
 			ctx := context.Background()
 
 			// Setup test data
@@ -346,7 +348,7 @@ func TestListSessions(t *testing.T) {
 }
 
 func TestDeleteSession(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 	ctx := context.Background()
 
 	// Setup: create test session
@@ -424,7 +426,7 @@ func TestDeleteSession(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -498,7 +500,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestGetOrCreateApp(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 
 	tests := []struct {
 		name    string
@@ -545,7 +547,7 @@ func TestGetOrCreateApp(t *testing.T) {
 
 // Additional tests for edge cases and State functionality
 func TestStateMerging(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 	ctx := context.Background()
 
 	appName := "test-app"
@@ -581,7 +583,7 @@ func TestStateMerging(t *testing.T) {
 }
 
 func TestAppIsolation(t *testing.T) {
-	service := NewSessionService()
+	service := NewSessionService(testServiceOpts)
 	ctx := context.Background()
 
 	// Create sessions in different apps

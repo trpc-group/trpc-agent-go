@@ -48,6 +48,9 @@ type Service interface {
 
 	// DeleteSession deletes a session.
 	DeleteSession(ctx context.Context, key SessionKey, options *Options) error
+
+	// AppendEvent appends an event to a session.
+	AppendEvent(ctx context.Context, key SessionKey, event *event.Event, options *Options) error
 }
 
 // SessionKey is the key for a session.
@@ -62,6 +65,7 @@ func (s *SessionKey) CheckSessionKey() error {
 	return checkSessionKey(s.AppName, s.UserID, s.SessionID)
 }
 
+// CheckUserKey checks if a user key is valid.
 func (s *SessionKey) CheckUserKey() error {
 	return checkUserKey(s.AppName, s.UserID)
 }
@@ -72,6 +76,7 @@ type UserKey struct {
 	UserID  string // user id
 }
 
+// CheckUserKey checks if a user key is valid.
 func (s *UserKey) CheckUserKey() error {
 	return checkUserKey(s.AppName, s.UserID)
 }

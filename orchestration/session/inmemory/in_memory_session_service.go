@@ -3,6 +3,7 @@ package inmemory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -30,16 +31,24 @@ func newAppSessions() *appSessions {
 	}
 }
 
+// ServiceOpts is the options for session service.
+type ServiceOpts struct {
+	// SessionEventLimit is the limit of events in a session.
+	SessionEventLimit int
+}
+
 // SessionService provides an in-memory implementation of SessionService.
 type SessionService struct {
 	mu   sync.RWMutex
 	apps map[string]*appSessions
+	opts ServiceOpts
 }
 
 // NewSessionService creates a new in-memory session service.
-func NewSessionService() *SessionService {
+func NewSessionService(opts ServiceOpts) *SessionService {
 	return &SessionService{
 		apps: make(map[string]*appSessions),
+		opts: opts,
 	}
 }
 
@@ -223,7 +232,51 @@ func (s *SessionService) DeleteSession(
 	return nil
 }
 
+// AppendEvent appends an event to a session.
+func (s *SessionService) AppendEvent(
+	ctx context.Context,
+	key session.SessionKey,
+	event *event.Event,
+	opts *session.Options,
+) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	app, ok := s.getAppSessions(key.AppName)
+	if !ok {
+		return fmt.Errorf("app not found: %s", key.AppName)
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	// Check if user exists first to prevent panic
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+
+	sess, ok := userSessions[key.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+
+	// Add the event first
+	sess.Events = append(sess.Events, *event)
+
+	// Then apply limit if needed (correct logic)
+	if s.opts.SessionEventLimit > 0 && len(sess.Events) > s.opts.SessionEventLimit {
+		sess.Events = sess.Events[len(sess.Events)-s.opts.SessionEventLimit:]
+	}
+
+	// Update timestamp
+	sess.UpdatedAt = time.Now()
+	return nil
+}
+
 // copySession creates a deep copy of a session.
+// shallow copy
 func copySession(sess *session.Session) *session.Session {
 	copiedSess := &session.Session{
 		ID:        sess.ID,
