@@ -14,34 +14,24 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	type outputArgs struct {
 		Result int `json:"result"`
 	}
-	fn := func(args inputArgs) <-chan outputArgs {
-		output := make(chan outputArgs, 1)
-		go func() {
-			defer close(output)
-			// Simulate some processing
-			output <- outputArgs{Result: args.A + args.B}
-		}()
-		return output
+	fn := func(args inputArgs) outputArgs {
+		return outputArgs{Result: args.A + args.B}
 	}
 	tool := NewFunctionTool(fn, FunctionToolConfig{
 		Name:        "SumFunction",
 		Description: "Calculates the sum of two integers.",
 	})
-
 	input := inputArgs{A: 2, B: 3}
 	args := toArguments(t, input)
 
-	resultCh, err := tool.Call(context.Background(), args)
+	result, err := tool.Call(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	var result any
-	for res := range resultCh {
-		result = res
 	}
 	sum, ok := result.(outputArgs)
 	if !ok {
 		t.Fatalf("expected int result, got %T", result)
+
 	}
 	if sum.Result != 5 {
 		t.Errorf("expected 5, got %d", sum)
