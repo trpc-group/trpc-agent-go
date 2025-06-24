@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/openai/openai-go"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 
@@ -204,8 +204,10 @@ func (m *Model) handleStreamingResponse(
 	stream := m.client.Chat.Completions.NewStreaming(ctx, chatRequest)
 	defer stream.Close()
 
+	acc := openai.ChatCompletionAccumulator{}
 	for stream.Next() {
 		chunk := stream.Current()
+		acc.AddChunk(chunk)
 
 		response := &model.Response{
 			ID:        chunk.ID,
@@ -214,6 +216,20 @@ func (m *Model) handleStreamingResponse(
 			Model:     chunk.Model,
 			Timestamp: time.Now(),
 			Done:      false,
+		}
+
+		if tool, ok := acc.JustFinishedToolCall(); ok {
+			response.SetToolCalls([]model.ToolCall{
+				{
+					Index: &tool.Index,
+					ID:    tool.ID,
+					Type:  "function", // openapi only supports function type for now
+					Function: model.FunctionDefinitionParam{
+						Name:      tool.Name,
+						Arguments: []byte(tool.Arguments),
+					},
+				},
+			})
 		}
 
 		// Convert choices.
@@ -234,10 +250,8 @@ func (m *Model) handleStreamingResponse(
 							Arguments: []byte(toolCall.Function.Arguments),
 						},
 					}
-					// if toolCall.Index != 0 {
 					index := int(toolCall.Index)
 					toolCallsConverted[j].Index = &index
-					// }
 				}
 
 				// Handle delta content - Content is a plain string.
@@ -350,6 +364,7 @@ func (m *Model) handleNonStreamingResponse(
 					ToolCalls: toolCallsConverted,
 				},
 			}
+			response.SetToolCalls(toolCallsConverted)
 
 			// Handle finish reason - FinishReason is a plain string.
 			if choice.FinishReason != "" {

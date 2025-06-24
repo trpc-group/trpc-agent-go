@@ -94,6 +94,20 @@ type Response struct {
 
 	// Done indicates if this is the final chunk in a stream.
 	Done bool `json:"-"`
+
+	toolCalls []ToolCall `json:"-"`
+}
+
+// ToolCall returns the tool calls made in the response.
+// This is used for both streaming and non-streaming responses.
+func (r *Response) ToolCalls() []ToolCall {
+	return r.toolCalls
+}
+
+// SetToolCalls sets the tool calls for the response.
+// It replaces any existing tool calls with the provided slice.
+func (r *Response) SetToolCalls(tcs []ToolCall) {
+	r.toolCalls = tcs
 }
 
 // ResponseError represents an error response from the API.
