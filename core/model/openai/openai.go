@@ -106,7 +106,7 @@ func (m *Model) GenerateContent(
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
-	opts := []option.RequestOption{}
+	var opts []option.RequestOption
 	const (
 		thinkingEnabledKey = "thinking_enabled"
 		thinkingTokensKey  = "thinking_tokens"
