@@ -31,7 +31,6 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	sum, ok := result.(outputArgs)
 	if !ok {
 		t.Fatalf("expected int result, got %T", result)
-
 	}
 	if sum.Result != 5 {
 		t.Errorf("expected 5, got %d", sum)

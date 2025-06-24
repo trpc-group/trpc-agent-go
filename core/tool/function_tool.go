@@ -44,7 +44,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 
 // Call calls the function tool with the provided arguments.
 // It unmarshals the given arguments into the tool's arguments placeholder,
-// then calls the underlying function with these arguments.strea
+// then calls the underlying function with these arguments.
 // Returns the result of the function execution or an error if unmarshalling fails.
 func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
