@@ -3,6 +3,7 @@ package tool
 
 import (
 	"context"
+	"io"
 	"reflect"
 	"strings"
 )
@@ -11,9 +12,37 @@ import (
 type Tool interface {
 	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
-	Call(ctx context.Context, jsonArgs []byte) (<-chan any, error)
+	Call(ctx context.Context, jsonArgs []byte) (any, error)
 	// Declaration returns the metadata describing the tool.
 	Declaration() *Declaration
+}
+
+type Streamer interface {
+	// StreamableCall initiates a call to the tool that supports streaming.
+	StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error)
+}
+
+type StreamReader[T any] struct {
+	chunkCh chan *StreamChunk[T]
+}
+
+func (sr *StreamReader[T]) Next() (T, Metadata, error) {
+	chunk, ok := <-sr.chunkCh
+	if !ok {
+		return *new(T), Metadata{}, io.EOF // Channel closed or nil chunk
+	}
+	if chunk == nil {
+		return *new(T), Metadata{}, nil // No content, but not an error
+	}
+	return chunk.Content, chunk.Metadata, nil
+}
+
+type StreamChunk[T any] struct {
+	Content  T        `json:"content"`
+	Metadata Metadata `json:"metadata,omitempty"`
+}
+type Metadata struct {
+	CreatedAt string `json:"createdAt,omitempty"`
 }
 
 // Declaration describes the metadata of a tool, such as its name, description, and expected arguments.

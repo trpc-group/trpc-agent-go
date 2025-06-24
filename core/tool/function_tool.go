@@ -12,7 +12,7 @@ type FunctionTool[I, O any] struct {
 	name        string
 	description string
 	inputSchema *Schema
-	fn          func(I) <-chan O
+	fn          func(I) O
 	unmarshaler unmarshaler
 }
 
@@ -35,7 +35,7 @@ type FunctionToolConfig struct {
 //
 // Returns:
 //   - A pointer to the newly created FunctionTool.
-func NewFunctionTool[I, O any](fn func(I) <-chan O, cfg FunctionToolConfig) *FunctionTool[I, O] {
+func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTool[I, O] {
 	var empty I
 	schema := generateJSONSchema(reflect.TypeOf(empty))
 
@@ -44,25 +44,14 @@ func NewFunctionTool[I, O any](fn func(I) <-chan O, cfg FunctionToolConfig) *Fun
 
 // Call calls the function tool with the provided arguments.
 // It unmarshals the given arguments into the tool's arguments placeholder,
-// then calls the underlying function with these arguments.
+// then calls the underlying function with these arguments.strea
 // Returns the result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (<-chan any, error) {
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
 	}
-
-	typedCh := ft.fn(input)
-	resultCh := make(chan any, 10)
-
-	go func() {
-		defer close(resultCh)
-		for v := range typedCh {
-			resultCh <- v
-		}
-	}()
-
-	return resultCh, nil
+	return ft.fn(input), nil
 }
 
 // Declaration returns a pointer to a Declaration struct that describes the FunctionTool,
