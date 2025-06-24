@@ -39,63 +39,63 @@ func TestNewSessionService(t *testing.T) {
 
 func TestCreateSession(t *testing.T) {
 	tests := []struct {
-		name      string
-		appName   string
-		userID    string
-		state     session.StateMap
-		sessionID string
-		wantErr   bool
-		validate  func(*testing.T, *session.Session, error)
+		name     string
+		appName  string
+		userID   string
+		state    session.StateMap
+		sessID   string
+		wantErr  bool
+		validate func(*testing.T, *session.Session, error)
 	}{
 		{
-			name:      "create session with provided ID",
-			appName:   "test-app",
-			userID:    "test-user",
-			state:     session.StateMap{"key1": "value1", "key2": 42},
-			sessionID: "test-session-id",
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
+			name:    "create session with provided ID",
+			appName: "test-app",
+			userID:  "test-user",
+			state:   session.StateMap{"key1": "value1", "key2": 42},
+			sessID:  "test-session-id",
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
 				require.NoError(t, err)
-				assert.Equal(t, "test-session-id", session.ID)
-				assert.Equal(t, "test-app", session.AppName)
-				assert.Equal(t, "test-user", session.UserID)
+				assert.Equal(t, "test-session-id", sess.ID)
+				assert.Equal(t, "test-app", sess.AppName)
+				assert.Equal(t, "test-user", sess.UserID)
 			},
 		},
 		{
-			name:      "create session with auto-generated ID",
-			appName:   "test-app",
-			userID:    "test-user",
-			state:     session.StateMap{"test": "data"},
-			sessionID: "",
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
+			name:    "create session with auto-generated ID",
+			appName: "test-app",
+			userID:  "test-user",
+			state:   session.StateMap{"test": "data"},
+			sessID:  "",
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
 				require.NoError(t, err)
-				assert.NotEmpty(t, session.ID, "expected auto-generated session ID")
-				assert.Len(t, session.ID, 36, "expected UUID format (36 chars)")
+				assert.NotEmpty(t, sess.ID, "expected auto-generated session ID")
+				assert.Len(t, sess.ID, 36, "expected UUID format (36 chars)")
 			},
 		},
 		{
-			name:      "create session with nil state",
-			appName:   "test-app",
-			userID:    "test-user",
-			state:     nil,
-			sessionID: "test-session",
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
+			name:    "create session with nil state",
+			appName: "test-app",
+			userID:  "test-user",
+			state:   nil,
+			sessID:  "test-session",
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
 				require.NoError(t, err)
-				assert.NotNil(t, session.State, "session state should not be nil")
+				assert.NotNil(t, sess.State, "session state should not be nil")
 			},
 		},
 		{
-			name:      "create session with empty state",
-			appName:   "test-app",
-			userID:    "test-user",
-			state:     session.StateMap{},
-			sessionID: "test-session",
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
+			name:    "create session with empty state",
+			appName: "test-app",
+			userID:  "test-user",
+			state:   session.StateMap{},
+			sessID:  "test-session",
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
 				require.NoError(t, err)
-				assert.NotNil(t, session.State, "session state should not be nil")
+				assert.NotNil(t, sess.State, "session state should not be nil")
 			},
 		},
 	}
@@ -105,7 +105,13 @@ func TestCreateSession(t *testing.T) {
 			service := NewSessionService()
 			ctx := context.Background()
 
-			session, err := service.CreateSession(ctx, tt.appName, tt.userID, tt.state, tt.sessionID)
+			key := session.SessionKey{
+				AppName:   tt.appName,
+				UserID:    tt.userID,
+				SessionID: tt.sessID,
+			}
+
+			sess, err := service.CreateSession(ctx, key, tt.state, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -114,7 +120,7 @@ func TestCreateSession(t *testing.T) {
 			}
 
 			if tt.validate != nil {
-				tt.validate(t, session, err)
+				tt.validate(t, sess, err)
 			}
 		})
 	}
@@ -126,10 +132,10 @@ func TestGetSession(t *testing.T) {
 
 	// Setup: create test sessions
 	setupData := []struct {
-		appName   string
-		userID    string
-		sessionID string
-		state     session.StateMap
+		appName string
+		userID  string
+		sessID  string
+		state   session.StateMap
 	}{
 		{"app1", "user1", "session1", session.StateMap{"key1": "value1"}},
 		{"app1", "user1", "session2", session.StateMap{"key2": "value2"}},
@@ -137,81 +143,92 @@ func TestGetSession(t *testing.T) {
 	}
 
 	for _, data := range setupData {
-		_, err := service.CreateSession(ctx, data.appName, data.userID, data.state, data.sessionID)
+		key := session.SessionKey{
+			AppName:   data.appName,
+			UserID:    data.userID,
+			SessionID: data.sessID,
+		}
+		_, err := service.CreateSession(ctx, key, data.state, nil)
 		require.NoError(t, err, "setup failed")
 	}
 
 	tests := []struct {
-		name      string
-		appName   string
-		userID    string
-		sessionID string
-		opts      *session.GetSessionOpts
-		wantNil   bool
-		wantErr   bool
-		validate  func(*testing.T, *session.Session, error)
+		name     string
+		appName  string
+		userID   string
+		sessID   string
+		opts     *session.Options
+		wantNil  bool
+		wantErr  bool
+		validate func(*testing.T, *session.Session, error)
 	}{
 		{
-			name:      "get existing session",
-			appName:   "app1",
-			userID:    "user1",
-			sessionID: "session1",
-			opts:      nil,
-			wantNil:   false,
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
-				assert.Equal(t, "session1", session.ID)
+			name:    "get existing session",
+			appName: "app1",
+			userID:  "user1",
+			sessID:  "session1",
+			opts:    nil,
+			wantNil: false,
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
+				assert.Equal(t, "session1", sess.ID)
 			},
 		},
 		{
-			name:      "get non-existent session",
-			appName:   "app1",
-			userID:    "user1",
-			sessionID: "nonexistent",
-			opts:      nil,
-			wantNil:   true,
-			wantErr:   false,
-			validate:  nil,
+			name:     "get non-existent session",
+			appName:  "app1",
+			userID:   "user1",
+			sessID:   "nonexistent",
+			opts:     nil,
+			wantNil:  true,
+			wantErr:  false,
+			validate: nil,
 		},
 		{
-			name:      "get session from non-existent app",
-			appName:   "nonexistent-app",
-			userID:    "user1",
-			sessionID: "session1",
-			opts:      nil,
-			wantNil:   true,
-			wantErr:   false,
-			validate:  nil,
+			name:     "get session from non-existent app",
+			appName:  "nonexistent-app",
+			userID:   "user1",
+			sessID:   "session1",
+			opts:     nil,
+			wantNil:  true,
+			wantErr:  false,
+			validate: nil,
 		},
 		{
-			name:      "get session with NumRecentEvents option",
-			appName:   "app1",
-			userID:    "user1",
-			sessionID: "session1",
-			opts:      &session.GetSessionOpts{NumRecentEvents: 2},
-			wantNil:   false,
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
-				assert.NotNil(t, session, "expected session, got nil")
+			name:    "get session with EventNum option",
+			appName: "app1",
+			userID:  "user1",
+			sessID:  "session1",
+			opts:    &session.Options{EventNum: 2},
+			wantNil: false,
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
+				assert.NotNil(t, sess, "expected session, got nil")
 			},
 		},
 		{
-			name:      "get session with AfterTime option",
-			appName:   "app1",
-			userID:    "user1",
-			sessionID: "session1",
-			opts:      &session.GetSessionOpts{AfterTime: time.Now().Add(-1 * time.Hour)},
-			wantNil:   false,
-			wantErr:   false,
-			validate: func(t *testing.T, session *session.Session, err error) {
-				assert.NotNil(t, session, "expected session, got nil")
+			name:    "get session with EventTime option",
+			appName: "app1",
+			userID:  "user1",
+			sessID:  "session1",
+			opts:    &session.Options{EventTime: time.Now().Add(-1 * time.Hour)},
+			wantNil: false,
+			wantErr: false,
+			validate: func(t *testing.T, sess *session.Session, err error) {
+				assert.NotNil(t, sess, "expected session, got nil")
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := service.GetSession(ctx, tt.appName, tt.userID, tt.sessionID, tt.opts)
+			key := session.SessionKey{
+				AppName:   tt.appName,
+				UserID:    tt.userID,
+				SessionID: tt.sessID,
+			}
+
+			sess, err := service.GetSession(ctx, key, tt.opts)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -220,13 +237,13 @@ func TestGetSession(t *testing.T) {
 			}
 
 			if tt.wantNil {
-				assert.Nil(t, session)
+				assert.Nil(t, sess)
 			} else {
-				assert.NotNil(t, session)
+				assert.NotNil(t, sess)
 			}
 
 			if tt.validate != nil {
-				tt.validate(t, session, err)
+				tt.validate(t, sess, err)
 			}
 		})
 	}
@@ -236,9 +253,9 @@ func TestListSessions(t *testing.T) {
 	tests := []struct {
 		name      string
 		setupData []struct {
-			appName   string
-			userID    string
-			sessionID string
+			appName string
+			userID  string
+			sessID  string
 		}
 		listAppName string
 		listUserID  string
@@ -248,9 +265,9 @@ func TestListSessions(t *testing.T) {
 		{
 			name: "list sessions for user with sessions",
 			setupData: []struct {
-				appName   string
-				userID    string
-				sessionID string
+				appName string
+				userID  string
+				sessID  string
 			}{
 				{"app1", "user1", "session1"},
 				{"app1", "user1", "session2"},
@@ -274,9 +291,9 @@ func TestListSessions(t *testing.T) {
 		{
 			name: "list sessions for different user",
 			setupData: []struct {
-				appName   string
-				userID    string
-				sessionID string
+				appName string
+				userID  string
+				sessID  string
 			}{
 				{"app1", "user1", "session1"},
 				{"app1", "user2", "session2"},
@@ -296,18 +313,26 @@ func TestListSessions(t *testing.T) {
 
 			// Setup test data
 			for _, data := range tt.setupData {
+				key := session.SessionKey{
+					AppName:   data.appName,
+					UserID:    data.userID,
+					SessionID: data.sessID,
+				}
 				_, err := testService.CreateSession(
 					ctx,
-					data.appName,
-					data.userID,
+					key,
 					session.StateMap{"test": "data"},
-					data.sessionID,
+					nil,
 				)
 				require.NoError(t, err, "setup failed")
 			}
 
 			// Test ListSessions
-			sessions, err := testService.ListSessions(ctx, tt.listAppName, tt.listUserID)
+			userKey := session.UserKey{
+				AppName: tt.listAppName,
+				UserID:  tt.listUserID,
+			}
+			sessions, err := testService.ListSessions(ctx, userKey, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -327,8 +352,14 @@ func TestDeleteSession(t *testing.T) {
 	// Setup: create test session
 	appName := "test-app"
 	userID := "test-user"
-	sessionID := "test-session"
-	_, err := service.CreateSession(ctx, appName, userID, session.StateMap{"test": "data"}, sessionID)
+	sessID := "test-session"
+
+	key := session.SessionKey{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessID,
+	}
+	_, err := service.CreateSession(ctx, key, session.StateMap{"test": "data"}, nil)
 	require.NoError(t, err, "setup failed")
 
 	tests := []struct {
@@ -343,7 +374,7 @@ func TestDeleteSession(t *testing.T) {
 			name:          "delete existing session",
 			deleteAppName: appName,
 			deleteUserID:  userID,
-			deleteSession: sessionID,
+			deleteSession: sessID,
 			wantErr:       false,
 			shouldExist:   false,
 		},
@@ -359,7 +390,12 @@ func TestDeleteSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := service.DeleteSession(ctx, tt.deleteAppName, tt.deleteUserID, tt.deleteSession)
+			deleteKey := session.SessionKey{
+				AppName:   tt.deleteAppName,
+				UserID:    tt.deleteUserID,
+				SessionID: tt.deleteSession,
+			}
+			err := service.DeleteSession(ctx, deleteKey, nil)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -369,13 +405,18 @@ func TestDeleteSession(t *testing.T) {
 
 			// Verify deletion by trying to get the original session
 			if tt.name == "delete existing session" {
-				session, err := service.GetSession(ctx, appName, userID, sessionID, nil)
+				getKey := session.SessionKey{
+					AppName:   appName,
+					UserID:    userID,
+					SessionID: sessID,
+				}
+				sess, err := service.GetSession(ctx, getKey, nil)
 				assert.NoError(t, err, "GetSession() after delete failed")
 
 				if tt.shouldExist {
-					assert.NotNil(t, session, "session should exist after deletion")
+					assert.NotNil(t, sess, "session should exist after deletion")
 				} else {
-					assert.Nil(t, session, "session should not exist after deletion")
+					assert.Nil(t, sess, "session should not exist after deletion")
 				}
 			}
 		})
@@ -416,10 +457,16 @@ func TestConcurrentAccess(t *testing.T) {
 				go func(id int) {
 					defer func() { done <- true }()
 
-					sessionID := fmt.Sprintf("session-%d", id)
+					sessID := fmt.Sprintf("session-%d", id)
 					state := session.StateMap{"id": id}
 
-					_, err := service.CreateSession(ctx, tt.appName, tt.userID, state, sessionID)
+					key := session.SessionKey{
+						AppName:   tt.appName,
+						UserID:    tt.userID,
+						SessionID: sessID,
+					}
+
+					_, err := service.CreateSession(ctx, key, state, nil)
 					if err != nil {
 						errors <- err
 						return
@@ -439,7 +486,11 @@ func TestConcurrentAccess(t *testing.T) {
 			}
 
 			// Verify all sessions were created
-			sessions, err := service.ListSessions(ctx, tt.appName, tt.userID)
+			userKey := session.UserKey{
+				AppName: tt.appName,
+				UserID:  tt.userID,
+			}
+			sessions, err := service.ListSessions(ctx, userKey, nil)
 			require.NoError(t, err, "ListSessions() failed")
 			assert.Len(t, sessions, tt.concurrency, "expected all sessions to be created")
 		})
@@ -478,7 +529,7 @@ func TestGetOrCreateApp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := service.getOrCreateApp(tt.appName)
+			app := service.getOrCreateAppSessions(tt.appName)
 
 			assert.Equal(t, tt.want, app != nil)
 
@@ -499,10 +550,10 @@ func TestStateMerging(t *testing.T) {
 
 	appName := "test-app"
 	userID := "test-user"
-	sessionID := "test-session"
+	sessID := "test-session"
 
 	// Setup app and user state
-	app := service.getOrCreateApp(appName)
+	app := service.getOrCreateAppSessions(appName)
 	app.appState["config"] = "production"
 	app.appState["version"] = "1.0.0"
 
@@ -514,12 +565,17 @@ func TestStateMerging(t *testing.T) {
 
 	// Create session
 	sessionState := session.StateMap{"context": "chat"}
-	sess, err := service.CreateSession(ctx, appName, userID, sessionState, sessionID)
+	key := session.SessionKey{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessID,
+	}
+	sess, err := service.CreateSession(ctx, key, sessionState, nil)
 	require.NoError(t, err)
 
 	// Verify session is created successfully
 	assert.NotNil(t, sess, "session should be created")
-	assert.Equal(t, sessionID, sess.ID)
+	assert.Equal(t, sessID, sess.ID)
 	assert.Equal(t, appName, sess.AppName)
 	assert.Equal(t, userID, sess.UserID)
 }
@@ -529,10 +585,20 @@ func TestAppIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create sessions in different apps
-	app1Session, err := service.CreateSession(ctx, "app1", "user1", session.StateMap{"key": "value1"}, "session1")
+	key1 := session.SessionKey{
+		AppName:   "app1",
+		UserID:    "user1",
+		SessionID: "session1",
+	}
+	app1Session, err := service.CreateSession(ctx, key1, session.StateMap{"key": "value1"}, nil)
 	require.NoError(t, err)
 
-	app2Session, err := service.CreateSession(ctx, "app2", "user1", session.StateMap{"key": "value2"}, "session2")
+	key2 := session.SessionKey{
+		AppName:   "app2",
+		UserID:    "user1",
+		SessionID: "session2",
+	}
+	app2Session, err := service.CreateSession(ctx, key2, session.StateMap{"key": "value2"}, nil)
 	require.NoError(t, err)
 
 	// Verify sessions are isolated
@@ -540,11 +606,13 @@ func TestAppIsolation(t *testing.T) {
 	assert.Equal(t, "app2", app2Session.AppName)
 
 	// List sessions for each app should only return sessions from that app
-	app1Sessions, err := service.ListSessions(ctx, "app1", "user1")
+	userKey1 := session.UserKey{AppName: "app1", UserID: "user1"}
+	app1Sessions, err := service.ListSessions(ctx, userKey1, nil)
 	require.NoError(t, err)
 	assert.Len(t, app1Sessions, 1)
 
-	app2Sessions, err := service.ListSessions(ctx, "app2", "user1")
+	userKey2 := session.UserKey{AppName: "app2", UserID: "user1"}
+	app2Sessions, err := service.ListSessions(ctx, userKey2, nil)
 	require.NoError(t, err)
 	assert.Len(t, app2Sessions, 1)
 }

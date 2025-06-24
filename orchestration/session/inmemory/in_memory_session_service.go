@@ -3,7 +3,6 @@ package inmemory
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -13,11 +12,6 @@ import (
 )
 
 var _ session.Service = (*SessionService)(nil)
-var (
-	errAppNameRequired   = errors.New("appName is required")
-	errUserIDRequired    = errors.New("userID is required")
-	errSessionIDRequired = errors.New("sessionID is required")
-)
 
 // appSessions is a map of userID to sessions, it store sessions of one app.
 type appSessions struct {
@@ -49,14 +43,14 @@ func NewSessionService() *SessionService {
 	}
 }
 
-func (s *SessionService) getApp(appName string) (*appSessions, bool) {
+func (s *SessionService) getAppSessions(appName string) (*appSessions, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	app, ok := s.apps[appName]
 	return app, ok
 }
 
-func (s *SessionService) getOrCreateApp(appName string) *appSessions {
+func (s *SessionService) getOrCreateAppSessions(appName string) *appSessions {
 	s.mu.RLock()
 	app, ok := s.apps[appName]
 	if ok {
@@ -80,110 +74,96 @@ func (s *SessionService) getOrCreateApp(appName string) *appSessions {
 // CreateSession creates a new session with the given parameters.
 func (s *SessionService) CreateSession(
 	ctx context.Context,
-	appName, userID string,
+	key session.SessionKey,
 	state session.StateMap,
-	sessionID string,
+	opts *session.Options,
 ) (*session.Session, error) {
-	if appName == "" {
-		return nil, errAppNameRequired
-	}
-	if userID == "" {
-		return nil, errUserIDRequired
+	if err := key.CheckUserKey(); err != nil {
+		return nil, err
 	}
 
-	app := s.getOrCreateApp(appName)
+	app := s.getOrCreateAppSessions(key.AppName)
 
 	// Generate session ID if not provided
-	if sessionID == "" {
-		sessionID = uuid.New().String()
+	if key.SessionID == "" {
+		key.SessionID = uuid.New().String()
 	}
 
-	// Create the sess with new State
+	// Create the session with new State
 	sess := &session.Session{
-		ID:        sessionID,
-		AppName:   appName,
-		UserID:    userID,
+		ID:        key.SessionID,
+		AppName:   key.AppName,
+		UserID:    key.UserID,
 		State:     session.NewState(), // Initialize with provided state
 		Events:    []event.Event{},
 		UpdatedAt: time.Now(),
 		CreatedAt: time.Now(),
 	}
 
-	for key, value := range state {
-		sess.State.Set(key, value)
+	// Set initial state if provided
+	for k, v := range state {
+		sess.State.Set(k, v)
 	}
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	if app.sessions[userID] == nil {
-		app.sessions[userID] = make(map[string]*session.Session)
+	if app.sessions[key.UserID] == nil {
+		app.sessions[key.UserID] = make(map[string]*session.Session)
 	}
 
 	// Store the session
-	app.sessions[userID][sessionID] = sess
+	app.sessions[key.UserID][key.SessionID] = sess
 
 	// Create a copy and merge state for return
-	copySess := copySession(sess)
-	return mergeState(app.appState, app.userState[userID], copySess), nil
+	copiedSess := copySession(sess)
+	return mergeState(app.appState, app.userState[key.UserID], copiedSess), nil
 }
 
 // GetSession retrieves a session by app name, user ID, and session ID.
 func (s *SessionService) GetSession(
 	ctx context.Context,
-	appName string,
-	userID, sessionID string,
-	opts *session.GetSessionOpts,
+	key session.SessionKey,
+	opts *session.Options,
 ) (*session.Session, error) {
-	if appName == "" {
-		return nil, errAppNameRequired
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
 	}
-	if userID == "" {
-		return nil, errUserIDRequired
-	}
-	if sessionID == "" {
-		return nil, errSessionIDRequired
-	}
-
-	app, ok := s.getApp(appName)
+	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
 	}
 
 	app.mu.RLock()
 	defer app.mu.RUnlock()
-
-	if _, ok := app.sessions[userID]; !ok {
+	if _, ok := app.sessions[key.UserID]; !ok {
 		return nil, nil
 	}
-
-	session, ok := app.sessions[userID][sessionID]
+	sess, ok := app.sessions[key.UserID][key.SessionID]
 	if !ok {
 		return nil, nil
 	}
 
-	copySess := copySession(session)
+	copiedSess := copySession(sess)
 
-	// Apply filtering options if provided
+	// apply filtering options if provided
 	if opts != nil {
-		applyGetSessionOptions(copySess, opts)
+		applyGetSessionOptions(copiedSess, opts)
 	}
-	return mergeState(app.appState, app.userState[userID], copySess), nil
+	return mergeState(app.appState, app.userState[key.UserID], copiedSess), nil
 }
 
 // ListSessions returns all sessions for a given app and user.
 func (s *SessionService) ListSessions(
 	ctx context.Context,
-	appName, userID string,
+	userKey session.UserKey,
+	opts *session.Options,
 ) ([]*session.Session, error) {
-	if appName == "" {
-		return nil, errAppNameRequired
-	}
-	if userID == "" {
-		return nil, errUserIDRequired
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
 	}
 
-	app, ok := s.getApp(appName)
+	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
 	}
@@ -191,34 +171,32 @@ func (s *SessionService) ListSessions(
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	if _, ok := app.sessions[userID]; !ok {
+	if _, ok := app.sessions[userKey.UserID]; !ok {
 		return []*session.Session{}, nil
 	}
 
-	sessions := make([]*session.Session, 0, len(app.sessions[userID]))
-	for _, sess := range app.sessions[userID] {
-		copySess := copySession(sess)
-		sessions = append(sessions, copySess)
+	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
+	for _, s := range app.sessions[userKey.UserID] {
+		copiedSess := copySession(s)
+		if opts != nil {
+			applyGetSessionOptions(copiedSess, opts)
+		}
+		sessList = append(sessList, mergeState(app.appState, app.userState[userKey.UserID], copiedSess))
 	}
-	return sessions, nil
+	return sessList, nil
 }
 
 // DeleteSession removes a session from storage.
 func (s *SessionService) DeleteSession(
 	ctx context.Context,
-	appName, userID, sessionID string,
+	key session.SessionKey,
+	opts *session.Options,
 ) error {
-	if appName == "" {
-		return errAppNameRequired
-	}
-	if userID == "" {
-		return errUserIDRequired
-	}
-	if sessionID == "" {
-		return errSessionIDRequired
+	if err := key.CheckSessionKey(); err != nil {
+		return err
 	}
 
-	app, ok := s.getApp(appName)
+	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil
 	}
@@ -226,49 +204,60 @@ func (s *SessionService) DeleteSession(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	if _, ok := app.sessions[userID][sessionID]; !ok {
-		return nil // Session doesn't exist, consider it already deleted
+	if _, ok := app.sessions[key.UserID][key.SessionID]; !ok {
+		return nil
 	}
 
-	delete(app.sessions[userID], sessionID)
+	// Delete the session
+	delete(app.sessions[key.UserID], key.SessionID)
+
+	// Clean up empty user sessions map
+	if len(app.sessions[key.UserID]) == 0 {
+		delete(app.sessions, key.UserID)
+	}
+
+	if len(app.sessions[key.UserID]) == 0 {
+		delete(app.userState, key.UserID)
+	}
+
 	return nil
 }
 
 // copySession creates a deep copy of a session.
 func copySession(sess *session.Session) *session.Session {
-	copySess := &session.Session{
+	copiedSess := &session.Session{
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     sess.State,
+		State:     session.NewState(), // Create new state to avoid reference sharing
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
+		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
 	}
 
+	// copy state
 	if sess.State != nil {
-		for key, value := range sess.State.Value {
-			copySess.State.Set(key, value)
+		for k, v := range sess.State.Value {
+			copiedSess.State.Set(k, v)
 		}
 	}
-
-	copy(copySess.Events, sess.Events)
-
-	return copySess
+	copy(copiedSess.Events, sess.Events)
+	return copiedSess
 }
 
 // applyGetSessionOptions applies filtering options to the session.
-func applyGetSessionOptions(sess *session.Session, opts *session.GetSessionOpts) {
-	if opts.NumRecentEvents > 0 && len(sess.Events) > opts.NumRecentEvents {
-		sess.Events = sess.Events[len(sess.Events)-opts.NumRecentEvents:]
+func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
+	if opts.EventNum > 0 && len(sess.Events) > opts.EventNum {
+		sess.Events = sess.Events[len(sess.Events)-opts.EventNum:]
 	}
 
-	if !opts.AfterTime.IsZero() {
+	if !opts.EventTime.IsZero() {
 		var filteredEvents []event.Event
-		for _, ev := range sess.Events {
+		for _, e := range sess.Events {
 			// Include events that are after or equal to the specified time
 			// This matches the Python implementation: timestamp >= after_timestamp
-			if ev.Timestamp.After(opts.AfterTime) || ev.Timestamp.Equal(opts.AfterTime) {
-				filteredEvents = append(filteredEvents, ev)
+			if e.Timestamp.After(opts.EventTime) || e.Timestamp.Equal(opts.EventTime) {
+				filteredEvents = append(filteredEvents, e)
 			}
 		}
 		sess.Events = filteredEvents
@@ -277,11 +266,11 @@ func applyGetSessionOptions(sess *session.Session, opts *session.GetSessionOpts)
 
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
-	for key, value := range appState {
-		sess.State.Set(session.StateAppPrefix+key, value)
+	for k, v := range appState {
+		sess.State.Set(session.StateAppPrefix+k, v)
 	}
-	for key, value := range userState {
-		sess.State.Set(session.StateUserPrefix+key, value)
+	for k, v := range userState {
+		sess.State.Set(session.StateUserPrefix+k, v)
 	}
 	return sess
 }
