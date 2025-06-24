@@ -13,6 +13,14 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// Thinking parameter keys used in API requests.
+const (
+	// ThinkingEnabledKey is the key used for enabling thinking mode in API requests.
+	ThinkingEnabledKey = "thinking_enabled"
+	// ThinkingTokensKey is the key used for thinking tokens configuration in API requests.
+	ThinkingTokensKey = "thinking_tokens"
+)
+
 // String returns the string representation of the role.
 func (r Role) String() string {
 	return string(r)

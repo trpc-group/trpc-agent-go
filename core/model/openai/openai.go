@@ -107,15 +107,11 @@ func (m *Model) GenerateContent(
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
 	var opts []option.RequestOption
-	const (
-		thinkingEnabledKey = "thinking_enabled"
-		thinkingTokensKey  = "thinking_tokens"
-	)
 	if request.ThinkingEnabled != nil {
-		opts = append(opts, option.WithJSONSet(thinkingEnabledKey, *request.ThinkingEnabled))
+		opts = append(opts, option.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
 	}
 	if request.ThinkingTokens != nil {
-		opts = append(opts, option.WithJSONSet(thinkingTokensKey, *request.ThinkingTokens))
+		opts = append(opts, option.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
 	}
 
 	// Add streaming options if needed.
