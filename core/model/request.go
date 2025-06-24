@@ -90,6 +90,18 @@ type GenerationConfig struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+
+	// ReasoningEffort limits the reasoning effort for reasoning models.
+	// Supported values: "low", "medium", "high".
+	// Only effective for OpenAI o-series models.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
+	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
+	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
+
+	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
+	// Must be greater than 1024 and not exceed max_tokens.
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
 // Request is the request to the model.
