@@ -1,3 +1,5 @@
+// Package builtin implements the built-in planner that uses model's built-in
+// thinking features.
 package builtin
 
 import (
