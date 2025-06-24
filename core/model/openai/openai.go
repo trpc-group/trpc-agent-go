@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/openai/openai-go"
+	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 
@@ -16,7 +16,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-const defaultChannelBufferSize = 256
+const (
+	functionToolType string = "function"
+
+	defaultChannelBufferSize = 256
+)
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
@@ -204,8 +208,10 @@ func (m *Model) handleStreamingResponse(
 	stream := m.client.Chat.Completions.NewStreaming(ctx, chatRequest)
 	defer stream.Close()
 
+	acc := openai.ChatCompletionAccumulator{}
 	for stream.Next() {
 		chunk := stream.Current()
+		acc.AddChunk(chunk)
 
 		response := &model.Response{
 			ID:        chunk.ID,
@@ -214,6 +220,20 @@ func (m *Model) handleStreamingResponse(
 			Model:     chunk.Model,
 			Timestamp: time.Now(),
 			Done:      false,
+		}
+
+		if t, ok := acc.JustFinishedToolCall(); ok {
+			response.ToolCalls = []model.ToolCall{
+				{
+					Index: &t.Index,
+					ID:    t.ID,
+					Type:  functionToolType, // openapi only supports a function type for now
+					Function: model.FunctionDefinitionParam{
+						Name:      t.Name,
+						Arguments: []byte(t.Arguments),
+					},
+				},
+			}
 		}
 
 		// Convert choices.
@@ -313,9 +333,9 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
-			toolCallsConverted := make([]model.ToolCall, len(choice.Message.ToolCalls))
+			response.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
-				toolCallsConverted[j] = model.ToolCall{
+				response.ToolCalls[j] = model.ToolCall{
 					ID:   toolCall.ID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
@@ -328,9 +348,8 @@ func (m *Model) handleNonStreamingResponse(
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),
 				Message: model.Message{
-					Role:      model.RoleAssistant,
-					Content:   choice.Message.Content,
-					ToolCalls: toolCallsConverted,
+					Role:    model.RoleAssistant,
+					Content: choice.Message.Content,
 				},
 			}
 

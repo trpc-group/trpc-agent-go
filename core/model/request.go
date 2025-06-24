@@ -30,10 +30,9 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role      Role       `json:"role"`                // The role of the message author
-	Content   string     `json:"content"`             // The message content
-	ToolID    string     `json:"id,omitempty"`        // Optional ID for the message
-	ToolCalls []ToolCall `json:"toolCalls,omitempty"` // Optional tools associated with the message
+	Role    Role   `json:"role"`         // The role of the message author
+	Content string `json:"content"`      // The message content
+	ToolID  string `json:"id,omitempty"` // Optional ID for the message
 }
 
 // NewSystemMessage creates a new system message.
@@ -111,6 +110,9 @@ type ToolCall struct {
 	Function FunctionDefinitionParam `json:"function,omitempty"`
 	// The ID of the tool call returned by the model.
 	ID string `json:"id,omitempty"`
+
+	// Index is the index of the tool call in the message for streaming responses.
+	Index *int `json:"index,omitempty"`
 }
 
 type FunctionDefinitionParam struct {
