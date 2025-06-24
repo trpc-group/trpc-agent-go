@@ -13,6 +13,14 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// Thinking parameter keys used in API requests.
+const (
+	// ThinkingEnabledKey is the key used for enabling thinking mode in API requests.
+	ThinkingEnabledKey = "thinking_enabled"
+	// ThinkingTokensKey is the key used for thinking tokens configuration in API requests.
+	ThinkingTokensKey = "thinking_tokens"
+)
+
 // String returns the string representation of the role.
 func (r Role) String() string {
 	return string(r)
@@ -30,10 +38,9 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role      Role       `json:"role"`                // The role of the message author
-	Content   string     `json:"content"`             // The message content
-	ToolID    string     `json:"id,omitempty"`        // Optional ID for the message
-	ToolCalls []ToolCall `json:"toolCalls,omitempty"` // Optional tools associated with the message
+	Role    Role   `json:"role"`         // The role of the message author
+	Content string `json:"content"`      // The message content
+	ToolID  string `json:"id,omitempty"` // Optional ID for the message
 }
 
 // NewSystemMessage creates a new system message.
@@ -90,6 +97,17 @@ type GenerationConfig struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+
+	// ReasoningEffort limits the reasoning effort for reasoning models.
+	// Supported values: "low", "medium", "high".
+	// Only effective for OpenAI o-series models.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
+	// ThinkingEnabled enables thinking mode for Claude and Gemini models via OpenAI API.
+	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
+
+	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
 // Request is the request to the model.
@@ -111,6 +129,9 @@ type ToolCall struct {
 	Function FunctionDefinitionParam `json:"function,omitempty"`
 	// The ID of the tool call returned by the model.
 	ID string `json:"id,omitempty"`
+
+	// Index is the index of the tool call in the message for streaming responses.
+	Index *int `json:"index,omitempty"`
 }
 
 type FunctionDefinitionParam struct {
