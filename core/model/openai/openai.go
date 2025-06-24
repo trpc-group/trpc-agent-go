@@ -107,6 +107,16 @@ func (m *Model) GenerateContent(
 	if request.FrequencyPenalty != nil {
 		chatRequest.FrequencyPenalty = openai.Float(*request.FrequencyPenalty)
 	}
+	if request.ReasoningEffort != nil {
+		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
+	}
+	var opts []option.RequestOption
+	if request.ThinkingEnabled != nil {
+		opts = append(opts, option.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+	}
+	if request.ThinkingTokens != nil {
+		opts = append(opts, option.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
+	}
 
 	// Add streaming options if needed.
 	if request.Stream {
@@ -119,9 +129,9 @@ func (m *Model) GenerateContent(
 		defer close(responseChan)
 
 		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan)
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan)
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		}
 	}()
 
@@ -204,8 +214,10 @@ func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
+	opts ...option.RequestOption,
 ) {
-	stream := m.client.Chat.Completions.NewStreaming(ctx, chatRequest)
+	stream := m.client.Chat.Completions.NewStreaming(
+		ctx, chatRequest, opts...)
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
@@ -301,8 +313,10 @@ func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
+	opts ...option.RequestOption,
 ) {
-	chatCompletion, err := m.client.Chat.Completions.New(ctx, chatRequest)
+	chatCompletion, err := m.client.Chat.Completions.New(
+		ctx, chatRequest, opts...)
 	if err != nil {
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
