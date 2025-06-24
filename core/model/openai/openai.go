@@ -16,7 +16,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-const defaultChannelBufferSize = 256
+const (
+	functionToolType string = "function"
+
+	defaultChannelBufferSize = 256
+)
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
@@ -219,17 +223,17 @@ func (m *Model) handleStreamingResponse(
 		}
 
 		if tool, ok := acc.JustFinishedToolCall(); ok {
-			response.SetToolCalls([]model.ToolCall{
+			response.ToolCalls = []model.ToolCall{
 				{
 					Index: &tool.Index,
 					ID:    tool.ID,
-					Type:  "function", // openapi only supports function type for now
+					Type:  functionToolType, // openapi only supports function type for now
 					Function: model.FunctionDefinitionParam{
 						Name:      tool.Name,
 						Arguments: []byte(tool.Arguments),
 					},
 				},
-			})
+			}
 		}
 
 		// Convert choices.
@@ -364,7 +368,7 @@ func (m *Model) handleNonStreamingResponse(
 					ToolCalls: toolCallsConverted,
 				},
 			}
-			response.SetToolCalls(toolCallsConverted)
+			response.ToolCalls = toolCallsConverted
 
 			// Handle finish reason - FinishReason is a plain string.
 			if choice.FinishReason != "" {
