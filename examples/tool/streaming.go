@@ -66,7 +66,6 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 			}
 
 			for _, tc := range response.ToolCalls {
-				fmt.Printf("toolCall: %v\n", tc)
 				if tc.Function.Name == "get_weather" {
 					// Simulate getting weather data
 					location := tc.Function.Arguments

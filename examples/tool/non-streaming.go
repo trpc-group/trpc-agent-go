@@ -48,12 +48,11 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			choice := response.Choices[0]
 			fmt.Printf("Response: %s\n", choice.Message.Content)
 
-			toolCalls := choice.Message.ToolCalls
-			if len(toolCalls) == 0 {
+			if len(response.ToolCalls) == 0 {
 				fmt.Println("No tool calls made.")
 			} else {
 				fmt.Println("Tool calls:")
-				for _, toolCall := range toolCalls {
+				for _, toolCall := range response.ToolCalls {
 					if toolCall.Function.Name == "get_weather" {
 						// Simulate getting weather data
 						location := toolCall.Function.Arguments

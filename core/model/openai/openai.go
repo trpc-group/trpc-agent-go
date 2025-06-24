@@ -222,15 +222,15 @@ func (m *Model) handleStreamingResponse(
 			Done:      false,
 		}
 
-		if tool, ok := acc.JustFinishedToolCall(); ok {
+		if t, ok := acc.JustFinishedToolCall(); ok {
 			response.ToolCalls = []model.ToolCall{
 				{
-					Index: &tool.Index,
-					ID:    tool.ID,
-					Type:  functionToolType, // openapi only supports function type for now
+					Index: &t.Index,
+					ID:    t.ID,
+					Type:  functionToolType, // openapi only supports a function type for now
 					Function: model.FunctionDefinitionParam{
-						Name:      tool.Name,
-						Arguments: []byte(tool.Arguments),
+						Name:      t.Name,
+						Arguments: []byte(t.Arguments),
 					},
 				},
 			}
@@ -244,26 +244,11 @@ func (m *Model) handleStreamingResponse(
 					Index: int(choice.Index),
 				}
 
-				toolCallsConverted := make([]model.ToolCall, len(choice.Delta.ToolCalls))
-				for j, toolCall := range choice.Delta.ToolCalls {
-					toolCallsConverted[j] = model.ToolCall{
-						ID:   toolCall.ID,
-						Type: string(toolCall.Type), // Convert constant to string
-						Function: model.FunctionDefinitionParam{
-							Name:      toolCall.Function.Name,
-							Arguments: []byte(toolCall.Function.Arguments),
-						},
-					}
-					index := int(toolCall.Index)
-					toolCallsConverted[j].Index = &index
-				}
-
 				// Handle delta content - Content is a plain string.
-				if choice.Delta.Content != "" || len(toolCallsConverted) > 0 {
+				if choice.Delta.Content != "" {
 					response.Choices[i].Delta = model.Message{
-						Role:      model.RoleAssistant,
-						Content:   choice.Delta.Content,
-						ToolCalls: toolCallsConverted,
+						Role:    model.RoleAssistant,
+						Content: choice.Delta.Content,
 					}
 				}
 
@@ -348,9 +333,9 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
-			toolCallsConverted := make([]model.ToolCall, len(choice.Message.ToolCalls))
+			response.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
-				toolCallsConverted[j] = model.ToolCall{
+				response.ToolCalls[j] = model.ToolCall{
 					ID:   toolCall.ID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
@@ -363,12 +348,10 @@ func (m *Model) handleNonStreamingResponse(
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),
 				Message: model.Message{
-					Role:      model.RoleAssistant,
-					Content:   choice.Message.Content,
-					ToolCalls: toolCallsConverted,
+					Role:    model.RoleAssistant,
+					Content: choice.Message.Content,
 				},
 			}
-			response.ToolCalls = toolCallsConverted
 
 			// Handle finish reason - FinishReason is a plain string.
 			if choice.FinishReason != "" {

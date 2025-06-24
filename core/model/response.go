@@ -95,7 +95,7 @@ type Response struct {
 	// Done indicates if this is the final chunk in a stream.
 	Done bool `json:"-"`
 
-	// This is used for both streaming and non-streaming responses, parsed from Choices.
+	// This is used for both streaming and non-streaming responses, parsed from the first choice of Choices.
 	ToolCalls []ToolCall `json:"-"`
 }
 

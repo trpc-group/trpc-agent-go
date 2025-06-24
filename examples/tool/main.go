@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,9 +13,12 @@ import (
 
 func main() {
 	// Read configuration from environment variables.
-	baseURL := getEnv("MODEL_BASE_URL", "https://api.openai.com/v1")
-	modelName := getEnv("MODEL_NAME", "gpt-4o-mini")
+	baseURL := getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 	apiKey := getEnv("OPENAI_API_KEY", "")
+
+	// Read configuration from command line flags.
+	modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
+	flag.Parse()
 
 	// Validate required environment variables.
 	if apiKey == "" {
@@ -22,13 +26,13 @@ func main() {
 	}
 
 	fmt.Printf("Using configuration:\n")
-	fmt.Printf("- Base URL: %s\n", baseURL)
-	fmt.Printf("- Model Name: %s\n", modelName)
-	fmt.Printf("- API Key: %s***\n", maskAPIKey(apiKey))
+	fmt.Printf("- Model Name: %s\n", *modelName)
+	fmt.Printf("- Channel Buffer Size: 512\n")
+	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance using the new package structure.
-	llm := openai.New(modelName, openai.Options{
+	llm := openai.New(*modelName, openai.Options{
 		APIKey:  apiKey,
 		BaseURL: baseURL,
 	})
