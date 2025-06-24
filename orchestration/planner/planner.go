@@ -12,8 +12,9 @@ import (
 // The planner allows the agent to generate plans for the queries to guide its
 // action.
 type Planner interface {
-	// BuildPlanningInstruction builds the system instruction to be appended to
-	// the LLM request for planning. Returns empty string if no instruction is needed.
+	// BuildPlanningInstruction applies any necessary configuration to the LLM request
+	// and builds the system instruction to be appended for planning.
+	// Returns empty string if no instruction is needed.
 	BuildPlanningInstruction(
 		ctx context.Context,
 		invocation *agent.Invocation,

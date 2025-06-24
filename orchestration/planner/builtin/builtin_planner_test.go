@@ -59,7 +59,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestPlanner_ApplyThinkingConfig(t *testing.T) {
+func TestPlanner_BuildPlanningInstruction(t *testing.T) {
 	tests := []struct {
 		name    string
 		planner *Planner
@@ -122,9 +122,18 @@ func TestPlanner_ApplyThinkingConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			invocation := &agent.Invocation{}
 			req := &model.Request{}
-			tt.planner.ApplyThinkingConfig(req)
 
+			result := tt.planner.BuildPlanningInstruction(ctx, invocation, req)
+
+			// Verify return value is empty string.
+			if result != "" {
+				t.Errorf("BuildPlanningInstruction() = %q, want empty string", result)
+			}
+
+			// Verify thinking configuration was applied to request.
 			if !equalStringPtr(req.ReasoningEffort, tt.want.GenerationConfig.ReasoningEffort) {
 				t.Errorf("ReasoningEffort = %v, want %v", req.ReasoningEffort, tt.want.GenerationConfig.ReasoningEffort)
 			}
@@ -135,18 +144,6 @@ func TestPlanner_ApplyThinkingConfig(t *testing.T) {
 				t.Errorf("ThinkingTokens = %v, want %v", req.ThinkingTokens, tt.want.GenerationConfig.ThinkingTokens)
 			}
 		})
-	}
-}
-
-func TestPlanner_BuildPlanningInstruction(t *testing.T) {
-	p := New(Options{})
-	ctx := context.Background()
-	invocation := &agent.Invocation{}
-	req := &model.Request{}
-
-	result := p.BuildPlanningInstruction(ctx, invocation, req)
-	if result != "" {
-		t.Errorf("BuildPlanningInstruction() = %q, want empty string", result)
 	}
 }
 

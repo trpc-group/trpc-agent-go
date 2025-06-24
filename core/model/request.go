@@ -100,7 +100,6 @@ type GenerationConfig struct {
 	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
 	// ThinkingTokens controls the length of thinking for Claude and Gemini models via OpenAI API.
-	// Must be greater than 1024 and not exceed max_tokens.
 	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
