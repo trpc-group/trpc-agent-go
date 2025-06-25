@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestFunctionTool_Run_Success(t *testing.T) {
@@ -45,4 +46,106 @@ func toArguments(t *testing.T, v any) json.RawMessage {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 	return json.RawMessage(b)
+}
+
+// Test input/output types for streaming functions
+type streamTestInput struct {
+	ArticalID int `json:"articalID,omitempty"`
+}
+
+type streamTestOutput struct {
+	Title     string `json:"title,omitempty"`
+	Body      string `json:"body,omitempty"`
+	Reference string `json:"reference,omitempty"`
+}
+
+// Helper function to create a simple streaming function
+func streamableFunc(input streamTestInput) *StreamReader[streamTestOutput] {
+	stream := NewStream[streamTestOutput](10)
+
+	go func() {
+		defer stream.Writer.Close()
+
+		articals := []struct {
+			Title     string
+			Body      string
+			Reference string
+		}{
+			{
+				Title:     "Getting Started with Go",
+				Body:      "Go is a programming language developed by Google. It's designed for simplicity, efficiency, and reliability. This guide will help you understand the basics of Go programming.",
+				Reference: "https://golang.org/doc/tutorial/getting-started",
+			},
+			{
+				Title:     "Understanding Goroutines",
+				Body:      "Goroutines are lightweight threads managed by the Go runtime. They enable concurrent programming in Go, allowing you to run multiple functions simultaneously.",
+				Reference: "https://golang.org/doc/effective_go#goroutines",
+			},
+			{
+				Title:     "Working with Channels",
+				Body:      "Channels are the pipes that connect concurrent goroutines. You can send values into channels from one goroutine and receive those values into another goroutine.",
+				Reference: "https://golang.org/doc/effective_go#channels",
+			},
+		}
+
+		id := input.ArticalID
+		// send the article title
+		output := streamTestOutput{
+			Title: articals[id%len(articals)].Title,
+		}
+		chunk := StreamChunk[streamTestOutput]{
+			Content:  output,
+			Metadata: Metadata{CreatedAt: time.Now()},
+		}
+		if closed := stream.Writer.Send(chunk, nil); closed {
+			return
+		}
+		// Simulate processing delay
+		time.Sleep(10 * time.Millisecond)
+
+		// send the article body in two parts
+		body := articals[id%len(articals)].Body
+		output = streamTestOutput{
+			Reference: body[:len(body)/2],
+		}
+		chunk = StreamChunk[streamTestOutput]{
+			Content:  output,
+			Metadata: Metadata{CreatedAt: time.Now()},
+		}
+		if closed := stream.Writer.Send(chunk, nil); closed {
+			return
+		}
+
+		output = streamTestOutput{
+			Reference: body[len(body)/2:],
+		}
+		chunk = StreamChunk[streamTestOutput]{
+			Content:  output,
+			Metadata: Metadata{CreatedAt: time.Now()},
+		}
+		if closed := stream.Writer.Send(chunk, nil); closed {
+			return
+		}
+
+		// Simulate processing delay
+		time.Sleep(10 * time.Millisecond)
+
+		// send the article reference
+		output = streamTestOutput{
+			Reference: articals[id%len(articals)].Reference,
+		}
+		chunk = StreamChunk[streamTestOutput]{
+			Content:  output,
+			Metadata: Metadata{CreatedAt: time.Now()},
+		}
+		if closed := stream.Writer.Send(chunk, nil); closed {
+			return
+		}
+
+		// Simulate processing delay
+		time.Sleep(10 * time.Millisecond)
+
+	}()
+
+	return stream.Reader
 }

@@ -4,6 +4,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 )
 
@@ -61,6 +62,60 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 		Name:        ft.name,
 		Description: ft.description,
 		InputSchema: ft.inputSchema,
+	}
+}
+
+// FunctionTool implements the Tool interface for executing functions with arguments.
+type StreamableFunctionTool[I, O any] struct {
+	name        string
+	description string
+	inputSchema *Schema
+	fn          func(I) *StreamReader[O]
+	unmarshaler unmarshaler
+}
+
+func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader[O], cfg FunctionToolConfig) *StreamableFunctionTool[I, O] {
+	var empty I
+	schema := generateJSONSchema(reflect.TypeOf(empty))
+
+	return &StreamableFunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
+}
+
+func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error) {
+	// FunctionTool does not support streaming calls, so we return an error.
+	var input I
+	if err := t.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
+		return nil, err
+	}
+	if t.fn == nil {
+		return nil, fmt.Errorf("FunctionTool: %s does not support streaming calls", t.name)
+	}
+	streamReader := t.fn(input)
+
+	return Convert(streamReader, func(o O) (string, error) {
+		b, err := json.Marshal(o)
+		if err != nil {
+			return "", fmt.Errorf("error marshaling output: %v", err)
+		}
+		return string(b), nil
+	}), nil
+
+}
+
+func Convert[I, O any](sr *StreamReader[I], convert func(I) (O, error)) *StreamReader[O] {
+	// TODO: Implement conversion logic for StreamReader
+	// This is a placeholder implementation.
+	// In a real implementation, you would read from sr, apply the convert function,
+	// and yield results of type O.
+	// For now, we return an empty StreamReader[O].
+	return &StreamReader[O]{}
+}
+
+func (t *StreamableFunctionTool[I, O]) Declaration() *Declaration {
+	return &Declaration{
+		Name:        t.name,
+		Description: t.description,
+		InputSchema: t.inputSchema,
 	}
 }
 
