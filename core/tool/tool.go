@@ -42,6 +42,9 @@ type Declaration struct {
 
 	// InputSchema defines the expected input for the tool in JSON schema format.
 	InputSchema *Schema `json:"inputSchema"`
+
+	// OutputSchema defines the expected output for the tool in JSON schema format.
+	OutputSchema *Schema `json:"outputSchema,omitempty"`
 }
 
 // Schema represents the structure of JSON Schema used for defining arguments and responses.

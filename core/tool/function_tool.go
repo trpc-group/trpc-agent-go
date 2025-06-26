@@ -12,11 +12,12 @@ import (
 // It provides a generic way to wrap any function as a tool that can be called
 // with JSON arguments and returns results.
 type FunctionTool[I, O any] struct {
-	name        string
-	description string
-	inputSchema *Schema
-	fn          func(I) O
-	unmarshaler unmarshaler
+	name         string
+	description  string
+	inputSchema  *Schema
+	outputSchema *Schema
+	fn           func(I) O
+	unmarshaler  unmarshaler
 }
 
 // FunctionToolConfig contains configuration options for a FunctionTool.
@@ -39,10 +40,20 @@ type FunctionToolConfig struct {
 // Returns:
 //   - A pointer to the newly created FunctionTool.
 func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTool[I, O] {
-	var empty I
-	schema := generateJSONSchema(reflect.TypeOf(empty))
+	var (
+		emptyI I
+		emptyO O
+	)
+	iSchema := generateJSONSchema(reflect.TypeOf(emptyI))
+	oSchema := generateJSONSchema(reflect.TypeOf(emptyO))
 
-	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
+	return &FunctionTool[I, O]{
+		name:        cfg.Name,
+		description: cfg.Description,
+		fn:          fn, unmarshaler: &jsonUnmarshaler{},
+		inputSchema:  iSchema,
+		outputSchema: oSchema,
+	}
 }
 
 // Call executes the function tool with the provided JSON arguments.
@@ -71,9 +82,10 @@ func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, e
 //   - A Declaration struct containing the tool's metadata.
 func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
-		Name:        ft.name,
-		Description: ft.description,
-		InputSchema: ft.inputSchema,
+		Name:         ft.name,
+		Description:  ft.description,
+		InputSchema:  ft.inputSchema,
+		OutputSchema: ft.outputSchema,
 	}
 }
 
@@ -81,11 +93,12 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 // that return streaming results. It extends the basic FunctionTool to support
 // streaming output through StreamReader.
 type StreamableFunctionTool[I, O any] struct {
-	name        string
-	description string
-	inputSchema *Schema
-	fn          func(I) *StreamReader
-	unmarshaler unmarshaler
+	name         string
+	description  string
+	inputSchema  *Schema
+	outputSchema *Schema
+	fn           func(I) *StreamReader
+	unmarshaler  unmarshaler
 }
 
 // NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
@@ -98,10 +111,21 @@ type StreamableFunctionTool[I, O any] struct {
 // Returns:
 //   - A pointer to the newly created StreamableFunctionTool.
 func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader, cfg FunctionToolConfig) *StreamableFunctionTool[I, O] {
-	var empty I
-	schema := generateJSONSchema(reflect.TypeOf(empty))
+	var (
+		emptyI I
+		emptyO O
+	)
+	iSchema := generateJSONSchema(reflect.TypeOf(emptyI))
+	oSchema := generateJSONSchema(reflect.TypeOf(emptyO))
 
-	return &StreamableFunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
+	return &StreamableFunctionTool[I, O]{
+		name:         cfg.Name,
+		description:  cfg.Description,
+		fn:           fn,
+		unmarshaler:  &jsonUnmarshaler{},
+		inputSchema:  iSchema,
+		outputSchema: oSchema,
+	}
 }
 
 // StreamableCall executes the streamable function tool with JSON arguments.
@@ -134,9 +158,10 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 //   - A Declaration struct containing the tool's metadata.
 func (t *StreamableFunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
-		Name:        t.name,
-		Description: t.description,
-		InputSchema: t.inputSchema,
+		Name:         t.name,
+		Description:  t.description,
+		InputSchema:  t.inputSchema,
+		OutputSchema: t.outputSchema,
 	}
 }
 
