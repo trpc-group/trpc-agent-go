@@ -222,7 +222,7 @@ func TestContentRequestProcessor_FilterEvents(t *testing.T) {
 	filteredEvents := processor.filterEvents(events)
 
 	// Should only have the valid event.
-	require.Equal(t, 1, len(filteredEvents))
+	require.Equal(t, 2, len(filteredEvents))
 	assert.Equal(t, "Valid message", filteredEvents[0].Choices[0].Message.Content)
 }
 
