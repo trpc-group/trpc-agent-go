@@ -9,6 +9,8 @@ import (
 )
 
 // FunctionTool implements the Tool interface for executing functions with arguments.
+// It provides a generic way to wrap any function as a tool that can be called
+// with JSON arguments and returns results.
 type FunctionTool[I, O any] struct {
 	name        string
 	description string
@@ -43,10 +45,16 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 	return &FunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
 }
 
-// Call calls the function tool with the provided arguments.
-// It unmarshals the given arguments into the tool's arguments placeholder,
+// Call executes the function tool with the provided JSON arguments.
+// It unmarshals the given arguments into the tool's input type,
 // then calls the underlying function with these arguments.
-// Returns the result of the function execution or an error if unmarshalling fails.
+//
+// Parameters:
+//   - ctx: the context for the function call
+//   - jsonArgs: JSON-encoded arguments for the function
+//
+// Returns:
+//   - The result of the function execution or an error if unmarshalling fails.
 func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
@@ -55,8 +63,12 @@ func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, e
 	return ft.fn(input), nil
 }
 
-// Declaration returns a pointer to a Declaration struct that describes the FunctionTool,
-// including its name, description, and expected arguments.
+// Declaration returns the tool's declaration information.
+// It provides metadata about the tool including its name, description,
+// and JSON schema for the expected input arguments.
+//
+// Returns:
+//   - A Declaration struct containing the tool's metadata.
 func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
 		Name:        ft.name,
@@ -65,7 +77,9 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	}
 }
 
-// FunctionTool implements the Tool interface for executing functions with arguments.
+// StreamableFunctionTool implements the Tool interface for executing functions
+// that return streaming results. It extends the basic FunctionTool to support
+// streaming output through StreamReader.
 type StreamableFunctionTool[I, O any] struct {
 	name        string
 	description string
@@ -74,6 +88,15 @@ type StreamableFunctionTool[I, O any] struct {
 	unmarshaler unmarshaler
 }
 
+// NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
+// It wraps a function that returns a StreamReader to provide streaming capabilities.
+//
+// Parameters:
+//   - fn: the function that takes input I and returns a StreamReader[O]
+//   - cfg: configuration options for the tool
+//
+// Returns:
+//   - A pointer to the newly created StreamableFunctionTool.
 func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader[O], cfg FunctionToolConfig) *StreamableFunctionTool[I, O] {
 	var empty I
 	schema := generateJSONSchema(reflect.TypeOf(empty))
@@ -81,6 +104,16 @@ func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader[O], cfg Functi
 	return &StreamableFunctionTool[I, O]{name: cfg.Name, description: cfg.Description, fn: fn, unmarshaler: &jsonUnmarshaler{}, inputSchema: schema}
 }
 
+// StreamableCall executes the streamable function tool with JSON arguments.
+// It unmarshals the arguments, calls the underlying function, and returns
+// a StreamReader that converts the output to JSON strings.
+//
+// Parameters:
+//   - ctx: the context for the function call
+//   - jsonArgs: JSON-encoded arguments for the function
+//
+// Returns:
+//   - A StreamReader[string] containing JSON-encoded results, or an error.
 func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error) {
 	// FunctionTool does not support streaming calls, so we return an error.
 	var input I
@@ -92,7 +125,7 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 	}
 	streamReader := t.fn(input)
 
-	return Convert(streamReader, func(o O) (string, error) {
+	return convert(streamReader, func(o O) (string, error) {
 		b, err := json.Marshal(o)
 		if err != nil {
 			return "", fmt.Errorf("error marshaling output: %v", err)
@@ -102,7 +135,7 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 
 }
 
-func Convert[I, O any](sr *StreamReader[I], convert func(I) (O, error)) *StreamReader[O] {
+func convert[I, O any](sr *StreamReader[I], convert func(I) (O, error)) *StreamReader[O] {
 	// TODO: Implement conversion logic for StreamReader
 	// This is a placeholder implementation.
 	// In a real implementation, you would read from sr, apply the convert function,
@@ -111,6 +144,12 @@ func Convert[I, O any](sr *StreamReader[I], convert func(I) (O, error)) *StreamR
 	return &StreamReader[O]{}
 }
 
+// Declaration returns the tool's declaration information.
+// It provides metadata about the streamable tool including its name, description,
+// and JSON schema for the expected input arguments.
+//
+// Returns:
+//   - A Declaration struct containing the tool's metadata.
 func (t *StreamableFunctionTool[I, O]) Declaration() *Declaration {
 	return &Declaration{
 		Name:        t.name,
