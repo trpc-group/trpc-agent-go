@@ -83,7 +83,7 @@ func (s *SessionService) getOrCreateAppSessions(appName string) *appSessions {
 // CreateSession creates a new session with the given parameters.
 func (s *SessionService) CreateSession(
 	ctx context.Context,
-	key session.SessionKey,
+	key session.Key,
 	state session.StateMap,
 	opts *session.Options,
 ) (*session.Session, error) {
@@ -132,7 +132,7 @@ func (s *SessionService) CreateSession(
 // GetSession retrieves a session by app name, user ID, and session ID.
 func (s *SessionService) GetSession(
 	ctx context.Context,
-	key session.SessionKey,
+	key session.Key,
 	opts *session.Options,
 ) (*session.Session, error) {
 	if err := key.CheckSessionKey(); err != nil {
@@ -198,7 +198,7 @@ func (s *SessionService) ListSessions(
 // DeleteSession removes a session from storage.
 func (s *SessionService) DeleteSession(
 	ctx context.Context,
-	key session.SessionKey,
+	key session.Key,
 	opts *session.Options,
 ) error {
 	if err := key.CheckSessionKey(); err != nil {
@@ -235,10 +235,16 @@ func (s *SessionService) DeleteSession(
 // AppendEvent appends an event to a session.
 func (s *SessionService) AppendEvent(
 	ctx context.Context,
-	key session.SessionKey,
+	sess *session.Session,
 	event *event.Event,
 	opts *session.Options,
 ) error {
+	s.updateSessionState(sess, event)
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
@@ -257,22 +263,20 @@ func (s *SessionService) AppendEvent(
 		return fmt.Errorf("user not found: %s", key.UserID)
 	}
 
-	sess, ok := userSessions[key.SessionID]
+	storedSession, ok := userSessions[key.SessionID]
 	if !ok {
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
+	s.updateSessionState(storedSession, event)
+	return nil
+}
 
-	// Add the event first
+func (s *SessionService) updateSessionState(sess *session.Session, event *event.Event) {
 	sess.Events = append(sess.Events, *event)
-
-	// Then apply limit if needed (correct logic)
 	if s.opts.SessionEventLimit > 0 && len(sess.Events) > s.opts.SessionEventLimit {
 		sess.Events = sess.Events[len(sess.Events)-s.opts.SessionEventLimit:]
 	}
-
-	// Update timestamp
 	sess.UpdatedAt = time.Now()
-	return nil
 }
 
 // copySession creates a deep copy of a session.

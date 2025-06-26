@@ -55,7 +55,7 @@ func (r *Runner) Run(
 	message model.Message,
 	opts agent.RunOptions,
 ) (<-chan *event.Event, error) {
-	sessionKey := session.SessionKey{
+	sessionKey := session.Key{
 		AppName:   r.appName,
 		UserID:    userID,
 		SessionID: sessionID,
@@ -96,7 +96,7 @@ func (r *Runner) Run(
 		}
 
 		if err := r.sessionService.AppendEvent(
-			ctx, sessionKey, userEvent, &session.Options{},
+			ctx, sess, userEvent, &session.Options{},
 		); err != nil {
 			return nil, err
 		}
@@ -127,9 +127,9 @@ func (r *Runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.Response != nil && agentEvent.Response.Done {
+			if agentEvent.Response != nil && !agentEvent.Response.IsPartial {
 				if err := r.sessionService.AppendEvent(
-					ctx, sessionKey, agentEvent, &session.Options{},
+					ctx, sess, agentEvent, &session.Options{},
 				); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}

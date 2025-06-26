@@ -89,7 +89,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	assert.Contains(t, events[0].Response.Choices[0].Message.Content, "Hello, world!")
 
 	// Verify session was created and contains events.
-	sessionKey := session.SessionKey{
+	sessionKey := session.Key{
 		AppName:   "test-app",
 		UserID:    userID,
 		SessionID: sessionID,
@@ -142,7 +142,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 	}
 
 	// Verify session was created.
-	sessionKey := session.SessionKey{
+	sessionKey := session.Key{
 		AppName:   "test-app",
 		UserID:    userID,
 		SessionID: sessionID,
@@ -184,7 +184,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	}
 
 	// Verify session was created but only contains agent response (no user message).
-	sessionKey := session.SessionKey{
+	sessionKey := session.Key{
 		AppName:   "test-app",
 		UserID:    userID,
 		SessionID: sessionID,

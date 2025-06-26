@@ -62,7 +62,7 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	// Send a preprocessing event.
 	if invocation != nil {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = "preprocessing.instruction"
+		evt.Object = model.ObjectTypePreprocessingInstruction
 
 		select {
 		case ch <- evt:

@@ -14,6 +14,16 @@ const (
 // Object type constants for Response.Object field.
 const (
 	ObjectTypeError = "error"
+	// ObjectTypeToolResponse is the object type for tool response events.
+	ObjectTypeToolResponse = "tool.response"
+	// ObjectTypePreprocessingBasic is the object type for basic preprocessing events.
+	ObjectTypePreprocessingBasic = "preprocessing.basic"
+	// ObjectTypePreprocessingContent is the object type for content preprocessing events.
+	ObjectTypePreprocessingContent = "preprocessing.content"
+	// ObjectTypePreprocessingIdentity is the object type for identity preprocessing events.
+	ObjectTypePreprocessingIdentity = "preprocessing.identity"
+	// ObjectTypePreprocessingInstruction is the object type for instruction preprocessing events.
+	ObjectTypePreprocessingInstruction = "preprocessing.instruction"
 )
 
 // Choice represents a single completion choice.
@@ -90,13 +100,16 @@ type Response struct {
 	Error *ResponseError `json:"error,omitempty"`
 
 	// Timestamp when this response chunk was received (for streaming).
-	Timestamp time.Time `json:"-"`
+	Timestamp time.Time `json:"timestamp"`
 
-	// Done indicates if this is the final chunk in a stream.
-	Done bool `json:"-"`
+	// Done indicates if the llm flow should stop.
+	Done bool `json:"done"`
+
+	// IsPartial indicates if this is a partial response.
+	IsPartial bool `json:"is_partial"`
 
 	// This is used for both streaming and non-streaming responses, parsed from the first choice of Choices.
-	ToolCalls []ToolCall `json:"-"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ResponseError represents an error response from the API.

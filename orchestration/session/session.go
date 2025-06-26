@@ -38,35 +38,35 @@ type Options struct {
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.
-	CreateSession(ctx context.Context, key SessionKey, state StateMap, options *Options) (*Session, error)
+	CreateSession(ctx context.Context, key Key, state StateMap, options *Options) (*Session, error)
 
 	// GetSession gets a session.
-	GetSession(ctx context.Context, key SessionKey, options *Options) (*Session, error)
+	GetSession(ctx context.Context, key Key, options *Options) (*Session, error)
 
 	// ListSessions lists all sessions by user scope of session key.
 	ListSessions(ctx context.Context, userKey UserKey, options *Options) ([]*Session, error)
 
 	// DeleteSession deletes a session.
-	DeleteSession(ctx context.Context, key SessionKey, options *Options) error
+	DeleteSession(ctx context.Context, key Key, options *Options) error
 
 	// AppendEvent appends an event to a session.
-	AppendEvent(ctx context.Context, key SessionKey, event *event.Event, options *Options) error
+	AppendEvent(ctx context.Context, session *Session, event *event.Event, options *Options) error
 }
 
-// SessionKey is the key for a session.
-type SessionKey struct {
+// Key is the key for a session.
+type Key struct {
 	AppName   string // app name
 	UserID    string // user id
 	SessionID string // session id
 }
 
 // CheckSessionKey checks if a session key is valid.
-func (s *SessionKey) CheckSessionKey() error {
+func (s *Key) CheckSessionKey() error {
 	return checkSessionKey(s.AppName, s.UserID, s.SessionID)
 }
 
 // CheckUserKey checks if a user key is valid.
-func (s *SessionKey) CheckUserKey() error {
+func (s *Key) CheckUserKey() error {
 	return checkUserKey(s.AppName, s.UserID)
 }
 

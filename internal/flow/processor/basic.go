@@ -63,7 +63,7 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	// Send a preprocessing event.
 	if invocation != nil {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = "preprocessing.basic"
+		evt.Object = model.ObjectTypePreprocessingBasic
 
 		select {
 		case ch <- evt:

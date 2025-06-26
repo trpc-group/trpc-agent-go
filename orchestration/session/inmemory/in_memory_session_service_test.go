@@ -107,7 +107,7 @@ func TestCreateSession(t *testing.T) {
 			service := NewSessionService(testServiceOpts)
 			ctx := context.Background()
 
-			key := session.SessionKey{
+			key := session.Key{
 				AppName:   tt.appName,
 				UserID:    tt.userID,
 				SessionID: tt.sessID,
@@ -145,7 +145,7 @@ func TestGetSession(t *testing.T) {
 	}
 
 	for _, data := range setupData {
-		key := session.SessionKey{
+		key := session.Key{
 			AppName:   data.appName,
 			UserID:    data.userID,
 			SessionID: data.sessID,
@@ -224,7 +224,7 @@ func TestGetSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := session.SessionKey{
+			key := session.Key{
 				AppName:   tt.appName,
 				UserID:    tt.userID,
 				SessionID: tt.sessID,
@@ -315,7 +315,7 @@ func TestListSessions(t *testing.T) {
 
 			// Setup test data
 			for _, data := range tt.setupData {
-				key := session.SessionKey{
+				key := session.Key{
 					AppName:   data.appName,
 					UserID:    data.userID,
 					SessionID: data.sessID,
@@ -356,7 +356,7 @@ func TestDeleteSession(t *testing.T) {
 	userID := "test-user"
 	sessID := "test-session"
 
-	key := session.SessionKey{
+	key := session.Key{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessID,
@@ -392,7 +392,7 @@ func TestDeleteSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			deleteKey := session.SessionKey{
+			deleteKey := session.Key{
 				AppName:   tt.deleteAppName,
 				UserID:    tt.deleteUserID,
 				SessionID: tt.deleteSession,
@@ -407,7 +407,7 @@ func TestDeleteSession(t *testing.T) {
 
 			// Verify deletion by trying to get the original session
 			if tt.name == "delete existing session" {
-				getKey := session.SessionKey{
+				getKey := session.Key{
 					AppName:   appName,
 					UserID:    userID,
 					SessionID: sessID,
@@ -462,7 +462,7 @@ func TestConcurrentAccess(t *testing.T) {
 					sessID := fmt.Sprintf("session-%d", id)
 					state := session.StateMap{"id": id}
 
-					key := session.SessionKey{
+					key := session.Key{
 						AppName:   tt.appName,
 						UserID:    tt.userID,
 						SessionID: sessID,
@@ -567,7 +567,7 @@ func TestStateMerging(t *testing.T) {
 
 	// Create session
 	sessionState := session.StateMap{"context": "chat"}
-	key := session.SessionKey{
+	key := session.Key{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessID,
@@ -587,7 +587,7 @@ func TestAppIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create sessions in different apps
-	key1 := session.SessionKey{
+	key1 := session.Key{
 		AppName:   "app1",
 		UserID:    "user1",
 		SessionID: "session1",
@@ -595,7 +595,7 @@ func TestAppIsolation(t *testing.T) {
 	app1Session, err := service.CreateSession(ctx, key1, session.StateMap{"key": "value1"}, nil)
 	require.NoError(t, err)
 
-	key2 := session.SessionKey{
+	key2 := session.Key{
 		AppName:   "app2",
 		UserID:    "user1",
 		SessionID: "session2",
