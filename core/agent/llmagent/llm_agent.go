@@ -26,6 +26,8 @@ type Options struct {
 	GenerationConfig model.GenerationConfig
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// Tools is the list of tools available to the agent.
+	Tools []tool.Tool
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
@@ -93,6 +95,7 @@ func New(
 		systemPrompt: opts.SystemPrompt,
 		genConfig:    opts.GenerationConfig,
 		flow:         llmFlow,
+		tools:        opts.Tools,
 	}
 }
 
@@ -113,6 +116,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	return a.flow.Run(ctx, invocation)
 }
 
+// Tools implements the agent.Agent interface.
+// It returns the list of tools available to the agent.
 func (a *LLMAgent) Tools() []tool.Tool {
 	return a.tools
 }

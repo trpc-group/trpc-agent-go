@@ -65,7 +65,7 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	// Send a preprocessing event.
 	if invocation != nil {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = "preprocessing.identity"
+		evt.Object = model.ObjectTypePreprocessingIdentity
 
 		select {
 		case ch <- evt:
@@ -84,4 +84,4 @@ func hasIdentityMessage(messages []model.Message, identity string) bool {
 		}
 	}
 	return false
-} 
+}

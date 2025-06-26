@@ -221,6 +221,7 @@ func (m *Model) handleStreamingResponse(
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
+	var hasToolCall bool
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
@@ -232,9 +233,11 @@ func (m *Model) handleStreamingResponse(
 			Model:     chunk.Model,
 			Timestamp: time.Now(),
 			Done:      false,
+			IsPartial: true,
 		}
 
 		if t, ok := acc.JustFinishedToolCall(); ok {
+			hasToolCall = true
 			response.ToolCalls = []model.ToolCall{
 				{
 					Index: &t.Index,
@@ -282,8 +285,27 @@ func (m *Model) handleStreamingResponse(
 	// Send final response with usage information if available.
 	if stream.Err() == nil {
 		finalResponse := &model.Response{
+			ID:      acc.ID,
+			Created: acc.Created,
+			Model:   acc.Model,
+			Choices: make([]model.Choice, len(acc.Choices)),
+			Usage: &model.Usage{
+				PromptTokens:     int(acc.Usage.PromptTokens),
+				CompletionTokens: int(acc.Usage.CompletionTokens),
+				TotalTokens:      int(acc.Usage.TotalTokens),
+			},
 			Timestamp: time.Now(),
-			Done:      true,
+			Done:      !hasToolCall,
+			IsPartial: false,
+		}
+		for i, choice := range acc.Choices {
+			finalResponse.Choices[i] = model.Choice{
+				Index: int(choice.Index),
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: choice.Message.Content,
+				},
+			}
 		}
 
 		select {

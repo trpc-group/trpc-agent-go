@@ -1,97 +1,222 @@
-// Package main demonstrates how to use the Runner with LLMAgent and
-// OpenAI-like model with environment variables.
+// Package main demonstrates multi-turn chat using the Runner with streaming
+// output, session management, and tool calling.
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 )
 
 func main() {
-	// Read configuration from command line flags.
-	modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
+	// Parse command line flags.
+	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
-	fmt.Printf("Creating Runner with configuration:\n")
-	fmt.Printf("- Model Name: %s\n", *modelName)
-	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
-	fmt.Println()
+	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
+	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Type 'exit' to end the conversation\n")
+	fmt.Printf("Available tools: calculator, current_time\n")
+	fmt.Println(strings.Repeat("=", 50))
 
-	// 1. Create OpenAI-like model.
-	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: 512, // Custom buffer size for high-throughput scenarios.
-	})
-
-	// 2. Create LLMAgent.
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming for runner.
+	// Create and run the chat.
+	chat := &multiTurnChat{
+		modelName: *modelName,
 	}
 
-	agentName := "assistant-agent"
+	if err := chat.run(); err != nil {
+		log.Fatalf("Chat failed: %v", err)
+	}
+}
+
+// multiTurnChat manages the conversation.
+type multiTurnChat struct {
+	modelName string
+	runner    *runner.Runner
+	userID    string
+	sessionID string
+}
+
+// run starts the interactive chat session.
+func (c *multiTurnChat) run() error {
+	ctx := context.Background()
+
+	// Setup the runner.
+	if err := c.setup(ctx); err != nil {
+		return fmt.Errorf("setup failed: %w", err)
+	}
+
+	// Start interactive chat.
+	return c.startChat(ctx)
+}
+
+// setup creates the runner with LLM agent and tools.
+func (c *multiTurnChat) setup(ctx context.Context) error {
+	// Create OpenAI model.
+	modelInstance := openai.New(c.modelName, openai.Options{
+		ChannelBufferSize: 512,
+	})
+
+	// Create tools.
+	calculatorTool := tool.NewFunctionTool(c.calculate, tool.FunctionToolConfig{
+		Name:        "calculator",
+		Description: "Perform basic mathematical calculations (add, subtract, multiply, divide)",
+	})
+
+	timeTool := tool.NewFunctionTool(c.getCurrentTime, tool.FunctionToolConfig{
+		Name:        "current_time",
+		Description: "Get the current time and date for a specific timezone",
+	})
+
+	// Create LLM agent with tools.
+	genConfig := model.GenerationConfig{
+		MaxTokens:   intPtr(2000),
+		Temperature: floatPtr(0.7),
+		Stream:      true, // Enable streaming
+	}
+
+	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.Options{
 			Model:             modelInstance,
-			Description:       "A helpful AI assistant for demonstrations using Runner",
-			Instruction:       "Be helpful, concise, and informative in your responses",
-			SystemPrompt:      "You are a helpful assistant designed to demonstrate Runner capabilities with streaming",
+			Description:       "A helpful AI assistant with calculator and time tools",
+			Instruction:       "Use tools when appropriate for calculations or time queries. Be helpful and conversational.",
+			SystemPrompt:      "You have access to calculator and current_time tools. Use them when users ask for calculations or time information.",
 			GenerationConfig:  genConfig,
 			ChannelBufferSize: 100,
+			Tools:             []tool.Tool{calculatorTool, timeTool},
 		},
 	)
 
-	// 3. Create Runner (session service not currently used by Runner).
-	appName := "runner-demo-app"
-	runnerInstance := runner.New(
+	// Create runner.
+	appName := "multi-turn-chat"
+	c.runner = runner.New(
 		appName,
 		llmAgent,
 		runner.Options{},
 	)
 
-	fmt.Printf("Created Runner: %s with agent: %s\n", appName, agentName)
-	fmt.Println()
+	// Setup identifiers.
+	c.userID = "user"
+	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
 
-	// 5. Use runner to run the agent with streaming.
-	ctx := context.Background()
-	userID := "demo-user-001"
-	sessionID := "demo-session-001"
-	userMessage := model.NewUserMessage("Hello! Can you tell me an interesting fact about Go programming language concurrency features?")
+	fmt.Printf("✅ Chat ready! Session: %s\n\n", c.sessionID)
 
-	fmt.Println("=== Runner Streaming Execution ===")
-	fmt.Printf("User: %s\n", userMessage.Content)
-	fmt.Printf("Starting streaming response...\n\n")
+	return nil
+}
 
-	// Run the agent through the runner.
-	eventChan, err := runnerInstance.Run(ctx, userID, sessionID, userMessage, agent.RunOptions{})
-	if err != nil {
-		log.Fatalf("Failed to run agent through Runner: %v", err)
+// startChat runs the interactive conversation loop.
+func (c *multiTurnChat) startChat(ctx context.Context) error {
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for {
+		fmt.Print("👤 You: ")
+		if !scanner.Scan() {
+			break
+		}
+
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "" {
+			continue
+		}
+
+		// Handle exit command.
+		if strings.ToLower(userInput) == "exit" {
+			fmt.Println("👋 Goodbye!")
+			return nil
+		}
+
+		// Process the user message.
+		if err := c.processMessage(ctx, userInput); err != nil {
+			fmt.Printf("❌ Error: %v\n", err)
+		}
+
+		fmt.Println() // Add spacing between turns
 	}
 
-	// Process streaming events.
-	eventCount := 0
-	var fullContent string
-	var lastFinishReason *string
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("input scanner error: %w", err)
+	}
 
-	fmt.Print("Assistant: ")
+	return nil
+}
+
+// processMessage handles a single message exchange.
+func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) error {
+	message := model.NewUserMessage(userMessage)
+
+	// Run the agent through the runner.
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to run agent: %w", err)
+	}
+
+	// Process streaming response.
+	return c.processStreamingResponse(eventChan)
+}
+
+// processStreamingResponse handles the streaming response with tool call visualization.
+func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) error {
+	fmt.Print("🤖 Assistant: ")
+
+	var (
+		fullContent       string
+		toolCallsDetected bool
+		assistantStarted  bool
+	)
 
 	for event := range eventChan {
-		eventCount++
 
 		// Handle errors.
 		if event.Error != nil {
-			fmt.Printf("\nError: %s (Type: %s)\n", event.Error.Message, event.Error.Type)
+			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
 			continue
+		}
+
+		// Detect and display tool calls.
+		if len(event.ToolCalls) > 0 {
+			toolCallsDetected = true
+			if assistantStarted {
+				fmt.Printf("\n")
+			}
+			fmt.Printf("🔧 Tool calls initiated:\n")
+			for _, toolCall := range event.ToolCalls {
+				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+				if len(toolCall.Function.Arguments) > 0 {
+					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+				}
+			}
+			fmt.Printf("\n🔄 Executing tools...\n")
+		}
+
+		// Detect tool responses.
+		if event.Response != nil && len(event.Response.Choices) > 0 {
+			hasToolResponse := false
+			for _, choice := range event.Response.Choices {
+				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+					fmt.Printf("✅ Tool response (ID: %s): %s\n",
+						choice.Message.ToolID,
+						strings.TrimSpace(choice.Message.Content))
+					hasToolResponse = true
+				}
+			}
+			if hasToolResponse {
+				continue
+			}
 		}
 
 		// Process streaming content.
@@ -100,80 +225,136 @@ func main() {
 
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
+				if !assistantStarted {
+					if toolCallsDetected {
+						fmt.Printf("\n🤖 Assistant: ")
+					}
+					assistantStarted = true
+				}
 				fmt.Print(choice.Delta.Content)
 				fullContent += choice.Delta.Content
-			}
-
-			// Handle complete message content (for non-streaming chunks).
-			if choice.Message.Content != "" && choice.Delta.Content == "" {
-				fmt.Print(choice.Message.Content)
-				fullContent += choice.Message.Content
-			}
-
-			// Store finish reason.
-			if choice.FinishReason != nil {
-				lastFinishReason = choice.FinishReason
 			}
 		}
 
 		// Check if this is the final event.
-		if event.Done {
-			fmt.Printf("\n\n=== Streaming Complete ===\n")
-			if lastFinishReason != nil {
-				fmt.Printf("Finish reason: %s\n", *lastFinishReason)
-			}
-
-			if event.Usage != nil {
-				fmt.Printf("Token usage - Prompt: %d, Completion: %d, Total: %d\n",
-					event.Usage.PromptTokens,
-					event.Usage.CompletionTokens,
-					event.Usage.TotalTokens)
-			}
-
-			fmt.Printf("Total events processed: %d\n", eventCount)
-			fmt.Printf("Response length: %d characters\n", len(fullContent))
+		// Don't break on tool response events (Done=true but not final assistant response).
+		if event.Done && !c.isToolEvent(event) {
+			fmt.Printf("\n")
 			break
 		}
 	}
 
-	fmt.Println("\n=== Runner Demo Complete ===")
+	return nil
+}
 
-	if eventCount == 0 {
-		fmt.Println("No events were generated. This might indicate:")
-		fmt.Println("- Model configuration issues")
-		fmt.Println("- Network connectivity problems")
-		fmt.Println("- Check the logs for more details")
+// isToolEvent checks if an event is a tool response (not a final response).
+func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
+	if event.Response == nil {
+		return false
+	}
+	if len(event.ToolCalls) > 0 {
+		return true
 	}
 
-	// Demonstrate a follow-up conversation.
-	fmt.Println("\n=== Follow-up Conversation ===")
-	followUpMessage := model.NewUserMessage("Can you give me a code example of using channels?")
-	fmt.Printf("User: %s\n", followUpMessage.Content)
-
-	followUpChan, err := runnerInstance.Run(ctx, userID, sessionID, followUpMessage, agent.RunOptions{})
-	if err != nil {
-		log.Printf("Failed to run follow-up: %v", err)
-		return
-	}
-
-	fmt.Print("Assistant: ")
-	for event := range followUpChan {
-		if event.Error != nil {
-			fmt.Printf("\nError: %s\n", event.Error.Message)
-			continue
-		}
-
-		if len(event.Choices) > 0 && event.Choices[0].Delta.Content != "" {
-			fmt.Print(event.Choices[0].Delta.Content)
-		}
-
-		if event.Done {
-			fmt.Println("")
-			break
+	// Check if this is a tool response by examining choices.
+	for _, choice := range event.Response.Choices {
+		if choice.Message.Role == model.RoleTool {
+			return true
 		}
 	}
 
-	fmt.Println("=== Demo Complete ===")
+	return false
+}
+
+// Tool implementations.
+
+// calculate performs basic mathematical operations.
+func (c *multiTurnChat) calculate(args calculatorArgs) calculatorResult {
+	var result float64
+
+	switch strings.ToLower(args.Operation) {
+	case "add", "+":
+		result = args.A + args.B
+	case "subtract", "-":
+		result = args.A - args.B
+	case "multiply", "*":
+		result = args.A * args.B
+	case "divide", "/":
+		if args.B != 0 {
+			result = args.A / args.B
+		} else {
+			result = 0 // Handle division by zero
+		}
+	default:
+		result = 0
+	}
+
+	return calculatorResult{
+		Operation: args.Operation,
+		A:         args.A,
+		B:         args.B,
+		Result:    result,
+	}
+}
+
+// getCurrentTime returns current time information.
+func (c *multiTurnChat) getCurrentTime(args timeArgs) timeResult {
+	now := time.Now()
+	var t time.Time
+	timezone := args.Timezone
+
+	// Handle timezone conversion.
+	switch strings.ToUpper(args.Timezone) {
+	case "UTC":
+		t = now.UTC()
+	case "EST", "EASTERN":
+		t = now.Add(-5 * time.Hour) // Simplified EST
+	case "PST", "PACIFIC":
+		t = now.Add(-8 * time.Hour) // Simplified PST
+	case "CST", "CENTRAL":
+		t = now.Add(-6 * time.Hour) // Simplified CST
+	case "":
+		t = now
+		timezone = "Local"
+	default:
+		t = now.UTC()
+		timezone = "UTC"
+	}
+
+	return timeResult{
+		Timezone: timezone,
+		Time:     t.Format("15:04:05"),
+		Date:     t.Format("2006-01-02"),
+		Weekday:  t.Weekday().String(),
+	}
+}
+
+// calculatorArgs represents arguments for the calculator tool.
+type calculatorArgs struct {
+	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
+	A         float64 `json:"a" description:"First number"`
+	B         float64 `json:"b" description:"Second number"`
+}
+
+// calculatorResult represents the result of a calculation.
+type calculatorResult struct {
+	Operation string  `json:"operation"`
+	A         float64 `json:"a"`
+	B         float64 `json:"b"`
+	Result    float64 `json:"result"`
+}
+
+// timeArgs represents arguments for the time tool.
+type timeArgs struct {
+	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
+}
+
+// timeResult represents the current time information.
+type timeResult struct {
+	Timezone string `json:"timezone"`
+	Time     string `json:"time"`
+	Date     string `json:"date"`
+	Weekday  string `json:"weekday"`
 }
 
 // Helper functions for creating pointers to primitive types.

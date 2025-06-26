@@ -1,17 +1,25 @@
-# Runner Example
+# Multi-turn Chat with Runner + Tools
 
-This example demonstrates how to use the `Runner` orchestration component with an `LLMAgent` and OpenAI-like model with environment variable configuration.
+This example demonstrates a clean multi-turn chat interface using the `Runner` orchestration component with streaming output, session management, and actual tool calling functionality.
 
-## What is Runner?
+## What is Multi-turn Chat?
 
-The `Runner` is an orchestration component that provides a higher-level interface for running agents. It manages agent execution and can integrate with session services for conversation management.
+This implementation showcases the essential features for building conversational AI applications:
+
+- **🔄 Multi-turn Conversations**: Maintains context across multiple exchanges
+- **🌊 Streaming Output**: Real-time character-by-character response generation
+- **💾 Session Management**: Conversation state preservation and continuity
+- **🔧 Tool Integration**: Working calculator and time tools with proper execution
+- **🚀 Simple Interface**: Clean, focused chat experience
 
 ### Key Features
 
-- **Agent Orchestration**: Provides a clean interface for running agents with user messages
-- **Session Management**: Can integrate with session services for conversation state
-- **Event-driven**: Returns streaming events from agent execution
-- **Configurable**: Supports different agent types and session services
+- **Context Preservation**: The assistant remembers previous conversation turns
+- **Streaming Responses**: Live, responsive output for better user experience
+- **Session Continuity**: Consistent conversation state across the chat session
+- **Tool Call Execution**: Proper execution and display of tool calling procedures
+- **Tool Visualization**: Clear indication of tool calls, arguments, and responses
+- **Error Handling**: Graceful error recovery and reporting
 
 ## Prerequisites
 
@@ -20,14 +28,10 @@ The `Runner` is an orchestration component that provides a higher-level interfac
 
 ## Environment Variables
 
-The example supports the following environment variables:
-
 | Variable | Description | Default Value |
 |----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required, automatically read by OpenAI SDK) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK) | `https://api.openai.com/v1` |
-
-**Note**: `OPENAI_API_KEY` and `OPENAI_BASE_URL` are automatically read by the OpenAI SDK. You don't need to manually read these environment variables in your code. The SDK handles this automatically when creating the client.
+| `OPENAI_API_KEY` | API key for the model service (required) | `` |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 
 ## Command Line Arguments
 
@@ -37,7 +41,7 @@ The example supports the following environment variables:
 
 ## Usage
 
-### Basic Usage
+### Basic Chat
 
 ```bash
 cd examples/runner
@@ -45,51 +49,69 @@ export OPENAI_API_KEY="your-api-key-here"
 go run main.go
 ```
 
-### With Custom Configuration
+### Custom Model
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-go run main.go -model gpt-4
+go run main.go -model gpt-4o
 ```
 
-### Using environment variables inline
+### Using Environment Variable
+
+If you have `MODEL_NAME` set in your environment:
 
 ```bash
-cd examples/runner
-OPENAI_API_KEY="your-api-key" OPENAI_BASE_URL="https://api.openai.com/v1" go run main.go -model gpt-4o-mini
+source ~/.bashrc && go run main.go -model "$MODEL_NAME"
 ```
 
-## Architecture
+## Implemented Tools
 
-The Runner example follows this architecture:
+The example includes two working tools:
 
-```
-Runner
-├── Manages Agent execution
-├── Provides streaming interface
-├── Handles user messages and sessions
-└── Returns events via channel
+### 🧮 Calculator Tool
+- **Function**: `calculator`
+- **Operations**: add, subtract, multiply, divide
+- **Usage**: "Calculate 15 * 25" or "What's 100 divided by 7?"
+- **Arguments**: operation (string), a (number), b (number)
 
-Components:
-1. OpenAI-like Model: Handles LLM API calls
-2. LLMAgent: Implements agent logic with request/response processors
-3. Runner: Orchestrates agent execution
-4. Streaming: Real-time response processing
-```
+### 🕐 Time Tool  
+- **Function**: `current_time`
+- **Timezones**: UTC, EST, PST, CST, or local time
+- **Usage**: "What time is it in EST?" or "Current time please"
+- **Arguments**: timezone (optional string)
 
-## Example Output
+## Tool Calling Process
 
-When you run the example, you will see output like:
+When you ask for calculations or time information, you'll see:
 
 ```
-Creating Runner with configuration:
-- Base URL: https://api.openai.com/v1
-- Model Name: gpt-4o-mini
-- API Key: sk-***
+🔧 Tool calls initiated:
+   • calculator (ID: call_abc123)
+     Args: {"operation":"multiply","a":25,"b":4}
 
-Created Runner: runner-demo-app with agent: assistant-agent
+🔄 Executing tools...
+✅ Tool response (ID: call_abc123): {"operation":"multiply","a":25,"b":4,"result":100}
 
-=== Runner Streaming Execution ===
-User: Hello! Can you tell me an interesting fact about Go programming language concurrency features?
-Starting streaming response... 
+🤖 Assistant: I calculated 25 × 4 = 100 for you.
+```
+
+## Chat Interface
+
+The interface is simple and intuitive:
+
+```
+🚀 Multi-turn Chat with Runner
+Model: gpt-4o-mini
+Type 'exit' to end the conversation
+==================================================
+✅ Chat ready! Session: chat-session-1703123456
+
+👤 You: Hello! How are you today?
+🤖 Assistant: Hello! I'm doing well, thank you for asking. I'm here and ready to help you with whatever you need. How are you doing today?
+
+👤 You: I'm good! Can you remember what I just asked you?
+🤖 Assistant: Yes, I can! You just asked me how I was doing today, and I responded that I'm doing well. This shows that I'm maintaining context from our conversation. Is there anything specific you'd like to chat about or any way I can help you?
+
+👤 You: exit
+👋 Goodbye!
+```
