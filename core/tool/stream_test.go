@@ -48,7 +48,7 @@ func TestStream_RecvEOF(t *testing.T) {
 	if err != io.EOF {
 		t.Errorf("Recv() error = %v, want io.EOF", err)
 	}
-	if chunk.Content != "" {
+	if chunk.Content != nil {
 		t.Errorf("Recv() got = %v, want empty", chunk.Content)
 	}
 }

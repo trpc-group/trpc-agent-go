@@ -1,4 +1,4 @@
-package tool
+package tool_test
 
 import (
 	"context"
@@ -6,6 +6,9 @@ import (
 	"io"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )
 
 func TestFunctionTool_Run_Success(t *testing.T) {
@@ -19,14 +22,14 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	fn := func(args inputArgs) outputArgs {
 		return outputArgs{Result: args.A + args.B}
 	}
-	tool := NewFunctionTool(fn, FunctionToolConfig{
+	fcTool := tool.NewFunctionTool(fn, tool.FunctionToolConfig{
 		Name:        "SumFunction",
 		Description: "Calculates the sum of two integers.",
 	})
 	input := inputArgs{A: 2, B: 3}
 	args := toArguments(t, input)
 
-	result, err := tool.Call(context.Background(), args)
+	result, err := fcTool.Call(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,8 +64,8 @@ type streamTestOutput struct {
 }
 
 // Helper function to create a simple streaming function
-func streamableFunc(input streamTestInput) *StreamReader {
-	stream := NewStream(10)
+func streamableFunc(input streamTestInput) *tool.StreamReader {
+	stream := tool.NewStream(10)
 
 	go func() {
 		defer stream.Writer.Close()
@@ -94,9 +97,9 @@ func streamableFunc(input streamTestInput) *StreamReader {
 		output := streamTestOutput{
 			Title: articals[id%len(articals)].Title,
 		}
-		chunk := StreamChunk{
+		chunk := tool.StreamChunk{
 			Content:  output,
-			Metadata: Metadata{CreatedAt: time.Now()},
+			Metadata: tool.Metadata{CreatedAt: time.Now()},
 		}
 		if closed := stream.Writer.Send(chunk, nil); closed {
 			return
@@ -109,9 +112,9 @@ func streamableFunc(input streamTestInput) *StreamReader {
 		output = streamTestOutput{
 			Body: body[:len(body)/2],
 		}
-		chunk = StreamChunk{
+		chunk = tool.StreamChunk{
 			Content:  output,
-			Metadata: Metadata{CreatedAt: time.Now()},
+			Metadata: tool.Metadata{CreatedAt: time.Now()},
 		}
 		if closed := stream.Writer.Send(chunk, nil); closed {
 			return
@@ -120,9 +123,9 @@ func streamableFunc(input streamTestInput) *StreamReader {
 		output = streamTestOutput{
 			Body: body[len(body)/2:],
 		}
-		chunk = StreamChunk{
+		chunk = tool.StreamChunk{
 			Content:  output,
-			Metadata: Metadata{CreatedAt: time.Now()},
+			Metadata: tool.Metadata{CreatedAt: time.Now()},
 		}
 		if closed := stream.Writer.Send(chunk, nil); closed {
 			return
@@ -135,9 +138,9 @@ func streamableFunc(input streamTestInput) *StreamReader {
 		output = streamTestOutput{
 			Reference: articals[id%len(articals)].Reference,
 		}
-		chunk = StreamChunk{
+		chunk = tool.StreamChunk{
 			Content:  output,
-			Metadata: Metadata{CreatedAt: time.Now()},
+			Metadata: tool.Metadata{CreatedAt: time.Now()},
 		}
 		if closed := stream.Writer.Send(chunk, nil); closed {
 			return
@@ -152,7 +155,7 @@ func streamableFunc(input streamTestInput) *StreamReader {
 }
 
 func Test_StreamableFunctionTool(t *testing.T) {
-	st := NewStreamableFunctionTool[streamTestInput, streamTestOutput](streamableFunc, FunctionToolConfig{
+	st := tool.NewStreamableFunctionTool[streamTestInput, streamTestOutput](streamableFunc, tool.FunctionToolConfig{
 		Name:        "StreamableFunction",
 		Description: "Streams articles based on the provided article ID.",
 	})
@@ -174,7 +177,7 @@ func Test_StreamableFunctionTool(t *testing.T) {
 		t.Logf("Received chunk: %+v", chunk.Content)
 		t.Logf("Chunk metadata: %+v", chunk.Metadata)
 	}
-	mergedContent := Merge(contents)
+	mergedContent := itool.Merge(contents)
 	bts, err := json.Marshal(mergedContent)
 	if err != nil {
 		t.Fatalf("failed to marshal output: %v", err)
