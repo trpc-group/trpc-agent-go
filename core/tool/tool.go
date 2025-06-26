@@ -7,13 +7,29 @@ import (
 	"strings"
 )
 
-// Tool defines the core interface that all tools must implement.
+type ToolDefinition interface {
+	// Declaration returns the metadata describing the tool.
+	Declaration() *Declaration
+}
+
 type Tool interface {
 	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
 	Call(ctx context.Context, jsonArgs []byte) (any, error)
-	// Declaration returns the metadata describing the tool.
-	Declaration() *Declaration
+
+	ToolDefinition
+}
+
+// StreamableTool defines the interface for tools that support streaming operations.
+// This interface extends the basic Tool interface to provide streaming capabilities,
+// allowing tools to return data progressively rather than all at once.
+type StreamableTool interface {
+	// StreamableCall initiates a call to the tool that supports streaming.
+	// It takes a context for cancellation and timeout control, and JSON-encoded
+	// arguments for the tool. Returns a StreamReader for consuming the streaming
+	// results or an error if the call fails to initialize.
+	StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error)
+	ToolDefinition
 }
 
 // Declaration describes the metadata of a tool, such as its name, description, and expected arguments.
@@ -26,6 +42,9 @@ type Declaration struct {
 
 	// InputSchema defines the expected input for the tool in JSON schema format.
 	InputSchema *Schema `json:"inputSchema"`
+
+	// OutputSchema defines the expected output for the tool in JSON schema format.
+	OutputSchema *Schema `json:"outputSchema,omitempty"`
 }
 
 // Schema represents the structure of JSON Schema used for defining arguments and responses.
