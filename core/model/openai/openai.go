@@ -166,6 +166,16 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
 						OfString: openai.String(msg.Content),
 					},
+					ToolCalls: m.convertToolCalls(msg.ToolCalls),
+				},
+			}
+		case model.RoleTool:
+			result[i] = openai.ChatCompletionMessageParamUnion{
+				OfTool: &openai.ChatCompletionToolMessageParam{
+					Content: openai.ChatCompletionToolMessageParamContentUnion{
+						OfString: openai.String(msg.Content),
+					},
+					ToolCallID: msg.ToolID,
 				},
 			}
 		default:
@@ -180,6 +190,20 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 		}
 	}
 
+	return result
+}
+
+func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatCompletionMessageToolCallParam {
+	var result []openai.ChatCompletionMessageToolCallParam
+	for _, toolCall := range toolCalls {
+		result = append(result, openai.ChatCompletionMessageToolCallParam{
+			ID: toolCall.ID,
+			Function: openai.ChatCompletionMessageToolCallFunctionParam{
+				Name:      toolCall.Function.Name,
+				Arguments: string(toolCall.Function.Arguments),
+			},
+		})
+	}
 	return result
 }
 
@@ -238,14 +262,21 @@ func (m *Model) handleStreamingResponse(
 
 		if t, ok := acc.JustFinishedToolCall(); ok {
 			hasToolCall = true
-			response.ToolCalls = []model.ToolCall{
-				{
-					Index: &t.Index,
-					ID:    t.ID,
-					Type:  functionToolType, // openapi only supports a function type for now
-					Function: model.FunctionDefinitionParam{
-						Name:      t.Name,
-						Arguments: []byte(t.Arguments),
+			response.IsPartial = false
+			if response.Choices == nil {
+				response.Choices = make([]model.Choice, 1)
+			}
+			response.Choices[0].Message = model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						Index: &t.Index,
+						ID:    t.ID,
+						Type:  functionToolType, // openapi only supports a function type for now
+						Function: model.FunctionDefinitionParam{
+							Name:      t.Name,
+							Arguments: []byte(t.Arguments),
+						},
 					},
 				},
 			}
@@ -253,25 +284,18 @@ func (m *Model) handleStreamingResponse(
 
 		// Convert choices.
 		if len(chunk.Choices) > 0 {
-			response.Choices = make([]model.Choice, len(chunk.Choices))
-			for i, choice := range chunk.Choices {
-				response.Choices[i] = model.Choice{
-					Index: int(choice.Index),
-				}
+			if response.Choices == nil {
+				response.Choices = make([]model.Choice, 1)
+			}
+			response.Choices[0].Delta = model.Message{
+				Role:    model.RoleAssistant,
+				Content: chunk.Choices[0].Delta.Content,
+			}
 
-				// Handle delta content - Content is a plain string.
-				if choice.Delta.Content != "" {
-					response.Choices[i].Delta = model.Message{
-						Role:    model.RoleAssistant,
-						Content: choice.Delta.Content,
-					}
-				}
-
-				// Handle finish reason - FinishReason is a plain string.
-				if choice.FinishReason != "" {
-					finishReason := choice.FinishReason
-					response.Choices[i].FinishReason = &finishReason
-				}
+			// Handle finish reason - FinishReason is a plain string.
+			if chunk.Choices[0].FinishReason != "" {
+				finishReason := chunk.Choices[0].FinishReason
+				response.Choices[0].FinishReason = &finishReason
 			}
 		}
 
@@ -369,9 +393,9 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
-			response.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
+			response.Choices[i].Message.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
-				response.ToolCalls[j] = model.ToolCall{
+				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
 					ID:   toolCall.ID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{

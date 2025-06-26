@@ -107,9 +107,6 @@ type Response struct {
 
 	// IsPartial indicates if this is a partial response.
 	IsPartial bool `json:"is_partial"`
-
-	// This is used for both streaming and non-streaming responses, parsed from the first choice of Choices.
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
 // ResponseError represents an error response from the API.

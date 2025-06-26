@@ -65,7 +65,7 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 				fmt.Printf("\nFinish reason: %s\n", *choice.FinishReason)
 			}
 
-			for _, tc := range response.ToolCalls {
+			for _, tc := range choice.Message.ToolCalls {
 				if tc.Function.Name == "get_weather" {
 					// Simulate getting weather data
 					location := tc.Function.Arguments
@@ -79,7 +79,11 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 					}
 					// Print the weather data
 					fmt.Printf("CallTool at local: Weather in %s: %s\n", location, bts)
-					request.Messages = append(request.Messages, model.NewToolCallMessage(string(bts), tc.ID))
+					request.Messages = append(request.Messages, model.Message{
+						Role:      model.RoleTool,
+						Content:   string(bts),
+						ToolCalls: []model.ToolCall{tc},
+					})
 				}
 				if tc.Function.Name == "get_population" {
 					// Simulate getting population data
@@ -94,7 +98,11 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 					}
 					// Print the population data
 					fmt.Printf("CallTool at local: Population in %s: %s\n", city, bts)
-					request.Messages = append(request.Messages, model.NewToolCallMessage(string(bts), tc.ID))
+					request.Messages = append(request.Messages, model.Message{
+						Role:      model.RoleTool,
+						Content:   string(bts),
+						ToolCalls: []model.ToolCall{tc},
+					})
 
 				}
 			}
