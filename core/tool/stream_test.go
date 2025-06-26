@@ -7,10 +7,10 @@ import (
 )
 
 func TestStream_SendRecv(t *testing.T) {
-	stream := NewStream[string](2)
+	stream := NewStream(2)
 
-	chunk1 := StreamChunk[string]{Content: "hello"}
-	chunk2 := StreamChunk[string]{Content: "world"}
+	chunk1 := StreamChunk{Content: "hello"}
+	chunk2 := StreamChunk{Content: "world"}
 
 	// Send two chunks
 	closed := stream.Writer.Send(chunk1, nil)
@@ -41,7 +41,7 @@ func TestStream_SendRecv(t *testing.T) {
 }
 
 func TestStream_RecvEOF(t *testing.T) {
-	stream := NewStream[string](1)
+	stream := NewStream(1)
 	stream.Writer.Close()
 
 	chunk, err := stream.Reader.Recv()
@@ -54,7 +54,7 @@ func TestStream_RecvEOF(t *testing.T) {
 }
 
 func TestStream_SendAfterClose(t *testing.T) {
-	stream := NewStream[string](1)
+	stream := NewStream(1)
 	stream.Writer.Close()
 
 	// We expect a panic when sending after close
@@ -65,22 +65,22 @@ func TestStream_SendAfterClose(t *testing.T) {
 	}()
 
 	// This should panic
-	stream.Writer.Send(StreamChunk[string]{Content: "late"}, nil)
+	stream.Writer.Send(StreamChunk{Content: "late"}, nil)
 	t.Error("Expected panic, but Send() completed without panic")
 }
 
 func TestStream_CloseRecv(t *testing.T) {
-	stream := NewStream[string](1)
+	stream := NewStream(1)
 	stream.Reader.Close()
 	// After closing recv, sending should return closed=true
-	closed := stream.Writer.Send(StreamChunk[string]{Content: "x"}, nil)
+	closed := stream.Writer.Send(StreamChunk{Content: "x"}, nil)
 	if !closed {
 		t.Error("Send after CloseRecv returned closed=false, want true")
 	}
 }
 
 func TestStream_ConcurrentSendRecv(t *testing.T) {
-	stream := NewStream[string](10)
+	stream := NewStream(10)
 	var wg sync.WaitGroup
 	n := 100
 
@@ -88,7 +88,7 @@ func TestStream_ConcurrentSendRecv(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < n; i++ {
-			stream.Writer.Send(StreamChunk[string]{Content: "msg"}, nil)
+			stream.Writer.Send(StreamChunk{Content: "msg"}, nil)
 		}
 		stream.Writer.Close()
 	}()

@@ -28,7 +28,7 @@ type StreamableTool interface {
 	// It takes a context for cancellation and timeout control, and JSON-encoded
 	// arguments for the tool. Returns a StreamReader for consuming the streaming
 	// results or an error if the call fails to initialize.
-	StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error)
+	StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error)
 	ToolDefinition
 }
 

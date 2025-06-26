@@ -9,20 +9,20 @@ import (
 // The buffer size determines how many StreamChunk items can be queued before
 // the sender blocks. A larger buffer size can improve performance but uses more memory.
 // Returns a Stream struct containing both a Reader and Writer for bidirectional communication.
-func NewStream[T any](bufferSize int) *Stream[T] {
-	s := newStream[StreamChunk[T]](bufferSize)
-	return &Stream[T]{
-		Reader: &StreamReader[T]{s: s},
-		Writer: &StreamWriter[T]{s: s},
+func NewStream(bufferSize int) *Stream {
+	s := newStream[StreamChunk](bufferSize)
+	return &Stream{
+		Reader: &StreamReader{s: s},
+		Writer: &StreamWriter{s: s},
 	}
 }
 
 // Stream represents a bidirectional streaming connection that supports both
 // reading and writing of StreamChunk data. It provides separate Reader and Writer
 // interfaces for consuming and producing streaming data respectively.
-type Stream[T any] struct {
-	Reader *StreamReader[T] // Reader for consuming StreamChunk items
-	Writer *StreamWriter[T] // Writer for producing StreamChunk items
+type Stream struct {
+	Reader *StreamReader // Reader for consuming StreamChunk items
+	Writer *StreamWriter // Writer for producing StreamChunk items
 }
 
 type readerType int
@@ -35,9 +35,9 @@ const (
 // StreamReader provides the reading interface for consuming streaming data.
 // It wraps the underlying stream implementation and provides methods to
 // receive StreamChunk items and close the reading side of the stream.
-type StreamReader[T any] struct {
+type StreamReader struct {
 	typ readerType
-	s   *stream[StreamChunk[T]] // Stream of StreamChunk items
+	s   *stream[StreamChunk] // Stream of StreamChunk items
 	// srw streamReaderWithConvert
 }
 
@@ -59,7 +59,7 @@ type StreamReader[T any] struct {
 //		// process chunk.Content
 //	}
 //	sr.Close()
-func (r *StreamReader[T]) Recv() (StreamChunk[T], error) {
+func (r *StreamReader) Recv() (StreamChunk, error) {
 	switch r.typ {
 	case readerTypeWithConvert:
 		panic("Convert is not implemented yet")
@@ -74,7 +74,7 @@ func (r *StreamReader[T]) Recv() (StreamChunk[T], error) {
 // Close closes the receiving side of the stream, indicating that no more
 // data will be read. This signals to the underlying stream that the reader
 // is no longer interested in receiving data.
-func (r *StreamReader[T]) Close() {
+func (r *StreamReader) Close() {
 	switch r.typ {
 	case readerTypeWithConvert:
 		panic("Convert is not implemented yet")
@@ -90,8 +90,8 @@ func (r *StreamReader[T]) Close() {
 // StreamWriter provides the writing interface for producing streaming data.
 // It wraps the underlying stream implementation and provides methods to
 // send StreamChunk items and close the writing side of the stream.
-type StreamWriter[T any] struct {
-	s *stream[StreamChunk[T]] // Stream of StreamChunk items
+type StreamWriter struct {
+	s *stream[StreamChunk] // Stream of StreamChunk items
 }
 
 // Send sends a StreamChunk with optional error to the stream.
@@ -104,7 +104,7 @@ type StreamWriter[T any] struct {
 //	if closed {
 //		// the stream is closed
 //	}
-func (w *StreamWriter[T]) Send(chunk StreamChunk[T], err error) (closed bool) {
+func (w *StreamWriter) Send(chunk StreamChunk, err error) (closed bool) {
 	return w.s.send(chunk, err)
 }
 
@@ -118,15 +118,16 @@ func (w *StreamWriter[T]) Send(chunk StreamChunk[T], err error) (closed bool) {
 //		chunk := StreamChunk{Content: fmt.Sprintf("data-%d", i)}
 //		sw.Send(chunk, nil)
 //	}
-func (w *StreamWriter[T]) Close() {
+func (w *StreamWriter) Close() {
 	w.s.closeSend()
 }
 
 // StreamChunk represents a single unit of data in a streaming operation.
 // Each chunk contains content and optional metadata that provides additional
 // context about the data, such as creation time, processing information, etc.
-type StreamChunk[T any] struct {
-	Content  T        `json:"content"`
+type StreamChunk struct {
+	// Content holds the actual data being streamed. Each content should be of the same type.
+	Content  any      `json:"content"`
 	Metadata Metadata `json:"metadata,omitempty"`
 }
 

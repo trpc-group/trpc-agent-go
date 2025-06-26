@@ -189,13 +189,13 @@ func TestStreamableTool_Interface(t *testing.T) {
 
 type testStreamableTool struct{}
 
-func (d *testStreamableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error) {
-	s := NewStream[string](1)
+func (d *testStreamableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error) {
+	s := NewStream(1)
 	go func() {
 		defer s.Writer.Close()
-		s.Writer.Send(StreamChunk[string]{Content: "test", Metadata: Metadata{CreatedAt: time.Now()}}, nil)
-		s.Writer.Send(StreamChunk[string]{Content: "more data"}, nil)
-		s.Writer.Send(StreamChunk[string]{Content: "final chunk"}, nil)
+		s.Writer.Send(StreamChunk{Content: "test", Metadata: Metadata{CreatedAt: time.Now()}}, nil)
+		s.Writer.Send(StreamChunk{Content: "more data"}, nil)
+		s.Writer.Send(StreamChunk{Content: "final chunk"}, nil)
 
 	}()
 	return s.Reader, nil

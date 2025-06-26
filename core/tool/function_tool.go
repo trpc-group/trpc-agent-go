@@ -84,7 +84,7 @@ type StreamableFunctionTool[I, O any] struct {
 	name        string
 	description string
 	inputSchema *Schema
-	fn          func(I) *StreamReader[O]
+	fn          func(I) *StreamReader
 	unmarshaler unmarshaler
 }
 
@@ -97,7 +97,7 @@ type StreamableFunctionTool[I, O any] struct {
 //
 // Returns:
 //   - A pointer to the newly created StreamableFunctionTool.
-func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader[O], cfg FunctionToolConfig) *StreamableFunctionTool[I, O] {
+func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader, cfg FunctionToolConfig) *StreamableFunctionTool[I, O] {
 	var empty I
 	schema := generateJSONSchema(reflect.TypeOf(empty))
 
@@ -114,7 +114,7 @@ func NewStreamableFunctionTool[I, O any](fn func(I) *StreamReader[O], cfg Functi
 //
 // Returns:
 //   - A StreamReader[string] containing JSON-encoded results, or an error.
-func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader[string], error) {
+func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error) {
 	// FunctionTool does not support streaming calls, so we return an error.
 	var input I
 	if err := t.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
@@ -123,25 +123,7 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 	if t.fn == nil {
 		return nil, fmt.Errorf("FunctionTool: %s does not support streaming calls", t.name)
 	}
-	streamReader := t.fn(input)
-
-	return convert(streamReader, func(o O) (string, error) {
-		b, err := json.Marshal(o)
-		if err != nil {
-			return "", fmt.Errorf("error marshaling output: %v", err)
-		}
-		return string(b), nil
-	}), nil
-
-}
-
-func convert[I, O any](sr *StreamReader[I], convert func(I) (O, error)) *StreamReader[O] {
-	// TODO: Implement conversion logic for StreamReader
-	// This is a placeholder implementation.
-	// In a real implementation, you would read from sr, apply the convert function,
-	// and yield results of type O.
-	// For now, we return an empty StreamReader[O].
-	return &StreamReader[O]{}
+	return t.fn(input), nil
 }
 
 // Declaration returns the tool's declaration information.
