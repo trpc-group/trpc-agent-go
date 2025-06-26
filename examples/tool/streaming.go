@@ -35,7 +35,7 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 			MaxTokens:   &maxTokens,
 			Stream:      true,
 		},
-		Tools: map[string]tool.CallableTool{
+		Tools: map[string]tool.Tool{
 			"get_weather":    getWeatherTool,
 			"get_population": getPopulationTool,
 		},

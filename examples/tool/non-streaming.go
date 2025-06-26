@@ -29,7 +29,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			MaxTokens:   &maxTokens,
 			Stream:      false,
 		},
-		Tools: map[string]tool.CallableTool{
+		Tools: map[string]tool.Tool{
 			"get_weather": getWeatherTool,
 		},
 	}

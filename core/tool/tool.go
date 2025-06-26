@@ -12,7 +12,7 @@ type ToolDefinition interface {
 	Declaration() *Declaration
 }
 
-type CallableTool interface {
+type Tool interface {
 	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
 	Call(ctx context.Context, jsonArgs []byte) (any, error)
