@@ -2,7 +2,6 @@ package processor
 
 import (
 	"context"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -51,13 +50,6 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.Session,
 		)
 		req.Messages = append(req.Messages, sessionMessages...)
-	}
-
-	// Add user message from current invocation if provided.
-	if invocation.Message.Content != "" {
-		if invocation.Message.Role == model.RoleUser {
-			req.Messages = append(req.Messages, invocation.Message)
-		}
 	}
 
 	// Send a preprocessing event.
@@ -119,12 +111,12 @@ func (p *ContentRequestProcessor) hasValidContent(evt *event.Event) bool {
 			}
 		}
 	}
-
-	// Check if event has tool calls.
-	if len(evt.ToolCalls) > 0 {
+	if len(evt.Choices) > 0 && evt.Choices[0].Message.ToolID != "" {
 		return true
 	}
-
+	if len(evt.Choices) > 0 && len(evt.Choices[0].Message.ToolCalls) > 0 {
+		return true
+	}
 	return false
 }
 
@@ -137,50 +129,11 @@ func (p *ContentRequestProcessor) convertEventsToMessages(
 	for _, evt := range events {
 		// Convert choices to messages.
 		for _, choice := range evt.Choices {
-			if choice.Message.Content != "" {
+			if choice.Message.Content != "" || choice.Message.ToolID != "" || len(choice.Message.ToolCalls) > 0 {
 				messages = append(messages, choice.Message)
-			} else if choice.Delta.Content != "" {
-				// Convert delta to regular message.
-				msg := model.Message{
-					Role:    choice.Delta.Role,
-					Content: choice.Delta.Content,
-				}
-				if msg.Role == "" {
-					// Default to assistant if role is empty.
-					msg.Role = model.RoleAssistant
-				}
-				messages = append(messages, msg)
-			}
-		}
-
-		// Handle tool calls as assistant messages.
-		if len(evt.ToolCalls) > 0 {
-			toolContent := p.buildToolCallMessage(evt.ToolCalls)
-			if toolContent != "" {
-				messages = append(messages, model.Message{
-					Role:    model.RoleAssistant,
-					Content: toolContent,
-				})
 			}
 		}
 	}
 
 	return messages
-}
-
-// buildToolCallMessage builds a message describing tool calls.
-func (p *ContentRequestProcessor) buildToolCallMessage(toolCalls []model.ToolCall) string {
-	if len(toolCalls) == 0 {
-		return ""
-	}
-
-	var parts []string
-	for _, toolCall := range toolCalls {
-		if toolCall.Function.Name != "" {
-			parts = append(parts, "Called "+toolCall.Function.Name+
-				" with: "+string(toolCall.Function.Arguments))
-		}
-	}
-
-	return strings.Join(parts, "; ")
 }

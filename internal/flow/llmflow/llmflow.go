@@ -152,7 +152,7 @@ func (f *Flow) runOneStep(
 		}
 
 		// 4. Handle function calls if present in the response.
-		if len(response.ToolCalls) > 0 {
+		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 			functionResponseEvent, err := f.handleFunctionCalls(
 				ctx,
 				invocation,
@@ -245,14 +245,14 @@ func (f *Flow) handleFunctionCalls(
 	functionCallEvent *event.Event,
 	tools map[string]tool.Tool,
 ) (*event.Event, error) {
-	if functionCallEvent.Response == nil || len(functionCallEvent.Response.ToolCalls) == 0 {
+	if functionCallEvent.Response == nil || len(functionCallEvent.Response.Choices) == 0 {
 		return nil, nil
 	}
 
 	var functionResponses []model.Choice
 
 	// Execute each tool call.
-	for i, toolCall := range functionCallEvent.Response.ToolCalls {
+	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
 		choice := f.executeToolCall(ctx, toolCall, tools, i)
 		functionResponses = append(functionResponses, choice)
 	}

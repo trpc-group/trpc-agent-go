@@ -188,13 +188,13 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Detect and display tool calls.
-		if len(event.ToolCalls) > 0 {
+		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Tool calls initiated:\n")
-			for _, toolCall := range event.ToolCalls {
+			for _, toolCall := range event.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -252,7 +252,10 @@ func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
 	if event.Response == nil {
 		return false
 	}
-	if len(event.ToolCalls) > 0 {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		return true
+	}
+	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
 		return true
 	}
 
