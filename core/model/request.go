@@ -38,9 +38,10 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role    Role   `json:"role"`         // The role of the message author
-	Content string `json:"content"`      // The message content
-	ToolID  string `json:"id,omitempty"` // Optional ID for the message
+	Role      Role       `json:"role"`                 // The role of the message author
+	Content   string     `json:"content"`              // The message content
+	ToolID    string     `json:"tool_id,omitempty"`    // Used by tool response
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Optional tool calls for the message
 }
 
 // NewSystemMessage creates a new system message.
@@ -64,14 +65,6 @@ func NewAssistantMessage(content string) Message {
 	return Message{
 		Role:    RoleAssistant,
 		Content: content,
-	}
-}
-
-func NewToolCallMessage(content string, id string) Message {
-	return Message{
-		Role:    RoleTool,
-		Content: content,
-		ToolID:  id,
 	}
 }
 

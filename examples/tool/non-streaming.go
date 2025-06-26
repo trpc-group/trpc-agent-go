@@ -48,11 +48,11 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			choice := response.Choices[0]
 			fmt.Printf("Response: %s\n", choice.Message.Content)
 
-			if len(response.ToolCalls) == 0 {
+			if len(choice.Message.ToolCalls) == 0 {
 				fmt.Println("No tool calls made.")
 			} else {
 				fmt.Println("Tool calls:")
-				for _, toolCall := range response.ToolCalls {
+				for _, toolCall := range choice.Message.ToolCalls {
 					if toolCall.Function.Name == "get_weather" {
 						// Simulate getting weather data
 						location := toolCall.Function.Arguments
@@ -66,7 +66,11 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 						}
 						// Print the weather data
 						fmt.Printf("CallTool at local: Weather in %s: %s\n", location, bts)
-						request.Messages = append(request.Messages, model.NewToolCallMessage(string(bts), toolCall.ID))
+						request.Messages = append(request.Messages, model.Message{
+							Role:      model.RoleTool,
+							Content:   string(bts),
+							ToolCalls: []model.ToolCall{toolCall},
+						})
 					}
 				}
 			}
