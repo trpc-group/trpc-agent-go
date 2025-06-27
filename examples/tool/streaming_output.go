@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // streamingOutputExample demonstrates non-streaming usage.

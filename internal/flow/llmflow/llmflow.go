@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"time"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 
 	"github.com/google/uuid"
 
@@ -16,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 

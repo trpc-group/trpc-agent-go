@@ -3,6 +3,7 @@ package tool_test
 import (
 	"reflect"
 	"testing"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )

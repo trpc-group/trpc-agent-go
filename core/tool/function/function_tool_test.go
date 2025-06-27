@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
