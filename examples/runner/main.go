@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
@@ -71,15 +72,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := tool.NewFunctionTool(c.calculate, tool.FunctionToolConfig{
-		Name:        "calculator",
-		Description: "Perform basic mathematical calculations (add, subtract, multiply, divide)",
-	})
-
-	timeTool := tool.NewFunctionTool(c.getCurrentTime, tool.FunctionToolConfig{
-		Name:        "current_time",
-		Description: "Get the current time and date for a specific timezone",
-	})
+	calculatorTool := function.NewUnaryFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
+	timeTool := function.NewUnaryFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{

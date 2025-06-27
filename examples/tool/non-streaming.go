@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
@@ -14,10 +15,7 @@ import (
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
-	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get weather at the given location",
-	})
+	getWeatherTool := function.NewUnaryFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{

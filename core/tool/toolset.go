@@ -2,7 +2,6 @@ package tool
 
 import "context"
 
-// UnaryTool defines the core interface that all tools must implement.
 // ToolSet defines an interface for managing a set of tools.
 // It provides methods to retrieve the current tools and to perform cleanup.
 type ToolSet interface {
