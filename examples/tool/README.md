@@ -105,7 +105,7 @@ Usage: 150 tokens (prompt: 50, completion: 100)
 Finish Reason: stop
 ```
 
-### 2. Streaming Example
+### 2. Streaming Input Example
 
 ```
 === Streaming Example ===
@@ -126,3 +126,20 @@ Based on the information I retrieved:
 
 Usage: 180 tokens (prompt: 60, completion: 120)
 ```
+
+### 2. Streaming Output Example
+
+The data results of Streaming Output are similar to Non-streaming, Streaming Output merges all the stream data
+
+```
+=== Non-streaming Example ===
+Response: Based on the weather tool, the current weather in New York City is Sunny with a temperature of 25°C. It's a beautiful day!
+
+Tool Calls:
+- get_weather called with: {"location": "New York City"}
+- Tool result: {"weather": "Sunny, 25°C"}
+
+Usage: 150 tokens (prompt: 50, completion: 100)
+Finish Reason: stop
+```
+

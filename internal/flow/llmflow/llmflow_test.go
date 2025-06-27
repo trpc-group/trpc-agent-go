@@ -16,7 +16,7 @@ import (
 // mockAgent implements agent.Agent for testing
 type mockAgent struct {
 	name  string
-	tools []tool.Tool
+	tools []tool.UnaryTool
 }
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -26,7 +26,7 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 	return eventChan, nil
 }
 
-func (m *mockAgent) Tools() []tool.Tool {
+func (m *mockAgent) Tools() []tool.UnaryTool {
 	return m.tools
 }
 

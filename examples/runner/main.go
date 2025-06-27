@@ -193,7 +193,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
-			fmt.Printf("🔧 Tool calls initiated:\n")
+			fmt.Printf("🔧 UnaryTool calls initiated:\n")
 			for _, toolCall := range event.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
@@ -208,7 +208,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			hasToolResponse := false
 			for _, choice := range event.Response.Choices {
 				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ Tool response (ID: %s): %s\n",
+					fmt.Printf("✅ UnaryTool response (ID: %s): %s\n",
 						choice.Message.ToolID,
 						strings.TrimSpace(choice.Message.Content))
 					hasToolResponse = true
@@ -269,7 +269,7 @@ func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
 	return false
 }
 
-// Tool implementations.
+// UnaryTool implementations.
 
 // calculate performs basic mathematical operations.
 func (c *multiTurnChat) calculate(args calculatorArgs) calculatorResult {

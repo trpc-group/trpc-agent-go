@@ -7,21 +7,21 @@ import (
 	"strings"
 )
 
-type ToolDefinition interface {
+type Tool interface {
 	// Declaration returns the metadata describing the tool.
 	Declaration() *Declaration
 }
 
-type Tool interface {
-	// Call calls the tool with the provided context and arguments.
+type UnaryTool interface {
+	// UnaryCall calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
-	Call(ctx context.Context, jsonArgs []byte) (any, error)
+	UnaryCall(ctx context.Context, jsonArgs []byte) (any, error)
 
-	ToolDefinition
+	Tool
 }
 
 // StreamableTool defines the interface for tools that support streaming operations.
-// This interface extends the basic Tool interface to provide streaming capabilities,
+// This interface extends the basic UnaryTool interface to provide streaming capabilities,
 // allowing tools to return data progressively rather than all at once.
 type StreamableTool interface {
 	// StreamableCall initiates a call to the tool that supports streaming.
@@ -29,7 +29,7 @@ type StreamableTool interface {
 	// arguments for the tool. Returns a StreamReader for consuming the streaming
 	// results or an error if the call fails to initialize.
 	StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error)
-	ToolDefinition
+	Tool
 }
 
 // Declaration describes the metadata of a tool, such as its name, description, and expected arguments.

@@ -14,12 +14,12 @@ import (
 
 // mockAgent is a test implementation of agent.Agent.
 type mockAgent struct {
-	name            string
-	shouldError     bool
-	eventCount      int
-	eventContent    string
-	executionOrder  *[]string // Track execution order
-	tools           []tool.Tool
+	name           string
+	shouldError    bool
+	eventCount     int
+	eventContent   string
+	executionOrder *[]string // Track execution order
+	tools          []tool.Tool
 }
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -41,7 +41,7 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 		for i := 0; i < m.eventCount; i++ {
 			evt := event.New(invocation.InvocationID, m.name)
 			evt.Object = "test.completion"
-			
+
 			// Add some content to simulate real events.
 			choice := model.Choice{
 				Index: i,
@@ -257,7 +257,7 @@ func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
 
 func TestChainAgent_Tools(t *testing.T) {
 	// Create some mock tools.
-	tools := []tool.Tool{} // Empty for now since we don't have concrete tool implementations.
+	tools := []tool.UnaryTool{} // Empty for now since we don't have concrete tool implementations.
 
 	chainAgent := New(Options{
 		Name:  "test-chain",
@@ -287,4 +287,4 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 	if chainAgent2.channelBufferSize != customSize {
 		t.Errorf("Expected custom buffer size %d, got %d", customSize, chainAgent2.channelBufferSize)
 	}
-} 
+}

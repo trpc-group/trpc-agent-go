@@ -11,9 +11,9 @@ import (
 
 func TestBasicRequestProcessor_ProcessRequest(t *testing.T) {
 	tests := []struct {
-		name      string
-		processor *BasicRequestProcessor
-		request   *model.Request
+		name       string
+		processor  *BasicRequestProcessor
+		request    *model.Request
 		invocation *agent.Invocation
 		wantStream bool
 	}{
@@ -36,7 +36,7 @@ func TestBasicRequestProcessor_ProcessRequest(t *testing.T) {
 			wantStream: false,
 		},
 		{
-			name: "default stream setting",
+			name:      "default stream setting",
 			processor: NewBasicRequestProcessor(),
 			request: &model.Request{
 				Messages: []model.Message{},
@@ -80,4 +80,4 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
-} 
+}

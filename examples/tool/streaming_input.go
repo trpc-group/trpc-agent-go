@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
-// streamingExample demonstrates streaming usage.
-func streamingExample(ctx context.Context, llm *openai.Model) error {
+// streamingInputExample demonstrates streaming usage.
+func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
 
@@ -69,7 +68,7 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_weather" {
 					// Simulate getting weather data
 					location := tc.Function.Arguments
-					weatherData, err := getWeatherTool.Call(context.Background(), location)
+					weatherData, err := getWeatherTool.UnaryCall(context.Background(), location)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}
@@ -88,7 +87,7 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_population" {
 					// Simulate getting population data
 					city := tc.Function.Arguments
-					populationData, err := getPopulationTool.Call(context.Background(), city)
+					populationData, err := getPopulationTool.UnaryCall(context.Background(), city)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}
