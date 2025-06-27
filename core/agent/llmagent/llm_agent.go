@@ -10,6 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/planner"
 )
 
 // Options contains configuration options for creating an LLMAgent.
@@ -28,6 +29,8 @@ type Options struct {
 	ChannelBufferSize int
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// Planner is the planner to use for planning instructions.
+	Planner planner.Planner
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
@@ -41,6 +44,7 @@ type LLMAgent struct {
 	genConfig    model.GenerationConfig
 	flow         flow.Flow
 	tools        []tool.Tool // Tools supported by the agent
+	planner      planner.Planner
 }
 
 // New creates a new LLMAgent with the given options.
@@ -58,24 +62,36 @@ func New(
 	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
 	requestProcessors = append(requestProcessors, basicProcessor)
 
-	// 2. Instruction processor - adds instruction content and system prompt.
+	// 2. Planning processor - handles planning instructions if planner is configured.
+	if opts.Planner != nil {
+		planningProcessor := processor.NewPlanningRequestProcessor(opts.Planner)
+		requestProcessors = append(requestProcessors, planningProcessor)
+	}
+
+	// 3. Instruction processor - adds instruction content and system prompt.
 	if opts.Instruction != "" || opts.SystemPrompt != "" {
 		instructionProcessor := processor.NewInstructionRequestProcessor(opts.Instruction, opts.SystemPrompt)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
-	// 3. Identity processor - sets agent identity.
+	// 4. Identity processor - sets agent identity.
 	if name != "" || opts.Description != "" {
 		identityProcessor := processor.NewIdentityRequestProcessor(name, opts.Description)
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 4. Content processor - handles messages from invocation.
+	// 5. Content processor - handles messages from invocation.
 	contentProcessor := processor.NewContentRequestProcessor()
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	// Prepare response processors.
-	responseProcessors := []flow.ResponseProcessor{}
+	var responseProcessors []flow.ResponseProcessor
+
+	// Add planning response processor if planner is configured.
+	if opts.Planner != nil {
+		planningResponseProcessor := processor.NewPlanningResponseProcessor(opts.Planner)
+		responseProcessors = append(responseProcessors, planningResponseProcessor)
+	}
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
@@ -96,6 +112,7 @@ func New(
 		genConfig:    opts.GenerationConfig,
 		flow:         llmFlow,
 		tools:        opts.Tools,
+		planner:      opts.Planner,
 	}
 }
 
