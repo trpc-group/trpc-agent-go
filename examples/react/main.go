@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -313,10 +314,7 @@ func (c *reactPlanningChat) calculate(args calcArgs) calcResult {
 			result = args.A / args.B
 		}
 	case "power", "^":
-		result = 1
-		for i := 0; i < int(args.B); i++ {
-			result *= args.A
-		}
+		result = math.Pow(args.A, args.B)
 	}
 
 	return calcResult{

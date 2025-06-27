@@ -103,13 +103,15 @@ func (r *Runner) Run(
 	}
 
 	// Create invocation.
+	eventCompletionCh := make(chan string)
 	invocation := &agent.Invocation{
-		Agent:         r.agent,
-		Session:       sess,
-		InvocationID:  invocationID,
-		EndInvocation: false,
-		Message:       message,
-		RunOptions:    opts,
+		Agent:             r.agent,
+		Session:           sess,
+		InvocationID:      invocationID,
+		EndInvocation:     false,
+		Message:           message,
+		RunOptions:        opts,
+		EventCompletionCh: eventCompletionCh,
 	}
 
 	// Run the agent and get the event channel.
@@ -133,6 +135,10 @@ func (r *Runner) Run(
 				); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
+			}
+
+			if agentEvent.RequiresCompletion {
+				eventCompletionCh <- agentEvent.CompletionID
 			}
 
 			// Forward the event to the output channel.
