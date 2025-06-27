@@ -44,11 +44,15 @@ func main() {
 		log.Printf("Non-streaming example failed: %v", err)
 	}
 
-	fmt.Println("=== Streaming Example ===")
-	if err := streamingExample(ctx, llm); err != nil {
-		log.Printf("Streaming example failed: %v", err)
+	fmt.Println("=== Streaming Input Example ===")
+	if err := streamingInputExample(ctx, llm); err != nil {
+		log.Printf("Streaming Input example failed: %v", err)
 	}
 
+	fmt.Println("=== Streaming Output Example ===")
+	if err := streamingOutputExample(ctx, llm); err != nil {
+		log.Printf("Streaming  Outputexample failed: %v", err)
+	}
 }
 
 // getEnv gets an environment variable with a default value.

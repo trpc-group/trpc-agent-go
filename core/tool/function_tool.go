@@ -8,7 +8,7 @@ import (
 	"reflect"
 )
 
-// FunctionTool implements the Tool interface for executing functions with arguments.
+// FunctionTool implements the UnaryTool interface for executing functions with arguments.
 // It provides a generic way to wrap any function as a tool that can be called
 // with JSON arguments and returns results.
 type FunctionTool[I, O any] struct {
@@ -56,7 +56,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 	}
 }
 
-// Call executes the function tool with the provided JSON arguments.
+// UnaryCall executes the function tool with the provided JSON arguments.
 // It unmarshals the given arguments into the tool's input type,
 // then calls the underlying function with these arguments.
 //
@@ -66,7 +66,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 //
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (ft *FunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func (ft *FunctionTool[I, O]) Declaration() *Declaration {
 	}
 }
 
-// StreamableFunctionTool implements the Tool interface for executing functions
+// StreamableFunctionTool implements the UnaryTool interface for executing functions
 // that return streaming results. It extends the basic FunctionTool to support
 // streaming output through StreamReader.
 type StreamableFunctionTool[I, O any] struct {

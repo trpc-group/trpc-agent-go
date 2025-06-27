@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 
 	"github.com/google/uuid"
 
@@ -22,8 +24,10 @@ const (
 
 	// ErrorToolNotFound is the error message for tool not found.
 	ErrorToolNotFound = "Error: tool not found"
-	// ErrorToolExecution is the error message for tool execution failed.
-	ErrorToolExecution = "Error: tool execution failed"
+	// ErrorUnaryToolExecution is the error message for unary tool execution failed.
+	ErrorUnaryToolExecution = "Error: tool execution failed"
+	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
+	ErrorStreamableToolExecution = "Error: tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
 )
@@ -130,7 +134,7 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
-	// 2. Call LLM (get response channel).
+	// 2. UnaryCall LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
@@ -228,7 +232,7 @@ func (f *Flow) callLLM(
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
-	// Call the model.
+	// UnaryCall the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.Errorf("LLM call failed for agent %s: %v", invocation.AgentName, err)
@@ -274,9 +278,9 @@ func (f *Flow) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 ) model.Choice {
-	tool, exists := tools[toolCall.Function.Name]
+	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
-		log.Errorf("Tool %s not found", toolCall.Function.Name)
+		log.Errorf("UnaryTool %s not found", toolCall.Function.Name)
 		return model.Choice{
 			Index: index,
 			Message: model.Message{
@@ -290,17 +294,53 @@ func (f *Flow) executeToolCall(
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
 
 	// Execute the tool.
-	result, err := tool.Call(ctx, toolCall.Function.Arguments)
-	if err != nil {
-		log.Errorf("Tool execution failed for %s: %v", toolCall.Function.Name, err)
-		return model.Choice{
-			Index: index,
-			Message: model.Message{
-				Role:    model.RoleTool,
-				Content: ErrorToolExecution + ": " + err.Error(),
-				ToolID:  toolCall.ID,
-			},
+	var (
+		result any
+		err    error
+	)
+	switch t := tl.(type) {
+	case tool.UnaryTool:
+		// Execute the tool.
+		result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+			return model.Choice{
+				Index: index,
+				Message: model.Message{
+					Role:    model.RoleTool,
+					Content: ErrorUnaryToolExecution + ": " + err.Error(),
+					ToolID:  toolCall.ID,
+				},
+			}
 		}
+	case tool.StreamableTool:
+		reader, err := t.StreamableCall(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
+			return model.Choice{
+				Index: index,
+				Message: model.Message{
+					Role:    model.RoleTool,
+					Content: ErrorStreamableToolExecution + ": " + err.Error(),
+					ToolID:  toolCall.ID,
+				},
+			}
+		}
+		var contents []any
+		for {
+			chunk, err := reader.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+					"may merge incomplete data", toolCall.Function.Name, err)
+				break
+			}
+			contents = append(contents, chunk.Content)
+		}
+		reader.Close()
+		result = itool.Merge(contents)
 	}
 
 	// Marshal the result to JSON.
@@ -317,7 +357,7 @@ func (f *Flow) executeToolCall(
 		}
 	}
 
-	log.Debugf("Tool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
+	log.Debugf("UnaryTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
 
 	return model.Choice{
 		Index: index,

@@ -1,5 +1,11 @@
 package main
 
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+)
+
 type getWeatherInput struct {
 	Location string `json:"location"`
 }
@@ -10,6 +16,28 @@ type getWeatherOutput struct {
 func getWeather(i getWeatherInput) getWeatherOutput {
 	// In a real implementation, this function would call a weather API
 	return getWeatherOutput{Weather: "Sunny, 25°C"}
+}
+
+func getStreamableWeather(input getWeatherInput) *tool.StreamReader {
+	stream := tool.NewStream(10)
+	go func() {
+		result := "Sunny, 25°C"
+		for i := 0; i < len(result); i++ {
+			output := tool.StreamChunk{
+				Content: getWeatherOutput{
+					Weather: result[i : i+1],
+				},
+				Metadata: tool.Metadata{CreatedAt: time.Now()},
+			}
+			if closed := stream.Writer.Send(output, nil); closed {
+				break
+			}
+			time.Sleep(10 * time.Millisecond) // Simulate delay
+		}
+		stream.Writer.Close()
+	}()
+
+	return stream.Reader
 }
 
 // getPopulationInput represents the input for the get_population tool.

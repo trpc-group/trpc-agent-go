@@ -144,4 +144,4 @@ func TestIdentityRequestProcessor_hasIdentityMessage(t *testing.T) {
 			}
 		})
 	}
-} 
+}

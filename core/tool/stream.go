@@ -25,20 +25,11 @@ type Stream struct {
 	Writer *StreamWriter // Writer for producing StreamChunk items
 }
 
-type readerType int
-
-const (
-	readerTypeStream readerType = iota
-	readerTypeWithConvert
-)
-
 // StreamReader provides the reading interface for consuming streaming data.
 // It wraps the underlying stream implementation and provides methods to
 // receive StreamChunk items and close the reading side of the stream.
 type StreamReader struct {
-	typ readerType
-	s   *stream[StreamChunk] // Stream of StreamChunk items
-	// srw streamReaderWithConvert
+	s *stream[StreamChunk] // Stream of StreamChunk items
 }
 
 // Recv receives the next StreamChunk from the stream.
@@ -60,31 +51,14 @@ type StreamReader struct {
 //	}
 //	sr.Close()
 func (r *StreamReader) Recv() (StreamChunk, error) {
-	switch r.typ {
-	case readerTypeWithConvert:
-		panic("Convert is not implemented yet")
-	case readerTypeStream:
-		// directly receive from the stream
-		return r.s.recv()
-	default:
-		panic("unknown reader type")
-	}
+	return r.s.recv()
 }
 
 // Close closes the receiving side of the stream, indicating that no more
 // data will be read. This signals to the underlying stream that the reader
 // is no longer interested in receiving data.
 func (r *StreamReader) Close() {
-	switch r.typ {
-	case readerTypeWithConvert:
-		panic("Convert is not implemented yet")
-	case readerTypeStream:
-		r.s.closeRecv()
-	// close the stream for receiving
-	default:
-		panic("unknown reader type")
-	}
-
+	r.s.closeRecv()
 }
 
 // StreamWriter provides the writing interface for producing streaming data.

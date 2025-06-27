@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
-// nonStreamingExample demonstrates non-streaming usage.
-func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
-	temperature := 0.9
+// streamingOutputExample demonstrates non-streaming usage.
+func streamingOutputExample(ctx context.Context, llm *openai.Model) error {
+	temperature := 0.8
 	maxTokens := 1000
-	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
+
+	getWeatherStreamingTool := tool.NewStreamableFunctionTool[getWeatherInput, getWeatherOutput](getStreamableWeather, tool.FunctionToolConfig{
 		Name:        "get_weather",
 		Description: "Get weather at the given location",
 	})
@@ -22,7 +26,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	request := &model.Request{
 		Messages: []model.Message{
 			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
-			model.NewUserMessage("What is the weather in New York City? "),
+			model.NewUserMessage("What is the weather in XYZ City? "),
 		},
 		GenerationConfig: model.GenerationConfig{
 			Temperature: &temperature,
@@ -30,7 +34,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			Stream:      false,
 		},
 		Tools: map[string]tool.Tool{
-			"get_weather": getWeatherTool,
+			"get_weather": getWeatherStreamingTool,
 		},
 	}
 
@@ -47,20 +51,39 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 		if len(response.Choices) > 0 {
 			choice := response.Choices[0]
 			fmt.Printf("Response: %s\n", choice.Message.Content)
+			fmt.Printf("Response: delta %v\n", choice.Delta)
+			fmt.Printf("Response: reason %v\n", *choice.FinishReason)
+			fmt.Printf("Response: len(Choices) %d\n", len(response.Choices))
 
 			if len(choice.Message.ToolCalls) == 0 {
 				fmt.Println("No tool calls made.")
 			} else {
-				fmt.Println("UnaryTool calls:")
+				fmt.Println("StreamableTool calls:")
 				for _, toolCall := range choice.Message.ToolCalls {
 					if toolCall.Function.Name == "get_weather" {
 						// Simulate getting weather data
 						location := toolCall.Function.Arguments
-						weatherData, err := getWeatherTool.UnaryCall(context.Background(), location)
+						reader, err := getWeatherStreamingTool.StreamableCall(context.Background(), location)
 						if err != nil {
 							return fmt.Errorf("failed to call tool: %w", err)
 						}
-						bts, err := json.Marshal(weatherData)
+
+						var contents []any
+						for {
+							chunk, err := reader.Recv()
+							if err == io.EOF {
+								break
+							}
+							if err != nil {
+								log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+									"may merge incomplete data", toolCall.Function.Name, err)
+								break
+							}
+							contents = append(contents, chunk.Content)
+						}
+						reader.Close()
+						result := itool.Merge(contents)
+						bts, err := json.Marshal(result)
 						if err != nil {
 							return fmt.Errorf("failed to marshal weather data: %w", err)
 						}
