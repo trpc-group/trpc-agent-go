@@ -21,6 +21,7 @@ type CycleAgent struct {
 	tools             []tool.UnaryTool
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
+	agentCallbacks    *agent.AgentCallbacks
 }
 
 // Options contains configuration options for creating a CycleAgent.
@@ -36,6 +37,8 @@ type Options struct {
 	MaxIterations *int
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// AgentCallbacks contains callbacks for agent operations.
+	AgentCallbacks *agent.AgentCallbacks
 }
 
 // New creates a new CycleAgent with the given options.
@@ -52,6 +55,7 @@ func New(opts Options) *CycleAgent {
 		tools:             opts.Tools,
 		maxIterations:     opts.MaxIterations,
 		channelBufferSize: channelBufferSize,
+		agentCallbacks:    opts.AgentCallbacks,
 	}
 }
 
@@ -84,6 +88,41 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		// Set agent name if not already set.
 		if invocation.AgentName == "" {
 			invocation.AgentName = a.name
+		}
+
+		// Set agent callbacks if available.
+		if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
+			invocation.AgentCallbacks = a.agentCallbacks
+		}
+
+		// Run before agent callbacks if they exist.
+		if invocation.AgentCallbacks != nil {
+			customResponse, skip, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+			if err != nil {
+				// Send error event.
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					model.ErrorTypeFlowError,
+					err.Error(),
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if customResponse != nil || skip {
+				// Create an event from the custom response and then close.
+				if customResponse != nil {
+					customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+					select {
+					case eventChan <- customEvent:
+					case <-ctx.Done():
+					}
+				}
+				return
+			}
 		}
 
 		timesLooped := 0
@@ -155,6 +194,33 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 			}
 
 			timesLooped++
+		}
+
+		// Run after agent callbacks if they exist.
+		if invocation.AgentCallbacks != nil {
+			customResponse, override, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			if err != nil {
+				// Send error event.
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					"agent_callback_error",
+					err.Error(),
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if customResponse != nil && override {
+				// Create an event from the custom response.
+				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				select {
+				case eventChan <- customEvent:
+				case <-ctx.Done():
+				}
+			}
 		}
 	}()
 

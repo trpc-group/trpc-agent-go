@@ -28,19 +28,25 @@ type Options struct {
 	ChannelBufferSize int
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// AgentCallbacks contains callbacks for agent operations.
+	AgentCallbacks *agent.AgentCallbacks
+	// ModelCallbacks contains callbacks for model operations.
+	ModelCallbacks *model.ModelCallbacks
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
 // It implements the agent.Agent interface.
 type LLMAgent struct {
-	name         string
-	model        model.Model
-	description  string
-	instruction  string
-	systemPrompt string
-	genConfig    model.GenerationConfig
-	flow         flow.Flow
-	tools        []tool.Tool // Tools supported by the agent
+	name           string
+	model          model.Model
+	description    string
+	instruction    string
+	systemPrompt   string
+	genConfig      model.GenerationConfig
+	flow           flow.Flow
+	tools          []tool.Tool // Tools supported by the agent
+	agentCallbacks *agent.AgentCallbacks
+	modelCallbacks *model.ModelCallbacks
 }
 
 // New creates a new LLMAgent with the given options.
@@ -88,14 +94,16 @@ func New(
 	)
 
 	return &LLMAgent{
-		name:         name,
-		model:        opts.Model,
-		description:  opts.Description,
-		instruction:  opts.Instruction,
-		systemPrompt: opts.SystemPrompt,
-		genConfig:    opts.GenerationConfig,
-		flow:         llmFlow,
-		tools:        opts.Tools,
+		name:           name,
+		model:          opts.Model,
+		description:    opts.Description,
+		instruction:    opts.Instruction,
+		systemPrompt:   opts.SystemPrompt,
+		genConfig:      opts.GenerationConfig,
+		flow:           llmFlow,
+		tools:          opts.Tools,
+		modelCallbacks: opts.ModelCallbacks,
+		agentCallbacks: opts.AgentCallbacks,
 	}
 }
 
@@ -112,8 +120,100 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		invocation.AgentName = a.name
 	}
 
+	// Set agent callbacks if available.
+	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
+		invocation.AgentCallbacks = a.agentCallbacks
+	}
+
+	// Set model callbacks if available.
+	if invocation.ModelCallbacks == nil && a.modelCallbacks != nil {
+		invocation.ModelCallbacks = a.modelCallbacks
+	}
+
+	// Run before agent callbacks if they exist.
+	if invocation.AgentCallbacks != nil {
+		customResponse, skip, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, err
+		}
+		if customResponse != nil || skip {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			if customResponse != nil {
+				// Create an event from the custom response.
+				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				eventChan <- customEvent
+			}
+			close(eventChan)
+			return eventChan, nil
+		}
+	}
+
 	// Use the underlying flow to execute the agent logic.
-	return a.flow.Run(ctx, invocation)
+	flowEventChan, err := a.flow.Run(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have after agent callbacks, we need to wrap the event channel.
+	if invocation.AgentCallbacks != nil {
+		return a.wrapEventChannel(ctx, invocation, flowEventChan), nil
+	}
+
+	return flowEventChan, nil
+}
+
+// wrapEventChannel wraps the event channel to apply after agent callbacks.
+func (a *LLMAgent) wrapEventChannel(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	originalChan <-chan *event.Event,
+) <-chan *event.Event {
+	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
+
+	go func() {
+		defer close(wrappedChan)
+
+		// Forward all events from the original channel
+		for evt := range originalChan {
+			select {
+			case wrappedChan <- evt:
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		// After all events are processed, run after agent callbacks
+		if invocation.AgentCallbacks != nil {
+			customResponse, override, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			if err != nil {
+				// Send error event.
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					"agent_callback_error",
+					err.Error(),
+				)
+				select {
+				case wrappedChan <- errorEvent:
+				case <-ctx.Done():
+					return
+				}
+				return
+			}
+			if customResponse != nil && override {
+				// Create an event from the custom response.
+				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				select {
+				case wrappedChan <- customEvent:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return wrappedChan
 }
 
 // Tools implements the agent.Agent interface.

@@ -367,3 +367,56 @@ func TestCycleAgent_ChannelBufferSize(t *testing.T) {
 		t.Errorf("Expected size 100, got %d", agent2.channelBufferSize)
 	}
 }
+
+func TestCycleAgent_WithCallbacks(t *testing.T) {
+	// Create agent callbacks
+	callbacks := agent.NewAgentCallbacks()
+
+	// Test before agent callback that skips execution
+	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+		if invocation.Message.Content == "skip" {
+			return nil, true, nil
+		}
+		return nil, false, nil
+	})
+
+	// Create cycle agent with callbacks
+	maxIterations := 3
+	cycleAgent := New(Options{
+		Name:           "test-cycle-agent",
+		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
+		MaxIterations:  &maxIterations,
+		AgentCallbacks: callbacks,
+	})
+
+	// Test skip execution
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation-skip",
+		AgentName:    "test-cycle-agent",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "skip",
+		},
+	}
+
+	ctx := context.Background()
+	eventChan, err := cycleAgent.Run(ctx, invocation)
+	if err != nil {
+		t.Fatalf("Failed to run agent: %v", err)
+	}
+
+	// Should not receive any events since execution was skipped
+	// Wait a bit to ensure no events are sent
+	time.Sleep(50 * time.Millisecond)
+
+	// Check if channel is closed (no events sent)
+	select {
+	case evt, ok := <-eventChan:
+		if ok {
+			t.Errorf("Expected no events, but received: %v", evt)
+		}
+		// If ok is false, channel is closed which is expected
+	default:
+		// Channel is still open, which means no events were sent (expected)
+	}
+}

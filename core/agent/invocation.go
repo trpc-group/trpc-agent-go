@@ -2,6 +2,7 @@ package agent
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
@@ -23,6 +24,12 @@ type Invocation struct {
 	Message model.Message
 	// RunOptions is the options for the Run method.
 	RunOptions RunOptions
+	// AgentCallbacks contains callbacks for agent operations.
+	AgentCallbacks *AgentCallbacks
+	// ModelCallbacks contains callbacks for model operations.
+	ModelCallbacks *model.ModelCallbacks
+	// ToolCallbacks contains callbacks for tool operations.
+	ToolCallbacks *tool.ToolCallbacks
 }
 
 // RunOptions is the options for the Run method.

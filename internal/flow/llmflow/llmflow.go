@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"time"
+
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 
 	"github.com/google/uuid"
@@ -232,14 +233,85 @@ func (f *Flow) callLLM(
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
-	// UnaryCall the model.
+	// Run before model callbacks if they exist.
+	if invocation.ModelCallbacks != nil {
+		customResponse, skip, err := invocation.ModelCallbacks.RunBeforeModel(ctx, llmRequest)
+		if err != nil {
+			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
+			return nil, err
+		}
+		if customResponse != nil || skip {
+			// Create a channel that returns the custom response and then closes.
+			responseChan := make(chan *model.Response, 1)
+			if customResponse != nil {
+				responseChan <- customResponse
+			}
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
+
+	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.Errorf("LLM call failed for agent %s: %v", invocation.AgentName, err)
 		return nil, err
 	}
 
+	// If we have after model callbacks, we need to wrap the response channel.
+	if invocation.ModelCallbacks != nil {
+		return f.wrapResponseChannel(ctx, invocation, responseChan), nil
+	}
+
 	return responseChan, nil
+}
+
+// wrapResponseChannel wraps the response channel to apply after model callbacks.
+func (f *Flow) wrapResponseChannel(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	originalChan <-chan *model.Response,
+) <-chan *model.Response {
+	wrappedChan := make(chan *model.Response, f.channelBufferSize)
+
+	go func() {
+		defer close(wrappedChan)
+
+		for response := range originalChan {
+			// Run after model callbacks if they exist.
+			if invocation.ModelCallbacks != nil {
+				customResponse, override, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+				if err != nil {
+					log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+					// Send error response.
+					errorResponse := &model.Response{
+						Error: &model.ResponseError{
+							Type:    model.ErrorTypeFlowError,
+							Message: err.Error(),
+						},
+					}
+					select {
+					case wrappedChan <- errorResponse:
+					case <-ctx.Done():
+						return
+					}
+					continue
+				}
+				if customResponse != nil && override {
+					response = customResponse
+				}
+			}
+
+			// Send the response (either original or overridden).
+			select {
+			case wrappedChan <- response:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return wrappedChan
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
@@ -257,7 +329,7 @@ func (f *Flow) handleFunctionCalls(
 
 	// Execute each tool call.
 	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
-		choice := f.executeToolCall(ctx, toolCall, tools, i)
+		choice := f.executeToolCall(ctx, invocation, toolCall, tools, i)
 		functionResponses = append(functionResponses, choice)
 	}
 
@@ -274,6 +346,7 @@ func (f *Flow) handleFunctionCalls(
 // executeToolCall executes a single tool call and returns the choice.
 func (f *Flow) executeToolCall(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tools map[string]tool.Tool,
 	index int,
@@ -293,54 +366,154 @@ func (f *Flow) executeToolCall(
 
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
 
+	// Get tool declaration for callbacks
+	toolDeclaration := tl.Declaration()
+
 	// Execute the tool.
 	var (
 		result any
 		err    error
 	)
-	switch t := tl.(type) {
-	case tool.UnaryTool:
-		// Execute the tool.
-		result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+
+	// Run before tool callbacks if they exist
+	if invocation.ToolCallbacks != nil {
+		customResult, skip, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+		)
+		if callbackErr != nil {
+			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return model.Choice{
 				Index: index,
 				Message: model.Message{
 					Role:    model.RoleTool,
-					Content: ErrorUnaryToolExecution + ": " + err.Error(),
+					Content: "Tool callback error: " + callbackErr.Error(),
 					ToolID:  toolCall.ID,
 				},
 			}
 		}
-	case tool.StreamableTool:
-		reader, err := t.StreamableCall(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
-			return model.Choice{
-				Index: index,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: ErrorStreamableToolExecution + ": " + err.Error(),
-					ToolID:  toolCall.ID,
-				},
+		if customResult != nil || skip {
+			// Use custom result from callback
+			result = customResult
+		} else {
+			// Execute the actual tool
+			switch t := tl.(type) {
+			case tool.UnaryTool:
+				result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
+				if err != nil {
+					log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+					return model.Choice{
+						Index: index,
+						Message: model.Message{
+							Role:    model.RoleTool,
+							Content: ErrorUnaryToolExecution + ": " + err.Error(),
+							ToolID:  toolCall.ID,
+						},
+					}
+				}
+			case tool.StreamableTool:
+				reader, err := t.StreamableCall(ctx, toolCall.Function.Arguments)
+				if err != nil {
+					log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
+					return model.Choice{
+						Index: index,
+						Message: model.Message{
+							Role:    model.RoleTool,
+							Content: ErrorStreamableToolExecution + ": " + err.Error(),
+							ToolID:  toolCall.ID,
+						},
+					}
+				}
+				var contents []any
+				for {
+					chunk, err := reader.Recv()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+							"may merge incomplete data", toolCall.Function.Name, err)
+						break
+					}
+					contents = append(contents, chunk.Content)
+				}
+				reader.Close()
+				result = itool.Merge(contents)
 			}
 		}
-		var contents []any
-		for {
-			chunk, err := reader.Recv()
-			if err == io.EOF {
-				break
-			}
+	} else {
+		// No callbacks, execute tool directly
+		switch t := tl.(type) {
+		case tool.UnaryTool:
+			result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
 			if err != nil {
-				log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
-					"may merge incomplete data", toolCall.Function.Name, err)
-				break
+				log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+				return model.Choice{
+					Index: index,
+					Message: model.Message{
+						Role:    model.RoleTool,
+						Content: ErrorUnaryToolExecution + ": " + err.Error(),
+						ToolID:  toolCall.ID,
+					},
+				}
 			}
-			contents = append(contents, chunk.Content)
+		case tool.StreamableTool:
+			reader, err := t.StreamableCall(ctx, toolCall.Function.Arguments)
+			if err != nil {
+				log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
+				return model.Choice{
+					Index: index,
+					Message: model.Message{
+						Role:    model.RoleTool,
+						Content: ErrorStreamableToolExecution + ": " + err.Error(),
+						ToolID:  toolCall.ID,
+					},
+				}
+			}
+			var contents []any
+			for {
+				chunk, err := reader.Recv()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+						"may merge incomplete data", toolCall.Function.Name, err)
+					break
+				}
+				contents = append(contents, chunk.Content)
+			}
+			reader.Close()
+			result = itool.Merge(contents)
 		}
-		reader.Close()
-		result = itool.Merge(contents)
+	}
+
+	// Run after tool callbacks if they exist
+	if invocation.ToolCallbacks != nil {
+		customResult, override, callbackErr := invocation.ToolCallbacks.RunAfterTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+			result,
+			err,
+		)
+		if callbackErr != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return model.Choice{
+				Index: index,
+				Message: model.Message{
+					Role:    model.RoleTool,
+					Content: "Tool callback error: " + callbackErr.Error(),
+					ToolID:  toolCall.ID,
+				},
+			}
+		}
+		if customResult != nil && override {
+			result = customResult
+		}
 	}
 
 	// Marshal the result to JSON.
