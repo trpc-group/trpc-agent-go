@@ -100,7 +100,7 @@ func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
-					model.ErrorTypeFlowError,
+					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
 				select {

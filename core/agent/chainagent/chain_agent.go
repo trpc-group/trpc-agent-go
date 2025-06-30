@@ -78,7 +78,7 @@ func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
-					model.ErrorTypeFlowError,
+					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
 				select {
