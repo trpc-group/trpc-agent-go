@@ -422,15 +422,15 @@ func (f *Flow) executeToolCall(
 		} else {
 			// Execute the actual tool
 			switch t := tl.(type) {
-			case tool.UnaryTool:
-				result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
+			case tool.CallableTool:
+				result, err = t.Call(ctx, toolCall.Function.Arguments)
 				if err != nil {
 					log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
 					return model.Choice{
 						Index: index,
 						Message: model.Message{
 							Role:    model.RoleTool,
-							Content: ErrorUnaryToolExecution + ": " + err.Error(),
+							Content: ErrorCallableToolExecution + ": " + err.Error(),
 							ToolID:  toolCall.ID,
 						},
 					}
@@ -468,15 +468,15 @@ func (f *Flow) executeToolCall(
 	} else {
 		// No callbacks, execute tool directly
 		switch t := tl.(type) {
-		case tool.UnaryTool:
-			result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
+		case tool.CallableTool:
+			result, err = t.Call(ctx, toolCall.Function.Arguments)
 			if err != nil {
-				log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+				log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
 				return model.Choice{
 					Index: index,
 					Message: model.Message{
 						Role:    model.RoleTool,
-						Content: ErrorUnaryToolExecution + ": " + err.Error(),
+						Content: ErrorCallableToolExecution + ": " + err.Error(),
 						ToolID:  toolCall.ID,
 					},
 				}
