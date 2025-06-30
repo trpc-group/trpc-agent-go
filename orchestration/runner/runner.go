@@ -19,6 +19,16 @@ const (
 	authorUser = "user"
 )
 
+// Option is a function that configures a Runner.
+type Option func(*Options)
+
+// WithSessionService sets the session service to use.
+func WithSessionService(service session.Service) Option {
+	return func(opts *Options) {
+		opts.sessionService = service
+	}
+}
+
 // Runner runs agents.
 type Runner struct {
 	appName        string
@@ -32,18 +42,21 @@ type Options struct {
 }
 
 // New creates a new Runner.
-func New(
-	appName string,
-	agent agent.Agent,
-	opts Options,
-) *Runner {
-	if opts.sessionService == nil {
-		opts.sessionService = inmemory.NewSessionService(inmemory.ServiceOpts{})
+func New(appName string, agent agent.Agent, opts ...Option) *Runner {
+	var options Options
+
+	// Apply function options.
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	if options.sessionService == nil {
+		options.sessionService = inmemory.NewSessionService(inmemory.ServiceOpts{})
 	}
 	return &Runner{
 		appName:        appName,
 		agent:          agent,
-		sessionService: opts.sessionService,
+		sessionService: options.sessionService,
 	}
 }
 
@@ -103,13 +116,15 @@ func (r *Runner) Run(
 	}
 
 	// Create invocation.
+	eventCompletionCh := make(chan string)
 	invocation := &agent.Invocation{
-		Agent:         r.agent,
-		Session:       sess,
-		InvocationID:  invocationID,
-		EndInvocation: false,
-		Message:       message,
-		RunOptions:    opts,
+		Agent:             r.agent,
+		Session:           sess,
+		InvocationID:      invocationID,
+		EndInvocation:     false,
+		Message:           message,
+		RunOptions:        opts,
+		EventCompletionCh: eventCompletionCh,
 	}
 
 	// Run the agent and get the event channel.
@@ -133,6 +148,10 @@ func (r *Runner) Run(
 				); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
+			}
+
+			if agentEvent.RequiresCompletion {
+				eventCompletionCh <- agentEvent.CompletionID
 			}
 
 			// Forward the event to the output channel.

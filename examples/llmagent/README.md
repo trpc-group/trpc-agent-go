@@ -104,17 +104,17 @@ To create a more functional LLMAgent, you would typically:
 2. **Add Response Processors**: These handle the LLM responses and can trigger additional actions
 3. **Configure Buffer Sizes**: Optimize for your specific throughput requirements
 
-Example with processors:
+Example with function options:
 
 ```go
-agent := llmagent.New(llmagent.Options{
-    Name:              "advanced-agent",
-    ChannelBufferSize: 50,
-    RequestProcessors: []flow.RequestProcessor{
-        // Add custom processors that set up the LLM request
-    },
-    ResponseProcessors: []flow.ResponseProcessor{
-        // Add custom processors that handle LLM responses
-    },
-})
+agent := llmagent.New(
+    "advanced-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription("An advanced AI assistant"),
+    llmagent.WithInstruction("Your agent instruction"),
+    llmagent.WithSystemPrompt("Your system prompt"),
+    llmagent.WithChannelBufferSize(50),
+    llmagent.WithTools(tools),
+    llmagent.WithPlanner(planner),
+)
 ```

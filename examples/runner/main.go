@@ -91,15 +91,13 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
 		agentName,
-		llmagent.Options{
-			Model:             modelInstance,
-			Description:       "A helpful AI assistant with calculator and time tools",
-			Instruction:       "Use tools when appropriate for calculations or time queries. Be helpful and conversational.",
-			SystemPrompt:      "You have access to calculator and current_time tools. Use them when users ask for calculations or time information.",
-			GenerationConfig:  genConfig,
-			ChannelBufferSize: 100,
-			Tools:             []tool.Tool{calculatorTool, timeTool},
-		},
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
+		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithSystemPrompt("You have access to calculator and current_time tools. Use them when users ask for calculations or time information."),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithChannelBufferSize(100),
+		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 	)
 
 	// Create runner.
@@ -107,7 +105,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	c.runner = runner.New(
 		appName,
 		llmAgent,
-		runner.Options{},
 	)
 
 	// Setup identifiers.

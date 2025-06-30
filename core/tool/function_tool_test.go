@@ -29,7 +29,7 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	input := inputArgs{A: 2, B: 3}
 	args := toArguments(t, input)
 
-	result, err := fTool.UnaryCall(context.Background(), args)
+	result, err := fTool.Call(context.Background(), args)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

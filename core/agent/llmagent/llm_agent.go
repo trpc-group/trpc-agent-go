@@ -10,7 +10,67 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/planner"
 )
+
+// Option is a function that configures an LLMAgent.
+type Option func(*Options)
+
+// WithModel sets the model to use.
+func WithModel(model model.Model) Option {
+	return func(opts *Options) {
+		opts.Model = model
+	}
+}
+
+// WithDescription sets the description of the agent.
+func WithDescription(description string) Option {
+	return func(opts *Options) {
+		opts.Description = description
+	}
+}
+
+// WithInstruction sets the instruction of the agent.
+func WithInstruction(instruction string) Option {
+	return func(opts *Options) {
+		opts.Instruction = instruction
+	}
+}
+
+// WithSystemPrompt sets the system prompt of the agent.
+func WithSystemPrompt(systemPrompt string) Option {
+	return func(opts *Options) {
+		opts.SystemPrompt = systemPrompt
+	}
+}
+
+// WithGenerationConfig sets the generation configuration.
+func WithGenerationConfig(config model.GenerationConfig) Option {
+	return func(opts *Options) {
+		opts.GenerationConfig = config
+	}
+}
+
+// WithChannelBufferSize sets the buffer size for event channels.
+func WithChannelBufferSize(size int) Option {
+	return func(opts *Options) {
+		opts.ChannelBufferSize = size
+	}
+}
+
+// WithTools sets the list of tools available to the agent.
+func WithTools(tools []tool.Tool) Option {
+	return func(opts *Options) {
+		opts.Tools = tools
+	}
+}
+
+// WithPlanner sets the planner to use for planning instructions.
+func WithPlanner(planner planner.Planner) Option {
+	return func(opts *Options) {
+		opts.Planner = planner
+	}
+}
 
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
@@ -28,6 +88,8 @@ type Options struct {
 	ChannelBufferSize int
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// Planner is the planner to use for planning instructions.
+	Planner planner.Planner
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
@@ -41,45 +103,62 @@ type LLMAgent struct {
 	genConfig    model.GenerationConfig
 	flow         flow.Flow
 	tools        []tool.Tool // Tools supported by the agent
+	planner      planner.Planner
 }
 
 // New creates a new LLMAgent with the given options.
-func New(
-	name string,
-	opts Options,
-) *LLMAgent {
+func New(name string, opts ...Option) *LLMAgent {
+	var options Options
+
+	// Apply function options.
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	// Prepare request processors in the correct order.
 	var requestProcessors []flow.RequestProcessor
 
 	// 1. Basic processor - handles generation config.
 	basicOptions := []processor.BasicOption{
-		processor.WithGenerationConfig(opts.GenerationConfig),
+		processor.WithGenerationConfig(options.GenerationConfig),
 	}
 	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
 	requestProcessors = append(requestProcessors, basicProcessor)
 
-	// 2. Instruction processor - adds instruction content and system prompt.
-	if opts.Instruction != "" || opts.SystemPrompt != "" {
-		instructionProcessor := processor.NewInstructionRequestProcessor(opts.Instruction, opts.SystemPrompt)
+	// 2. Planning processor - handles planning instructions if planner is configured.
+	if options.Planner != nil {
+		planningProcessor := processor.NewPlanningRequestProcessor(options.Planner)
+		requestProcessors = append(requestProcessors, planningProcessor)
+	}
+
+	// 3. Instruction processor - adds instruction content and system prompt.
+	if options.Instruction != "" || options.SystemPrompt != "" {
+		instructionProcessor := processor.NewInstructionRequestProcessor(options.Instruction, options.SystemPrompt)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
-	// 3. Identity processor - sets agent identity.
-	if name != "" || opts.Description != "" {
-		identityProcessor := processor.NewIdentityRequestProcessor(name, opts.Description)
+	// 4. Identity processor - sets agent identity.
+	if name != "" || options.Description != "" {
+		identityProcessor := processor.NewIdentityRequestProcessor(name, options.Description)
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 4. Content processor - handles messages from invocation.
+	// 5. Content processor - handles messages from invocation.
 	contentProcessor := processor.NewContentRequestProcessor()
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	// Prepare response processors.
-	responseProcessors := []flow.ResponseProcessor{}
+	var responseProcessors []flow.ResponseProcessor
+
+	// Add planning response processor if planner is configured.
+	if options.Planner != nil {
+		planningResponseProcessor := processor.NewPlanningResponseProcessor(options.Planner)
+		responseProcessors = append(responseProcessors, planningResponseProcessor)
+	}
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: opts.ChannelBufferSize,
+		ChannelBufferSize: options.ChannelBufferSize,
 	}
 
 	llmFlow := llmflow.New(
@@ -89,13 +168,14 @@ func New(
 
 	return &LLMAgent{
 		name:         name,
-		model:        opts.Model,
-		description:  opts.Description,
-		instruction:  opts.Instruction,
-		systemPrompt: opts.SystemPrompt,
-		genConfig:    opts.GenerationConfig,
+		model:        options.Model,
+		description:  options.Description,
+		instruction:  options.Instruction,
+		systemPrompt: options.SystemPrompt,
+		genConfig:    options.GenerationConfig,
 		flow:         llmFlow,
-		tools:        opts.Tools,
+		tools:        options.Tools,
+		planner:      options.Planner,
 	}
 }
 
