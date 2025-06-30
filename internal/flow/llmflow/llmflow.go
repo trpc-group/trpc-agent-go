@@ -30,6 +30,9 @@ const (
 	ErrorStreamableToolExecution = "Error: tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
+
+	// Timeout for event completion signaling.
+	eventCompletionTimeout = 5 * time.Second
 )
 
 // Options contains configuration options for creating a Flow.
@@ -183,6 +186,22 @@ func (f *Flow) runOneStep(
 				case <-ctx.Done():
 					return lastEvent, ctx.Err()
 				}
+
+				// Wait for completion of events that require it.
+				if lastEvent.RequiresCompletion {
+					select {
+					case completedID := <-invocation.EventCompletionCh:
+						// Event has been written to session, safe to proceed.
+						if completedID == lastEvent.CompletionID {
+							log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
+						}
+					case <-time.After(eventCompletionTimeout):
+						// Handle timeout.
+						log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+					case <-ctx.Done():
+						return lastEvent, ctx.Err()
+					}
+				}
 			}
 		}
 
@@ -267,6 +286,10 @@ func (f *Flow) handleFunctionCalls(
 		functionCallEvent,
 		functionResponses,
 	)
+
+	// Signal that this event needs to be completed before proceeding.
+	functionResponseEvent.RequiresCompletion = true
+	functionResponseEvent.CompletionID = uuid.New().String()
 
 	return functionResponseEvent, nil
 }

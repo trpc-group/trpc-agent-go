@@ -83,7 +83,7 @@ func NewFunctionTool[I, O any](fn func(I) O, opts ...Option) *FunctionTool[I, O]
 	}
 }
 
-// UnaryCall executes the function tool with the provided JSON arguments.
+// Call executes the function tool with the provided JSON arguments.
 // It unmarshals the given arguments into the tool's input type,
 // then calls the underlying function with these arguments.
 //
