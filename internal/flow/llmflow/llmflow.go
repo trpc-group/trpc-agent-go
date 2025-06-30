@@ -303,7 +303,7 @@ func (f *Flow) executeToolCall(
 ) model.Choice {
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
-		log.Errorf("UnaryTool %s not found", toolCall.Function.Name)
+		log.Errorf("CallableTool %s not found", toolCall.Function.Name)
 		return model.Choice{
 			Index: index,
 			Message: model.Message{
@@ -322,11 +322,11 @@ func (f *Flow) executeToolCall(
 		err    error
 	)
 	switch t := tl.(type) {
-	case tool.UnaryTool:
+	case tool.CallableTool:
 		// Execute the tool.
 		result, err = t.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
+			log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
 			return model.Choice{
 				Index: index,
 				Message: model.Message{
@@ -380,7 +380,7 @@ func (f *Flow) executeToolCall(
 		}
 	}
 
-	log.Debugf("UnaryTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
+	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
 
 	return model.Choice{
 		Index: index,

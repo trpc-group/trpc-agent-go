@@ -21,7 +21,7 @@ const defaultChannelBufferSize = 256
 type ParallelAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.UnaryTool
+	tools             []tool.CallableTool
 	channelBufferSize int
 }
 
@@ -32,7 +32,7 @@ type Options struct {
 	// SubAgents is the list of sub-agents to run in parallel.
 	SubAgents []agent.Agent
 	// Tools is the list of tools available to the agent.
-	Tools []tool.UnaryTool
+	Tools []tool.CallableTool
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 }
@@ -172,6 +172,6 @@ func (a *ParallelAgent) mergeEventStreams(
 
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
-func (a *ParallelAgent) Tools() []tool.UnaryTool {
+func (a *ParallelAgent) Tools() []tool.CallableTool {
 	return a.tools
 }

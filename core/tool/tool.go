@@ -10,8 +10,8 @@ type Tool interface {
 	Declaration() *Declaration
 }
 
-// UnaryTool defines the interface for tools that support calling operations.
-type UnaryTool interface {
+// CallableTool defines the interface for tools that support calling operations.
+type CallableTool interface {
 	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
 	Call(ctx context.Context, jsonArgs []byte) (any, error)
@@ -20,7 +20,7 @@ type UnaryTool interface {
 }
 
 // StreamableTool defines the interface for tools that support streaming operations.
-// This interface extends the basic UnaryTool interface to provide streaming capabilities,
+// This interface extends the basic CallableTool interface to provide streaming capabilities,
 // allowing tools to return data progressively rather than all at once.
 type StreamableTool interface {
 	// StreamableCall initiates a call to the tool that supports streaming.

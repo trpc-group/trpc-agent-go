@@ -11,7 +11,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )
 
-// FunctionTool implements the UnaryTool interface for executing functions with arguments.
+// FunctionTool implements the CallableTool interface for executing functions with arguments.
 // It provides a generic way to wrap any function as a tool that can be called
 // with JSON arguments and returns results.
 type FunctionTool[I, O any] struct {
@@ -116,7 +116,7 @@ func (ft *FunctionTool[I, O]) Declaration() *tool.Declaration {
 	}
 }
 
-// StreamableFunctionTool implements the UnaryTool interface for executing functions
+// StreamableFunctionTool implements the CallableTool interface for executing functions
 // that return streaming results. It extends the basic FunctionTool to support
 // streaming output through StreamReader.
 type StreamableFunctionTool[I, O any] struct {
