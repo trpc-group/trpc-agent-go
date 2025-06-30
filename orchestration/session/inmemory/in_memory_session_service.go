@@ -103,7 +103,7 @@ func (s *SessionService) CreateSession(
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
-		State:     session.NewState(), // Initialize with provided state
+		State:     make(session.StateMap), // Initialize with provided state
 		Events:    []event.Event{},
 		UpdatedAt: time.Now(),
 		CreatedAt: time.Now(),
@@ -111,7 +111,7 @@ func (s *SessionService) CreateSession(
 
 	// Set initial state if provided
 	for k, v := range state {
-		sess.State.Set(k, v)
+		sess.State[k] = v
 	}
 
 	app.mu.Lock()
@@ -119,6 +119,10 @@ func (s *SessionService) CreateSession(
 
 	if app.sessions[key.UserID] == nil {
 		app.sessions[key.UserID] = make(map[string]*session.Session)
+	}
+
+	if app.userState[key.UserID] == nil {
+		app.userState[key.UserID] = make(session.StateMap)
 	}
 
 	// Store the session
@@ -213,6 +217,9 @@ func (s *SessionService) DeleteSession(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
+	if _, ok := app.sessions[key.UserID]; !ok {
+		return nil
+	}
 	if _, ok := app.sessions[key.UserID][key.SessionID]; !ok {
 		return nil
 	}
@@ -225,9 +232,7 @@ func (s *SessionService) DeleteSession(
 		delete(app.sessions, key.UserID)
 	}
 
-	if len(app.sessions[key.UserID]) == 0 {
-		delete(app.userState, key.UserID)
-	}
+	// todo: check if need clean user state
 
 	return nil
 }
@@ -279,14 +284,13 @@ func (s *SessionService) updateSessionState(sess *session.Session, event *event.
 	sess.UpdatedAt = time.Now()
 }
 
-// copySession creates a deep copy of a session.
-// shallow copy
+// copySession creates a  copy of a session.
 func copySession(sess *session.Session) *session.Session {
 	copiedSess := &session.Session{
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     session.NewState(), // Create new state to avoid reference sharing
+		State:     make(session.StateMap), // Create new state to avoid reference sharing
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
 		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
@@ -294,8 +298,8 @@ func copySession(sess *session.Session) *session.Session {
 
 	// copy state
 	if sess.State != nil {
-		for k, v := range sess.State.Value {
-			copiedSess.State.Set(k, v)
+		for k, v := range sess.State {
+			copiedSess.State[k] = v
 		}
 	}
 	copy(copiedSess.Events, sess.Events)
@@ -324,10 +328,10 @@ func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State.Set(session.StateAppPrefix+k, v)
+		sess.State[session.StateAppPrefix+k] = v
 	}
 	for k, v := range userState {
-		sess.State.Set(session.StateUserPrefix+k, v)
+		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
 }

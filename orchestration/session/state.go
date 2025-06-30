@@ -11,9 +11,9 @@ const (
 // State maintains the current value and the pending-commit delta.
 type State struct {
 	// Value stores the current committed state
-	Value StateMap
+	Value StateMap `json:"value"`
 	// Delta stores the pending changes that haven't been committed
-	Delta StateMap
+	Delta StateMap `json:"delta"`
 }
 
 // NewState creates a new empty State.
@@ -25,7 +25,7 @@ func NewState() *State {
 }
 
 // Set sets the value of a key in the state.
-func (s *State) Set(key string, value interface{}) {
+func (s *State) Set(key string, value []byte) {
 	s.Value[key] = value
 	s.Delta[key] = value
 }
