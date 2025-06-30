@@ -12,8 +12,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
-var testServiceOpts = ServiceOpts{}
-
 func TestNewSessionService(t *testing.T) {
 	tests := []struct {
 		name string
@@ -27,7 +25,7 @@ func TestNewSessionService(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 
 			assert.Equal(t, tt.want, service != nil)
 
@@ -136,7 +134,7 @@ func TestCreateSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 			key, state := tt.setup()
 			sess, err := service.CreateSession(context.Background(), key, state, &session.Options{})
 			tt.validate(t, sess, err, key, state)
@@ -280,7 +278,7 @@ func TestGetSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 			baseTime := setup(t, service)
 
 			sess, err := tt.setup(service, baseTime)
@@ -432,7 +430,7 @@ func TestListSessions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Fresh service for each test
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 
 			sessions, err := tt.setup(service)
 			tt.validate(t, sessions, err)
@@ -499,7 +497,7 @@ func TestDeleteSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 			originalKey := setup(t, service)
 
 			err := tt.setup(service, originalKey)
@@ -634,7 +632,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 			var expectedCount int
 			if tt.name == "concurrent session creation" {
 				expectedCount = 10
@@ -721,7 +719,7 @@ func TestGetOrCreateApp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service := NewSessionService(testServiceOpts)
+			service := NewSessionService()
 
 			app := tt.setup(service)
 			tt.validate(t, app)
@@ -731,7 +729,7 @@ func TestGetOrCreateApp(t *testing.T) {
 
 // Additional tests for edge cases and State functionality
 func TestStateMerging(t *testing.T) {
-	service := NewSessionService(testServiceOpts)
+	service := NewSessionService()
 	ctx := context.Background()
 	appName := "test-app"
 	userID := "test-user"
@@ -765,7 +763,7 @@ func TestStateMerging(t *testing.T) {
 }
 
 func TestAppIsolation(t *testing.T) {
-	service := NewSessionService(testServiceOpts)
+	service := NewSessionService()
 	ctx := context.Background()
 
 	// Create sessions in different apps

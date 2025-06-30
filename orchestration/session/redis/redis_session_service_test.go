@@ -132,7 +132,7 @@ func TestService_CreateSession(t *testing.T) {
 			client, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(client)
+			service, err := NewService(WithRedisClient(client))
 			require.NoError(t, err)
 
 			key, state := tt.setup(t)
@@ -234,7 +234,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			client, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(client)
+			service, err := NewService(WithRedisClient(client))
 			require.NoError(t, err)
 
 			// Create a session first
@@ -332,7 +332,7 @@ func TestService_AppendEvent_ErrorCases(t *testing.T) {
 			client, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(client)
+			service, err := NewService(WithRedisClient(client))
 			require.NoError(t, err)
 
 			sess := tt.setup(t, service)
@@ -465,7 +465,7 @@ func TestService_GetSession(t *testing.T) {
 			client, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(client)
+			service, err := NewService(WithRedisClient(client))
 			require.NoError(t, err)
 
 			// Setup initial data for all test cases.
@@ -561,7 +561,7 @@ func TestService_Atomicity(t *testing.T) {
 			client, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(client)
+			service, err := NewService(WithRedisClient(client))
 			require.NoError(t, err)
 
 			sessionKey := session.Key{
