@@ -24,8 +24,8 @@ const (
 
 	// ErrorToolNotFound is the error message for tool not found.
 	ErrorToolNotFound = "Error: tool not found"
-	// ErrorUnaryToolExecution is the error message for unary tool execution failed.
-	ErrorUnaryToolExecution = "Error: tool execution failed"
+	// ErrorCallableToolExecution is the error message for unary tool execution failed.
+	ErrorCallableToolExecution = "Error: tool execution failed"
 	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
 	ErrorStreamableToolExecution = "Error: tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
@@ -331,7 +331,7 @@ func (f *Flow) executeToolCall(
 				Index: index,
 				Message: model.Message{
 					Role:    model.RoleTool,
-					Content: ErrorUnaryToolExecution + ": " + err.Error(),
+					Content: ErrorCallableToolExecution + ": " + err.Error(),
 					ToolID:  toolCall.ID,
 				},
 			}
