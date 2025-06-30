@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
@@ -74,20 +75,21 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools for demonstration.
-	searchTool := tool.NewFunctionTool(c.search, tool.FunctionToolConfig{
-		Name:        "search",
-		Description: "Search for information on a given topic",
-	})
-
-	calculatorTool := tool.NewFunctionTool(c.calculate, tool.FunctionToolConfig{
-		Name:        "calculator",
-		Description: "Perform mathematical calculations",
-	})
-
-	weatherTool := tool.NewFunctionTool(c.getWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get current weather information for a location",
-	})
+	searchTool := function.NewFunctionTool(
+		c.search,
+		function.WithName("search"),
+		function.WithDescription("Search for information on a given topic"),
+	)
+	calculatorTool := function.NewFunctionTool(
+		c.calculate,
+		function.WithName("calculator"),
+		function.WithDescription("Perform mathematical calculations"),
+	)
+	weatherTool := function.NewFunctionTool(
+		c.getWeather,
+		function.WithName("get_weather"),
+		function.WithDescription("Get current weather information for a location"),
+	)
 
 	// Create React planner.
 	reactPlanner := react.New()
