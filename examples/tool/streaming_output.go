@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // streamingOutputExample demonstrates non-streaming usage.
@@ -18,10 +19,7 @@ func streamingOutputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.8
 	maxTokens := 1000
 
-	getWeatherStreamingTool := tool.NewStreamableFunctionTool[getWeatherInput, getWeatherOutput](getStreamableWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get weather at the given location",
-	})
+	getWeatherStreamingTool := function.NewStreamableFunctionTool[getWeatherInput, getWeatherOutput](getStreamableWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{

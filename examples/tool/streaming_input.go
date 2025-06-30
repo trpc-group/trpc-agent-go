@@ -8,6 +8,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 )
 
 // streamingInputExample demonstrates streaming usage.
@@ -15,15 +16,8 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
 
-	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get weather at the given location",
-	})
-
-	getPopulationTool := tool.NewFunctionTool(getPopulation, tool.FunctionToolConfig{
-		Name:        "get_population",
-		Description: "Get population at the given city",
-	})
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getPopulationTool := function.NewFunctionTool(getPopulation, function.WithName("get_population"), function.WithDescription("Get population at the given city"))
 
 	request := &model.Request{
 		Messages: []model.Message{

@@ -257,7 +257,7 @@ func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
 
 func TestChainAgent_Tools(t *testing.T) {
 	// Create some mock tools.
-	tools := []tool.UnaryTool{} // Empty for now since we don't have concrete tool implementations.
+	tools := []tool.CallableTool{} // Empty for now since we don't have concrete tool implementations.
 
 	chainAgent := New(Options{
 		Name:  "test-chain",

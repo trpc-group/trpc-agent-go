@@ -1,4 +1,4 @@
-package tool_test
+package function_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )
 
@@ -22,10 +23,9 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	fn := func(args inputArgs) outputArgs {
 		return outputArgs{Result: args.A + args.B}
 	}
-	fTool := tool.NewFunctionTool(fn, tool.FunctionToolConfig{
-		Name:        "SumFunction",
-		Description: "Calculates the sum of two integers.",
-	})
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("SumFunction"),
+		function.WithDescription("Calculates the sum of two integers."))
 	input := inputArgs{A: 2, B: 3}
 	args := toArguments(t, input)
 
@@ -155,10 +155,9 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 }
 
 func Test_StreamableFunctionTool(t *testing.T) {
-	st := tool.NewStreamableFunctionTool[streamTestInput, streamTestOutput](streamableFunc, tool.FunctionToolConfig{
-		Name:        "StreamableFunction",
-		Description: "Streams articles based on the provided article ID.",
-	})
+	st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](streamableFunc,
+		function.WithName("StreamableFunction"),
+		function.WithDescription("Streams articles based on the provided article ID."))
 	reader, err := st.StreamableCall(context.Background(), toArguments(t, streamTestInput{ArticalID: 1}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

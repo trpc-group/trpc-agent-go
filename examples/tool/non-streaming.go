@@ -8,16 +8,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 )
 
 // nonStreamingExample demonstrates non-streaming usage.
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
-	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get weather at the given location",
-	})
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{
@@ -51,7 +49,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			if len(choice.Message.ToolCalls) == 0 {
 				fmt.Println("No tool calls made.")
 			} else {
-				fmt.Println("UnaryTool calls:")
+				fmt.Println("CallableTool calls:")
 				for _, toolCall := range choice.Message.ToolCalls {
 					if toolCall.Function.Name == "get_weather" {
 						// Simulate getting weather data
