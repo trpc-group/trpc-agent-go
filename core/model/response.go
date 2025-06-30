@@ -24,6 +24,10 @@ const (
 	ObjectTypePreprocessingIdentity = "preprocessing.identity"
 	// ObjectTypePreprocessingInstruction is the object type for instruction preprocessing events.
 	ObjectTypePreprocessingInstruction = "preprocessing.instruction"
+	// ObjectTypePreprocessingPlanning is the object type for planning preprocessing events.
+	ObjectTypePreprocessingPlanning = "preprocessing.planning"
+	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
+	ObjectTypePostprocessingPlanning = "postprocessing.planning"
 )
 
 // Choice represents a single completion choice.

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 )
 
 // streamingInputExample demonstrates streaming usage.
@@ -14,15 +16,8 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
 
-	getWeatherTool := tool.NewFunctionTool(getWeather, tool.FunctionToolConfig{
-		Name:        "get_weather",
-		Description: "Get weather at the given location",
-	})
-
-	getPopulationTool := tool.NewFunctionTool(getPopulation, tool.FunctionToolConfig{
-		Name:        "get_population",
-		Description: "Get population at the given city",
-	})
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getPopulationTool := function.NewFunctionTool(getPopulation, function.WithName("get_population"), function.WithDescription("Get population at the given city"))
 
 	request := &model.Request{
 		Messages: []model.Message{
@@ -68,7 +63,7 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_weather" {
 					// Simulate getting weather data
 					location := tc.Function.Arguments
-					weatherData, err := getWeatherTool.UnaryCall(context.Background(), location)
+					weatherData, err := getWeatherTool.Call(context.Background(), location)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}
@@ -87,7 +82,7 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_population" {
 					// Simulate getting population data
 					city := tc.Function.Arguments
-					populationData, err := getPopulationTool.UnaryCall(context.Background(), city)
+					populationData, err := getPopulationTool.Call(context.Background(), city)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}

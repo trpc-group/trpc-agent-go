@@ -22,6 +22,8 @@ type Invocation struct {
 	Model model.Model
 	// Message is the message that is being sent to the agent.
 	Message model.Message
+	// EventCompletionCh is used to signal when events are written to session.
+	EventCompletionCh <-chan string
 	// RunOptions is the options for the Run method.
 	RunOptions RunOptions
 	// AgentCallbacks contains callbacks for agent operations.

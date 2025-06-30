@@ -63,9 +63,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	mockAgent := &mockAgent{name: "test-agent"}
 
 	// Create runner with session service.
-	runner := New("test-app", mockAgent, Options{
-		sessionService: sessionService,
-	})
+	runner := New("test-app", mockAgent, WithSessionService(sessionService))
 
 	ctx := context.Background()
 	userID := "test-user"
@@ -122,9 +120,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 	mockAgent := &mockAgent{name: "test-agent"}
 
 	// Create runner.
-	runner := New("test-app", mockAgent, Options{
-		sessionService: sessionService,
-	})
+	runner := New("test-app", mockAgent, WithSessionService(sessionService))
 
 	ctx := context.Background()
 	userID := "new-user"
@@ -164,9 +160,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	mockAgent := &mockAgent{name: "test-agent"}
 
 	// Create runner.
-	runner := New("test-app", mockAgent, Options{
-		sessionService: sessionService,
-	})
+	runner := New("test-app", mockAgent, WithSessionService(sessionService))
 
 	ctx := context.Background()
 	userID := "test-user"

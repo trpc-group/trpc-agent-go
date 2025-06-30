@@ -24,6 +24,12 @@ type Event struct {
 
 	// Timestamp is the timestamp of the event.
 	Timestamp time.Time `json:"timestamp"`
+
+	// RequiresCompletion indicates if this event needs completion signaling.
+	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
+
+	// CompletionID is used for completion signaling of this event.
+	CompletionID string `json:"completionId,omitempty"`
 }
 
 // Option is a function that can be used to configure the Event.

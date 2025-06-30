@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 )
 
@@ -71,15 +72,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := tool.NewFunctionTool(c.calculate, tool.FunctionToolConfig{
-		Name:        "calculator",
-		Description: "Perform basic mathematical calculations (add, subtract, multiply, divide)",
-	})
-
-	timeTool := tool.NewFunctionTool(c.getCurrentTime, tool.FunctionToolConfig{
-		Name:        "current_time",
-		Description: "Get the current time and date for a specific timezone",
-	})
+	calculatorTool := function.NewFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
+	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -91,15 +85,13 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
 		agentName,
-		llmagent.Options{
-			Model:             modelInstance,
-			Description:       "A helpful AI assistant with calculator and time tools",
-			Instruction:       "Use tools when appropriate for calculations or time queries. Be helpful and conversational.",
-			SystemPrompt:      "You have access to calculator and current_time tools. Use them when users ask for calculations or time information.",
-			GenerationConfig:  genConfig,
-			ChannelBufferSize: 100,
-			Tools:             []tool.Tool{calculatorTool, timeTool},
-		},
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
+		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithSystemPrompt("You have access to calculator and current_time tools. Use them when users ask for calculations or time information."),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithChannelBufferSize(100),
+		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 	)
 
 	// Create runner.
@@ -107,7 +99,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	c.runner = runner.New(
 		appName,
 		llmAgent,
-		runner.Options{},
 	)
 
 	// Setup identifiers.
@@ -193,7 +184,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
-			fmt.Printf("🔧 UnaryTool calls initiated:\n")
+			fmt.Printf("🔧 CallableTool calls initiated:\n")
 			for _, toolCall := range event.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
@@ -208,7 +199,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			hasToolResponse := false
 			for _, choice := range event.Response.Choices {
 				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ UnaryTool response (ID: %s): %s\n",
+					fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 						choice.Message.ToolID,
 						strings.TrimSpace(choice.Message.Content))
 					hasToolResponse = true
@@ -269,7 +260,7 @@ func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
 	return false
 }
 
-// UnaryTool implementations.
+// CallableTool implementations.
 
 // calculate performs basic mathematical operations.
 func (c *multiTurnChat) calculate(args calculatorArgs) calculatorResult {

@@ -8,8 +8,6 @@ import (
 	"io"
 	"time"
 
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
@@ -17,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -25,12 +24,15 @@ const (
 
 	// ErrorToolNotFound is the error message for tool not found.
 	ErrorToolNotFound = "Error: tool not found"
-	// ErrorUnaryToolExecution is the error message for unary tool execution failed.
-	ErrorUnaryToolExecution = "Error: tool execution failed"
+	// ErrorCallableToolExecution is the error message for unary tool execution failed.
+	ErrorCallableToolExecution = "Error: tool execution failed"
 	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
 	ErrorStreamableToolExecution = "Error: tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
+
+	// Timeout for event completion signaling.
+	eventCompletionTimeout = 5 * time.Second
 )
 
 // Options contains configuration options for creating a Flow.
@@ -135,7 +137,7 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
-	// 2. UnaryCall LLM (get response channel).
+	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
@@ -183,6 +185,22 @@ func (f *Flow) runOneStep(
 				case eventChan <- functionResponseEvent:
 				case <-ctx.Done():
 					return lastEvent, ctx.Err()
+				}
+
+				// Wait for completion of events that require it.
+				if lastEvent.RequiresCompletion {
+					select {
+					case completedID := <-invocation.EventCompletionCh:
+						// Event has been written to session, safe to proceed.
+						if completedID == lastEvent.CompletionID {
+							log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
+						}
+					case <-time.After(eventCompletionTimeout):
+						// Handle timeout.
+						log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+					case <-ctx.Done():
+						return lastEvent, ctx.Err()
+					}
 				}
 			}
 		}
@@ -340,6 +358,10 @@ func (f *Flow) handleFunctionCalls(
 		functionResponses,
 	)
 
+	// Signal that this event needs to be completed before proceeding.
+	functionResponseEvent.RequiresCompletion = true
+	functionResponseEvent.CompletionID = uuid.New().String()
+
 	return functionResponseEvent, nil
 }
 
@@ -353,7 +375,7 @@ func (f *Flow) executeToolCall(
 ) model.Choice {
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
-		log.Errorf("UnaryTool %s not found", toolCall.Function.Name)
+		log.Errorf("CallableTool %s not found", toolCall.Function.Name)
 		return model.Choice{
 			Index: index,
 			Message: model.Message{
@@ -530,7 +552,7 @@ func (f *Flow) executeToolCall(
 		}
 	}
 
-	log.Debugf("UnaryTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
+	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
 
 	return model.Choice{
 		Index: index,
