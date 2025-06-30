@@ -77,9 +77,15 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 }
 
 // hasSystemMessage checks if a system message with the given content already exists.
+// It compares only the first few characters of the content for performance reasons,
+// as this is usually sufficient to determine content similarity.
 func hasSystemMessage(messages []model.Message, content string) bool {
+	// Maximum length of content prefix to compare for performance optimization.
+	const maxContentPrefixLength = 100
+	// Use content prefix for comparison to avoid performance issues with long content.
+	contentPrefix := content[:min(maxContentPrefixLength, len(content))]
 	for _, msg := range messages {
-		if msg.Role == model.RoleSystem && strings.Contains(msg.Content, content[:min(100, len(content))]) {
+		if msg.Role == model.RoleSystem && strings.Contains(msg.Content, contentPrefix) {
 			return true
 		}
 	}
