@@ -72,6 +72,20 @@ func WithPlanner(planner planner.Planner) Option {
 	}
 }
 
+// WithAgentCallbacks sets the agent callbacks.
+func WithAgentCallbacks(callbacks *agent.AgentCallbacks) Option {
+	return func(opts *Options) {
+		opts.AgentCallbacks = callbacks
+	}
+}
+
+// WithModelCallbacks sets the model callbacks.
+func WithModelCallbacks(callbacks *model.ModelCallbacks) Option {
+	return func(opts *Options) {
+		opts.ModelCallbacks = callbacks
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Model is the model to use.
@@ -181,9 +195,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		genConfig:      options.GenerationConfig,
 		flow:           llmFlow,
 		tools:          options.Tools,
-		planner:      options.Planner,
-		modelCallbacks: opts.ModelCallbacks,
-		agentCallbacks: opts.AgentCallbacks,
+		planner:        options.Planner,
+		modelCallbacks: options.ModelCallbacks,
+		agentCallbacks: options.AgentCallbacks,
 	}
 }
 
