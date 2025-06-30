@@ -2,6 +2,7 @@ package llmagent
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -244,7 +245,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	if invocation.AgentCallbacks != nil {
 		customResponse, skip, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
 		if customResponse != nil || skip {
 			// Create a channel that returns the custom response and then closes.

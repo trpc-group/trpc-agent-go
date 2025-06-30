@@ -45,7 +45,10 @@ func (c *AgentCallbacks) AddAfterAgent(cb AfterAgentCallback) {
 // RunBeforeAgent runs all before agent callbacks in order.
 // Returns (customResponse, skip, error).
 // If any callback returns a custom response or skip=true, stop and return.
-func (c *AgentCallbacks) RunBeforeAgent(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+func (c *AgentCallbacks) RunBeforeAgent(
+	ctx context.Context,
+	invocation *Invocation,
+) (*model.Response, bool, error) {
 	for _, cb := range c.BeforeAgent {
 		customResponse, skip, err := cb(ctx, invocation)
 		if err != nil {
@@ -61,7 +64,11 @@ func (c *AgentCallbacks) RunBeforeAgent(ctx context.Context, invocation *Invocat
 // RunAfterAgent runs all after agent callbacks in order.
 // Returns (customResponse, override, error).
 // If any callback returns a custom response with override=true, stop and return.
-func (c *AgentCallbacks) RunAfterAgent(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+func (c *AgentCallbacks) RunAfterAgent(
+	ctx context.Context,
+	invocation *Invocation,
+	runErr error,
+) (*model.Response, bool, error) {
 	for _, cb := range c.AfterAgent {
 		customResponse, override, err := cb(ctx, invocation, runErr)
 		if err != nil {
