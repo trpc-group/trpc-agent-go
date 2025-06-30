@@ -142,12 +142,13 @@ func (p *Planner) processTextContent(content string) string {
 
 // splitByLastPattern splits text by the last occurrence of a separator.
 // Returns the text before the last separator and the text after it.
+// The separator itself is not included in either returned part.
 func (p *Planner) splitByLastPattern(text, separator string) (string, string) {
 	index := strings.LastIndex(text, separator)
 	if index == -1 {
 		return text, ""
 	}
-	return text[:index+len(separator)], text[index+len(separator):]
+	return text[:index], text[index+len(separator):]
 }
 
 // buildPlannerInstruction builds the comprehensive planning instruction
