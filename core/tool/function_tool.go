@@ -56,7 +56,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 	}
 }
 
-// UnaryCall executes the function tool with the provided JSON arguments.
+// Call executes the function tool with the provided JSON arguments.
 // It unmarshals the given arguments into the tool's input type,
 // then calls the underlying function with these arguments.
 //
@@ -66,7 +66,7 @@ func NewFunctionTool[I, O any](fn func(I) O, cfg FunctionToolConfig) *FunctionTo
 //
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byte) (any, error) {
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err

@@ -138,7 +138,7 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
-	// 2. UnaryCall LLM (get response channel).
+	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
 		return nil, err
@@ -252,7 +252,7 @@ func (f *Flow) callLLM(
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
-	// UnaryCall the model.
+	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
 		log.Errorf("LLM call failed for agent %s: %v", invocation.AgentName, err)
@@ -325,7 +325,7 @@ func (f *Flow) executeToolCall(
 	switch t := tl.(type) {
 	case tool.UnaryTool:
 		// Execute the tool.
-		result, err = t.UnaryCall(ctx, toolCall.Function.Arguments)
+		result, err = t.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
 			log.Errorf("UnaryTool execution failed for %s: %v", toolCall.Function.Name, err)
 			return model.Choice{

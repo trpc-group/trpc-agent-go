@@ -56,7 +56,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 					if toolCall.Function.Name == "get_weather" {
 						// Simulate getting weather data
 						location := toolCall.Function.Arguments
-						weatherData, err := getWeatherTool.UnaryCall(context.Background(), location)
+						weatherData, err := getWeatherTool.Call(context.Background(), location)
 						if err != nil {
 							return fmt.Errorf("failed to call tool: %w", err)
 						}
