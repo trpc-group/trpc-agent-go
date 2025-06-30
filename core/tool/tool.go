@@ -10,10 +10,11 @@ type Tool interface {
 	Declaration() *Declaration
 }
 
+// UnaryTool defines the interface for tools that support calling operations.
 type UnaryTool interface {
-	// UnaryCall calls the tool with the provided context and arguments.
+	// Call calls the tool with the provided context and arguments.
 	// Returns the result of execution or an error if the operation fails.
-	UnaryCall(ctx context.Context, jsonArgs []byte) (any, error)
+	Call(ctx context.Context, jsonArgs []byte) (any, error)
 
 	Tool
 }

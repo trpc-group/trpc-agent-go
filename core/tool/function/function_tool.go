@@ -93,7 +93,7 @@ func NewFunctionTool[I, O any](fn func(I) O, opts ...Option) *FunctionTool[I, O]
 //
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
-func (ft *FunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byte) (any, error) {
+func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err

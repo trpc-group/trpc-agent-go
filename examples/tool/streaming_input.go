@@ -63,7 +63,7 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_weather" {
 					// Simulate getting weather data
 					location := tc.Function.Arguments
-					weatherData, err := getWeatherTool.UnaryCall(context.Background(), location)
+					weatherData, err := getWeatherTool.Call(context.Background(), location)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}
@@ -82,7 +82,7 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 				if tc.Function.Name == "get_population" {
 					// Simulate getting population data
 					city := tc.Function.Arguments
-					populationData, err := getPopulationTool.UnaryCall(context.Background(), city)
+					populationData, err := getPopulationTool.Call(context.Background(), city)
 					if err != nil {
 						return fmt.Errorf("failed to call tool: %w", err)
 					}
