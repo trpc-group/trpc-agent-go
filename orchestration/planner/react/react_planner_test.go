@@ -259,7 +259,7 @@ func TestPlanner_SplitByLastPattern(t *testing.T) {
 			name:      "normal split",
 			text:      "Hello SPLIT World",
 			separator: "SPLIT",
-			before:    "Hello SPLIT",
+			before:    "Hello ",
 			after:     " World",
 		},
 		{
@@ -273,7 +273,7 @@ func TestPlanner_SplitByLastPattern(t *testing.T) {
 			name:      "multiple separators",
 			text:      "A SPLIT B SPLIT C",
 			separator: "SPLIT",
-			before:    "A SPLIT B SPLIT",
+			before:    "A SPLIT B ",
 			after:     " C",
 		},
 		{
@@ -287,7 +287,7 @@ func TestPlanner_SplitByLastPattern(t *testing.T) {
 			name:      "separator at end",
 			text:      "Hello SPLIT",
 			separator: "SPLIT",
-			before:    "Hello SPLIT",
+			before:    "Hello ",
 			after:     "",
 		},
 	}
