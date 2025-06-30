@@ -7,6 +7,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 )
 
+// ErrorTypeAgentCallbackError is used for errors from agent callbacks (before/after hooks).
+const ErrorTypeAgentCallbackError = "agent_callback_error"
+
+
 // BeforeAgentCallback is called before the agent runs.
 // Returns (customResponse, skip, error).
 // - customResponse: if not nil, this response will be returned to user and agent execution will be skipped.

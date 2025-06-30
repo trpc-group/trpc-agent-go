@@ -148,7 +148,7 @@ func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
-					"agent_callback_error",
+					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
 				select {

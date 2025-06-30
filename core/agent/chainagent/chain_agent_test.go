@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -113,9 +114,7 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := chainAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("ChainAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect all events.
 	var events []*event.Event
@@ -125,19 +124,13 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 
 	// Verify events count (2 + 1 + 1 = 4 events).
 	expectedEventCount := 4
-	if len(events) != expectedEventCount {
-		t.Errorf("Expected %d events, got %d", expectedEventCount, len(events))
-	}
+	require.Equal(t, expectedEventCount, len(events))
 
 	// Verify execution order (agents should run sequentially).
 	expectedOrder := []string{"agent-1", "agent-2", "agent-3"}
-	if len(executionOrder) != len(expectedOrder) {
-		t.Errorf("Expected %d agents to execute, got %d", len(expectedOrder), len(executionOrder))
-	}
+	require.Equal(t, len(expectedOrder), len(executionOrder))
 	for i, expected := range expectedOrder {
-		if i >= len(executionOrder) || executionOrder[i] != expected {
-			t.Errorf("Expected agent %s at position %d, got %v", expected, i, executionOrder)
-		}
+		require.Equal(t, expected, executionOrder[i])
 	}
 
 	// Verify event authors match execution order.
@@ -150,15 +143,9 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 		agentEventCounts[evt.Author]++
 	}
 
-	if agentEventCounts["agent-1"] != 2 {
-		t.Errorf("Expected 2 events from agent-1, got %d", agentEventCounts["agent-1"])
-	}
-	if agentEventCounts["agent-2"] != 1 {
-		t.Errorf("Expected 1 event from agent-2, got %d", agentEventCounts["agent-2"])
-	}
-	if agentEventCounts["agent-3"] != 1 {
-		t.Errorf("Expected 1 event from agent-3, got %d", agentEventCounts["agent-3"])
-	}
+	require.Equal(t, 2, agentEventCounts["agent-1"])
+	require.Equal(t, 1, agentEventCounts["agent-2"])
+	require.Equal(t, 1, agentEventCounts["agent-3"])
 }
 
 func TestChainAgent_Run_SubAgentError(t *testing.T) {
@@ -195,9 +182,7 @@ func TestChainAgent_Run_SubAgentError(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := chainAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("ChainAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect all events.
 	var events []*event.Event
@@ -208,17 +193,12 @@ func TestChainAgent_Run_SubAgentError(t *testing.T) {
 	// Should have 1 event from agent-1 + 1 error event = 2 events.
 	// agent-3 should not execute because agent-2 errored.
 	expectedEventCount := 2
-	if len(events) != expectedEventCount {
-		t.Errorf("Expected %d events, got %d", expectedEventCount, len(events))
-	}
+	require.Equal(t, expectedEventCount, len(events))
 
 	// Last event should be an error event.
 	lastEvent := events[len(events)-1]
-	if lastEvent.Error == nil {
-		t.Error("Expected last event to be an error event")
-	} else if lastEvent.Error.Type != model.ErrorTypeFlowError {
-		t.Errorf("Expected error type %s, got %s", model.ErrorTypeFlowError, lastEvent.Error.Type)
-	}
+	require.NotNil(t, lastEvent.Error)
+	require.Equal(t, model.ErrorTypeFlowError, lastEvent.Error.Type)
 }
 
 func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
@@ -239,9 +219,7 @@ func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := chainAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("ChainAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect all events.
 	var events []*event.Event
@@ -250,9 +228,7 @@ func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
 	}
 
 	// Should have no events.
-	if len(events) != 0 {
-		t.Errorf("Expected 0 events, got %d", len(events))
-	}
+	require.Equal(t, 0, len(events))
 }
 
 func TestChainAgent_Tools(t *testing.T) {
@@ -264,9 +240,7 @@ func TestChainAgent_Tools(t *testing.T) {
 		Tools: tools,
 	})
 
-	if len(chainAgent.Tools()) != len(tools) {
-		t.Errorf("Expected %d tools, got %d", len(tools), len(chainAgent.Tools()))
-	}
+	require.Equal(t, len(tools), len(chainAgent.Tools()))
 }
 
 func TestChainAgent_ChannelBufferSize(t *testing.T) {
@@ -274,9 +248,7 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 	chainAgent1 := New(Options{
 		Name: "test-chain-1",
 	})
-	if chainAgent1.channelBufferSize != defaultChannelBufferSize {
-		t.Errorf("Expected default buffer size %d, got %d", defaultChannelBufferSize, chainAgent1.channelBufferSize)
-	}
+	require.Equal(t, defaultChannelBufferSize, chainAgent1.channelBufferSize)
 
 	// Test custom buffer size.
 	customSize := 100
@@ -284,9 +256,7 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 		Name:              "test-chain-2",
 		ChannelBufferSize: customSize,
 	})
-	if chainAgent2.channelBufferSize != customSize {
-		t.Errorf("Expected custom buffer size %d, got %d", customSize, chainAgent2.channelBufferSize)
-	}
+	require.Equal(t, customSize, chainAgent2.channelBufferSize)
 }
 
 func TestChainAgent_WithCallbacks(t *testing.T) {
@@ -320,9 +290,7 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 
 	ctx := context.Background()
 	eventChan, err := chainAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("Failed to run agent: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should not receive any events since execution was skipped
 	// Wait a bit to ensure no events are sent
@@ -331,9 +299,7 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 	// Check if channel is closed (no events sent)
 	select {
 	case evt, ok := <-eventChan:
-		if ok {
-			t.Errorf("Expected no events, but received: %v", evt)
-		}
+		require.False(t, ok, "Expected no events, but received: %v", evt)
 		// If ok is false, channel is closed which is expected
 	default:
 		// Channel is still open, which means no events were sent (expected)
