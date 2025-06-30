@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -85,9 +86,7 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := parallelAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("ParallelAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect events.
 	var events []*event.Event
@@ -96,9 +95,7 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 	}
 
 	// Verify events count (2 + 1 = 3 events).
-	if len(events) != 3 {
-		t.Errorf("Expected 3 events, got %d", len(events))
-	}
+	require.Equal(t, 3, len(events))
 
 	// Verify both agents contributed.
 	agentCounts := make(map[string]int)
@@ -106,12 +103,8 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 		agentCounts[evt.Author]++
 	}
 
-	if agentCounts["agent-1"] != 2 {
-		t.Errorf("Expected 2 events from agent-1, got %d", agentCounts["agent-1"])
-	}
-	if agentCounts["agent-2"] != 1 {
-		t.Errorf("Expected 1 event from agent-2, got %d", agentCounts["agent-2"])
-	}
+	require.Equal(t, 2, agentCounts["agent-1"])
+	require.Equal(t, 1, agentCounts["agent-2"])
 }
 
 func TestParallelAgent_Run_WithError(t *testing.T) {
@@ -133,9 +126,7 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := parallelAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("ParallelAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	var events []*event.Event
 	for evt := range eventChan {
@@ -143,9 +134,7 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 	}
 
 	// Should have events from successful agent and error event.
-	if len(events) < 1 {
-		t.Errorf("Expected at least 1 event, got %d", len(events))
-	}
+	require.Greater(t, len(events), 0)
 
 	// Check for error event.
 	hasError := false
@@ -154,9 +143,7 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 			hasError = true
 		}
 	}
-	if !hasError {
-		t.Error("Expected error event")
-	}
+	require.True(t, hasError)
 }
 
 func TestParallelAgent_BranchInvocations(t *testing.T) {
@@ -171,33 +158,21 @@ func TestParallelAgent_BranchInvocations(t *testing.T) {
 	branchInvocation := parallelAgent.createBranchInvocationForSubAgent(subAgent, baseInvocation)
 
 	// Verify branch has different ID.
-	if branchInvocation.InvocationID == baseInvocation.InvocationID {
-		t.Error("Branch should have different InvocationID")
-	}
-
+	require.NotEqual(t, branchInvocation.InvocationID, baseInvocation.InvocationID)
 	// Verify branch contains base ID.
-	if !strings.Contains(branchInvocation.InvocationID, baseInvocation.InvocationID) {
-		t.Error("Branch ID should contain base ID")
-	}
-
+	require.True(t, strings.Contains(branchInvocation.InvocationID, baseInvocation.InvocationID))
 	// Verify agent is set.
-	if branchInvocation.Agent != subAgent {
-		t.Error("Branch should have correct agent")
-	}
+	require.Equal(t, branchInvocation.Agent, subAgent)
 }
 
 func TestParallelAgent_ChannelBufferSize(t *testing.T) {
 	// Test default.
 	agent1 := New(Options{Name: "test1"})
-	if agent1.channelBufferSize != defaultChannelBufferSize {
-		t.Errorf("Expected default size %d, got %d", defaultChannelBufferSize, agent1.channelBufferSize)
-	}
+	require.Equal(t, defaultChannelBufferSize, agent1.channelBufferSize)
 
 	// Test custom.
 	agent2 := New(Options{Name: "test2", ChannelBufferSize: 100})
-	if agent2.channelBufferSize != 100 {
-		t.Errorf("Expected size 100, got %d", agent2.channelBufferSize)
-	}
+	require.Equal(t, 100, agent2.channelBufferSize)
 }
 
 func TestParallelAgent_WithCallbacks(t *testing.T) {
@@ -205,7 +180,7 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 	callbacks := agent.NewAgentCallbacks()
 
 	// Test before agent callback that skips execution
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
 		if invocation.Message.Content == "skip" {
 			return nil, true, nil
 		}
@@ -231,9 +206,7 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 
 	ctx := context.Background()
 	eventChan, err := parallelAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("Failed to run agent: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Should not receive any events since execution was skipped
 	// Wait a bit to ensure no events are sent
@@ -242,9 +215,7 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 	// Check if channel is closed (no events sent)
 	select {
 	case evt, ok := <-eventChan:
-		if ok {
-			t.Errorf("Expected no events, but received: %v", evt)
-		}
+		require.False(t, ok, "Expected no events, but received: %v", evt)
 		// If ok is false, channel is closed which is expected
 	default:
 		// Channel is still open, which means no events were sent (expected)

@@ -28,7 +28,7 @@ func TestAgentCallbacks_BeforeAgent_NoCallbacks(t *testing.T) {
 func TestAgentCallbacks_BeforeAgent_CustomResponse(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-agent-response"}
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
 		return customResponse, false, nil
 	})
 	invocation := &Invocation{
@@ -44,7 +44,7 @@ func TestAgentCallbacks_BeforeAgent_CustomResponse(t *testing.T) {
 
 func TestAgentCallbacks_BeforeAgent_Skip(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
 		return nil, true, nil
 	})
 	invocation := &Invocation{
@@ -60,7 +60,7 @@ func TestAgentCallbacks_BeforeAgent_Skip(t *testing.T) {
 
 func TestAgentCallbacks_BeforeAgent_Error(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
 		return nil, false, context.DeadlineExceeded
 	})
 	invocation := &Invocation{
@@ -76,10 +76,10 @@ func TestAgentCallbacks_BeforeAgent_Error(t *testing.T) {
 
 func TestAgentCallbacks_BeforeAgent_MultipleCallbacks(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
 		return nil, false, nil
 	})
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error) {
 		return &model.Response{ID: "second"}, false, nil
 	})
 	invocation := &Invocation{
@@ -114,7 +114,7 @@ func TestAgentCallbacks_AfterAgent_NoCallbacks(t *testing.T) {
 func TestAgentCallbacks_AfterAgent_CustomResponseOverride(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-after-response"}
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return customResponse, true, nil
 	})
 	invocation := &Invocation{InvocationID: "test-invocation", AgentName: "test-agent", Message: model.Message{Role: model.RoleUser, Content: "Hello"}}
@@ -127,7 +127,7 @@ func TestAgentCallbacks_AfterAgent_CustomResponseOverride(t *testing.T) {
 func TestAgentCallbacks_AfterAgent_CustomResponseNoOverride(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-no-override"}
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return customResponse, false, nil
 	})
 	invocation := &Invocation{InvocationID: "test-invocation", AgentName: "test-agent", Message: model.Message{Role: model.RoleUser, Content: "Hello"}}
@@ -139,7 +139,7 @@ func TestAgentCallbacks_AfterAgent_CustomResponseNoOverride(t *testing.T) {
 
 func TestAgentCallbacks_AfterAgent_NilResponseWithOverride(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return nil, true, nil
 	})
 	invocation := &Invocation{
@@ -155,7 +155,7 @@ func TestAgentCallbacks_AfterAgent_NilResponseWithOverride(t *testing.T) {
 
 func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return nil, false, context.DeadlineExceeded
 	})
 	invocation := &Invocation{
@@ -172,7 +172,7 @@ func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
 func TestAgentCallbacks_AfterAgent_WithRunError(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	runError := context.DeadlineExceeded
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		require.Equal(t, runError, runErr)
 		return nil, false, nil
 	})
@@ -189,10 +189,10 @@ func TestAgentCallbacks_AfterAgent_WithRunError(t *testing.T) {
 
 func TestAgentCallbacks_AfterAgent_MultipleCallbacks(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return nil, false, nil
 	})
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return &model.Response{ID: "second"}, true, nil
 	})
 	invocation := &Invocation{
@@ -209,10 +209,10 @@ func TestAgentCallbacks_AfterAgent_MultipleCallbacks(t *testing.T) {
 
 func TestAgentCallbacks_AfterAgent_MultipleCallbacksNoOverride(t *testing.T) {
 	callbacks := NewAgentCallbacks()
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return &model.Response{ID: "first"}, false, nil
 	})
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
+	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error) {
 		return &model.Response{ID: "second"}, false, nil
 	})
 	invocation := &Invocation{

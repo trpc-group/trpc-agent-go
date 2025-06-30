@@ -45,13 +45,13 @@ func NewToolCallbacks() *ToolCallbacks {
 	return &ToolCallbacks{}
 }
 
-// AddBeforeTool adds a before tool callback.
-func (c *ToolCallbacks) AddBeforeTool(cb BeforeToolCallback) {
+// RegisterBeforeTool registers a before tool callback.
+func (c *ToolCallbacks) RegisterBeforeTool(cb BeforeToolCallback) {
 	c.BeforeTool = append(c.BeforeTool, cb)
 }
 
-// AddAfterTool adds an after tool callback.
-func (c *ToolCallbacks) AddAfterTool(cb AfterToolCallback) {
+// RegisterAfterTool registers an after tool callback.
+func (c *ToolCallbacks) RegisterAfterTool(cb AfterToolCallback) {
 	c.AfterTool = append(c.AfterTool, cb)
 }
 

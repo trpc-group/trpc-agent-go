@@ -211,10 +211,10 @@ func main() {
 
 // createAgentCallbacks creates agent callbacks with comprehensive logging
 func createAgentCallbacks() *agent.AgentCallbacks {
-	callbacks := agent.NewAgentCallbacks()
+	agentCallbacks := agent.NewAgentCallbacks()
 
 	// Before Agent Callback
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
 		fmt.Println("🔄 Before Agent Callback:")
 		fmt.Printf("   - Agent: %s\n", invocation.AgentName)
 		fmt.Printf("   - Invocation ID: %s\n", invocation.InvocationID)
@@ -255,7 +255,7 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 	})
 
 	// After Agent Callback
-	callbacks.AddAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, bool, error) {
+	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, bool, error) {
 		fmt.Println("🔄 After Agent Callback:")
 		if runErr != nil {
 			fmt.Printf("   ❌ Agent execution failed: %v\n", runErr)
@@ -275,15 +275,15 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 		return nil, false, nil
 	})
 
-	return callbacks
+	return agentCallbacks
 }
 
 // createModelCallbacks creates model callbacks with comprehensive logging
 func createModelCallbacks() *model.ModelCallbacks {
-	callbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewModelCallbacks()
 
 	// Before Model Callback
-	callbacks.AddBeforeModel(func(ctx context.Context, request *model.Request) (*model.Response, bool, error) {
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, request *model.Request) (*model.Response, bool, error) {
 		fmt.Println("🔄 Before Model Callback:")
 		fmt.Printf("   - Messages count: %d\n", len(request.Messages))
 		fmt.Printf("   - Tools count: %d\n", len(request.Tools))
@@ -323,7 +323,7 @@ func createModelCallbacks() *model.ModelCallbacks {
 	})
 
 	// After Model Callback
-	callbacks.AddAfterModel(func(ctx context.Context, response *model.Response, runErr error) (*model.Response, bool, error) {
+	modelCallbacks.RegisterAfterModel(func(ctx context.Context, response *model.Response, runErr error) (*model.Response, bool, error) {
 		fmt.Println("🔄 After Model Callback:")
 		if runErr != nil {
 			fmt.Printf("   ❌ Model call failed: %v\n", runErr)
@@ -361,15 +361,15 @@ func createModelCallbacks() *model.ModelCallbacks {
 		return nil, false, nil
 	})
 
-	return callbacks
+	return modelCallbacks
 }
 
 // createToolCallbacks creates tool callbacks with comprehensive logging
 func createToolCallbacks() *tool.ToolCallbacks {
-	callbacks := tool.NewToolCallbacks()
+	toolCallbacks := tool.NewToolCallbacks()
 
 	// Before Tool Callback
-	callbacks.AddBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
+	toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
 		fmt.Println("🔄 Before Tool Callback:")
 		fmt.Printf("   - Tool: %s\n", toolName)
 		fmt.Printf("   - Args: %s\n", string(jsonArgs))
@@ -407,7 +407,7 @@ func createToolCallbacks() *tool.ToolCallbacks {
 	})
 
 	// After Tool Callback
-	callbacks.AddAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
 		fmt.Println("🔄 After Tool Callback:")
 		fmt.Printf("   - Tool: %s\n", toolName)
 
@@ -445,5 +445,5 @@ func createToolCallbacks() *tool.ToolCallbacks {
 		return nil, false, nil
 	})
 
-	return callbacks
+	return toolCallbacks
 }

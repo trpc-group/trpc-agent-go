@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -157,9 +158,7 @@ func TestCycleAgent_Run_WithEscalation(t *testing.T) {
 	}
 
 	// Should have events from both agents in first iteration (escalation stops loop).
-	if len(events) != 2 {
-		t.Errorf("Expected 2 events, got %d", len(events))
-	}
+	require.Equal(t, 2, len(events))
 
 	// Should run only 1 iteration due to escalation.
 	if agent1Count != 1 {
@@ -373,7 +372,7 @@ func TestCycleAgent_WithCallbacks(t *testing.T) {
 	callbacks := agent.NewAgentCallbacks()
 
 	// Test before agent callback that skips execution
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
 		if invocation.Message.Content == "skip" {
 			return nil, true, nil
 		}

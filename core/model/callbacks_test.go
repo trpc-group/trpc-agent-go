@@ -3,6 +3,8 @@ package model
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestModelCallbacks_BeforeModel(t *testing.T) {
@@ -25,7 +27,7 @@ func TestModelCallbacks_BeforeModel(t *testing.T) {
 		},
 	}
 
-	callbacks.AddBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
+	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
 		return customResponse, false, nil
 	})
 
@@ -39,25 +41,16 @@ func TestModelCallbacks_BeforeModel(t *testing.T) {
 	}
 
 	resp, skip, err := callbacks.RunBeforeModel(context.Background(), req)
-	if err != nil {
-		t.Errorf("RunBeforeModel() error = %v", err)
-		return
-	}
-	if skip {
-		t.Error("RunBeforeModel() should not skip")
-	}
-	if resp == nil {
-		t.Error("RunBeforeModel() should return custom response")
-	}
-	if resp.ID != "custom-response" {
-		t.Errorf("RunBeforeModel() returned wrong response ID: %s", resp.ID)
-	}
+	require.NoError(t, err)
+	require.False(t, skip)
+	require.NotNil(t, resp)
+	require.Equal(t, "custom-response", resp.ID)
 }
 
 func TestModelCallbacks_BeforeModelSkip(t *testing.T) {
 	callbacks := NewModelCallbacks()
 
-	callbacks.AddBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
+	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
 		return nil, true, nil
 	})
 
@@ -71,16 +64,9 @@ func TestModelCallbacks_BeforeModelSkip(t *testing.T) {
 	}
 
 	resp, skip, err := callbacks.RunBeforeModel(context.Background(), req)
-	if err != nil {
-		t.Errorf("RunBeforeModel() error = %v", err)
-		return
-	}
-	if !skip {
-		t.Error("RunBeforeModel() should skip")
-	}
-	if resp != nil {
-		t.Error("RunBeforeModel() should not return response when skipping")
-	}
+	require.NoError(t, err)
+	require.True(t, skip)
+	require.Nil(t, resp)
 }
 
 func TestModelCallbacks_AfterModel(t *testing.T) {
@@ -103,7 +89,7 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 		},
 	}
 
-	callbacks.AddAfterModel(func(ctx context.Context, resp *Response, modelErr error) (*Response, bool, error) {
+	callbacks.RegisterAfterModel(func(ctx context.Context, resp *Response, modelErr error) (*Response, bool, error) {
 		return customResponse, true, nil
 	})
 
@@ -124,30 +110,21 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 	}
 
 	resp, override, err := callbacks.RunAfterModel(context.Background(), originalResponse, nil)
-	if err != nil {
-		t.Errorf("RunAfterModel() error = %v", err)
-		return
-	}
-	if !override {
-		t.Error("RunAfterModel() should override")
-	}
-	if resp == nil {
-		t.Error("RunAfterModel() should return custom response")
-	}
-	if resp.ID != "custom-response" {
-		t.Errorf("RunAfterModel() returned wrong response ID: %s", resp.ID)
-	}
+	require.NoError(t, err)
+	require.True(t, override)
+	require.NotNil(t, resp)
+	require.Equal(t, "custom-response", resp.ID)
 }
 
 func TestModelCallbacks_MultipleCallbacks(t *testing.T) {
 	callbacks := NewModelCallbacks()
 
 	// Add multiple callbacks - the first one should be called and stop execution.
-	callbacks.AddBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
+	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
 		return &Response{ID: "first"}, false, nil
 	})
 
-	callbacks.AddBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
+	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, bool, error) {
 		return &Response{ID: "second"}, false, nil
 	})
 
@@ -161,18 +138,8 @@ func TestModelCallbacks_MultipleCallbacks(t *testing.T) {
 	}
 
 	resp, skip, err := callbacks.RunBeforeModel(context.Background(), req)
-	if err != nil {
-		t.Errorf("RunBeforeModel() error = %v", err)
-		return
-	}
-	if skip {
-		t.Error("RunBeforeModel() should not skip")
-	}
-	if resp == nil {
-		t.Error("RunBeforeModel() should return response")
-	}
-	if resp.ID != "first" {
-		t.Errorf("RunBeforeModel() should return first callback response, got: %s", resp.ID)
-	}
+	require.NoError(t, err)
+	require.False(t, skip)
+	require.NotNil(t, resp)
+	require.Equal(t, "first", resp.ID)
 }
- 

@@ -32,13 +32,13 @@ func NewAgentCallbacks() *AgentCallbacks {
 	return &AgentCallbacks{}
 }
 
-// AddBeforeAgent adds a before agent callback.
-func (c *AgentCallbacks) AddBeforeAgent(cb BeforeAgentCallback) {
+// RegisterBeforeAgent registers a before agent callback.
+func (c *AgentCallbacks) RegisterBeforeAgent(cb BeforeAgentCallback) {
 	c.BeforeAgent = append(c.BeforeAgent, cb)
 }
 
-// AddAfterAgent adds an after agent callback.
-func (c *AgentCallbacks) AddAfterAgent(cb AfterAgentCallback) {
+// RegisterAfterAgent registers an after agent callback.
+func (c *AgentCallbacks) RegisterAfterAgent(cb AfterAgentCallback) {
 	c.AfterAgent = append(c.AfterAgent, cb)
 }
 

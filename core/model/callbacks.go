@@ -30,13 +30,13 @@ func NewModelCallbacks() *ModelCallbacks {
 	return &ModelCallbacks{}
 }
 
-// AddBeforeModel adds a before model callback.
-func (c *ModelCallbacks) AddBeforeModel(cb BeforeModelCallback) {
+// RegisterBeforeModel registers a before model callback.
+func (c *ModelCallbacks) RegisterBeforeModel(cb BeforeModelCallback) {
 	c.BeforeModel = append(c.BeforeModel, cb)
 }
 
-// AddAfterModel adds an after model callback.
-func (c *ModelCallbacks) AddAfterModel(cb AfterModelCallback) {
+// RegisterAfterModel registers an after model callback.
+func (c *ModelCallbacks) RegisterAfterModel(cb AfterModelCallback) {
 	c.AfterModel = append(c.AfterModel, cb)
 }
 

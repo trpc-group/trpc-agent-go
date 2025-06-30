@@ -294,7 +294,7 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 	callbacks := agent.NewAgentCallbacks()
 
 	// Test before agent callback that skips execution
-	callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
 		if invocation.Message.Content == "skip" {
 			return nil, true, nil
 		}
