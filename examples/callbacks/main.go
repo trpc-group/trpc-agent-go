@@ -10,8 +10,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 )
 
 // Tool input/output structures
@@ -42,6 +42,71 @@ func weather(input WeatherInput) WeatherOutput {
 	return WeatherOutput{Weather: "Sunny, 25°C"}
 }
 
+// MockModel implements model.Model for testing purposes.
+type MockModel struct{}
+
+func (m *MockModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+	toolCount := 0
+	for _, msg := range request.Messages {
+		if msg.Role == model.RoleTool {
+			toolCount++
+		}
+	}
+	var response *model.Response
+	if toolCount == 0 {
+		response = &model.Response{
+			ID:      "mock-response-1",
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   "mock-model",
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call_1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "calculator",
+									Arguments: []byte(`{"a": 5, "b": 3}`),
+								},
+							},
+							{
+								ID: "call_2",
+								Function: model.FunctionDefinitionParam{
+									Name:      "weather",
+									Arguments: []byte(`{"city": "Beijing"}`),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	} else {
+		response = &model.Response{
+			ID:      "mock-response-2",
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   "mock-model",
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Based on the calculations and weather data, 5 + 3 = 8 and the weather in Beijing is sunny at 25°C.",
+					},
+				},
+			},
+		}
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- response
+	close(ch)
+	return ch, nil
+}
+
 func main() {
 	fmt.Println("🚀 Starting Comprehensive Callbacks Example")
 	fmt.Println("==========================================")
@@ -52,29 +117,29 @@ func main() {
 	toolCallbacks := createToolCallbacks()
 
 	// Create tools
-	calculatorTool := tool.NewFunctionTool(calculator, tool.FunctionToolConfig{
-		Name:        "calculator",
-		Description: "Perform basic mathematical calculations",
-	})
+	calculatorTool := function.NewFunctionTool(calculator,
+		function.WithName("calculator"),
+		function.WithDescription("Perform basic mathematical calculations"),
+	)
 
-	weatherTool := tool.NewFunctionTool(weather, tool.FunctionToolConfig{
-		Name:        "weather",
-		Description: "Get weather information for a city",
-	})
+	weatherTool := function.NewFunctionTool(weather,
+		function.WithName("weather"),
+		function.WithDescription("Get weather information for a city"),
+	)
 
-	// Create LLM model
-	llm := openai.New("your-api-key-here", openai.Options{})
+	// Create LLM model (using mock for demonstration)
+	llm := &MockModel{}
 
 	// Create LLM Agent with callbacks
-	llmAgent := llmagent.New("example-agent", llmagent.Options{
-		Model:          llm,
-		AgentCallbacks: agentCallbacks,
-		ModelCallbacks: modelCallbacks,
-		Tools: []tool.Tool{
+	llmAgent := llmagent.New("example-agent",
+		llmagent.WithModel(llm),
+		llmagent.WithAgentCallbacks(agentCallbacks),
+		llmagent.WithModelCallbacks(modelCallbacks),
+		llmagent.WithTools([]tool.Tool{
 			calculatorTool,
 			weatherTool,
-		},
-	})
+		}),
+	)
 
 	// Create invocation
 	invocation := &agent.Invocation{
@@ -126,6 +191,7 @@ func main() {
 			// Handle assistant content
 			if choice.Message.Content != "" {
 				fmt.Printf("🤖 Assistant: %s\n", choice.Message.Content)
+				break // Break the loop if assistant has content to avoid infinite loop.
 			}
 
 			if choice.Delta.Content != "" {
