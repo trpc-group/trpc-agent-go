@@ -135,6 +135,7 @@ func main() {
 		llmagent.WithModel(llm),
 		llmagent.WithAgentCallbacks(agentCallbacks),
 		llmagent.WithModelCallbacks(modelCallbacks),
+		llmagent.WithToolCallbacks(toolCallbacks),
 		llmagent.WithTools([]tool.Tool{
 			calculatorTool,
 			weatherTool,

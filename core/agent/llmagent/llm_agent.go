@@ -86,6 +86,13 @@ func WithModelCallbacks(callbacks *model.ModelCallbacks) Option {
 	}
 }
 
+// WithToolCallbacks sets the tool callbacks.
+func WithToolCallbacks(callbacks *tool.ToolCallbacks) Option {
+	return func(opts *Options) {
+		opts.ToolCallbacks = callbacks
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Model is the model to use.
@@ -108,6 +115,8 @@ type Options struct {
 	AgentCallbacks *agent.AgentCallbacks
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.ModelCallbacks
+	// ToolCallbacks contains callbacks for tool operations.
+	ToolCallbacks *tool.ToolCallbacks
 }
 
 // LLMAgent is an agent that uses a language model to generate responses.
@@ -124,6 +133,7 @@ type LLMAgent struct {
 	planner        planner.Planner
 	agentCallbacks *agent.AgentCallbacks
 	modelCallbacks *model.ModelCallbacks
+	toolCallbacks  *tool.ToolCallbacks
 }
 
 // New creates a new LLMAgent with the given options.
@@ -198,6 +208,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		planner:        options.Planner,
 		modelCallbacks: options.ModelCallbacks,
 		agentCallbacks: options.AgentCallbacks,
+		toolCallbacks:  options.ToolCallbacks,
 	}
 }
 
@@ -222,6 +233,11 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	// Set model callbacks if available.
 	if invocation.ModelCallbacks == nil && a.modelCallbacks != nil {
 		invocation.ModelCallbacks = a.modelCallbacks
+	}
+
+	// Set tool callbacks if available.
+	if invocation.ToolCallbacks == nil && a.toolCallbacks != nil {
+		invocation.ToolCallbacks = a.toolCallbacks
 	}
 
 	// Run before agent callbacks if they exist.
