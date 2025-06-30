@@ -40,14 +40,12 @@ func main() {
 	// Create an LLMAgent with configuration.
 	llmAgent := llmagent.New(
 		name,
-		llmagent.Options{
-			Model:             modelInstance,
-			Description:       "A helpful AI assistant for demonstrations",
-			Instruction:       "Be helpful, concise, and informative in your responses",
-			SystemPrompt:      "You are a helpful assistant designed to demonstrate the LLMAgent capabilities",
-			GenerationConfig:  genConfig,
-			ChannelBufferSize: 20,
-		},
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A helpful AI assistant for demonstrations"),
+		llmagent.WithInstruction("Be helpful, concise, and informative in your responses"),
+		llmagent.WithSystemPrompt("You are a helpful assistant designed to demonstrate the LLMAgent capabilities"),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithChannelBufferSize(20),
 	)
 
 	// Create an invocation context.

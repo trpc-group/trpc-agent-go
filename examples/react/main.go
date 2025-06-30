@@ -102,16 +102,14 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 	agentName := "react-research-agent"
 	llmAgent := llmagent.New(
 		agentName,
-		llmagent.Options{
-			Model:             modelInstance,
-			Description:       "A research agent that uses React planning to structure its thinking and actions",
-			Instruction:       "You are a helpful research assistant. Use the React planning approach to break down complex questions into manageable steps.",
-			SystemPrompt:      "You have access to search, calculator, and weather tools. Use structured planning to approach each query systematically.",
-			GenerationConfig:  genConfig,
-			ChannelBufferSize: 200,
-			Tools:             []tool.Tool{searchTool, calculatorTool, weatherTool},
-			Planner:           reactPlanner,
-		},
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A research agent that uses React planning to structure its thinking and actions"),
+		llmagent.WithInstruction("You are a helpful research assistant. Use the React planning approach to break down complex questions into manageable steps."),
+		llmagent.WithSystemPrompt("You have access to search, calculator, and weather tools. Use structured planning to approach each query systematically."),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithChannelBufferSize(200),
+		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool, weatherTool}),
+		llmagent.WithPlanner(reactPlanner),
 	)
 
 	// Create runner.
@@ -119,7 +117,6 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 	c.runner = runner.New(
 		appName,
 		llmAgent,
-		runner.Options{},
 	)
 
 	// Setup identifiers.

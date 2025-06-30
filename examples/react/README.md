@@ -116,10 +116,14 @@ The example shows how to integrate the React planner into the agent flow:
 reactPlanner := react.New()
 
 // Add to LLM agent
-llmAgent := llmagent.New(agentName, llmagent.Options{
+llmAgent := llmagent.New(
+    agentName,
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription("Your agent description"),
+    llmagent.WithInstruction("Your agent instruction"),
+    llmagent.WithPlanner(reactPlanner),
     // ... other options
-    Planner: reactPlanner,
-})
+)
 ```
 
 The planner automatically:
