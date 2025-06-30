@@ -25,10 +25,10 @@ const (
 
 	// ErrorToolNotFound is the error message for tool not found.
 	ErrorToolNotFound = "Error: tool not found"
-	// ErrorCallableToolExecution is the error message for unary tool execution failed.
-	ErrorCallableToolExecution = "Error: tool execution failed"
+	// ErrorCallableToolExecution is the error message for callable tool execution failed.
+	ErrorCallableToolExecution = "Error: callable tool execution failed"
 	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
-	ErrorStreamableToolExecution = "Error: tool execution failed"
+	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
 
