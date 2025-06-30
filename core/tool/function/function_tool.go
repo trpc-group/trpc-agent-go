@@ -11,10 +11,10 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )
 
-// UnaryFunctionTool implements the UnaryTool interface for executing functions with arguments.
+// FunctionTool implements the UnaryTool interface for executing functions with arguments.
 // It provides a generic way to wrap any function as a tool that can be called
 // with JSON arguments and returns results.
-type UnaryFunctionTool[I, O any] struct {
+type FunctionTool[I, O any] struct {
 	name         string
 	description  string
 	inputSchema  *tool.Schema
@@ -23,10 +23,10 @@ type UnaryFunctionTool[I, O any] struct {
 	unmarshaler  unmarshaler
 }
 
-// Option is a function that configures a UnaryFunctionTool.
+// Option is a function that configures a FunctionTool.
 type Option func(*functionToolOptions)
 
-// functionToolOptions holds the configuration options for UnaryFunctionTool.
+// functionToolOptions holds the configuration options for FunctionTool.
 type functionToolOptions struct {
 	name        string
 	description string
@@ -47,15 +47,15 @@ func WithDescription(description string) Option {
 	}
 }
 
-// NewUnaryFunctionTool creates and returns a new instance of UnaryFunctionTool with the specified
+// NewFunctionTool creates and returns a new instance of FunctionTool with the specified
 // function implementation and optional configuration.
 // Parameters:
 //   - fn: the function implementation conforming to FuncType.
 //   - opts: optional configuration functions.
 //
 // Returns:
-//   - A pointer to the newly created UnaryFunctionTool.
-func NewUnaryFunctionTool[I, O any](fn func(I) O, opts ...Option) *UnaryFunctionTool[I, O] {
+//   - A pointer to the newly created FunctionTool.
+func NewFunctionTool[I, O any](fn func(I) O, opts ...Option) *FunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
 		unmarshaler: &jsonUnmarshaler{},
@@ -73,7 +73,7 @@ func NewUnaryFunctionTool[I, O any](fn func(I) O, opts ...Option) *UnaryFunction
 	iSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyI))
 	oSchema := itool.GenerateJSONSchema(reflect.TypeOf(emptyO))
 
-	return &UnaryFunctionTool[I, O]{
+	return &FunctionTool[I, O]{
 		name:         options.name,
 		description:  options.description,
 		fn:           fn,
@@ -93,7 +93,7 @@ func NewUnaryFunctionTool[I, O any](fn func(I) O, opts ...Option) *UnaryFunction
 //
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
-func (ft *UnaryFunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byte) (any, error) {
+func (ft *FunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byte) (any, error) {
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (ft *UnaryFunctionTool[I, O]) UnaryCall(ctx context.Context, jsonArgs []byt
 //
 // Returns:
 //   - A Declaration struct containing the tool's metadata.
-func (ft *UnaryFunctionTool[I, O]) Declaration() *tool.Declaration {
+func (ft *FunctionTool[I, O]) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:         ft.name,
 		Description:  ft.description,
@@ -117,7 +117,7 @@ func (ft *UnaryFunctionTool[I, O]) Declaration() *tool.Declaration {
 }
 
 // StreamableFunctionTool implements the UnaryTool interface for executing functions
-// that return streaming results. It extends the basic UnaryFunctionTool to support
+// that return streaming results. It extends the basic FunctionTool to support
 // streaming output through StreamReader.
 type StreamableFunctionTool[I, O any] struct {
 	name         string
@@ -176,13 +176,13 @@ func NewStreamableFunctionTool[I, O any](fn func(I) *tool.StreamReader, opts ...
 // Returns:
 //   - A StreamReader[string] containing JSON-encoded results, or an error.
 func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
-	// UnaryFunctionTool does not support streaming calls, so we return an error.
+	// FunctionTool does not support streaming calls, so we return an error.
 	var input I
 	if err := t.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
 	}
 	if t.fn == nil {
-		return nil, fmt.Errorf("UnaryFunctionTool: %s does not support streaming calls", t.name)
+		return nil, fmt.Errorf("FunctionTool: %s does not support streaming calls", t.name)
 	}
 	return t.fn(input), nil
 }

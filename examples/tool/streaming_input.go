@@ -16,8 +16,8 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
 
-	getWeatherTool := function.NewUnaryFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
-	getPopulationTool := function.NewUnaryFunctionTool(getPopulation, function.WithName("get_population"), function.WithDescription("Get population at the given city"))
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getPopulationTool := function.NewFunctionTool(getPopulation, function.WithName("get_population"), function.WithDescription("Get population at the given city"))
 
 	request := &model.Request{
 		Messages: []model.Message{

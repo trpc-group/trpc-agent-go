@@ -72,8 +72,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := function.NewUnaryFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
-	timeTool := function.NewUnaryFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
+	calculatorTool := function.NewFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
+	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{

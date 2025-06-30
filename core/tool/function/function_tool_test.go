@@ -23,7 +23,7 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	fn := func(args inputArgs) outputArgs {
 		return outputArgs{Result: args.A + args.B}
 	}
-	fTool := function.NewUnaryFunctionTool(fn,
+	fTool := function.NewFunctionTool(fn,
 		function.WithName("SumFunction"),
 		function.WithDescription("Calculates the sum of two integers."))
 	input := inputArgs{A: 2, B: 3}

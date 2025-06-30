@@ -15,7 +15,7 @@ import (
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
-	getWeatherTool := function.NewUnaryFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{
