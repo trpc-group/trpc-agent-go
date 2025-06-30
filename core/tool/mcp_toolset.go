@@ -517,12 +517,6 @@ func (m *mcpSessionManager) isConnected() bool {
 	return m.connected && m.initialized
 }
 
-// basicAuthHandler implements authentication using HTTP basic auth.
-type basicAuthHandler struct {
-	username string
-	password string
-}
-
 // bearerAuthHandler implements authentication using bearer token.
 type bearerAuthHandler struct {
 	token string
@@ -534,11 +528,6 @@ type noopAuthHandler struct{}
 // newAuthHandler creates an appropriate auth handler based on config.
 func newAuthHandler(config *AuthConfig) authHandler {
 	switch config.Type {
-	case AuthTypeBasic:
-		username, _ := config.Credentials["username"].(string)
-		password, _ := config.Credentials["password"].(string)
-		return &basicAuthHandler{username: username, password: password}
-
 	case AuthTypeBearer:
 		token, _ := config.Credentials["token"].(string)
 		return &bearerAuthHandler{token: token}
@@ -546,15 +535,6 @@ func newAuthHandler(config *AuthConfig) authHandler {
 	default:
 		return &noopAuthHandler{}
 	}
-}
-
-// ApplyAuth applies basic authentication to headers.
-func (h *basicAuthHandler) ApplyAuth(headers http.Header) error {
-	if h.username == "" {
-		return fmt.Errorf("basic auth username is required")
-	}
-	headers.Set("Authorization", fmt.Sprintf("Basic %s:%s", h.username, h.password))
-	return nil
 }
 
 // ApplyAuth applies bearer token authentication to headers.

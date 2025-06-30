@@ -1,6 +1,4 @@
 // Package main demonstrates using multiple MCPToolsets for multi-session management.
-// This approach aligns with ADK Python's design where each MCPToolset manages
-// one independent MCP connection/session.
 package main
 
 import (

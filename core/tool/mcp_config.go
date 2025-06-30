@@ -8,12 +8,68 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
+// Transport specifies the transport method: "stdio", "sse", "streamable_http".
 type Transport string
 
+// AuthType defines the authentication method.
+type AuthType string
+
+// MCPErrorCode represents specific MCP error types for better diagnosis.
+type MCPErrorCode string
+
+// FilterMode defines how the filter should behave.
+type FilterMode string
+
+// contextKey is a custom type for context keys to avoid collisions.
+type contextKey string
+
 const (
-	TransportStdio      Transport = "stdio"
-	TransportSSE        Transport = "sse"
+	// TransportStdio is the stdio transport.
+	TransportStdio Transport = "stdio"
+	// TransportSSE is the Server-Sent Events transport.
+	TransportSSE Transport = "sse"
+	// TransportStreamable is the streamable HTTP transport.
 	TransportStreamable Transport = "streamable"
+
+	// AuthTypeNone No authentication.
+	AuthTypeNone AuthType = "none"
+	// AuthTypeBearer Bearer authentication.
+	AuthTypeBearer AuthType = "bearer"
+	// AuthTypeOAuth2 OAuth2 authentication.
+	AuthTypeOAuth2 AuthType = "oauth2"
+
+	FilterModeInclude FilterMode = "include" // Only include listed tools
+	FilterModeExclude FilterMode = "exclude" // Exclude listed tools
+
+	MCPErrorUnknown              MCPErrorCode = "unknown"
+	MCPErrorConnectionFailed     MCPErrorCode = "connection_failed"
+	MCPErrorAuthenticationFailed MCPErrorCode = "authentication_failed"
+	MCPErrorToolNotFound         MCPErrorCode = "tool_not_found"
+	MCPErrorInvalidParameters    MCPErrorCode = "invalid_parameters"
+	MCPErrorMissingParameters    MCPErrorCode = "missing_parameters"
+	MCPErrorTypeValidation       MCPErrorCode = "type_validation"
+	MCPErrorPermissionDenied     MCPErrorCode = "permission_denied"
+	MCPErrorServerError          MCPErrorCode = "server_error"
+	MCPErrorTimeout              MCPErrorCode = "timeout"
+	MCPErrorInvalidResponse      MCPErrorCode = "invalid_response"
+
+	toolContextKey contextKey = "tool_context"
+)
+
+// Default configurations.
+var (
+	defaultRetryConfig = &RetryConfig{
+		Enabled:       true,
+		MaxAttempts:   3,
+		InitialDelay:  100 * time.Millisecond,
+		BackoffFactor: 2.0,
+		MaxDelay:      5 * time.Second,
+	}
+
+	defaultClientInfo = mcp.Implementation{
+		Name:    "trpc-agent-go",
+		Version: "1.0.0",
+	}
 )
 
 // MCPConnectionConfig defines the configuration for connecting to an MCP server.
@@ -21,7 +77,7 @@ type MCPConnectionConfig struct {
 	// Transport specifies the transport method: "stdio", "sse", "streamable_http".
 	Transport Transport `json:"transport"`
 
-	// HTTP/SSE configuration.
+	// Streamable/SSE configuration.
 	ServerURL string            `json:"server_url,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 
@@ -39,6 +95,30 @@ type MCPConnectionConfig struct {
 	Extensions map[string]interface{} `json:"extensions,omitempty"`
 }
 
+// RetryConfig configures retry behavior for MCP operations.
+type RetryConfig struct {
+	// Enabled determines whether retry is enabled.
+	Enabled bool `json:"enabled"`
+	// MaxAttempts specifies the maximum number of retry attempts.
+	MaxAttempts int `json:"max_attempts"`
+	// InitialDelay is the initial delay before the first retry.
+	InitialDelay time.Duration `json:"initial_delay"`
+	// BackoffFactor is the factor by which the delay increases after each retry.
+	BackoffFactor float64 `json:"backoff_factor"`
+	// MaxDelay is the maximum delay between retries.
+	MaxDelay time.Duration `json:"max_delay"`
+}
+
+// AuthConfig configures authentication for MCP connections.
+type AuthConfig struct {
+	// Type specifies the authentication type.
+	Type AuthType `json:"type"`
+	// Credentials contains authentication credentials.
+	Credentials map[string]interface{} `json:"credentials"`
+	// Options contains additional authentication options.
+	Options map[string]interface{} `json:"options"`
+}
+
 // mcpToolSetConfig holds internal configuration for MCPToolSet.
 type mcpToolSetConfig struct {
 	connectionConfig MCPConnectionConfig
@@ -51,12 +131,49 @@ type mcpToolSetConfig struct {
 // MCPToolSetOption is a function type for configuring MCPToolSet.
 type MCPToolSetOption func(*mcpToolSetConfig)
 
-// contextKey is a custom type for context keys to avoid collisions.
-type contextKey string
+// WithRetry configures retry behavior for MCP operations.
+func WithRetry(config RetryConfig) MCPToolSetOption {
+	return func(c *mcpToolSetConfig) {
+		c.retryConfig = &config
+	}
+}
 
-const (
-	toolContextKey contextKey = "tool_context"
-)
+// WithAuth configures authentication for MCP connections.
+func WithAuth(config AuthConfig) MCPToolSetOption {
+	return func(c *mcpToolSetConfig) {
+		c.authConfig = &config
+	}
+}
+
+// WithToolFilter configures tool filtering.
+func WithToolFilter(filter ToolFilter) MCPToolSetOption {
+	return func(c *mcpToolSetConfig) {
+		c.toolFilter = filter
+	}
+}
+
+// WithAutoRefresh configures automatic tool list refresh.
+func WithAutoRefresh(interval time.Duration) MCPToolSetOption {
+	return func(c *mcpToolSetConfig) {
+		c.autoRefresh = interval
+	}
+}
+
+// ToolContext contains context information for tool execution.
+type ToolContext struct {
+	// AgentID is the unique identifier for the agent.
+	AgentID string `json:"agent_id"`
+	// SessionID is the unique identifier for the session.
+	SessionID string `json:"session_id"`
+	// UserID is the unique identifier for the user.
+	UserID string `json:"user_id"`
+	// RequestID is the unique identifier for the request.
+	RequestID string `json:"request_id"`
+	// Permissions contains the list of permissions for this context.
+	Permissions []string `json:"permissions"`
+	// Metadata contains additional metadata for the context.
+	Metadata map[string]interface{} `json:"metadata"`
+}
 
 // WithToolContext adds a ToolContext to the given context.
 func WithToolContext(ctx context.Context, toolCtx *ToolContext) context.Context {
@@ -70,45 +187,17 @@ func GetToolContext(ctx context.Context) (*ToolContext, bool) {
 	return toolCtx, ok
 }
 
-// RetryConfig configures retry behavior for MCP operations.
-type RetryConfig struct {
-	Enabled       bool          `json:"enabled"`
-	MaxAttempts   int           `json:"max_attempts"`
-	InitialDelay  time.Duration `json:"initial_delay"`
-	BackoffFactor float64       `json:"backoff_factor"`
-	MaxDelay      time.Duration `json:"max_delay"`
-}
-
-// AuthConfig configures authentication for MCP connections.
-type AuthConfig struct {
-	Type        AuthType               `json:"type"`
-	Credentials map[string]interface{} `json:"credentials"`
-	Options     map[string]interface{} `json:"options"`
-}
-
-// AuthType defines the authentication method.
-type AuthType string
-
-const (
-	AuthTypeNone   AuthType = "none"
-	AuthTypeBearer AuthType = "bearer"
-	AuthTypeBasic  AuthType = "basic"
-	AuthTypeOAuth2 AuthType = "oauth2"
-)
-
-// ToolContext contains context information for tool execution.
-type ToolContext struct {
-	AgentID     string                 `json:"agent_id"`
-	SessionID   string                 `json:"session_id"`
-	UserID      string                 `json:"user_id"`
-	RequestID   string                 `json:"request_id"`
-	Permissions []string               `json:"permissions"`
-	Metadata    map[string]interface{} `json:"metadata"`
-}
-
 // ToolFilter defines the interface for filtering tools.
 type ToolFilter interface {
 	Filter(ctx context.Context, tools []MCPToolInfo) []MCPToolInfo
+}
+
+// MCPToolInfo contains metadata about an MCP tool.
+type MCPToolInfo struct {
+	// Name is the name of the tool.
+	Name string `json:"name"`
+	// Description is a description of what the tool does.
+	Description string `json:"description"`
 }
 
 // ToolFilterFunc is a function type that implements ToolFilter interface.
@@ -121,17 +210,11 @@ func (f ToolFilterFunc) Filter(ctx context.Context, tools []MCPToolInfo) []MCPTo
 
 // ToolNameFilter filters tools by a list of allowed tool names.
 type ToolNameFilter struct {
+	// AllowedNames is the list of tool names to filter by.
 	AllowedNames []string
-	Mode         FilterMode
+	// Mode specifies whether to include or exclude the listed names.
+	Mode FilterMode
 }
-
-// FilterMode defines how the filter should behave.
-type FilterMode string
-
-const (
-	FilterModeInclude FilterMode = "include" // Only include listed tools
-	FilterModeExclude FilterMode = "exclude" // Exclude listed tools
-)
 
 // Filter implements the ToolFilter interface.
 func (f *ToolNameFilter) Filter(ctx context.Context, tools []MCPToolInfo) []MCPToolInfo {
@@ -170,6 +253,7 @@ func (f *ToolNameFilter) Filter(ctx context.Context, tools []MCPToolInfo) []MCPT
 
 // CompositeFilter combines multiple filters using AND logic.
 type CompositeFilter struct {
+	// Filters is the list of filters to combine.
 	Filters []ToolFilter
 }
 
@@ -184,9 +268,12 @@ func (f *CompositeFilter) Filter(ctx context.Context, tools []MCPToolInfo) []MCP
 
 // PatternFilter filters tools using pattern matching on names and descriptions.
 type PatternFilter struct {
-	NamePatterns        []string
+	// NamePatterns is the list of regex patterns to match against tool names.
+	NamePatterns []string
+	// DescriptionPatterns is the list of regex patterns to match against descriptions.
 	DescriptionPatterns []string
-	Mode                FilterMode
+	// Mode specifies whether to include or exclude matches.
+	Mode FilterMode
 }
 
 // Filter implements the ToolFilter interface.
@@ -237,58 +324,6 @@ func (f *PatternFilter) matchesTool(tool MCPToolInfo) bool {
 
 	return false
 }
-
-// MCPToolInfo contains metadata about an MCP tool.
-type MCPToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-// WithRetry configures retry behavior for MCP operations.
-func WithRetry(config RetryConfig) MCPToolSetOption {
-	return func(c *mcpToolSetConfig) {
-		c.retryConfig = &config
-	}
-}
-
-// WithAuth configures authentication for MCP connections.
-func WithAuth(config AuthConfig) MCPToolSetOption {
-	return func(c *mcpToolSetConfig) {
-		c.authConfig = &config
-	}
-}
-
-// WithToolFilter configures tool filtering.
-func WithToolFilter(filter ToolFilter) MCPToolSetOption {
-	return func(c *mcpToolSetConfig) {
-		c.toolFilter = filter
-	}
-}
-
-// WithAutoRefresh configures automatic tool list refresh.
-func WithAutoRefresh(interval time.Duration) MCPToolSetOption {
-	return func(c *mcpToolSetConfig) {
-		c.autoRefresh = interval
-	}
-}
-
-// Default configurations
-var (
-	defaultRetryConfig = &RetryConfig{
-		Enabled:       true,
-		MaxAttempts:   3,
-		InitialDelay:  100 * time.Millisecond,
-		BackoffFactor: 2.0,
-		MaxDelay:      5 * time.Second,
-	}
-
-	defaultClientInfo = mcp.Implementation{
-		Name:    "trpc-agent-go",
-		Version: "1.0.0",
-	}
-)
-
-// Convenience functions for creating tool filters
 
 // NewIncludeFilter creates a filter that only includes specified tool names.
 func NewIncludeFilter(toolNames ...string) ToolFilter {
@@ -347,31 +382,20 @@ var NoFilter ToolFilter = ToolFilterFunc(func(ctx context.Context, tools []MCPTo
 	return tools
 })
 
-// MCPErrorCode represents specific MCP error types for better diagnosis.
-type MCPErrorCode string
-
-const (
-	MCPErrorUnknown              MCPErrorCode = "unknown"
-	MCPErrorConnectionFailed     MCPErrorCode = "connection_failed"
-	MCPErrorAuthenticationFailed MCPErrorCode = "authentication_failed"
-	MCPErrorToolNotFound         MCPErrorCode = "tool_not_found"
-	MCPErrorInvalidParameters    MCPErrorCode = "invalid_parameters"
-	MCPErrorMissingParameters    MCPErrorCode = "missing_parameters"
-	MCPErrorTypeValidation       MCPErrorCode = "type_validation"
-	MCPErrorPermissionDenied     MCPErrorCode = "permission_denied"
-	MCPErrorServerError          MCPErrorCode = "server_error"
-	MCPErrorTimeout              MCPErrorCode = "timeout"
-	MCPErrorInvalidResponse      MCPErrorCode = "invalid_response"
-)
-
 // MCPError represents an enhanced error with diagnostic information.
 type MCPError struct {
-	Code        MCPErrorCode           `json:"code"`
-	Message     string                 `json:"message"`
-	OriginalErr error                  `json:"-"`
-	Context     map[string]interface{} `json:"context,omitempty"`
-	Suggestions []string               `json:"suggestions,omitempty"`
-	Details     *ErrorDetails          `json:"details,omitempty"`
+	// Code is the specific MCP error code.
+	Code MCPErrorCode `json:"code"`
+	// Message is the error message.
+	Message string `json:"message"`
+	// OriginalErr is the original error that caused this MCP error.
+	OriginalErr error `json:"-"`
+	// Context contains additional context information about the error.
+	Context map[string]interface{} `json:"context,omitempty"`
+	// Suggestions contains possible solutions or next steps.
+	Suggestions []string `json:"suggestions,omitempty"`
+	// Details contains detailed diagnostic information.
+	Details *ErrorDetails `json:"details,omitempty"`
 }
 
 // Error implements the error interface.
@@ -389,31 +413,50 @@ func (e *MCPError) Unwrap() error {
 
 // ErrorDetails contains detailed diagnostic information.
 type ErrorDetails struct {
-	UserFriendlyMessage string                 `json:"user_friendly_message"`
-	TechnicalDetails    string                 `json:"technical_details"`
-	ExpectedParameters  []ParameterInfo        `json:"expected_parameters,omitempty"`
-	ProvidedParameters  map[string]interface{} `json:"provided_parameters,omitempty"`
-	AvailableTools      []string               `json:"available_tools,omitempty"`
-	ServerResponse      interface{}            `json:"server_response,omitempty"`
+	// UserFriendlyMessage is a message suitable for display to end users.
+	UserFriendlyMessage string `json:"user_friendly_message"`
+	// TechnicalDetails contains technical information for debugging.
+	TechnicalDetails string `json:"technical_details"`
+	// ExpectedParameters describes the parameters that were expected.
+	ExpectedParameters []ParameterInfo `json:"expected_parameters,omitempty"`
+	// ProvidedParameters contains the parameters that were actually provided.
+	ProvidedParameters map[string]interface{} `json:"provided_parameters,omitempty"`
+	// AvailableTools lists the tools that are available.
+	AvailableTools []string `json:"available_tools,omitempty"`
+	// ServerResponse contains the raw response from the server.
+	ServerResponse interface{} `json:"server_response,omitempty"`
 }
 
 // ParameterInfo describes expected parameter information.
 type ParameterInfo struct {
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
-	Required    bool        `json:"required"`
-	Description string      `json:"description"`
-	Example     interface{} `json:"example,omitempty"`
+	// Name is the name of the parameter.
+	Name string `json:"name"`
+	// Type is the data type of the parameter.
+	Type string `json:"type"`
+	// Required indicates whether the parameter is required.
+	Required bool `json:"required"`
+	// Description explains what the parameter is for.
+	Description string `json:"description"`
+	// Example provides an example value for the parameter.
+	Example interface{} `json:"example,omitempty"`
 }
 
 // DiagnosticInfo contains context information for error diagnosis.
 type DiagnosticInfo struct {
-	ToolName           string                 `json:"tool_name"`
-	Operation          string                 `json:"operation"`
-	ProvidedArgs       map[string]interface{} `json:"provided_args"`
-	ExpectedSchema     interface{}            `json:"expected_schema"`
-	AvailableTools     []string               `json:"available_tools"`
-	ConnectionInfo     map[string]interface{} `json:"connection_info"`
-	SessionContext     *ToolContext           `json:"session_context"`
-	ServerCapabilities []string               `json:"server_capabilities"`
+	// ToolName is the name of the tool being diagnosed.
+	ToolName string `json:"tool_name"`
+	// Operation is the operation that was being performed.
+	Operation string `json:"operation"`
+	// ProvidedArgs contains the arguments that were provided.
+	ProvidedArgs map[string]interface{} `json:"provided_args"`
+	// ExpectedSchema contains the expected parameter schema.
+	ExpectedSchema interface{} `json:"expected_schema"`
+	// AvailableTools lists the tools that are available.
+	AvailableTools []string `json:"available_tools"`
+	// ConnectionInfo contains information about the connection.
+	ConnectionInfo map[string]interface{} `json:"connection_info"`
+	// SessionContext contains the session context.
+	SessionContext *ToolContext `json:"session_context"`
+	// ServerCapabilities lists the capabilities of the server.
+	ServerCapabilities []string `json:"server_capabilities"`
 }
