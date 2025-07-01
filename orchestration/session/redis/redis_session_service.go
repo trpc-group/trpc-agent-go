@@ -34,6 +34,7 @@ type ServiceOpts struct {
 	redisClient       redis.UniversalClient
 }
 
+// ServiceOption is the option for the redis session service.
 type ServiceOption func(*ServiceOpts)
 
 // WithSessionEventLimit sets the limit of events in a session.

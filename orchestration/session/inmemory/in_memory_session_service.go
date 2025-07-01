@@ -49,8 +49,10 @@ type SessionService struct {
 	opts ServiceOpts
 }
 
+// ServiceOption is the option for the in-memory session service.
 type ServiceOption func(*ServiceOpts)
 
+// WithSessionEventLimit sets the limit of events in a session.
 func WithSessionEventLimit(limit int) func(*ServiceOpts) {
 	return func(opts *ServiceOpts) {
 		opts.sessionEventLimit = limit

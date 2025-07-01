@@ -13,8 +13,11 @@ import (
 type StateMap map[string][]byte
 
 var (
-	ErrAppNameRequired   = errors.New("appName is required")
-	ErrUserIDRequired    = errors.New("userID is required")
+	// ErrAppNameRequired is the error for app name required.
+	ErrAppNameRequired = errors.New("appName is required")
+	// ErrUserIDRequired is the error for user id required.
+	ErrUserIDRequired = errors.New("userID is required")
+	// ErrSessionIDRequired is the error for session id required.
 	ErrSessionIDRequired = errors.New("sessionID is required")
 )
 
