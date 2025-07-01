@@ -146,6 +146,29 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
+		// Run after model callbacks if they exist.
+		if invocation.ModelCallbacks != nil {
+			customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+			if err != nil {
+				log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					model.ErrorTypeFlowError,
+					err.Error(),
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+					return lastEvent, ctx.Err()
+				}
+				return lastEvent, err
+			}
+			if customResponse != nil {
+				response = customResponse
+			}
+		}
+
 		// Create event from response using the clean constructor.
 		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
 
@@ -280,58 +303,7 @@ func (f *Flow) callLLM(
 		return nil, err
 	}
 
-	// If we have after model callbacks, we need to wrap the response channel.
-	if invocation.ModelCallbacks != nil {
-		return f.wrapResponseChannel(ctx, invocation, responseChan), nil
-	}
-
 	return responseChan, nil
-}
-
-// wrapResponseChannel wraps the response channel to apply after model callbacks.
-func (f *Flow) wrapResponseChannel(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	originalChan <-chan *model.Response,
-) <-chan *model.Response {
-	wrappedChan := make(chan *model.Response, f.channelBufferSize)
-
-	go func() {
-		defer close(wrappedChan)
-
-		for response := range originalChan {
-			// Run after model callbacks if they exist.
-			if invocation.ModelCallbacks != nil {
-				customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
-				if err != nil {
-					log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-					// Send error response and then drain originalChan to prevent producer blocking.
-					errorResponse := &model.Response{
-						Error: &model.ResponseError{
-							Type:    model.ErrorTypeFlowError,
-							Message: err.Error(),
-						},
-					}
-					select {
-					case wrappedChan <- errorResponse:
-					case <-ctx.Done():
-					}
-					// Drain originalChan to avoid producer goroutine blocking.
-					for range originalChan {
-						// Drain.
-					}
-					return
-				}
-				if customResponse != nil {
-					wrappedChan <- customResponse
-					continue
-				}
-			}
-			wrappedChan <- response
-		}
-	}()
-
-	return wrappedChan
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
