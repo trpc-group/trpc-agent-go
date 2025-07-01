@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -101,4 +103,163 @@ func TestFlow_Interface(t *testing.T) {
 
 	// Simple compile test
 	var _ flow.Flow = f
+}
+
+func TestModelCallbacks_BeforeModel_Skip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+		return &model.Response{ID: "skip-response"}, nil // Return custom response to skip model call
+	})
+
+	llmFlow := New(nil, nil, Options{})
+	invocation := &agent.Invocation{
+		InvocationID:   "test-invocation",
+		AgentName:      "test-agent",
+		ModelCallbacks: modelCallbacks,
+		Model: &mockModel{
+			responses: []*model.Response{{ID: "should-not-be-called"}},
+		},
+	}
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+		// Receive the first event and cancel ctx to prevent deadlock.
+		cancel()
+		break
+	}
+	require.Equal(t, 1, len(events))
+	require.Equal(t, "skip-response", events[0].Response.ID)
+}
+
+func TestModelCallbacks_BeforeModel_CustomResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+		return &model.Response{ID: "custom-before"}, nil
+	})
+
+	llmFlow := New(nil, nil, Options{})
+	invocation := &agent.Invocation{
+		InvocationID:   "test-invocation",
+		AgentName:      "test-agent",
+		ModelCallbacks: modelCallbacks,
+		Model: &mockModel{
+			responses: []*model.Response{{ID: "should-not-be-called"}},
+		},
+	}
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+		// Receive the first event and cancel ctx to prevent deadlock.
+		cancel()
+		break
+	}
+	require.Equal(t, 1, len(events))
+	require.Equal(t, "custom-before", events[0].Response.ID)
+}
+
+func TestModelCallbacks_BeforeModel_Error(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+		return nil, errors.New("before error")
+	})
+
+	llmFlow := New(nil, nil, Options{})
+	invocation := &agent.Invocation{
+		InvocationID:   "test-invocation",
+		AgentName:      "test-agent",
+		ModelCallbacks: modelCallbacks,
+		Model: &mockModel{
+			responses: []*model.Response{{ID: "should-not-be-called"}},
+		},
+	}
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+		// Receive the first error event and cancel ctx to prevent deadlock.
+		if evt.Error != nil && evt.Error.Message == "before error" {
+			cancel()
+			break
+		}
+	}
+	require.Equal(t, 1, len(events))
+	require.Equal(t, "before error", events[0].Error.Message)
+}
+
+func TestModelCallbacks_AfterModel_Override(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks.RegisterAfterModel(func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+		return &model.Response{ID: "after-override"}, nil
+	})
+
+	llmFlow := New(nil, nil, Options{})
+	invocation := &agent.Invocation{
+		InvocationID:   "test-invocation",
+		AgentName:      "test-agent",
+		ModelCallbacks: modelCallbacks,
+		Model: &mockModel{
+			responses: []*model.Response{{ID: "original"}},
+		},
+	}
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+		// Receive the first event and cancel ctx to prevent deadlock.
+		cancel()
+		break
+	}
+	require.Equal(t, 1, len(events))
+	require.Equal(t, "after-override", events[0].Response.ID)
+}
+
+func TestModelCallbacks_AfterModel_Error(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks.RegisterAfterModel(func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+		return nil, errors.New("after error")
+	})
+
+	llmFlow := New(nil, nil, Options{})
+	invocation := &agent.Invocation{
+		InvocationID:   "test-invocation",
+		AgentName:      "test-agent",
+		ModelCallbacks: modelCallbacks,
+		Model: &mockModel{
+			responses: []*model.Response{{ID: "original"}},
+		},
+	}
+	eventChan, err := llmFlow.Run(ctx, invocation)
+	require.NoError(t, err)
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+		// Receive the first error event and cancel ctx to prevent deadlock.
+		if evt.Error != nil && evt.Error.Message == "after error" {
+			cancel()
+			break
+		}
+	}
+	require.Equal(t, 1, len(events))
+	require.Equal(t, "after error", events[0].Error.Message)
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -111,9 +112,7 @@ func TestCycleAgent_Run_WithMaxIterations(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := cycleAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("CycleAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect events.
 	var events []*event.Event
@@ -122,17 +121,11 @@ func TestCycleAgent_Run_WithMaxIterations(t *testing.T) {
 	}
 
 	// Should run 2 iterations * 2 agents = 4 events.
-	if len(events) != 4 {
-		t.Errorf("Expected 4 events, got %d", len(events))
-	}
+	require.Equal(t, 4, len(events))
 
 	// Each agent should run exactly maxIter times.
-	if agent1Count != maxIter {
-		t.Errorf("Expected agent-1 to run %d times, got %d", maxIter, agent1Count)
-	}
-	if agent2Count != maxIter {
-		t.Errorf("Expected agent-2 to run %d times, got %d", maxIter, agent2Count)
-	}
+	require.Equal(t, maxIter, agent1Count)
+	require.Equal(t, maxIter, agent2Count)
 }
 
 func TestCycleAgent_Run_WithEscalation(t *testing.T) {
@@ -163,9 +156,7 @@ func TestCycleAgent_Run_WithEscalation(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := cycleAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("CycleAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect events.
 	var events []*event.Event
@@ -174,23 +165,15 @@ func TestCycleAgent_Run_WithEscalation(t *testing.T) {
 	}
 
 	// Should have events from both agents in first iteration (escalation stops loop).
-	if len(events) != 2 {
-		t.Errorf("Expected 2 events, got %d", len(events))
-	}
+	require.Equal(t, 2, len(events))
 
 	// Should run only 1 iteration due to escalation.
-	if agent1Count != 1 {
-		t.Errorf("Expected agent-1 to run 1 time, got %d", agent1Count)
-	}
-	if agent2Count != 1 {
-		t.Errorf("Expected agent-2 to run 1 time, got %d", agent2Count)
-	}
+	require.Equal(t, 1, agent1Count)
+	require.Equal(t, 1, agent2Count)
 
 	// Last event should be error event.
 	lastEvent := events[len(events)-1]
-	if lastEvent.Error == nil {
-		t.Error("Expected last event to be error event")
-	}
+	require.NotNil(t, lastEvent.Error)
 }
 
 func TestCycleAgent_Run_NoMaxIterations(t *testing.T) {
@@ -227,9 +210,7 @@ func TestCycleAgent_Run_NoMaxIterations(t *testing.T) {
 	defer cancel()
 
 	eventChan, err := cycleAgent.Run(ctx, invocation)
-	if err != nil {
-		t.Fatalf("CycleAgent.Run() failed: %v", err)
-	}
+	require.NoError(t, err)
 
 	// Collect events.
 	var events []*event.Event
@@ -242,14 +223,10 @@ func TestCycleAgent_Run_NoMaxIterations(t *testing.T) {
 	// On 3rd iteration, agent2 will escalate instead of normal event.
 	triggerAfter := 3
 	expectedEvents := triggerAfter * 2 // 3 iterations * 2 agents = 6 events total.
-	if len(events) != expectedEvents {
-		t.Errorf("Expected %d events, got %d", expectedEvents, len(events))
-	}
+	require.Equal(t, expectedEvents, len(events))
 
 	// agent1 should run triggerAfter times.
-	if agent1Count != triggerAfter {
-		t.Errorf("Expected agent-1 to run %d times, got %d", triggerAfter, agent1Count)
-	}
+	require.Equal(t, triggerAfter, agent1Count)
 }
 
 // conditionalMockAgent escalates when a condition is met.
@@ -348,56 +325,89 @@ func TestCycleAgent_Run_SubAgentError(t *testing.T) {
 	}
 
 	// Should have event from agent1 + error event.
-	if len(events) != 2 {
-		t.Errorf("Expected 2 events, got %d", len(events))
-	}
+	require.Equal(t, 2, len(events))
 
 	// Last event should be error.
 	lastEvent := events[len(events)-1]
-	if lastEvent.Error == nil {
-		t.Error("Expected error event")
-	}
+	require.NotNil(t, lastEvent.Error)
 }
 
 func TestCycleAgent_ShouldEscalate(t *testing.T) {
 	cycleAgent := New(Options{Name: "test"})
 
 	// Test nil event.
-	if cycleAgent.shouldEscalate(nil) {
-		t.Error("Nil event should not escalate")
-	}
+	require.False(t, cycleAgent.shouldEscalate(nil))
 
 	// Test normal event.
 	normalEvent := event.New("test", "test")
-	if cycleAgent.shouldEscalate(normalEvent) {
-		t.Error("Normal event should not escalate")
-	}
+	require.False(t, cycleAgent.shouldEscalate(normalEvent))
 
 	// Test error event.
 	errorEvent := event.NewErrorEvent("test", "test", model.ErrorTypeFlowError, "test error")
-	if !cycleAgent.shouldEscalate(errorEvent) {
-		t.Error("Error event should escalate")
-	}
+	require.True(t, cycleAgent.shouldEscalate(errorEvent))
 
 	// Test done error event.
 	doneErrorEvent := event.New("test", "test")
 	doneErrorEvent.Object = model.ObjectTypeError
 	doneErrorEvent.Done = true
-	if !cycleAgent.shouldEscalate(doneErrorEvent) {
-		t.Error("Done error event should escalate")
-	}
+	require.True(t, cycleAgent.shouldEscalate(doneErrorEvent))
 }
 
 func TestCycleAgent_ChannelBufferSize(t *testing.T) {
 	// Test default.
 	agent1 := New(Options{Name: "test1"})
-	if agent1.channelBufferSize != defaultChannelBufferSize {
-		t.Errorf("Expected default size %d, got %d", defaultChannelBufferSize, agent1.channelBufferSize)
-	}
+	require.Equal(t, defaultChannelBufferSize, agent1.channelBufferSize)
 
 	// Test custom.
 	agent2 := New(Options{Name: "test2", ChannelBufferSize: 100})
-	if agent2.channelBufferSize != 100 {
-		t.Errorf("Expected size 100, got %d", agent2.channelBufferSize)
+	require.Equal(t, 100, agent2.channelBufferSize)
+}
+
+func TestCycleAgent_WithCallbacks(t *testing.T) {
+	// Create agent callbacks.
+	callbacks := agent.NewAgentCallbacks()
+
+	// Test before agent callback that skips execution.
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+		if invocation.Message.Content == "skip" {
+			return nil, nil
+		}
+		return nil, nil
+	})
+
+	// Create cycle agent with callbacks.
+	maxIterations := 3
+	cycleAgent := New(Options{
+		Name:           "test-cycle-agent",
+		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
+		MaxIterations:  &maxIterations,
+		AgentCallbacks: callbacks,
+	})
+
+	// Test skip execution.
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation-skip",
+		AgentName:    "test-cycle-agent",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "skip",
+		},
+	}
+
+	ctx := context.Background()
+	eventChan, err := cycleAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+
+	// Should not receive any events since execution was skipped.
+	// Wait a bit to ensure no events are sent.
+	time.Sleep(50 * time.Millisecond)
+
+	// Check if channel is closed (no events sent).
+	select {
+	case evt, ok := <-eventChan:
+		require.False(t, ok, "Expected no events, but received: %v", evt)
+		// If ok is false, channel is closed which is expected.
+	default:
+		// Channel is still open, which means no events were sent (expected).
 	}
 }
