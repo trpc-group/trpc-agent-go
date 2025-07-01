@@ -181,3 +181,20 @@ func (a *ParallelAgent) Tools() []tool.Tool {
 func (a *ParallelAgent) Name() string {
 	return a.name
 }
+
+// SubAgents implements the agent.Agent interface.
+// It returns the list of sub-agents available to this agent.
+func (a *ParallelAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
+
+// FindSubAgent implements the agent.Agent interface.
+// It finds a sub-agent by name and returns nil if not found.
+func (a *ParallelAgent) FindSubAgent(name string) agent.Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Name() == name {
+			return subAgent
+		}
+	}
+	return nil
+}

@@ -27,6 +27,16 @@ func (m *mockAgent) Name() string {
 	return m.name
 }
 
+// SubAgents implements the agent.Agent interface for testing.
+func (m *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if m.shouldError {
 		return nil, errors.New("mock agent error")
@@ -250,6 +260,16 @@ type conditionalMockAgent struct {
 
 func (m *conditionalMockAgent) Name() string {
 	return m.name
+}
+
+// SubAgents implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
 }
 
 func (m *conditionalMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {

@@ -34,20 +34,20 @@ type Response struct {
 
 // Tool implements the transfer_to_agent functionality.
 type Tool struct {
-	agentProvider agent.SubAgentProvider
+	agent agent.Agent
 }
 
 // New creates a new transfer_to_agent tool.
-func New(agentProvider agent.SubAgentProvider) *Tool {
+func New(a agent.Agent) *Tool {
 	return &Tool{
-		agentProvider: agentProvider,
+		agent: a,
 	}
 }
 
 // Declaration implements the tool.Tool interface.
 func (t *Tool) Declaration() *tool.Declaration {
-	// Get available agent names from the provider.
-	subAgents := t.agentProvider.SubAgents()
+	// Get available agent names from the agent.
+	subAgents := t.agent.SubAgents()
 	agentNames := make([]string, len(subAgents))
 	for i, subAgent := range subAgents {
 		agentNames[i] = subAgent.Name()
@@ -91,9 +91,9 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	}
 
 	// Find the target agent.
-	targetAgent := t.agentProvider.FindSubAgent(req.AgentName)
+	targetAgent := t.agent.FindSubAgent(req.AgentName)
 	if targetAgent == nil {
-		subAgents := t.agentProvider.SubAgents()
+		subAgents := t.agent.SubAgents()
 		availableAgents := make([]string, len(subAgents))
 		for i, subAgent := range subAgents {
 			availableAgents[i] = subAgent.Name()

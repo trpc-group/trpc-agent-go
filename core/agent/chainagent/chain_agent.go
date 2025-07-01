@@ -116,3 +116,20 @@ func (a *ChainAgent) Tools() []tool.Tool {
 func (a *ChainAgent) Name() string {
 	return a.name
 }
+
+// SubAgents implements the agent.Agent interface.
+// It returns the list of sub-agents available to this agent.
+func (a *ChainAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
+
+// FindSubAgent implements the agent.Agent interface.
+// It finds a sub-agent by name and returns nil if not found.
+func (a *ChainAgent) FindSubAgent(name string) agent.Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Name() == name {
+			return subAgent
+		}
+	}
+	return nil
+}

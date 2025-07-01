@@ -20,12 +20,9 @@ type Agent interface {
 
 	// Name returns the name of the agent.
 	Name() string
-}
 
-// SubAgentProvider defines the interface for agents that support sub-agents.
-// This interface allows for agent delegation and transfer functionality.
-type SubAgentProvider interface {
 	// SubAgents returns the list of sub-agents available to this agent.
+	// Returns empty slice if no sub-agents are available.
 	SubAgents() []Agent
 
 	// FindSubAgent finds a sub-agent by name.

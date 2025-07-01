@@ -10,16 +10,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
-// mockAgentProvider implements agent.SubAgentProvider for testing.
-type mockAgentProvider struct {
+// mockAgent implements agent.Agent for testing.
+type mockAgent struct {
+	name      string
 	subAgents []agent.Agent
 }
 
-func (m *mockAgentProvider) SubAgents() []agent.Agent {
+func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockAgent) Name() string {
+	return m.name
+}
+
+func (m *mockAgent) SubAgents() []agent.Agent {
 	return m.subAgents
 }
 
-func (m *mockAgentProvider) FindSubAgent(name string) agent.Agent {
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
 	for _, subAgent := range m.subAgents {
 		if subAgent.Name() == name {
 			return subAgent
@@ -47,11 +62,19 @@ func (m *mockSubAgent) Name() string {
 	return m.name
 }
 
+func (m *mockSubAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *mockSubAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
 func TestTransferTool_Declaration(t *testing.T) {
 	calc := &mockSubAgent{name: "calculator"}
-	provider := &mockAgentProvider{subAgents: []agent.Agent{calc}}
+	mainAgent := &mockAgent{name: "main", subAgents: []agent.Agent{calc}}
 
-	tool := New(provider)
+	tool := New(mainAgent)
 	declaration := tool.Declaration()
 
 	if declaration.Name != "transfer_to_agent" {
@@ -61,9 +84,9 @@ func TestTransferTool_Declaration(t *testing.T) {
 
 func TestTransferTool_Call_Success(t *testing.T) {
 	calc := &mockSubAgent{name: "calculator"}
-	provider := &mockAgentProvider{subAgents: []agent.Agent{calc}}
+	mainAgent := &mockAgent{name: "main", subAgents: []agent.Agent{calc}}
 
-	tool := New(provider)
+	tool := New(mainAgent)
 
 	request := Request{AgentName: "calculator"}
 	requestBytes, _ := json.Marshal(request)
