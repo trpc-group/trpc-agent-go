@@ -1,3 +1,4 @@
+// Package llmagent provides an LLM agent implementation.
 package llmagent
 
 import (
