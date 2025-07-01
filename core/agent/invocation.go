@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
@@ -39,6 +40,12 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
+	// AgentCallbacks contains callbacks for agent operations.
+	AgentCallbacks *AgentCallbacks
+	// ModelCallbacks contains callbacks for model operations.
+	ModelCallbacks *model.ModelCallbacks
+	// ToolCallbacks contains callbacks for tool operations.
+	ToolCallbacks *tool.ToolCallbacks
 }
 
 type invocationKey struct{}

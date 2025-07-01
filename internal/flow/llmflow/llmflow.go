@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -24,10 +25,10 @@ const (
 
 	// ErrorToolNotFound is the error message for tool not found.
 	ErrorToolNotFound = "Error: tool not found"
-	// ErrorCallableToolExecution is the error message for unary tool execution failed.
-	ErrorCallableToolExecution = "Error: tool execution failed"
+	// ErrorCallableToolExecution is the error message for callable tool execution failed.
+	ErrorCallableToolExecution = "Error: callable tool execution failed"
 	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
-	ErrorStreamableToolExecution = "Error: tool execution failed"
+	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
 
@@ -145,6 +146,29 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
+		// Run after model callbacks if they exist.
+		if invocation.ModelCallbacks != nil {
+			customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+			if err != nil {
+				log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					model.ErrorTypeFlowError,
+					err.Error(),
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+					return lastEvent, ctx.Err()
+				}
+				return lastEvent, err
+			}
+			if customResponse != nil {
+				response = customResponse
+			}
+		}
+
 		// Create event from response using the clean constructor.
 		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
 
@@ -155,6 +179,10 @@ func (f *Flow) runOneStep(
 		select {
 		case eventChan <- llmEvent:
 		case <-ctx.Done():
+			return lastEvent, ctx.Err()
+		}
+		// Check if wrappedChan is closed, prevent infinite writing.
+		if ctx.Err() != nil {
 			return lastEvent, ctx.Err()
 		}
 
@@ -186,17 +214,18 @@ func (f *Flow) runOneStep(
 				case <-ctx.Done():
 					return lastEvent, ctx.Err()
 				}
-
+				// Check if wrappedChan is closed, prevent infinite writing.
+				if ctx.Err() != nil {
+					return lastEvent, ctx.Err()
+				}
 				// Wait for completion of events that require it.
 				if lastEvent.RequiresCompletion {
 					select {
 					case completedID := <-invocation.EventCompletionCh:
-						// Event has been written to session, safe to proceed.
 						if completedID == lastEvent.CompletionID {
 							log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
 						}
 					case <-time.After(eventCompletionTimeout):
-						// Handle timeout.
 						log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
 					case <-ctx.Done():
 						return lastEvent, ctx.Err()
@@ -251,6 +280,22 @@ func (f *Flow) callLLM(
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
+	// Run before model callbacks if they exist.
+	if invocation.ModelCallbacks != nil {
+		customResponse, err := invocation.ModelCallbacks.RunBeforeModel(ctx, llmRequest)
+		if err != nil {
+			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
+			return nil, err
+		}
+		if customResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			responseChan := make(chan *model.Response, 1)
+			responseChan <- customResponse
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
+
 	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
@@ -277,7 +322,7 @@ func (f *Flow) handleFunctionCalls(
 	// Execute each tool call.
 	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
 		ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
-		choice := f.executeToolCall(ctxWithInvocation, toolCall, tools, i)
+		choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
 		functionResponses = append(functionResponses, choice)
 	}
 
@@ -298,87 +343,31 @@ func (f *Flow) handleFunctionCalls(
 // executeToolCall executes a single tool call and returns the choice.
 func (f *Flow) executeToolCall(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tools map[string]tool.Tool,
 	index int,
 ) model.Choice {
+	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
 		log.Errorf("CallableTool %s not found", toolCall.Function.Name)
-		return model.Choice{
-			Index: index,
-			Message: model.Message{
-				Role:    model.RoleTool,
-				Content: ErrorToolNotFound,
-				ToolID:  toolCall.ID,
-			},
-		}
+		return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound)
 	}
 
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
 
-	// Execute the tool.
-	var (
-		result any
-		err    error
-	)
-	switch t := tl.(type) {
-	case tool.CallableTool:
-		// Execute the tool.
-		result, err = t.Call(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
-			return model.Choice{
-				Index: index,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: ErrorCallableToolExecution + ": " + err.Error(),
-					ToolID:  toolCall.ID,
-				},
-			}
-		}
-	case tool.StreamableTool:
-		reader, err := t.StreamableCall(ctx, toolCall.Function.Arguments)
-		if err != nil {
-			log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
-			return model.Choice{
-				Index: index,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: ErrorStreamableToolExecution + ": " + err.Error(),
-					ToolID:  toolCall.ID,
-				},
-			}
-		}
-		var contents []any
-		for {
-			chunk, err := reader.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
-					"may merge incomplete data", toolCall.Function.Name, err)
-				break
-			}
-			contents = append(contents, chunk.Content)
-		}
-		reader.Close()
-		result = itool.Merge(contents)
+	// Execute the tool with callbacks.
+	result, err := f.executeToolWithCallbacks(ctx, invocation, toolCall, tl)
+	if err != nil {
+		return f.createErrorChoice(index, toolCall.ID, err.Error())
 	}
 
 	// Marshal the result to JSON.
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return model.Choice{
-			Index: index,
-			Message: model.Message{
-				Role:    model.RoleTool,
-				Content: ErrorMarshalResult,
-				ToolID:  toolCall.ID,
-			},
-		}
+		return f.createErrorChoice(index, toolCall.ID, ErrorMarshalResult)
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
@@ -389,6 +378,133 @@ func (f *Flow) executeToolCall(
 			Role:    model.RoleTool,
 			Content: string(resultBytes),
 			ToolID:  toolCall.ID,
+		},
+	}
+}
+
+// executeToolWithCallbacks executes a tool with before/after callbacks.
+func (f *Flow) executeToolWithCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+) (any, error) {
+	toolDeclaration := tl.Declaration()
+
+	// Run before tool callbacks if they exist.
+	if invocation.ToolCallbacks != nil {
+		customResult, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+		)
+		if callbackErr != nil {
+			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
+		}
+		if customResult != nil {
+			// Use custom result from callback.
+			return customResult, nil
+		}
+	}
+
+	// Execute the actual tool.
+	result, err := f.executeTool(ctx, toolCall, tl)
+	if err != nil {
+		return nil, err
+	}
+
+	// Run after tool callbacks if they exist.
+	if invocation.ToolCallbacks != nil {
+		customResult, callbackErr := invocation.ToolCallbacks.RunAfterTool(
+			ctx,
+			toolCall.Function.Name,
+			toolDeclaration,
+			toolCall.Function.Arguments,
+			result,
+			err,
+		)
+		if callbackErr != nil {
+			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
+			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
+		}
+		if customResult != nil {
+			result = customResult
+		}
+	}
+
+	return result, nil
+}
+
+// executeTool executes the actual tool based on its type.
+func (f *Flow) executeTool(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+) (any, error) {
+	switch t := tl.(type) {
+	case tool.CallableTool:
+		return f.executeCallableTool(ctx, toolCall, t)
+	case tool.StreamableTool:
+		return f.executeStreamableTool(ctx, toolCall, t)
+	default:
+		return nil, fmt.Errorf("unsupported tool type: %T", tl)
+	}
+}
+
+// executeCallableTool executes a callable tool.
+func (f *Flow) executeCallableTool(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.CallableTool,
+) (any, error) {
+	result, err := tl.Call(ctx, toolCall.Function.Arguments)
+	if err != nil {
+		log.Errorf("CallableTool execution failed for %s: %v", toolCall.Function.Name, err)
+		return nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
+	}
+	return result, nil
+}
+
+// executeStreamableTool executes a streamable tool.
+func (f *Flow) executeStreamableTool(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.StreamableTool,
+) (any, error) {
+	reader, err := tl.StreamableCall(ctx, toolCall.Function.Arguments)
+	if err != nil {
+		log.Errorf("StreamableTool execution failed for %s: %v", toolCall.Function.Name, err)
+		return nil, fmt.Errorf("%s: %w", ErrorStreamableToolExecution, err)
+	}
+	defer reader.Close()
+
+	var contents []any
+	for {
+		chunk, err := reader.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+				"may merge incomplete data", toolCall.Function.Name, err)
+			break
+		}
+		contents = append(contents, chunk.Content)
+	}
+
+	return itool.Merge(contents), nil
+}
+
+// createErrorChoice creates an error choice for tool execution failures.
+func (f *Flow) createErrorChoice(index int, toolID string, errorMsg string) model.Choice {
+	return model.Choice{
+		Index: index,
+		Message: model.Message{
+			Role:    model.RoleTool,
+			Content: errorMsg,
+			ToolID:  toolID,
 		},
 	}
 }
