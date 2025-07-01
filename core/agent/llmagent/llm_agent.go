@@ -226,8 +226,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		tools:          options.Tools,
 		planner:        options.Planner,
 		subAgents:      options.SubAgents,
-		modelCallbacks: options.ModelCallbacks,
 		agentCallbacks: options.AgentCallbacks,
+		modelCallbacks: options.ModelCallbacks,
 		toolCallbacks:  options.ToolCallbacks,
 	}
 }
