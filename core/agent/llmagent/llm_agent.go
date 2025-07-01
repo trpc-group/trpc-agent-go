@@ -243,18 +243,16 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 
 	// Run before agent callbacks if they exist.
 	if invocation.AgentCallbacks != nil {
-		customResponse, skip, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
-		if customResponse != nil || skip {
+		if customResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
-			if customResponse != nil {
-				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				eventChan <- customEvent
-			}
+			// Create an event from the custom response.
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			eventChan <- customEvent
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -296,7 +294,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// After all events are processed, run after agent callbacks
 		if invocation.AgentCallbacks != nil {
-			customResponse, override, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(
@@ -312,7 +310,7 @@ func (a *LLMAgent) wrapEventChannel(
 				}
 				return
 			}
-			if customResponse != nil && override {
+			if customResponse != nil {
 				// Create an event from the custom response.
 				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 				select {

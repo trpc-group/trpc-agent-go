@@ -21,18 +21,16 @@ func NewError(message string) error {
 }
 
 // BeforeToolCallback is called before a tool is executed.
-// Returns (customResult, skip, error).
+// Returns (customResult, error).
 // - customResult: if not nil, this result will be returned and tool execution will be skipped.
-// - skip: if true, tool execution will be skipped.
 // - error: if not nil, tool execution will be stopped with this error.
-type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte) (any, bool, error)
+type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte) (any, error)
 
 // AfterToolCallback is called after a tool is executed.
-// Returns (customResult, override, error).
-// - customResult: if not nil and override is true, this result will be used instead of the actual tool result.
-// - override: if true, the customResult will be used.
+// Returns (customResult, error).
+// - customResult: if not nil, this result will be used instead of the actual tool result.
 // - error: if not nil, this error will be returned.
-type AfterToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error)
+type AfterToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, result any, runErr error) (any, error)
 
 // ToolCallbacks holds callbacks for tool operations.
 type ToolCallbacks struct {
@@ -56,33 +54,45 @@ func (c *ToolCallbacks) RegisterAfterTool(cb AfterToolCallback) {
 }
 
 // RunBeforeTool runs all before tool callbacks in order.
-// Returns (customResult, skip, error).
-// If any callback returns a custom result or skip=true, stop and return.
-func (c *ToolCallbacks) RunBeforeTool(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte) (any, bool, error) {
+// Returns (customResult, error).
+// If any callback returns a custom result, stop and return.
+func (c *ToolCallbacks) RunBeforeTool(
+	ctx context.Context,
+	toolName string,
+	toolDeclaration *Declaration,
+	jsonArgs []byte,
+) (any, error) {
 	for _, cb := range c.BeforeTool {
-		customResult, skip, err := cb(ctx, toolName, toolDeclaration, jsonArgs)
+		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		if customResult != nil || skip {
-			return customResult, skip, nil
+		if customResult != nil {
+			return customResult, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
 // RunAfterTool runs all after tool callbacks in order.
-// Returns (customResult, override, error).
-// If any callback returns a custom result with override=true, stop and return.
-func (c *ToolCallbacks) RunAfterTool(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+// Returns (customResult, error).
+// If any callback returns a custom result, stop and return.
+func (c *ToolCallbacks) RunAfterTool(
+	ctx context.Context,
+	toolName string,
+	toolDeclaration *Declaration,
+	jsonArgs []byte,
+	result any,
+	runErr error,
+) (any, error) {
 	for _, cb := range c.AfterTool {
-		customResult, override, err := cb(ctx, toolName, toolDeclaration, jsonArgs, result, runErr)
+		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs, result, runErr)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		if customResult != nil && override {
-			return customResult, true, nil
+		if customResult != nil {
+			return customResult, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }

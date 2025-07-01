@@ -260,25 +260,25 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 }
 
 func TestChainAgent_WithCallbacks(t *testing.T) {
-	// Create agent callbacks
+	// Create agent callbacks.
 	callbacks := agent.NewAgentCallbacks()
 
 	// Test before agent callback that skips execution
-	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
 		if invocation.Message.Content == "skip" {
-			return nil, true, nil
+			return nil, nil
 		}
-		return nil, false, nil
+		return nil, nil
 	})
 
-	// Create chain agent with callbacks
+	// Create chain agent with callbacks.
 	chainAgent := New(Options{
 		Name:           "test-chain-agent",
 		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
 		AgentCallbacks: callbacks,
 	})
 
-	// Test skip execution
+	// Test skip execution.
 	invocation := &agent.Invocation{
 		InvocationID: "test-invocation-skip",
 		AgentName:    "test-chain-agent",
@@ -292,16 +292,16 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 	eventChan, err := chainAgent.Run(ctx, invocation)
 	require.NoError(t, err)
 
-	// Should not receive any events since execution was skipped
-	// Wait a bit to ensure no events are sent
+	// Should not receive any events since execution was skipped.
+	// Wait a bit to ensure no events are sent.
 	time.Sleep(50 * time.Millisecond)
 
-	// Check if channel is closed (no events sent)
+	// Check if channel is closed (no events sent).
 	select {
 	case evt, ok := <-eventChan:
 		require.False(t, ok, "Expected no events, but received: %v", evt)
-		// If ok is false, channel is closed which is expected
+		// If ok is false, channel is closed which is expected.
 	default:
-		// Channel is still open, which means no events were sent (expected)
+		// Channel is still open, which means no events were sent (expected).
 	}
 }

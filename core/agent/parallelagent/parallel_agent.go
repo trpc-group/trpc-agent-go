@@ -94,7 +94,7 @@ func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 
 		// Run before agent callbacks if they exist.
 		if invocation.AgentCallbacks != nil {
-			customResponse, skip, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+			customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(
@@ -109,14 +109,12 @@ func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 				}
 				return
 			}
-			if customResponse != nil || skip {
+			if customResponse != nil {
 				// Create an event from the custom response and then close.
-				if customResponse != nil {
-					customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-					select {
-					case eventChan <- customEvent:
-					case <-ctx.Done():
-					}
+				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+				select {
+				case eventChan <- customEvent:
+				case <-ctx.Done():
 				}
 				return
 			}
@@ -167,7 +165,7 @@ func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 
 		// Run after agent callbacks if they exist.
 		if invocation.AgentCallbacks != nil {
-			customResponse, override, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(
@@ -182,7 +180,7 @@ func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 				}
 				return
 			}
-			if customResponse != nil && override {
+			if customResponse != nil {
 				// Create an event from the custom response.
 				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 				select {

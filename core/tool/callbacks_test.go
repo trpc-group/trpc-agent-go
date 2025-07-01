@@ -19,8 +19,13 @@ func TestNewToolCallbacks(t *testing.T) {
 func TestRegisterBeforeTool(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-		return nil, false, nil
+	callback := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
+		return nil, nil
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -31,8 +36,15 @@ func TestRegisterBeforeTool(t *testing.T) {
 func TestRegisterAfterTool(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-		return nil, false, nil
+	callback := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
+		return nil, nil
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -50,18 +62,23 @@ func TestRunBeforeTool_Empty(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
 
 	require.NoError(t, err)
 	require.Nil(t, customResult)
-	require.False(t, skip)
+
 }
 
 func TestRunBeforeTool_Skip(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-		return nil, true, nil
+	callback := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
+		return nil, nil
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -73,11 +90,11 @@ func TestRunBeforeTool_Skip(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
 
 	require.NoError(t, err)
 	require.Nil(t, customResult)
-	require.True(t, skip)
+
 }
 
 func TestRunBeforeTool_CustomResult(t *testing.T) {
@@ -85,8 +102,13 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 
 	expectedResult := map[string]string{"result": "custom"}
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-		return expectedResult, false, nil
+	callback := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
+		return expectedResult, nil
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -98,7 +120,7 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
 
 	require.NoError(t, err)
 	require.NotNil(t, customResult)
@@ -106,7 +128,7 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 	result, ok := customResult.(map[string]string)
 	require.True(t, ok)
 	require.Equal(t, "custom", result["result"])
-	require.False(t, skip)
+
 }
 
 func TestRunBeforeTool_Error(t *testing.T) {
@@ -114,8 +136,13 @@ func TestRunBeforeTool_Error(t *testing.T) {
 
 	expectedErr := "callback error"
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-		return nil, false, tool.NewError(expectedErr)
+	callback := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
+		return nil, tool.NewError(expectedErr)
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -127,12 +154,12 @@ func TestRunBeforeTool_Error(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
 
 	require.Error(t, err)
 	require.EqualError(t, err, expectedErr)
 	require.Nil(t, customResult)
-	require.False(t, skip)
+
 }
 
 func TestRunBeforeTool_MultipleCallbacks(t *testing.T) {
@@ -140,14 +167,24 @@ func TestRunBeforeTool_MultipleCallbacks(t *testing.T) {
 
 	callCount := 0
 
-	callback1 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
+	callback1 := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
 		callCount++
-		return nil, false, nil
+		return nil, nil
 	}
 
-	callback2 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
+	callback2 := func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
 		callCount++
-		return map[string]string{"result": "from-second"}, false, nil
+		return map[string]string{"result": "from-second"}, nil
 	}
 
 	callbacks.RegisterBeforeTool(callback1)
@@ -160,7 +197,7 @@ func TestRunBeforeTool_MultipleCallbacks(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
 
 	require.NoError(t, err)
 	require.Equal(t, 2, callCount)
@@ -169,7 +206,7 @@ func TestRunBeforeTool_MultipleCallbacks(t *testing.T) {
 	result, ok := customResult.(map[string]string)
 	require.True(t, ok)
 	require.Equal(t, "from-second", result["result"])
-	require.False(t, skip)
+
 }
 
 func TestRunAfterTool_Empty(t *testing.T) {
@@ -183,17 +220,10 @@ func TestRunAfterTool_Empty(t *testing.T) {
 	args := []byte(`{"test": "value"}`)
 	result := map[string]string{"original": "result"}
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, result, nil)
+	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, result, nil)
 
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if override {
-		t.Error("Expected override to be false")
-	}
+	require.NoError(t, err)
+	require.Nil(t, customResult)
 }
 
 func TestRunAfterTool_Override(t *testing.T) {
@@ -201,8 +231,8 @@ func TestRunAfterTool_Override(t *testing.T) {
 
 	expectedResult := map[string]string{"result": "overridden"}
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-		return expectedResult, true, nil
+	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+		return expectedResult, nil
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -215,65 +245,24 @@ func TestRunAfterTool_Override(t *testing.T) {
 	args := []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
+	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
 
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, customResult)
 
 	result, ok := customResult.(map[string]string)
-	if !ok {
-		t.Fatalf("Expected map[string]string, got %T", customResult)
-	}
-	if result["result"] != "overridden" {
-		t.Errorf("Expected result 'overridden', got %s", result["result"])
-	}
-	if !override {
-		t.Error("Expected override to be true")
-	}
-}
-
-func TestRunAfterTool_NoOverride(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
-
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-		return map[string]string{"result": "not-overridden"}, false, nil
-	}
-
-	callbacks.RegisterAfterTool(callback)
-
-	declaration := &tool.Declaration{
-		Name:        "test-tool",
-		Description: "A test tool",
-	}
-
-	args := []byte(`{"test": "value"}`)
-	originalResult := map[string]string{"original": "result"}
-
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
-
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if override {
-		t.Error("Expected override to be false")
-	}
+	require.True(t, ok)
+	require.Equal(t, "overridden", result["result"])
 }
 
 func TestRunAfterTool_WithError(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
 		if runErr != nil {
-			return map[string]string{"error": "handled"}, true, nil
+			return map[string]string{"error": "handled"}, nil
 		}
-		return nil, false, nil
+		return nil, nil
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -287,25 +276,14 @@ func TestRunAfterTool_WithError(t *testing.T) {
 	originalResult := map[string]string{"original": "result"}
 	runErr := tool.NewError("tool execution error")
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, runErr)
+	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, runErr)
 
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	require.NoError(t, err)
+	require.NotNil(t, customResult)
 
 	result, ok := customResult.(map[string]string)
-	if !ok {
-		t.Fatalf("Expected map[string]string, got %T", customResult)
-	}
-	if result["error"] != "handled" {
-		t.Errorf("Expected result 'handled', got %s", result["error"])
-	}
-	if !override {
-		t.Error("Expected override to be true")
-	}
+	require.True(t, ok)
+	require.Equal(t, "handled", result["error"])
 }
 
 func TestRunAfterTool_Error(t *testing.T) {
@@ -313,8 +291,8 @@ func TestRunAfterTool_Error(t *testing.T) {
 
 	expectedErr := "callback error"
 
-	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-		return nil, false, tool.NewError(expectedErr)
+	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+		return nil, tool.NewError(expectedErr)
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -327,20 +305,11 @@ func TestRunAfterTool_Error(t *testing.T) {
 	args := []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
+	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
 
-	if err == nil {
-		t.Fatal("Expected error")
-	}
-	if err.Error() != expectedErr {
-		t.Errorf("Expected error '%s', got '%s'", expectedErr, err.Error())
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if override {
-		t.Error("Expected override to be false")
-	}
+	require.Error(t, err)
+	require.Equal(t, expectedErr, err.Error())
+	require.Nil(t, customResult)
 }
 
 func TestRunAfterTool_MultipleCallbacks(t *testing.T) {
@@ -348,14 +317,14 @@ func TestRunAfterTool_MultipleCallbacks(t *testing.T) {
 
 	callCount := 0
 
-	callback1 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	callback1 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
 		callCount++
-		return nil, false, nil
+		return nil, nil
 	}
 
-	callback2 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	callback2 := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
 		callCount++
-		return map[string]string{"result": "from-second"}, true, nil
+		return map[string]string{"result": "from-second"}, nil
 	}
 
 	callbacks.RegisterAfterTool(callback1)
@@ -369,28 +338,15 @@ func TestRunAfterTool_MultipleCallbacks(t *testing.T) {
 	args := []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
+	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, nil)
 
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if callCount != 2 {
-		t.Errorf("Expected 2 callback calls, got %d", callCount)
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	require.NoError(t, err)
+	require.Equal(t, 2, callCount)
+	require.NotNil(t, customResult)
 
 	result, ok := customResult.(map[string]string)
-	if !ok {
-		t.Fatalf("Expected map[string]string, got %T", customResult)
-	}
-	if result["result"] != "from-second" {
-		t.Errorf("Expected result 'from-second', got %s", result["result"])
-	}
-	if !override {
-		t.Error("Expected override to be true")
-	}
+	require.True(t, ok)
+	require.Equal(t, "from-second", result["result"])
 }
 
 // Mock tool for testing
@@ -409,134 +365,100 @@ func (m *MockTool) Declaration() *tool.Declaration {
 func TestToolCallbacks_Integration(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	// Add before callback that logs and modifies args
-	callbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
+	// Add before callback that logs and modifies args.
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
 		if toolName == "skip-tool" {
-			return map[string]string{"skipped": "true"}, true, nil
+			return map[string]string{"skipped": "true"}, nil
 		}
 
-		// Modify args for certain tools
+		// Modify args for certain tools.
 		if toolName == "modify-args" {
 			var args map[string]interface{}
 			if err := json.Unmarshal(jsonArgs, &args); err != nil {
-				return nil, false, err
+				return nil, err
 			}
 			args["modified"] = true
-			return args, false, nil
+			return args, nil
 		}
 
-		return nil, false, nil
+		return nil, nil
 	})
 
-	// Add after callback that logs and modifies results
-	callbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	// Add after callback that logs and modifies results.
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
 		if runErr != nil {
-			return map[string]string{"error": "handled"}, true, nil
+			return map[string]string{"error": "handled"}, nil
 		}
 
 		if toolName == "override-result" {
-			return map[string]string{"overridden": "true"}, true, nil
+			return map[string]string{"overridden": "true"}, nil
 		}
 
-		return nil, false, nil
+		return nil, nil
 	})
 
-	// Test skip functionality
+	// Test skip functionality.
 	declaration := &tool.Declaration{Name: "skip-tool", Description: "A tool to skip"}
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "skip-tool", declaration, args)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !skip {
-		t.Error("Expected skip to be true")
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "skip-tool", declaration, args)
+	require.NoError(t, err)
+	require.NotNil(t, customResult)
 
-	// Test error handling
+	// Test error handling.
 	declaration = &tool.Declaration{Name: "error-tool", Description: "A tool with error"}
 	args = []byte(`{"test": "value"}`)
 	runErr := tool.NewError("execution error")
 
-	customResult, override, err := callbacks.RunAfterTool(context.Background(), "error-tool", declaration, args, nil, runErr)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !override {
-		t.Error("Expected override to be true")
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	customResult, err = callbacks.RunAfterTool(context.Background(), "error-tool", declaration, args, nil, runErr)
+	require.NoError(t, err)
+	require.NotNil(t, customResult)
 
-	// Test override functionality
+	// Test override functionality.
 	declaration = &tool.Declaration{Name: "override-result", Description: "A tool to override"}
 	args = []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
 
-	customResult, override, err = callbacks.RunAfterTool(context.Background(), "override-result", declaration, args, originalResult, nil)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if !override {
-		t.Error("Expected override to be true")
-	}
-	if customResult == nil {
-		t.Fatal("Expected non-nil customResult")
-	}
+	customResult, err = callbacks.RunAfterTool(context.Background(), "override-result", declaration, args, originalResult, nil)
+	require.NoError(t, err)
+	require.NotNil(t, customResult)
 
 	result, ok := customResult.(map[string]string)
-	if !ok {
-		t.Fatalf("Expected map[string]string, got %T", customResult)
-	}
-	if result["overridden"] != "true" {
-		t.Errorf("Expected 'overridden': 'true', got %v", result)
-	}
+	require.True(t, ok)
+	require.Equal(t, "true", result["overridden"])
 }
 
 func TestToolCallbacks_EdgeCases(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
-	// Test with nil declaration
+	// Test with nil declaration.
 	args := []byte(`{"test": "value"}`)
 
-	customResult, skip, err := callbacks.RunBeforeTool(context.Background(), "test-tool", nil, args)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if skip {
-		t.Error("Expected skip to be false")
-	}
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", nil, args)
+	require.NoError(t, err)
+	require.Nil(t, customResult)
 
-	// Test with nil args
+	// Test with nil args.
 	declaration := &tool.Declaration{Name: "test-tool", Description: "A test tool"}
 
-	customResult, skip, err = callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, nil)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if skip {
-		t.Error("Expected skip to be false")
-	}
+	customResult, err = callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, nil)
+	require.NoError(t, err)
+	require.Nil(t, customResult)
 
-	// Test with empty tool name
-	customResult, skip, err = callbacks.RunBeforeTool(context.Background(), "", declaration, args)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if customResult != nil {
-		t.Errorf("Expected nil customResult, got %v", customResult)
-	}
-	if skip {
-		t.Error("Expected skip to be false")
-	}
+	// Test with empty tool name.
+	customResult, err = callbacks.RunBeforeTool(context.Background(), "", declaration, args)
+	require.NoError(t, err)
+	require.Nil(t, customResult)
 }

@@ -10,20 +10,17 @@ import (
 // ErrorTypeAgentCallbackError is used for errors from agent callbacks (before/after hooks).
 const ErrorTypeAgentCallbackError = "agent_callback_error"
 
-
 // BeforeAgentCallback is called before the agent runs.
-// Returns (customResponse, skip, error).
+// Returns (customResponse, error).
 // - customResponse: if not nil, this response will be returned to user and agent execution will be skipped.
-// - skip: if true, agent execution will be skipped.
 // - error: if not nil, agent execution will be stopped with this error.
-type BeforeAgentCallback func(ctx context.Context, invocation *Invocation) (*model.Response, bool, error)
+type BeforeAgentCallback func(ctx context.Context, invocation *Invocation) (*model.Response, error)
 
 // AfterAgentCallback is called after the agent runs.
-// Returns (customResponse, override, error).
-// - customResponse: if not nil and override is true, this response will be used instead of the actual agent response.
-// - override: if true, the customResponse will be used.
+// Returns (customResponse, error).
+// - customResponse: if not nil, this response will be used instead of the actual agent response.
 // - error: if not nil, this error will be returned.
-type AfterAgentCallback func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, bool, error)
+type AfterAgentCallback func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error)
 
 // AgentCallbacks holds callbacks for agent operations.
 type AgentCallbacks struct {
@@ -47,40 +44,40 @@ func (c *AgentCallbacks) RegisterAfterAgent(cb AfterAgentCallback) {
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
-// Returns (customResponse, skip, error).
-// If any callback returns a custom response or skip=true, stop and return.
+// Returns (customResponse, error).
+// If any callback returns a custom response, stop and return.
 func (c *AgentCallbacks) RunBeforeAgent(
 	ctx context.Context,
 	invocation *Invocation,
-) (*model.Response, bool, error) {
+) (*model.Response, error) {
 	for _, cb := range c.BeforeAgent {
-		customResponse, skip, err := cb(ctx, invocation)
+		customResponse, err := cb(ctx, invocation)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		if customResponse != nil || skip {
-			return customResponse, skip, nil
+		if customResponse != nil {
+			return customResponse, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
 // RunAfterAgent runs all after agent callbacks in order.
-// Returns (customResponse, override, error).
-// If any callback returns a custom response with override=true, stop and return.
+// Returns (customResponse, error).
+// If any callback returns a custom response, stop and return.
 func (c *AgentCallbacks) RunAfterAgent(
 	ctx context.Context,
 	invocation *Invocation,
 	runErr error,
-) (*model.Response, bool, error) {
+) (*model.Response, error) {
 	for _, cb := range c.AfterAgent {
-		customResponse, override, err := cb(ctx, invocation, runErr)
+		customResponse, err := cb(ctx, invocation, runErr)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		if customResponse != nil && override {
-			return customResponse, true, nil
+		if customResponse != nil {
+			return customResponse, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }

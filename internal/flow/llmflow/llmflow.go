@@ -158,6 +158,10 @@ func (f *Flow) runOneStep(
 		case <-ctx.Done():
 			return lastEvent, ctx.Err()
 		}
+		// Check if wrappedChan is closed, prevent infinite writing.
+		if ctx.Err() != nil {
+			return lastEvent, ctx.Err()
+		}
 
 		// 4. Handle function calls if present in the response.
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
@@ -187,17 +191,18 @@ func (f *Flow) runOneStep(
 				case <-ctx.Done():
 					return lastEvent, ctx.Err()
 				}
-
+				// Check if wrappedChan is closed, prevent infinite writing.
+				if ctx.Err() != nil {
+					return lastEvent, ctx.Err()
+				}
 				// Wait for completion of events that require it.
 				if lastEvent.RequiresCompletion {
 					select {
 					case completedID := <-invocation.EventCompletionCh:
-						// Event has been written to session, safe to proceed.
 						if completedID == lastEvent.CompletionID {
 							log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
 						}
 					case <-time.After(eventCompletionTimeout):
-						// Handle timeout.
 						log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
 					case <-ctx.Done():
 						return lastEvent, ctx.Err()
@@ -254,17 +259,15 @@ func (f *Flow) callLLM(
 
 	// Run before model callbacks if they exist.
 	if invocation.ModelCallbacks != nil {
-		customResponse, skip, err := invocation.ModelCallbacks.RunBeforeModel(ctx, llmRequest)
+		customResponse, err := invocation.ModelCallbacks.RunBeforeModel(ctx, llmRequest)
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
 		}
-		if customResponse != nil || skip {
+		if customResponse != nil {
 			// Create a channel that returns the custom response and then closes.
 			responseChan := make(chan *model.Response, 1)
-			if customResponse != nil {
-				responseChan <- customResponse
-			}
+			responseChan <- customResponse
 			close(responseChan)
 			return responseChan, nil
 		}
@@ -299,10 +302,10 @@ func (f *Flow) wrapResponseChannel(
 		for response := range originalChan {
 			// Run after model callbacks if they exist.
 			if invocation.ModelCallbacks != nil {
-				customResponse, override, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+				customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
 				if err != nil {
 					log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-					// Send error response.
+					// Send error response and then drain originalChan to prevent producer blocking.
 					errorResponse := &model.Response{
 						Error: &model.ResponseError{
 							Type:    model.ErrorTypeFlowError,
@@ -312,21 +315,19 @@ func (f *Flow) wrapResponseChannel(
 					select {
 					case wrappedChan <- errorResponse:
 					case <-ctx.Done():
-						return
 					}
+					// Drain originalChan to avoid producer goroutine blocking.
+					for range originalChan {
+						// Drain.
+					}
+					return
+				}
+				if customResponse != nil {
+					wrappedChan <- customResponse
 					continue
 				}
-				if customResponse != nil && override {
-					response = customResponse
-				}
 			}
-
-			// Send the response (either original or overridden).
-			select {
-			case wrappedChan <- response:
-			case <-ctx.Done():
-				return
-			}
+			wrappedChan <- response
 		}
 	}()
 
@@ -419,7 +420,7 @@ func (f *Flow) executeToolWithCallbacks(
 
 	// Run before tool callbacks if they exist.
 	if invocation.ToolCallbacks != nil {
-		customResult, skip, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
+		customResult, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -429,7 +430,7 @@ func (f *Flow) executeToolWithCallbacks(
 			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
-		if customResult != nil || skip {
+		if customResult != nil {
 			// Use custom result from callback.
 			return customResult, nil
 		}
@@ -443,7 +444,7 @@ func (f *Flow) executeToolWithCallbacks(
 
 	// Run after tool callbacks if they exist.
 	if invocation.ToolCallbacks != nil {
-		customResult, override, callbackErr := invocation.ToolCallbacks.RunAfterTool(
+		customResult, callbackErr := invocation.ToolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -455,7 +456,7 @@ func (f *Flow) executeToolWithCallbacks(
 			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
 			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
-		if customResult != nil && override {
+		if customResult != nil {
 			result = customResult
 		}
 	}

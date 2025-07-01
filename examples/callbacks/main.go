@@ -214,7 +214,7 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 	agentCallbacks := agent.NewAgentCallbacks()
 
 	// Before Agent Callback
-	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
+	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
 		fmt.Println("🔄 Before Agent Callback:")
 		fmt.Printf("   - Agent: %s\n", invocation.AgentName)
 		fmt.Printf("   - Invocation ID: %s\n", invocation.InvocationID)
@@ -232,7 +232,7 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 						},
 					},
 				},
-			}, true, nil
+			}, nil
 		}
 
 		// Example: Return custom response for certain conditions
@@ -247,15 +247,15 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 						},
 					},
 				},
-			}, false, nil
+			}, nil
 		}
 
 		fmt.Println("   ✅ Proceeding with normal agent execution")
-		return nil, false, nil
+		return nil, nil
 	})
 
 	// After Agent Callback
-	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, bool, error) {
+	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
 		fmt.Println("🔄 After Agent Callback:")
 		if runErr != nil {
 			fmt.Printf("   ❌ Agent execution failed: %v\n", runErr)
@@ -268,11 +268,11 @@ func createAgentCallbacks() *agent.AgentCallbacks {
 						},
 					},
 				},
-			}, true, nil
+			}, nil
 		}
 
 		fmt.Println("   ✅ Agent execution completed successfully")
-		return nil, false, nil
+		return nil, nil
 	})
 
 	return agentCallbacks
@@ -283,7 +283,7 @@ func createModelCallbacks() *model.ModelCallbacks {
 	modelCallbacks := model.NewModelCallbacks()
 
 	// Before Model Callback
-	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, request *model.Request) (*model.Response, bool, error) {
+	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, request *model.Request) (*model.Response, error) {
 		fmt.Println("🔄 Before Model Callback:")
 		fmt.Printf("   - Messages count: %d\n", len(request.Messages))
 		fmt.Printf("   - Tools count: %d\n", len(request.Tools))
@@ -300,7 +300,7 @@ func createModelCallbacks() *model.ModelCallbacks {
 						},
 					},
 				},
-			}, true, nil
+			}, nil
 		}
 
 		// Example: Return custom response for certain conditions
@@ -315,15 +315,15 @@ func createModelCallbacks() *model.ModelCallbacks {
 						},
 					},
 				},
-			}, false, nil
+			}, nil
 		}
 
 		fmt.Println("   ✅ Proceeding with normal model call")
-		return nil, false, nil
+		return nil, nil
 	})
 
 	// After Model Callback
-	modelCallbacks.RegisterAfterModel(func(ctx context.Context, response *model.Response, runErr error) (*model.Response, bool, error) {
+	modelCallbacks.RegisterAfterModel(func(ctx context.Context, response *model.Response, runErr error) (*model.Response, error) {
 		fmt.Println("🔄 After Model Callback:")
 		if runErr != nil {
 			fmt.Printf("   ❌ Model call failed: %v\n", runErr)
@@ -336,7 +336,7 @@ func createModelCallbacks() *model.ModelCallbacks {
 						},
 					},
 				},
-			}, true, nil
+			}, nil
 		}
 
 		if response != nil && len(response.Choices) > 0 {
@@ -354,11 +354,11 @@ func createModelCallbacks() *model.ModelCallbacks {
 							},
 						},
 					},
-				}, true, nil
+				}, nil
 			}
 		}
 
-		return nil, false, nil
+		return nil, nil
 	})
 
 	return modelCallbacks
@@ -369,7 +369,7 @@ func createToolCallbacks() *tool.ToolCallbacks {
 	toolCallbacks := tool.NewToolCallbacks()
 
 	// Before Tool Callback
-	toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
+	toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
 		fmt.Println("🔄 Before Tool Callback:")
 		fmt.Printf("   - Tool: %s\n", toolName)
 		fmt.Printf("   - Args: %s\n", string(jsonArgs))
@@ -377,7 +377,7 @@ func createToolCallbacks() *tool.ToolCallbacks {
 		// Example: Skip tool execution for certain conditions
 		if toolName == "skip-tool" {
 			fmt.Println("   ⏭️  Skipping tool execution")
-			return map[string]string{"skipped": "true"}, true, nil
+			return map[string]string{"skipped": "true"}, nil
 		}
 
 		// Example: Return custom result for certain conditions
@@ -385,7 +385,7 @@ func createToolCallbacks() *tool.ToolCallbacks {
 			var args CalculatorInput
 			if err := json.Unmarshal(jsonArgs, &args); err == nil && args.A == 0 && args.B == 0 {
 				fmt.Println("   🎯 Returning custom calculator result")
-				return CalculatorOutput{Result: 42}, false, nil
+				return CalculatorOutput{Result: 42}, nil
 			}
 		}
 
@@ -403,17 +403,17 @@ func createToolCallbacks() *tool.ToolCallbacks {
 		}
 
 		fmt.Println("   ✅ Proceeding with normal tool execution")
-		return nil, false, nil
+		return nil, nil
 	})
 
 	// After Tool Callback
-	toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
+	toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
 		fmt.Println("🔄 After Tool Callback:")
 		fmt.Printf("   - Tool: %s\n", toolName)
 
 		if runErr != nil {
 			fmt.Printf("   ❌ Tool execution failed: %v\n", runErr)
-			return map[string]string{"error": "handled"}, true, nil
+			return map[string]string{"error": "handled"}, nil
 		}
 
 		fmt.Printf("   ✅ Tool execution successful, result: %v\n", result)
@@ -426,7 +426,7 @@ func createToolCallbacks() *tool.ToolCallbacks {
 					return map[string]string{
 						"formatted_result": fmt.Sprintf("The answer is %d", calcResult.Result),
 						"original_result":  fmt.Sprintf("%d", calcResult.Result),
-					}, true, nil
+					}, nil
 				}
 			}
 		}
@@ -438,11 +438,11 @@ func createToolCallbacks() *tool.ToolCallbacks {
 				return map[string]interface{}{
 					"weather":  weatherResult.Weather,
 					"metadata": map[string]string{"source": "callback", "timestamp": time.Now().Format(time.RFC3339)},
-				}, true, nil
+				}, nil
 			}
 		}
 
-		return nil, false, nil
+		return nil, nil
 	})
 
 	return toolCallbacks
