@@ -91,7 +91,7 @@ To integrate STDIO MCP tools into your agent, use the following code:
 
 ```go
 // Configure STDIO MCP to connect to our local server.
-mcpConfig := mcp.MCPConnectionConfig{
+mcpConfig := mcp.ConnectionConfig{
     Transport: "stdio",
     Command:   "go",
     Args:      []string{"run", "./stdio_server/main.go"},
@@ -113,7 +113,7 @@ To integrate Streamable HTTP tools into your agent, use the following code:
 
 ```go
 // Configure Streamable HTTP MCP connection.
-streamableConfig := mcp.MCPConnectionConfig{
+streamableConfig := mcp.ConnectionConfig{
     Transport: "streamable_http",
     ServerURL: "http://localhost:3000/mcp",
     Timeout:   10 * time.Second,
@@ -121,13 +121,6 @@ streamableConfig := mcp.MCPConnectionConfig{
 
 // Create MCP toolset with enterprise-level configuration.
 streamableToolSet := mcp.NewMCPToolSet(streamableConfig,
-    mcp.WithRetry(mcp.RetryConfig{
-        Enabled:       true,
-        MaxAttempts:   3,
-        InitialDelay:  time.Second,
-        BackoffFactor: 2.0,
-        MaxDelay:      30 * time.Second,
-    }),
     mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
 )
 
@@ -138,11 +131,21 @@ streamableTools := streamableToolSet.Tools(ctx)
 ### Combining Tools for Use in LLM Agent
 
 ```go
+// Get tools from both toolsets (returns []tool.CallableTool)
+stdioTools := stdioToolSet.Tools(ctx)
+streamableTools := streamableToolSet.Tools(ctx)
+
 // Combine all tools
 allTools := make([]tool.Tool, 0, 2+len(stdioTools)+len(streamableTools))
 allTools = append(allTools, calculatorTool, timeTool) // Function tools
-allTools = append(allTools, stdioTools...)            // STDIO MCP tools
-allTools = append(allTools, streamableTools...)       // Streamable HTTP tools
+
+// Convert CallableTool to Tool and append
+for _, mcpTool := range stdioTools {
+    allTools = append(allTools, mcpTool)
+}
+for _, mcpTool := range streamableTools {
+    allTools = append(allTools, mcpTool)
+}
 
 // Create LLM agent with tools
 llmAgent := llmagent.New(

@@ -49,7 +49,7 @@ type multiTurnChat struct {
 	runner     *runner.Runner
 	userID     string
 	sessionID  string
-	mcpToolSet []*mcp.MCPToolSet
+	mcpToolSet []*mcp.ToolSet
 }
 
 // run starts the interactive chat session.
@@ -79,7 +79,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	// Create Stdio MCP tools.
 	// Configure STDIO MCP to connect to our local server.
 	// This is a simplified STDIO server with two tools: 'echo' and 'add'
-	mcpConfig := mcp.MCPConnectionConfig{
+	mcpConfig := mcp.ConnectionConfig{
 		Transport: "stdio",
 		Command:   "go",
 		Args:      []string{"run", "./stdio_server/main.go"},
@@ -99,7 +99,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	// Create Streamable MCP tools.
 	// Configure Streamable HTTP MCP connection.
 	// This server provides special tools: get_weather and get_news (with fake data)
-	streamableConfig := mcp.MCPConnectionConfig{
+	streamableConfig := mcp.ConnectionConfig{
 		Transport: "streamable_http",
 		ServerURL: "http://localhost:3000/mcp", // Use ServerURL instead of URL
 		Timeout:   10 * time.Second,
@@ -107,13 +107,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 
 	// Create MCP toolset with enterprise-level configuration.
 	streamableToolSet := mcp.NewMCPToolSet(streamableConfig,
-		mcp.WithRetry(mcp.RetryConfig{
-			Enabled:       true,
-			MaxAttempts:   3,
-			InitialDelay:  time.Second,
-			BackoffFactor: 2.0,
-			MaxDelay:      30 * time.Second,
-		}),
 		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
 	)
 	fmt.Println("MCP Toolset created successfully")

@@ -6,43 +6,30 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
-// MCPToolSet implements the ToolSet interface for MCP tools.
-type MCPToolSet struct {
-	config         mcpToolSetConfig
+// ToolSet implements the ToolSet interface for MCP tools.
+type ToolSet struct {
+	config         toolSetConfig
 	sessionManager *mcpSessionManager
 	tools          []tool.Tool
 	mu             sync.RWMutex
-	lastRefresh    time.Time
-	refreshTicker  *time.Ticker
-	stopCh         chan struct{}
 }
 
 // NewMCPToolSet creates a new MCP tool set with the given configuration.
-func NewMCPToolSet(config MCPConnectionConfig, opts ...MCPToolSetOption) *MCPToolSet {
+func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	// Apply default configuration.
-	cfg := mcpToolSetConfig{
+	cfg := toolSetConfig{
 		connectionConfig: config,
-		retryConfig:      defaultRetryConfig,
 	}
 
 	// Apply user options.
 	for _, opt := range opts {
 		opt(&cfg)
-	}
-
-	// Merge connection config settings into cfg if they exist
-	if config.Retry != nil {
-		cfg.retryConfig = config.Retry
-	}
-	if config.Auth != nil {
-		cfg.authConfig = config.Auth
 	}
 
 	// Set default client info if not provided
@@ -53,66 +40,37 @@ func NewMCPToolSet(config MCPConnectionConfig, opts ...MCPToolSetOption) *MCPToo
 	// Create session manager
 	sessionManager := newMCPSessionManager(cfg.connectionConfig)
 
-	toolSet := &MCPToolSet{
+	toolSet := &ToolSet{
 		config:         cfg,
 		sessionManager: sessionManager,
-		tools:          make([]tool.Tool, 0),
-		stopCh:         make(chan struct{}),
-	}
-
-	// Set up auto-refresh if configured
-	if cfg.autoRefresh > 0 {
-		toolSet.startAutoRefresh()
+		tools:          nil,
 	}
 
 	return toolSet
 }
 
 // Tools implements the ToolSet interface.
-func (ts *MCPToolSet) Tools(ctx context.Context) []tool.CallableTool {
-	ts.mu.RLock()
-	shouldRefresh := len(ts.tools) == 0 ||
-		(ts.config.autoRefresh > 0 && time.Since(ts.lastRefresh) > ts.config.autoRefresh)
-	ts.mu.RUnlock()
-
-	if shouldRefresh {
-		if err := ts.refreshTools(ctx); err != nil {
-			log.Error("Failed to refresh tools", err)
-			// Return cached tools if refresh fails
-		}
+func (ts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
+	if err := ts.listTools(ctx); err != nil {
+		log.Error("Failed to refresh tools", err)
+		// Return cached tools if refresh fails
 	}
 
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	// Return a copy to prevent external modification.
-	// Convert []tool.Tool to []tool.CallableTool since mcpTool implements CallableTool.
-	result := make([]tool.CallableTool, len(ts.tools))
-	for i, t := range ts.tools {
-		result[i] = t.(tool.CallableTool)
+	// Since we control the creation of mcpTool instances and they all implement CallableTool,
+	// we can safely do the type conversion. Using a more explicit approach for better readability.
+	result := make([]tool.CallableTool, 0, len(ts.tools))
+	for _, t := range ts.tools {
+		// All tools created by newMCPTool implement CallableTool, so this should always succeed
+		result = append(result, t.(tool.CallableTool))
 	}
 	return result
 }
 
 // Close implements the ToolSet interface.
-func (ts *MCPToolSet) Close() error {
-	ts.mu.Lock()
-
-	// Stop auto-refresh first
-	if ts.refreshTicker != nil {
-		ts.refreshTicker.Stop()
-		ts.refreshTicker = nil
-	}
-
-	ts.mu.Unlock()
-
-	// Signal stop to auto-refresh goroutine (without holding lock)
-	select {
-	case ts.stopCh <- struct{}{}:
-	default:
-		// Channel might be closed or blocked, that's okay
-	}
-
+func (ts *ToolSet) Close() error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -128,8 +86,8 @@ func (ts *MCPToolSet) Close() error {
 	return nil
 }
 
-// refreshTools connects to the MCP server and refreshes the tool list.
-func (ts *MCPToolSet) refreshTools(ctx context.Context) error {
+// listTools connects to the MCP server and refreshes the tool list.
+func (ts *ToolSet) listTools(ctx context.Context) error {
 	log.Debug("Refreshing MCP tools")
 
 	// Ensure connection.
@@ -150,16 +108,16 @@ func (ts *MCPToolSet) refreshTools(ctx context.Context) error {
 	// Convert MCP tools to standard tool format.
 	tools := make([]tool.Tool, 0, len(mcpTools))
 	for _, mcpTool := range mcpTools {
-		tool := newMCPTool(mcpTool, ts.sessionManager, ts.config.retryConfig)
+		tool := newMCPTool(mcpTool, ts.sessionManager)
 		tools = append(tools, tool)
 	}
 
 	// Apply tool filter if configured.
 	if ts.config.toolFilter != nil {
-		toolInfos := make([]MCPToolInfo, len(tools))
+		toolInfos := make([]ToolInfo, len(tools))
 		for i, tool := range tools {
 			decl := tool.Declaration()
-			toolInfos[i] = MCPToolInfo{
+			toolInfos[i] = ToolInfo{
 				Name:        decl.Name,
 				Description: decl.Description,
 			}
@@ -187,127 +145,25 @@ func (ts *MCPToolSet) refreshTools(ctx context.Context) error {
 	// Update tools atomically.
 	ts.mu.Lock()
 	ts.tools = tools
-	ts.lastRefresh = time.Now()
 	ts.mu.Unlock()
 
 	log.Debug("Successfully refreshed MCP tools", "count", len(tools))
 	return nil
 }
 
-// startAutoRefresh starts the auto-refresh goroutine.
-func (ts *MCPToolSet) startAutoRefresh() {
-	if ts.config.autoRefresh <= 0 {
-		return
-	}
-
-	ts.refreshTicker = time.NewTicker(ts.config.autoRefresh)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error("Auto-refresh goroutine panicked", "panic", r)
-			}
-		}()
-
-		log.Debug("Starting auto-refresh", "interval", ts.config.autoRefresh)
-
-		for {
-			// Get ticker channel safely
-			ts.mu.RLock()
-			ticker := ts.refreshTicker
-			ts.mu.RUnlock()
-
-			if ticker == nil {
-				log.Debug("Auto-refresh ticker is nil, stopping")
-				return
-			}
-
-			select {
-			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				if err := ts.refreshTools(ctx); err != nil {
-					log.Error("Auto-refresh failed", err)
-				}
-				cancel()
-
-			case <-ts.stopCh:
-				log.Debug("Auto-refresh stopped")
-				return
-			}
-		}
-	}()
-}
-
-// GetToolByName returns a tool by its name, or nil if not found.
-func (ts *MCPToolSet) GetToolByName(ctx context.Context, name string) tool.Tool {
-	tools := ts.Tools(ctx)
-	for _, tool := range tools {
-		if tool.Declaration().Name == name {
-			return tool
-		}
-	}
-	return nil
-}
-
-// IsConnected returns whether the MCP session is connected and initialized.
-func (ts *MCPToolSet) IsConnected() bool {
-	return ts.sessionManager.isConnected()
-}
-
-// Reconnect explicitly reconnects to the MCP server.
-func (ts *MCPToolSet) Reconnect(ctx context.Context) error {
-	log.Info("Reconnecting to MCP server")
-
-	// Close existing connection.
-	if err := ts.sessionManager.close(); err != nil {
-		log.Warn("Failed to close existing connection during reconnect", err)
-	}
-
-	// Reconnect and refresh tools.
-	if err := ts.refreshTools(ctx); err != nil {
-		return fmt.Errorf("failed to reconnect and refresh tools: %w", err)
-	}
-
-	log.Info("Successfully reconnected to MCP server")
-	return nil
-}
-
-// GetToolNames returns the names of all available tools.
-func (ts *MCPToolSet) GetToolNames(ctx context.Context) []string {
-	tools := ts.Tools(ctx)
-	names := make([]string, len(tools))
-	for i, tool := range tools {
-		names[i] = tool.Declaration().Name
-	}
-	return names
-}
-
 // mcpSessionManager manages the MCP client connection and session.
 type mcpSessionManager struct {
-	config      MCPConnectionConfig
+	config      ConnectionConfig
 	client      mcp.Connector
-	authHandler authHandler
-	diagnostics *errorDiagnostic
 	mu          sync.RWMutex
 	connected   bool
 	initialized bool
 }
 
-// authHandler handles authentication for MCP connections.
-type authHandler interface {
-	ApplyAuth(headers http.Header) error
-}
-
 // newMCPSessionManager creates a new MCP session manager.
-func newMCPSessionManager(config MCPConnectionConfig) *mcpSessionManager {
+func newMCPSessionManager(config ConnectionConfig) *mcpSessionManager {
 	manager := &mcpSessionManager{
-		config:      config,
-		diagnostics: newErrorDiagnostic(),
-	}
-
-	// Set up authentication handler if needed.
-	if config.Auth != nil {
-		manager.authHandler = newAuthHandler(config.Auth)
+		config: config,
 	}
 
 	return manager
@@ -456,13 +312,6 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		return nil, enhancedErr
 	}
 
-	// Check if the result contains an error.
-	if callResp.IsError {
-		errorMessage := m.extractErrorFromContent(callResp.Content)
-		log.Error("Tool returned error", "name", name, "error", errorMessage)
-		return nil, fmt.Errorf("tool %s returned error: %s", name, errorMessage)
-	}
-
 	log.Debug("Tool call completed", "name", name, "content_count", len(callResp.Content))
 	return callResp.Content, nil
 }
@@ -522,60 +371,4 @@ func (m *mcpSessionManager) isConnected() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.connected && m.initialized
-}
-
-// bearerAuthHandler implements authentication using bearer token.
-type bearerAuthHandler struct {
-	token string
-}
-
-// noopAuthHandler implements no authentication.
-type noopAuthHandler struct{}
-
-// newAuthHandler creates an appropriate auth handler based on config.
-func newAuthHandler(config *AuthConfig) authHandler {
-	// Validate and convert auth type string to internal type
-	authType, err := validateAuthType(config.Type)
-	if err != nil {
-		// For invalid auth types, fall back to no-op
-		return &noopAuthHandler{}
-	}
-
-	switch authType {
-	case authTypeBearer:
-		token, _ := config.Credentials["token"].(string)
-		return &bearerAuthHandler{token: token}
-
-	default:
-		return &noopAuthHandler{}
-	}
-}
-
-// ApplyAuth applies bearer token authentication to headers.
-func (h *bearerAuthHandler) ApplyAuth(headers http.Header) error {
-	if h.token == "" {
-		return fmt.Errorf("bearer token is required")
-	}
-	headers.Set("Authorization", fmt.Sprintf("Bearer %s", h.token))
-	return nil
-}
-
-// ApplyAuth does nothing for no-op authentication.
-func (h *noopAuthHandler) ApplyAuth(headers http.Header) error {
-	return nil
-}
-
-// getAvailableToolNames returns a list of available tool names.
-// This is used for error diagnostics.
-func (m *mcpSessionManager) getAvailableToolNames(ctx context.Context) []string {
-	tools, err := m.listTools(ctx)
-	if err != nil {
-		return nil
-	}
-
-	names := make([]string, len(tools))
-	for i, tool := range tools {
-		names[i] = tool.Name
-	}
-	return names
 }
