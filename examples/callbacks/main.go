@@ -1,5 +1,5 @@
-// Package main demonstrates multi-turn chat using the Runner with streaming
-// output, session management, and tool calling, and shows how to use ModelCallbacks and ToolCallbacks.
+// Package main demonstrates multi-turn chat using the Runner with streaming output, session management,
+// tool calling, and shows how to use AgentCallbacks, ModelCallbacks, and ToolCallbacks.
 package main
 
 import (
@@ -65,12 +65,22 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := function.NewFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
-	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
+	calculatorTool := function.NewFunctionTool(
+		c.calculate,
+		function.WithName("calculator"),
+		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+	)
+	timeTool := function.NewFunctionTool(
+		c.getCurrentTime,
+		function.WithName("current_time"),
+		function.WithDescription("Get the current time and date for a specific timezone"),
+	)
 
 	// Construct ModelCallbacks example.
 	modelCallbacks := model.NewModelCallbacks()
-	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+	modelCallbacks.RegisterBeforeModel(func(
+		ctx context.Context, req *model.Request,
+	) (*model.Response, error) {
 		userMsg := ""
 		if len(req.Messages) > 0 {
 			userMsg = req.Messages[len(req.Messages)-1].Content
@@ -92,7 +102,9 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 		}
 		return nil, nil
 	})
-	modelCallbacks.RegisterAfterModel(func(ctx context.Context, resp *model.Response, runErr error) (*model.Response, error) {
+	modelCallbacks.RegisterAfterModel(func(
+		ctx context.Context, resp *model.Response, runErr error,
+	) (*model.Response, error) {
 		if resp != nil && resp.Done {
 			fmt.Printf("\n🟣 AfterModelCallback: model=%s has finished\n", c.modelName)
 		}
@@ -112,7 +124,12 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 
 	// Construct ToolCallbacks example.
 	toolCallbacks := tool.NewToolCallbacks()
-	toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+	toolCallbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+	) (any, error) {
 		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
 		if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
 			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
@@ -120,7 +137,14 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 		}
 		return nil, nil
 	})
-	toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+	toolCallbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs []byte,
+		result any,
+		runErr error,
+	) (any, error) {
 		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n", toolName, string(jsonArgs), result, runErr)
 		if toolName == "current_time" {
 			if m, ok := result.(map[string]any); ok {
@@ -134,7 +158,9 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 
 	// AgentCallbacks example.
 	agentCallbacks := agent.NewAgentCallbacks()
-	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+	agentCallbacks.RegisterBeforeAgent(func(
+		ctx context.Context, invocation *agent.Invocation,
+	) (*model.Response, error) {
 		fmt.Printf("\n🟢 BeforeAgentCallback: agent=%s, invocationID=%s, userMsg=%q\n",
 			invocation.AgentName,
 			invocation.InvocationID,
@@ -142,7 +168,9 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 		)
 		return nil, nil
 	})
-	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+	agentCallbacks.RegisterAfterAgent(func(
+		ctx context.Context, invocation *agent.Invocation, runErr error,
+	) (*model.Response, error) {
 		respContent := "<nil>"
 		if invocation != nil && invocation.Message.Content != "" {
 			respContent = invocation.Message.Content
