@@ -69,7 +69,7 @@ func NewMCPToolSet(config MCPConnectionConfig, opts ...MCPToolSetOption) *MCPToo
 }
 
 // Tools implements the ToolSet interface.
-func (ts *MCPToolSet) Tools(ctx context.Context) []tool.Tool {
+func (ts *MCPToolSet) Tools(ctx context.Context) []tool.CallableTool {
 	ts.mu.RLock()
 	shouldRefresh := len(ts.tools) == 0 ||
 		(ts.config.autoRefresh > 0 && time.Since(ts.lastRefresh) > ts.config.autoRefresh)
@@ -85,9 +85,12 @@ func (ts *MCPToolSet) Tools(ctx context.Context) []tool.Tool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	// Return a copy to prevent external modification
-	result := make([]tool.Tool, len(ts.tools))
-	copy(result, ts.tools)
+	// Return a copy to prevent external modification.
+	// Convert []tool.Tool to []tool.CallableTool since mcpTool implements CallableTool.
+	result := make([]tool.CallableTool, len(ts.tools))
+	for i, t := range ts.tools {
+		result[i] = t.(tool.CallableTool)
+	}
 	return result
 }
 
@@ -269,8 +272,7 @@ func (ts *MCPToolSet) Reconnect(ctx context.Context) error {
 	return nil
 }
 
-// GetToolNames returns a list of available tool names.
-// This is useful for error diagnostics and debugging.
+// GetToolNames returns the names of all available tools.
 func (ts *MCPToolSet) GetToolNames(ctx context.Context) []string {
 	tools := ts.Tools(ctx)
 	names := make([]string, len(tools))
@@ -334,7 +336,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 	if err := m.initialize(ctx); err != nil {
 		m.connected = false
 		if closeErr := client.Close(); closeErr != nil {
-			log.Error("Failed to close client after initialization failure", "error", closeErr)
+			log.Error("Failed to close client after initialization failure", "client_close_error", closeErr, "error", err)
 		}
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
