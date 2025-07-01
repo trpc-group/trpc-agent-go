@@ -1,15 +1,59 @@
-# MCP Tool + LLM Integration Example
+# MCP Tool Example
 
-This example demonstrates how to integrate trpc-agent-go MCP tools with LLM, supporting intelligent tool calling and multi-turn conversations.
+This example demonstrates how trpc-agent-go supports MCP (Model-Client-Protocol) tools, showcasing both STDIO and Streamable HTTP implementations for building intelligent AI assistants.
 
-## Features
+## What are MCP Tools?
 
-- **STDIO MCP Server Integration**: Connect to local STDIO MCP server
-- **Streamable HTTP MCP Server Integration**: Connect to local HTTP MCP server
-- **Direct Tool Testing**: Ability to test tools directly without LLM
-- **Hybrid Tool Environment**: Seamless integration of function tools + MCP tools
-- **Intelligent Tool Calling**: LLM automatically selects and uses appropriate tools
-- **Multi-turn Conversation Support**: Tool call results automatically passed to LLM
+The trpc-agent-go framework provides built-in support for MCP tools with these key capabilities:
+
+- **🔄 Multiple Tool Types**: Native support for Function tools, STDIO MCP tools, and Streamable HTTP tools
+- **🌊 Streaming Responses**: Real-time character-by-character response generation
+- **💾 Tool State Management**: Proper handling of tool calls and responses
+- **🔧 Simple Tool Implementations**: Focused examples with minimal complexity
+- **🚀 LLM Integration**: Seamless use of tools with language models
+
+### Key Features
+
+- **STDIO MCP Server**: Local server with echo and add tools
+- **Streamable HTTP Server**: HTTP server with weather and news tools
+- **Direct Tool Testing**: Test tools directly without LLM
+- **LLM Integration**: Use tools with an LLM agent for intelligent conversations
+- **Multi-turn Chat**: Support for conversational tool usage
+- **Tool Visualization**: Clear indication of tool calls, arguments, and responses
+
+## Prerequisites
+
+- Go 1.23 or later
+- Valid OpenAI API key (or compatible API endpoint)
+
+## Environment Variables
+
+| Variable | Description | Default Value |
+|----------|-------------|---------------|
+| `OPENAI_API_KEY` | API key for the model service (required) | `` |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
+
+## Command Line Arguments
+
+| Argument | Description | Default Value |
+|----------|-------------|---------------|
+| `-model` | Name of the model to use | `deepseek-chat` |
+
+## Usage
+
+### Start the HTTP Server
+
+```bash
+cd streamalbe_server
+go run main.go
+```
+
+### Run the Example
+
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+go run main.go
+```
 
 ## Project Structure
 
