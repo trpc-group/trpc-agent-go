@@ -40,7 +40,29 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	transferInfo := invocation.TransferInfo
-	targetAgent := transferInfo.TargetAgent
+	targetAgentName := transferInfo.TargetAgentName
+
+	// Look up the target agent from the current agent's sub-agents.
+	var targetAgent agent.Agent
+	if invocation.Agent != nil {
+		targetAgent = invocation.Agent.FindSubAgent(targetAgentName)
+	}
+
+	if targetAgent == nil {
+		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			"Transfer failed: target agent '"+targetAgentName+"' not found",
+		)
+		select {
+		case ch <- errorEvent:
+		case <-ctx.Done():
+		}
+		return
+	}
 
 	// Create transfer event to notify about the handoff.
 	transferEvent := event.New(invocation.InvocationID, invocation.AgentName)
@@ -56,7 +78,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 				Index: 0,
 				Message: model.Message{
 					Role:    model.RoleAssistant,
-					Content: "Transferring control to agent: " + targetAgent.Name(),
+					Content: "Transferring control to agent: " + targetAgent.Info().Name,
 				},
 			},
 		},
@@ -74,7 +96,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Create new invocation for the target agent.
 	targetInvocation := &agent.Invocation{
 		Agent:             targetAgent,
-		AgentName:         targetAgent.Name(),
+		AgentName:         targetAgent.Info().Name,
 		InvocationID:      invocation.InvocationID, // Keep same invocation ID for continuity
 		EndInvocation:     transferInfo.EndInvocation,
 		Session:           invocation.Session,
@@ -98,7 +120,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Actually call the target agent's Run method.
 	targetEventChan, err := targetAgent.Run(ctx, targetInvocation)
 	if err != nil {
-		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Name(), err)
+		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
 		errorEvent := event.NewErrorEvent(
 			invocation.InvocationID,
@@ -117,7 +139,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	for targetEvent := range targetEventChan {
 		select {
 		case ch <- targetEvent:
-			log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Name())
+			log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 		case <-ctx.Done():
 			return
 		}
@@ -128,7 +150,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 
 	// Update the original invocation to reflect the transfer.
 	invocation.Agent = targetAgent
-	invocation.AgentName = targetAgent.Name()
+	invocation.AgentName = targetAgent.Info().Name
 	// Always end the original invocation after transfer.
 	invocation.EndInvocation = true
 }

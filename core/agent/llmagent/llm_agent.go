@@ -215,13 +215,29 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	return a.flow.Run(ctx, invocation)
 }
 
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *LLMAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        a.name,
+		Description: a.description,
+	}
+}
+
 // Tools implements the agent.Agent interface.
 // It returns the list of tools available to the agent, including transfer tools.
 func (a *LLMAgent) Tools() []tool.Tool {
 	if len(a.subAgents) == 0 {
 		return a.tools
 	}
-	transferTool := transfer.New(a)
+
+	// Create agent info for sub-agents.
+	agentInfos := make([]agent.Info, len(a.subAgents))
+	for i, subAgent := range a.subAgents {
+		agentInfos[i] = subAgent.Info()
+	}
+
+	transferTool := transfer.New(agentInfos)
 	return append(a.tools, transferTool)
 }
 
@@ -234,14 +250,9 @@ func (a *LLMAgent) SubAgents() []agent.Agent {
 // Returns nil if no sub-agent with the given name is found.
 func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 	for _, subAgent := range a.subAgents {
-		if subAgent.Name() == name {
+		if subAgent.Info().Name == name {
 			return subAgent
 		}
 	}
 	return nil
-}
-
-// Name returns the name of the agent.
-func (a *LLMAgent) Name() string {
-	return a.name
 }

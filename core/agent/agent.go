@@ -8,6 +8,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
+// Info contains basic information about an agent.
+type Info struct {
+	Name        string
+	Description string
+}
+
 // Agent is the interface that all agents must implement.
 type Agent interface {
 	// Run executes the provided invocation within the given context and returns
@@ -18,8 +24,8 @@ type Agent interface {
 	// These tools represent the capabilities available to the agent during invocations.
 	Tools() []tool.Tool
 
-	// Name returns the name of the agent.
-	Name() string
+	// Info returns the basic information about this agent.
+	Info() Info
 
 	// SubAgents returns the list of sub-agents available to this agent.
 	// Returns empty slice if no sub-agents are available.

@@ -3,6 +3,7 @@ package parallelagent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
@@ -176,10 +177,13 @@ func (a *ParallelAgent) Tools() []tool.Tool {
 	return a.tools
 }
 
-// Name implements the agent.Agent interface.
-// It returns the name of this agent.
-func (a *ParallelAgent) Name() string {
-	return a.name
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *ParallelAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        a.name,
+		Description: fmt.Sprintf("Parallel agent that runs %d sub-agents concurrently", len(a.subAgents)),
+	}
 }
 
 // SubAgents implements the agent.Agent interface.
@@ -192,7 +196,7 @@ func (a *ParallelAgent) SubAgents() []agent.Agent {
 // It finds a sub-agent by name and returns nil if not found.
 func (a *ParallelAgent) FindSubAgent(name string) agent.Agent {
 	for _, subAgent := range a.subAgents {
-		if subAgent.Name() == name {
+		if subAgent.Info().Name == name {
 			return subAgent
 		}
 	}

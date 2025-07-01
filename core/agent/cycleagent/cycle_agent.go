@@ -3,6 +3,7 @@ package cycleagent
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -167,10 +168,17 @@ func (a *CycleAgent) Tools() []tool.Tool {
 	return a.tools
 }
 
-// Name implements the agent.Agent interface.
-// It returns the name of this agent.
-func (a *CycleAgent) Name() string {
-	return a.name
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *CycleAgent) Info() agent.Info {
+	maxIterStr := "unlimited"
+	if a.maxIterations != nil {
+		maxIterStr = fmt.Sprintf("%d", *a.maxIterations)
+	}
+	return agent.Info{
+		Name:        a.name,
+		Description: fmt.Sprintf("Cycle agent that runs %d sub-agents in a loop (max iterations: %s)", len(a.subAgents), maxIterStr),
+	}
 }
 
 // SubAgents implements the agent.Agent interface.
@@ -183,7 +191,7 @@ func (a *CycleAgent) SubAgents() []agent.Agent {
 // It finds a sub-agent by name and returns nil if not found.
 func (a *CycleAgent) FindSubAgent(name string) agent.Agent {
 	for _, subAgent := range a.subAgents {
-		if subAgent.Name() == name {
+		if subAgent.Info().Name == name {
 			return subAgent
 		}
 	}

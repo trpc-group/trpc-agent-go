@@ -9,8 +9,8 @@ import (
 
 // TransferInfo contains information about a pending agent transfer.
 type TransferInfo struct {
-	// TargetAgent is the agent to transfer control to.
-	TargetAgent Agent
+	// TargetAgentName is the name of the agent to transfer control to.
+	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
 	// EndInvocation indicates whether to end the current invocation after transfer.

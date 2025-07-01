@@ -22,8 +22,11 @@ type mockAgent struct {
 	tools        []tool.Tool
 }
 
-func (m *mockAgent) Name() string {
-	return m.name
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing",
+	}
 }
 
 // SubAgents implements the agent.Agent interface for testing.
@@ -194,7 +197,7 @@ func TestParallelAgent_BranchInvocations(t *testing.T) {
 	}
 
 	// Verify agent is set.
-	if branchInvocation.Agent == nil || branchInvocation.Agent.Name() != subAgent.Name() {
+	if branchInvocation.Agent == nil || branchInvocation.Agent.Info().Name != subAgent.Info().Name {
 		t.Error("Branch should have correct agent")
 	}
 }

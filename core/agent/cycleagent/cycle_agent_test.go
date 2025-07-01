@@ -23,8 +23,11 @@ type mockAgent struct {
 	tools              []tool.Tool
 }
 
-func (m *mockAgent) Name() string {
-	return m.name
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing",
+	}
 }
 
 // SubAgents implements the agent.Agent interface for testing.
@@ -258,8 +261,11 @@ type conditionalMockAgent struct {
 	trackCount     *int // External counter to track
 }
 
-func (m *conditionalMockAgent) Name() string {
-	return m.name
+func (m *conditionalMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Conditional mock agent for testing",
+	}
 }
 
 // SubAgents implements the agent.Agent interface for testing.

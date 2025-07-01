@@ -3,6 +3,7 @@ package chainagent
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -111,10 +112,13 @@ func (a *ChainAgent) Tools() []tool.Tool {
 	return a.tools
 }
 
-// Name implements the agent.Agent interface.
-// It returns the name of this agent.
-func (a *ChainAgent) Name() string {
-	return a.name
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *ChainAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        a.name,
+		Description: fmt.Sprintf("Chain agent that runs %d sub-agents in sequence", len(a.subAgents)),
+	}
 }
 
 // SubAgents implements the agent.Agent interface.
@@ -127,7 +131,7 @@ func (a *ChainAgent) SubAgents() []agent.Agent {
 // It finds a sub-agent by name and returns nil if not found.
 func (a *ChainAgent) FindSubAgent(name string) agent.Agent {
 	for _, subAgent := range a.subAgents {
-		if subAgent.Name() == name {
+		if subAgent.Info().Name == name {
 			return subAgent
 		}
 	}

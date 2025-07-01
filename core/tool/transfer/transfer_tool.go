@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
@@ -34,31 +35,49 @@ type Response struct {
 
 // Tool implements the transfer_to_agent functionality.
 type Tool struct {
-	agent agent.Agent
+	availableAgents []agent.Info
 }
 
-// New creates a new transfer_to_agent tool.
-func New(a agent.Agent) *Tool {
+// New creates a new transfer_to_agent tool with the provided agent information.
+func New(agents []agent.Info) *Tool {
 	return &Tool{
-		agent: a,
+		availableAgents: agents,
 	}
+}
+
+// findAgentInfo finds agent information by name.
+// Returns nil if no agent with the given name is found.
+func (t *Tool) findAgentInfo(name string) *agent.Info {
+	for _, agentInfo := range t.availableAgents {
+		if agentInfo.Name == name {
+			return &agentInfo
+		}
+	}
+	return nil
 }
 
 // Declaration implements the tool.Tool interface.
 func (t *Tool) Declaration() *tool.Declaration {
-	// Get available agent names from the agent.
-	subAgents := t.agent.SubAgents()
-	agentNames := make([]string, len(subAgents))
-	for i, subAgent := range subAgents {
-		agentNames[i] = subAgent.Name()
+	// Build detailed agent descriptions.
+	var agentDescriptions []string
+	agentNames := make([]string, len(t.availableAgents))
+
+	for i, agentInfo := range t.availableAgents {
+		agentNames[i] = agentInfo.Name
+		agentDescriptions = append(agentDescriptions,
+			fmt.Sprintf("- %s: %s", agentInfo.Name, agentInfo.Description))
 	}
+
+	agentDetailsText := strings.Join(agentDescriptions, "\n")
 
 	schema := &tool.Schema{
 		Type: "object",
 		Properties: map[string]*tool.Schema{
 			"agent_name": {
-				Type:        "string",
-				Description: fmt.Sprintf("Name of the agent to transfer control to. Available agents: %v", agentNames),
+				Type: "string",
+				Description: fmt.Sprintf(
+					"Name of the agent to transfer control to.\n\nAvailable agents:\n%s\n\nValid agent names: %v",
+					agentDetailsText, agentNames),
 			},
 			"message": {
 				Type:        "string",
@@ -90,13 +109,12 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		}, nil
 	}
 
-	// Find the target agent.
-	targetAgent := t.agent.FindSubAgent(req.AgentName)
-	if targetAgent == nil {
-		subAgents := t.agent.SubAgents()
-		availableAgents := make([]string, len(subAgents))
-		for i, subAgent := range subAgents {
-			availableAgents[i] = subAgent.Name()
+	// Find the target agent information.
+	targetAgentInfo := t.findAgentInfo(req.AgentName)
+	if targetAgentInfo == nil {
+		availableAgents := make([]string, len(t.availableAgents))
+		for i, agentInfo := range t.availableAgents {
+			availableAgents[i] = agentInfo.Name
 		}
 		return Response{
 			Success:      false,
@@ -115,11 +133,11 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		}, nil
 	}
 
-	// Set transfer information in the invocation.
+	// Set transfer information in the invocation with just the agent name.
 	invocation.TransferInfo = &agent.TransferInfo{
-		TargetAgent:   targetAgent,
-		Message:       req.Message,
-		EndInvocation: req.EndInvocation,
+		TargetAgentName: targetAgentInfo.Name,
+		Message:         req.Message,
+		EndInvocation:   req.EndInvocation,
 	}
 
 	return Response{
