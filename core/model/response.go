@@ -28,6 +28,8 @@ const (
 	ObjectTypePreprocessingPlanning = "preprocessing.planning"
 	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
+	// ObjectTypeTransfer is the object type for agent transfer events.
+	ObjectTypeTransfer = "agent.transfer"
 )
 
 // Choice represents a single completion choice.

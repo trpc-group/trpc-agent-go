@@ -276,7 +276,8 @@ func (f *Flow) handleFunctionCalls(
 
 	// Execute each tool call.
 	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
-		choice := f.executeToolCall(ctx, toolCall, tools, i)
+		ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
+		choice := f.executeToolCall(ctxWithInvocation, toolCall, tools, i)
 		functionResponses = append(functionResponses, choice)
 	}
 

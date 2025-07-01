@@ -3,6 +3,7 @@ package cycleagent
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -18,7 +19,7 @@ const defaultChannelBufferSize = 256
 type CycleAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.CallableTool
+	tools             []tool.Tool
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
 }
@@ -30,7 +31,7 @@ type Options struct {
 	// SubAgents is the list of sub-agents to run in a loop.
 	SubAgents []agent.Agent
 	// Tools is the list of tools available to the agent.
-	Tools []tool.CallableTool
+	Tools []tool.Tool
 	// MaxIterations is the maximum number of iterations to run the loop agent.
 	// If not set, the loop agent will run indefinitely until a sub-agent escalates.
 	MaxIterations *int
@@ -163,6 +164,36 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
-func (a *CycleAgent) Tools() []tool.CallableTool {
+func (a *CycleAgent) Tools() []tool.Tool {
 	return a.tools
+}
+
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *CycleAgent) Info() agent.Info {
+	maxIterStr := "unlimited"
+	if a.maxIterations != nil {
+		maxIterStr = fmt.Sprintf("%d", *a.maxIterations)
+	}
+	return agent.Info{
+		Name:        a.name,
+		Description: fmt.Sprintf("Cycle agent that runs %d sub-agents in a loop (max iterations: %s)", len(a.subAgents), maxIterStr),
+	}
+}
+
+// SubAgents implements the agent.Agent interface.
+// It returns the list of sub-agents available to this agent.
+func (a *CycleAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
+
+// FindSubAgent implements the agent.Agent interface.
+// It finds a sub-agent by name and returns nil if not found.
+func (a *CycleAgent) FindSubAgent(name string) agent.Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Info().Name == name {
+			return subAgent
+		}
+	}
+	return nil
 }

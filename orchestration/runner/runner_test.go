@@ -20,6 +20,23 @@ type mockAgent struct {
 	name string
 }
 
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing",
+	}
+}
+
+// SubAgents implements the agent.Agent interface for testing.
+func (m *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventCh := make(chan *event.Event, 1)
 

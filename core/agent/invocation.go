@@ -1,9 +1,21 @@
 package agent
 
 import (
+	"context"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
+
+// TransferInfo contains information about a pending agent transfer.
+type TransferInfo struct {
+	// TargetAgentName is the name of the agent to transfer control to.
+	TargetAgentName string
+	// Message is the message to send to the target agent.
+	Message string
+	// EndInvocation indicates whether to end the current invocation after transfer.
+	EndInvocation bool
+}
 
 // Invocation represents the context for a flow execution.
 type Invocation struct {
@@ -25,6 +37,21 @@ type Invocation struct {
 	EventCompletionCh <-chan string
 	// RunOptions is the options for the Run method.
 	RunOptions RunOptions
+	// TransferInfo contains information about a pending agent transfer.
+	TransferInfo *TransferInfo
+}
+
+type invocationKey struct{}
+
+// NewContextWithInvocation creates a new context with the invocation.
+func NewContextWithInvocation(ctx context.Context, invocation *Invocation) context.Context {
+	return context.WithValue(ctx, invocationKey{}, invocation)
+}
+
+// InvocationFromContext returns the invocation from the context.
+func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
+	invocation, ok := ctx.Value(invocationKey{}).(*Invocation)
+	return invocation, ok
 }
 
 // RunOptions is the options for the Run method.

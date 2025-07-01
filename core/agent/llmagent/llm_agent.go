@@ -7,6 +7,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/transfer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -72,15 +73,24 @@ func WithPlanner(planner planner.Planner) Option {
 	}
 }
 
+// WithSubAgents sets the list of sub-agents available to the agent.
+func WithSubAgents(subAgents []agent.Agent) Option {
+	return func(opts *Options) {
+		opts.SubAgents = subAgents
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
-	// Model is the model to use.
+	// Name is the name of the agent.
+	Name string
+	// Model is the model to use for generating responses.
 	Model model.Model
-	// Description is the description of the agent.
+	// Description is a description of the agent.
 	Description string
-	// Instruction is the instruction of the agent.
+	// Instruction is the instruction for the agent.
 	Instruction string
-	// SystemPrompt is the system prompt of the agent.
+	// SystemPrompt is the system prompt for the agent.
 	SystemPrompt string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
@@ -90,10 +100,11 @@ type Options struct {
 	Tools []tool.Tool
 	// Planner is the planner to use for planning instructions.
 	Planner planner.Planner
+	// SubAgents is the list of sub-agents available to the agent.
+	SubAgents []agent.Agent
 }
 
-// LLMAgent is an agent that uses a language model to generate responses.
-// It implements the agent.Agent interface.
+// LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
 	name         string
 	model        model.Model
@@ -104,6 +115,7 @@ type LLMAgent struct {
 	flow         flow.Flow
 	tools        []tool.Tool // Tools supported by the agent
 	planner      planner.Planner
+	subAgents    []agent.Agent // Sub-agents that can be delegated to
 }
 
 // New creates a new LLMAgent with the given options.
@@ -156,6 +168,12 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
+	// Add transfer response processor if sub-agents are configured.
+	if len(options.SubAgents) > 0 {
+		transferResponseProcessor := processor.NewTransferResponseProcessor()
+		responseProcessors = append(responseProcessors, transferResponseProcessor)
+	}
+
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
 		ChannelBufferSize: options.ChannelBufferSize,
@@ -176,6 +194,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		flow:         llmFlow,
 		tools:        options.Tools,
 		planner:      options.Planner,
+		subAgents:    options.SubAgents,
 	}
 }
 
@@ -196,8 +215,44 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	return a.flow.Run(ctx, invocation)
 }
 
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *LLMAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        a.name,
+		Description: a.description,
+	}
+}
+
 // Tools implements the agent.Agent interface.
-// It returns the list of tools available to the agent.
+// It returns the list of tools available to the agent, including transfer tools.
 func (a *LLMAgent) Tools() []tool.Tool {
-	return a.tools
+	if len(a.subAgents) == 0 {
+		return a.tools
+	}
+
+	// Create agent info for sub-agents.
+	agentInfos := make([]agent.Info, len(a.subAgents))
+	for i, subAgent := range a.subAgents {
+		agentInfos[i] = subAgent.Info()
+	}
+
+	transferTool := transfer.New(agentInfos)
+	return append(a.tools, transferTool)
+}
+
+// SubAgents returns the list of sub-agents for this agent.
+func (a *LLMAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
+
+// FindSubAgent finds a sub-agent by name.
+// Returns nil if no sub-agent with the given name is found.
+func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Info().Name == name {
+			return subAgent
+		}
+	}
+	return nil
 }

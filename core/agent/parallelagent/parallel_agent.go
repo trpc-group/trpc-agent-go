@@ -3,6 +3,7 @@ package parallelagent
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
@@ -21,7 +22,7 @@ const defaultChannelBufferSize = 256
 type ParallelAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.CallableTool
+	tools             []tool.Tool
 	channelBufferSize int
 }
 
@@ -32,7 +33,7 @@ type Options struct {
 	// SubAgents is the list of sub-agents to run in parallel.
 	SubAgents []agent.Agent
 	// Tools is the list of tools available to the agent.
-	Tools []tool.CallableTool
+	Tools []tool.Tool
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 }
@@ -172,6 +173,32 @@ func (a *ParallelAgent) mergeEventStreams(
 
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
-func (a *ParallelAgent) Tools() []tool.CallableTool {
+func (a *ParallelAgent) Tools() []tool.Tool {
 	return a.tools
+}
+
+// Info implements the agent.Agent interface.
+// It returns the basic information about this agent.
+func (a *ParallelAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        a.name,
+		Description: fmt.Sprintf("Parallel agent that runs %d sub-agents concurrently", len(a.subAgents)),
+	}
+}
+
+// SubAgents implements the agent.Agent interface.
+// It returns the list of sub-agents available to this agent.
+func (a *ParallelAgent) SubAgents() []agent.Agent {
+	return a.subAgents
+}
+
+// FindSubAgent implements the agent.Agent interface.
+// It finds a sub-agent by name and returns nil if not found.
+func (a *ParallelAgent) FindSubAgent(name string) agent.Agent {
+	for _, subAgent := range a.subAgents {
+		if subAgent.Info().Name == name {
+			return subAgent
+		}
+	}
+	return nil
 }

@@ -23,6 +23,23 @@ type mockAgent struct {
 	tools              []tool.Tool
 }
 
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing",
+	}
+}
+
+// SubAgents implements the agent.Agent interface for testing.
+func (m *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if m.shouldError {
 		return nil, errors.New("mock agent error")
@@ -242,6 +259,23 @@ type conditionalMockAgent struct {
 	executionCount *int
 	triggerAfter   int
 	trackCount     *int // External counter to track
+}
+
+func (m *conditionalMockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Conditional mock agent for testing",
+	}
+}
+
+// SubAgents implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
 }
 
 func (m *conditionalMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {

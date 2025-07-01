@@ -22,6 +22,23 @@ type mockAgent struct {
 	tools          []tool.Tool
 }
 
+func (m *mockAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing",
+	}
+}
+
+// SubAgents implements the agent.Agent interface for testing.
+func (m *mockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+// FindSubAgent implements the agent.Agent interface for testing.
+func (m *mockAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if m.shouldError {
 		return nil, errors.New("mock agent error")
@@ -257,7 +274,7 @@ func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
 
 func TestChainAgent_Tools(t *testing.T) {
 	// Create some mock tools.
-	tools := []tool.CallableTool{} // Empty for now since we don't have concrete tool implementations.
+	tools := []tool.Tool{} // Empty for now since we don't have concrete tool implementations.
 
 	chainAgent := New(Options{
 		Name:  "test-chain",
