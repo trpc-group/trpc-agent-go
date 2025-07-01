@@ -1,4 +1,5 @@
-package tool
+// Package mcp provides MCP tool set implementation.
+package mcp
 
 import (
 	"context"
@@ -7,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
@@ -15,7 +17,7 @@ import (
 type MCPToolSet struct {
 	config         mcpToolSetConfig
 	sessionManager *mcpSessionManager
-	tools          []Tool
+	tools          []tool.Tool
 	mu             sync.RWMutex
 	lastRefresh    time.Time
 	refreshTicker  *time.Ticker
@@ -54,7 +56,7 @@ func NewMCPToolSet(config MCPConnectionConfig, opts ...MCPToolSetOption) *MCPToo
 	toolSet := &MCPToolSet{
 		config:         cfg,
 		sessionManager: sessionManager,
-		tools:          make([]Tool, 0),
+		tools:          make([]tool.Tool, 0),
 		stopCh:         make(chan struct{}),
 	}
 
@@ -67,7 +69,7 @@ func NewMCPToolSet(config MCPConnectionConfig, opts ...MCPToolSetOption) *MCPToo
 }
 
 // Tools implements the ToolSet interface.
-func (ts *MCPToolSet) Tools(ctx context.Context) []Tool {
+func (ts *MCPToolSet) Tools(ctx context.Context) []tool.Tool {
 	ts.mu.RLock()
 	shouldRefresh := len(ts.tools) == 0 ||
 		(ts.config.autoRefresh > 0 && time.Since(ts.lastRefresh) > ts.config.autoRefresh)
@@ -84,7 +86,7 @@ func (ts *MCPToolSet) Tools(ctx context.Context) []Tool {
 	defer ts.mu.RUnlock()
 
 	// Return a copy to prevent external modification
-	result := make([]Tool, len(ts.tools))
+	result := make([]tool.Tool, len(ts.tools))
 	copy(result, ts.tools)
 	return result
 }
@@ -107,9 +109,6 @@ func (ts *MCPToolSet) Close() error {
 	default:
 		// Channel might be closed or blocked, that's okay
 	}
-
-	// Give goroutine a moment to exit
-	time.Sleep(10 * time.Millisecond)
 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -146,7 +145,7 @@ func (ts *MCPToolSet) refreshTools(ctx context.Context) error {
 	log.Debug("Retrieved tools from MCP server", "count", len(mcpTools))
 
 	// Convert MCP tools to standard tool format.
-	tools := make([]Tool, 0, len(mcpTools))
+	tools := make([]tool.Tool, 0, len(mcpTools))
 	for _, mcpTool := range mcpTools {
 		tool := newMCPTool(mcpTool, ts.sessionManager, ts.config.retryConfig)
 		tools = append(tools, tool)
@@ -164,7 +163,7 @@ func (ts *MCPToolSet) refreshTools(ctx context.Context) error {
 		}
 
 		filteredInfos := ts.config.toolFilter.Filter(ctx, toolInfos)
-		filteredTools := make([]Tool, 0, len(filteredInfos))
+		filteredTools := make([]tool.Tool, 0, len(filteredInfos))
 
 		// Build a map for quick lookup.
 		filteredNames := make(map[string]bool)
@@ -237,7 +236,7 @@ func (ts *MCPToolSet) startAutoRefresh() {
 }
 
 // GetToolByName returns a tool by its name, or nil if not found.
-func (ts *MCPToolSet) GetToolByName(ctx context.Context, name string) Tool {
+func (ts *MCPToolSet) GetToolByName(ctx context.Context, name string) tool.Tool {
 	tools := ts.Tools(ctx)
 	for _, tool := range tools {
 		if tool.Declaration().Name == name {
@@ -286,7 +285,7 @@ type mcpSessionManager struct {
 	config      MCPConnectionConfig
 	client      mcp.Connector
 	authHandler authHandler
-	diagnostics *ErrorDiagnostic
+	diagnostics *errorDiagnostic
 	mu          sync.RWMutex
 	connected   bool
 	initialized bool
@@ -301,7 +300,7 @@ type authHandler interface {
 func newMCPSessionManager(config MCPConnectionConfig) *mcpSessionManager {
 	manager := &mcpSessionManager{
 		config:      config,
-		diagnostics: NewErrorDiagnostic(),
+		diagnostics: newErrorDiagnostic(),
 	}
 
 	// Set up authentication handler if needed.
@@ -351,8 +350,14 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 		clientInfo = defaultClientInfo
 	}
 
-	switch m.config.Transport {
-	case TransportStdio:
+	// Validate and convert transport string to internal type
+	transportType, err := validateTransport(m.config.Transport)
+	if err != nil {
+		return nil, err
+	}
+
+	switch transportType {
+	case transportStdio:
 		config := mcp.StdioTransportConfig{
 			ServerParams: mcp.StdioServerParameters{
 				Command: m.config.Command,
@@ -362,7 +367,7 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 		}
 		return mcp.NewStdioClient(config, clientInfo)
 
-	case TransportStreamable:
+	case transportStreamable:
 		options := []mcp.ClientOption{
 			mcp.WithClientLogger(mcp.GetDefaultLogger()),
 		}
@@ -527,8 +532,15 @@ type noopAuthHandler struct{}
 
 // newAuthHandler creates an appropriate auth handler based on config.
 func newAuthHandler(config *AuthConfig) authHandler {
-	switch config.Type {
-	case AuthTypeBearer:
+	// Validate and convert auth type string to internal type
+	authType, err := validateAuthType(config.Type)
+	if err != nil {
+		// For invalid auth types, fall back to no-op
+		return &noopAuthHandler{}
+	}
+
+	switch authType {
+	case authTypeBearer:
 		token, _ := config.Credentials["token"].(string)
 		return &bearerAuthHandler{token: token}
 

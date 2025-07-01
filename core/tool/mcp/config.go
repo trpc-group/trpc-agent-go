@@ -1,7 +1,8 @@
-package tool
+package mcp
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"time"
 
@@ -9,13 +10,13 @@ import (
 )
 
 // Transport specifies the transport method: "stdio", "sse", "streamable_http".
-type Transport string
+type transport string
 
-// AuthType defines the authentication method.
-type AuthType string
+// authType defines the authentication method.
+type authType string
 
-// MCPErrorCode represents specific MCP error types for better diagnosis.
-type MCPErrorCode string
+// mcpErrorCode represents specific MCP error types for better diagnosis.
+type mcpErrorCode string
 
 // FilterMode defines how the filter should behave.
 type FilterMode string
@@ -24,37 +25,65 @@ type FilterMode string
 type contextKey string
 
 const (
-	// TransportStdio is the stdio transport.
-	TransportStdio Transport = "stdio"
-	// TransportSSE is the Server-Sent Events transport.
-	TransportSSE Transport = "sse"
-	// TransportStreamable is the streamable HTTP transport.
-	TransportStreamable Transport = "streamable"
+	// transportStdio is the stdio transport.
+	transportStdio transport = "stdio"
+	// transportSSE is the Server-Sent Events transport.
+	transportSSE transport = "sse"
+	// transportStreamable is the streamable HTTP transport.
+	transportStreamable transport = "streamable"
 
-	// AuthTypeNone No authentication.
-	AuthTypeNone AuthType = "none"
-	// AuthTypeBearer Bearer authentication.
-	AuthTypeBearer AuthType = "bearer"
-	// AuthTypeOAuth2 OAuth2 authentication.
-	AuthTypeOAuth2 AuthType = "oauth2"
+	// authTypeNone No authentication.
+	authTypeNone authType = "none"
+	// authTypeBearer Bearer authentication.
+	authTypeBearer authType = "bearer"
+	// authTypeOAuth2 OAuth2 authentication.
+	authTypeOAuth2 authType = "oauth2"
 
 	FilterModeInclude FilterMode = "include" // Only include listed tools
 	FilterModeExclude FilterMode = "exclude" // Exclude listed tools
 
-	MCPErrorUnknown              MCPErrorCode = "unknown"
-	MCPErrorConnectionFailed     MCPErrorCode = "connection_failed"
-	MCPErrorAuthenticationFailed MCPErrorCode = "authentication_failed"
-	MCPErrorToolNotFound         MCPErrorCode = "tool_not_found"
-	MCPErrorInvalidParameters    MCPErrorCode = "invalid_parameters"
-	MCPErrorMissingParameters    MCPErrorCode = "missing_parameters"
-	MCPErrorTypeValidation       MCPErrorCode = "type_validation"
-	MCPErrorPermissionDenied     MCPErrorCode = "permission_denied"
-	MCPErrorServerError          MCPErrorCode = "server_error"
-	MCPErrorTimeout              MCPErrorCode = "timeout"
-	MCPErrorInvalidResponse      MCPErrorCode = "invalid_response"
+	mcpErrorUnknown              mcpErrorCode = "unknown"
+	mcpErrorConnectionFailed     mcpErrorCode = "connection_failed"
+	mcpErrorAuthenticationFailed mcpErrorCode = "authentication_failed"
+	mcpErrorToolNotFound         mcpErrorCode = "tool_not_found"
+	mcpErrorInvalidParameters    mcpErrorCode = "invalid_parameters"
+	mcpErrorMissingParameters    mcpErrorCode = "missing_parameters"
+	mcpErrorTypeValidation       mcpErrorCode = "type_validation"
+	mcpErrorPermissionDenied     mcpErrorCode = "permission_denied"
+	mcpErrorServerError          mcpErrorCode = "server_error"
+	mcpErrorTimeout              mcpErrorCode = "timeout"
+	mcpErrorInvalidResponse      mcpErrorCode = "invalid_response"
 
 	toolContextKey contextKey = "tool_context"
 )
+
+// validateTransport validates the transport string and returns the internal transport type.
+func validateTransport(t string) (transport, error) {
+	switch t {
+	case "stdio":
+		return transportStdio, nil
+	case "sse":
+		return transportSSE, nil
+	case "streamable", "streamable_http":
+		return transportStreamable, nil
+	default:
+		return "", fmt.Errorf("unsupported transport: %s, supported: stdio, sse, streamable", t)
+	}
+}
+
+// validateAuthType validates the auth type string and returns the internal auth type.
+func validateAuthType(t string) (authType, error) {
+	switch t {
+	case "none":
+		return authTypeNone, nil
+	case "bearer":
+		return authTypeBearer, nil
+	case "oauth2":
+		return authTypeOAuth2, nil
+	default:
+		return "", fmt.Errorf("unsupported auth type: %s, supported: none, bearer, oauth2", t)
+	}
+}
 
 // Default configurations.
 var (
@@ -74,8 +103,8 @@ var (
 
 // MCPConnectionConfig defines the configuration for connecting to an MCP server.
 type MCPConnectionConfig struct {
-	// Transport specifies the transport method: "stdio", "sse", "streamable_http".
-	Transport Transport `json:"transport"`
+	// Transport specifies the transport method: "stdio", "sse", "streamable".
+	Transport string `json:"transport"`
 
 	// Streamable/SSE configuration.
 	ServerURL string            `json:"server_url,omitempty"`
@@ -111,8 +140,8 @@ type RetryConfig struct {
 
 // AuthConfig configures authentication for MCP connections.
 type AuthConfig struct {
-	// Type specifies the authentication type.
-	Type AuthType `json:"type"`
+	// Type specifies the authentication type: "none", "bearer", "oauth2".
+	Type string `json:"type"`
 	// Credentials contains authentication credentials.
 	Credentials map[string]interface{} `json:"credentials"`
 	// Options contains additional authentication options.
@@ -385,7 +414,7 @@ var NoFilter ToolFilter = ToolFilterFunc(func(ctx context.Context, tools []MCPTo
 // MCPError represents an enhanced error with diagnostic information.
 type MCPError struct {
 	// Code is the specific MCP error code.
-	Code MCPErrorCode `json:"code"`
+	Code string `json:"code"`
 	// Message is the error message.
 	Message string `json:"message"`
 	// OriginalErr is the original error that caused this MCP error.
@@ -439,24 +468,4 @@ type ParameterInfo struct {
 	Description string `json:"description"`
 	// Example provides an example value for the parameter.
 	Example interface{} `json:"example,omitempty"`
-}
-
-// DiagnosticInfo contains context information for error diagnosis.
-type DiagnosticInfo struct {
-	// ToolName is the name of the tool being diagnosed.
-	ToolName string `json:"tool_name"`
-	// Operation is the operation that was being performed.
-	Operation string `json:"operation"`
-	// ProvidedArgs contains the arguments that were provided.
-	ProvidedArgs map[string]interface{} `json:"provided_args"`
-	// ExpectedSchema contains the expected parameter schema.
-	ExpectedSchema interface{} `json:"expected_schema"`
-	// AvailableTools lists the tools that are available.
-	AvailableTools []string `json:"available_tools"`
-	// ConnectionInfo contains information about the connection.
-	ConnectionInfo map[string]interface{} `json:"connection_info"`
-	// SessionContext contains the session context.
-	SessionContext *ToolContext `json:"session_context"`
-	// ServerCapabilities lists the capabilities of the server.
-	ServerCapabilities []string `json:"server_capabilities"`
 }

@@ -11,6 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/mcp"
 )
 
 // MultipleMCPToolsetsDemo demonstrates the ADK Python approach:
@@ -23,23 +24,23 @@ func MultipleMCPToolsetsDemo() {
 	ctx := context.Background()
 
 	// MCPToolset 1: Streamable HTTP MCP server (file system tools).
-	httpToolSet := tool.NewMCPToolSet(tool.MCPConnectionConfig{
+	httpToolSet := mcp.NewMCPToolSet(mcp.MCPConnectionConfig{
 		Transport: "streamable_http",
 		ServerURL: "http://localhost:3000/mcp",
 		Timeout:   10 * time.Second,
 	},
-		tool.WithToolFilter(tool.NewIncludeFilter("echo", "greet", "current_time")),
+		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "greet", "current_time")),
 	)
 	defer httpToolSet.Close()
 
 	// MCPToolset 2: STDIO MCP server (local tools).
-	stdioToolSet := tool.NewMCPToolSet(tool.MCPConnectionConfig{
+	stdioToolSet := mcp.NewMCPToolSet(mcp.MCPConnectionConfig{
 		Transport: "stdio",
 		Command:   "./stdio_server/stdio_server",
 		Args:      []string{},
 		Timeout:   5 * time.Second,
 	},
-		tool.WithToolFilter(tool.NewIncludeFilter("echo", "text_transform", "calculator")),
+		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "text_transform", "calculator")),
 	)
 	defer stdioToolSet.Close()
 

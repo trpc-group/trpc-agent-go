@@ -1,4 +1,4 @@
-package tool
+package mcp
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
@@ -14,27 +15,27 @@ import (
 // mcpTool implements the Tool interface for MCP tools.
 type mcpTool struct {
 	mcpToolRef     *mcp.Tool
-	inputSchema    *Schema
+	inputSchema    *tool.Schema
 	sessionManager *mcpSessionManager
 	retryConfig    *RetryConfig
-	diagnostics    *ErrorDiagnostic
+	diagnostics    *errorDiagnostic
 }
 
 // newMCPTool creates a new MCP tool wrapper.
 func newMCPTool(mcpToolData mcp.Tool, sessionManager *mcpSessionManager, retryConfig *RetryConfig) *mcpTool {
-	tool := &mcpTool{
+	mcpTool := &mcpTool{
 		mcpToolRef:     &mcpToolData,
 		sessionManager: sessionManager,
 		retryConfig:    retryConfig,
-		diagnostics:    NewErrorDiagnostic(),
+		diagnostics:    newErrorDiagnostic(),
 	}
 
 	// Convert MCP input schema to inner Schema.
 	if mcpToolData.InputSchema != nil {
-		tool.inputSchema = convertMCPSchemaToSchema(mcpToolData.InputSchema)
+		mcpTool.inputSchema = convertMCPSchemaToSchema(mcpToolData.InputSchema)
 	}
 
-	return tool
+	return mcpTool
 }
 
 // Call implements the Tool interface.
@@ -55,7 +56,7 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	normalizedParams, err := t.normalizeParameters(ctx, rawArguments)
 	if err != nil {
 		// Enhanced error diagnosis for parameter processing
-		diagInfo := DiagnosticInfo{
+		diagInfo := diagnosticInfo{
 			ToolName:       t.mcpToolRef.Name,
 			Operation:      "parameter_processing",
 			ProvidedArgs:   rawArguments,
@@ -65,15 +66,15 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 			diagInfo.SessionContext = toolCtx
 		}
 
-		mcpErr := t.diagnostics.AnalyzeError(err, diagInfo)
-		t.diagnostics.LogError(mcpErr)
+		mcpErr := t.diagnostics.analyzeError(err, diagInfo)
+		t.diagnostics.logError(mcpErr)
 		return nil, mcpErr
 	}
 
 	// Validate parameters against schema.
 	if err := t.validateParameters(normalizedParams); err != nil {
 		// Enhanced error diagnosis for parameter validation.
-		diagInfo := DiagnosticInfo{
+		diagInfo := diagnosticInfo{
 			ToolName:       t.mcpToolRef.Name,
 			Operation:      "parameter_validation",
 			ProvidedArgs:   normalizedParams,
@@ -83,8 +84,8 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 			diagInfo.SessionContext = toolCtx
 		}
 
-		mcpErr := t.diagnostics.AnalyzeError(err, diagInfo)
-		t.diagnostics.LogError(mcpErr)
+		mcpErr := t.diagnostics.analyzeError(err, diagInfo)
+		t.diagnostics.logError(mcpErr)
 		return nil, mcpErr
 	}
 
@@ -123,7 +124,7 @@ func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]interface{}
 	content, err := t.sessionManager.callTool(ctx, t.mcpToolRef.Name, arguments)
 	if err != nil {
 		// Enhanced error diagnosis.
-		diagInfo := DiagnosticInfo{
+		diagInfo := diagnosticInfo{
 			ToolName:       t.mcpToolRef.Name,
 			Operation:      "tool_call",
 			ProvidedArgs:   arguments,
@@ -145,8 +146,8 @@ func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]interface{}
 		}
 
 		// Analyze and enhance the error.
-		mcpErr := t.diagnostics.AnalyzeError(err, diagInfo)
-		t.diagnostics.LogError(mcpErr)
+		mcpErr := t.diagnostics.analyzeError(err, diagInfo)
+		t.diagnostics.logError(mcpErr) // TODO: implement logError
 
 		return nil, mcpErr
 	}
@@ -194,490 +195,11 @@ func (t *mcpTool) callWithRetry(ctx context.Context, arguments map[string]interf
 }
 
 // Declaration implements the Tool interface.
-func (t *mcpTool) Declaration() *Declaration {
-	return &Declaration{
+func (t *mcpTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
 		Name:        t.mcpToolRef.Name,
 		Description: t.mcpToolRef.Description,
 		InputSchema: t.inputSchema,
-	}
-}
-
-// ErrorDiagnostic provides intelligent error analysis and suggestions.
-type ErrorDiagnostic struct{}
-
-// NewErrorDiagnostic creates a new error diagnostic instance.
-func NewErrorDiagnostic() *ErrorDiagnostic {
-	return &ErrorDiagnostic{}
-}
-
-// AnalyzeError analyzes an error and returns an enhanced MCPError with suggestions.
-func (d *ErrorDiagnostic) AnalyzeError(err error, info DiagnosticInfo) *MCPError {
-	if err == nil {
-		return nil
-	}
-
-	mcpErr := &MCPError{
-		Code:        d.classifyError(err, info),
-		Message:     err.Error(),
-		OriginalErr: err,
-		Context:     d.buildContext(info),
-		Details:     d.buildErrorDetails(err, info),
-	}
-
-	mcpErr.Suggestions = d.generateSuggestions(mcpErr.Code, info)
-
-	log.Debug("Error analyzed",
-		"code", mcpErr.Code,
-		"operation", info.Operation,
-		"tool", info.ToolName)
-
-	return mcpErr
-}
-
-// classifyError determines the error type based on error content and context.
-func (d *ErrorDiagnostic) classifyError(err error, info DiagnosticInfo) MCPErrorCode {
-	errMsg := strings.ToLower(err.Error())
-
-	// Connection-related errors
-	if strings.Contains(errMsg, "connection") || strings.Contains(errMsg, "dial") {
-		return MCPErrorConnectionFailed
-	}
-
-	// Authentication errors
-	if strings.Contains(errMsg, "auth") || strings.Contains(errMsg, "unauthorized") ||
-		strings.Contains(errMsg, "403") || strings.Contains(errMsg, "401") {
-		return MCPErrorAuthenticationFailed
-	}
-
-	// Tool not found errors
-	if strings.Contains(errMsg, "tool not found") || strings.Contains(errMsg, "unknown tool") ||
-		(info.Operation == "tool_call" && strings.Contains(errMsg, "not found")) {
-		return MCPErrorToolNotFound
-	}
-
-	// Parameter-related errors
-	if strings.Contains(errMsg, "parameter") || strings.Contains(errMsg, "argument") {
-		if strings.Contains(errMsg, "missing") || strings.Contains(errMsg, "required") {
-			return MCPErrorMissingParameters
-		}
-		if strings.Contains(errMsg, "invalid") || strings.Contains(errMsg, "type") {
-			return MCPErrorInvalidParameters
-		}
-		if strings.Contains(errMsg, "validation") {
-			return MCPErrorTypeValidation
-		}
-	}
-
-	// Permission errors
-	if strings.Contains(errMsg, "permission") || strings.Contains(errMsg, "forbidden") {
-		return MCPErrorPermissionDenied
-	}
-
-	// Timeout errors
-	if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline") {
-		return MCPErrorTimeout
-	}
-
-	// Server errors
-	if strings.Contains(errMsg, "server") || strings.Contains(errMsg, "500") ||
-		strings.Contains(errMsg, "internal error") {
-		return MCPErrorServerError
-	}
-
-	// Response parsing errors
-	if strings.Contains(errMsg, "json") || strings.Contains(errMsg, "parse") ||
-		strings.Contains(errMsg, "unmarshal") || strings.Contains(errMsg, "decode") {
-		return MCPErrorInvalidResponse
-	}
-
-	return MCPErrorUnknown
-}
-
-// buildContext creates contextual information for the error.
-func (d *ErrorDiagnostic) buildContext(info DiagnosticInfo) map[string]interface{} {
-	context := make(map[string]interface{})
-
-	if info.ToolName != "" {
-		context["tool_name"] = info.ToolName
-	}
-	if info.Operation != "" {
-		context["operation"] = info.Operation
-	}
-	if len(info.ProvidedArgs) > 0 {
-		context["provided_arguments"] = info.ProvidedArgs
-	}
-	if len(info.AvailableTools) > 0 {
-		context["available_tools"] = info.AvailableTools
-	}
-	if info.SessionContext != nil {
-		context["session_id"] = info.SessionContext.SessionID
-		context["user_id"] = info.SessionContext.UserID
-	}
-
-	context["timestamp"] = time.Now().Format(time.RFC3339)
-
-	return context
-}
-
-// buildErrorDetails creates detailed error information.
-func (d *ErrorDiagnostic) buildErrorDetails(err error, info DiagnosticInfo) *ErrorDetails {
-	details := &ErrorDetails{
-		TechnicalDetails:   err.Error(),
-		ProvidedParameters: info.ProvidedArgs,
-	}
-
-	// Generate user-friendly message.
-	details.UserFriendlyMessage = d.generateUserFriendlyMessage(err, info)
-
-	// Extract expected parameters if available.
-	if info.ExpectedSchema != nil {
-		details.ExpectedParameters = d.extractParameterInfo(info.ExpectedSchema)
-	}
-
-	// Include available tools for tool not found errors.
-	if len(info.AvailableTools) > 0 {
-		details.AvailableTools = info.AvailableTools
-	}
-
-	return details
-}
-
-// generateUserFriendlyMessage creates a user-friendly error message.
-func (d *ErrorDiagnostic) generateUserFriendlyMessage(err error, info DiagnosticInfo) string {
-	errMsg := strings.ToLower(err.Error())
-
-	switch {
-	case strings.Contains(errMsg, "connection"):
-		return fmt.Sprintf("Unable to connect to the MCP server. Please check if the server is running and accessible.")
-
-	case strings.Contains(errMsg, "auth"):
-		return fmt.Sprintf("Authentication failed. Please check your credentials and try again.")
-
-	case strings.Contains(errMsg, "tool not found") ||
-		(info.Operation == "tool_call" && strings.Contains(errMsg, "not found")):
-		if info.ToolName != "" {
-			return fmt.Sprintf("Tool '%s' was not found. Please check the tool name or refresh the available tools list.", info.ToolName)
-		}
-		return "The requested tool was not found. Please check the tool name and try again."
-
-	case strings.Contains(errMsg, "parameter") && strings.Contains(errMsg, "missing"):
-		return "Some required parameters are missing. Please provide all necessary parameters and try again."
-
-	case strings.Contains(errMsg, "parameter") && (strings.Contains(errMsg, "invalid") ||
-		strings.Contains(errMsg, "type")):
-		return "One or more parameters have invalid values or types. Please check the parameter format and try again."
-
-	case strings.Contains(errMsg, "timeout"):
-		return "The operation timed out. The server may be busy or the request is taking too long to process."
-
-	case strings.Contains(errMsg, "permission"):
-		return "You don't have permission to perform this operation. Please check your access rights."
-
-	default:
-		return fmt.Sprintf("An error occurred: %s", err.Error())
-	}
-}
-
-// extractParameterInfo extracts parameter information from schema.
-func (d *ErrorDiagnostic) extractParameterInfo(schema interface{}) []ParameterInfo {
-	var params []ParameterInfo
-
-	// Try to parse as openapi3.Schema or generic map.
-	switch s := schema.(type) {
-	case map[string]interface{}:
-		if properties, ok := s["properties"].(map[string]interface{}); ok {
-			required := make(map[string]bool)
-			if reqSlice, ok := s["required"].([]interface{}); ok {
-				for _, req := range reqSlice {
-					if reqStr, ok := req.(string); ok {
-						required[reqStr] = true
-					}
-				}
-			}
-
-			for name, prop := range properties {
-				if propMap, ok := prop.(map[string]interface{}); ok {
-					param := ParameterInfo{
-						Name:     name,
-						Required: required[name],
-					}
-
-					if typeVal, ok := propMap["type"].(string); ok {
-						param.Type = typeVal
-					}
-					if desc, ok := propMap["description"].(string); ok {
-						param.Description = desc
-					}
-					if example, ok := propMap["example"]; ok {
-						param.Example = example
-					}
-
-					params = append(params, param)
-				}
-			}
-		}
-	}
-
-	return params
-}
-
-// generateSuggestions creates actionable suggestions based on error type.
-func (d *ErrorDiagnostic) generateSuggestions(code MCPErrorCode, info DiagnosticInfo) []string {
-	var suggestions []string
-
-	switch code {
-	case MCPErrorConnectionFailed:
-		suggestions = append(suggestions, "Check if the MCP server is running")
-		suggestions = append(suggestions, "Verify the server URL or command path")
-		suggestions = append(suggestions, "Check network connectivity")
-		if len(info.ConnectionInfo) > 0 {
-			if url, ok := info.ConnectionInfo["server_url"].(string); ok && url != "" {
-				suggestions = append(suggestions, fmt.Sprintf("Try accessing %s manually", url))
-			}
-		}
-
-	case MCPErrorAuthenticationFailed:
-		suggestions = append(suggestions, "Verify your authentication credentials")
-		suggestions = append(suggestions, "Check if the authentication token/key is still valid")
-		suggestions = append(suggestions, "Ensure you have the correct permissions")
-
-	case MCPErrorToolNotFound:
-		suggestions = append(suggestions, "Check the tool name spelling")
-		suggestions = append(suggestions, "Refresh the tools list to get updated available tools")
-		if len(info.AvailableTools) > 0 {
-			suggestions = append(suggestions, fmt.Sprintf("Available tools: %s", strings.Join(info.AvailableTools, ", ")))
-		}
-
-	case MCPErrorMissingParameters:
-		suggestions = append(suggestions, "Check the required parameters for this tool")
-		suggestions = append(suggestions, "Ensure all mandatory parameters are provided")
-		if info.ExpectedSchema != nil {
-			suggestions = append(suggestions, "Use the parameter information to provide the correct arguments")
-		}
-
-	case MCPErrorInvalidParameters:
-		suggestions = append(suggestions, "Verify parameter types and formats")
-		suggestions = append(suggestions, "Check parameter value constraints")
-		suggestions = append(suggestions, "Ensure JSON format is correct if using structured arguments")
-
-	case MCPErrorTypeValidation:
-		suggestions = append(suggestions, "Check parameter data types (string, number, boolean, etc.)")
-		suggestions = append(suggestions, "Verify numeric values are within valid ranges")
-		suggestions = append(suggestions, "Ensure required fields are not empty")
-
-	case MCPErrorTimeout:
-		suggestions = append(suggestions, "Try again after a short delay")
-		suggestions = append(suggestions, "Check if the server is overloaded")
-		suggestions = append(suggestions, "Consider increasing timeout settings")
-
-	case MCPErrorServerError:
-		suggestions = append(suggestions, "Check server logs for more details")
-		suggestions = append(suggestions, "Try again later if this is a temporary issue")
-		suggestions = append(suggestions, "Contact the server administrator if the problem persists")
-
-	case MCPErrorInvalidResponse:
-		suggestions = append(suggestions, "Check if the server response format is valid")
-		suggestions = append(suggestions, "Verify server compatibility with MCP protocol version")
-		suggestions = append(suggestions, "Try refreshing the connection")
-
-	default:
-		suggestions = append(suggestions, "Check the error message for more specific information")
-		suggestions = append(suggestions, "Try the operation again")
-		suggestions = append(suggestions, "Contact support if the problem persists")
-	}
-
-	return suggestions
-}
-
-// FormatError formats an MCPError for display to users.
-func (d *ErrorDiagnostic) FormatError(mcpErr *MCPError) string {
-	var parts []string
-
-	// Add user-friendly message
-	if mcpErr.Details != nil && mcpErr.Details.UserFriendlyMessage != "" {
-		parts = append(parts, mcpErr.Details.UserFriendlyMessage)
-	} else {
-		parts = append(parts, mcpErr.Message)
-	}
-
-	// Add suggestions if available
-	if len(mcpErr.Suggestions) > 0 {
-		parts = append(parts, "\nSuggestions:")
-		for i, suggestion := range mcpErr.Suggestions {
-			parts = append(parts, fmt.Sprintf("  %d. %s", i+1, suggestion))
-		}
-	}
-
-	// Add context information if helpful
-	if len(mcpErr.Context) > 0 {
-		if toolName, ok := mcpErr.Context["tool_name"].(string); ok && toolName != "" {
-			parts = append(parts, fmt.Sprintf("\nTool: %s", toolName))
-		}
-		if operation, ok := mcpErr.Context["operation"].(string); ok && operation != "" {
-			parts = append(parts, fmt.Sprintf("Operation: %s", operation))
-		}
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-// LogError logs an error with appropriate detail level.
-func (d *ErrorDiagnostic) LogError(mcpErr *MCPError) {
-	fields := []interface{}{
-		"error_code", mcpErr.Code,
-		"message", mcpErr.Message,
-	}
-
-	// Add context fields.
-	for key, value := range mcpErr.Context {
-		fields = append(fields, key, value)
-	}
-
-	log.Error("MCP operation failed", fields)
-
-	// Log technical details at debug level.
-	if mcpErr.Details != nil && mcpErr.Details.TechnicalDetails != "" {
-		log.Debug("Technical error details", "details", mcpErr.Details.TechnicalDetails)
-	}
-}
-
-// convertMCPSchemaToSchema converts MCP's JSON schema to our Schema format.
-func convertMCPSchemaToSchema(mcpSchema interface{}) *Schema {
-	schemaBytes, err := json.Marshal(mcpSchema)
-	if err != nil {
-		return &Schema{
-			Type: "object",
-		}
-	}
-
-	var schemaMap map[string]interface{}
-	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
-		return &Schema{
-			Type: "object",
-		}
-	}
-
-	schema := &Schema{}
-	if typeVal, ok := schemaMap["type"].(string); ok {
-		schema.Type = typeVal
-	}
-	if descVal, ok := schemaMap["description"].(string); ok {
-		schema.Description = descVal
-	}
-	if propsVal, ok := schemaMap["properties"].(map[string]interface{}); ok {
-		schema.Properties = convertProperties(propsVal)
-	}
-	if reqVal, ok := schemaMap["required"].([]interface{}); ok {
-		required := make([]string, len(reqVal))
-		for i, req := range reqVal {
-			if reqStr, ok := req.(string); ok {
-				required[i] = reqStr
-			}
-		}
-		schema.Required = required
-	}
-
-	return schema
-}
-
-// convertProperties converts property definitions from map[string]interface{} to map[string]*Schema.
-func convertProperties(props map[string]interface{}) map[string]*Schema {
-	if props == nil {
-		return nil
-	}
-
-	result := make(map[string]*Schema)
-	for name, prop := range props {
-		if propMap, ok := prop.(map[string]interface{}); ok {
-			propSchema := &Schema{}
-			if typeVal, ok := propMap["type"].(string); ok {
-				propSchema.Type = typeVal
-			}
-			if descVal, ok := propMap["description"].(string); ok {
-				propSchema.Description = descVal
-			}
-			result[name] = propSchema
-		}
-	}
-	return result
-}
-
-// convertMCPContentToResult converts MCP content to a suitable return format.
-func convertMCPContentToResult(content []mcp.Content) interface{} {
-	if len(content) == 0 {
-		return nil
-	}
-
-	if len(content) == 1 {
-		return convertSingleMCPContent(content[0])
-	}
-
-	// Multiple content items - return as array.
-	results := make([]interface{}, len(content))
-	for i, item := range content {
-		results[i] = convertSingleMCPContent(item)
-	}
-	return results
-}
-
-// convertSingleMCPContent converts a single MCP content item to standard format.
-func convertSingleMCPContent(content mcp.Content) interface{} {
-	switch c := content.(type) {
-	case mcp.TextContent:
-		return map[string]interface{}{
-			"type": "text",
-			"text": c.Text,
-		}
-	case mcp.ImageContent:
-		return map[string]interface{}{
-			"type":     "image",
-			"data":     c.Data,
-			"mimetype": c.MimeType,
-		}
-	case mcp.AudioContent:
-		return map[string]interface{}{
-			"type":     "audio",
-			"data":     c.Data,
-			"mimetype": c.MimeType,
-		}
-	case mcp.EmbeddedResource:
-		resourceData := map[string]interface{}{
-			"type": "resource",
-		}
-
-		// Handle different types of resource contents
-		switch res := c.Resource.(type) {
-		case mcp.TextResourceContents:
-			resourceData["uri"] = res.URI
-			resourceData["text"] = res.Text
-			resourceData["mimetype"] = res.MIMEType
-		case mcp.BlobResourceContents:
-			resourceData["uri"] = res.URI
-			resourceData["blob"] = res.Blob
-			resourceData["mimetype"] = res.MIMEType
-		default:
-			resourceData["error"] = "unknown resource type"
-		}
-
-		return resourceData
-	default:
-		// Fallback: try to marshal the content as-is.
-		contentBytes, err := json.Marshal(content)
-		if err != nil {
-			return map[string]interface{}{
-				"type":  "unknown",
-				"error": err.Error(),
-			}
-		}
-
-		var result interface{}
-		if err := json.Unmarshal(contentBytes, &result); err != nil {
-			return map[string]interface{}{
-				"type":  "unknown",
-				"error": err.Error(),
-			}
-		}
-		return result
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool/mcp"
 )
 
 func main() {
@@ -79,23 +80,23 @@ func runStreamableHTTPMCPDemo() {
 	})
 
 	// Configure Streamable HTTP MCP connection.
-	mcpConfig := tool.MCPConnectionConfig{
+	mcpConfig := mcp.MCPConnectionConfig{
 		Transport: "streamable_http",
 		ServerURL: "http://localhost:3000/mcp", // Use ServerURL instead of URL
 		Timeout:   10 * time.Second,
 	}
 
 	// Create MCP toolset with enterprise-level configuration.
-	mcpToolSet := tool.NewMCPToolSet(mcpConfig,
-		tool.WithRetry(tool.RetryConfig{
+	mcpToolSet := mcp.NewMCPToolSet(mcpConfig,
+		mcp.WithRetry(mcp.RetryConfig{
 			Enabled:       true,
 			MaxAttempts:   3,
 			InitialDelay:  time.Second,
 			BackoffFactor: 2.0,
 			MaxDelay:      30 * time.Second,
 		}),
-		tool.WithToolFilter(tool.NewIncludeFilter("echo", "greet", "current_time", "calculate", "env_info")),
-		tool.WithAutoRefresh(5*time.Minute), // Auto-refresh tool list every 5 minutes
+		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "greet", "current_time", "calculate", "env_info")),
+		mcp.WithAutoRefresh(5*time.Minute), // Auto-refresh tool list every 5 minutes
 	)
 	defer mcpToolSet.Close()
 
@@ -115,7 +116,7 @@ func runStreamableHTTPMCPDemo() {
 	fmt.Println()
 
 	// Prepare tool context.
-	toolCtx := &tool.ToolContext{
+	toolCtx := &mcp.ToolContext{
 		SessionID: "mcp-http-demo-session",
 		UserID:    "demo-user",
 		Metadata: map[string]interface{}{
@@ -125,7 +126,7 @@ func runStreamableHTTPMCPDemo() {
 			"environment": "development",
 		},
 	}
-	ctx = tool.WithToolContext(ctx, toolCtx)
+	ctx = mcp.WithToolContext(ctx, toolCtx)
 
 	// Test scenarios.
 	scenarios := []struct {
@@ -297,14 +298,14 @@ func runMixedToolsDemo() {
 	})
 
 	// 2. Create MCP toolset.
-	mcpConfig := tool.MCPConnectionConfig{
+	mcpConfig := mcp.MCPConnectionConfig{
 		Transport: "streamable_http",
 		ServerURL: "http://localhost:3000/mcp",
 		Timeout:   5 * time.Second,
 	}
 
-	mcpToolSet := tool.NewMCPToolSet(mcpConfig,
-		tool.WithRetry(tool.RetryConfig{
+	mcpToolSet := mcp.NewMCPToolSet(mcpConfig,
+		mcp.WithRetry(mcp.RetryConfig{
 			Enabled:      true,
 			MaxAttempts:  2,
 			InitialDelay: 500 * time.Millisecond,
@@ -469,22 +470,22 @@ func runStdioMCPDemo() {
 	})
 
 	// Configure STDIO MCP to connect to our local server.
-	mcpConfig := tool.MCPConnectionConfig{
+	mcpConfig := mcp.MCPConnectionConfig{
 		Transport: "stdio",
 		Command:   "./stdio_server/stdio_server", // Point to our created STDIO server
 		Timeout:   10 * time.Second,
 	}
 
 	// Create MCP toolset with enterprise-level configuration.
-	mcpToolSet := tool.NewMCPToolSet(mcpConfig,
-		tool.WithRetry(tool.RetryConfig{
+	mcpToolSet := mcp.NewMCPToolSet(mcpConfig,
+		mcp.WithRetry(mcp.RetryConfig{
 			Enabled:       true,
 			MaxAttempts:   3,
 			InitialDelay:  time.Second,
 			BackoffFactor: 2.0,
 			MaxDelay:      30 * time.Second,
 		}),
-		tool.WithAutoRefresh(5*time.Minute), // Auto-refresh tool list every 5 minutes
+		mcp.WithAutoRefresh(5*time.Minute), // Auto-refresh tool list every 5 minutes
 	)
 	defer mcpToolSet.Close()
 
@@ -505,7 +506,7 @@ func runStdioMCPDemo() {
 	fmt.Println()
 
 	// Prepare tool context.
-	toolCtx := &tool.ToolContext{
+	toolCtx := &mcp.ToolContext{
 		SessionID: "stdio-mcp-demo-session",
 		UserID:    "demo-user",
 		Metadata: map[string]interface{}{
@@ -515,7 +516,7 @@ func runStdioMCPDemo() {
 			"environment": "development",
 		},
 	}
-	ctx = tool.WithToolContext(ctx, toolCtx)
+	ctx = mcp.WithToolContext(ctx, toolCtx)
 
 	// Test scenarios - show various features of the STDIO MCP server.
 	scenarios := []struct {
@@ -664,46 +665,46 @@ func runFilterDemo() {
 	demos := []struct {
 		name        string
 		description string
-		filter      tool.ToolFilter
+		filter      mcp.ToolFilter
 	}{
 		{
 			name:        "No Filter",
 			description: "Show all available tools",
-			filter:      tool.NoFilter,
+			filter:      mcp.NoFilter,
 		},
 		{
 			name:        "Include Specific Tools",
 			description: "Only show echo and calculator tools",
-			filter:      tool.NewIncludeFilter("echo", "calculator"),
+			filter:      mcp.NewIncludeFilter("echo", "calculator"),
 		},
 		{
 			name:        "Exclude System Tools",
 			description: "Exclude potentially sensitive system tools",
-			filter:      tool.NewExcludeFilter("file_info", "env_info"),
+			filter:      mcp.NewExcludeFilter("file_info", "env_info"),
 		},
 		{
 			name:        "Pattern Include Filter",
 			description: "Only tools starting with 'text' or 'get'",
-			filter:      tool.NewPatternIncludeFilter("^(text|get).*"),
+			filter:      mcp.NewPatternIncludeFilter("^(text|get).*"),
 		},
 		{
 			name:        "Description Filter",
 			description: "Tools related to 'time' or 'random'",
-			filter:      tool.NewDescriptionFilter(".*(time|random).*"),
+			filter:      mcp.NewDescriptionFilter(".*(time|random).*"),
 		},
 		{
 			name:        "Composite Filter",
 			description: "Combine multiple filters: include math tools but exclude calculator",
-			filter: tool.NewCompositeFilter(
-				tool.NewDescriptionFilter(".*(math|calc|random).*"),
-				tool.NewExcludeFilter("calculator"),
+			filter: mcp.NewCompositeFilter(
+				mcp.NewDescriptionFilter(".*(math|calc|random).*"),
+				mcp.NewExcludeFilter("calculator"),
 			),
 		},
 		{
 			name:        "Custom Function Filter",
 			description: "Custom filter: only tools with names shorter than 7 characters",
-			filter: tool.NewFuncFilter(func(ctx context.Context, tools []tool.MCPToolInfo) []tool.MCPToolInfo {
-				var filtered []tool.MCPToolInfo
+			filter: mcp.NewFuncFilter(func(ctx context.Context, tools []mcp.MCPToolInfo) []mcp.MCPToolInfo {
+				var filtered []mcp.MCPToolInfo
 				for _, tool := range tools {
 					if len(tool.Name) < 7 {
 						filtered = append(filtered, tool)
@@ -719,15 +720,15 @@ func runFilterDemo() {
 		fmt.Printf("Description: %s\n", demo.description)
 
 		// Create MCP toolset with the specific filter.
-		config := tool.MCPConnectionConfig{
+		config := mcp.MCPConnectionConfig{
 			Transport: "stdio",
 			Command:   "./stdio_server/stdio_server",
 			Timeout:   30 * time.Second,
 		}
 
-		mcpToolset := tool.NewMCPToolSet(config,
-			tool.WithToolFilter(demo.filter),
-			tool.WithRetry(tool.RetryConfig{
+		mcpToolset := mcp.NewMCPToolSet(config,
+			mcp.WithToolFilter(demo.filter),
+			mcp.WithRetry(mcp.RetryConfig{
 				Enabled:      true,
 				MaxAttempts:  2,
 				InitialDelay: 100 * time.Millisecond,
@@ -783,14 +784,14 @@ func runDiagnosticsDemo() {
 
 func testConnectionError(ctx context.Context) {
 	// Try to connect to a non-existent server.
-	config := tool.MCPConnectionConfig{
+	config := mcp.MCPConnectionConfig{
 		Transport: "http",
 		ServerURL: "http://localhost:9999/mcp", // Non-existent server
 		Timeout:   5 * time.Second,
 	}
 
-	toolset := tool.NewMCPToolSet(config,
-		tool.WithRetry(tool.RetryConfig{
+	toolset := mcp.NewMCPToolSet(config,
+		mcp.WithRetry(mcp.RetryConfig{
 			Enabled:     true,
 			MaxAttempts: 2, // Reduce attempts for demo
 		}),
@@ -804,13 +805,13 @@ func testConnectionError(ctx context.Context) {
 
 func testToolNotFoundError(ctx context.Context) {
 	// Connect to STDIO server.
-	config := tool.MCPConnectionConfig{
+	config := mcp.MCPConnectionConfig{
 		Transport: "stdio",
 		Command:   "./stdio_server/stdio_server",
 		Timeout:   10 * time.Second,
 	}
 
-	toolset := tool.NewMCPToolSet(config)
+	toolset := mcp.NewMCPToolSet(config)
 	defer toolset.Close()
 
 	// Get available tools first.
@@ -843,13 +844,13 @@ func testToolNotFoundError(ctx context.Context) {
 
 func testParameterErrors(ctx context.Context) {
 	// Connect to STDIO server.
-	config := tool.MCPConnectionConfig{
+	config := mcp.MCPConnectionConfig{
 		Transport: "stdio",
 		Command:   "./stdio_server/stdio_server",
 		Timeout:   10 * time.Second,
 	}
 
-	toolset := tool.NewMCPToolSet(config)
+	toolset := mcp.NewMCPToolSet(config)
 	defer toolset.Close()
 
 	tools := toolset.Tools(ctx)
@@ -879,7 +880,7 @@ func testParameterErrors(ctx context.Context) {
 	emptyArgs, _ := json.Marshal(map[string]interface{}{})
 	_, err := calcTool.Call(ctx, emptyArgs)
 	if err != nil {
-		if mcpErr, ok := err.(*tool.MCPError); ok {
+		if mcpErr, ok := err.(*mcp.MCPError); ok {
 			fmt.Printf("  Got enhanced error: %s\n", mcpErr.Code)
 			fmt.Printf("  Suggestions: %v\n", mcpErr.Suggestions)
 		} else {
@@ -894,7 +895,7 @@ func testParameterErrors(ctx context.Context) {
 	})
 	_, err = calcTool.Call(ctx, invalidArgs)
 	if err != nil {
-		if mcpErr, ok := err.(*tool.MCPError); ok {
+		if mcpErr, ok := err.(*mcp.MCPError); ok {
 			fmt.Printf("  Got enhanced error: %s\n", mcpErr.Code)
 			fmt.Printf("  User-friendly message: %s\n", mcpErr.Error())
 		} else {
@@ -905,13 +906,13 @@ func testParameterErrors(ctx context.Context) {
 
 func testServerError(ctx context.Context) {
 	// Connect to STDIO server.
-	config := tool.MCPConnectionConfig{
+	config := mcp.MCPConnectionConfig{
 		Transport: "stdio",
 		Command:   "./stdio_server/stdio_server",
 		Timeout:   10 * time.Second,
 	}
 
-	toolset := tool.NewMCPToolSet(config)
+	toolset := mcp.NewMCPToolSet(config)
 	defer toolset.Close()
 
 	tools := toolset.Tools(ctx)
@@ -938,7 +939,7 @@ func testServerError(ctx context.Context) {
 
 	_, err := testTool.Call(ctx, malformedArgs)
 	if err != nil {
-		if mcpErr, ok := err.(*tool.MCPError); ok {
+		if mcpErr, ok := err.(*mcp.MCPError); ok {
 			fmt.Printf("✓ Got enhanced error code: %s\n", mcpErr.Code)
 			fmt.Printf("  User-friendly: %s\n", mcpErr.Error())
 			fmt.Printf("  Suggestions: %v\n", mcpErr.Suggestions[:min(3, len(mcpErr.Suggestions))])
