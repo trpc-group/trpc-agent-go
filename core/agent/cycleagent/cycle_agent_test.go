@@ -23,6 +23,10 @@ type mockAgent struct {
 	tools              []tool.Tool
 }
 
+func (m *mockAgent) Name() string {
+	return m.name
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if m.shouldError {
 		return nil, errors.New("mock agent error")
@@ -242,6 +246,10 @@ type conditionalMockAgent struct {
 	executionCount *int
 	triggerAfter   int
 	trackCount     *int // External counter to track
+}
+
+func (m *conditionalMockAgent) Name() string {
+	return m.name
 }
 
 func (m *conditionalMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {

@@ -20,6 +20,10 @@ type mockAgent struct {
 	name string
 }
 
+func (m *mockAgent) Name() string {
+	return m.name
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventCh := make(chan *event.Event, 1)
 

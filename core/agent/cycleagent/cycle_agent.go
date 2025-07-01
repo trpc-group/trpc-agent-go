@@ -18,7 +18,7 @@ const defaultChannelBufferSize = 256
 type CycleAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.CallableTool
+	tools             []tool.Tool
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
 }
@@ -30,7 +30,7 @@ type Options struct {
 	// SubAgents is the list of sub-agents to run in a loop.
 	SubAgents []agent.Agent
 	// Tools is the list of tools available to the agent.
-	Tools []tool.CallableTool
+	Tools []tool.Tool
 	// MaxIterations is the maximum number of iterations to run the loop agent.
 	// If not set, the loop agent will run indefinitely until a sub-agent escalates.
 	MaxIterations *int
@@ -163,6 +163,12 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
-func (a *CycleAgent) Tools() []tool.CallableTool {
+func (a *CycleAgent) Tools() []tool.Tool {
 	return a.tools
+}
+
+// Name implements the agent.Agent interface.
+// It returns the name of this agent.
+func (a *CycleAgent) Name() string {
+	return a.name
 }

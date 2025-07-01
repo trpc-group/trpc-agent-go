@@ -22,6 +22,10 @@ type mockAgent struct {
 	tools        []tool.Tool
 }
 
+func (m *mockAgent) Name() string {
+	return m.name
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if m.shouldError {
 		return nil, errors.New("mock agent error")
