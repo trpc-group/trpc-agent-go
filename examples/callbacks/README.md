@@ -1,504 +1,204 @@
-# Comprehensive Callbacks Example
+# Multi-turn Chat with Callbacks Example
 
-This example demonstrates the usage of all 6 types of callbacks available in the trpc-agent-go framework:
+This example demonstrates how to use the `Runner` orchestration component in a multi-turn chat system, with a focus on registering and utilizing **ModelCallbacks**, **ToolCallbacks**, and **AgentCallbacks**. These callbacks allow you to intercept, log, and customize key steps in LLM inference, tool invocation, and agent execution.
 
-1. **Before Agent Callbacks** - Execute before agent runs
-2. **After Agent Callbacks** - Execute after agent completes
-3. **Before Model Callbacks** - Execute before model is called
-4. **After Model Callbacks** - Execute after model responds
-5. **Before Tool Callbacks** - Execute before tool execution
-6. **After Tool Callbacks** - Execute after tool execution
+---
 
-## Overview
+## Key Features
 
-Callbacks provide a powerful mechanism to intercept, modify, or skip execution at various stages of the agent workflow. They enable:
+- **Multi-turn Conversation**: Maintains context across multiple user turns
+- **Streaming Output**: Real-time streaming of model responses
+- **Session Management**: Supports persistent chat sessions
+- **Tool Integration**: Built-in calculator and time tools
+- **Callback Mechanism**: Pluggable model, tool, and agent callbacks for extensibility and debugging
 
-- **Logging and Monitoring** - Track execution flow and performance
-- **Permission Control** - Validate access before execution
-- **Caching** - Store and retrieve results to improve performance
-- **Error Handling** - Gracefully handle failures
-- **Result Transformation** - Modify outputs to match requirements
-- **Debugging** - Add detailed logging for troubleshooting
+---
 
-## Execution Flow
+## Callback Mechanism Overview
+
+### 1. ModelCallbacks
+
+- **BeforeModelCallback**: Triggered before each model inference. Use for input interception, logging, or mocking responses.
+- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging.
+
+**Example output:**
 
 ```
-1. Before Agent Callbacks
-2. Agent Execution
-   ├── Before Model Callbacks
-   ├── Model Call
-   ├── After Model Callbacks
-   ├── Before Tool Callbacks (when tools are called)
-   ├── Tool Execution
-   ├── After Tool Callbacks
-   └── Repeat steps 2-6 as needed
-3. After Agent Callbacks
+🔵 BeforeModelCallback: model=deepseek-chat, lastUserMsg="Hello"
+🟣 AfterModelCallback: model=deepseek-chat has finished
 ```
 
-## Callback Types
+### 2. ToolCallbacks
 
-### 1. Agent Callbacks
+- **BeforeToolCallback**: Triggered before each tool invocation. Use for argument validation, mocking tool results, or logging.
+- **AfterToolCallback**: Triggered after each tool invocation. Use for result post-processing, formatting, or logging.
 
-#### Before Agent Callback
+**Example output:**
+
+```
+🟠 BeforeToolCallback: tool=calculator, args={"operation":"add","a":1,"b":2}
+🟤 AfterToolCallback: tool=calculator, args={...}, result=map[...], err=<nil>
+```
+
+### 3. AgentCallbacks
+
+- **BeforeAgentCallback**: Triggered before each agent execution. Use for input logging, permission checks, etc.
+- **AfterAgentCallback**: Triggered after each agent execution. Use for output logging, error handling, etc.
+
+**Example output:**
+
+```
+🟢 BeforeAgentCallback: invocationID=..., userMsg="..."
+🟡 AfterAgentCallback: invocationID=..., runErr=<nil>, userMsg="..."
+```
+
+---
+
+## Declaring and Registering Callbacks
+
+To use callbacks, you need to declare them and register your handler functions. Below are examples for each callback type:
+
+### ModelCallbacks
 
 ```go
-type BeforeAgentCallback func(
-    ctx context.Context,
-    invocation *agent.Invocation
-) (*model.Response, bool, error)
-```
-
-**Returns:**
-
-- `customResponse`: If not nil, this response will be returned and agent execution will be skipped
-- `skip`: If true, agent execution will be skipped
-- `error`: If not nil, agent execution will be stopped with this error
-
-#### After Agent Callback
-
-```go
-type AfterAgentCallback func(
-    ctx context.Context,
-    invocation *agent.Invocation,
-    runErr error
-) (*model.Response, bool, error)
-```
-
-**Returns:**
-
-- `customResponse`: If not nil and override is true, this response will be used instead of the actual agent response
-- `override`: If true, the customResponse will be used
-- `error`: If not nil, this error will be returned
-
-### 2. Model Callbacks
-
-#### Before Model Callback
-
-```go
-type BeforeModelCallback func(
-    ctx context.Context,
-    request *model.Request
-) (*model.Response, bool, error)
-```
-
-**Returns:**
-
-- `customResponse`: If not nil, this response will be returned and model call will be skipped
-- `skip`: If true, model call will be skipped
-- `error`: If not nil, model call will be stopped with this error
-
-#### After Model Callback
-
-```go
-type AfterModelCallback func(
-    ctx context.Context,
-    response *model.Response,
-    modelErr error
-) (*model.Response, bool, error)
-```
-
-**Returns:**
-
-- `customResponse`: If not nil and override is true, this response will be used instead of the actual model response
-- `override`: If true, the customResponse will be used
-- `error`: If not nil, this error will be returned
-
-### 3. Tool Callbacks
-
-#### Before Tool Callback
-
-```go
-type BeforeToolCallback func(
-    ctx context.Context,
-    toolName string,
-    toolDeclaration *tool.Declaration,
-    jsonArgs []byte
-) (any, bool, error)
-```
-
-**Returns:**
-
-- `customResult`: If not nil, this result will be returned and tool execution will be skipped
-- `skip`: If true, tool execution will be skipped
-- `error`: If not nil, tool execution will be stopped with this error
-
-#### After Tool Callback
-
-```go
-type AfterToolCallback func(
-    ctx context.Context,
-    toolName string,
-    toolDeclaration *tool.Declaration,
-    jsonArgs []byte,
-    result any,
-    runErr error
-) (any, bool, error)
-```
-
-**Returns:**
-
-- `customResult`: If not nil and override is true, this result will be used instead of the actual tool result
-- `override`: If true, the customResult will be used
-- `error`: If not nil, this error will be returned
-
-## Usage Examples
-
-### Basic Setup
-
-```go
-// Create callbacks
-agentCallbacks := agent.NewAgentCallbacks()
 modelCallbacks := model.NewModelCallbacks()
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+    // Your logic here
+    return nil, nil
+})
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, resp *model.Response, runErr error) (*model.Response, error) {
+    // Your logic here
+    return nil, nil
+})
+```
+
+### ToolCallbacks
+
+```go
 toolCallbacks := tool.NewToolCallbacks()
-
-// Create agent with callbacks
-llmAgent := llmagent.New("example-agent", llmagent.Options{
-    Model:          llm,
-    AgentCallbacks: agentCallbacks,
-    ModelCallbacks: modelCallbacks,
-    Tools:          []tool.Tool{calculatorTool, weatherTool},
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+    // Your logic here
+    return nil, nil
 })
-
-// Create invocation with callbacks
-invocation := &agent.Invocation{
-    Agent:          llmAgent,
-    AgentName:      "example-agent",
-    InvocationID:   "example-invocation",
-    Model:          llm,
-    Message:        model.NewUserMessage("Your message here"),
-    AgentCallbacks: agentCallbacks,
-    ModelCallbacks: modelCallbacks,
-    ToolCallbacks:  toolCallbacks,
-}
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+    // Your logic here
+    return nil, nil
+})
 ```
 
-### Agent Callbacks Example
+### AgentCallbacks
 
 ```go
-// Before Agent Callback
-agentCallbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
-    fmt.Printf("Agent %s starting execution\n", invocation.AgentName)
+agentCallbacks := agent.NewAgentCallbacks()
+agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+    // Your logic here
+    return nil, nil
+})
+agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+    // Your logic here
+    return nil, nil
+})
+```
 
-    // Skip execution for certain conditions
-    if invocation.Message.Content == "skip" {
+After declaring and registering your callbacks, pass them to the agent or runner during construction:
+
+```go
+llmAgent := llmagent.New(
+    ...,
+    llmagent.WithModelCallbacks(modelCallbacks),
+    llmagent.WithToolCallbacks(toolCallbacks),
+    llmagent.WithAgentCallbacks(agentCallbacks),
+)
+```
+
+### Skipping Execution in Callbacks
+
+You can short-circuit (skip) the default execution of a model, tool, or agent by returning a non-nil response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
+
+- **ModelCallbacks**: If `BeforeModelCallback` returns a non-nil `*model.Response`, the model will not be called and this response will be used directly.
+- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly.
+- **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `*model.Response`, the agent execution will be skipped and this response will be used.
+
+**Example: Mocking a tool result in BeforeToolCallback**
+
+```go
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+    if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
+        // Return a mock result and skip actual tool execution.
+        return map[string]any{"result": 4242, "note": "mocked result"}, nil
+    }
+    return nil, nil
+})
+```
+
+**Example: Blocking a model call in BeforeModelCallback**
+
+```go
+modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+    if strings.Contains(req.Messages[len(req.Messages)-1].Content, "block me") {
+        // Return a custom response and skip model inference.
         return &model.Response{
             Choices: []model.Choice{{
                 Message: model.Message{
                     Role:    model.RoleAssistant,
-                    Content: "Execution skipped by callback",
+                    Content: "This request was blocked by a callback.",
                 },
             }},
-        }, true, nil
+        }, nil
     }
-
-    return nil, false, nil
-})
-
-// After Agent Callback
-agentCallbacks.AddAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, bool, error) {
-    if runErr != nil {
-        fmt.Printf("Agent execution failed: %v\n", runErr)
-        return &model.Response{
-            Choices: []model.Choice{{
-                Message: model.Message{
-                    Role:    model.RoleAssistant,
-                    Content: "Error handled gracefully",
-                },
-            }},
-        }, true, nil
-    }
-
-    fmt.Printf("Agent %s completed successfully\n", invocation.AgentName)
-    return nil, false, nil
+    return nil, nil
 })
 ```
 
-### Model Callbacks Example
+This mechanism allows you to flexibly intercept, mock, or block any step in the agent/model/tool pipeline.
 
-```go
-// Before Model Callback
-modelCallbacks.AddBeforeModel(func(ctx context.Context, request *model.Request) (*model.Response, bool, error) {
-    fmt.Printf("Model call with %d messages and %d tools\n",
-        len(request.Messages), len(request.Tools))
-
-    // Skip model call for empty requests
-    if len(request.Messages) == 0 {
-        return &model.Response{
-            Choices: []model.Choice{{
-                Message: model.Message{
-                    Role:    model.RoleAssistant,
-                    Content: "No messages to process",
-                },
-            }},
-        }, true, nil
-    }
-
-    return nil, false, nil
-})
-
-// After Model Callback
-modelCallbacks.AddAfterModel(func(ctx context.Context, response *model.Response, runErr error) (*model.Response, bool, error) {
-    if runErr != nil {
-        fmt.Printf("Model call failed: %v\n", runErr)
-        return &model.Response{
-            Choices: []model.Choice{{
-                Message: model.Message{
-                    Role:    model.RoleAssistant,
-                    Content: "Model error handled gracefully",
-                },
-            }},
-        }, true, nil
-    }
-
-    fmt.Printf("Model call successful with %d choices\n", len(response.Choices))
-    return nil, false, nil
-})
-```
-
-### Tool Callbacks Example
-
-```go
-// Before Tool Callback
-toolCallbacks.AddBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-    fmt.Printf("Executing tool: %s with args: %s\n", toolName, string(jsonArgs))
-
-    // Skip specific tools
-    if toolName == "skip-tool" {
-        return map[string]string{"skipped": "true"}, true, nil
-    }
-
-    // Return custom result for specific conditions
-    if toolName == "calculator" {
-        var args CalculatorInput
-        if err := json.Unmarshal(jsonArgs, &args); err == nil && args.A == 0 && args.B == 0 {
-            return CalculatorOutput{Result: 42}, false, nil
-        }
-    }
-
-    return nil, false, nil
-})
-
-// After Tool Callback
-toolCallbacks.AddAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-    if runErr != nil {
-        fmt.Printf("Tool %s execution failed: %v\n", toolName, runErr)
-        return map[string]string{"error": "handled"}, true, nil
-    }
-
-    fmt.Printf("Tool %s executed successfully: %v\n", toolName, result)
-
-    // Override result for specific conditions
-    if toolName == "calculator" {
-        if calcResult, ok := result.(CalculatorOutput); ok {
-            return map[string]string{
-                "formatted_result": fmt.Sprintf("The answer is %d", calcResult.Result),
-                "original_result":  fmt.Sprintf("%d", calcResult.Result),
-            }, true, nil
-        }
-    }
-
-    return nil, false, nil
-})
-```
-
-## Common Use Cases
-
-### 1. Logging and Monitoring
-
-```go
-// Add timing information
-startTime := time.Now()
-callbacks.AddBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, bool, error) {
-    ctx = context.WithValue(ctx, "startTime", startTime)
-    return nil, false, nil
-})
-
-callbacks.AddAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, bool, error) {
-    if startTime, ok := ctx.Value("startTime").(time.Time); ok {
-        duration := time.Since(startTime)
-        fmt.Printf("Agent execution took: %v\n", duration)
-    }
-    return nil, false, nil
-})
-```
-
-### 2. Permission Control
-
-```go
-callbacks.AddBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-    if !hasPermission(ctx, toolName) {
-        return map[string]string{"error": "permission denied"}, true, nil
-    }
-    return nil, false, nil
-})
-```
-
-### 3. Caching
-
-```go
-cache := make(map[string]any)
-
-callbacks.AddBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, bool, error) {
-    cacheKey := fmt.Sprintf("%s:%s", toolName, string(jsonArgs))
-    if cached, found := cache[cacheKey]; found {
-        return cached, true, nil
-    }
-    return nil, false, nil
-})
-
-callbacks.AddAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-    if runErr == nil {
-        cacheKey := fmt.Sprintf("%s:%s", toolName, string(jsonArgs))
-        cache[cacheKey] = result
-    }
-    return nil, false, nil
-})
-```
-
-### 4. Error Handling
-
-```go
-callbacks.AddAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-    if runErr != nil {
-        // Log error and return graceful fallback
-        log.Printf("Tool %s failed: %v", toolName, runErr)
-        return map[string]string{
-            "error": "Tool execution failed",
-            "fallback": "Using default value",
-        }, true, nil
-    }
-    return nil, false, nil
-})
-```
-
-### 5. Result Transformation
-
-```go
-callbacks.AddAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, bool, error) {
-    if runErr != nil {
-        return nil, false, runErr
-    }
-
-    // Add metadata to all results
-    return map[string]interface{}{
-        "data": result,
-        "metadata": map[string]string{
-            "source": "callback",
-            "timestamp": time.Now().Format(time.RFC3339),
-        },
-    }, true, nil
-})
-```
-
-## Best Practices
-
-### 1. Error Handling
-
-- Always handle errors gracefully in callbacks
-- Use `tool.NewError()` for tool-specific errors
-- Provide meaningful fallback responses
-
-### 2. Performance
-
-- Avoid expensive operations in callbacks
-- Use async processing for logging and monitoring
-- Implement caching to reduce redundant operations
-
-### 3. Debugging
-
-- Add detailed logging in development
-- Use conditional logging based on environment
-- Include context information in logs
-
-### 4. Testing
-
-- Write unit tests for callback logic
-- Test error scenarios
-- Verify callback execution order
-
-### 5. Security
-
-- Validate inputs in before callbacks
-- Implement proper permission checks
-- Sanitize outputs in after callbacks
+---
 
 ## Running the Example
 
-1. **Set up your environment:**
+1. Enter the directory and set your API key:
 
-   ```bash
-   export OPENAI_API_KEY="your-api-key-here"
-   ```
+```bash
+cd examples/callbacks
+export OPENAI_API_KEY="your-api-key"
+```
 
-2. **Run the example:**
+2. Start the demo:
 
-   ```bash
-   go run main.go
-   ```
+```bash
+go run main.go
+```
 
-3. **Expected output:**
+3. Follow the prompts to interact with the chat, trigger tool calls, and observe callback logs.
 
-   ```
-   🚀 Starting Comprehensive Callbacks Example
-   ==========================================
-   📝 User Message: Please calculate 5 + 3 and tell me the weather in Beijing
+---
 
-   🔄 Before Agent Callback:
-      - Agent: example-agent
-      - Invocation ID: example-invocation
-      - Message: Please calculate 5 + 3 and tell me the weather in Beijing
-      ✅ Proceeding with normal agent execution
+## Customizing Callbacks
 
-   🔄 Before Model Callback:
-      - Messages count: 1
-      - Tools count: 2
-      ✅ Proceeding with normal model call
+- In `main.go`, look for `RegisterBeforeModel`, `RegisterAfterModel`, `RegisterBeforeTool`, `RegisterAfterTool`, `RegisterBeforeAgent`, and `RegisterAfterAgent` to customize callback logic.
+- Callback functions can return custom responses (for mocking or interception) or simply perform logging/monitoring.
+- Typical use cases:
+  - Logging and tracing
+  - Input/output interception and modification
+  - Content safety and moderation
+  - Tool mocking or fallback
 
-   🔧 Tool calls detected:
-      - Tool: calculator
-      - Args: {"a":5,"b":3}
+---
 
-   🔄 Before Tool Callback:
-      - Tool: calculator
-      - Args: {"a":5,"b":3}
-      ✅ Proceeding with normal tool execution
+## Typical Scenarios
 
-   🔄 After Tool Callback:
-      - Tool: calculator
-      ✅ Tool execution successful, result: {Result:8}
-      🎯 Overriding calculator result
+- **Debugging LLM Pipelines**: Observe every step of input/output in real time
+- **A/B Testing**: Dynamically switch models or tool implementations
+- **Safety & Compliance**: Moderate model outputs and tool results
+- **Business Extensions**: Insert custom business logic as needed
 
-   ✅ Tool response: {"formatted_result":"The answer is 8","original_result":"8"}
+---
 
-   🔧 Tool calls detected:
-      - Tool: weather
-      - Args: {"city":"Beijing"}
+## References
 
-   🔄 Before Tool Callback:
-      - Tool: weather
-      - Args: {"city":"Beijing"}
-      ✅ Proceeding with normal tool execution
+- [runner/README.md](../runner/README.md) (basic multi-turn chat and tool calling)
+- This directory's `main.go` (full callback registration and usage)
 
-   🔄 After Tool Callback:
-      - Tool: weather
-      ✅ Tool execution successful, result: {Weather:Sunny, 25°C}
-      📊 Adding metadata to weather result
+---
 
-   ✅ Tool response: {"weather":"Sunny, 25°C","metadata":{"source":"callback","timestamp":"2024-01-01T12:00:00Z"}}
-
-   🔄 After Model Callback:
-      ✅ Model call successful, choices: 1
-
-   🔄 After Agent Callback:
-      ✅ Agent execution completed successfully
-
-   🤖 Assistant: Based on the calculations and weather data...
-
-   ✨ Example completed!
-   ```
-
-## Conclusion
-
-Callbacks provide a powerful and flexible way to customize agent behavior at every stage of execution. By understanding and properly implementing these 6 types of callbacks, you can build robust, efficient, and maintainable agent systems that meet your specific requirements.
-
-The key is to use callbacks judiciously - they should enhance functionality without significantly impacting performance or complicating the codebase.
+For advanced customization or production integration, see the source code or contact the maintainers.
