@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis
 
-replace trpc.group/trpc-go/trpc-agent-go => /data/home/homerpan/workspace/trpc-agent-go/
+replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
 go 1.23.0
 
