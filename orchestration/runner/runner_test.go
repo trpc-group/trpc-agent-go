@@ -110,7 +110,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 		SessionID: sessionID,
 	}
 
-	sess, err := sessionService.GetSession(ctx, sessionKey, &session.Options{})
+	sess, err := sessionService.GetSession(ctx, sessionKey)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -161,7 +161,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 		SessionID: sessionID,
 	}
 
-	sess, err := sessionService.GetSession(ctx, sessionKey, &session.Options{})
+	sess, err := sessionService.GetSession(ctx, sessionKey)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, sessionID, sess.ID)
@@ -201,7 +201,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 		SessionID: sessionID,
 	}
 
-	sess, err := sessionService.GetSession(ctx, sessionKey, &session.Options{})
+	sess, err := sessionService.GetSession(ctx, sessionKey)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
