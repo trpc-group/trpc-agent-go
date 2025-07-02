@@ -26,6 +26,8 @@ type Invocation struct {
 	AgentName string
 	// InvocationID is the ID of the invocation.
 	InvocationID string
+	// Branch is the branch identifier for hierarchical event filtering.
+	Branch string
 	// EndInvocation is a flag that indicates if the invocation is complete.
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.

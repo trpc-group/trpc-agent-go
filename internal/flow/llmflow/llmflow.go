@@ -171,6 +171,8 @@ func (f *Flow) runOneStep(
 
 		// Create event from response using the clean constructor.
 		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
+		// Set branch for hierarchical event filtering.
+		llmEvent.Branch = invocation.Branch
 
 		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
 
@@ -532,6 +534,7 @@ func (f *Flow) createToolResponseEvent(
 		Author:       invocation.AgentName,
 		ID:           eventID,
 		Timestamp:    time.Now(),
+		Branch:       invocation.Branch, // Set branch for hierarchical event filtering.
 	}
 
 	return functionResponseEvent

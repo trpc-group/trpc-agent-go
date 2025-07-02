@@ -30,6 +30,8 @@ const (
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
 	// ObjectTypeTransfer is the object type for agent transfer events.
 	ObjectTypeTransfer = "agent.transfer"
+	// ObjectTypeRunnerCompletion is the object type for runner completion events.
+	ObjectTypeRunnerCompletion = "runner.completion"
 )
 
 // Choice represents a single completion choice.
