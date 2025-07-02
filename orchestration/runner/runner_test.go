@@ -99,7 +99,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	}
 
 	// Verify we received the mock response.
-	require.Len(t, events, 1)
+	require.Len(t, events, 2)
 	assert.Equal(t, "test-agent", events[0].Author)
 	assert.Contains(t, events[0].Response.Choices[0].Message.Content, "Hello, world!")
 
@@ -115,8 +115,8 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	require.NotNil(t, sess)
 
 	// Verify session contains both user message and agent response.
-	// Should have: user message + agent response = 2 events.
-	assert.Len(t, sess.Events, 2)
+	// Should have: user message + agent response + runner done = 3 events.
+	assert.Len(t, sess.Events, 3)
 
 	// Verify user event.
 	userEvent := sess.Events[0]
@@ -206,6 +206,6 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	require.NotNil(t, sess)
 
 	// Should only have agent response, no user message since it was empty.
-	assert.Len(t, sess.Events, 1)
+	assert.Len(t, sess.Events, 2)
 	assert.Equal(t, "test-agent", sess.Events[0].Author)
 }
