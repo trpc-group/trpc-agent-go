@@ -77,53 +77,27 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create Stdio MCP tools.
-	// Configure STDIO MCP to connect to our local server.
-	// This is a simplified STDIO server with two tools: 'echo' and 'add'
-	mcpConfig := mcp.ConnectionConfig{
-		Transport: "stdio",
-		Command:   "go",
-		Args:      []string{"run", "./stdio_server/main.go"},
-		Timeout:   10 * time.Second,
-	}
-
-	// Create MCP toolset with enterprise-level configuration.
-	stdioToolSet := mcp.NewMCPToolSet(mcpConfig,
+	stdioToolSet := mcp.NewMCPToolSet(
+		mcp.ConnectionConfig{
+			Transport: "stdio",
+			Command:   "go",
+			Args:      []string{"run", "./stdio_server/main.go"},
+			Timeout:   10 * time.Second,
+		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
 	)
 	fmt.Println("STDIO MCP Toolset created successfully")
 
-	// Discover available tools.
-	stdioTools := stdioToolSet.Tools(ctx)
-	fmt.Printf("Discovered %d STDIO MCP tools\n", len(stdioTools))
-
 	// Create Streamable MCP tools.
-	// Configure Streamable HTTP MCP connection.
-	// This server provides special tools: get_weather and get_news (with fake data)
-	streamableConfig := mcp.ConnectionConfig{
-		Transport: "streamable_http",
-		ServerURL: "http://localhost:3000/mcp", // Use ServerURL instead of URL
-		Timeout:   10 * time.Second,
-	}
-
-	// Create MCP toolset with enterprise-level configuration.
-	streamableToolSet := mcp.NewMCPToolSet(streamableConfig,
+	streamableToolSet := mcp.NewMCPToolSet(
+		mcp.ConnectionConfig{
+			Transport: "streamable_http",
+			ServerURL: "http://localhost:3000/mcp", // Use ServerURL instead of URL
+			Timeout:   10 * time.Second,
+		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
 	)
 	fmt.Println("MCP Toolset created successfully")
-
-	// Discover available tools.
-	streamableTools := streamableToolSet.Tools(ctx)
-	fmt.Printf("Discovered %d MCP tools\n", len(streamableTools))
-
-	// Combine all tools
-	allTools := make([]tool.Tool, 0, 2+len(stdioTools)+len(streamableTools))
-	allTools = append(allTools, calculatorTool, timeTool)
-	for _, mcpTool := range stdioTools {
-		allTools = append(allTools, mcpTool)
-	}
-	for _, mcpTool := range streamableTools {
-		allTools = append(allTools, mcpTool)
-	}
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -141,7 +115,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		llmagent.WithSystemPrompt("You have access to calculator and current_time tools. Use them when users ask for calculations or time information."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
-		llmagent.WithTools(allTools),
+		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
+		llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, streamableToolSet}),
 	)
 
 	// Create runner.

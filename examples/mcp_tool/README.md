@@ -91,20 +91,15 @@ To integrate STDIO MCP tools into your agent, use the following code:
 
 ```go
 // Configure STDIO MCP to connect to our local server.
-mcpConfig := mcp.ConnectionConfig{
-    Transport: "stdio",
-    Command:   "go",
-    Args:      []string{"run", "./stdio_server/main.go"},
-    Timeout:   10 * time.Second,
-}
-
-// Create MCP toolset
-stdioToolSet := mcp.NewMCPToolSet(mcpConfig,
+stdioToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "stdio",
+        Command:   "go",
+        Args:      []string{"run", "./stdio_server/main.go"},
+        Timeout:   10 * time.Second,
+    },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
 )
-
-// Get tools from the STDIO server
-stdioTools := stdioToolSet.Tools(ctx)
 ```
 
 ### Streamable HTTP Tool Configuration
@@ -113,47 +108,35 @@ To integrate Streamable HTTP tools into your agent, use the following code:
 
 ```go
 // Configure Streamable HTTP MCP connection.
-streamableConfig := mcp.ConnectionConfig{
-    Transport: "streamable_http",
-    ServerURL: "http://localhost:3000/mcp",
-    Timeout:   10 * time.Second,
-}
-
-// Create MCP toolset with enterprise-level configuration.
-streamableToolSet := mcp.NewMCPToolSet(streamableConfig,
+streamableToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+        Timeout:   10 * time.Second,
+    },
     mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
 )
-
-// Get tools from the HTTP server
-streamableTools := streamableToolSet.Tools(ctx)
 ```
 
-### Combining Tools for Use in LLM Agent
+### Using ToolSets with LLM Agent
 
 ```go
-// Get tools from both toolsets (returns []tool.CallableTool)
-stdioTools := stdioToolSet.Tools(ctx)
-streamableTools := streamableToolSet.Tools(ctx)
+// Create function tools
+calculatorTool := function.NewFunctionTool(calculate, 
+    function.WithName("calculator"), 
+    function.WithDescription("Perform basic mathematical calculations"))
+timeTool := function.NewFunctionTool(getCurrentTime, 
+    function.WithName("current_time"), 
+    function.WithDescription("Get the current time and date"))
 
-// Combine all tools
-allTools := make([]tool.Tool, 0, 2+len(stdioTools)+len(streamableTools))
-allTools = append(allTools, calculatorTool, timeTool) // Function tools
-
-// Convert CallableTool to Tool and append
-for _, mcpTool := range stdioTools {
-    allTools = append(allTools, mcpTool)
-}
-for _, mcpTool := range streamableTools {
-    allTools = append(allTools, mcpTool)
-}
-
-// Create LLM agent with tools
+// Create LLM agent with both function tools and toolsets
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
     llmagent.WithDescription("A helpful AI assistant"),
     // ... other configurations
-    llmagent.WithTools(allTools), // Pass all tools to the agent
+    llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),        // Function tools
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, streamableToolSet}), // MCP ToolSets
 )
 ```
 
