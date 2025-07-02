@@ -163,7 +163,7 @@ func (s *SessionService) GetSession(
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
-	opt := session.ApplyOptions(opts...)
+	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -195,7 +195,7 @@ func (s *SessionService) ListSessions(
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	opt := session.ApplyOptions(opts...)
+	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -505,4 +505,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
+}
+
+func applyOptions(opts ...session.Option) *session.Options {
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	return opt
 }

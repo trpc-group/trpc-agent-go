@@ -55,15 +55,6 @@ func WithEventTime(time time.Time) Option {
 	}
 }
 
-// ApplyOptions applies the options to the options.
-func ApplyOptions(opts ...Option) *Options {
-	opt := &Options{}
-	for _, o := range opts {
-		o(opt)
-	}
-	return opt
-}
-
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.
