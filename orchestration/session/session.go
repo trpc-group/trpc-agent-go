@@ -10,12 +10,15 @@ import (
 )
 
 // StateMap is a map of state key-value pairs.
-type StateMap map[string]interface{}
+type StateMap map[string][]byte
 
 var (
-	errAppNameRequired   = errors.New("appName is required")
-	errUserIDRequired    = errors.New("userID is required")
-	errSessionIDRequired = errors.New("sessionID is required")
+	// ErrAppNameRequired is the error for app name required.
+	ErrAppNameRequired = errors.New("appName is required")
+	// ErrUserIDRequired is the error for user id required.
+	ErrUserIDRequired = errors.New("userID is required")
+	// ErrSessionIDRequired is the error for session id required.
+	ErrSessionIDRequired = errors.New("sessionID is required")
 )
 
 // Session is the interface that all sessions must implement.
@@ -23,7 +26,7 @@ type Session struct {
 	ID        string        `json:"id"`        // session id
 	AppName   string        `json:"appName"`   // app name
 	UserID    string        `json:"userID"`    // user id
-	State     *State        `json:"state"`     // session state with delta support
+	State     StateMap      `json:"state"`     // session state with delta support
 	Events    []event.Event `json:"events"`    // session events
 	UpdatedAt time.Time     `json:"updatedAt"` // last update time
 	CreatedAt time.Time     `json:"createdAt"` // creation time
@@ -48,6 +51,24 @@ type Service interface {
 
 	// DeleteSession deletes a session.
 	DeleteSession(ctx context.Context, key Key, options *Options) error
+
+	// UpdateAppState updates the state by target scope and key.
+	UpdateAppState(ctx context.Context, appName string, state StateMap) error
+
+	// DeleteAppState deletes the state by target scope and key.
+	DeleteAppState(ctx context.Context, appName string, key string) error
+
+	// GetState gets the state by target scope and key.
+	ListAppStates(ctx context.Context, appName string) (StateMap, error)
+
+	// UpdateUserState updates the state by target scope and key.
+	UpdateUserState(ctx context.Context, userKey UserKey, state StateMap) error
+
+	// GetUserState gets the state by target scope and key.
+	ListUserStates(ctx context.Context, userKey UserKey) (StateMap, error)
+
+	// DeleteUserState deletes the state by target scope and key.
+	DeleteUserState(ctx context.Context, userKey UserKey, key string) error
 
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options *Options) error
@@ -83,23 +104,23 @@ func (s *UserKey) CheckUserKey() error {
 
 func checkSessionKey(appName, userID, sessionID string) error {
 	if appName == "" {
-		return errAppNameRequired
+		return ErrAppNameRequired
 	}
 	if userID == "" {
-		return errUserIDRequired
+		return ErrUserIDRequired
 	}
 	if sessionID == "" {
-		return errSessionIDRequired
+		return ErrSessionIDRequired
 	}
 	return nil
 }
 
 func checkUserKey(appName, userID string) error {
 	if appName == "" {
-		return errAppNameRequired
+		return ErrAppNameRequired
 	}
 	if userID == "" {
-		return errUserIDRequired
+		return ErrUserIDRequired
 	}
 	return nil
 }

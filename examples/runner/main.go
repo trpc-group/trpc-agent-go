@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
@@ -20,11 +22,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis"
+)
+
+var (
+	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
+	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
+	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
 )
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
@@ -94,11 +104,28 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 	)
 
+	var sessionService session.Service
+	var err error
+	switch *sessServiceName {
+	case "inmemory":
+		sessionService = inmemory.NewSessionService()
+	case "redis":
+		redisClient := goredis.NewClient(&goredis.Options{Addr: *redisAddr})
+		sessionService, err = redis.NewService(redis.WithRedisClient(redisClient))
+	default:
+		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to create session service: %w", err)
+	}
+
 	// Create runner.
 	appName := "multi-turn-chat"
 	c.runner = runner.New(
 		appName,
 		llmAgent,
+		runner.WithSessionService(sessionService),
 	)
 
 	// Setup identifiers.
@@ -114,6 +141,12 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 func (c *multiTurnChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
+	fmt.Println("💡 Special commands:")
+	fmt.Println("   /history  - Show conversation history")
+	fmt.Println("   /new      - Start a new session")
+	fmt.Println("   /exit      - End the conversation")
+	fmt.Println()
+
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -125,10 +158,16 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			continue
 		}
 
-		// Handle exit command.
-		if strings.ToLower(userInput) == "exit" {
+		// Handle special commands.
+		switch strings.ToLower(userInput) {
+		case "/exit":
 			fmt.Println("👋 Goodbye!")
 			return nil
+		case "/history":
+			userInput = "show our conversation history"
+		case "/new":
+			c.startNewSession()
+			continue
 		}
 
 		// Process the user message.
@@ -258,6 +297,17 @@ func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
 	}
 
 	return false
+}
+
+// startNewSession creates a new session ID.
+func (c *multiTurnChat) startNewSession() {
+	oldSessionID := c.sessionID
+	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
+	fmt.Printf("🆕 Started new session!\n")
+	fmt.Printf("   Previous: %s\n", oldSessionID)
+	fmt.Printf("   Current:  %s\n", c.sessionID)
+	fmt.Printf("   (Conversation history has been reset)\n")
+	fmt.Println()
 }
 
 // CallableTool implementations.

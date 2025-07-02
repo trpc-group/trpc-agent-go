@@ -37,7 +37,9 @@ This implementation showcases the essential features for building conversational
 
 | Argument | Description | Default Value |
 |----------|-------------|---------------|
-| `-model` | Name of the model to use | `gpt-4o-mini` |
+| `-model` | Name of the model to use | `deepseek-chat` |
+| `-session` | Session service: `inmemory` or `redis` | `inmemory` |
+| `-redis-addr` | Redis server address (when using redis session) | `localhost:6379` |
 
 ## Usage
 
@@ -54,6 +56,13 @@ go run main.go
 ```bash
 export OPENAI_API_KEY="your-api-key"
 go run main.go -model gpt-4o
+```
+
+### With Redis Session
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+go run main.go -session redis -redis-addr localhost:6379
 ```
 
 ### Using Environment Variable
@@ -112,6 +121,12 @@ Type 'exit' to end the conversation
 👤 You: I'm good! Can you remember what I just asked you?
 🤖 Assistant: Yes, I can! You just asked me how I was doing today, and I responded that I'm doing well. This shows that I'm maintaining context from our conversation. Is there anything specific you'd like to chat about or any way I can help you?
 
-👤 You: exit
+👤 You: /exit
 👋 Goodbye!
 ```
+
+### Session Commands
+
+- `/history` - Ask the agent to show conversation history
+- `/new` - Start a new session (resets conversation context)
+- `/exit` - End the conversation

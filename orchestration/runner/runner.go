@@ -51,7 +51,7 @@ func New(appName string, agent agent.Agent, opts ...Option) *Runner {
 	}
 
 	if options.sessionService == nil {
-		options.sessionService = inmemory.NewSessionService(inmemory.ServiceOpts{})
+		options.sessionService = inmemory.NewSessionService()
 	}
 	return &Runner{
 		appName:        appName,

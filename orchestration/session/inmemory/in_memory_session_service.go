@@ -4,12 +4,17 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+)
+
+const (
+	defaultSessionEventLimit = 100
 )
 
 var _ session.Service = (*SessionService)(nil)
@@ -33,8 +38,8 @@ func newAppSessions() *appSessions {
 
 // ServiceOpts is the options for session service.
 type ServiceOpts struct {
-	// SessionEventLimit is the limit of events in a session.
-	SessionEventLimit int
+	// sessionEventLimit is the limit of events in a session.
+	sessionEventLimit int
 }
 
 // SessionService provides an in-memory implementation of SessionService.
@@ -44,8 +49,24 @@ type SessionService struct {
 	opts ServiceOpts
 }
 
+// ServiceOption is the option for the in-memory session service.
+type ServiceOption func(*ServiceOpts)
+
+// WithSessionEventLimit sets the limit of events in a session.
+func WithSessionEventLimit(limit int) func(*ServiceOpts) {
+	return func(opts *ServiceOpts) {
+		opts.sessionEventLimit = limit
+	}
+}
+
 // NewSessionService creates a new in-memory session service.
-func NewSessionService(opts ServiceOpts) *SessionService {
+func NewSessionService(options ...ServiceOption) *SessionService {
+	opts := ServiceOpts{
+		sessionEventLimit: defaultSessionEventLimit,
+	}
+	for _, option := range options {
+		option(&opts)
+	}
 	return &SessionService{
 		apps: make(map[string]*appSessions),
 		opts: opts,
@@ -103,7 +124,7 @@ func (s *SessionService) CreateSession(
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
-		State:     session.NewState(), // Initialize with provided state
+		State:     make(session.StateMap), // Initialize with provided state
 		Events:    []event.Event{},
 		UpdatedAt: time.Now(),
 		CreatedAt: time.Now(),
@@ -111,7 +132,7 @@ func (s *SessionService) CreateSession(
 
 	// Set initial state if provided
 	for k, v := range state {
-		sess.State.Set(k, v)
+		sess.State[k] = v
 	}
 
 	app.mu.Lock()
@@ -119,6 +140,10 @@ func (s *SessionService) CreateSession(
 
 	if app.sessions[key.UserID] == nil {
 		app.sessions[key.UserID] = make(map[string]*session.Session)
+	}
+
+	if app.userState[key.UserID] == nil {
+		app.userState[key.UserID] = make(session.StateMap)
 	}
 
 	// Store the session
@@ -213,6 +238,9 @@ func (s *SessionService) DeleteSession(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
+	if _, ok := app.sessions[key.UserID]; !ok {
+		return nil
+	}
 	if _, ok := app.sessions[key.UserID][key.SessionID]; !ok {
 		return nil
 	}
@@ -225,11 +253,161 @@ func (s *SessionService) DeleteSession(
 		delete(app.sessions, key.UserID)
 	}
 
-	if len(app.sessions[key.UserID]) == 0 {
-		delete(app.userState, key.UserID)
+	return nil
+}
+
+// UpdateAppState updates the app state.
+func (s *SessionService) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
+	if appName == "" {
+		return session.ErrAppNameRequired
+	}
+
+	// if app not found, create a new one
+	app := s.getOrCreateAppSessions(appName)
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	for k, v := range state {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		k = strings.TrimPrefix(k, session.StateAppPrefix)
+		app.appState[k] = copiedValue
+	}
+	return nil
+}
+
+// DeleteAppState deletes the app state.
+func (s *SessionService) DeleteAppState(ctx context.Context, appName string, key string) error {
+	if appName == "" {
+		return session.ErrAppNameRequired
+	}
+
+	// if app not found, return nil
+	app, ok := s.getAppSessions(appName)
+	if !ok {
+		return nil
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	key = strings.TrimPrefix(key, session.StateAppPrefix)
+	delete(app.appState, key)
+	return nil
+}
+
+// ListAppStates gets the app states.
+func (s *SessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	if appName == "" {
+		return nil, session.ErrAppNameRequired
+	}
+
+	// if app not found, return empty state map
+	app, ok := s.getAppSessions(appName)
+	if !ok {
+		return make(session.StateMap), nil
+	}
+
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+
+	copiedState := make(session.StateMap)
+	for k, v := range app.appState {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		copiedState[k] = copiedValue
+	}
+	return copiedState, nil
+}
+
+// UpdateUserState updates the user state.
+func (s *SessionService) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	// if app not found, create a new one
+	app := s.getOrCreateAppSessions(userKey.AppName)
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	if app.userState[userKey.UserID] == nil {
+		app.userState[userKey.UserID] = make(session.StateMap)
+	}
+
+	for k := range state {
+		if strings.HasPrefix(k, session.StateAppPrefix) {
+			return fmt.Errorf("memory session service update user state failed: %s is not allowed", k)
+		}
+		if strings.HasPrefix(k, session.StateTempPrefix) {
+			return fmt.Errorf("memory session service update user state failed: %s is not allowed", k)
+		}
+	}
+
+	for k, v := range state {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		k = strings.TrimPrefix(k, session.StateUserPrefix)
+		app.userState[userKey.UserID][k] = copiedValue
+	}
+	return nil
+}
+
+// DeleteUserState deletes the user state.
+func (s *SessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	// if app not found, return nil
+	app, ok := s.getAppSessions(userKey.AppName)
+	if !ok {
+		return nil
+	}
+
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	if app.userState[userKey.UserID] == nil {
+		return nil
+	}
+
+	key = strings.TrimPrefix(key, session.StateUserPrefix)
+	delete(app.userState[userKey.UserID], key)
+
+	if len(app.userState[userKey.UserID]) == 0 {
+		delete(app.userState, userKey.UserID)
 	}
 
 	return nil
+}
+
+// ListUserStates gets the user states.
+func (s *SessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+	app, ok := s.getAppSessions(userKey.AppName)
+	if !ok {
+		return make(session.StateMap), nil
+	}
+
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	userState, ok := app.userState[userKey.UserID]
+	if !ok {
+		return make(session.StateMap), nil
+	}
+
+	copiedState := make(session.StateMap)
+	for k, v := range userState {
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		copiedState[k] = copiedValue
+	}
+	return copiedState, nil
 }
 
 // AppendEvent appends an event to a session.
@@ -273,20 +451,19 @@ func (s *SessionService) AppendEvent(
 
 func (s *SessionService) updateSessionState(sess *session.Session, event *event.Event) {
 	sess.Events = append(sess.Events, *event)
-	if s.opts.SessionEventLimit > 0 && len(sess.Events) > s.opts.SessionEventLimit {
-		sess.Events = sess.Events[len(sess.Events)-s.opts.SessionEventLimit:]
+	if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
+		sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
 	}
 	sess.UpdatedAt = time.Now()
 }
 
-// copySession creates a deep copy of a session.
-// shallow copy
+// copySession creates a  copy of a session.
 func copySession(sess *session.Session) *session.Session {
 	copiedSess := &session.Session{
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     session.NewState(), // Create new state to avoid reference sharing
+		State:     make(session.StateMap), // Create new state to avoid reference sharing
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
 		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
@@ -294,8 +471,10 @@ func copySession(sess *session.Session) *session.Session {
 
 	// copy state
 	if sess.State != nil {
-		for k, v := range sess.State.Value {
-			copiedSess.State.Set(k, v)
+		for k, v := range sess.State {
+			copiedValue := make([]byte, len(v))
+			copy(copiedValue, v)
+			copiedSess.State[k] = copiedValue
 		}
 	}
 	copy(copiedSess.Events, sess.Events)
@@ -324,10 +503,10 @@ func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
-		sess.State.Set(session.StateAppPrefix+k, v)
+		sess.State[session.StateAppPrefix+k] = v
 	}
 	for k, v := range userState {
-		sess.State.Set(session.StateUserPrefix+k, v)
+		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
 }

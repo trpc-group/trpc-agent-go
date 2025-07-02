@@ -74,7 +74,7 @@ func (m *mockAgent) Tools() []tool.Tool {
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService(inmemory.ServiceOpts{})
+	sessionService := inmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -131,7 +131,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService(inmemory.ServiceOpts{})
+	sessionService := inmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -171,7 +171,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 
 func TestRunner_EmptyMessageHandling(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService(inmemory.ServiceOpts{})
+	sessionService := inmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
