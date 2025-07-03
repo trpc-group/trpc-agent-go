@@ -67,10 +67,14 @@ func (a *ParallelAgent) createBranchInvocationForSubAgent(
 	// Create a copy of the invocation.
 	branchInvocation := *baseInvocation
 	branchInvocation.Agent = subAgent
+	branchInvocation.AgentName = subAgent.Info().Name
 
 	// Create unique invocation ID for this branch.
 	branchSuffix := a.name + "." + branchInvocation.AgentName
 	branchInvocation.InvocationID = baseInvocation.InvocationID + "." + branchSuffix
+
+	// Set branch identifier for hierarchical event filtering.
+	branchInvocation.Branch = branchInvocation.InvocationID
 
 	return &branchInvocation
 }

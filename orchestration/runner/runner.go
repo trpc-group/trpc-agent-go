@@ -99,6 +99,7 @@ func (r *Runner) Run(
 			Author:       authorUser,
 			ID:           uuid.New().String(),
 			Timestamp:    time.Now(),
+			Branch:       "", // User events typically don't have branch constraints
 		}
 		// Set the user message content in the response.
 		userEvent.Response.Choices = []model.Choice{
@@ -160,6 +161,34 @@ func (r *Runner) Run(
 			case <-ctx.Done():
 				return
 			}
+		}
+
+		// Emit final runner completion event after all agent events are processed.
+		runnerCompletionEvent := &event.Event{
+			Response: &model.Response{
+				ID:        "runner-completion-" + uuid.New().String(),
+				Object:    model.ObjectTypeRunnerCompletion,
+				Created:   time.Now().Unix(),
+				Done:      true,
+				IsPartial: false,
+			},
+			InvocationID: invocationID,
+			Author:       r.appName,
+			ID:           uuid.New().String(),
+			Timestamp:    time.Now(),
+		}
+
+		// Append runner completion event to session.
+		if err := r.sessionService.AppendEvent(
+			ctx, sess, runnerCompletionEvent, &session.Options{},
+		); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+
+		// Send the runner completion event to output channel.
+		select {
+		case processedEventCh <- runnerCompletionEvent:
+		case <-ctx.Done():
 		}
 	}()
 
