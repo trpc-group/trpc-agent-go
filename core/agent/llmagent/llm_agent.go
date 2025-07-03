@@ -68,6 +68,13 @@ func WithTools(tools []tool.Tool) Option {
 	}
 }
 
+// WithToolSets sets the list of tool sets available to the agent.
+func WithToolSets(toolSets []tool.ToolSet) Option {
+	return func(opts *Options) {
+		opts.ToolSets = toolSets
+	}
+}
+
 // WithPlanner sets the planner to use for planning instructions.
 func WithPlanner(planner planner.Planner) Option {
 	return func(opts *Options) {
@@ -121,6 +128,8 @@ type Options struct {
 	ChannelBufferSize int
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// ToolSets is the list of tool sets available to the agent.
+	ToolSets []tool.ToolSet
 	// Planner is the planner to use for planning instructions.
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
@@ -216,6 +225,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		flowOpts,
 	)
 
+	// Register tools from both tools and toolsets.
+	tools := registerTools(options.Tools, options.ToolSets)
+
 	return &LLMAgent{
 		name:           name,
 		model:          options.Model,
@@ -224,13 +236,34 @@ func New(name string, opts ...Option) *LLMAgent {
 		systemPrompt:   options.SystemPrompt,
 		genConfig:      options.GenerationConfig,
 		flow:           llmFlow,
-		tools:          options.Tools,
+		tools:          tools,
 		planner:        options.Planner,
 		subAgents:      options.SubAgents,
 		agentCallbacks: options.AgentCallbacks,
 		modelCallbacks: options.ModelCallbacks,
 		toolCallbacks:  options.ToolCallbacks,
 	}
+}
+
+func registerTools(tools []tool.Tool, toolSets []tool.ToolSet) []tool.Tool {
+	if len(tools) == 0 && len(toolSets) == 0 {
+		return nil
+	}
+
+	// Start with direct tools.
+	allTools := make([]tool.Tool, len(tools))
+	copy(allTools, tools)
+
+	// Add tools from each toolset.
+	ctx := context.Background()
+	for _, toolSet := range toolSets {
+		setTools := toolSet.Tools(ctx)
+		for _, t := range setTools {
+			allTools = append(allTools, t)
+		}
+	}
+
+	return allTools
 }
 
 // Run implements the agent.Agent interface.
