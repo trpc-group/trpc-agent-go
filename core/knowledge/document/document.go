@@ -50,6 +50,5 @@ func (d *Document) Clone() *Document {
 			clone.Metadata[k] = v
 		}
 	}
-
 	return clone
 }

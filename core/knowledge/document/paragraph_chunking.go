@@ -15,7 +15,6 @@ func NewParagraphChunking(opts ...Option) (*ParagraphChunking, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
-
 	return &ParagraphChunking{
 		opts: options,
 	}, nil
@@ -54,7 +53,6 @@ func (p *ParagraphChunking) Chunk(doc *Document) ([]*Document, error) {
 	if p.opts.overlap > 0 {
 		chunks = p.applyOverlap(doc, chunks)
 	}
-
 	return chunks, nil
 }
 
@@ -71,7 +69,6 @@ func (p *ParagraphChunking) splitIntoParagraphs(content string) []string {
 			result = append(result, trimmed)
 		}
 	}
-
 	return result
 }
 
@@ -113,7 +110,6 @@ func (p *ParagraphChunking) groupParagraphsIntoChunks(doc *Document, paragraphs 
 		chunk := createChunk(doc, chunkContent, chunkNumber)
 		chunks = append(chunks, chunk)
 	}
-
 	return chunks
 }
 
@@ -146,7 +142,6 @@ func (p *ParagraphChunking) applyOverlap(doc *Document, chunks []*Document) []*D
 			overlappedChunks = append(overlappedChunks, newChunk)
 		}
 	}
-
 	return overlappedChunks
 }
 
@@ -155,6 +150,5 @@ func (p *ParagraphChunking) extractOverlap(content string, overlapSize int) stri
 	if len(content) <= overlapSize {
 		return content
 	}
-
 	return content[len(content)-overlapSize:]
 }

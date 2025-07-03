@@ -13,7 +13,6 @@ func NewFixedSizeChunking(opts ...Option) (*FixedSizeChunking, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
-
 	return &FixedSizeChunking{
 		opts: options,
 	}, nil
@@ -66,7 +65,6 @@ func (f *FixedSizeChunking) Chunk(doc *Document) ([]*Document, error) {
 		chunkNumber++
 		start = end - f.opts.overlap
 	}
-
 	return chunks, nil
 }
 
@@ -78,7 +76,6 @@ func (f *FixedSizeChunking) findBreakPoint(content string, start, targetEnd int)
 			return i + 1 // Return position after the whitespace.
 		}
 	}
-
 	return -1 // No suitable break point found.
 }
 

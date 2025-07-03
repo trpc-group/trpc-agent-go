@@ -44,7 +44,6 @@ func buildOptions(opts ...Option) *options {
 	for _, opt := range opts {
 		opt(o)
 	}
-
 	return o
 }
 
@@ -81,7 +80,6 @@ func cleanText(content string) string {
 	for i, line := range lines {
 		lines[i] = strings.TrimSpace(line)
 	}
-
 	return strings.Join(lines, LineFeed)
 }
 
@@ -113,7 +111,6 @@ func createChunk(originalDoc *Document, content string, chunkNumber int) *Docume
 	chunk.Metadata["chunk_number"] = chunkNumber
 	chunk.Metadata["chunk_size"] = len(content)
 	chunk.Metadata["is_chunk"] = true
-
 	return chunk
 }
 
@@ -137,6 +134,5 @@ func itoa(i int) string {
 	if negative {
 		result = append([]byte{'-'}, result...)
 	}
-
 	return string(result)
 }

@@ -15,7 +15,6 @@ func NewNaturalBreakChunking(opts ...Option) (*NaturalBreakChunking, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
-
 	return &NaturalBreakChunking{
 		opts: options,
 	}, nil
@@ -72,7 +71,6 @@ func (n *NaturalBreakChunking) Chunk(doc *Document) ([]*Document, error) {
 
 		start = newStart
 	}
-
 	return chunks, nil
 }
 
@@ -102,7 +100,6 @@ func (n *NaturalBreakChunking) findNaturalBreakPoint(content string, start, targ
 			return start + lastIndex + len(separator)
 		}
 	}
-
 	return -1 // No natural break point found.
 }
 
