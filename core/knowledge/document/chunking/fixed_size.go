@@ -1,4 +1,6 @@
-package document
+package chunking
+
+import "trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 // It attempts to split at whitespace boundaries to avoid breaking words.
@@ -19,13 +21,13 @@ func NewFixedSizeChunking(opts ...Option) (*FixedSizeChunking, error) {
 }
 
 // Chunk splits the document into fixed-size chunks with optional overlap.
-func (f *FixedSizeChunking) Chunk(doc *Document) ([]*Document, error) {
+func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	if doc == nil {
-		return nil, ErrNilDocument
+		return nil, document.ErrNilDocument
 	}
 
 	if doc.IsEmpty() {
-		return nil, ErrEmptyDocument
+		return nil, document.ErrEmptyDocument
 	}
 
 	content := cleanText(doc.Content)
@@ -34,10 +36,10 @@ func (f *FixedSizeChunking) Chunk(doc *Document) ([]*Document, error) {
 	// If content is smaller than chunk size, return as single chunk.
 	if contentLength <= f.opts.chunkSize {
 		chunk := createChunk(doc, content, 1)
-		return []*Document{chunk}, nil
+		return []*document.Document{chunk}, nil
 	}
 
-	var chunks []*Document
+	var chunks []*document.Document
 	chunkNumber := 1
 	start := 0
 
@@ -81,7 +83,7 @@ func (f *FixedSizeChunking) findBreakPoint(content string, start, targetEnd int)
 
 // isWhitespace checks if a character is considered whitespace.
 func (f *FixedSizeChunking) isWhitespace(char rune) bool {
-	for _, ws := range WhitespaceChars {
+	for _, ws := range document.WhitespaceChars {
 		if char == ws {
 			return true
 		}

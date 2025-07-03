@@ -1,6 +1,10 @@
-package document
+package chunking
 
-import "strings"
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+)
 
 // NaturalBreakChunking implements a chunking strategy that finds natural break points.
 // It prioritizes splitting at newlines and sentence endings to maintain semantic coherence.
@@ -21,13 +25,13 @@ func NewNaturalBreakChunking(opts ...Option) (*NaturalBreakChunking, error) {
 }
 
 // Chunk splits the document by finding natural break points like newlines and sentence endings.
-func (n *NaturalBreakChunking) Chunk(doc *Document) ([]*Document, error) {
+func (n *NaturalBreakChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	if doc == nil {
-		return nil, ErrNilDocument
+		return nil, document.ErrNilDocument
 	}
 
 	if doc.IsEmpty() {
-		return nil, ErrEmptyDocument
+		return nil, document.ErrEmptyDocument
 	}
 
 	content := cleanText(doc.Content)
@@ -36,10 +40,10 @@ func (n *NaturalBreakChunking) Chunk(doc *Document) ([]*Document, error) {
 	// If content is smaller than chunk size, return as single chunk.
 	if contentLength <= n.opts.chunkSize {
 		chunk := createChunk(doc, content, 1)
-		return []*Document{chunk}, nil
+		return []*document.Document{chunk}, nil
 	}
 
-	var chunks []*Document
+	var chunks []*document.Document
 	chunkNumber := 1
 	start := 0
 
@@ -65,7 +69,7 @@ func (n *NaturalBreakChunking) Chunk(doc *Document) ([]*Document, error) {
 
 		// Prevent infinite loop by ensuring we make progress.
 		if newStart <= start {
-			minProgress := max(1, int(float64(n.opts.chunkSize)*MinProgressRatio))
+			minProgress := max(1, int(float64(n.opts.chunkSize)*document.MinProgressRatio))
 			newStart = min(contentLength, start+minProgress)
 		}
 
@@ -78,7 +82,7 @@ func (n *NaturalBreakChunking) Chunk(doc *Document) ([]*Document, error) {
 // Priority order: newline > period.
 func (n *NaturalBreakChunking) findNaturalBreakPoint(content string, start, targetEnd int) int {
 	// Search for high priority break characters first.
-	for _, separator := range HighPriorityBreaks {
+	for _, separator := range document.HighPriorityBreaks {
 		// Find the last occurrence of this separator in the range.
 		searchRange := content[start:targetEnd]
 		lastIndex := strings.LastIndex(searchRange, separator)
@@ -90,7 +94,7 @@ func (n *NaturalBreakChunking) findNaturalBreakPoint(content string, start, targ
 	}
 
 	// Search for medium priority break characters.
-	for _, separator := range MediumPriorityBreaks {
+	for _, separator := range document.MediumPriorityBreaks {
 		// Find the last occurrence of this separator in the range.
 		searchRange := content[start:targetEnd]
 		lastIndex := strings.LastIndex(searchRange, separator)

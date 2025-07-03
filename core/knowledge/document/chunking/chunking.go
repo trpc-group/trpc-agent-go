@@ -1,14 +1,17 @@
-package document
+// Package chunking provides document chunking strategies and utilities.
+package chunking
 
 import (
 	"regexp"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 )
 
-// ChunkingStrategy defines the interface for document chunking strategies.
-type ChunkingStrategy interface {
+// Strategy defines the interface for document chunking strategies.
+type Strategy interface {
 	// Chunk splits a document into smaller chunks based on the strategy's algorithm.
-	Chunk(doc *Document) ([]*Document, error)
+	Chunk(doc *document.Document) ([]*document.Document, error)
 }
 
 // Option represents a functional option for configuring chunking strategies.
@@ -37,8 +40,8 @@ func WithOverlap(overlap int) Option {
 // buildOptions creates options with defaults applied.
 func buildOptions(opts ...Option) *options {
 	o := &options{
-		chunkSize: DefaultChunkSize,
-		overlap:   DefaultOverlap,
+		chunkSize: document.DefaultChunkSize,
+		overlap:   document.DefaultOverlap,
 	}
 
 	for _, opt := range opts {
@@ -50,13 +53,13 @@ func buildOptions(opts ...Option) *options {
 // validate validates the chunking options.
 func (o *options) validate() error {
 	if o.chunkSize <= 0 {
-		return ErrInvalidChunkSize
+		return document.ErrInvalidChunkSize
 	}
 	if o.overlap < 0 {
-		return ErrInvalidOverlap
+		return document.ErrInvalidOverlap
 	}
 	if o.overlap >= o.chunkSize {
-		return ErrOverlapTooLarge
+		return document.ErrOverlapTooLarge
 	}
 	return nil
 }
@@ -72,20 +75,20 @@ func cleanText(content string) string {
 	content = strings.TrimSpace(content)
 
 	// Normalize line breaks.
-	content = strings.ReplaceAll(content, CarriageReturnLineFeed, LineFeed)
-	content = strings.ReplaceAll(content, CarriageReturn, LineFeed)
+	content = strings.ReplaceAll(content, document.CarriageReturnLineFeed, document.LineFeed)
+	content = strings.ReplaceAll(content, document.CarriageReturn, document.LineFeed)
 
 	// Remove excessive whitespace while preserving line breaks.
-	lines := strings.Split(content, LineFeed)
+	lines := strings.Split(content, document.LineFeed)
 	for i, line := range lines {
 		lines[i] = strings.TrimSpace(line)
 	}
-	return strings.Join(lines, LineFeed)
+	return strings.Join(lines, document.LineFeed)
 }
 
 // createChunk creates a new document chunk with appropriate metadata.
-func createChunk(originalDoc *Document, content string, chunkNumber int) *Document {
-	chunk := &Document{
+func createChunk(originalDoc *document.Document, content string, chunkNumber int) *document.Document {
+	chunk := &document.Document{
 		Name:      originalDoc.Name,
 		Content:   content,
 		CreatedAt: originalDoc.CreatedAt,

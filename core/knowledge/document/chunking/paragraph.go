@@ -1,6 +1,10 @@
-package document
+package chunking
 
-import "strings"
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+)
 
 // ParagraphChunking implements a chunking strategy based on document paragraph structure.
 // It attempts to keep paragraphs intact and groups them into appropriately sized chunks.
@@ -21,13 +25,13 @@ func NewParagraphChunking(opts ...Option) (*ParagraphChunking, error) {
 }
 
 // Chunk splits the document based on paragraph structure while respecting size constraints.
-func (p *ParagraphChunking) Chunk(doc *Document) ([]*Document, error) {
+func (p *ParagraphChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
 	if doc == nil {
-		return nil, ErrNilDocument
+		return nil, document.ErrNilDocument
 	}
 
 	if doc.IsEmpty() {
-		return nil, ErrEmptyDocument
+		return nil, document.ErrEmptyDocument
 	}
 
 	content := cleanText(doc.Content)
@@ -36,14 +40,14 @@ func (p *ParagraphChunking) Chunk(doc *Document) ([]*Document, error) {
 	// If content is smaller than chunk size, return as single chunk.
 	if contentLength <= p.opts.chunkSize {
 		chunk := createChunk(doc, content, 1)
-		return []*Document{chunk}, nil
+		return []*document.Document{chunk}, nil
 	}
 
 	// Split content into paragraphs (double newlines indicate paragraph breaks).
 	paragraphs := p.splitIntoParagraphs(content)
 
 	if len(paragraphs) == 0 {
-		return nil, ErrEmptyDocument
+		return nil, document.ErrEmptyDocument
 	}
 
 	// Group paragraphs into chunks.
@@ -59,7 +63,7 @@ func (p *ParagraphChunking) Chunk(doc *Document) ([]*Document, error) {
 // splitIntoParagraphs splits content into individual paragraphs.
 func (p *ParagraphChunking) splitIntoParagraphs(content string) []string {
 	// Split on double newlines (paragraph separators).
-	paragraphs := strings.Split(content, ParagraphSeparator)
+	paragraphs := strings.Split(content, document.ParagraphSeparator)
 
 	// Filter out empty paragraphs and trim whitespace.
 	var result []string
@@ -73,19 +77,19 @@ func (p *ParagraphChunking) splitIntoParagraphs(content string) []string {
 }
 
 // groupParagraphsIntoChunks groups paragraphs into chunks while respecting size limits.
-func (p *ParagraphChunking) groupParagraphsIntoChunks(doc *Document, paragraphs []string) []*Document {
-	var chunks []*Document
+func (p *ParagraphChunking) groupParagraphsIntoChunks(doc *document.Document, paragraphs []string) []*document.Document {
+	var chunks []*document.Document
 	var currentChunk []string
 	currentSize := 0
 	chunkNumber := 1
-	separatorSize := len(ParagraphSeparator)
+	separatorSize := len(document.ParagraphSeparator)
 
 	for _, para := range paragraphs {
 		paraSize := len(para)
 
 		// If adding this paragraph would exceed chunk size, finalize current chunk.
 		if len(currentChunk) > 0 && currentSize+paraSize+separatorSize > p.opts.chunkSize {
-			chunkContent := strings.Join(currentChunk, ParagraphSeparator)
+			chunkContent := strings.Join(currentChunk, document.ParagraphSeparator)
 			chunk := createChunk(doc, chunkContent, chunkNumber)
 			chunks = append(chunks, chunk)
 
@@ -106,7 +110,7 @@ func (p *ParagraphChunking) groupParagraphsIntoChunks(doc *Document, paragraphs 
 
 	// Don't forget the last chunk.
 	if len(currentChunk) > 0 {
-		chunkContent := strings.Join(currentChunk, ParagraphSeparator)
+		chunkContent := strings.Join(currentChunk, document.ParagraphSeparator)
 		chunk := createChunk(doc, chunkContent, chunkNumber)
 		chunks = append(chunks, chunk)
 	}
@@ -114,12 +118,12 @@ func (p *ParagraphChunking) groupParagraphsIntoChunks(doc *Document, paragraphs 
 }
 
 // applyOverlap adds overlap between consecutive chunks.
-func (p *ParagraphChunking) applyOverlap(doc *Document, chunks []*Document) []*Document {
+func (p *ParagraphChunking) applyOverlap(doc *document.Document, chunks []*document.Document) []*document.Document {
 	if len(chunks) <= 1 {
 		return chunks
 	}
 
-	var overlappedChunks []*Document
+	var overlappedChunks []*document.Document
 
 	for i, chunk := range chunks {
 		if i == 0 {
@@ -132,7 +136,7 @@ func (p *ParagraphChunking) applyOverlap(doc *Document, chunks []*Document) []*D
 
 			var newContent string
 			if overlapContent != "" {
-				newContent = overlapContent + ParagraphSeparator + chunk.Content
+				newContent = overlapContent + document.ParagraphSeparator + chunk.Content
 			} else {
 				newContent = chunk.Content
 			}

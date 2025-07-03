@@ -1,4 +1,4 @@
-package document
+package chunking
 
 import (
 	"testing"
@@ -6,13 +6,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 )
 
 func TestFixedSizeChunking(t *testing.T) {
 	chunker, err := NewFixedSizeChunking(WithChunkSize(50), WithOverlap(10))
 	require.NoError(t, err)
 
-	doc := &Document{
+	doc := &document.Document{
 		ID:      "test-doc",
 		Name:    "Test Document",
 		Content: "This is the first sentence. This is the second sentence. This is the third sentence with more content.",
@@ -40,7 +41,7 @@ func TestNaturalBreakChunking(t *testing.T) {
 	chunker, err := NewNaturalBreakChunking(WithChunkSize(40), WithOverlap(0))
 	require.NoError(t, err)
 
-	doc := &Document{
+	doc := &document.Document{
 		ID:      "natural-test",
 		Content: "First paragraph.\nSecond line.\n\nSecond paragraph with more content.",
 	}
@@ -71,7 +72,7 @@ func TestParagraphChunking(t *testing.T) {
 	chunker, err := NewParagraphChunking(WithChunkSize(80), WithOverlap(0))
 	require.NoError(t, err)
 
-	doc := &Document{
+	doc := &document.Document{
 		ID: "para-test",
 		Content: `First paragraph with some content.
 
@@ -96,10 +97,10 @@ func TestChunkingWithEmptyDocument(t *testing.T) {
 	chunker, err := NewFixedSizeChunking(WithChunkSize(50), WithOverlap(10))
 	require.NoError(t, err)
 
-	doc := &Document{Content: ""}
+	doc := &document.Document{Content: ""}
 	chunks, err := chunker.Chunk(doc)
 	assert.Error(t, err)
-	assert.Equal(t, ErrEmptyDocument, err)
+	assert.Equal(t, document.ErrEmptyDocument, err)
 	assert.Nil(t, chunks)
 }
 
@@ -109,7 +110,7 @@ func TestChunkingWithNilDocument(t *testing.T) {
 
 	chunks, err := chunker.Chunk(nil)
 	assert.Error(t, err)
-	assert.Equal(t, ErrNilDocument, err)
+	assert.Equal(t, document.ErrNilDocument, err)
 	assert.Nil(t, chunks)
 }
 
@@ -117,24 +118,24 @@ func TestInvalidChunkingOptions(t *testing.T) {
 	// Test invalid chunk size.
 	_, err := NewFixedSizeChunking(WithChunkSize(0))
 	assert.Error(t, err)
-	assert.Equal(t, ErrInvalidChunkSize, err)
+	assert.Equal(t, document.ErrInvalidChunkSize, err)
 
 	// Test invalid overlap.
 	_, err = NewFixedSizeChunking(WithChunkSize(50), WithOverlap(-1))
 	assert.Error(t, err)
-	assert.Equal(t, ErrInvalidOverlap, err)
+	assert.Equal(t, document.ErrInvalidOverlap, err)
 
 	// Test overlap too large.
 	_, err = NewFixedSizeChunking(WithChunkSize(50), WithOverlap(50))
 	assert.Error(t, err)
-	assert.Equal(t, ErrOverlapTooLarge, err)
+	assert.Equal(t, document.ErrOverlapTooLarge, err)
 }
 
 func TestSmallDocument(t *testing.T) {
 	chunker, err := NewFixedSizeChunking(WithChunkSize(100), WithOverlap(10))
 	require.NoError(t, err)
 
-	doc := &Document{
+	doc := &document.Document{
 		ID:      "small-doc",
 		Content: "Small content.",
 	}
@@ -150,7 +151,7 @@ func TestDefaultOptions(t *testing.T) {
 	chunker, err := NewFixedSizeChunking()
 	require.NoError(t, err)
 
-	doc := &Document{
+	doc := &document.Document{
 		ID:      "default-test",
 		Content: generateLargeContent(2000),
 	}
@@ -162,7 +163,7 @@ func TestDefaultOptions(t *testing.T) {
 
 func BenchmarkFixedSizeChunking(b *testing.B) {
 	chunker, _ := NewFixedSizeChunking(WithChunkSize(1000), WithOverlap(100))
-	doc := &Document{
+	doc := &document.Document{
 		Content: generateLargeContent(10000),
 	}
 
@@ -174,7 +175,7 @@ func BenchmarkFixedSizeChunking(b *testing.B) {
 
 func BenchmarkNaturalBreakChunking(b *testing.B) {
 	chunker, _ := NewNaturalBreakChunking(WithChunkSize(1000), WithOverlap(100))
-	doc := &Document{
+	doc := &document.Document{
 		Content: generateLargeContent(10000),
 	}
 
@@ -186,7 +187,7 @@ func BenchmarkNaturalBreakChunking(b *testing.B) {
 
 func BenchmarkParagraphChunking(b *testing.B) {
 	chunker, _ := NewParagraphChunking(WithChunkSize(1000), WithOverlap(100))
-	doc := &Document{
+	doc := &document.Document{
 		Content: generateParagraphContent(10000),
 	}
 
