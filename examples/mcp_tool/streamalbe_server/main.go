@@ -58,7 +58,7 @@ func main() {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 
-	fmt.Printf("Starting MCP server on http://localhost%s\n", 3000)
+	fmt.Printf("Starting MCP server on http://localhost:%d\n", 3000)
 	fmt.Println("Available tools:")
 	fmt.Println("- get_weather: Get current weather for a location (fake data)")
 	fmt.Println("- get_news: Get latest news headlines (fake data)")

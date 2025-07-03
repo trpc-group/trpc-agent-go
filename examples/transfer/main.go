@@ -48,7 +48,7 @@ func main() {
 // transferChat manages the conversation with agent transfer functionality.
 type transferChat struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }
