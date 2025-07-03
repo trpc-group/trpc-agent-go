@@ -49,7 +49,7 @@ func main() {
 // reactPlanningChat manages the conversation with React planning.
 type reactPlanningChat struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }

@@ -46,7 +46,7 @@ func main() {
 // searchChat manages the conversation with DuckDuckGo search.
 type searchChat struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }

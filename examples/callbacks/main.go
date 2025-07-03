@@ -46,7 +46,7 @@ func main() {
 // multiTurnChatWithCallbacks manages the chat with callbacks.
 type multiTurnChatWithCallbacks struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }

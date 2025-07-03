@@ -46,7 +46,7 @@ func main() {
 // multiTurnChat manages the conversation.
 type multiTurnChat struct {
 	modelName  string
-	runner     *runner.Runner
+	runner     runner.Runner
 	userID     string
 	sessionID  string
 	mcpToolSet []*mcp.ToolSet

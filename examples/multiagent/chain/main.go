@@ -54,7 +54,7 @@ func main() {
 // chainChat manages the multi-agent conversation.
 type chainChat struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }

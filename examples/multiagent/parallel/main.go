@@ -32,7 +32,7 @@ const (
 // parallelChat manages the parallel multi-agent conversation.
 type parallelChat struct {
 	modelName string
-	runner    *runner.Runner
+	runner    runner.Runner
 	userID    string
 	sessionID string
 }
