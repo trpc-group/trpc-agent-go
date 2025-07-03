@@ -22,13 +22,13 @@ func TestLog(t *testing.T) {
 
 type noopLogger struct{}
 
-func (*noopLogger) Debug(args ...interface{})                 {}
-func (*noopLogger) Debugf(format string, args ...interface{}) {}
-func (*noopLogger) Info(args ...interface{})                  {}
-func (*noopLogger) Infof(format string, args ...interface{})  {}
-func (*noopLogger) Warn(args ...interface{})                  {}
-func (*noopLogger) Warnf(format string, args ...interface{})  {}
-func (*noopLogger) Error(args ...interface{})                 {}
-func (*noopLogger) Errorf(format string, args ...interface{}) {}
-func (*noopLogger) Fatal(args ...interface{})                 {}
-func (*noopLogger) Fatalf(format string, args ...interface{}) {}
+func (*noopLogger) Debug(args ...any)                 {}
+func (*noopLogger) Debugf(format string, args ...any) {}
+func (*noopLogger) Info(args ...any)                  {}
+func (*noopLogger) Infof(format string, args ...any)  {}
+func (*noopLogger) Warn(args ...any)                  {}
+func (*noopLogger) Warnf(format string, args ...any)  {}
+func (*noopLogger) Error(args ...any)                 {}
+func (*noopLogger) Errorf(format string, args ...any) {}
+func (*noopLogger) Fatal(args ...any)                 {}
+func (*noopLogger) Fatalf(format string, args ...any) {}
