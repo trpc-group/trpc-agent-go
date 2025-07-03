@@ -106,7 +106,7 @@ func (s *SessionService) CreateSession(
 	ctx context.Context,
 	key session.Key,
 	state session.StateMap,
-	opts *session.Options,
+	opts ...session.Option,
 ) (*session.Session, error) {
 	if err := key.CheckUserKey(); err != nil {
 		return nil, err
@@ -158,11 +158,12 @@ func (s *SessionService) CreateSession(
 func (s *SessionService) GetSession(
 	ctx context.Context,
 	key session.Key,
-	opts *session.Options,
+	opts ...session.Option,
 ) (*session.Session, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
+	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -181,9 +182,7 @@ func (s *SessionService) GetSession(
 	copiedSess := copySession(sess)
 
 	// apply filtering options if provided
-	if opts != nil {
-		applyGetSessionOptions(copiedSess, opts)
-	}
+	applyGetSessionOptions(copiedSess, opt)
 	return mergeState(app.appState, app.userState[key.UserID], copiedSess), nil
 }
 
@@ -191,12 +190,12 @@ func (s *SessionService) GetSession(
 func (s *SessionService) ListSessions(
 	ctx context.Context,
 	userKey session.UserKey,
-	opts *session.Options,
+	opts ...session.Option,
 ) ([]*session.Session, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-
+	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -212,9 +211,7 @@ func (s *SessionService) ListSessions(
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, s := range app.sessions[userKey.UserID] {
 		copiedSess := copySession(s)
-		if opts != nil {
-			applyGetSessionOptions(copiedSess, opts)
-		}
+		applyGetSessionOptions(copiedSess, opt)
 		sessList = append(sessList, mergeState(app.appState, app.userState[userKey.UserID], copiedSess))
 	}
 	return sessList, nil
@@ -224,7 +221,7 @@ func (s *SessionService) ListSessions(
 func (s *SessionService) DeleteSession(
 	ctx context.Context,
 	key session.Key,
-	opts *session.Options,
+	opts ...session.Option,
 ) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
@@ -415,7 +412,7 @@ func (s *SessionService) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
 	event *event.Event,
-	opts *session.Options,
+	opts ...session.Option,
 ) error {
 	s.updateSessionState(sess, event)
 	key := session.Key{
@@ -491,7 +488,6 @@ func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
 		var filteredEvents []event.Event
 		for _, e := range sess.Events {
 			// Include events that are after or equal to the specified time
-			// This matches the Python implementation: timestamp >= after_timestamp
 			if e.Timestamp.After(opts.EventTime) || e.Timestamp.Equal(opts.EventTime) {
 				filteredEvents = append(filteredEvents, e)
 			}
@@ -509,4 +505,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
+}
+
+func applyOptions(opts ...session.Option) *session.Options {
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	return opt
 }

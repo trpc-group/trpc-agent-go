@@ -80,7 +80,7 @@ func (s *Service) CreateSession(
 	ctx context.Context,
 	key session.Key,
 	state session.StateMap,
-	opts *session.Options,
+	opts ...session.Option,
 ) (*session.Session, error) {
 	if err := key.CheckUserKey(); err != nil {
 		return nil, err
@@ -117,15 +117,13 @@ func (s *Service) CreateSession(
 func (s *Service) GetSession(
 	ctx context.Context,
 	key session.Key,
-	opts *session.Options,
+	opts ...session.Option,
 ) (*session.Session, error) {
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
-	if opts == nil {
-		opts = &session.Options{}
-	}
-	sess, err := s.getSession(ctx, key, opts.EventNum, opts.EventTime)
+	opt := applyOptions(opts...)
+	sess, err := s.getSession(ctx, key, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("redis session service get session state failed: %w", err)
 	}
@@ -136,16 +134,13 @@ func (s *Service) GetSession(
 func (s *Service) ListSessions(
 	ctx context.Context,
 	userKey session.UserKey,
-	opts *session.Options,
+	opts ...session.Option,
 ) ([]*session.Session, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	if opts == nil {
-		opts = &session.Options{}
-	}
-
-	sessList, err := s.listSessions(ctx, userKey, opts.EventNum, opts.EventTime)
+	opt := applyOptions(opts...)
+	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("redis session service get session list failed: %w", err)
 	}
@@ -156,7 +151,7 @@ func (s *Service) ListSessions(
 func (s *Service) DeleteSession(
 	ctx context.Context,
 	key session.Key,
-	opts *session.Options,
+	opts ...session.Option,
 ) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
@@ -297,7 +292,7 @@ func (s *Service) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
 	event *event.Event,
-	opts *session.Options,
+	opts ...session.Option,
 ) error {
 	key := session.Key{
 		AppName:   sess.AppName,
@@ -307,12 +302,11 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	opt := applyOptions(opts...)
 	sess.Events = append(sess.Events, *event)
 	sess.UpdatedAt = time.Now()
-	if opts != nil {
-		if opts.EventNum > 0 && len(sess.Events) > opts.EventNum {
-			sess.Events = sess.Events[len(sess.Events)-opts.EventNum:]
-		}
+	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
+		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
 	}
 	if err := s.addEvent(ctx, key, event); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
@@ -634,4 +628,12 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
+}
+
+func applyOptions(opts ...session.Option) *session.Options {
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	return opt
 }

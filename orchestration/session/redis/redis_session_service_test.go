@@ -136,7 +136,7 @@ func TestService_CreateSession(t *testing.T) {
 			require.NoError(t, err)
 
 			key, state := tt.setup(t)
-			sess, err := service.CreateSession(context.Background(), key, state, &session.Options{})
+			sess, err := service.CreateSession(context.Background(), key, state)
 
 			tt.validate(t, sess, err, key, state)
 		})
@@ -248,7 +248,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 				"initial_key": []byte("initial_value"),
 			}
 
-			sess, err := service.CreateSession(context.Background(), sessionKey, initialState, &session.Options{})
+			sess, err := service.CreateSession(context.Background(), sessionKey, initialState)
 			require.NoError(t, err)
 
 			initialUpdateTime := sess.UpdatedAt
@@ -259,7 +259,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			// Setup and append events
 			events := tt.setupEvents()
 			for _, evt := range events {
-				err = service.AppendEvent(context.Background(), sess, evt, &session.Options{})
+				err = service.AppendEvent(context.Background(), sess, evt)
 				require.NoError(t, err)
 
 				// Small delay between events for timestamp differences
@@ -267,7 +267,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			}
 
 			// Retrieve final session state
-			finalSess, err := service.GetSession(context.Background(), sessionKey, &session.Options{})
+			finalSess, err := service.GetSession(context.Background(), sessionKey)
 			require.NoError(t, err)
 			assert.NotNil(t, finalSess)
 
@@ -337,7 +337,7 @@ func TestService_AppendEvent_ErrorCases(t *testing.T) {
 
 			sess := tt.setup(t, service)
 
-			err = service.AppendEvent(context.Background(), sess, tt.event, &session.Options{})
+			err = service.AppendEvent(context.Background(), sess, tt.event)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -352,7 +352,7 @@ func TestService_GetSession(t *testing.T) {
 
 		// Session 1: with events for filtering tests
 		sess1Key := session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"}
-		sess1, err := service.CreateSession(ctx, sess1Key, session.StateMap{"key": []byte("val")}, &session.Options{})
+		sess1, err := service.CreateSession(ctx, sess1Key, session.StateMap{"key": []byte("val")})
 		require.NoError(t, err)
 
 		events := []*event.Event{
@@ -362,13 +362,13 @@ func TestService_GetSession(t *testing.T) {
 			{ID: "event4", Timestamp: baseTime.Add(-1 * time.Hour)},
 		}
 		for _, evt := range events {
-			err := service.AppendEvent(ctx, sess1, evt, &session.Options{EventTime: evt.Timestamp})
+			err := service.AppendEvent(ctx, sess1, evt, session.WithEventTime(evt.Timestamp))
 			require.NoError(t, err)
 		}
 
 		// Session 2: simple session without extra events from this setup
 		sess2Key := session.Key{AppName: "testapp", UserID: "user1", SessionID: "session2"}
-		_, err = service.CreateSession(ctx, sess2Key, session.StateMap{}, &session.Options{})
+		_, err = service.CreateSession(ctx, sess2Key, session.StateMap{})
 		require.NoError(t, err)
 
 		return baseTime
@@ -382,7 +382,9 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get existing session",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "session2"}, &session.Options{})
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "session2"})
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -393,7 +395,10 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get nonexistent session",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "nonexistent"}, &session.Options{})
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "nonexistent"},
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				// Redis returns nil session without error for nonexistent sessions
@@ -404,7 +409,10 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get session with events",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"}, &session.Options{})
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"},
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -415,7 +423,11 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get session with EventNum option",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"}, &session.Options{EventNum: 2})
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"},
+					session.WithEventNum(2),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -429,8 +441,11 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get session with EventTime option",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				opts := &session.Options{EventTime: baseTime.Add(-2*time.Hour - 30*time.Minute)}
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"}, opts)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"},
+					session.WithEventTime(baseTime.Add(-2*time.Hour-30*time.Minute)),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -444,11 +459,12 @@ func TestService_GetSession(t *testing.T) {
 		{
 			name: "get session with both EventNum and EventTime",
 			setup: func(service *Service, baseTime time.Time) (*session.Session, error) {
-				opts := &session.Options{
-					EventNum:  1,
-					EventTime: baseTime.Add(-3*time.Hour - 30*time.Minute),
-				}
-				return service.GetSession(context.Background(), session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"}, opts)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "testapp", UserID: "user1", SessionID: "session1"},
+					session.WithEventNum(1),
+					session.WithEventTime(baseTime.Add(-3*time.Hour-30*time.Minute)),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -495,7 +511,7 @@ func TestService_Atomicity(t *testing.T) {
 			validate: func(t *testing.T, client *redis.Client, service *Service, sessionKey session.Key, err error) {
 				require.NoError(t, err)
 
-				finalSess, err := service.GetSession(context.Background(), sessionKey, &session.Options{})
+				finalSess, err := service.GetSession(context.Background(), sessionKey)
 				require.NoError(t, err)
 
 				assert.Equal(t, 1, len(finalSess.Events))
@@ -527,17 +543,17 @@ func TestService_Atomicity(t *testing.T) {
 					Response:     &model.Response{Object: "test", Done: false},
 					InvocationID: "inv123", Author: "agent", ID: "event123", Timestamp: time.Now(),
 				}
-				sess, err := service.GetSession(context.Background(), sessionKey, &session.Options{})
+				sess, err := service.GetSession(context.Background(), sessionKey)
 				require.NoError(t, err)
-				err = service.AppendEvent(context.Background(), sess, testEvent, &session.Options{})
+				err = service.AppendEvent(context.Background(), sess, testEvent)
 				require.NoError(t, err)
-				return service.DeleteSession(context.Background(), sessionKey, &session.Options{})
+				return service.DeleteSession(context.Background(), sessionKey)
 			},
 			validate: func(t *testing.T, client *redis.Client, service *Service, sessionKey session.Key, err error) {
 				require.NoError(t, err)
 
 				// Verify both session and events are deleted
-				sess, getErr := service.GetSession(context.Background(), sessionKey, &session.Options{})
+				sess, getErr := service.GetSession(context.Background(), sessionKey)
 
 				// Handle known miniredis pipeline limitation when accessing deleted sessions
 				if getErr != nil && strings.Contains(getErr.Error(), "redis: nil") {
@@ -568,7 +584,7 @@ func TestService_Atomicity(t *testing.T) {
 				AppName: "testapp", UserID: "user123", SessionID: "session123",
 			}
 			// Create session is common for both tests.
-			_, err = service.CreateSession(context.Background(), sessionKey, session.StateMap{}, &session.Options{})
+			_, err = service.CreateSession(context.Background(), sessionKey, session.StateMap{})
 			require.NoError(t, err)
 
 			err = tt.setup(t, service, sessionKey)

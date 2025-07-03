@@ -75,14 +75,13 @@ func (r *Runner) Run(
 	}
 
 	// Get session or create if it doesn't exist.
-	sess, err := r.sessionService.GetSession(ctx, sessionKey, &session.Options{})
+	sess, err := r.sessionService.GetSession(ctx, sessionKey)
 	if err != nil {
 		return nil, err
 	}
 	if sess == nil {
 		if sess, err = r.sessionService.CreateSession(
 			ctx, sessionKey, session.StateMap{},
-			&session.Options{},
 		); err != nil {
 			return nil, err
 		}
@@ -109,9 +108,7 @@ func (r *Runner) Run(
 			},
 		}
 
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, userEvent, &session.Options{},
-		); err != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
 			return nil, err
 		}
 	}
@@ -144,9 +141,7 @@ func (r *Runner) Run(
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
 			if agentEvent.Response != nil && !agentEvent.Response.IsPartial {
-				if err := r.sessionService.AppendEvent(
-					ctx, sess, agentEvent, &session.Options{},
-				); err != nil {
+				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
 			}
