@@ -38,19 +38,36 @@ type Options struct {
 	EventTime time.Time // after time
 }
 
+// Option is the option for a session.
+type Option func(*Options)
+
+// WithEventNum is the option for the number of recent events.
+func WithEventNum(num int) Option {
+	return func(o *Options) {
+		o.EventNum = num
+	}
+}
+
+// WithEventTime is the option for the time of the recent events.
+func WithEventTime(time time.Time) Option {
+	return func(o *Options) {
+		o.EventTime = time
+	}
+}
+
 // Service is the interface that all session services must implement.
 type Service interface {
 	// CreateSession creates a new session.
-	CreateSession(ctx context.Context, key Key, state StateMap, options *Options) (*Session, error)
+	CreateSession(ctx context.Context, key Key, state StateMap, options ...Option) (*Session, error)
 
 	// GetSession gets a session.
-	GetSession(ctx context.Context, key Key, options *Options) (*Session, error)
+	GetSession(ctx context.Context, key Key, options ...Option) (*Session, error)
 
 	// ListSessions lists all sessions by user scope of session key.
-	ListSessions(ctx context.Context, userKey UserKey, options *Options) ([]*Session, error)
+	ListSessions(ctx context.Context, userKey UserKey, options ...Option) ([]*Session, error)
 
 	// DeleteSession deletes a session.
-	DeleteSession(ctx context.Context, key Key, options *Options) error
+	DeleteSession(ctx context.Context, key Key, options ...Option) error
 
 	// UpdateAppState updates the state by target scope and key.
 	UpdateAppState(ctx context.Context, appName string, state StateMap) error
@@ -71,7 +88,7 @@ type Service interface {
 	DeleteUserState(ctx context.Context, userKey UserKey, key string) error
 
 	// AppendEvent appends an event to a session.
-	AppendEvent(ctx context.Context, session *Session, event *event.Event, options *Options) error
+	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
 }
 
 // Key is the key for a session.

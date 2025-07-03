@@ -53,6 +53,30 @@ func New(opts Options) *ChainAgent {
 	}
 }
 
+// createSubAgentInvocation creates a clean invocation for a sub-agent.
+// This ensures proper agent attribution for sequential execution.
+func (a *ChainAgent) createSubAgentInvocation(
+	subAgent agent.Agent,
+	baseInvocation *agent.Invocation,
+) *agent.Invocation {
+	// Create a copy of the invocation - no shared state mutation.
+	subInvocation := *baseInvocation
+
+	// Update agent-specific fields.
+	subInvocation.Agent = subAgent
+	subInvocation.AgentName = subAgent.Info().Name
+	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
+
+	// Set branch info to track sequence in multi-agent scenarios.
+	if baseInvocation.Branch != "" {
+		subInvocation.Branch = baseInvocation.Branch + "." + subAgent.Info().Name
+	} else {
+		subInvocation.Branch = a.name + "." + subAgent.Info().Name
+	}
+
+	return &subInvocation
+}
+
 // Run implements the agent.Agent interface.
 // It executes sub-agents in sequence, passing events through as they are generated.
 func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -101,12 +125,11 @@ func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 		// Run each sub-agent in sequence.
 		for _, subAgent := range a.subAgents {
-			// Create a new invocation for the sub-agent.
-			subInvocation := *invocation
-			subInvocation.Agent = subAgent
+			// Create clean invocation for sub-agent - no shared state mutation.
+			subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 			// Run the sub-agent.
-			subEventChan, err := subAgent.Run(ctx, &subInvocation)
+			subEventChan, err := subAgent.Run(ctx, subInvocation)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(

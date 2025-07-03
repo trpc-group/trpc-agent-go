@@ -136,7 +136,7 @@ func TestCreateSession(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			service := NewSessionService()
 			key, state := tt.setup()
-			sess, err := service.CreateSession(context.Background(), key, state, &session.Options{})
+			sess, err := service.CreateSession(context.Background(), key, state)
 			tt.validate(t, sess, err, key, state)
 		})
 	}
@@ -165,7 +165,7 @@ func TestGetSession(t *testing.T) {
 				UserID:    data.userID,
 				SessionID: data.sessID,
 			}
-			_, err := service.CreateSession(ctx, key, data.state, nil)
+			_, err := service.CreateSession(ctx, key, data.state)
 			require.NoError(t, err, "setup failed")
 		}
 
@@ -189,7 +189,7 @@ func TestGetSession(t *testing.T) {
 				AppName: "app1",
 				UserID:  "user1",
 				ID:      "session1",
-			}, evt, nil)
+			}, evt)
 			require.NoError(t, err)
 		}
 
@@ -204,7 +204,10 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get existing session",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}, nil)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"},
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -216,7 +219,10 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get non-existent session",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "app1", UserID: "user1", SessionID: "nonexistent"}, nil)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "app1", UserID: "user1", SessionID: "nonexistent"},
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				assert.NoError(t, err)
@@ -226,7 +232,11 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get session from non-existent app",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "nonexistent-app", UserID: "user1", SessionID: "session1"}, nil)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "nonexistent-app", UserID: "user1", SessionID: "session1"},
+					session.WithEventNum(1),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				assert.NoError(t, err)
@@ -236,7 +246,11 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get session with EventNum option",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				return service.GetSession(context.Background(), session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}, &session.Options{EventNum: 3})
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"},
+					session.WithEventNum(3),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -248,8 +262,11 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get session with EventTime option",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				opts := &session.Options{EventTime: baseTime.Add(45 * time.Minute)}
-				return service.GetSession(context.Background(), session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}, opts)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"},
+					session.WithEventTime(baseTime.Add(45*time.Minute)),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -261,11 +278,12 @@ func TestGetSession(t *testing.T) {
 		{
 			name: "get session with both EventNum and EventTime",
 			setup: func(service *SessionService, baseTime time.Time) (*session.Session, error) {
-				opts := &session.Options{
-					EventNum:  2,
-					EventTime: baseTime.Add(30 * time.Minute),
-				}
-				return service.GetSession(context.Background(), session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}, opts)
+				return service.GetSession(
+					context.Background(),
+					session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"},
+					session.WithEventNum(2),
+					session.WithEventTime(baseTime.Add(30*time.Minute)),
+				)
 			},
 			validate: func(t *testing.T, sess *session.Session, err error, baseTime time.Time) {
 				require.NoError(t, err)
@@ -307,7 +325,6 @@ func TestListSessions(t *testing.T) {
 				ctx,
 				key,
 				session.StateMap{"test": []byte("data")},
-				nil,
 			)
 			require.NoError(t, err, "setup failed")
 
@@ -319,7 +336,7 @@ func TestListSessions(t *testing.T) {
 						AppName: data.appName,
 						UserID:  data.userID,
 						ID:      data.sessID,
-					}, evt, nil)
+					}, evt)
 					require.NoError(t, err)
 				}
 			}
@@ -351,7 +368,7 @@ func TestListSessions(t *testing.T) {
 					AppName: "app1",
 					UserID:  "user1",
 				}
-				return service.ListSessions(context.Background(), userKey, nil)
+				return service.ListSessions(context.Background(), userKey)
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error) {
 				require.NoError(t, err)
@@ -366,7 +383,7 @@ func TestListSessions(t *testing.T) {
 					AppName: "nonexistent-app",
 					UserID:  "nonexistent-user",
 				}
-				return service.ListSessions(context.Background(), userKey, nil)
+				return service.ListSessions(context.Background(), userKey)
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error) {
 				require.NoError(t, err)
@@ -390,7 +407,7 @@ func TestListSessions(t *testing.T) {
 					AppName: "app1",
 					UserID:  "user2",
 				}
-				return service.ListSessions(context.Background(), userKey, nil)
+				return service.ListSessions(context.Background(), userKey)
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error) {
 				require.NoError(t, err)
@@ -414,7 +431,7 @@ func TestListSessions(t *testing.T) {
 					AppName: "app1",
 					UserID:  "user1",
 				}
-				return service.ListSessions(context.Background(), userKey, &session.Options{EventNum: 2})
+				return service.ListSessions(context.Background(), userKey, session.WithEventNum(2))
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error) {
 				require.NoError(t, err)
@@ -452,7 +469,7 @@ func TestDeleteSession(t *testing.T) {
 			UserID:    userID,
 			SessionID: sessID,
 		}
-		_, err := service.CreateSession(ctx, key, session.StateMap{"test": []byte("data")}, nil)
+		_, err := service.CreateSession(ctx, key, session.StateMap{"test": []byte("data")})
 		require.NoError(t, err, "setup failed")
 		return key
 	}
@@ -465,12 +482,12 @@ func TestDeleteSession(t *testing.T) {
 		{
 			name: "delete existing session",
 			setup: func(service *SessionService, originalKey session.Key) error {
-				return service.DeleteSession(context.Background(), originalKey, nil)
+				return service.DeleteSession(context.Background(), originalKey)
 			},
 			validate: func(t *testing.T, err error, service *SessionService, originalKey session.Key) {
 				require.NoError(t, err)
 				// Verify deletion by trying to get the original session
-				sess, getErr := service.GetSession(context.Background(), originalKey, nil)
+				sess, getErr := service.GetSession(context.Background(), originalKey)
 				assert.NoError(t, getErr, "GetSession() after delete failed")
 				assert.Nil(t, sess, "session should not exist after deletion")
 			},
@@ -483,12 +500,12 @@ func TestDeleteSession(t *testing.T) {
 					UserID:    "nonexistent-user",
 					SessionID: "nonexistent-session",
 				}
-				return service.DeleteSession(context.Background(), nonExistentKey, nil)
+				return service.DeleteSession(context.Background(), nonExistentKey)
 			},
 			validate: func(t *testing.T, err error, service *SessionService, originalKey session.Key) {
 				require.NoError(t, err)
 				// Original session should still exist
-				sess, getErr := service.GetSession(context.Background(), originalKey, nil)
+				sess, getErr := service.GetSession(context.Background(), originalKey)
 				assert.NoError(t, getErr, "GetSession() should succeed")
 				assert.NotNil(t, sess, "original session should still exist")
 			},
@@ -537,7 +554,7 @@ func TestConcurrentAccess(t *testing.T) {
 							SessionID: sessID,
 						}
 
-						_, err := service.CreateSession(ctx, key, state, nil)
+						_, err := service.CreateSession(ctx, key, state)
 						if err != nil {
 							errors <- err
 							return
@@ -563,7 +580,7 @@ func TestConcurrentAccess(t *testing.T) {
 					AppName: appName,
 					UserID:  userID,
 				}
-				return service.ListSessions(ctx, userKey, nil)
+				return service.ListSessions(ctx, userKey)
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error, expectedCount int) {
 				require.NoError(t, err, "concurrent operation failed")
@@ -595,7 +612,7 @@ func TestConcurrentAccess(t *testing.T) {
 							SessionID: sessID,
 						}
 
-						_, err := service.CreateSession(ctx, key, state, nil)
+						_, err := service.CreateSession(ctx, key, state)
 						if err != nil {
 							errors <- err
 							return
@@ -621,7 +638,7 @@ func TestConcurrentAccess(t *testing.T) {
 					AppName: appName,
 					UserID:  userID,
 				}
-				return service.ListSessions(ctx, userKey, nil)
+				return service.ListSessions(ctx, userKey)
 			},
 			validate: func(t *testing.T, sessions []*session.Session, err error, expectedCount int) {
 				require.NoError(t, err, "concurrent operation failed")
@@ -753,7 +770,7 @@ func TestStateMerging(t *testing.T) {
 		UserID:    userID,
 		SessionID: sessID,
 	}
-	sess, err := service.CreateSession(ctx, key, sessionState, nil)
+	sess, err := service.CreateSession(ctx, key, sessionState)
 
 	require.NoError(t, err)
 	assert.NotNil(t, sess, "session should be created")
@@ -772,7 +789,7 @@ func TestAppIsolation(t *testing.T) {
 		UserID:    "user1",
 		SessionID: "session1",
 	}
-	app1Session, err := service.CreateSession(ctx, key1, session.StateMap{"key": []byte("value1")}, nil)
+	app1Session, err := service.CreateSession(ctx, key1, session.StateMap{"key": []byte("value1")})
 	require.NoError(t, err)
 
 	key2 := session.Key{
@@ -780,7 +797,7 @@ func TestAppIsolation(t *testing.T) {
 		UserID:    "user1",
 		SessionID: "session2",
 	}
-	app2Session, err := service.CreateSession(ctx, key2, session.StateMap{"key": []byte("value2")}, nil)
+	app2Session, err := service.CreateSession(ctx, key2, session.StateMap{"key": []byte("value2")})
 	require.NoError(t, err)
 
 	// Verify sessions are isolated
@@ -789,11 +806,11 @@ func TestAppIsolation(t *testing.T) {
 
 	// List sessions for each app should only return sessions from that app
 	userKey1 := session.UserKey{AppName: "app1", UserID: "user1"}
-	app1Sessions, err := service.ListSessions(ctx, userKey1, nil)
+	app1Sessions, err := service.ListSessions(ctx, userKey1)
 	require.NoError(t, err)
 
 	userKey2 := session.UserKey{AppName: "app2", UserID: "user1"}
-	app2Sessions, err := service.ListSessions(ctx, userKey2, nil)
+	app2Sessions, err := service.ListSessions(ctx, userKey2)
 	require.NoError(t, err)
 
 	assert.Len(t, app1Sessions, 1, "app1 should have 1 session")

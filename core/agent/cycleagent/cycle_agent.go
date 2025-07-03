@@ -13,6 +13,10 @@ import (
 
 const defaultChannelBufferSize = 256
 
+// EscalationFunc is a callback function that determines if an event should
+// trigger escalation (stop the cycle). Return true to stop the cycle.
+type EscalationFunc func(*event.Event) bool
+
 // CycleAgent is an agent that runs its sub-agents in a loop.
 // When a sub-agent generates an event with escalation or max_iterations are
 // reached, the cycle agent will stop.
@@ -23,6 +27,7 @@ type CycleAgent struct {
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
 	agentCallbacks    *agent.AgentCallbacks
+	escalationFunc    EscalationFunc // Injectable escalation logic
 }
 
 // Options contains configuration options for creating a CycleAgent.
@@ -40,6 +45,9 @@ type Options struct {
 	ChannelBufferSize int
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.AgentCallbacks
+	// EscalationFunc is an optional function to determine custom escalation logic.
+	// If not provided, defaults to error-based escalation.
+	EscalationFunc EscalationFunc
 }
 
 // New creates a new CycleAgent with the given options.
@@ -57,25 +65,81 @@ func New(opts Options) *CycleAgent {
 		maxIterations:     opts.MaxIterations,
 		channelBufferSize: channelBufferSize,
 		agentCallbacks:    opts.AgentCallbacks,
+		escalationFunc:    opts.EscalationFunc,
 	}
 }
 
-// shouldEscalate checks if an event indicates escalation.
-// In the Go implementation, we consider an event to indicate escalation
-// if it's an error event or if it's marked as done with an error.
+// createSubAgentInvocation creates a proper invocation for sub-agents with correct attribution.
+// This ensures events from sub-agents have the correct Author field set.
+func (a *CycleAgent) createSubAgentInvocation(
+	subAgent agent.Agent,
+	baseInvocation *agent.Invocation,
+) *agent.Invocation {
+	// Create a copy of the invocation - no shared state mutation.
+	subInvocation := *baseInvocation
+
+	// Update agent-specific fields for proper agent attribution.
+	subInvocation.Agent = subAgent
+	subInvocation.AgentName = subAgent.Info().Name
+	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
+
+	// Set branch info for hierarchical event filtering.
+	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the
+	// previous agent's conversation history.
+	if baseInvocation.Branch != "" {
+		subInvocation.Branch = baseInvocation.Branch
+	} else {
+		subInvocation.Branch = a.name
+	}
+
+	return &subInvocation
+}
+
+// shouldEscalate checks if an event indicates escalation using injectable logic.
 func (a *CycleAgent) shouldEscalate(evt *event.Event) bool {
 	if evt == nil {
 		return false
 	}
 
-	// Check for explicit error events.
+	// Only check escalation for meaningful events, not streaming chunks
+	if !a.isEscalationCheckEvent(evt) {
+		return false
+	}
+
+	// Use custom escalation function if provided.
+	if a.escalationFunc != nil {
+		return a.escalationFunc(evt)
+	}
+
+	// Default escalation logic: error events.
 	if evt.Error != nil {
 		return true
 	}
 
 	// Check for done events that might indicate completion or escalation.
-	// TODO: add more sophisticated escalation logic.
 	return evt.Done && evt.Object == model.ObjectTypeError
+}
+
+// isEscalationCheckEvent determines if an event should be checked for escalation.
+// Only check meaningful completion events, not streaming chunks or preprocessing.
+func (a *CycleAgent) isEscalationCheckEvent(evt *event.Event) bool {
+	// Always check error events
+	if evt.Error != nil {
+		return true
+	}
+
+	// Check tool response events (these contain our quality assessment results)
+	if evt.Object == model.ObjectTypeToolResponse {
+		return true
+	}
+
+	// Check final completion events (not streaming chunks)
+	if evt.Done && evt.Response != nil && evt.Object != "chat.completion.chunk" {
+		return true
+	}
+
+	// Skip streaming chunks, preprocessing events, etc.
+	return false
 }
 
 // Run implements the agent.Agent interface.
@@ -138,12 +202,11 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 			// Run each sub-agent in sequence within the loop.
 			shouldBreak := false
 			for _, subAgent := range a.subAgents {
-				// Create a new invocation for the sub-agent.
-				subInvocation := *invocation
-				subInvocation.Agent = subAgent
+				// Create a proper invocation for the sub-agent with correct attribution.
+				subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 				// Run the sub-agent.
-				subEventChan, err := subAgent.Run(ctx, &subInvocation)
+				subEventChan, err := subAgent.Run(ctx, subInvocation)
 				if err != nil {
 					// Send error event and escalate.
 					errorEvent := event.NewErrorEvent(

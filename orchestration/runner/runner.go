@@ -75,14 +75,13 @@ func (r *Runner) Run(
 	}
 
 	// Get session or create if it doesn't exist.
-	sess, err := r.sessionService.GetSession(ctx, sessionKey, &session.Options{})
+	sess, err := r.sessionService.GetSession(ctx, sessionKey)
 	if err != nil {
 		return nil, err
 	}
 	if sess == nil {
 		if sess, err = r.sessionService.CreateSession(
 			ctx, sessionKey, session.StateMap{},
-			&session.Options{},
 		); err != nil {
 			return nil, err
 		}
@@ -99,6 +98,7 @@ func (r *Runner) Run(
 			Author:       authorUser,
 			ID:           uuid.New().String(),
 			Timestamp:    time.Now(),
+			Branch:       "", // User events typically don't have branch constraints
 		}
 		// Set the user message content in the response.
 		userEvent.Response.Choices = []model.Choice{
@@ -108,9 +108,7 @@ func (r *Runner) Run(
 			},
 		}
 
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, userEvent, &session.Options{},
-		); err != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
 			return nil, err
 		}
 	}
@@ -143,9 +141,7 @@ func (r *Runner) Run(
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
 			if agentEvent.Response != nil && !agentEvent.Response.IsPartial {
-				if err := r.sessionService.AppendEvent(
-					ctx, sess, agentEvent, &session.Options{},
-				); err != nil {
+				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
 			}
@@ -160,6 +156,34 @@ func (r *Runner) Run(
 			case <-ctx.Done():
 				return
 			}
+		}
+
+		// Emit final runner completion event after all agent events are processed.
+		runnerCompletionEvent := &event.Event{
+			Response: &model.Response{
+				ID:        "runner-completion-" + uuid.New().String(),
+				Object:    model.ObjectTypeRunnerCompletion,
+				Created:   time.Now().Unix(),
+				Done:      true,
+				IsPartial: false,
+			},
+			InvocationID: invocationID,
+			Author:       r.appName,
+			ID:           uuid.New().String(),
+			Timestamp:    time.Now(),
+		}
+
+		// Append runner completion event to session.
+		if err := r.sessionService.AppendEvent(
+			ctx, sess, runnerCompletionEvent, &session.Options{},
+		); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+
+		// Send the runner completion event to output channel.
+		select {
+		case processedEventCh <- runnerCompletionEvent:
+		case <-ctx.Done():
 		}
 	}()
 

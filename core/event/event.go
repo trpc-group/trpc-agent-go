@@ -25,6 +25,9 @@ type Event struct {
 	// Timestamp is the timestamp of the event.
 	Timestamp time.Time `json:"timestamp"`
 
+	// Branch is the branch identifier for hierarchical event filtering.
+	Branch string `json:"branch,omitempty"`
+
 	// RequiresCompletion indicates if this event needs completion signaling.
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
