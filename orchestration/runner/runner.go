@@ -175,7 +175,7 @@ func (r *Runner) Run(
 
 		// Append runner completion event to session.
 		if err := r.sessionService.AppendEvent(
-			ctx, sess, runnerCompletionEvent, &session.Options{},
+			ctx, sess, runnerCompletionEvent,
 		); err != nil {
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
