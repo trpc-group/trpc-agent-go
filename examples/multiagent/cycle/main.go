@@ -59,7 +59,7 @@ func main() {
 type cycleChat struct {
 	modelName     string
 	maxIterations int
-	runner        *runner.Runner
+	runner        runner.Runner
 	userID        string
 	sessionID     string
 }

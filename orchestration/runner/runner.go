@@ -29,8 +29,19 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
-// Runner runs agents.
-type Runner struct {
+// Runner is the interface for running agents.
+type Runner interface {
+	Run(
+		ctx context.Context,
+		userID string,
+		sessionID string,
+		message model.Message,
+		opts agent.RunOptions,
+	) (<-chan *event.Event, error)
+}
+
+// runner runs agents.
+type runner struct {
 	appName        string
 	agent          agent.Agent
 	sessionService session.Service
@@ -42,7 +53,7 @@ type Options struct {
 }
 
 // New creates a new Runner.
-func New(appName string, agent agent.Agent, opts ...Option) *Runner {
+func New(appName string, agent agent.Agent, opts ...Option) Runner {
 	var options Options
 
 	// Apply function options.
@@ -53,7 +64,7 @@ func New(appName string, agent agent.Agent, opts ...Option) *Runner {
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 	}
-	return &Runner{
+	return &runner{
 		appName:        appName,
 		agent:          agent,
 		sessionService: options.sessionService,
@@ -61,7 +72,7 @@ func New(appName string, agent agent.Agent, opts ...Option) *Runner {
 }
 
 // Run runs the agent.
-func (r *Runner) Run(
+func (r *runner) Run(
 	ctx context.Context,
 	userID string,
 	sessionID string,
