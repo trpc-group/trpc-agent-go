@@ -11,7 +11,7 @@ import (
 func TestGenerateJSONSchema_PrimitiveTypes(t *testing.T) {
 	tests := []struct {
 		name     string
-		input    interface{}
+		input    any
 		expected *tool.Schema
 	}{
 		{

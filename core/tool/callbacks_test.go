@@ -378,7 +378,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 
 		// Modify args for certain tools.
 		if toolName == "modify-args" {
-			var args map[string]interface{}
+			var args map[string]any
 			if err := json.Unmarshal(jsonArgs, &args); err != nil {
 				return nil, err
 			}

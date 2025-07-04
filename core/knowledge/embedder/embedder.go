@@ -49,7 +49,7 @@ type Embedder interface {
 	// - A slice of float64 values representing the embedding
 	// - Usage information as a map (may be nil if not supported)
 	// - An error for system-level failures
-	GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]interface{}, error)
+	GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error)
 
 	// GetDimensions returns the dimensionality of the embeddings produced by this embedder.
 	// Returns 0 if dimensions are not known or configurable.

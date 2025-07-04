@@ -46,7 +46,7 @@ func (fs *FlexibleString) UnmarshalJSON(data []byte) error {
 	}
 
 	// If both fail, try to unmarshal as any type and convert to string.
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
 	}

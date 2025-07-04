@@ -200,7 +200,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 
 // GetEmbeddingWithUsage implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text and returns usage information.
-func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]interface{}, error) {
+func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
 	if text == "" {
 		return nil, nil, fmt.Errorf("text cannot be empty")
 	}
@@ -245,7 +245,7 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 
 	// Extract usage information.
-	usage := make(map[string]interface{})
+	usage := make(map[string]any)
 	if response.Usage.PromptTokens > 0 || response.Usage.TotalTokens > 0 {
 		usage["prompt_tokens"] = response.Usage.PromptTokens
 		usage["total_tokens"] = response.Usage.TotalTokens

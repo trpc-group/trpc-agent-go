@@ -7,7 +7,7 @@ import (
 )
 
 // convertMCPSchemaToSchema converts MCP's JSON schema to our Schema format.
-func convertMCPSchemaToSchema(mcpSchema interface{}) *tool.Schema {
+func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	schemaBytes, err := json.Marshal(mcpSchema)
 	if err != nil {
 		return &tool.Schema{
@@ -15,7 +15,7 @@ func convertMCPSchemaToSchema(mcpSchema interface{}) *tool.Schema {
 		}
 	}
 
-	var schemaMap map[string]interface{}
+	var schemaMap map[string]any
 	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
 		return &tool.Schema{
 			Type: "object",
@@ -29,10 +29,10 @@ func convertMCPSchemaToSchema(mcpSchema interface{}) *tool.Schema {
 	if descVal, ok := schemaMap["description"].(string); ok {
 		schema.Description = descVal
 	}
-	if propsVal, ok := schemaMap["properties"].(map[string]interface{}); ok {
+	if propsVal, ok := schemaMap["properties"].(map[string]any); ok {
 		schema.Properties = convertProperties(propsVal)
 	}
-	if reqVal, ok := schemaMap["required"].([]interface{}); ok {
+	if reqVal, ok := schemaMap["required"].([]any); ok {
 		required := make([]string, len(reqVal))
 		for i, req := range reqVal {
 			if reqStr, ok := req.(string); ok {
@@ -46,14 +46,14 @@ func convertMCPSchemaToSchema(mcpSchema interface{}) *tool.Schema {
 }
 
 // convertProperties converts property definitions from map[string]interface{} to map[string]*Schema.
-func convertProperties(props map[string]interface{}) map[string]*tool.Schema {
+func convertProperties(props map[string]any) map[string]*tool.Schema {
 	if props == nil {
 		return nil
 	}
 
 	result := make(map[string]*tool.Schema)
 	for name, prop := range props {
-		if propMap, ok := prop.(map[string]interface{}); ok {
+		if propMap, ok := prop.(map[string]any); ok {
 			propSchema := &tool.Schema{}
 			if typeVal, ok := propMap["type"].(string); ok {
 				propSchema.Type = typeVal

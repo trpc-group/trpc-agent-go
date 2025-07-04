@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -36,20 +37,20 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	log.Debug("Calling MCP tool", "name", t.mcpToolRef.Name)
 
 	// Parse raw arguments.
-	var rawArguments map[string]interface{}
+	var rawArguments map[string]any
 	if len(jsonArgs) > 0 {
 		if err := json.Unmarshal(jsonArgs, &rawArguments); err != nil {
 			return nil, fmt.Errorf("failed to parse tool arguments: %w", err)
 		}
 	} else {
-		rawArguments = make(map[string]interface{})
+		rawArguments = make(map[string]any)
 	}
 
 	return t.callOnce(ctx, rawArguments)
 }
 
 // callOnce performs a single call to the MCP tool.
-func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]interface{}) (any, error) {
+func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]any) (any, error) {
 	content, err := t.sessionManager.callTool(ctx, t.mcpToolRef.Name, arguments)
 	if err != nil {
 		return nil, err
