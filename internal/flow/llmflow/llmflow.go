@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry"
 )
@@ -515,7 +514,7 @@ func (f *Flow) executeStreamableTool(
 		contents = append(contents, chunk.Content)
 	}
 
-	return itool.Merge(contents), nil
+	return tool.Merge(contents), nil
 }
 
 // createErrorChoice creates an error choice for tool execution failures.

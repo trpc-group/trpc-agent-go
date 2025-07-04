@@ -10,7 +10,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -80,7 +79,7 @@ func streamingOutputExample(ctx context.Context, llm *openai.Model) error {
 							contents = append(contents, chunk.Content)
 						}
 						reader.Close()
-						result := itool.Merge(contents)
+						result := tool.Merge(contents)
 						bts, err := json.Marshal(result)
 						if err != nil {
 							return fmt.Errorf("failed to marshal weather data: %w", err)

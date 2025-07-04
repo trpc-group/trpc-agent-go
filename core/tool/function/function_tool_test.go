@@ -9,7 +9,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
-	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 )
 
 func TestFunctionTool_Run_Success(t *testing.T) {
@@ -176,7 +175,7 @@ func Test_StreamableFunctionTool(t *testing.T) {
 		t.Logf("Received chunk: %+v", chunk.Content)
 		t.Logf("Chunk metadata: %+v", chunk.Metadata)
 	}
-	mergedContent := itool.Merge(contents)
+	mergedContent := tool.Merge(contents)
 	bts, err := json.Marshal(mergedContent)
 	if err != nil {
 		t.Fatalf("failed to marshal output: %v", err)
