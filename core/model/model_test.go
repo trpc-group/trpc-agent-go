@@ -30,6 +30,11 @@ func TestModelInterface(t *testing.T) {
 // mockModel is a simple mock implementation for testing the interface.
 type mockModel struct{}
 
+func (m *mockModel) Info() Info {
+	return Info{
+		Name: "mock",
+	}
+}
 func (m *mockModel) GenerateContent(ctx context.Context, request *Request) (<-chan *Response, error) {
 	if request == nil {
 		return nil, errors.New("request cannot be nil")

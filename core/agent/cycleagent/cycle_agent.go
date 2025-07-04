@@ -4,7 +4,6 @@ package cycleagent
 import (
 	"context"
 	"fmt"
-
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"

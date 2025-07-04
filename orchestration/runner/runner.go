@@ -3,15 +3,18 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry"
 )
 
 // Author types for events.
@@ -79,6 +82,9 @@ func (r *runner) Run(
 	message model.Message,
 	opts agent.RunOptions,
 ) (<-chan *event.Event, error) {
+	ctx, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("invocation"))
+	defer span.End()
+
 	sessionKey := session.Key{
 		AppName:   r.appName,
 		UserID:    userID,

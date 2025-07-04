@@ -16,8 +16,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry"
 )
 
 const (
@@ -138,6 +140,8 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
+	ctx, span := telemetry.Tracer.Start(ctx, "call_llm")
+	defer span.End()
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
@@ -146,6 +150,12 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
+		// Create event from response using the clean constructor.
+		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
+		// Set branch for hierarchical event filtering.
+		llmEvent.Branch = invocation.Branch
+		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
+		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmEvent.ID)
 		// Run after model callbacks if they exist.
 		if invocation.ModelCallbacks != nil {
 			customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
@@ -166,15 +176,9 @@ func (f *Flow) runOneStep(
 			}
 			if customResponse != nil {
 				response = customResponse
+				llmEvent.Response = response
 			}
 		}
-
-		// Create event from response using the clean constructor.
-		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
-		// Set branch for hierarchical event filtering.
-		llmEvent.Branch = invocation.Branch
-
-		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
 
 		// Send the LLM response event.
 		lastEvent = llmEvent
@@ -246,7 +250,6 @@ func (f *Flow) runOneStep(
 		default:
 		}
 	}
-
 	return lastEvent, nil
 }
 
@@ -319,27 +322,45 @@ func (f *Flow) handleFunctionCalls(
 		return nil, nil
 	}
 
-	var functionResponses []model.Choice
-
+	var toolCallResponsesEvents []*event.Event
 	// Execute each tool call.
 	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
 		ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
+		ctxWithInvocation, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
 		choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
-		functionResponses = append(functionResponses, choice)
+		toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{choice})
+		toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
+		tl, ok := tools[toolCall.Function.Name]
+		var declaration *tool.Declaration
+		if !ok {
+			declaration = &tool.Declaration{
+				Name:        "<not found>",
+				Description: "<not found>",
+			}
+		} else {
+			declaration = tl.Declaration()
+		}
+		itelemetry.TraceToolCall(span, declaration, toolCall.Function.Arguments, toolCallResponseEvent)
+		span.End()
 	}
 
-	// Create function response event.
-	functionResponseEvent := f.createToolResponseEvent(
-		invocation,
-		functionCallEvent,
-		functionResponses,
-	)
+	var mergedEvent *event.Event
+	if len(toolCallResponsesEvents) == 0 {
+		mergedEvent = newToolCallResponseEvent(invocation, functionCallEvent, nil)
+	} else {
+		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
+	}
 
 	// Signal that this event needs to be completed before proceeding.
-	functionResponseEvent.RequiresCompletion = true
-	functionResponseEvent.CompletionID = uuid.New().String()
+	mergedEvent.RequiresCompletion = true
+	mergedEvent.CompletionID = uuid.New().String()
+	if len(toolCallResponsesEvents) > 1 {
+		_, span := telemetry.Tracer.Start(ctx, "execute_tool (merged)")
+		itelemetry.TraceMergedToolCalls(span, mergedEvent)
+		span.End()
+	}
 
-	return functionResponseEvent, nil
+	return mergedEvent, nil
 }
 
 // executeToolCall executes a single tool call and returns the choice.
@@ -392,7 +413,6 @@ func (f *Flow) executeToolWithCallbacks(
 	tl tool.Tool,
 ) (any, error) {
 	toolDeclaration := tl.Declaration()
-
 	// Run before tool callbacks if they exist.
 	if invocation.ToolCallbacks != nil {
 		customResult, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
@@ -435,7 +455,6 @@ func (f *Flow) executeToolWithCallbacks(
 			result = customResult
 		}
 	}
-
 	return result, nil
 }
 
@@ -511,17 +530,14 @@ func (f *Flow) createErrorChoice(index int, toolID string, errorMsg string) mode
 	}
 }
 
-// createToolResponseEvent creates the function response event.
-func (f *Flow) createToolResponseEvent(
+func newToolCallResponseEvent(
 	invocation *agent.Invocation,
 	functionCallEvent *event.Event,
-	functionResponses []model.Choice,
-) *event.Event {
+	functionResponses []model.Choice) *event.Event {
 	// Generate a proper unique ID.
 	eventID := uuid.New().String()
-
 	// Create function response event.
-	functionResponseEvent := &event.Event{
+	return &event.Event{
 		Response: &model.Response{
 			ID:        "tool-response-" + eventID,
 			Object:    model.ObjectTypeToolResponse,
@@ -536,8 +552,37 @@ func (f *Flow) createToolResponseEvent(
 		Timestamp:    time.Now(),
 		Branch:       invocation.Branch, // Set branch for hierarchical event filtering.
 	}
+}
 
-	return functionResponseEvent
+func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
+	if len(es) == 0 {
+		return nil
+	}
+	if len(es) == 1 {
+		return es[0]
+	}
+
+	mergedChoices := make([]model.Choice, len(es))
+	for _, e := range es {
+		mergedChoices = append(mergedChoices, e.Response.Choices...)
+	}
+	eventID := uuid.New().String()
+	baseEvent := es[0]
+	return &event.Event{
+		Response: &model.Response{
+			ID:        "tool-response-" + eventID,
+			Object:    model.ObjectTypeToolResponse,
+			Created:   time.Now().Unix(),
+			Model:     baseEvent.Response.Model,
+			Choices:   mergedChoices,
+			Timestamp: time.Now(),
+		},
+		InvocationID: baseEvent.InvocationID,
+		Author:       baseEvent.Author,
+		ID:           eventID,
+		Timestamp:    baseEvent.Timestamp, // Use the base event as the timestamp
+		Branch:       baseEvent.Branch,
+	}
 }
 
 // postprocess handles post-LLM call processing using response processors.

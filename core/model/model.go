@@ -42,4 +42,12 @@ type Model interface {
 	//
 	// The Response objects may contain their own Error field for API-level errors.
 	GenerateContent(ctx context.Context, request *Request) (<-chan *Response, error)
+
+	// Info returns basic information about the model.
+	Info() Info
+}
+
+// Info contains basic information about a Model.
+type Info struct {
+	Name string
 }
