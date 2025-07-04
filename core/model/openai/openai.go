@@ -67,6 +67,13 @@ func New(name string, opts Options) *Model {
 	}
 }
 
+// Info implements the model.Model interface.
+func (m *Model) Info() model.Info {
+	return model.Info{
+		Name: m.name,
+	}
+}
+
 // GenerateContent implements the model.Model interface.
 func (m *Model) GenerateContent(
 	ctx context.Context,

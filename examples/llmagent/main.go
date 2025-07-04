@@ -11,6 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 func main() {
@@ -55,6 +56,9 @@ func main() {
 		EndInvocation: false,
 		Model:         modelInstance,
 		Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"),
+		Session: &session.Session{
+			ID: "session-001",
+		},
 	}
 
 	// Run the agent.

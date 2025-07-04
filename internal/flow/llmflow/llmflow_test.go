@@ -13,6 +13,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 // mockAgent implements agent.Agent for testing
@@ -37,6 +38,12 @@ type mockModel struct {
 	ShouldError bool
 	responses   []*model.Response
 	currentIdx  int
+}
+
+func (m *mockModel) Info() model.Info {
+	return model.Info{
+		Name: "mock",
+	}
 }
 
 func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
@@ -122,6 +129,9 @@ func TestModelCallbacks_BeforeModel_Skip(t *testing.T) {
 		Model: &mockModel{
 			responses: []*model.Response{{ID: "should-not-be-called"}},
 		},
+		Session: &session.Session{
+			ID: "test-session",
+		},
 	}
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
@@ -152,6 +162,9 @@ func TestModelCallbacks_BeforeModel_CustomResponse(t *testing.T) {
 		ModelCallbacks: modelCallbacks,
 		Model: &mockModel{
 			responses: []*model.Response{{ID: "should-not-be-called"}},
+		},
+		Session: &session.Session{
+			ID: "test-session",
 		},
 	}
 	eventChan, err := llmFlow.Run(ctx, invocation)
@@ -206,7 +219,7 @@ func TestModelCallbacks_AfterModel_Override(t *testing.T) {
 
 	modelCallbacks := model.NewModelCallbacks()
 	modelCallbacks.RegisterAfterModel(func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
-		return &model.Response{ID: "after-override"}, nil
+		return &model.Response{Object: "after-override"}, nil
 	})
 
 	llmFlow := New(nil, nil, Options{})
@@ -216,6 +229,9 @@ func TestModelCallbacks_AfterModel_Override(t *testing.T) {
 		ModelCallbacks: modelCallbacks,
 		Model: &mockModel{
 			responses: []*model.Response{{ID: "original"}},
+		},
+		Session: &session.Session{
+			ID: "test-session",
 		},
 	}
 	eventChan, err := llmFlow.Run(ctx, invocation)
@@ -228,7 +244,8 @@ func TestModelCallbacks_AfterModel_Override(t *testing.T) {
 		break
 	}
 	require.Equal(t, 1, len(events))
-	require.Equal(t, "after-override", events[0].Response.ID)
+	t.Log(events[0])
+	require.Equal(t, "after-override", events[0].Response.Object)
 }
 
 func TestModelCallbacks_AfterModel_Error(t *testing.T) {
@@ -247,6 +264,9 @@ func TestModelCallbacks_AfterModel_Error(t *testing.T) {
 		ModelCallbacks: modelCallbacks,
 		Model: &mockModel{
 			responses: []*model.Response{{ID: "original"}},
+		},
+		Session: &session.Session{
+			ID: "test-session",
 		},
 	}
 	eventChan, err := llmFlow.Run(ctx, invocation)

@@ -10,6 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 
 func newDummyModel() model.Model {
@@ -91,7 +92,7 @@ func TestLLMAgent_Run_AfterAgentCallback(t *testing.T) {
 		}, nil
 	})
 	agt := New("test", WithModel(newDummyModel()), WithAgentCallbacks(agentCallbacks))
-	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi"), InvocationID: "test-invocation", Session: &session.Session{ID: "test-session"}}
 	events, err := agt.Run(context.Background(), inv)
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
@@ -110,7 +111,7 @@ func TestLLMAgent_Run_AfterAgentCallback(t *testing.T) {
 
 func TestLLMAgent_Run_NormalFlow(t *testing.T) {
 	agt := New("test", WithModel(newDummyModel()))
-	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi"), InvocationID: "test-invocation", Session: &session.Session{ID: "test-session"}}
 	events, err := agt.Run(context.Background(), inv)
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
@@ -128,7 +129,7 @@ func TestLLMAgent_Run_AfterAgentCallbackError(t *testing.T) {
 		return nil, errors.New("after error")
 	})
 	agt := New("test", WithModel(newDummyModel()), WithAgentCallbacks(agentCallbacks))
-	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi"), InvocationID: "test-invocation", Session: &session.Session{ID: "test-session"}}
 	events, err := agt.Run(context.Background(), inv)
 	if err != nil {
 		t.Fatalf("Run error: %v", err)
