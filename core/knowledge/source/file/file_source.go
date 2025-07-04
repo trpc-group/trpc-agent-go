@@ -10,6 +10,13 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
+)
+
+const (
+	defaultFileSourceName    = "File Source"
+	defaultMultipleFilesName = "Multiple Files"
+	fileSourceType           = "file"
 )
 
 // Source represents a knowledge source for file-based content.
@@ -21,7 +28,7 @@ type Source struct {
 
 // New creates a new file knowledge source.
 func New(filePaths []string, opts ...Option) *Source {
-	source := &Source{
+	sourceObj := &Source{
 		filePaths: filePaths,
 		name:      "File Source", // Default name.
 		metadata:  make(map[string]interface{}),
@@ -29,10 +36,10 @@ func New(filePaths []string, opts ...Option) *Source {
 
 	// Apply options.
 	for _, opt := range opts {
-		opt(source)
+		opt(sourceObj)
 	}
 
-	return source
+	return sourceObj
 }
 
 // ReadDocument reads all files and returns a combined document.
@@ -64,7 +71,7 @@ func (s *Source) Name() string {
 
 // Type returns the type of this source.
 func (s *Source) Type() string {
-	return "file"
+	return source.TypeFile
 }
 
 // processFile processes a single file and returns its content and metadata.
@@ -91,14 +98,14 @@ func (s *Source) processFile(filePath string) (string, map[string]interface{}, e
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "file"
-	metadata["file_path"] = filePath
-	metadata["file_name"] = filepath.Base(filePath)
-	metadata["file_ext"] = filepath.Ext(filePath)
-	metadata["file_size"] = fileInfo.Size()
-	metadata["file_mode"] = fileInfo.Mode().String()
-	metadata["modified_at"] = fileInfo.ModTime().UTC()
-	metadata["content_length"] = len(content)
+	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaFilePath] = filePath
+	metadata[source.MetaFileName] = filepath.Base(filePath)
+	metadata[source.MetaFileExt] = filepath.Ext(filePath)
+	metadata[source.MetaFileSize] = fileInfo.Size()
+	metadata[source.MetaFileMode] = fileInfo.Mode().String()
+	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
+	metadata[source.MetaContentLength] = len(content)
 
 	return string(content), metadata, nil
 }
@@ -109,7 +116,7 @@ func (s *Source) createDocument(content string, fileMetadata []map[string]interf
 	id := s.generateFileID()
 
 	// Generate name from first file.
-	name := "Multiple Files"
+	name := defaultMultipleFilesName
 	if len(s.filePaths) > 0 {
 		name = filepath.Base(s.filePaths[0])
 		if len(s.filePaths) > 1 {
@@ -122,10 +129,10 @@ func (s *Source) createDocument(content string, fileMetadata []map[string]interf
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "file"
-	metadata["file_count"] = len(s.filePaths)
-	metadata["file_paths"] = s.filePaths
-	metadata["content_length"] = len(content)
+	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaFileCount] = len(s.filePaths)
+	metadata[source.MetaFilePaths] = s.filePaths
+	metadata[source.MetaContentLength] = len(content)
 
 	return &document.Document{
 		ID:        id,

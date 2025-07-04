@@ -14,6 +14,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
+)
+
+const (
+	defaultAutoSourceName   = "Auto Source"
+	defaultMixedContentName = "Mixed Content"
+	defaultAutoContentName  = "Auto Content"
+	defaultUserAgent        = "trpc-agent-go/1.0"
+	defaultTimeout          = 30 * time.Second
+	nameTruncateLength      = 50
 )
 
 // Source represents a knowledge source that automatically deduces the type of input.
@@ -29,9 +40,9 @@ type Source struct {
 func New(inputs []string, opts ...Option) *Source {
 	source := &Source{
 		inputs:     inputs,
-		name:       "Auto Source", // Default name.
+		name:       defaultAutoSourceName, // Default name.
 		metadata:   make(map[string]interface{}),
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: defaultTimeout},
 	}
 
 	// Apply options.
@@ -71,7 +82,7 @@ func (s *Source) Name() string {
 
 // Type returns the type of this source.
 func (s *Source) Type() string {
-	return "auto"
+	return source.TypeAuto
 }
 
 // processInput processes a single input and returns its content and metadata.
@@ -79,11 +90,47 @@ func (s *Source) processInput(ctx context.Context, input string) (string, map[st
 	inputType := s.deduceInputType(input)
 
 	switch inputType {
-	case "url":
+	case source.TypeURL:
 		return s.processURL(ctx, input)
-	case "file":
+	case source.TypePDF:
+		pdfSrc := file.NewPDFSource(input)
+		doc, err := pdfSrc.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
+	case source.TypeCSV:
+		csvSrc := file.NewCSVSource(input)
+		doc, err := csvSrc.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
+	case source.TypeExcel:
+		excelSrc := file.NewExcelSource(input)
+		doc, err := excelSrc.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
+	case source.TypeJSON:
+		jsonSrc := file.NewJSONSource(input)
+		doc, err := jsonSrc.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
+	case source.TypeTextFile:
+		txtSrc := file.NewTXTSource(input)
+		doc, err := txtSrc.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
+	case source.TypeFile:
+		// fallback for unknown file types
 		return s.processFile(input)
-	case "text":
+	case source.TypeString:
 		return s.processText(input)
 	default:
 		return "", nil, fmt.Errorf("unable to deduce type for input: %s", input)
@@ -92,66 +139,52 @@ func (s *Source) processInput(ctx context.Context, input string) (string, map[st
 
 // processURL processes a URL input.
 func (s *Source) processURL(ctx context.Context, urlStr string) (string, map[string]interface{}, error) {
-	// Validate URL.
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid URL: %w", err)
 	}
-
-	// Fetch content from URL.
 	content, err := s.fetchURL(ctx, urlStr)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}
-
-	// Prepare metadata.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "url"
-	metadata["url"] = urlStr
-	metadata["url_host"] = parsedURL.Host
-	metadata["url_path"] = parsedURL.Path
-	metadata["url_scheme"] = parsedURL.Scheme
-	metadata["content_length"] = len(content)
-
+	metadata[source.MetaSource] = source.TypeURL
+	metadata[source.MetaURL] = urlStr
+	metadata[source.MetaURLHost] = parsedURL.Host
+	metadata[source.MetaURLPath] = parsedURL.Path
+	metadata[source.MetaURLScheme] = parsedURL.Scheme
+	metadata[source.MetaContentLength] = len(content)
 	return content, metadata, nil
 }
 
 // processFile processes a file input.
 func (s *Source) processFile(filePath string) (string, map[string]interface{}, error) {
-	// Get file info.
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to stat file: %w", err)
 	}
-
-	// Check if it's a regular file.
 	if !fileInfo.Mode().IsRegular() {
 		return "", nil, fmt.Errorf("not a regular file: %s", filePath)
 	}
-
-	// Read file content.
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to read file: %w", err)
 	}
-
-	// Prepare metadata.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "file"
-	metadata["file_path"] = filePath
-	metadata["file_name"] = filepath.Base(filePath)
-	metadata["file_ext"] = filepath.Ext(filePath)
-	metadata["file_size"] = fileInfo.Size()
-	metadata["file_mode"] = fileInfo.Mode().String()
-	metadata["modified_at"] = fileInfo.ModTime().UTC()
-	metadata["content_length"] = len(content)
-
+	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaFilePath] = filePath
+	metadata[source.MetaFileName] = filepath.Base(filePath)
+	metadata[source.MetaFileExt] = filepath.Ext(filePath)
+	metadata[source.MetaFileSize] = fileInfo.Size()
+	metadata[source.MetaFileMode] = fileInfo.Mode().String()
+	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
+	metadata[source.MetaContentLength] = len(content)
 	return string(content), metadata, nil
 }
 
@@ -160,70 +193,56 @@ func (s *Source) processText(text string) (string, map[string]interface{}, error
 	if text == "" {
 		return "", nil, fmt.Errorf("content cannot be empty")
 	}
-
-	// Prepare metadata.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "string"
-	metadata["content_length"] = len(text)
-
+	metadata[source.MetaSource] = source.TypeString
+	metadata[source.MetaContentLength] = len(text)
 	return text, metadata, nil
 }
 
 // fetchURL fetches content from a URL.
 func (s *Source) fetchURL(ctx context.Context, urlStr string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-
 	// Set user agent to avoid being blocked.
-	req.Header.Set("User-Agent", "trpc-agent-go/1.0")
-
+	req.Header.Set("User-Agent", defaultUserAgent)
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
-
 	return string(body), nil
 }
 
 // createDocument creates a document from combined input content.
 func (s *Source) createDocument(content string, inputMetadata []map[string]interface{}) *document.Document {
-	// Generate ID based on inputs.
 	hash := md5.Sum([]byte(strings.Join(s.inputs, "|")))
 	id := fmt.Sprintf("auto_%x", hash[:8])
-
-	// Generate name.
-	name := "Mixed Content"
+	name := defaultMixedContentName
 	if len(s.inputs) == 1 {
 		name = s.generateName(s.inputs[0])
 	} else {
-		name = fmt.Sprintf("Mixed Content (%d items)", len(s.inputs))
+		name = fmt.Sprintf("%s (%d items)", defaultMixedContentName, len(s.inputs))
 	}
-
-	// Combine metadata.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "auto"
-	metadata["input_count"] = len(s.inputs)
-	metadata["inputs"] = s.inputs
-	metadata["content_length"] = len(content)
-
+	metadata[source.MetaSource] = source.TypeAuto
+	metadata[source.MetaInputCount] = len(s.inputs)
+	metadata[source.MetaInputs] = s.inputs
+	metadata[source.MetaContentLength] = len(content)
 	return &document.Document{
 		ID:        id,
 		Name:      name,
@@ -242,38 +261,43 @@ func (s *Source) generateName(input string) string {
 			return parsedURL.Host
 		}
 	}
-
 	if s.isFilePath(input) {
 		return filepath.Base(input)
 	}
-
-	// For text, use first line.
 	lines := strings.Split(input, "\n")
 	if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
 		name := strings.TrimSpace(lines[0])
-		if len(name) > 50 {
-			name = name[:50] + "..."
+		if len(name) > nameTruncateLength {
+			name = name[:nameTruncateLength] + "..."
 		}
 		return name
 	}
-
-	return "Auto Content"
+	return defaultAutoContentName
 }
 
 // deduceInputType determines the type of input (URL, file, or text).
 func (s *Source) deduceInputType(input string) string {
-	// Check if it's a URL.
 	if s.isURL(input) {
-		return "url"
+		return source.TypeURL
 	}
-
-	// Check if it's a file path.
 	if s.isFilePath(input) {
-		return "file"
+		ext := strings.ToLower(filepath.Ext(input))
+		switch ext {
+		case ".pdf":
+			return source.TypePDF
+		case ".csv":
+			return source.TypeCSV
+		case ".xlsx", ".xls":
+			return source.TypeExcel
+		case ".json":
+			return source.TypeJSON
+		case ".txt", ".md":
+			return source.TypeTextFile
+		default:
+			return source.TypeFile
+		}
 	}
-
-	// Default to text content.
-	return "text"
+	return source.TypeString
 }
 
 // isURL checks if the input is a valid URL.
