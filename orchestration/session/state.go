@@ -32,7 +32,7 @@ func (s *State) Set(key string, value []byte) {
 
 // Get gets the value of a key in the state.
 // Will return the delta value if it exists, otherwise the value.
-func (s *State) Get(key string) (interface{}, bool) {
+func (s *State) Get(key string) (any, bool) {
 	v, ok := s.Delta[key]
 	if ok {
 		return v, true

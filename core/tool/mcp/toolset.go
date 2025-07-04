@@ -290,7 +290,7 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 }
 
 // callTool executes a tool call on the MCP server.
-func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]interface{}) ([]mcp.Content, error) {
+func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) ([]mcp.Content, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
