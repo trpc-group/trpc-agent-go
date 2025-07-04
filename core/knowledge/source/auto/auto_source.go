@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
+	stringsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/string"
+	urlsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/url"
 )
 
 const (
@@ -91,73 +92,64 @@ func (s *Source) processInput(ctx context.Context, input string) (string, map[st
 
 	switch inputType {
 	case source.TypeURL:
-		return s.processURL(ctx, input)
+		src := urlsource.New([]string{input})
+		doc, err := src.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
 	case source.TypePDF:
-		pdfSrc := file.NewPDFSource(input)
-		doc, err := pdfSrc.ReadDocument(ctx)
+		src := file.NewPDFSource(input)
+		doc, err := src.ReadDocument(ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		return doc.Content, doc.Metadata, nil
 	case source.TypeCSV:
-		csvSrc := file.NewCSVSource(input)
-		doc, err := csvSrc.ReadDocument(ctx)
+		src := file.NewCSVSource(input)
+		doc, err := src.ReadDocument(ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		return doc.Content, doc.Metadata, nil
 	case source.TypeExcel:
-		excelSrc := file.NewExcelSource(input)
-		doc, err := excelSrc.ReadDocument(ctx)
+		src := file.NewExcelSource(input)
+		doc, err := src.ReadDocument(ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		return doc.Content, doc.Metadata, nil
 	case source.TypeJSON:
-		jsonSrc := file.NewJSONSource(input)
-		doc, err := jsonSrc.ReadDocument(ctx)
+		src := file.NewJSONSource(input)
+		doc, err := src.ReadDocument(ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		return doc.Content, doc.Metadata, nil
 	case source.TypeTextFile:
-		txtSrc := file.NewTXTSource(input)
-		doc, err := txtSrc.ReadDocument(ctx)
+		src := file.NewTXTSource(input)
+		doc, err := src.ReadDocument(ctx)
 		if err != nil {
 			return "", nil, err
 		}
 		return doc.Content, doc.Metadata, nil
 	case source.TypeFile:
-		// fallback for unknown file types
-		return s.processFile(input)
+		src := file.New([]string{input})
+		doc, err := src.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
 	case source.TypeString:
-		return s.processText(input)
+		src := stringsource.New(input)
+		doc, err := src.ReadDocument(ctx)
+		if err != nil {
+			return "", nil, err
+		}
+		return doc.Content, doc.Metadata, nil
 	default:
 		return "", nil, fmt.Errorf("unable to deduce type for input: %s", input)
 	}
-}
-
-// processURL processes a URL input.
-func (s *Source) processURL(ctx context.Context, urlStr string) (string, map[string]interface{}, error) {
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid URL: %w", err)
-	}
-	content, err := s.fetchURL(ctx, urlStr)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to fetch URL: %w", err)
-	}
-	metadata := make(map[string]interface{})
-	for k, v := range s.metadata {
-		metadata[k] = v
-	}
-	metadata[source.MetaSource] = source.TypeURL
-	metadata[source.MetaURL] = urlStr
-	metadata[source.MetaURLHost] = parsedURL.Host
-	metadata[source.MetaURLPath] = parsedURL.Path
-	metadata[source.MetaURLScheme] = parsedURL.Scheme
-	metadata[source.MetaContentLength] = len(content)
-	return content, metadata, nil
 }
 
 // processFile processes a file input.
@@ -186,43 +178,6 @@ func (s *Source) processFile(filePath string) (string, map[string]interface{}, e
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
 	metadata[source.MetaContentLength] = len(content)
 	return string(content), metadata, nil
-}
-
-// processText processes a text input.
-func (s *Source) processText(text string) (string, map[string]interface{}, error) {
-	if text == "" {
-		return "", nil, fmt.Errorf("content cannot be empty")
-	}
-	metadata := make(map[string]interface{})
-	for k, v := range s.metadata {
-		metadata[k] = v
-	}
-	metadata[source.MetaSource] = source.TypeString
-	metadata[source.MetaContentLength] = len(text)
-	return text, metadata, nil
-}
-
-// fetchURL fetches content from a URL.
-func (s *Source) fetchURL(ctx context.Context, urlStr string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	// Set user agent to avoid being blocked.
-	req.Header.Set("User-Agent", defaultUserAgent)
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch URL: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP error: %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
-	}
-	return string(body), nil
 }
 
 // createDocument creates a document from combined input content.

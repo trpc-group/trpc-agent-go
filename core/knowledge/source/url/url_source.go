@@ -14,6 +14,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 )
 
+var defaultClient = &http.Client{Timeout: 30 * time.Second}
+
 // Source represents a knowledge source for web content.
 type Source struct {
 	urls       []string
@@ -28,7 +30,7 @@ func New(urls []string, opts ...Option) *Source {
 		urls:       urls,
 		name:       "URL Source", // Default name.
 		metadata:   make(map[string]interface{}),
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: defaultClient,
 	}
 
 	// Apply options.
