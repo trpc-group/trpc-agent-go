@@ -60,35 +60,40 @@ func New(opts ...Option) *DefaultRetriever {
 }
 
 // Retrieve implements the Retriever interface by executing the complete RAG pipeline.
-func (dr *DefaultRetriever) Retrieve(ctx context.Context, query *Query) (*Result, error) {
-	// Step 1: Enhance query (if enhancer is available)
-	finalQuery := query.Text
+func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, error) {
+	// Step 1: Enhance query (if enhancer is available).
+	finalQuery := q.Text
 	if dr.queryEnhancer != nil {
-		enhanced, err := dr.queryEnhancer.EnhanceQuery(ctx, query.Text)
+		// Create query request with context (retriever doesn't have full context info).
+		queryReq := &query.Request{
+			Query: q.Text,
+			// History, UserID, SessionID would need to be passed from higher level.
+		}
+		enhanced, err := dr.queryEnhancer.EnhanceQuery(ctx, queryReq)
 		if err != nil {
 			return nil, err
 		}
 		finalQuery = enhanced.Enhanced
 	}
 
-	// Step 2: Generate embedding
+	// Step 2: Generate embedding.
 	embedding, err := dr.embedder.GetEmbedding(ctx, finalQuery)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3: Search vector store
+	// Step 3: Search vector store.
 	searchResults, err := dr.vectorStore.Search(ctx, &vectorstore.SearchQuery{
 		Vector:   embedding,
-		Limit:    query.Limit,
-		MinScore: query.MinScore,
-		Filter:   convertQueryFilter(query.Filter),
+		Limit:    q.Limit,
+		MinScore: q.MinScore,
+		Filter:   convertQueryFilter(q.Filter),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 4: Convert to reranker format
+	// Step 4: Convert to reranker format.
 	rerankerResults := make([]*reranker.Result, len(searchResults.Results))
 	for i, doc := range searchResults.Results {
 		rerankerResults[i] = &reranker.Result{
@@ -97,7 +102,7 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, query *Query) (*Result
 		}
 	}
 
-	// Step 5: Rerank results (if reranker is available)
+	// Step 5: Rerank results (if reranker is available).
 	if dr.reranker != nil {
 		rerankerResults, err = dr.reranker.Rerank(ctx, rerankerResults)
 		if err != nil {
@@ -105,7 +110,7 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, query *Query) (*Result
 		}
 	}
 
-	// Step 6: Convert back to retriever format
+	// Step 6: Convert back to retriever format.
 	finalResults := make([]*RelevantDocument, len(rerankerResults))
 	for i, result := range rerankerResults {
 		finalResults[i] = &RelevantDocument{
@@ -121,7 +126,7 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, query *Query) (*Result
 
 // Close implements the Retriever interface.
 func (dr *DefaultRetriever) Close() error {
-	// Close components if they support closing
+	// Close components if they support closing.
 	return nil
 }
 

@@ -9,15 +9,47 @@ import (
 
 // Knowledge is the main interface for knowledge management operations.
 type Knowledge interface {
-	// AddDocument adds a document to the knowledge base.
-	AddDocument(ctx context.Context, doc *document.Document) error
-
 	// Search performs semantic search and returns the best result.
 	// This is the main method used by agents for RAG.
-	Search(ctx context.Context, query string) (*SearchResult, error)
+	// Context includes conversation history for better search results.
+	Search(ctx context.Context, req *SearchRequest) (*SearchResult, error)
 
 	// Close closes the knowledge base and releases resources.
 	Close() error
+}
+
+// SearchRequest represents a search request with context.
+type SearchRequest struct {
+	// Query is the search query text.
+	Query string
+
+	// History contains recent conversation messages for context.
+	// Should be limited to last N messages for performance.
+	History []ConversationMessage
+
+	// UserID can help with personalized search results.
+	UserID string
+
+	// SessionID can help with session-specific context.
+	SessionID string
+
+	// MaxResults limits the number of results returned (optional).
+	MaxResults int
+
+	// MinScore sets minimum relevance score threshold (optional).
+	MinScore float64
+}
+
+// ConversationMessage represents a message in conversation history.
+type ConversationMessage struct {
+	// Role indicates if this is from user or assistant.
+	Role string
+
+	// Content is the message content.
+	Content string
+
+	// Timestamp when the message was sent.
+	Timestamp int64
 }
 
 // SearchResult represents the result of a knowledge search.

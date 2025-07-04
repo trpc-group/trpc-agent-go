@@ -16,9 +16,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/builder"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
+	autosource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/auto"
+	filesource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
+	stringsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/string"
+	urlsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/url"
 	storageinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/storage/inmemory"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
@@ -142,59 +145,76 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
-	// Create in-memory storage and vector store
+	// Create in-memory storage and vector store.
 	storage := storageinmemory.New()
 	vectorStore := vectorinmemory.New()
 
-	// Use OpenAI embedder for demonstration (replace with your API key)
+	// Use OpenAI embedder for demonstration (replace with your API key).
 	embedder := openaiembedder.New(
 		openaiembedder.WithAPIKey("sk-your-openai-key"),
 	)
 
-	// Create built-in knowledge base
+	// Create diverse sources showcasing different types.
+	sources := []source.Source{
+		// String source for direct text content.
+		stringsource.New(
+			"Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions without being explicitly programmed. It uses algorithms to identify patterns in data and make predictions or decisions based on those patterns. Common types include supervised learning, unsupervised learning, and reinforcement learning.",
+			stringsource.WithName("ML Fundamentals"),
+			stringsource.WithMetadataValue("topic", "AI/ML"),
+			stringsource.WithMetadataValue("difficulty", "beginner"),
+		),
+
+		// Another string source for programming content.
+		stringsource.New(
+			"Python is a high-level, interpreted programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming. Python is widely used in data science, web development, automation, and artificial intelligence.",
+			stringsource.WithName("Python Overview"),
+			stringsource.WithMetadataValue("topic", "Programming"),
+			stringsource.WithMetadataValue("language", "python"),
+		),
+
+		// File source for local documentation (if files exist).
+		filesource.New(
+			[]string{"README.md", "docs/api.md"},
+			filesource.WithName("Project Documentation"),
+			filesource.WithMetadataValue("type", "documentation"),
+		),
+
+		// URL source for web content.
+		urlsource.New(
+			[]string{
+				"https://golang.org/doc/",
+				"https://pkg.go.dev/",
+			},
+			urlsource.WithName("Go Documentation"),
+			urlsource.WithMetadataValue("topic", "Go Programming"),
+			urlsource.WithMetadataValue("source", "official"),
+		),
+
+		// Auto source that can handle mixed inputs.
+		autosource.New(
+			[]string{
+				"Cloud computing is the delivery of computing services over the internet, including servers, storage, databases, networking, software, and analytics. It provides on-demand access to shared computing resources.",
+				"https://kubernetes.io/docs/concepts/",
+				"./examples/README.md",
+			},
+			autosource.WithName("Mixed Content Source"),
+			autosource.WithMetadataValue("type", "mixed"),
+		),
+	}
+
+	// Create knowledge base with sources using the regular constructor.
 	c.kb = knowledge.New(
+		knowledge.WithSources(sources),
 		knowledge.WithStorage(storage),
 		knowledge.WithVectorStore(vectorStore),
 		knowledge.WithEmbedder(embedder),
 	)
 
-	// Add sample documents
-	sampleDocuments := []*document.Document{
-		builder.FromText(
-			"Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions without being explicitly programmed. It uses algorithms to identify patterns in data and make predictions or decisions based on those patterns. Common types include supervised learning, unsupervised learning, and reinforcement learning.",
-			builder.WithTextID("machine-learning"),
-			builder.WithTextName("Machine Learning Basics"),
-		),
-		builder.FromText(
-			"Python is a high-level, interpreted programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming. Python is widely used in data science, web development, automation, and artificial intelligence.",
-			builder.WithTextID("python"),
-			builder.WithTextName("Python Programming"),
-		),
-		builder.FromText(
-			"Data science is an interdisciplinary field that uses scientific methods, processes, algorithms, and systems to extract knowledge and insights from structured and unstructured data. It combines statistics, data analysis, machine learning, and related methods to understand and analyze actual phenomena with data.",
-			builder.WithTextID("data-science"),
-			builder.WithTextName("Data Science Fundamentals"),
-		),
-		builder.FromText(
-			"Web development involves creating websites and web applications. It includes frontend development (HTML, CSS, JavaScript) for user interfaces and backend development (server-side programming, databases) for server logic. Modern web development often uses frameworks like React, Angular, or Vue.js for frontend and Node.js, Python, or Java for backend.",
-			builder.WithTextID("web-development"),
-			builder.WithTextName("Web Development"),
-		),
-		builder.FromText(
-			"Cloud computing is the delivery of computing services over the internet, including servers, storage, databases, networking, software, and analytics. It provides on-demand access to shared computing resources. Major cloud providers include AWS, Microsoft Azure, and Google Cloud Platform. Benefits include scalability, cost-effectiveness, and flexibility.",
-			builder.WithTextID("cloud-computing"),
-			builder.WithTextName("Cloud Computing"),
-		),
-	}
-
-	// Add documents to knowledge base
-	for _, doc := range sampleDocuments {
-		if err := c.kb.AddDocument(ctx, doc); err != nil {
-			return fmt.Errorf("failed to add document %s: %w", doc.ID, err)
-		}
-	}
-
-	fmt.Printf("📖 Built-in knowledge base created with %d documents\n", len(sampleDocuments))
+	fmt.Printf("📖 Knowledge base created with %d diverse sources\n", len(sources))
+	fmt.Printf("   - String sources: Direct text content\n")
+	fmt.Printf("   - File source: Local documentation\n")
+	fmt.Printf("   - URL source: Web documentation\n")
+	fmt.Printf("   - Auto source: Mixed content types\n")
 	return nil
 }
 

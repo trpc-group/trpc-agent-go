@@ -158,9 +158,9 @@ func (m *mockKnowledgeBase) AddDocument(ctx context.Context, doc *document.Docum
 	return nil
 }
 
-func (m *mockKnowledgeBase) Search(ctx context.Context, query string) (*knowledge.SearchResult, error) {
+func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchRequest) (*knowledge.SearchResult, error) {
 	// Simple keyword-based search for testing.
-	query = strings.ToLower(query)
+	query := strings.ToLower(req.Query)
 
 	var bestMatch *document.Document
 	var bestScore float64

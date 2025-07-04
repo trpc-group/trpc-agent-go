@@ -38,8 +38,15 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 			}
 		}
 
+		// Create search request - for tools, we don't have conversation history yet.
+		// This could be enhanced in the future to extract context from the agent's session.
+		searchReq := &knowledge.SearchRequest{
+			Query: req.Query,
+			// History, UserID, SessionID could be filled from agent context in the future.
+		}
+
 		// Search using the knowledge interface.
-		result, err := kb.Search(ctx, req.Query)
+		result, err := kb.Search(ctx, searchReq)
 		if err != nil {
 			return KnowledgeSearchResponse{
 				Success: false,

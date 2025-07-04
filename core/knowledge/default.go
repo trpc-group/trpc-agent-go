@@ -10,6 +10,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/retriever"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/storage"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
 )
@@ -22,6 +23,7 @@ type BuiltinKnowledge struct {
 	retriever     retriever.Retriever
 	queryEnhancer query.Enhancer
 	reranker      reranker.Reranker
+	sources       []source.Source
 }
 
 // Option represents a functional option for configuring BuiltinKnowledge.
@@ -69,23 +71,30 @@ func WithRetriever(r retriever.Retriever) Option {
 	}
 }
 
+// WithSources sets the knowledge sources.
+func WithSources(sources []source.Source) Option {
+	return func(dk *BuiltinKnowledge) {
+		dk.sources = sources
+	}
+}
+
 // New creates a new BuiltinKnowledge instance with the given options.
 func New(opts ...Option) *BuiltinKnowledge {
 	dk := &BuiltinKnowledge{}
 
-	// Apply options
+	// Apply options.
 	for _, opt := range opts {
 		opt(dk)
 	}
 
-	// Create built-in retriever if not provided
+	// Create built-in retriever if not provided.
 	if dk.retriever == nil {
-		// Use defaults if not specified
+		// Use defaults if not specified.
 		if dk.queryEnhancer == nil {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
 		}
 		if dk.reranker == nil {
-			dk.reranker = reranker.NewTop1Reranker()
+			dk.reranker = reranker.NewTopKReranker(1)
 		}
 
 		dk.retriever = retriever.New(
@@ -96,18 +105,41 @@ func New(opts ...Option) *BuiltinKnowledge {
 		)
 	}
 
+	// Process sources if provided.
+	if len(dk.sources) > 0 {
+		if err := dk.processSources(context.Background()); err != nil {
+			// Log error but don't fail construction.
+			fmt.Printf("Warning: failed to process sources: %v\n", err)
+		}
+	}
+
 	return dk
 }
 
-// AddDocument implements the Knowledge interface.
-// It stores the document in storage AND adds its embedding to the vector store.
-func (dk *BuiltinKnowledge) AddDocument(ctx context.Context, doc *document.Document) error {
-	// Step 1: Store document in storage backend
+// processSources processes all sources and adds their documents to the knowledge base.
+func (dk *BuiltinKnowledge) processSources(ctx context.Context) error {
+	for _, src := range dk.sources {
+		doc, err := src.ReadDocument(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to read document from source %s: %w", src.Name(), err)
+		}
+
+		// Add document to knowledge base.
+		if err := dk.addDocument(ctx, doc); err != nil {
+			return fmt.Errorf("failed to add document from source %s: %w", src.Name(), err)
+		}
+	}
+	return nil
+}
+
+// addDocument adds a document to the knowledge base (internal method).
+func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Document) error {
+	// Step 1: Store document in storage backend.
 	if err := dk.storage.Store(ctx, doc); err != nil {
 		return fmt.Errorf("failed to store document: %w", err)
 	}
 
-	// Step 2: Generate embedding and store in vector store
+	// Step 2: Generate embedding and store in vector store.
 	if dk.embedder != nil && dk.vectorStore != nil {
 		embedding, err := dk.embedder.GetEmbedding(ctx, doc.Content)
 		if err != nil {
@@ -123,23 +155,50 @@ func (dk *BuiltinKnowledge) AddDocument(ctx context.Context, doc *document.Docum
 }
 
 // Search implements the Knowledge interface.
-// It uses the built-in retriever for the complete RAG pipeline.
-func (dk *BuiltinKnowledge) Search(ctx context.Context, query string) (*SearchResult, error) {
+// It uses the built-in retriever for the complete RAG pipeline with context awareness.
+func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*SearchResult, error) {
 	if dk.retriever == nil {
 		return nil, fmt.Errorf("retriever not configured")
 	}
 
-	// Use built-in retriever for RAG pipeline
+	// Enhanced query using conversation context.
+	finalQuery := req.Query
+	if dk.queryEnhancer != nil {
+		queryReq := &query.Request{
+			Query:     req.Query,
+			History:   convertConversationHistory(req.History),
+			UserID:    req.UserID,
+			SessionID: req.SessionID,
+		}
+		enhanced, err := dk.queryEnhancer.EnhanceQuery(ctx, queryReq)
+		if err != nil {
+			return nil, fmt.Errorf("query enhancement failed: %w", err)
+		}
+		finalQuery = enhanced.Enhanced
+	}
+
+	// Set defaults for search parameters.
+	limit := req.MaxResults
+	if limit <= 0 {
+		limit = 1 // Return only the best result by default.
+	}
+
+	minScore := req.MinScore
+	if minScore < 0 {
+		minScore = 0.0
+	}
+
+	// Use built-in retriever for RAG pipeline.
 	result, err := dk.retriever.Retrieve(ctx, &retriever.Query{
-		Text:     query,
-		Limit:    1, // Return only the best result
-		MinScore: 0.0,
+		Text:     finalQuery,
+		Limit:    limit,
+		MinScore: minScore,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Return the top result if available
+	// Return the top result if available.
 	if len(result.Documents) == 0 {
 		return nil, nil
 	}
@@ -150,6 +209,19 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, query string) (*SearchRe
 		Score:    topDoc.Score,
 		Text:     topDoc.Document.Content,
 	}, nil
+}
+
+// convertConversationHistory converts knowledge.ConversationMessage to query.ConversationMessage
+func convertConversationHistory(history []ConversationMessage) []query.ConversationMessage {
+	converted := make([]query.ConversationMessage, len(history))
+	for i, msg := range history {
+		converted[i] = query.ConversationMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		}
+	}
+	return converted
 }
 
 // Close implements the Knowledge interface.

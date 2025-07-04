@@ -6,14 +6,40 @@ import "context"
 // Enhancer enhances user queries for better search results.
 type Enhancer interface {
 	// EnhanceQuery improves a user query by expanding or rephrasing it.
-	EnhanceQuery(ctx context.Context, query string) (*Enhanced, error)
+	// Context includes conversation history for better understanding.
+	EnhanceQuery(ctx context.Context, req *Request) (*Enhanced, error)
+}
+
+// Request represents a query enhancement request with context.
+type Request struct {
+	// Query is the user's current query text.
+	Query string
+
+	// History contains recent conversation messages for context.
+	// Should be limited to last N messages to avoid overwhelming the enhancer.
+	History []ConversationMessage
+
+	// UserID can help with personalized query enhancement.
+	UserID string
+
+	// SessionID can help with session-specific context.
+	SessionID string
+}
+
+// ConversationMessage represents a message in conversation history.
+type ConversationMessage struct {
+	// Role indicates if this is from user or assistant.
+	Role string
+
+	// Content is the message content.
+	Content string
+
+	// Timestamp when the message was sent.
+	Timestamp int64
 }
 
 // Enhanced represents an enhanced search query.
 type Enhanced struct {
-	// Original is the original query text.
-	Original string
-
 	// Enhanced is the improved query text.
 	Enhanced string
 

@@ -11,10 +11,9 @@ func NewPassthroughEnhancer() *PassthroughEnhancer {
 }
 
 // EnhanceQuery implements the Enhancer interface by returning the original query.
-func (p *PassthroughEnhancer) EnhanceQuery(ctx context.Context, query string) (*Enhanced, error) {
+func (p *PassthroughEnhancer) EnhanceQuery(ctx context.Context, req *Request) (*Enhanced, error) {
 	return &Enhanced{
-		Original: query,
-		Enhanced: query,
-		Keywords: []string{query},
+		Enhanced: req.Query,
+		Keywords: []string{req.Query},
 	}, nil
 }
