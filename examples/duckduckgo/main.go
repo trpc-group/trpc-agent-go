@@ -88,7 +88,6 @@ func (c *searchChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with access to DuckDuckGo web search"),
 		llmagent.WithInstruction("Use the DuckDuckGo search tool for factual, encyclopedic information such as entity details (people, companies, places), definitions, mathematical calculations, and historical facts. Do NOT use it for real-time data like current weather, latest news, or live stock prices as the API is designed for static information."),
-		llmagent.WithSystemPrompt("You have access to DuckDuckGo's Instant Answer API. Use it to find factual information about entities (Steve Jobs, Tesla company), definitions (algorithm, photosynthesis), calculations (unit conversions), and historical facts. This API provides static, curated information and is NOT suitable for real-time data, current events, or time-sensitive queries."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{searchTool}),

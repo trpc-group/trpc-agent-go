@@ -41,10 +41,10 @@ func WithInstruction(instruction string) Option {
 	}
 }
 
-// WithSystemPrompt sets the system prompt of the agent.
-func WithSystemPrompt(systemPrompt string) Option {
+// WithGlobalInstruction sets the global instruction of the agent.
+func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
-		opts.SystemPrompt = systemPrompt
+		opts.GlobalInstruction = instruction
 	}
 }
 
@@ -121,8 +121,9 @@ type Options struct {
 	Description string
 	// Instruction is the instruction for the agent.
 	Instruction string
-	// SystemPrompt is the system prompt for the agent.
-	SystemPrompt string
+	// GlobalInstruction is the global instruction for the agent.
+	// It will be used for all agents in the agent tree.
+	GlobalInstruction string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -186,8 +187,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.SystemPrompt != "" {
-		instructionProcessor := processor.NewInstructionRequestProcessor(options.Instruction, options.SystemPrompt)
+	if options.Instruction != "" || options.GlobalInstruction != "" {
+		instructionProcessor := processor.NewInstructionRequestProcessor(options.Instruction, options.GlobalInstruction)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
@@ -234,7 +235,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		model:          options.Model,
 		description:    options.Description,
 		instruction:    options.Instruction,
-		systemPrompt:   options.SystemPrompt,
+		systemPrompt:   options.GlobalInstruction,
 		genConfig:      options.GenerationConfig,
 		flow:           llmFlow,
 		tools:          tools,

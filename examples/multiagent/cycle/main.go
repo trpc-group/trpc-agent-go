@@ -109,7 +109,6 @@ func (c *cycleChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Generates content based on user prompts and improvement feedback"),
 		llmagent.WithInstruction("You are a creative content generator. Create high-quality content based on the user's request. If this is a refinement iteration, incorporate the critic's feedback to improve your previous output. Be creative, specific, and engaging. Keep responses concise but complete."),
-		llmagent.WithSystemPrompt("Generate the best possible content for the user's request. In iterations, use the critic's feedback to enhance quality, add detail, or fix issues. Always aim for excellence and creativity."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{solutionTool}), // Can store iterations
@@ -121,7 +120,6 @@ func (c *cycleChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Critically evaluates generated content and provides improvement feedback"),
 		llmagent.WithInstruction("You are a critical evaluator. Carefully assess the generated content for quality, creativity, completeness, and engagement. Give a score from 0-100 and decide if it needs improvement (scores below 82 need improvement). Always use the record_score tool to formally record your decision. Provide specific, actionable feedback for improvements when needed."),
-		llmagent.WithSystemPrompt("Evaluate content thoroughly. Consider creativity, completeness, engagement, and overall quality. Use record_score tool to record your assessment. Be constructive with feedback."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{scoreTool}),

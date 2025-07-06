@@ -107,7 +107,6 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A research agent that uses React planning to structure its thinking and actions"),
 		llmagent.WithInstruction("You are a helpful research assistant. Use the React planning approach to break down complex questions into manageable steps."),
-		llmagent.WithSystemPrompt("You have access to search, calculator, and weather tools. Use structured planning to approach each query systematically."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool, weatherTool}),

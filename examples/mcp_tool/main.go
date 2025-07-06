@@ -112,7 +112,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
 		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
-		llmagent.WithSystemPrompt("You have access to calculator and current_time tools. Use them when users ask for calculations or time information."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),

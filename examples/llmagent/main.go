@@ -44,7 +44,6 @@ func main() {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant for demonstrations"),
 		llmagent.WithInstruction("Be helpful, concise, and informative in your responses"),
-		llmagent.WithSystemPrompt("You are a helpful assistant designed to demonstrate the LLMAgent capabilities"),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(20),
 	)
