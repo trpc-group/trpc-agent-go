@@ -436,17 +436,17 @@ func handleAbs(expr string) (float64, error) {
 	return 0, fmt.Errorf("abs function format error")
 }
 
-// evaluateBasicExpression 计算基本的数学表达式
+// evaluateBasicExpression evaluates basic mathematical expressions
 func evaluateBasicExpression(expr string) (float64, error) {
-	// 移除所有空格
+	// Remove all spaces
 	expr = strings.ReplaceAll(expr, " ", "")
 
-	// 如果是单个数字，直接解析
+	// If it's a single number, parse directly
 	if num, err := strconv.ParseFloat(expr, 64); err == nil {
 		return num, nil
 	}
 
-	// 处理乘法和除法（优先级高）
+	// Handle multiplication and division (higher priority)
 	result, err := evaluateMultiplicationDivision(expr)
 	if err != nil {
 		return 0, err
@@ -455,19 +455,19 @@ func evaluateBasicExpression(expr string) (float64, error) {
 	return result, nil
 }
 
-// evaluateMultiplicationDivision 处理乘法和除法，然后处理加法和减法
+// evaluateMultiplicationDivision handles multiplication and division, then handles addition and subtraction
 func evaluateMultiplicationDivision(expr string) (float64, error) {
-	// 首先处理加法和减法，因为它们的优先级最低
+	// First handle addition and subtraction, as they have the lowest priority
 	return evaluateAdditionSubtraction(expr)
 }
 
-// evaluateAdditionSubtraction 处理加法和减法
+// evaluateAdditionSubtraction handles addition and subtraction
 func evaluateAdditionSubtraction(expr string) (float64, error) {
-	// 查找最后一个加号或减号（不在开头的）
+	// Find the last plus or minus sign (not at the beginning)
 	var lastOpPos = -1
 	var lastOp rune
 
-	for i := len(expr) - 1; i >= 1; i-- { // 从1开始，避免处理开头的负号
+	for i := len(expr) - 1; i >= 1; i-- { // Start from 1 to avoid handling negative sign at the beginning
 		if expr[i] == '+' || expr[i] == '-' {
 			lastOpPos = i
 			lastOp = rune(expr[i])
@@ -476,15 +476,15 @@ func evaluateAdditionSubtraction(expr string) (float64, error) {
 	}
 
 	if lastOpPos == -1 {
-		// 没有找到加法或减法，处理乘法和除法
+		// No addition or subtraction found, handle multiplication and division
 		return evaluateMultiplicationDivisionOnly(expr)
 	}
 
-	// 分割表达式
+	// Split the expression
 	left := expr[:lastOpPos]
 	right := expr[lastOpPos+1:]
 
-	// 递归计算左右两部分
+	// Recursively calculate left and right parts
 	leftVal, err := evaluateAdditionSubtraction(left)
 	if err != nil {
 		return 0, err
@@ -495,20 +495,20 @@ func evaluateAdditionSubtraction(expr string) (float64, error) {
 		return 0, err
 	}
 
-	// 执行运算
+	// Execute the operation
 	switch lastOp {
 	case '+':
 		return leftVal + rightVal, nil
 	case '-':
 		return leftVal - rightVal, nil
 	default:
-		return 0, fmt.Errorf("未知运算符: %c", lastOp)
+		return 0, fmt.Errorf("unknown operator: %c", lastOp)
 	}
 }
 
-// evaluateMultiplicationDivisionOnly 仅处理乘法和除法
+// evaluateMultiplicationDivisionOnly handles only multiplication and division
 func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
-	// 查找最后一个乘号或除号
+	// Find the last multiplication or division sign
 	var lastOpPos = -1
 	var lastOp rune
 
@@ -521,15 +521,15 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 	}
 
 	if lastOpPos == -1 {
-		// 没有找到乘法或除法，直接解析数字
+		// No multiplication or division found, parse number directly
 		return strconv.ParseFloat(expr, 64)
 	}
 
-	// 分割表达式
+	// Split the expression
 	left := expr[:lastOpPos]
 	right := expr[lastOpPos+1:]
 
-	// 递归计算左右两部分
+	// Recursively calculate left and right parts
 	leftVal, err := evaluateMultiplicationDivisionOnly(left)
 	if err != nil {
 		return 0, err
@@ -540,17 +540,17 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 		return 0, err
 	}
 
-	// 执行运算
+	// Execute the operation
 	switch lastOp {
 	case '*':
 		return leftVal * rightVal, nil
 	case '/':
 		if rightVal == 0 {
-			return 0, fmt.Errorf("除零错误")
+			return 0, fmt.Errorf("division by zero")
 		}
 		return leftVal / rightVal, nil
 	default:
-		return 0, fmt.Errorf("未知运算符: %c", lastOp)
+		return 0, fmt.Errorf("unknown operator: %c", lastOp)
 	}
 }
 
