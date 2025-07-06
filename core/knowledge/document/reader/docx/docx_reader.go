@@ -1,25 +1,27 @@
-// Package csv provides CSV document reader implementation.
-package csv
+// Package docx provides DOCX document reader implementation.
+package docx
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	unioffice "github.com/unidoc/unioffice/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/internal/document"
 )
 
-// Reader reads CSV documents and applies chunking strategies.
+// Reader reads DOCX documents and applies chunking strategies.
 type Reader struct {
 	chunk            bool
 	chunkingStrategy chunking.Strategy
 }
 
-// Option represents a functional option for configuring the CSV reader.
+// Option represents a functional option for configuring the DOCX reader.
 type Option func(*Reader)
 
 // WithChunking enables or disables document chunking.
@@ -36,7 +38,7 @@ func WithChunkingStrategy(strategy chunking.Strategy) Option {
 	}
 }
 
-// New creates a new CSV reader with the given options.
+// New creates a new DOCX reader with the given options.
 func New(opts ...Option) *Reader {
 	r := &Reader{
 		chunk:            true,
@@ -49,37 +51,31 @@ func New(opts ...Option) *Reader {
 	return r
 }
 
-// ReadFromReader reads CSV content from an io.Reader and returns a list of documents.
+// ReadFromReader reads DOCX content from an io.Reader and returns a list of documents.
 func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
-	// Read content from reader.
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-	// Convert CSV to text.
-	textContent := r.csvToText(string(content))
-	// Create document.
-	doc := idocument.CreateDocument(textContent, name)
-	// Apply chunking if enabled.
-	if r.chunk {
-		return r.chunkDocument(doc)
-	}
-	return []*document.Document{doc}, nil
+	return r.readFromReader(reader, name)
 }
 
-// ReadFromFile reads CSV content from a file path and returns a list of documents.
+// ReadFromFile reads DOCX content from a file path and returns a list of documents.
 func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
-	// Read file content.
-	content, err := os.ReadFile(filePath)
+	// Open DOCX directly from file path.
+	docx, err := unioffice.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
+	defer docx.Close()
 	// Get file name without extension.
 	fileName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
-	// Convert CSV to text.
-	textContent := r.csvToText(string(content))
+	// Extract text content.
+	var textContent strings.Builder
+	for _, para := range docx.Paragraphs() {
+		for _, run := range para.Runs() {
+			textContent.WriteString(run.Text())
+		}
+		textContent.WriteString("\n")
+	}
 	// Create document.
-	doc := idocument.CreateDocument(textContent, fileName)
+	doc := idocument.CreateDocument(textContent.String(), fileName)
 	// Apply chunking if enabled.
 	if r.chunk {
 		return r.chunkDocument(doc)
@@ -87,9 +83,9 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil
 }
 
-// ReadFromURL reads CSV content from a URL and returns a list of documents.
+// ReadFromURL reads DOCX content from a URL and returns a list of documents.
 func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
-	// Download CSV from URL.
+	// Download DOCX from URL.
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -97,33 +93,56 @@ func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
 	defer resp.Body.Close()
 	// Get file name from URL.
 	fileName := r.extractFileNameFromURL(url)
-	return r.ReadFromReader(fileName, resp.Body)
+	return r.readFromReader(resp.Body, fileName)
 }
 
-// csvToText converts CSV content to a readable text format.
-func (r *Reader) csvToText(csvContent string) string {
-	// Split content into lines.
-	lines := strings.Split(csvContent, "\n")
-	// Process each line to handle CSV formatting.
-	var processedLines []string
-	for _, line := range lines {
-		// Skip empty lines.
-		if strings.TrimSpace(line) == "" {
-			continue
+// readFromReader reads DOCX content from an io.Reader and returns a list of documents.
+func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Document, error) {
+	// UniOffice requires io.ReadSeeker, so buffer if necessary.
+	var readSeeker io.ReadSeeker
+	if rs, ok := reader.(io.ReadSeeker); ok {
+		readSeeker = rs
+	} else {
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
 		}
-		// Split by comma and clean up each field.
-		fields := strings.Split(line, ",")
-		for i, field := range fields {
-			// Remove quotes and trim whitespace.
-			field = strings.Trim(field, `"'`)
-			field = strings.TrimSpace(field)
-			fields[i] = field
-		}
-		// Join fields with a more readable separator.
-		processedLine := strings.Join(fields, " | ")
-		processedLines = append(processedLines, processedLine)
+		readSeeker = bytes.NewReader(data)
 	}
-	return strings.Join(processedLines, "\n")
+
+	// Create a temporary file to use with unioffice.
+	tmpFile, err := os.CreateTemp("", "docx_reader_*.docx")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	// Copy data to temporary file.
+	if _, err := io.Copy(tmpFile, readSeeker); err != nil {
+		return nil, err
+	}
+	// Open DOCX from temporary file.
+	docx, err := unioffice.Open(tmpFile.Name())
+	if err != nil {
+		return nil, err
+	}
+	defer docx.Close()
+	// Extract text content.
+	var textContent strings.Builder
+	for _, para := range docx.Paragraphs() {
+		for _, run := range para.Runs() {
+			textContent.WriteString(run.Text())
+		}
+		textContent.WriteString("\n")
+	}
+	// Create document.
+	doc := idocument.CreateDocument(textContent.String(), name)
+	// Apply chunking if enabled.
+	if r.chunk {
+		return r.chunkDocument(doc)
+	}
+	return []*document.Document{doc}, nil
 }
 
 // chunkDocument applies chunking to a document.
@@ -148,13 +167,13 @@ func (r *Reader) extractFileNameFromURL(url string) string {
 			fileName = fileName[:idx]
 		}
 		// Remove file extension.
-		fileName = strings.TrimSuffix(fileName, ".csv")
+		fileName = strings.TrimSuffix(fileName, ".docx")
 		return fileName
 	}
-	return "csv_document"
+	return "docx_document"
 }
 
 // Name returns the name of this reader.
 func (r *Reader) Name() string {
-	return "CSVReader"
+	return "DOCXReader"
 }

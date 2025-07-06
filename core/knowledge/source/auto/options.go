@@ -1,10 +1,6 @@
 // Package auto provides auto-detection knowledge source implementation.
 package auto
 
-import (
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
-)
-
 // Option represents a functional option for configuring auto sources.
 type Option func(*Source)
 
@@ -31,12 +27,5 @@ func WithMetadataValue(key string, value interface{}) Option {
 			s.metadata = make(map[string]interface{})
 		}
 		s.metadata[key] = value
-	}
-}
-
-// WithReaderFactory sets the reader factory for the auto source.
-func WithReaderFactory(factory *readerfactory.Factory) Option {
-	return func(s *Source) {
-		s.readerFactory = factory
 	}
 }

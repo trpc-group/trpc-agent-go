@@ -4,13 +4,13 @@ package file
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
+	isource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/internal/source"
 )
 
 const (
@@ -20,27 +20,25 @@ const (
 
 // Source represents a knowledge source for file-based content.
 type Source struct {
-	filePaths     []string
-	name          string
-	metadata      map[string]interface{}
-	readerFactory *readerfactory.Factory
+	filePaths []string
+	name      string
+	metadata  map[string]interface{}
+	readers   map[string]reader.Reader
 }
 
 // New creates a new file knowledge source.
 func New(filePaths []string, opts ...Option) *Source {
-	sourceObj := &Source{
-		filePaths:     filePaths,
-		name:          defaultFileSourceName,
-		metadata:      make(map[string]interface{}),
-		readerFactory: readerfactory.NewFactory(), // Use default config.
+	s := &Source{
+		filePaths: filePaths,
+		name:      defaultFileSourceName,
+		metadata:  make(map[string]interface{}),
+		readers:   isource.GetReaders(),
 	}
-
 	// Apply options.
 	for _, opt := range opts {
-		opt(sourceObj)
+		opt(s)
 	}
-
-	return sourceObj
+	return s
 }
 
 // ReadDocuments reads all files and returns documents using appropriate readers.
@@ -48,9 +46,7 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 	if len(s.filePaths) == 0 {
 		return nil, fmt.Errorf("no file paths provided")
 	}
-
 	var allDocuments []*document.Document
-
 	for _, filePath := range s.filePaths {
 		documents, err := s.processFile(filePath)
 		if err != nil {
@@ -58,7 +54,6 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		}
 		allDocuments = append(allDocuments, documents...)
 	}
-
 	return allDocuments, nil
 }
 
@@ -81,19 +76,17 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	if !fileInfo.Mode().IsRegular() {
 		return nil, fmt.Errorf("not a regular file: %s", filePath)
 	}
-
-	f, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+	// Determine file type and get appropriate reader.
+	fileType := isource.GetFileType(filePath)
+	reader, exists := s.readers[fileType]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
 	}
-	defer f.Close()
-
-	// Read file content.
-	content, err := io.ReadAll(f)
+	// Read the file using the reader's ReadFromFile method.
+	documents, err := reader.ReadFromFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file content: %w", err)
+		return nil, fmt.Errorf("failed to read file with reader: %w", err)
 	}
-
 	// Create metadata for this file.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
@@ -106,16 +99,6 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	metadata[source.MetaFileSize] = fileInfo.Size()
 	metadata[source.MetaFileMode] = fileInfo.Mode().String()
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
-
-	// Create the appropriate reader based on file extension.
-	reader := s.readerFactory.CreateReader(filePath)
-
-	// Read the file content and create documents.
-	documents, err := reader.Read(string(content), filepath.Base(filePath))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file with reader: %w", err)
-	}
-
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
@@ -125,13 +108,12 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 			doc.Metadata[k] = v
 		}
 	}
-
 	return documents, nil
 }
 
-// SetReaderFactory sets the reader factory for this source.
-func (s *Source) SetReaderFactory(factory *readerfactory.Factory) {
-	s.readerFactory = factory
+// SetReader sets a custom reader for a specific file type.
+func (s *Source) SetReader(fileType string, reader reader.Reader) {
+	s.readers[fileType] = reader
 }
 
 // SetMetadata sets metadata for this source.

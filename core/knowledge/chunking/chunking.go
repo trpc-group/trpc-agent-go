@@ -2,19 +2,22 @@
 package chunking
 
 import (
-	"regexp"
+	"strconv"
 	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 )
 
 // Strategy defines the interface for document chunking strategies.
 type Strategy interface {
 	// Chunk splits a document into smaller chunks based on the strategy's algorithm.
-	Chunk(doc interface{}) ([]interface{}, error)
+	Chunk(doc *document.Document) ([]*document.Document, error)
 }
 
 var (
-	// cleanTextRegex removes extra whitespace and normalizes line breaks.
-	cleanTextRegex = regexp.MustCompile(`\s+`)
+	defaultChunkSize = 1024
+	defaultOverlap   = 128
 )
 
 // cleanText normalizes whitespace in text content.
@@ -35,31 +38,33 @@ func cleanText(content string) string {
 }
 
 // createChunk creates a new document chunk with appropriate metadata.
-func createChunk(originalDoc interface{}, content string, chunkNumber int) interface{} {
-	// This is a placeholder function for the chunking package.
-	// The actual implementation should be in the document package.
-	return nil
-}
-
-// itoa converts an integer to a string (simple implementation).
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
+func createChunk(originalDoc *document.Document, content string, chunkNumber int) *document.Document {
+	// Create a copy of the original metadata.
+	metadata := make(map[string]interface{})
+	for k, v := range originalDoc.Metadata {
+		metadata[k] = v
 	}
 
-	var result []byte
-	negative := i < 0
-	if negative {
-		i = -i
+	// Add chunk-specific metadata.
+	metadata["chunk"] = chunkNumber
+	metadata["chunk_size"] = len(content)
+
+	// Generate chunk ID.
+	var chunkID string
+	if originalDoc.ID != "" {
+		chunkID = originalDoc.ID + "_" + strconv.Itoa(chunkNumber)
+	} else if originalDoc.Name != "" {
+		chunkID = originalDoc.Name + "_" + strconv.Itoa(chunkNumber)
+	} else {
+		chunkID = "chunk_" + strconv.Itoa(chunkNumber)
 	}
 
-	for i > 0 {
-		result = append([]byte{byte('0' + i%10)}, result...)
-		i /= 10
+	return &document.Document{
+		ID:        chunkID,
+		Name:      originalDoc.Name,
+		Content:   content,
+		Metadata:  metadata,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
 	}
-
-	if negative {
-		result = append([]byte{'-'}, result...)
-	}
-	return string(result)
 }

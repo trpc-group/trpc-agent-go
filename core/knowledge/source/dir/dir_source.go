@@ -3,14 +3,20 @@ package dir
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/csv"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/docx"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/json"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/markdown"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/pdf"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/text"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 )
 
@@ -24,47 +30,74 @@ type Source struct {
 	dirPath        string
 	name           string
 	metadata       map[string]interface{}
-	readerFactory  *readerfactory.Factory
+	readers        map[string]reader.Reader
 	fileExtensions []string // Optional: filter by file extensions
 	recursive      bool     // Whether to process subdirectories
 }
 
 // New creates a new directory knowledge source.
 func New(dirPath string, opts ...Option) *Source {
-	sourceObj := &Source{
-		dirPath:       dirPath,
-		name:          defaultDirSourceName,
-		metadata:      make(map[string]interface{}),
-		readerFactory: readerfactory.NewFactory(), // Use default config.
-		recursive:     false,                      // Default to non-recursive.
+	s := &Source{
+		dirPath:   dirPath,
+		name:      defaultDirSourceName,
+		metadata:  make(map[string]interface{}),
+		readers:   make(map[string]reader.Reader),
+		recursive: false, // Default to non-recursive.
 	}
-
+	// Initialize default readers.
+	s.initializeReaders()
 	// Apply options.
 	for _, opt := range opts {
-		opt(sourceObj)
+		opt(s)
 	}
+	return s
+}
 
-	return sourceObj
+// initializeReaders initializes all available readers.
+func (s *Source) initializeReaders() {
+	s.readers["text"] = text.New()
+	s.readers["pdf"] = pdf.New()
+	s.readers["markdown"] = markdown.New()
+	s.readers["json"] = json.New()
+	s.readers["csv"] = csv.New()
+	s.readers["docx"] = docx.New()
+}
+
+// getFileType determines the file type based on the file extension.
+func (s *Source) getFileType(filePath string) string {
+	ext := filepath.Ext(filePath)
+	switch ext {
+	case ".txt", ".text":
+		return "text"
+	case ".pdf":
+		return "pdf"
+	case ".md", ".markdown":
+		return "markdown"
+	case ".json":
+		return "json"
+	case ".csv":
+		return "csv"
+	case ".docx", ".doc":
+		return "docx"
+	default:
+		return "text"
+	}
 }
 
 // ReadDocuments reads all files in the directory and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if s.dirPath == "" {
-		return nil, fmt.Errorf("no directory path provided")
+		return nil, errors.New("no directory path provided")
 	}
-
 	// Get all file paths in the directory.
 	filePaths, err := s.getFilePaths()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file paths: %w", err)
 	}
-
 	if len(filePaths) == 0 {
 		return nil, fmt.Errorf("no files found in directory: %s", s.dirPath)
 	}
-
 	var allDocuments []*document.Document
-
 	for _, filePath := range filePaths {
 		documents, err := s.processFile(filePath)
 		if err != nil {
@@ -74,7 +107,6 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		}
 		allDocuments = append(allDocuments, documents...)
 	}
-
 	return allDocuments, nil
 }
 
@@ -131,7 +163,6 @@ func (s *Source) getFilePaths() ([]string, error) {
 		filePaths = append(filePaths, path)
 		return nil
 	})
-
 	return filePaths, err
 }
 
@@ -145,16 +176,17 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("not a regular file: %s", filePath)
 	}
 
-	f, err := os.Open(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+	// Determine file type and get appropriate reader.
+	fileType := s.getFileType(filePath)
+	reader, exists := s.readers[fileType]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
 	}
-	defer f.Close()
 
-	// Read file content.
-	content, err := io.ReadAll(f)
+	// Read the file using the reader's ReadFromFile method.
+	documents, err := reader.ReadFromFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file content: %w", err)
+		return nil, fmt.Errorf("failed to read file with reader: %w", err)
 	}
 
 	// Create metadata for this file.
@@ -170,15 +202,6 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	metadata[source.MetaFileMode] = fileInfo.Mode().String()
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
 
-	// Create the appropriate reader based on file extension.
-	reader := s.readerFactory.CreateReader(filePath)
-
-	// Read the file content and create documents.
-	documents, err := reader.Read(string(content), filepath.Base(filePath))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file with reader: %w", err)
-	}
-
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
@@ -192,16 +215,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	return documents, nil
 }
 
-// SetReaderFactory sets the reader factory for this source.
-func (s *Source) SetReaderFactory(factory *readerfactory.Factory) {
-	s.readerFactory = factory
-}
-
-// SetMetadata sets metadata for this source.
+// SetMetadata sets a metadata value for the directory source.
 func (s *Source) SetMetadata(key string, value interface{}) {
-	if s.metadata == nil {
-		s.metadata = make(map[string]interface{})
-	}
 	s.metadata[key] = value
 }
- 

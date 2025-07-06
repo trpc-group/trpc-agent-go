@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/text"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
@@ -22,20 +24,22 @@ const (
 
 // Source represents a knowledge source that automatically detects the source type.
 type Source struct {
-	inputs        []string
-	name          string
-	metadata      map[string]interface{}
-	readerFactory *readerfactory.Factory
+	inputs     []string
+	name       string
+	metadata   map[string]interface{}
+	textReader reader.Reader
 }
 
 // New creates a new auto knowledge source.
 func New(inputs []string, opts ...Option) *Source {
 	sourceObj := &Source{
-		inputs:        inputs,
-		name:          defaultAutoSourceName,
-		metadata:      make(map[string]interface{}),
-		readerFactory: readerfactory.NewFactory(), // Use default config.
+		inputs:   inputs,
+		name:     defaultAutoSourceName,
+		metadata: make(map[string]interface{}),
 	}
+
+	// Initialize default readers.
+	sourceObj.initializeReaders()
 
 	// Apply options.
 	for _, opt := range opts {
@@ -45,22 +49,24 @@ func New(inputs []string, opts ...Option) *Source {
 	return sourceObj
 }
 
+// initializeReaders initializes all available readers.
+func (s *Source) initializeReaders() {
+	s.textReader = text.New()
+}
+
 // ReadDocuments automatically detects the source type and reads documents.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.inputs) == 0 {
 		return nil, fmt.Errorf("no inputs provided")
 	}
-
 	var allDocuments []*document.Document
-
 	for _, input := range s.inputs {
-		documents, err := s.processInput(input)
+		documents, err := s.processInput(ctx, input)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process input %s: %w", input, err)
 		}
 		allDocuments = append(allDocuments, documents...)
 	}
-
 	return allDocuments, nil
 }
 
@@ -75,22 +81,19 @@ func (s *Source) Type() string {
 }
 
 // processInput determines the input type and processes it accordingly.
-func (s *Source) processInput(input string) ([]*document.Document, error) {
+func (s *Source) processInput(ctx context.Context, input string) ([]*document.Document, error) {
 	// Check if it's a URL.
 	if s.isURL(input) {
-		return s.processAsURL(input)
+		return s.processAsURL(ctx, input)
 	}
-
 	// Check if it's a directory.
 	if s.isDirectory(input) {
-		return s.processAsDirectory(input)
+		return s.processAsDirectory(ctx, input)
 	}
-
 	// Check if it's a file.
 	if s.isFile(input) {
-		return s.processAsFile(input)
+		return s.processAsFile(ctx, input)
 	}
-
 	// If none of the above, treat as text content.
 	return s.processAsText(input)
 }
@@ -114,52 +117,38 @@ func (s *Source) isFile(input string) bool {
 }
 
 // processAsURL processes the input as a URL.
-func (s *Source) processAsURL(input string) ([]*document.Document, error) {
+func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
 	urlSource := urlsource.New([]string{input})
-	urlSource.SetReaderFactory(s.readerFactory)
-
 	// Copy metadata.
 	for k, v := range s.metadata {
 		urlSource.SetMetadata(k, v)
 	}
-
-	return urlSource.ReadDocuments(context.Background())
+	return urlSource.ReadDocuments(ctx)
 }
 
 // processAsDirectory processes the input as a directory.
-func (s *Source) processAsDirectory(input string) ([]*document.Document, error) {
+func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
 	dirSource := dirsource.New(input)
-	dirSource.SetReaderFactory(s.readerFactory)
-
 	// Copy metadata.
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)
 	}
-
-	return dirSource.ReadDocuments(context.Background())
+	return dirSource.ReadDocuments(ctx)
 }
 
 // processAsFile processes the input as a file.
-func (s *Source) processAsFile(input string) ([]*document.Document, error) {
+func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.Document, error) {
 	fileSource := filesource.New([]string{input})
-	fileSource.SetReaderFactory(s.readerFactory)
 
 	// Copy metadata.
 	for k, v := range s.metadata {
 		fileSource.SetMetadata(k, v)
 	}
-
-	return fileSource.ReadDocuments(context.Background())
+	return fileSource.ReadDocuments(ctx)
 }
 
 // processAsText processes the input as text content.
 func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
-	reader := s.readerFactory.CreateReader("document.txt")
-	return reader.Read(input, "text_input")
-}
-
-// SetReaderFactory sets the reader factory for this source.
-func (s *Source) SetReaderFactory(factory *readerfactory.Factory) {
-	s.readerFactory = factory
+	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
 }

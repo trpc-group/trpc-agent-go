@@ -32,4 +32,4 @@ func WithRecursive(recursive bool) Option {
 	return func(s *Source) {
 		s.recursive = recursive
 	}
-} 
+}

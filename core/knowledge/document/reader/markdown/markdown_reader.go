@@ -2,244 +2,142 @@
 package markdown
 
 import (
-	"regexp"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
+	idocument "trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/internal/document"
 )
 
-// Reader reads markdown documents and applies markdown-specific chunking strategies.
+// Reader reads markdown documents and applies chunking strategies.
 type Reader struct {
-	*reader.BaseReader
+	chunk            bool
+	chunkingStrategy chunking.Strategy
 }
 
-// New creates a new markdown reader with the given configuration.
-func New(config *reader.Config) *Reader {
-	if config == nil {
-		config = reader.DefaultConfig()
-	}
-	
-	// Use markdown-specific chunking strategy if not specified.
-	if config.ChunkingStrategy == nil {
-		config.ChunkingStrategy = NewChunking(
-			WithChunkSize(config.ChunkSize),
-			WithOverlap(config.Overlap),
-		)
-	}
-	
-	return &Reader{
-		BaseReader: reader.NewBaseReader(config),
+// Option represents a functional option for configuring the markdown reader.
+type Option func(*Reader)
+
+// WithChunking enables or disables document chunking.
+func WithChunking(chunk bool) Option {
+	return func(r *Reader) {
+		r.chunk = chunk
 	}
 }
 
-// Read reads markdown content and returns a list of documents.
-func (r *Reader) Read(content string, name string) ([]*document.Document, error) {
-	// Clean the text.
-	markdownContent := r.CleanText(content)
+// WithChunkingStrategy sets the chunking strategy to use.
+func WithChunkingStrategy(strategy chunking.Strategy) Option {
+	return func(r *Reader) {
+		r.chunkingStrategy = strategy
+	}
+}
 
-	// Create the document.
-	doc := r.CreateDocument(markdownContent, name)
+// New creates a new markdown reader with the given options.
+func New(opts ...Option) *Reader {
+	r := &Reader{
+		chunk:            true,
+		chunkingStrategy: chunking.NewMarkdownChunking(),
+	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	return r
+}
+
+// ReadFromReader reads markdown content from an io.Reader and returns a list of documents.
+func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Document, error) {
+	// Read content from reader.
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create document.
+	doc := idocument.CreateDocument(string(content), name)
 
 	// Apply chunking if enabled.
-	return r.ChunkDocument(doc)
+	if r.chunk {
+		return r.chunkDocument(doc)
+	}
+
+	return []*document.Document{doc}, nil
+}
+
+// ReadFromFile reads markdown content from a file path and returns a list of documents.
+func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	// Read file content.
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get file name without extension.
+	fileName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+
+	// Create document.
+	doc := idocument.CreateDocument(string(content), fileName)
+
+	// Apply chunking if enabled.
+	if r.chunk {
+		return r.chunkDocument(doc)
+	}
+
+	return []*document.Document{doc}, nil
+}
+
+// ReadFromURL reads markdown content from a URL and returns a list of documents.
+func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
+	// Download markdown from URL.
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Get file name from URL.
+	fileName := r.extractFileNameFromURL(url)
+
+	return r.ReadFromReader(fileName, resp.Body)
+}
+
+// chunkDocument applies chunking to a document.
+func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
+	if r.chunkingStrategy == nil {
+		r.chunkingStrategy = chunking.NewMarkdownChunking()
+	}
+
+	return r.chunkingStrategy.Chunk(doc)
+}
+
+// extractFileNameFromURL extracts a file name from a URL.
+func (r *Reader) extractFileNameFromURL(url string) string {
+	// Extract the last part of the URL as the file name.
+	parts := strings.Split(url, "/")
+	if len(parts) > 0 {
+		fileName := parts[len(parts)-1]
+		// Remove query parameters and fragments.
+		if idx := strings.Index(fileName, "?"); idx != -1 {
+			fileName = fileName[:idx]
+		}
+		if idx := strings.Index(fileName, "#"); idx != -1 {
+			fileName = fileName[:idx]
+		}
+		// Remove file extension.
+		fileName = strings.TrimSuffix(fileName, ".md")
+		fileName = strings.TrimSuffix(fileName, ".markdown")
+		return fileName
+	}
+	return "markdown_document"
 }
 
 // Name returns the name of this reader.
 func (r *Reader) Name() string {
 	return "MarkdownReader"
 }
-
-// Chunking implements a chunking strategy specific to markdown documents.
-type Chunking struct {
-	ChunkSize int
-	Overlap   int
-}
-
-// Option represents a functional option for configuring Chunking.
-type Option func(*Chunking)
-
-// WithChunkSize sets the maximum size of each chunk in characters.
-func WithChunkSize(size int) Option {
-	return func(c *Chunking) {
-		c.ChunkSize = size
-	}
-}
-
-// WithOverlap sets the number of characters to overlap between chunks.
-func WithOverlap(overlap int) Option {
-	return func(c *Chunking) {
-		c.Overlap = overlap
-	}
-}
-
-// NewChunking creates a new markdown chunking strategy.
-func NewChunking(opts ...Option) *Chunking {
-	chunking := &Chunking{
-		ChunkSize: document.DefaultChunkSize,
-		Overlap:   document.DefaultOverlap,
-	}
-
-	// Apply options.
-	for _, opt := range opts {
-		opt(chunking)
-	}
-
-	return chunking
-}
-
-// Chunk splits the markdown document into chunks based on markdown structure.
-func (m *Chunking) Chunk(doc *document.Document) ([]*document.Document, error) {
-	if doc == nil {
-		return nil, document.ErrNilDocument
-	}
-
-	if doc.IsEmpty() {
-		return nil, document.ErrEmptyDocument
-	}
-
-	// Get content directly as string.
-	content := doc.Content
-	content = cleanText(content)
-	contentLength := len(content)
-
-	// If content is smaller than chunk size, return as single chunk.
-	if contentLength <= m.ChunkSize {
-		chunk := createChunk(doc, content, 1)
-		return []*document.Document{chunk}, nil
-	}
-
-	// Split markdown by headers and sections.
-	sections := m.splitByHeaders(content)
-
-	var chunks []*document.Document
-	chunkNumber := 1
-	currentChunk := ""
-	currentSize := 0
-
-	for _, section := range sections {
-		section = strings.TrimSpace(section)
-		sectionSize := len(section)
-
-		if currentSize+sectionSize <= m.ChunkSize {
-			if currentChunk != "" {
-				currentChunk += "\n\n"
-			}
-			currentChunk += section
-			currentSize += sectionSize
-		} else {
-			// Create chunk from current content.
-			if currentChunk != "" {
-				chunk := createChunk(doc, currentChunk, chunkNumber)
-				chunks = append(chunks, chunk)
-				chunkNumber++
-			}
-
-			// Start new chunk with current section.
-			currentChunk = section
-			currentSize = sectionSize
-		}
-	}
-
-	// Add the last chunk.
-	if currentChunk != "" {
-		chunk := createChunk(doc, currentChunk, chunkNumber)
-		chunks = append(chunks, chunk)
-	}
-
-	return chunks, nil
-}
-
-// splitByHeaders splits markdown content by headers and natural breaks.
-func (m *Chunking) splitByHeaders(content string) []string {
-	// Split by markdown headers (# ## ### etc.).
-	headerRegex := regexp.MustCompile(`(?m)^#{1,6}\s+.*$`)
-	parts := headerRegex.Split(content, -1)
-
-	var sections []string
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			// Further split by paragraphs.
-			paragraphs := strings.Split(part, "\n\n")
-			for _, paragraph := range paragraphs {
-				paragraph = strings.TrimSpace(paragraph)
-				if paragraph != "" {
-					sections = append(sections, paragraph)
-				}
-			}
-		}
-	}
-
-	return sections
-}
-
-// cleanText normalizes whitespace in text content.
-func cleanText(content string) string {
-	// Trim leading and trailing whitespace.
-	content = strings.TrimSpace(content)
-
-	// Normalize line breaks.
-	content = strings.ReplaceAll(content, document.CarriageReturnLineFeed, document.LineFeed)
-	content = strings.ReplaceAll(content, document.CarriageReturn, document.LineFeed)
-
-	// Remove excessive whitespace while preserving line breaks.
-	lines := strings.Split(content, document.LineFeed)
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
-	}
-	return strings.Join(lines, document.LineFeed)
-}
-
-// createChunk creates a new document chunk with appropriate metadata.
-func createChunk(originalDoc *document.Document, content string, chunkNumber int) *document.Document {
-	chunk := &document.Document{
-		Name:      originalDoc.Name,
-		Content:   content,
-		CreatedAt: originalDoc.CreatedAt,
-		UpdatedAt: originalDoc.UpdatedAt,
-	}
-
-	// Generate chunk ID.
-	if originalDoc.ID != "" {
-		chunk.ID = originalDoc.ID + "_chunk_" + itoa(chunkNumber)
-	}
-
-	// Copy and extend metadata.
-	if originalDoc.Metadata != nil {
-		chunk.Metadata = make(map[string]interface{})
-		for k, v := range originalDoc.Metadata {
-			chunk.Metadata[k] = v
-		}
-	} else {
-		chunk.Metadata = make(map[string]interface{})
-	}
-
-	// Add chunk-specific metadata.
-	chunk.Metadata["chunk_number"] = chunkNumber
-	chunk.Metadata["is_chunk"] = true
-	return chunk
-}
-
-// itoa converts an integer to a string.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-
-	var result []byte
-	negative := i < 0
-	if negative {
-		i = -i
-	}
-
-	for i > 0 {
-		result = append([]byte{byte('0' + i%10)}, result...)
-		i /= 10
-	}
-
-	if negative {
-		result = append([]byte{'-'}, result...)
-	}
-	return string(result)
-} 
