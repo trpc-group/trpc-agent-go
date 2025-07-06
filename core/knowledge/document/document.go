@@ -1,7 +1,9 @@
 // Package document provides document processing functionality for knowledge management.
 package document
 
-import "time"
+import (
+	"time"
+)
 
 // Document represents a text document with metadata.
 type Document struct {
@@ -24,14 +26,12 @@ type Document struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
-// Size returns the size of the document content in characters.
-func (d *Document) Size() int {
-	return len(d.Content)
-}
-
-// IsEmpty returns true if the document has no content.
+// IsEmpty checks if the document has no content.
 func (d *Document) IsEmpty() bool {
-	return len(d.Content) == 0
+	if d == nil || d.Content == "" {
+		return true
+	}
+	return false
 }
 
 // Clone creates a deep copy of the document.

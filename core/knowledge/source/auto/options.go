@@ -1,22 +1,26 @@
-// Package auto provides auto-deduction knowledge source implementation.
+// Package auto provides auto-detection knowledge source implementation.
 package auto
 
-import "net/http"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
+)
 
-// Option represents a functional option for configuring Source.
+// Option represents a functional option for configuring auto sources.
 type Option func(*Source)
 
-// WithName sets a custom name for the auto source.
+// WithName sets the name of the auto source.
 func WithName(name string) Option {
 	return func(s *Source) {
 		s.name = name
 	}
 }
 
-// WithMetadata sets additional metadata for the source.
+// WithMetadata sets the metadata for the auto source.
 func WithMetadata(metadata map[string]interface{}) Option {
 	return func(s *Source) {
-		s.metadata = metadata
+		for k, v := range metadata {
+			s.metadata[k] = v
+		}
 	}
 }
 
@@ -30,9 +34,9 @@ func WithMetadataValue(key string, value interface{}) Option {
 	}
 }
 
-// WithHTTPClient sets a custom HTTP client for downloading content from URLs.
-func WithHTTPClient(client *http.Client) Option {
+// WithReaderFactory sets the reader factory for the auto source.
+func WithReaderFactory(factory *readerfactory.Factory) Option {
 	return func(s *Source) {
-		s.httpClient = client
+		s.readerFactory = factory
 	}
 }

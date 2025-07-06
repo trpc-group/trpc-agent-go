@@ -9,15 +9,10 @@ import (
 
 // Source types
 const (
-	TypeAuto     = "auto"
-	TypeFile     = "file"
-	TypeCSV      = "csv"
-	TypeJSON     = "json"
-	TypePDF      = "pdf"
-	TypeExcel    = "excel"
-	TypeTextFile = "textfile"
-	TypeURL      = "url"
-	TypeString   = "string"
+	TypeAuto = "auto"
+	TypeFile = "file"
+	TypeDir  = "dir"
+	TypeURL  = "url"
 )
 
 // Metadata keys
@@ -40,15 +35,15 @@ const (
 	MetaInputs        = "inputs"
 )
 
-// Source represents a knowledge source that can provide a document.
+// Source represents a knowledge source that can provide documents.
 type Source interface {
-	// ReadDocument reads and returns a document representing the whole source.
+	// ReadDocuments reads and returns documents representing the source.
 	// This method should handle the specific content type and return any errors.
-	ReadDocument(ctx context.Context) (*document.Document, error)
+	ReadDocuments(ctx context.Context) ([]*document.Document, error)
 
 	// Name returns a human-readable name for this source.
 	Name() string
 
-	// Type returns the type of this source (e.g., "file", "url", "text").
+	// Type returns the type of this source (e.g., "file", "url", "dir").
 	Type() string
 }

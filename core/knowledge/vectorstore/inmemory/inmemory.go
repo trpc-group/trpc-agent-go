@@ -18,12 +18,22 @@ type VectorStore struct {
 	mutex      sync.RWMutex
 }
 
-// New creates a new in-memory vector store instance.
-func New() *VectorStore {
-	return &VectorStore{
+// Option represents a functional option for configuring VectorStore.
+type Option func(*VectorStore)
+
+// New creates a new in-memory vector store instance with options.
+func New(opts ...Option) *VectorStore {
+	vs := &VectorStore{
 		documents:  make(map[string]*document.Document),
 		embeddings: make(map[string][]float64),
 	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(vs)
+	}
+
+	return vs
 }
 
 // Add implements vectorstore.VectorStore interface.
@@ -205,20 +215,21 @@ func cosineSimilarity(a, b []float64) float64 {
 
 // sortByScore sorts results by score in descending order.
 func sortByScore(results []*vectorstore.ScoredDocument) {
-	// Simple bubble sort for small datasets
+	// Simple bubble sort for small datasets.
+	// For larger datasets, consider using sort.Slice.
 	for i := 0; i < len(results)-1; i++ {
-		for j := 0; j < len(results)-i-1; j++ {
-			if results[j].Score < results[j+1].Score {
-				results[j], results[j+1] = results[j+1], results[j]
+		for j := i + 1; j < len(results); j++ {
+			if results[i].Score < results[j].Score {
+				results[i], results[j] = results[j], results[i]
 			}
 		}
 	}
 }
 
-// matchesFilter checks if a document matches the given filter.
+// matchesFilter checks if a document matches the given filter criteria.
 func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFilter) bool {
-	doc := vs.documents[docID]
-	if doc == nil {
+	doc, exists := vs.documents[docID]
+	if !exists {
 		return false
 	}
 
@@ -241,7 +252,6 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 		if doc.Metadata == nil {
 			return false
 		}
-
 		for key, value := range filter.Metadata {
 			if docValue, exists := doc.Metadata[key]; !exists || docValue != value {
 				return false

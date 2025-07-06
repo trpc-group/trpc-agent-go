@@ -3,64 +3,73 @@ package url
 
 import (
 	"context"
-	"crypto/md5"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
+)
+
+const (
+	defaultURLSourceName = "URL Source"
+	urlSourceType        = "url"
 )
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
-// Source represents a knowledge source for web content.
+// Source represents a knowledge source for URL-based content.
 type Source struct {
-	urls       []string
-	name       string
-	metadata   map[string]interface{}
-	httpClient *http.Client
+	urls          []string
+	name          string
+	metadata      map[string]interface{}
+	readerFactory *readerfactory.Factory
+	httpClient    *http.Client
+	timeout       time.Duration
 }
 
 // New creates a new URL knowledge source.
 func New(urls []string, opts ...Option) *Source {
-	source := &Source{
-		urls:       urls,
-		name:       "URL Source", // Default name.
-		metadata:   make(map[string]interface{}),
-		httpClient: defaultClient,
+	sourceObj := &Source{
+		urls:          urls,
+		name:          defaultURLSourceName,
+		metadata:      make(map[string]interface{}),
+		readerFactory: readerfactory.NewFactory(), // Use default config.
+		httpClient:    &http.Client{Timeout: 30 * time.Second},
+		timeout:       30 * time.Second,
 	}
 
 	// Apply options.
 	for _, opt := range opts {
-		opt(source)
+		opt(sourceObj)
 	}
 
-	return source
+	return sourceObj
 }
 
-// ReadDocument reads all URLs and returns a combined document.
-func (s *Source) ReadDocument(ctx context.Context) (*document.Document, error) {
+// ReadDocuments downloads content from all URLs and returns documents using appropriate readers.
+func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.urls) == 0 {
 		return nil, fmt.Errorf("no URLs provided")
 	}
 
-	var allContent strings.Builder
-	var allMetadata []map[string]interface{}
+	var allDocuments []*document.Document
 
 	for _, urlStr := range s.urls {
-		content, metadata, err := s.processURL(ctx, urlStr)
+		documents, err := s.processURL(urlStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process URL %s: %w", urlStr, err)
 		}
-		allContent.WriteString(content)
-		allContent.WriteString("\n\n")
-		allMetadata = append(allMetadata, metadata)
+		allDocuments = append(allDocuments, documents...)
 	}
 
-	return s.createDocument(allContent.String(), allMetadata), nil
+	return allDocuments, nil
 }
 
 // Name returns the name of this source.
@@ -70,130 +79,135 @@ func (s *Source) Name() string {
 
 // Type returns the type of this source.
 func (s *Source) Type() string {
-	return "url"
+	return source.TypeURL
 }
 
-// processURL processes a single URL and returns its content and metadata.
-func (s *Source) processURL(ctx context.Context, urlStr string) (string, map[string]interface{}, error) {
-	// Validate URL.
+// processURL downloads content from a URL and returns its documents.
+func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
+	// Parse the URL.
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return "", nil, fmt.Errorf("invalid URL: %w", err)
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
 	}
 
-	// Fetch content from URL.
-	content, err := s.fetchURL(ctx, urlStr)
+	// Create HTTP request with context.
+	req, err := http.NewRequest("GET", urlStr, nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to fetch URL: %w", err)
-	}
-
-	// Prepare metadata.
-	metadata := make(map[string]interface{})
-	for k, v := range s.metadata {
-		metadata[k] = v
-	}
-	metadata["source"] = "url"
-	metadata["url"] = urlStr
-	metadata["url_host"] = parsedURL.Host
-	metadata["url_path"] = parsedURL.Path
-	metadata["url_scheme"] = parsedURL.Scheme
-	metadata["content_length"] = len(content)
-
-	return content, metadata, nil
-}
-
-// fetchURL fetches content from a URL.
-func (s *Source) fetchURL(ctx context.Context, urlStr string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set user agent to avoid being blocked.
-	req.Header.Set("User-Agent", "trpc-agent-go/1.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; KnowledgeSource/1.0)")
 
+	// Make the request.
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch URL: %w", err)
+		return nil, fmt.Errorf("failed to download URL: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP error: %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Read the response body.
+	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	return string(body), nil
-}
-
-// createDocument creates a document from combined URL content.
-func (s *Source) createDocument(content string, urlMetadata []map[string]interface{}) *document.Document {
-	// Generate ID based on URLs.
-	hash := md5.Sum([]byte(strings.Join(s.urls, "|")))
-	id := fmt.Sprintf("url_%x", hash[:8])
-
-	// Generate name from first URL.
-	name := "Multiple URLs"
-	if len(s.urls) > 0 {
-		name = s.generateName(s.urls[0])
-		if len(s.urls) > 1 {
-			name += fmt.Sprintf(" and %d more", len(s.urls)-1)
-		}
-	}
-
-	// Combine metadata.
+	// Create metadata for this URL.
 	metadata := make(map[string]interface{})
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata["source"] = "url"
-	metadata["url_count"] = len(s.urls)
-	metadata["urls"] = s.urls
-	metadata["content_length"] = len(content)
+	metadata[source.MetaSource] = source.TypeURL
+	metadata[source.MetaURL] = urlStr
+	metadata[source.MetaURLHost] = parsedURL.Host
+	metadata[source.MetaURLPath] = parsedURL.Path
+	metadata[source.MetaURLScheme] = parsedURL.Scheme
+	metadata[source.MetaContentLength] = len(content)
 
-	return &document.Document{
-		ID:        id,
-		Name:      name,
-		Content:   content,
-		Metadata:  metadata,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+	// Determine the content type and file name.
+	contentType := resp.Header.Get("Content-Type")
+	fileName := s.getFileName(parsedURL, contentType)
+
+	// Create the appropriate reader based on content type or file extension.
+	var reader reader.Reader
+	if contentType != "" {
+		reader = s.readerFactory.CreateReaderByContentType(contentType)
+	} else {
+		// Fall back to file extension.
+		reader = s.readerFactory.CreateReader(fileName)
 	}
-}
 
-// generateName generates a name for the document based on URL.
-func (s *Source) generateName(urlStr string) string {
-	parsedURL, err := url.Parse(urlStr)
+	// Read the content and create documents.
+	documents, err := reader.Read(string(content), fileName)
 	if err != nil {
-		return "Web Content"
+		return nil, fmt.Errorf("failed to read content with reader: %w", err)
 	}
 
-	// Use hostname as base name.
-	name := parsedURL.Host
-
-	// Add path if it's not just "/".
-	if parsedURL.Path != "" && parsedURL.Path != "/" {
-		pathParts := strings.Split(strings.Trim(parsedURL.Path, "/"), "/")
-		if len(pathParts) > 0 {
-			lastPart := pathParts[len(pathParts)-1]
-			if lastPart != "" {
-				name = lastPart
-			}
+	// Add metadata to all documents.
+	for _, doc := range documents {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]interface{})
+		}
+		for k, v := range metadata {
+			doc.Metadata[k] = v
 		}
 	}
 
-	// Clean up the name.
-	name = strings.ReplaceAll(name, ".", "_")
-	name = strings.ReplaceAll(name, "-", "_")
-	name = strings.ReplaceAll(name, " ", "_")
+	return documents, nil
+}
 
-	if name == "" {
-		name = "Web Content"
+// getFileName extracts a file name from the URL or content type.
+func (s *Source) getFileName(parsedURL *url.URL, contentType string) string {
+	// Try to get file name from URL path.
+	if parsedURL.Path != "" && parsedURL.Path != "/" {
+		fileName := filepath.Base(parsedURL.Path)
+		if fileName != "" && fileName != "." {
+			return fileName
+		}
 	}
 
-	return name
+	// Try to get file name from content type.
+	if contentType != "" {
+		parts := strings.Split(contentType, ";")
+		mainType := strings.TrimSpace(parts[0])
+
+		switch {
+		case strings.Contains(mainType, "text/html"):
+			return "index.html"
+		case strings.Contains(mainType, "text/plain"):
+			return "document.txt"
+		case strings.Contains(mainType, "application/json"):
+			return "document.json"
+		case strings.Contains(mainType, "text/csv"):
+			return "document.csv"
+		case strings.Contains(mainType, "application/pdf"):
+			return "document.pdf"
+		default:
+			return "document"
+		}
+	}
+
+	// Fall back to host name.
+	if parsedURL.Host != "" {
+		return parsedURL.Host + ".txt"
+	}
+
+	return "document.txt"
+}
+
+// SetReaderFactory sets the reader factory for this source.
+func (s *Source) SetReaderFactory(factory *readerfactory.Factory) {
+	s.readerFactory = factory
+}
+
+// SetMetadata sets metadata for this source.
+func (s *Source) SetMetadata(key string, value interface{}) {
+	if s.metadata == nil {
+		s.metadata = make(map[string]interface{})
+	}
+	s.metadata[key] = value
 }

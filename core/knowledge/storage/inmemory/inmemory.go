@@ -16,11 +16,21 @@ type Storage struct {
 	mutex     sync.RWMutex
 }
 
-// New creates a new in-memory storage instance.
-func New() *Storage {
-	return &Storage{
+// Option represents a functional option for configuring Storage.
+type Option func(*Storage)
+
+// New creates a new in-memory storage instance with options.
+func New(opts ...Option) *Storage {
+	s := &Storage{
 		documents: make(map[string]*document.Document),
 	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
 }
 
 // Store implements storage.Storage interface.

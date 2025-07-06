@@ -94,7 +94,7 @@ func New(opts ...Option) *BuiltinKnowledge {
 			dk.queryEnhancer = query.NewPassthroughEnhancer()
 		}
 		if dk.reranker == nil {
-			dk.reranker = reranker.NewTopKReranker(1)
+			dk.reranker = reranker.NewTopKReranker(reranker.WithK(1))
 		}
 
 		dk.retriever = retriever.New(
@@ -119,14 +119,16 @@ func New(opts ...Option) *BuiltinKnowledge {
 // processSources processes all sources and adds their documents to the knowledge base.
 func (dk *BuiltinKnowledge) processSources(ctx context.Context) error {
 	for _, src := range dk.sources {
-		doc, err := src.ReadDocument(ctx)
+		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to read document from source %s: %w", src.Name(), err)
+			return fmt.Errorf("failed to read documents from source %s: %w", src.Name(), err)
 		}
 
-		// Add document to knowledge base.
-		if err := dk.addDocument(ctx, doc); err != nil {
-			return fmt.Errorf("failed to add document from source %s: %w", src.Name(), err)
+		// Add all documents to knowledge base.
+		for _, doc := range docs {
+			if err := dk.addDocument(ctx, doc); err != nil {
+				return fmt.Errorf("failed to add document from source %s: %w", src.Name(), err)
+			}
 		}
 	}
 	return nil
@@ -141,7 +143,10 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 
 	// Step 2: Generate embedding and store in vector store.
 	if dk.embedder != nil && dk.vectorStore != nil {
-		embedding, err := dk.embedder.GetEmbedding(ctx, doc.Content)
+		// Get content directly as string for embedding generation.
+		content := doc.Content
+
+		embedding, err := dk.embedder.GetEmbedding(ctx, content)
 		if err != nil {
 			return fmt.Errorf("failed to generate embedding: %w", err)
 		}
@@ -189,55 +194,62 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	}
 
 	// Use built-in retriever for RAG pipeline.
-	result, err := dk.retriever.Retrieve(ctx, &retriever.Query{
+	retrieverReq := &retriever.Query{
 		Text:     finalQuery,
 		Limit:    limit,
 		MinScore: minScore,
-	})
+	}
+
+	result, err := dk.retriever.Retrieve(ctx, retrieverReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("retrieval failed: %w", err)
 	}
 
-	// Return the top result if available.
 	if len(result.Documents) == 0 {
-		return nil, nil
+		return nil, fmt.Errorf("no relevant documents found")
 	}
 
-	topDoc := result.Documents[0]
+	// Return the best result.
+	bestDoc := result.Documents[0]
+	content := bestDoc.Document.Content
+
 	return &SearchResult{
-		Document: topDoc.Document,
-		Score:    topDoc.Score,
-		Text:     topDoc.Document.Content,
+		Document: bestDoc.Document,
+		Score:    bestDoc.Score,
+		Text:     content,
 	}, nil
 }
 
-// convertConversationHistory converts knowledge.ConversationMessage to query.ConversationMessage
+// convertConversationHistory converts conversation messages to query format.
 func convertConversationHistory(history []ConversationMessage) []query.ConversationMessage {
-	converted := make([]query.ConversationMessage, len(history))
+	result := make([]query.ConversationMessage, len(history))
 	for i, msg := range history {
-		converted[i] = query.ConversationMessage{
+		result[i] = query.ConversationMessage{
 			Role:      msg.Role,
 			Content:   msg.Content,
 			Timestamp: msg.Timestamp,
 		}
 	}
-	return converted
+	return result
 }
 
-// Close implements the Knowledge interface.
+// Close closes the knowledge base and releases resources.
 func (dk *BuiltinKnowledge) Close() error {
-	// Close all components
-	if dk.storage != nil {
-		if err := dk.storage.Close(); err != nil {
-			return fmt.Errorf("failed to close storage: %w", err)
+	// Close components if they support closing.
+	if dk.retriever != nil {
+		if err := dk.retriever.Close(); err != nil {
+			return fmt.Errorf("failed to close retriever: %w", err)
 		}
 	}
-
 	if dk.vectorStore != nil {
 		if err := dk.vectorStore.Close(); err != nil {
 			return fmt.Errorf("failed to close vector store: %w", err)
 		}
 	}
-
+	if dk.storage != nil {
+		if err := dk.storage.Close(); err != nil {
+			return fmt.Errorf("failed to close storage: %w", err)
+		}
+	}
 	return nil
 }

@@ -166,6 +166,7 @@ func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchReq
 	var bestScore float64
 
 	for _, doc := range m.documents {
+		// Get content directly as string.
 		content := strings.ToLower(doc.Content)
 		name := strings.ToLower(doc.Name)
 
@@ -188,10 +189,13 @@ func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchReq
 		return nil, nil
 	}
 
+	// Get content for the result.
+	content := bestMatch.Content
+
 	return &knowledge.SearchResult{
 		Document: bestMatch,
 		Score:    bestScore,
-		Text:     bestMatch.Content,
+		Text:     content,
 	}, nil
 }
 

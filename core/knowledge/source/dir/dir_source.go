@@ -1,5 +1,5 @@
-// Package file provides file-based knowledge source implementation.
-package file
+// Package dir provides directory-based knowledge source implementation.
+package dir
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/readerfactory"
@@ -14,25 +15,28 @@ import (
 )
 
 const (
-	defaultFileSourceName = "File Source"
-	fileSourceType        = "file"
+	defaultDirSourceName = "Directory Source"
+	dirSourceType        = "dir"
 )
 
-// Source represents a knowledge source for file-based content.
+// Source represents a knowledge source for directory-based content.
 type Source struct {
-	filePaths     []string
-	name          string
-	metadata      map[string]interface{}
-	readerFactory *readerfactory.Factory
+	dirPath        string
+	name           string
+	metadata       map[string]interface{}
+	readerFactory  *readerfactory.Factory
+	fileExtensions []string // Optional: filter by file extensions
+	recursive      bool     // Whether to process subdirectories
 }
 
-// New creates a new file knowledge source.
-func New(filePaths []string, opts ...Option) *Source {
+// New creates a new directory knowledge source.
+func New(dirPath string, opts ...Option) *Source {
 	sourceObj := &Source{
-		filePaths:     filePaths,
-		name:          defaultFileSourceName,
+		dirPath:       dirPath,
+		name:          defaultDirSourceName,
 		metadata:      make(map[string]interface{}),
 		readerFactory: readerfactory.NewFactory(), // Use default config.
+		recursive:     false,                      // Default to non-recursive.
 	}
 
 	// Apply options.
@@ -43,18 +47,30 @@ func New(filePaths []string, opts ...Option) *Source {
 	return sourceObj
 }
 
-// ReadDocuments reads all files and returns documents using appropriate readers.
+// ReadDocuments reads all files in the directory and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
-	if len(s.filePaths) == 0 {
-		return nil, fmt.Errorf("no file paths provided")
+	if s.dirPath == "" {
+		return nil, fmt.Errorf("no directory path provided")
+	}
+
+	// Get all file paths in the directory.
+	filePaths, err := s.getFilePaths()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file paths: %w", err)
+	}
+
+	if len(filePaths) == 0 {
+		return nil, fmt.Errorf("no files found in directory: %s", s.dirPath)
 	}
 
 	var allDocuments []*document.Document
 
-	for _, filePath := range s.filePaths {
+	for _, filePath := range filePaths {
 		documents, err := s.processFile(filePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to process file %s: %w", filePath, err)
+			// Log error but continue with other files.
+			fmt.Printf("Warning: failed to process file %s: %v\n", filePath, err)
+			continue
 		}
 		allDocuments = append(allDocuments, documents...)
 	}
@@ -69,7 +85,54 @@ func (s *Source) Name() string {
 
 // Type returns the type of this source.
 func (s *Source) Type() string {
-	return source.TypeFile
+	return source.TypeDir
+}
+
+// getFilePaths returns all file paths in the directory.
+func (s *Source) getFilePaths() ([]string, error) {
+	var filePaths []string
+
+	err := filepath.Walk(s.dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories if not recursive.
+		if info.IsDir() {
+			if path == s.dirPath {
+				return nil // Process the root directory.
+			}
+			if !s.recursive {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip if not a regular file.
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		// Filter by file extension if specified.
+		if len(s.fileExtensions) > 0 {
+			ext := strings.ToLower(filepath.Ext(path))
+			found := false
+			for _, allowedExt := range s.fileExtensions {
+				if ext == allowedExt {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil
+			}
+		}
+
+		filePaths = append(filePaths, path)
+		return nil
+	})
+
+	return filePaths, err
 }
 
 // processFile processes a single file and returns its documents.
@@ -99,7 +162,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
-	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaSource] = source.TypeDir
 	metadata[source.MetaFilePath] = filePath
 	metadata[source.MetaFileName] = filepath.Base(filePath)
 	metadata[source.MetaFileExt] = filepath.Ext(filePath)
@@ -141,3 +204,4 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 	}
 	s.metadata[key] = value
 }
+ 

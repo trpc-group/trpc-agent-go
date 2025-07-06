@@ -7,12 +7,33 @@ type TopKReranker struct {
 	k int // Number of results to return.
 }
 
-// NewTopKReranker creates a new top-K reranker.
-func NewTopKReranker(k int) *TopKReranker {
-	if k <= 0 {
-		k = 1 // Default to top 1.
+// Option represents a functional option for configuring TopKReranker.
+type Option func(*TopKReranker)
+
+// WithK sets the number of top results to return.
+func WithK(k int) Option {
+	return func(tkr *TopKReranker) {
+		tkr.k = k
 	}
-	return &TopKReranker{k: k}
+}
+
+// NewTopKReranker creates a new top-K reranker with options.
+func NewTopKReranker(opts ...Option) *TopKReranker {
+	tkr := &TopKReranker{
+		k: 1, // Default to top 1.
+	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(tkr)
+	}
+
+	// Validate k value.
+	if tkr.k <= 0 {
+		tkr.k = 1
+	}
+
+	return tkr
 }
 
 // Rerank implements the Reranker interface by returning top K results in original order.
