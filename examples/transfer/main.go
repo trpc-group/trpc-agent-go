@@ -121,7 +121,6 @@ func (c *transferChat) createMathAgent(modelInstance model.Model) agent.Agent {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized mathematical computation agent"),
 		llmagent.WithInstruction("You are a math expert. Solve mathematical problems step by step with clear explanations."),
-		llmagent.WithSystemPrompt("Focus on accuracy and provide detailed mathematical reasoning. Use the calculate tool for computations."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{calculateTool}),
@@ -148,7 +147,6 @@ func (c *transferChat) createWeatherAgent(modelInstance model.Model) agent.Agent
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized weather information agent"),
 		llmagent.WithInstruction("You are a weather expert. Provide detailed weather information and recommendations."),
-		llmagent.WithSystemPrompt("Focus on providing accurate weather data and helpful recommendations based on conditions."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{weatherTool}),
@@ -175,7 +173,6 @@ func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agen
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized research and information gathering agent"),
 		llmagent.WithInstruction("You are a research expert. Gather comprehensive information and provide well-structured answers."),
-		llmagent.WithSystemPrompt("Focus on finding accurate information and presenting it in a clear, organized manner."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool}),
@@ -206,7 +203,6 @@ When a user asks a question:
 3. If unsure, ask the user for clarification or handle simple queries yourself
 
 Always explain why you're transferring to a specific agent.`),
-		llmagent.WithSystemPrompt("You coordinate task delegation. Use transfer_to_agent when you identify a task that would be better handled by a specialist."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithSubAgents(subAgents),

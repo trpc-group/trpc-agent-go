@@ -104,7 +104,6 @@ func (c *chainChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Analyzes user requests and creates structured plans"),
 		llmagent.WithInstruction("You are a planning specialist. Analyze the user's request and create a brief, structured plan (2-3 steps max). Be concise and specific about what needs to be done. Keep your response under 100 words."),
-		llmagent.WithSystemPrompt("Create a short step-by-step plan for addressing the user's request. Focus on 2-3 key steps only. Be brief and direct."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(50),
 	)
@@ -115,7 +114,6 @@ func (c *chainChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Gathers information using available tools and resources"),
 		llmagent.WithInstruction("You are a research specialist. Use the available tools to gather key information. Be concise and fact-based. Keep your response under 150 words."),
-		llmagent.WithSystemPrompt("Use web_search and knowledge_base tools when needed. Provide a brief summary of findings. Be direct and concise."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
@@ -127,7 +125,6 @@ func (c *chainChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Composes final responses based on planning and research"),
 		llmagent.WithInstruction("You are a writing specialist. Create a brief, well-structured response based on the plan and research from previous agents. Be clear and concise. Keep your response under 200 words."),
-		llmagent.WithSystemPrompt("Synthesize the planning and research information into a concise, helpful response. Be direct and clear."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(50),
 	)
