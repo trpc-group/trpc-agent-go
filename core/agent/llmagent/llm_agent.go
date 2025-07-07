@@ -7,6 +7,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/core/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/transfer"
@@ -111,6 +113,14 @@ func WithToolCallbacks(callbacks *tool.ToolCallbacks) Option {
 	}
 }
 
+// WithKnowledge sets the knowledge base for the agent.
+// If provided, the knowledge search tool will be automatically added to the agent's tools.
+func WithKnowledge(kb knowledge.Knowledge) Option {
+	return func(opts *Options) {
+		opts.Knowledge = kb
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -142,6 +152,9 @@ type Options struct {
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.ToolCallbacks
+	// Knowledge is the knowledge base for the agent.
+	// If provided, the knowledge search tool will be automatically added.
+	Knowledge knowledge.Knowledge
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -227,8 +240,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		flowOpts,
 	)
 
-	// Register tools from both tools and toolsets.
-	tools := registerTools(options.Tools, options.ToolSets)
+	// Register tools from both tools and toolsets, including knowledge search tool if provided.
+	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge)
 
 	return &LLMAgent{
 		name:           name,
@@ -247,14 +260,10 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 }
 
-func registerTools(tools []tool.Tool, toolSets []tool.ToolSet) []tool.Tool {
-	if len(tools) == 0 && len(toolSets) == 0 {
-		return nil
-	}
-
+func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge) []tool.Tool {
 	// Start with direct tools.
-	allTools := make([]tool.Tool, len(tools))
-	copy(allTools, tools)
+	allTools := make([]tool.Tool, 0, len(tools))
+	allTools = append(allTools, tools...)
 
 	// Add tools from each toolset.
 	ctx := context.Background()
@@ -263,6 +272,11 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet) []tool.Tool {
 		for _, t := range setTools {
 			allTools = append(allTools, t)
 		}
+	}
+
+	// Add knowledge search tool if knowledge base is provided.
+	if kb != nil {
+		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
 	}
 
 	return allTools

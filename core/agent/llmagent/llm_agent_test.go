@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/agent"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
@@ -143,5 +145,113 @@ func TestLLMAgent_Run_AfterAgentCallbackError(t *testing.T) {
 	}
 	if !foundErr {
 		t.Errorf("expected error event from after agent callback")
+	}
+}
+
+// mockKnowledgeBase is a simple in-memory knowledge base for testing.
+type mockKnowledgeBase struct {
+	documents map[string]*document.Document
+}
+
+func (m *mockKnowledgeBase) AddDocument(ctx context.Context, doc *document.Document) error {
+	m.documents[doc.ID] = doc
+	return nil
+}
+
+func (m *mockKnowledgeBase) Search(ctx context.Context, req *knowledge.SearchRequest) (*knowledge.SearchResult, error) {
+	// Simple keyword-based search for testing.
+	query := strings.ToLower(req.Query)
+
+	var bestMatch *document.Document
+	var bestScore float64
+
+	for _, doc := range m.documents {
+		// Get content directly as string.
+		content := strings.ToLower(doc.Content)
+		name := strings.ToLower(doc.Name)
+
+		// Calculate a simple relevance score.
+		score := 0.0
+		if strings.Contains(content, query) {
+			score += 0.5
+		}
+		if strings.Contains(name, query) {
+			score += 0.3
+		}
+
+		if score > bestScore {
+			bestScore = score
+			bestMatch = doc
+		}
+	}
+
+	if bestMatch == nil {
+		return nil, nil
+	}
+
+	// Get content for the result.
+	content := bestMatch.Content
+
+	return &knowledge.SearchResult{
+		Document: bestMatch,
+		Score:    bestScore,
+		Text:     content,
+	}, nil
+}
+
+func (m *mockKnowledgeBase) Close() error {
+	return nil
+}
+
+func TestLLMAgent_WithKnowledge(t *testing.T) {
+	// Create a mock knowledge base.
+	kb := &mockKnowledgeBase{
+		documents: map[string]*document.Document{
+			"test-doc": {
+				ID:      "test-doc",
+				Name:    "Test Document",
+				Content: "This is a test document about testing.",
+			},
+		},
+	}
+
+	// Create agent with knowledge base.
+	agt := New("test-agent",
+		WithModel(newDummyModel()),
+		WithKnowledge(kb),
+	)
+
+	// Check that the knowledge search tool was automatically added.
+	tools := agt.Tools()
+	foundKnowledgeTool := false
+	for _, toolItem := range tools {
+		decl := toolItem.Declaration()
+		if decl.Name == "knowledge_search" {
+			foundKnowledgeTool = true
+			break
+		}
+	}
+
+	if !foundKnowledgeTool {
+		t.Errorf("expected knowledge_search tool to be automatically added")
+	}
+
+	// Verify that the tool can be called.
+	for _, toolItem := range tools {
+		decl := toolItem.Declaration()
+		if decl.Name == "knowledge_search" {
+			// Check if it's a callable tool.
+			if callableTool, ok := toolItem.(tool.CallableTool); ok {
+				// Test the tool with a simple query.
+				result, err := callableTool.Call(context.Background(), []byte(`{"query": "test"}`))
+				if err != nil {
+					t.Errorf("knowledge search tool call failed: %v", err)
+				}
+				if result == nil {
+					t.Errorf("expected non-nil result from knowledge search")
+				}
+			}
+			break
+		}
 	}
 }
