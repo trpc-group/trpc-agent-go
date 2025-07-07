@@ -87,7 +87,7 @@ func (c *transferChat) setup(ctx context.Context) error {
 
 	// Create runner.
 	appName := "agent-transfer-demo"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		coordinatorAgent,
 	)

@@ -170,7 +170,7 @@ func (c *cycleChat) setup(ctx context.Context) error {
 
 	// Create runner with the cycle agent.
 	appName := "cycle-agent-demo"
-	c.runner = runner.New(appName, cycleAgent)
+	c.runner = runner.NewRunner(appName, cycleAgent)
 
 	// Setup identifiers.
 	c.userID = "user"

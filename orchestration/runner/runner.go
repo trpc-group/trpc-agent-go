@@ -55,8 +55,8 @@ type Options struct {
 	sessionService session.Service
 }
 
-// New creates a new Runner.
-func New(appName string, agent agent.Agent, opts ...Option) Runner {
+// NewRunner creates a new Runner.
+func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 	var options Options
 
 	// Apply function options.

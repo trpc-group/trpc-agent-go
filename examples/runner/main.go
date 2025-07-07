@@ -121,7 +121,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 
 	// Create runner.
 	appName := "multi-turn-chat"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),

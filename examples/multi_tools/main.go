@@ -111,7 +111,7 @@ func (c *multiToolChat) setup(ctx context.Context) error {
 
 	// Create runner
 	appName := "multi-tool-chat"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 	)

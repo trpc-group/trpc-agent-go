@@ -95,7 +95,7 @@ func (c *searchChat) setup(ctx context.Context) error {
 
 	// Create runner.
 	appName := "duckduckgo-search-chat"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 	)
