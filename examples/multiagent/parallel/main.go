@@ -143,7 +143,7 @@ func (c *parallelChat) setup(ctx context.Context) error {
 
 	// Create runner with the parallel agent.
 	appName := "parallel-agent-demo"
-	c.runner = runner.New(appName, parallelAgent)
+	c.runner = runner.NewRunner(appName, parallelAgent)
 
 	// Setup identifiers.
 	c.userID = "user"

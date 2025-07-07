@@ -126,7 +126,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 
 	// Create runner.
 	appName := "knowledge-chat"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),

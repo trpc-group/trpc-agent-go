@@ -115,7 +115,7 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 
 	// Create runner.
 	appName := "react-planning-demo"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 	)

@@ -205,7 +205,7 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	)
 
 	appName := "multi-turn-chat-callbacks"
-	c.runner = runner.New(
+	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 	)

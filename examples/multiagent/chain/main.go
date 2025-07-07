@@ -139,7 +139,7 @@ func (c *chainChat) setup(ctx context.Context) error {
 
 	// Create runner with the chain agent.
 	appName := "chain-agent-demo"
-	c.runner = runner.New(appName, chainAgent)
+	c.runner = runner.NewRunner(appName, chainAgent)
 
 	// Setup identifiers.
 	c.userID = "user"
