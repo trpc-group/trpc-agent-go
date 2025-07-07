@@ -128,7 +128,7 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 
 // processAsDirectory processes the input as a directory.
 func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
-	dirSource := dirsource.New(input)
+	dirSource := dirsource.New([]string{input})
 	// Copy metadata.
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)

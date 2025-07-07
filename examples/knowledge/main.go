@@ -163,7 +163,7 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		),
 
 		dirsource.New(
-			"/data",
+			[]string{"/data"},
 			dirsource.WithName("Data Directory"),
 		),
 

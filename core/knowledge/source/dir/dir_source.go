@@ -27,7 +27,7 @@ const (
 
 // Source represents a knowledge source for directory-based content.
 type Source struct {
-	dirPath        string
+	dirPaths       []string
 	name           string
 	metadata       map[string]interface{}
 	readers        map[string]reader.Reader
@@ -36,9 +36,9 @@ type Source struct {
 }
 
 // New creates a new directory knowledge source.
-func New(dirPath string, opts ...Option) *Source {
+func New(dirPaths []string, opts ...Option) *Source {
 	s := &Source{
-		dirPath:   dirPath,
+		dirPaths:  dirPaths,
 		name:      defaultDirSourceName,
 		metadata:  make(map[string]interface{}),
 		readers:   make(map[string]reader.Reader),
@@ -84,29 +84,50 @@ func (s *Source) getFileType(filePath string) string {
 	}
 }
 
-// ReadDocuments reads all files in the directory and returns documents using appropriate readers.
+// ReadDocuments reads all files in the directories and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
-	if s.dirPath == "" {
-		return nil, errors.New("no directory path provided")
+	if len(s.dirPaths) == 0 {
+		return nil, errors.New("no directory paths provided")
 	}
-	// Get all file paths in the directory.
-	filePaths, err := s.getFilePaths()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get file paths: %w", err)
-	}
-	if len(filePaths) == 0 {
-		return nil, fmt.Errorf("no files found in directory: %s", s.dirPath)
-	}
+
 	var allDocuments []*document.Document
-	for _, filePath := range filePaths {
-		documents, err := s.processFile(filePath)
-		if err != nil {
-			// Log error but continue with other files.
-			fmt.Printf("Warning: failed to process file %s: %v\n", filePath, err)
+	var totalFiles int
+
+	for _, dirPath := range s.dirPaths {
+		if dirPath == "" {
 			continue
 		}
-		allDocuments = append(allDocuments, documents...)
+
+		// Get all file paths in the directory.
+		filePaths, err := s.getFilePaths(dirPath)
+		if err != nil {
+			// Log error but continue with other directories.
+			fmt.Printf("Warning: failed to get file paths from directory %s: %v\n", dirPath, err)
+			continue
+		}
+
+		if len(filePaths) == 0 {
+			fmt.Printf("Warning: no files found in directory: %s\n", dirPath)
+			continue
+		}
+
+		totalFiles += len(filePaths)
+
+		for _, filePath := range filePaths {
+			documents, err := s.processFile(filePath)
+			if err != nil {
+				// Log error but continue with other files.
+				fmt.Printf("Warning: failed to process file %s: %v\n", filePath, err)
+				continue
+			}
+			allDocuments = append(allDocuments, documents...)
+		}
 	}
+
+	if totalFiles == 0 {
+		return nil, fmt.Errorf("no files found in any of the provided directories")
+	}
+
 	return allDocuments, nil
 }
 
@@ -120,18 +141,18 @@ func (s *Source) Type() string {
 	return source.TypeDir
 }
 
-// getFilePaths returns all file paths in the directory.
-func (s *Source) getFilePaths() ([]string, error) {
+// getFilePaths returns all file paths in the specified directory.
+func (s *Source) getFilePaths(dirPath string) ([]string, error) {
 	var filePaths []string
 
-	err := filepath.Walk(s.dirPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip directories if not recursive.
 		if info.IsDir() {
-			if path == s.dirPath {
+			if path == dirPath {
 				return nil // Process the root directory.
 			}
 			if !s.recursive {
