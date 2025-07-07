@@ -30,6 +30,9 @@ type VectorStore interface {
 
 // SearchQuery represents a vector similarity search query.
 type SearchQuery struct {
+	// Query is the original text query for hybrid search capabilities.
+	Query string
+
 	// Vector is the query embedding vector.
 	Vector []float64
 
