@@ -41,7 +41,7 @@ func WithChunkingStrategy(strategy chunking.Strategy) Option {
 func New(opts ...Option) *Reader {
 	r := &Reader{
 		chunk:            true,
-		chunkingStrategy: chunking.NewFixedSizeChunking(),
+		chunkingStrategy: chunking.NewJSONChunking(),
 	}
 
 	// Apply options.
