@@ -19,8 +19,8 @@ import (
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 	autosource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/auto"
+	dirsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
-	stringsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/string"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/url"
 	storageinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/storage/inmemory"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore/inmemory"
@@ -115,11 +115,10 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with knowledge base access and calculator tools"),
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Use calculator and current_time tools when appropriate. Be helpful and conversational."),
-		llmagent.WithSystemPrompt("You have access to a knowledge base with information about various topics. Use the knowledge_search tool to find relevant information when users ask questions. You also have calculator and current_time tools available."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
-		llmagent.WithKnowledge(c.kb), // This automatically adds the knowledge_search tool
+		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
 	)
 
 	// Create session service.
@@ -156,27 +155,16 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 
 	// Create diverse sources showcasing different types.
 	sources := []source.Source{
-		// String source for direct text content.
-		stringsource.New(
-			"Machine learning is a subset of artificial intelligence that enables computers to learn and make decisions without being explicitly programmed. It uses algorithms to identify patterns in data and make predictions or decisions based on those patterns. Common types include supervised learning, unsupervised learning, and reinforcement learning.",
-			stringsource.WithName("ML Fundamentals"),
-			stringsource.WithMetadataValue("topic", "AI/ML"),
-			stringsource.WithMetadataValue("difficulty", "beginner"),
-		),
-
-		// Another string source for programming content.
-		stringsource.New(
-			"Python is a high-level, interpreted programming language known for its simplicity and readability. It supports multiple programming paradigms including procedural, object-oriented, and functional programming. Python is widely used in data science, web development, automation, and artificial intelligence.",
-			stringsource.WithName("Python Overview"),
-			stringsource.WithMetadataValue("topic", "Programming"),
-			stringsource.WithMetadataValue("language", "python"),
-		),
-
 		// File source for local documentation (if files exist).
 		filesource.New(
 			[]string{"README.md", "docs/api.md"},
 			filesource.WithName("Project Documentation"),
 			filesource.WithMetadataValue("type", "documentation"),
+		),
+
+		dirsource.New(
+			"/data",
+			dirsource.WithName("Data Directory"),
 		),
 
 		// URL source for web content.
@@ -198,23 +186,19 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 				"./examples/README.md",
 			},
 			autosource.WithName("Mixed Content Source"),
+			autosource.WithMetadataValue("topic", "Cloud Computing"),
 			autosource.WithMetadataValue("type", "mixed"),
 		),
 	}
 
-	// Create knowledge base with sources using the regular constructor.
+	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
-		knowledge.WithSources(sources),
 		knowledge.WithStorage(storage),
 		knowledge.WithVectorStore(vectorStore),
 		knowledge.WithEmbedder(embedder),
+		knowledge.WithSources(sources),
 	)
 
-	fmt.Printf("📖 Knowledge base created with %d diverse sources\n", len(sources))
-	fmt.Printf("   - String sources: Direct text content\n")
-	fmt.Printf("   - File source: Local documentation\n")
-	fmt.Printf("   - URL source: Web documentation\n")
-	fmt.Printf("   - Auto source: Mixed content types\n")
 	return nil
 }
 
