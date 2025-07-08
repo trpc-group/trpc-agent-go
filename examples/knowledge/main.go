@@ -61,7 +61,7 @@ type knowledgeChat struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
-	kb        knowledge.Knowledge
+	kb        *knowledge.BuiltinKnowledge
 }
 
 // run starts the interactive chat session.

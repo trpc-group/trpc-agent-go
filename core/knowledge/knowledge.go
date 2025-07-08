@@ -9,16 +9,10 @@ import (
 
 // Knowledge is the main interface for knowledge management operations.
 type Knowledge interface {
-	// Load loads the knowledge base from the sources.
-	Load(ctx context.Context) error
-
 	// Search performs semantic search and returns the best result.
 	// This is the main method used by agents for RAG.
 	// Context includes conversation history for better search results.
 	Search(ctx context.Context, req *SearchRequest) (*SearchResult, error)
-
-	// Close closes the knowledge base and releases resources.
-	Close() error
 }
 
 // SearchRequest represents a search request with context.
