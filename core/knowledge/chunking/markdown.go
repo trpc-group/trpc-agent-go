@@ -100,6 +100,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 	// Create a new parser context.
 	reader := text.NewReader([]byte(content))
 	doc := m.md.Parser().Parse(reader)
+	source := []byte(content)
 
 	var sections []markdownSection
 	var currentSection markdownSection
@@ -122,7 +123,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 			}
 
 			// Extract header title.
-			title := m.extractText(n)
+			title := m.extractText(n, source)
 			level := n.Level
 
 			// Start new section.
@@ -141,7 +142,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 				currentSection.Type = "paragraph"
 			}
 			// Add paragraph content.
-			paraText := m.extractText(n)
+			paraText := m.extractText(n, source)
 			if currentContent.Len() > 0 {
 				currentContent.WriteString("\n\n")
 			}
@@ -152,7 +153,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 				currentSection.Type = "list"
 			}
 			// Add list content.
-			listText := m.extractText(n)
+			listText := m.extractText(n, source)
 			if currentContent.Len() > 0 {
 				currentContent.WriteString("\n\n")
 			}
@@ -163,7 +164,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 				currentSection.Type = "code_block"
 			}
 			// Add code block content.
-			codeText := m.extractText(n)
+			codeText := m.extractText(n, source)
 			if currentContent.Len() > 0 {
 				currentContent.WriteString("\n\n")
 			}
@@ -174,14 +175,14 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 				currentSection.Type = "blockquote"
 			}
 			// Add blockquote content.
-			quoteText := m.extractText(n)
+			quoteText := m.extractText(n, source)
 			if currentContent.Len() > 0 {
 				currentContent.WriteString("\n\n")
 			}
 			currentContent.WriteString(quoteText)
 		}
 
-		position += len(m.extractText(node))
+		position += len(m.extractText(node, source))
 		return ast.WalkContinue, nil
 	})
 
@@ -196,7 +197,7 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 }
 
 // extractText extracts text content from an AST node.
-func (m *MarkdownChunking) extractText(node ast.Node) string {
+func (m *MarkdownChunking) extractText(node ast.Node, source []byte) string {
 	var buf bytes.Buffer
 	ast.Walk(node, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -205,7 +206,7 @@ func (m *MarkdownChunking) extractText(node ast.Node) string {
 
 		switch v := n.(type) {
 		case *ast.Text:
-			buf.Write(v.Text([]byte{}))
+			buf.Write(v.Text(source))
 		case *ast.String:
 			buf.Write(v.Value)
 		}
