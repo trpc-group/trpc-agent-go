@@ -29,7 +29,6 @@ type Server struct {
 	runners map[string]runner.Runner
 
 	sessionSvc session.Service
-
 	runnerOpts []runner.Option // Extra options applied when creating a runner.
 }
 
@@ -159,7 +158,6 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	appName := vars["appName"]
 	userID := vars["userId"]
 	sessionID := vars["sessionId"]
-
 	sess, err := s.sessionSvc.GetSession(r.Context(), session.Key{
 		AppName:   appName,
 		UserID:    userID,
@@ -181,7 +179,6 @@ func convertContentToMessage(content schema.Content) model.Message {
 	log.Debugf("convertContentToMessage: role=%s parts=%+v", content.Role, content.Parts)
 	var textParts []string
 	var toolCalls []model.ToolCall
-
 	for _, part := range content.Parts {
 		if part.Text != "" {
 			textParts = append(textParts, part.Text)
@@ -224,12 +221,10 @@ func convertContentToMessage(content schema.Content) model.Message {
 			textParts = append(textParts, responseText)
 		}
 	}
-
 	var combinedText string
 	if len(textParts) > 0 {
 		combinedText = strings.Join(textParts, "\n")
 	}
-
 	msg := model.Message{
 		Role:    model.Role(content.Role),
 		Content: combinedText,
@@ -238,7 +233,6 @@ func convertContentToMessage(content schema.Content) model.Message {
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
 	}
-
 	return msg
 }
 
@@ -523,7 +517,6 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 			"totalTokenCount":      e.Usage.TotalTokens,
 		}
 	}
-
 	return adkEvent
 }
 
