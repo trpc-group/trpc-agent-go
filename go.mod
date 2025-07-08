@@ -6,7 +6,9 @@ toolchain go1.24.4
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/mux v1.8.1
 	github.com/openai/openai-go v1.5.0
+	github.com/rs/cors v1.10.1
 	github.com/stretchr/testify v1.10.0
 	github.com/unidoc/unioffice v1.39.0
 	github.com/unidoc/unipdf/v4 v4.1.0
