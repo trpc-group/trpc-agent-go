@@ -95,20 +95,11 @@ func New(opts ...Option) *BuiltinKnowledge {
 			retriever.WithReranker(dk.reranker),
 		)
 	}
-
-	// Process sources if provided.
-	if len(dk.sources) > 0 {
-		if err := dk.processSources(context.Background()); err != nil {
-			// Log error but don't fail construction.
-			fmt.Printf("Warning: failed to process sources: %v\n", err)
-		}
-	}
-
 	return dk
 }
 
-// processSources processes all sources and adds their documents to the knowledge base.
-func (dk *BuiltinKnowledge) processSources(ctx context.Context) error {
+// Load processes all sources and adds their documents to the knowledge base.
+func (dk *BuiltinKnowledge) Load(ctx context.Context) error {
 	for _, src := range dk.sources {
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {

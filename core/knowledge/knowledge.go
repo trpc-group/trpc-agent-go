@@ -13,9 +13,6 @@ type Knowledge interface {
 	// This is the main method used by agents for RAG.
 	// Context includes conversation history for better search results.
 	Search(ctx context.Context, req *SearchRequest) (*SearchResult, error)
-
-	// Close closes the knowledge base and releases resources.
-	Close() error
 }
 
 // SearchRequest represents a search request with context.
