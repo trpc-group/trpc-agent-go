@@ -1,4 +1,4 @@
-package cli
+package adkweb
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/cli/internal/schema"
+	"trpc.group/trpc-go/trpc-agent-go/server/adkweb/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 )
 

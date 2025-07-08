@@ -17,7 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/cli"
+	"trpc.group/trpc-go/trpc-agent-go/server/adkweb"
 )
 
 const defaultListenAddr = ":8080"
@@ -63,7 +63,7 @@ func main() {
 		agentName: llmAgent,
 	}
 
-	server := cli.New(agents)
+	server := adkweb.New(agents)
 
 	log.Infof("CLI server listening on %s (apps: %v)", addr, agents)
 	if err := http.ListenAndServe(addr, server.Handler()); err != nil {

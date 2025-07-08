@@ -1,4 +1,4 @@
-package cli
+package adkweb
 
 import (
 	"encoding/json"
@@ -13,10 +13,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/event"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/cli/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/server/adkweb/internal/schema"
 )
 
 // Server exposes HTTP endpoints compatible with the ADK Web UI. Internally it
