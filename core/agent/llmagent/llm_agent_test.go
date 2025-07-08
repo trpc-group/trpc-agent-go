@@ -153,6 +153,10 @@ type mockKnowledgeBase struct {
 	documents map[string]*document.Document
 }
 
+func (m *mockKnowledgeBase) Load(ctx context.Context) error {
+	return nil
+}
+
 func (m *mockKnowledgeBase) AddDocument(ctx context.Context, doc *document.Document) error {
 	m.documents[doc.ID] = doc
 	return nil

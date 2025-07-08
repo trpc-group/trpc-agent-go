@@ -196,6 +196,11 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithSources(sources),
 	)
 
+	// Load the knowledge base.
+	// If you want to do it asynchronously, you can call it in a separate goroutine.
+	if err := c.kb.Load(ctx); err != nil {
+		return fmt.Errorf("failed to load knowledge base: %w", err)
+	}
 	return nil
 }
 
