@@ -11,13 +11,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/storage"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
 )
 
 // BuiltinKnowledge implements the Knowledge interface with a built-in retriever.
 type BuiltinKnowledge struct {
-	storage       storage.Storage
 	vectorStore   vectorstore.VectorStore
 	embedder      embedder.Embedder
 	retriever     retriever.Retriever
@@ -28,13 +26,6 @@ type BuiltinKnowledge struct {
 
 // Option represents a functional option for configuring BuiltinKnowledge.
 type Option func(*BuiltinKnowledge)
-
-// WithStorage sets the storage backend for document persistence.
-func WithStorage(s storage.Storage) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.storage = s
-	}
-}
 
 // WithVectorStore sets the vector store for similarity search.
 func WithVectorStore(vs vectorstore.VectorStore) Option {
@@ -136,12 +127,7 @@ func (dk *BuiltinKnowledge) processSources(ctx context.Context) error {
 
 // addDocument adds a document to the knowledge base (internal method).
 func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Document) error {
-	// Step 1: Store document in storage backend.
-	if err := dk.storage.Store(ctx, doc); err != nil {
-		return fmt.Errorf("failed to store document: %w", err)
-	}
-
-	// Step 2: Generate embedding and store in vector store.
+	// Generate embedding and store in vector store.
 	if dk.embedder != nil && dk.vectorStore != nil {
 		// Get content directly as string for embedding generation.
 		content := doc.Content
@@ -244,11 +230,6 @@ func (dk *BuiltinKnowledge) Close() error {
 	if dk.vectorStore != nil {
 		if err := dk.vectorStore.Close(); err != nil {
 			return fmt.Errorf("failed to close vector store: %w", err)
-		}
-	}
-	if dk.storage != nil {
-		if err := dk.storage.Close(); err != nil {
-			return fmt.Errorf("failed to close storage: %w", err)
 		}
 	}
 	return nil
