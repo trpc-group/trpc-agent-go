@@ -22,7 +22,6 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/url"
-	storageinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/storage/inmemory"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	openaimodel "trpc.group/trpc-go/trpc-agent-go/core/model/openai"
@@ -144,8 +143,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
-	// Create in-memory storage and vector store.
-	storage := storageinmemory.New()
+	// Create in-memory vector store.
 	vectorStore := vectorinmemory.New()
 
 	// Use OpenAI embedder for demonstration (replace with your API key).
@@ -193,7 +191,6 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
-		knowledge.WithStorage(storage),
 		knowledge.WithVectorStore(vectorStore),
 		knowledge.WithEmbedder(embedder),
 		knowledge.WithSources(sources),
