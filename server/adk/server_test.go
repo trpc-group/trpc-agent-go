@@ -1,4 +1,4 @@
-package adkweb
+package adk
 
 import (
 	"bytes"
@@ -16,8 +16,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
 	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/server/adkweb/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
+	"trpc.group/trpc-go/trpc-agent-go/server/adk/internal/schema"
 )
 
 // mockAgent is a simple mock agent for testing.

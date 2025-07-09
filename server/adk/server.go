@@ -1,4 +1,5 @@
-package adkweb
+// Package adk provides a HTTP server compatible with the ADK Web UI.
+package adk
 
 import (
 	"encoding/json"
@@ -16,7 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
 	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/server/adkweb/internal/schema"
+	"trpc.group/trpc-go/trpc-agent-go/server/adk/internal/schema"
 )
 
 // Server exposes HTTP endpoints compatible with the ADK Web UI. Internally it
