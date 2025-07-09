@@ -25,25 +25,35 @@ var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
 // Source represents a knowledge source for URL-based content.
 type Source struct {
-	urls       []string
-	name       string
-	metadata   map[string]interface{}
-	readers    map[string]reader.Reader
-	httpClient *http.Client
+	urls         []string
+	name         string
+	metadata     map[string]interface{}
+	readers      map[string]reader.Reader
+	httpClient   *http.Client
+	chunkSize    int
+	chunkOverlap int
 }
 
 // New creates a new URL knowledge source.
 func New(urls []string, opts ...Option) *Source {
 	s := &Source{
-		urls:       urls,
-		name:       defaultURLSourceName,
-		metadata:   make(map[string]interface{}),
-		readers:    isource.GetReaders(),
-		httpClient: defaultClient,
+		urls:         urls,
+		name:         defaultURLSourceName,
+		metadata:     make(map[string]interface{}),
+		httpClient:   defaultClient,
+		chunkSize:    0,
+		chunkOverlap: 0,
 	}
-	// Apply options.
+
+	// Apply options first (capture chunk config).
 	for _, opt := range opts {
 		opt(s)
+	}
+	// Initialize readers with potential custom chunk configuration.
+	if s.chunkSize > 0 || s.chunkOverlap > 0 {
+		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
+	} else {
+		s.readers = isource.GetReaders()
 	}
 	return s
 }
@@ -51,7 +61,7 @@ func New(urls []string, opts ...Option) *Source {
 // ReadDocuments downloads content from all URLs and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.urls) == 0 {
-		return nil, fmt.Errorf("no URLs provided")
+		return nil, nil // Skip if no URLs provided.
 	}
 
 	var allDocuments []*document.Document

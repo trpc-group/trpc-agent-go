@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/text"
@@ -24,40 +25,58 @@ const (
 
 // Source represents a knowledge source that automatically detects the source type.
 type Source struct {
-	inputs     []string
-	name       string
-	metadata   map[string]interface{}
-	textReader reader.Reader
+	inputs       []string
+	name         string
+	metadata     map[string]interface{}
+	textReader   reader.Reader
+	chunkSize    int
+	chunkOverlap int
 }
 
 // New creates a new auto knowledge source.
 func New(inputs []string, opts ...Option) *Source {
 	sourceObj := &Source{
-		inputs:   inputs,
-		name:     defaultAutoSourceName,
-		metadata: make(map[string]interface{}),
+		inputs:       inputs,
+		name:         defaultAutoSourceName,
+		metadata:     make(map[string]interface{}),
+		chunkSize:    0,
+		chunkOverlap: 0,
 	}
 
-	// Initialize default readers.
-	sourceObj.initializeReaders()
-
-	// Apply options.
+	// Apply options first so chunk config is captured.
 	for _, opt := range opts {
 		opt(sourceObj)
 	}
+
+	// Initialize readers.
+	sourceObj.initializeReaders()
 
 	return sourceObj
 }
 
 // initializeReaders initializes all available readers.
 func (s *Source) initializeReaders() {
-	s.textReader = text.New()
+	if s.chunkSize <= 0 && s.chunkOverlap <= 0 {
+		s.textReader = text.New()
+		return
+	}
+
+	// Build chunking options.
+	var fixedOpts []chunking.Option
+	if s.chunkSize > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithChunkSize(s.chunkSize))
+	}
+	if s.chunkOverlap > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithOverlap(s.chunkOverlap))
+	}
+	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
+	s.textReader = text.New(text.WithChunkingStrategy(fixedChunk))
 }
 
 // ReadDocuments automatically detects the source type and reads documents.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.inputs) == 0 {
-		return nil, fmt.Errorf("no inputs provided")
+		return nil, nil // Skip if no inputs provided.
 	}
 	var allDocuments []*document.Document
 	for _, input := range s.inputs {
@@ -118,7 +137,11 @@ func (s *Source) isFile(input string) bool {
 
 // processAsURL processes the input as a URL.
 func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
-	urlSource := urlsource.New([]string{input})
+	urlSource := urlsource.New(
+		[]string{input},
+		urlsource.WithChunkSize(s.chunkSize),
+		urlsource.WithChunkOverlap(s.chunkOverlap),
+	)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		urlSource.SetMetadata(k, v)
@@ -128,7 +151,11 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 
 // processAsDirectory processes the input as a directory.
 func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*document.Document, error) {
-	dirSource := dirsource.New([]string{input})
+	dirSource := dirsource.New(
+		[]string{input},
+		dirsource.WithChunkSize(s.chunkSize),
+		dirsource.WithChunkOverlap(s.chunkOverlap),
+	)
 	// Copy metadata.
 	for k, v := range s.metadata {
 		dirSource.SetMetadata(k, v)
@@ -138,7 +165,11 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 
 // processAsFile processes the input as a file.
 func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.Document, error) {
-	fileSource := filesource.New([]string{input})
+	fileSource := filesource.New(
+		[]string{input},
+		filesource.WithChunkSize(s.chunkSize),
+		filesource.WithChunkOverlap(s.chunkOverlap),
+	)
 
 	// Copy metadata.
 	for k, v := range s.metadata {

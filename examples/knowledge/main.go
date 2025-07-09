@@ -32,7 +32,7 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
 )
 
 func main() {
@@ -147,32 +147,33 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 	vectorStore := vectorinmemory.New()
 
 	// Use OpenAI embedder for demonstration (replace with your API key).
-	embedder := openaiembedder.New(
-		openaiembedder.WithAPIKey("sk-your-openai-key"),
-	)
+	embedder := openaiembedder.New()
 
 	// Create diverse sources showcasing different types.
 	sources := []source.Source{
 		// File source for local documentation (if files exist).
 		filesource.New(
-			[]string{"README.md", "docs/api.md"},
-			filesource.WithName("Project Documentation"),
+			[]string{
+				"./data/llm.md",
+			},
+			filesource.WithName("Large Language Model"),
 			filesource.WithMetadataValue("type", "documentation"),
 		),
 
 		dirsource.New(
-			[]string{"/data"},
+			[]string{
+				"./dir",
+			},
 			dirsource.WithName("Data Directory"),
 		),
 
 		// URL source for web content.
 		urlsource.New(
 			[]string{
-				"https://golang.org/doc/",
-				"https://pkg.go.dev/",
+				"https://en.wikipedia.org/wiki/Byte-pair_encoding",
 			},
-			urlsource.WithName("Go Documentation"),
-			urlsource.WithMetadataValue("topic", "Go Programming"),
+			urlsource.WithName("Byte-pair encoding"),
+			urlsource.WithMetadataValue("topic", "Byte-pair encoding"),
 			urlsource.WithMetadataValue("source", "official"),
 		),
 
@@ -180,8 +181,8 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		autosource.New(
 			[]string{
 				"Cloud computing is the delivery of computing services over the internet, including servers, storage, databases, networking, software, and analytics. It provides on-demand access to shared computing resources.",
-				"https://kubernetes.io/docs/concepts/",
-				"./examples/README.md",
+				"https://en.wikipedia.org/wiki/N-gram",
+				"./README.md",
 			},
 			autosource.WithName("Mixed Content Source"),
 			autosource.WithMetadataValue("topic", "Cloud Computing"),
@@ -195,10 +196,13 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithEmbedder(embedder),
 		knowledge.WithSources(sources),
 	)
-
 	// Load the knowledge base.
-	// If you want to do it asynchronously, you can call it in a separate goroutine.
-	if err := c.kb.Load(ctx); err != nil {
+	if err := c.kb.Load(
+		ctx,
+		knowledge.WithShowProgress(false),  // The default is true.
+		knowledge.WithProgressStepSize(10), // The default is 10.
+		knowledge.WithShowStats(false),     // The default is true.
+	); err != nil {
 		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}
 	return nil
@@ -214,14 +218,15 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println("   /exit      - End the conversation")
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
-	fmt.Println("   - What is machine learning?")
-	fmt.Println("   - Tell me about Python programming")
-	fmt.Println("   - Explain data science")
+	fmt.Println("   - What is a Large Language Model?")
+	fmt.Println("   - Explain the Transformer architecture.")
+	fmt.Println("   - What is a Mixture-of-Experts (MoE) model?")
+	fmt.Println("   - How does Byte-pair encoding work?")
+	fmt.Println("   - What is an N-gram model?")
 	fmt.Println("   - What is cloud computing?")
 	fmt.Println("   - Calculate 15 * 23")
-	fmt.Println("   - What time is it?")
-	fmt.Println()
-
+	fmt.Println("   - What time is it in PST?")
+	fmt.Println("   - What tools are available in this chat demo?")
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {

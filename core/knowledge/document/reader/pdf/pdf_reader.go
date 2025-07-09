@@ -9,8 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/unidoc/unipdf/v4/extractor"
-	"github.com/unidoc/unipdf/v4/model"
+	"github.com/ledongthuc/pdf"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/internal/document"
@@ -87,39 +86,23 @@ func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
 
 // readFromReader reads PDF content from an io.Reader and returns a list of documents.
 func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Document, error) {
-	// UniPDF requires io.ReadSeeker, so buffer if necessary.
-	var readSeeker io.ReadSeeker
-	if rs, ok := reader.(io.ReadSeeker); ok {
-		readSeeker = rs
-	} else {
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, err
-		}
-		readSeeker = bytes.NewReader(data)
-	}
-
-	pdfReader, err := model.NewPdfReader(readSeeker)
+	readerAt, size, err := toReaderAt(reader)
 	if err != nil {
 		return nil, err
 	}
-
-	numPages, err := pdfReader.GetNumPages()
+	pdfReader, err := pdf.NewReader(readerAt, size)
 	if err != nil {
 		return nil, err
 	}
 
 	var allText strings.Builder
-	for pageNum := 1; pageNum <= numPages; pageNum++ {
-		page, err := pdfReader.GetPage(pageNum)
-		if err != nil {
+	totalPage := pdfReader.NumPage()
+	for pageIndex := 1; pageIndex <= totalPage; pageIndex++ {
+		page := pdfReader.Page(pageIndex)
+		if page.V.IsNull() {
 			continue
 		}
-		ex, err := extractor.New(page)
-		if err != nil {
-			continue
-		}
-		text, err := ex.ExtractText()
+		text, err := page.GetPlainText(nil)
 		if err != nil {
 			continue
 		}
@@ -133,12 +116,33 @@ func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Docu
 	return []*document.Document{doc}, nil
 }
 
+func toReaderAt(r io.Reader) (io.ReaderAt, int64, error) {
+	// If the reader is already an io.ReaderAt and io.ReadSeeker (like an *os.File),
+	// we can get its size and use it directly without buffering.
+	if ra, ok := r.(io.ReaderAt); ok {
+		if rs, ok := r.(io.ReadSeeker); ok {
+			size, err := getReaderSize(rs)
+			if err != nil {
+				return nil, 0, err
+			}
+			return ra, size, nil
+		}
+	}
+
+	// For other readers (like network streams), we must buffer the whole
+	// content into memory to make it seekable and get its size.
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	return bytes.NewReader(data), int64(len(data)), nil
+}
+
 // chunkDocument applies chunking to a document.
 func (r *Reader) chunkDocument(doc *document.Document) ([]*document.Document, error) {
 	if r.chunkingStrategy == nil {
 		r.chunkingStrategy = chunking.NewFixedSizeChunking()
 	}
-
 	return r.chunkingStrategy.Chunk(doc)
 }
 
@@ -165,4 +169,22 @@ func (r *Reader) extractFileNameFromURL(url string) string {
 // Name returns the name of this reader.
 func (r *Reader) Name() string {
 	return "PDFReader"
+}
+
+// getReaderSize returns the total size of an io.ReadSeeker without altering
+// its current position.
+func getReaderSize(rs io.ReadSeeker) (int64, error) {
+	current, err := rs.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	end, err := rs.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	_, err = rs.Seek(current, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+	return end, nil
 }

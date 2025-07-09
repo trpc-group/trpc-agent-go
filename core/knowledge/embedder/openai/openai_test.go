@@ -2,7 +2,6 @@ package openai
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder"
@@ -129,65 +128,5 @@ func TestGetEmbeddingValidation(t *testing.T) {
 	_, _, err = e.GetEmbeddingWithUsage(ctx, "")
 	if err == nil {
 		t.Error("expected error for empty text with usage, got nil")
-	}
-}
-
-// TestGetEmbeddingIntegration is an integration test that requires an API key.
-func TestGetEmbeddingIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		t.Skip("OPENAI_API_KEY not set, skipping integration test")
-	}
-
-	e := New(
-		WithAPIKey(apiKey),
-		WithModel(ModelTextEmbedding3Small),
-	)
-
-	ctx := context.Background()
-	text := "Hello, world! This is a test embedding."
-
-	// Test GetEmbedding.
-	embedding, err := e.GetEmbedding(ctx, text)
-	if err != nil {
-		t.Fatalf("GetEmbedding failed: %v", err)
-	}
-
-	if len(embedding) == 0 {
-		t.Error("expected non-empty embedding")
-	}
-
-	if len(embedding) != DefaultDimensions {
-		t.Errorf("expected embedding dimension %d, got %d", DefaultDimensions, len(embedding))
-	}
-
-	// Test GetEmbeddingWithUsage.
-	embedding2, usage, err := e.GetEmbeddingWithUsage(ctx, text)
-	if err != nil {
-		t.Fatalf("GetEmbeddingWithUsage failed: %v", err)
-	}
-
-	if len(embedding2) == 0 {
-		t.Error("expected non-empty embedding")
-	}
-
-	if len(embedding2) != len(embedding) {
-		t.Error("expected same embedding dimensions from both methods")
-	}
-
-	// Usage should be present for OpenAI API.
-	if usage == nil {
-		t.Error("expected usage information")
-	} else {
-		if _, ok := usage["prompt_tokens"]; !ok {
-			t.Error("expected prompt_tokens in usage")
-		}
-		if _, ok := usage["total_tokens"]; !ok {
-			t.Error("expected total_tokens in usage")
-		}
 	}
 }

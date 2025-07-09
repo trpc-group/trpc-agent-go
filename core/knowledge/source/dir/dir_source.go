@@ -3,12 +3,12 @@ package dir
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/csv"
@@ -33,34 +33,70 @@ type Source struct {
 	readers        map[string]reader.Reader
 	fileExtensions []string // Optional: filter by file extensions
 	recursive      bool     // Whether to process subdirectories
+	chunkSize      int
+	chunkOverlap   int
 }
 
 // New creates a new directory knowledge source.
 func New(dirPaths []string, opts ...Option) *Source {
 	s := &Source{
-		dirPaths:  dirPaths,
-		name:      defaultDirSourceName,
-		metadata:  make(map[string]interface{}),
-		readers:   make(map[string]reader.Reader),
-		recursive: false, // Default to non-recursive.
+		dirPaths:     dirPaths,
+		name:         defaultDirSourceName,
+		metadata:     make(map[string]interface{}),
+		recursive:    false, // Default to non-recursive.
+		chunkSize:    0,
+		chunkOverlap: 0,
 	}
-	// Initialize default readers.
-	s.initializeReaders()
-	// Apply options.
+
+	// Apply options first so chunk configuration is set.
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Initialize readers with potential custom chunk configuration.
+	s.initializeReaders()
+
 	return s
 }
 
 // initializeReaders initializes all available readers.
 func (s *Source) initializeReaders() {
-	s.readers["text"] = text.New()
-	s.readers["pdf"] = pdf.New()
-	s.readers["markdown"] = markdown.New()
-	s.readers["json"] = json.New()
-	s.readers["csv"] = csv.New()
-	s.readers["docx"] = docx.New()
+	// Build readers map.
+	s.readers = make(map[string]reader.Reader)
+
+	// Decide whether to use custom chunk configuration.
+	if s.chunkSize <= 0 && s.chunkOverlap <= 0 {
+		// Default readers.
+		s.readers["text"] = text.New()
+		s.readers["pdf"] = pdf.New()
+		s.readers["markdown"] = markdown.New()
+		s.readers["json"] = json.New()
+		s.readers["csv"] = csv.New()
+		s.readers["docx"] = docx.New()
+		return
+	}
+
+	// Build chunking options.
+	var fixedOpts []chunking.Option
+	var mdOpts []chunking.MarkdownOption
+	if s.chunkSize > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithChunkSize(s.chunkSize))
+		mdOpts = append(mdOpts, chunking.WithMarkdownChunkSize(s.chunkSize))
+	}
+	if s.chunkOverlap > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithOverlap(s.chunkOverlap))
+		mdOpts = append(mdOpts, chunking.WithMarkdownOverlap(s.chunkOverlap))
+	}
+
+	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
+	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
+
+	s.readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
+	s.readers["pdf"] = pdf.New(pdf.WithChunkingStrategy(fixedChunk))
+	s.readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
+	s.readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
+	s.readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
+	s.readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
 }
 
 // getFileType determines the file type based on the file extension.
@@ -87,7 +123,7 @@ func (s *Source) getFileType(filePath string) string {
 // ReadDocuments reads all files in the directories and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.dirPaths) == 0 {
-		return nil, errors.New("no directory paths provided")
+		return nil, nil // Skip if no directory paths provided.
 	}
 
 	var allDocuments []*document.Document

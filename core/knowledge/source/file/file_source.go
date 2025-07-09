@@ -20,31 +20,43 @@ const (
 
 // Source represents a knowledge source for file-based content.
 type Source struct {
-	filePaths []string
-	name      string
-	metadata  map[string]interface{}
-	readers   map[string]reader.Reader
+	filePaths    []string
+	name         string
+	metadata     map[string]interface{}
+	readers      map[string]reader.Reader
+	chunkSize    int
+	chunkOverlap int
 }
 
 // New creates a new file knowledge source.
 func New(filePaths []string, opts ...Option) *Source {
 	s := &Source{
-		filePaths: filePaths,
-		name:      defaultFileSourceName,
-		metadata:  make(map[string]interface{}),
-		readers:   isource.GetReaders(),
+		filePaths:    filePaths,
+		name:         defaultFileSourceName,
+		metadata:     make(map[string]interface{}),
+		chunkSize:    0,
+		chunkOverlap: 0,
 	}
-	// Apply options.
+
+	// Apply options first to capture chunk configuration.
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Initialize readers with potential custom chunk configuration.
+	if s.chunkSize > 0 || s.chunkOverlap > 0 {
+		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
+	} else {
+		s.readers = isource.GetReaders()
+	}
+
 	return s
 }
 
 // ReadDocuments reads all files and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.filePaths) == 0 {
-		return nil, fmt.Errorf("no file paths provided")
+		return nil, nil // Skip if no file paths provided.
 	}
 	var allDocuments []*document.Document
 	for _, filePath := range s.filePaths {
@@ -123,3 +135,4 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 	}
 	s.metadata[key] = value
 }
+

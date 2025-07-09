@@ -33,3 +33,17 @@ func WithRecursive(recursive bool) Option {
 		s.recursive = recursive
 	}
 }
+
+// WithChunkSize sets the desired chunk size for document splitting.
+func WithChunkSize(size int) Option {
+	return func(s *Source) {
+		s.chunkSize = size
+	}
+}
+
+// WithChunkOverlap sets the desired chunk overlap for document splitting.
+func WithChunkOverlap(overlap int) Option {
+	return func(s *Source) {
+		s.chunkOverlap = overlap
+	}
+}

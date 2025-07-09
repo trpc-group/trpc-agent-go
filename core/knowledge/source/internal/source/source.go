@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/csv"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/reader/docx"
@@ -88,4 +89,39 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 	default:
 		return "text"
 	}
+}
+
+// GetReadersWithChunkConfig returns readers configured with a fixed-size
+// chunking strategy customized by chunkSize and overlap. If both parameters
+// are zero or negative, it falls back to the default readers configuration.
+func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader {
+	// If no custom configuration is provided, return the defaults.
+	if chunkSize <= 0 && overlap <= 0 {
+		return GetReaders()
+	}
+
+	// Build chunking options.
+	var fixedOpts []chunking.Option
+	var mdOpts []chunking.MarkdownOption
+	if chunkSize > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithChunkSize(chunkSize))
+		mdOpts = append(mdOpts, chunking.WithMarkdownChunkSize(chunkSize))
+	}
+	if overlap > 0 {
+		fixedOpts = append(fixedOpts, chunking.WithOverlap(overlap))
+		mdOpts = append(mdOpts, chunking.WithMarkdownOverlap(overlap))
+	}
+
+	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
+	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
+
+	readers := make(map[string]reader.Reader)
+	readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
+	readers["pdf"] = pdf.New(pdf.WithChunkingStrategy(fixedChunk))
+	readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
+	readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
+	readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
+	readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
+
+	return readers
 }

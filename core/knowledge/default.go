@@ -4,6 +4,7 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder"
@@ -12,7 +13,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
+
+// defaultSizeBuckets defines size boundaries (bytes) used for document
+// size statistics.
+var defaultSizeBuckets = []int{256, 512, 1024, 2048, 4096, 8192}
 
 // BuiltinKnowledge implements the Knowledge interface with a built-in retriever.
 type BuiltinKnowledge struct {
@@ -69,6 +75,38 @@ func WithSources(sources []source.Source) Option {
 	}
 }
 
+// LoadOption represents a functional option for configuring load behavior.
+type LoadOption func(*loadConfig)
+
+// loadConfig holds the configuration for load behavior.
+type loadConfig struct {
+	showProgress     bool
+	progressStepSize int
+	showStats        bool
+}
+
+// WithShowProgress enables or disables progress logging during load.
+func WithShowProgress(show bool) LoadOption {
+	return func(lc *loadConfig) {
+		lc.showProgress = show
+	}
+}
+
+// WithProgressStepSize sets the granularity of progress updates.
+func WithProgressStepSize(stepSize int) LoadOption {
+	return func(lc *loadConfig) {
+		lc.progressStepSize = stepSize
+	}
+}
+
+// WithShowStats enables or disables statistics logging during load.
+// By default statistics are shown.
+func WithShowStats(show bool) LoadOption {
+	return func(lc *loadConfig) {
+		lc.showStats = show
+	}
+}
+
 // New creates a new BuiltinKnowledge instance with the given options.
 func New(opts ...Option) *BuiltinKnowledge {
 	dk := &BuiltinKnowledge{}
@@ -99,19 +137,93 @@ func New(opts ...Option) *BuiltinKnowledge {
 }
 
 // Load processes all sources and adds their documents to the knowledge base.
-func (dk *BuiltinKnowledge) Load(ctx context.Context) error {
-	for _, src := range dk.sources {
+func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error {
+	// Apply load options with defaults.
+	config := &loadConfig{
+		showProgress:     true,
+		progressStepSize: 10,
+		showStats:        true,
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	// Timing variables.
+	startTime := time.Now()
+
+	// Initialise statistics helpers.
+	sizeBuckets := defaultSizeBuckets
+	stats := newSizeStats(sizeBuckets)
+
+	totalSources := len(dk.sources)
+	log.Infof("Starting knowledge base loading with %d sources", totalSources)
+
+	var processedDocs int
+	for i, src := range dk.sources {
+		sourceName := src.Name()
+		sourceType := src.Type()
+		log.Infof("Loading source %d/%d: %s (type: %s)", i+1, totalSources, sourceName, sourceType)
+
+		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to read documents from source %s: %w", src.Name(), err)
+			log.Errorf("Failed to read documents from source %s: %v", sourceName, err)
+			return fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
-		// Add all documents to knowledge base.
-		for _, doc := range docs {
+		log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
+
+		// Per-source statistics.
+		srcStats := newSizeStats(sizeBuckets)
+		for _, d := range docs {
+			sz := len(d.Content)
+			srcStats.add(sz, sizeBuckets)
+			stats.add(sz, sizeBuckets)
+		}
+
+		if config.showStats {
+			log.Infof("Statistics for source %s:", sourceName)
+			srcStats.log(sizeBuckets)
+		}
+
+		log.Infof("Start embedding & storing documents from source %s...", sourceName)
+
+		// Process documents with progress logging if enabled.
+		for j, doc := range docs {
 			if err := dk.addDocument(ctx, doc); err != nil {
-				return fmt.Errorf("failed to add document from source %s: %w", src.Name(), err)
+				log.Errorf("Failed to add document from source %s: %v", sourceName, err)
+				return fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
+			}
+
+			processedDocs++
+
+			// Log progress based on configuration.
+			if config.showProgress {
+				srcProcessed := j + 1
+				totalSrc := len(docs)
+
+				// Respect progressStepSize for logging frequency.
+				if srcProcessed%config.progressStepSize == 0 || srcProcessed == totalSrc {
+					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
+					elapsedSrc := time.Since(srcStartTime)
+
+					log.Infof("Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
+						srcProcessed, totalSrc, sourceName,
+						elapsedSrc.Truncate(time.Second),
+						etaSrc.Truncate(time.Second))
+				}
 			}
 		}
+		log.Infof("Successfully loaded source %s", sourceName)
+	}
+
+	elapsedTotal := time.Since(startTime)
+	log.Infof("Knowledge base loading completed in %s (%d sources)",
+		elapsedTotal, totalSources)
+
+	// Output statistics if requested.
+	if config.showStats && stats.totalDocs > 0 {
+		stats.log(sizeBuckets)
 	}
 	return nil
 }
@@ -132,7 +244,6 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 			return fmt.Errorf("failed to store embedding: %w", err)
 		}
 	}
-
 	return nil
 }
 
@@ -224,4 +335,92 @@ func (dk *BuiltinKnowledge) Close() error {
 		}
 	}
 	return nil
+}
+
+// sizeStats tracks statistics for document sizes during a load run.
+type sizeStats struct {
+	totalDocs  int
+	totalSize  int
+	minSize    int
+	maxSize    int
+	bucketCnts []int
+}
+
+// newSizeStats returns a sizeStats initialised for the provided buckets.
+func newSizeStats(buckets []int) *sizeStats {
+	return &sizeStats{
+		minSize:    int(^uint(0) >> 1), // Initialise with max-int.
+		bucketCnts: make([]int, len(buckets)+1),
+	}
+}
+
+// add records the size of a document.
+func (ss *sizeStats) add(size int, buckets []int) {
+	ss.totalDocs++
+	ss.totalSize += size
+	if size < ss.minSize {
+		ss.minSize = size
+	}
+	if size > ss.maxSize {
+		ss.maxSize = size
+	}
+
+	placed := false
+	for i, upper := range buckets {
+		if size < upper {
+			ss.bucketCnts[i]++
+			placed = true
+			break
+		}
+	}
+	if !placed {
+		ss.bucketCnts[len(ss.bucketCnts)-1]++
+	}
+}
+
+// avg returns the average document size.
+func (ss *sizeStats) avg() float64 {
+	if ss.totalDocs == 0 {
+		return 0
+	}
+	return float64(ss.totalSize) / float64(ss.totalDocs)
+}
+
+// log outputs the collected statistics.
+func (ss *sizeStats) log(buckets []int) {
+	log.Infof(
+		"Document statistics - total: %d, avg: %.1f B, min: %d B, max: %d B",
+		ss.totalDocs, ss.avg(), ss.minSize, ss.maxSize,
+	)
+
+	lower := 0
+	for i, upper := range buckets {
+		if ss.bucketCnts[i] == 0 {
+			lower = upper
+			continue
+		}
+		log.Infof("  [%d, %d): %d document(s)", lower, upper,
+			ss.bucketCnts[i])
+		lower = upper
+	}
+
+	lastCnt := ss.bucketCnts[len(ss.bucketCnts)-1]
+	if lastCnt > 0 {
+		log.Infof("  [>= %d]: %d document(s)", buckets[len(buckets)-1],
+			lastCnt)
+	}
+}
+
+// calcETA estimates the remaining time based on throughput so far.
+func calcETA(start time.Time, processed, total int) time.Duration {
+	if processed == 0 || total == 0 {
+		return 0
+	}
+	elapsed := time.Since(start)
+	expected := time.Duration(float64(elapsed) /
+		float64(processed) * float64(total))
+	if expected < elapsed {
+		return 0
+	}
+	return expected - elapsed
 }

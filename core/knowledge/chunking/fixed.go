@@ -73,12 +73,23 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		// Try to find a good break point (whitespace) to avoid splitting words.
 		if end < contentLength {
 			breakPoint := f.findBreakPoint(content, start, end)
-			if breakPoint != -1 {
+			// Ensure the break point actually advances beyond the current
+			// overlap window; otherwise, keep the original end to guarantee
+			// forward progress and avoid an infinite loop.
+			if breakPoint != -1 && breakPoint-start > f.overlap {
 				end = breakPoint
 			}
 		}
 
-		// If we couldn't find a good break point, use the original end.
+		// Guard against pathological cases where the chosen end does not
+		// advance the cursor sufficiently. This can happen when the first
+		// whitespace is too close to the start (<= overlap), causing
+		// start to remain unchanged and leading to an infinite loop.
+		if end-start <= f.overlap {
+			end = min(start+f.chunkSize, contentLength)
+		}
+
+		// If we still couldn't find a good break point, use the original end.
 		if end == start {
 			end = start + f.chunkSize
 		}
@@ -88,6 +99,11 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		chunks = append(chunks, chunk)
 
 		chunkNumber++
+		// If we've reached the end of the content, break to avoid an extra
+		// iteration that would violate the loop condition.
+		if end == contentLength {
+			break
+		}
 		start = end - f.overlap
 	}
 	return chunks, nil
