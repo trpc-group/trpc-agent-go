@@ -107,94 +107,6 @@ func WithShowStats(show bool) LoadOption {
 	}
 }
 
-// sizeStats tracks statistics for document sizes during a load run.
-type sizeStats struct {
-	totalDocs  int
-	totalSize  int
-	minSize    int
-	maxSize    int
-	bucketCnts []int
-}
-
-// newSizeStats returns a sizeStats initialised for the provided buckets.
-func newSizeStats(buckets []int) *sizeStats {
-	return &sizeStats{
-		minSize:    int(^uint(0) >> 1), // Initialise with max-int.
-		bucketCnts: make([]int, len(buckets)+1),
-	}
-}
-
-// add records the size of a document.
-func (ss *sizeStats) add(size int, buckets []int) {
-	ss.totalDocs++
-	ss.totalSize += size
-	if size < ss.minSize {
-		ss.minSize = size
-	}
-	if size > ss.maxSize {
-		ss.maxSize = size
-	}
-
-	placed := false
-	for i, upper := range buckets {
-		if size < upper {
-			ss.bucketCnts[i]++
-			placed = true
-			break
-		}
-	}
-	if !placed {
-		ss.bucketCnts[len(ss.bucketCnts)-1]++
-	}
-}
-
-// avg returns the average document size.
-func (ss *sizeStats) avg() float64 {
-	if ss.totalDocs == 0 {
-		return 0
-	}
-	return float64(ss.totalSize) / float64(ss.totalDocs)
-}
-
-// log outputs the collected statistics.
-func (ss *sizeStats) log(buckets []int) {
-	log.Infof(
-		"Document statistics - total: %d, avg: %.1f B, min: %d B, max: %d B",
-		ss.totalDocs, ss.avg(), ss.minSize, ss.maxSize,
-	)
-
-	lower := 0
-	for i, upper := range buckets {
-		if ss.bucketCnts[i] == 0 {
-			lower = upper
-			continue
-		}
-		log.Infof("  [%d, %d): %d document(s)", lower, upper,
-			ss.bucketCnts[i])
-		lower = upper
-	}
-
-	lastCnt := ss.bucketCnts[len(ss.bucketCnts)-1]
-	if lastCnt > 0 {
-		log.Infof("  [>= %d]: %d document(s)", buckets[len(buckets)-1],
-			lastCnt)
-	}
-}
-
-// calcETA estimates the remaining time based on throughput so far.
-func calcETA(start time.Time, processed, total int) time.Duration {
-	if processed == 0 || total == 0 {
-		return 0
-	}
-	elapsed := time.Since(start)
-	expected := time.Duration(float64(elapsed) /
-		float64(processed) * float64(total))
-	if expected < elapsed {
-		return 0
-	}
-	return expected - elapsed
-}
-
 // New creates a new BuiltinKnowledge instance with the given options.
 func New(opts ...Option) *BuiltinKnowledge {
 	dk := &BuiltinKnowledge{}
@@ -423,4 +335,92 @@ func (dk *BuiltinKnowledge) Close() error {
 		}
 	}
 	return nil
+}
+
+// sizeStats tracks statistics for document sizes during a load run.
+type sizeStats struct {
+	totalDocs  int
+	totalSize  int
+	minSize    int
+	maxSize    int
+	bucketCnts []int
+}
+
+// newSizeStats returns a sizeStats initialised for the provided buckets.
+func newSizeStats(buckets []int) *sizeStats {
+	return &sizeStats{
+		minSize:    int(^uint(0) >> 1), // Initialise with max-int.
+		bucketCnts: make([]int, len(buckets)+1),
+	}
+}
+
+// add records the size of a document.
+func (ss *sizeStats) add(size int, buckets []int) {
+	ss.totalDocs++
+	ss.totalSize += size
+	if size < ss.minSize {
+		ss.minSize = size
+	}
+	if size > ss.maxSize {
+		ss.maxSize = size
+	}
+
+	placed := false
+	for i, upper := range buckets {
+		if size < upper {
+			ss.bucketCnts[i]++
+			placed = true
+			break
+		}
+	}
+	if !placed {
+		ss.bucketCnts[len(ss.bucketCnts)-1]++
+	}
+}
+
+// avg returns the average document size.
+func (ss *sizeStats) avg() float64 {
+	if ss.totalDocs == 0 {
+		return 0
+	}
+	return float64(ss.totalSize) / float64(ss.totalDocs)
+}
+
+// log outputs the collected statistics.
+func (ss *sizeStats) log(buckets []int) {
+	log.Infof(
+		"Document statistics - total: %d, avg: %.1f B, min: %d B, max: %d B",
+		ss.totalDocs, ss.avg(), ss.minSize, ss.maxSize,
+	)
+
+	lower := 0
+	for i, upper := range buckets {
+		if ss.bucketCnts[i] == 0 {
+			lower = upper
+			continue
+		}
+		log.Infof("  [%d, %d): %d document(s)", lower, upper,
+			ss.bucketCnts[i])
+		lower = upper
+	}
+
+	lastCnt := ss.bucketCnts[len(ss.bucketCnts)-1]
+	if lastCnt > 0 {
+		log.Infof("  [>= %d]: %d document(s)", buckets[len(buckets)-1],
+			lastCnt)
+	}
+}
+
+// calcETA estimates the remaining time based on throughput so far.
+func calcETA(start time.Time, processed, total int) time.Duration {
+	if processed == 0 || total == 0 {
+		return 0
+	}
+	elapsed := time.Since(start)
+	expected := time.Duration(float64(elapsed) /
+		float64(processed) * float64(total))
+	if expected < elapsed {
+		return 0
+	}
+	return expected - elapsed
 }
