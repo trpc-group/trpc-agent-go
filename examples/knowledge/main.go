@@ -197,7 +197,12 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithSources(sources),
 	)
 	// Load the knowledge base.
-	if err := c.kb.Load(ctx); err != nil {
+	if err := c.kb.Load(
+		ctx,
+		knowledge.WithShowProgress(false),  // The default is true.
+		knowledge.WithProgressStepSize(10), // The default is 10.
+		knowledge.WithShowStats(false),     // The default is true.
+	); err != nil {
 		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}
 	return nil

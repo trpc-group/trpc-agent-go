@@ -171,7 +171,7 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 			return fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
-		log.Infof("Fetched %d document(s) from source %s (type: %s)", len(docs), sourceName, sourceType)
+		log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
 
 		// Per-source statistics.
 		srcStats := newSizeStats(sizeBuckets)
@@ -182,11 +182,11 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 		}
 
 		if config.showStats {
-			log.Infof("Statistics for source %s (type: %s):", sourceName, sourceType)
+			log.Infof("Statistics for source %s:", sourceName)
 			srcStats.log(sizeBuckets)
 		}
 
-		log.Infof("Start embedding & storing documents from source %s (type: %s)...", sourceName, sourceType)
+		log.Infof("Start embedding & storing documents from source %s...", sourceName)
 
 		// Process documents with progress logging if enabled.
 		for j, doc := range docs {
