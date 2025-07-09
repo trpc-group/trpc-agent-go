@@ -3,7 +3,6 @@ package dir
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -87,7 +86,7 @@ func (s *Source) getFileType(filePath string) string {
 // ReadDocuments reads all files in the directories and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.dirPaths) == 0 {
-		return nil, errors.New("no directory paths provided")
+		return nil, nil // Skip if no directory paths provided.
 	}
 
 	var allDocuments []*document.Document

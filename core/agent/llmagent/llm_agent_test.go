@@ -153,7 +153,7 @@ type mockKnowledgeBase struct {
 	documents map[string]*document.Document
 }
 
-func (m *mockKnowledgeBase) Load(ctx context.Context) error {
+func (m *mockKnowledgeBase) Load(ctx context.Context, opts ...knowledge.LoadOption) error {
 	return nil
 }
 

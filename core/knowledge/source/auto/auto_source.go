@@ -57,7 +57,7 @@ func (s *Source) initializeReaders() {
 // ReadDocuments automatically detects the source type and reads documents.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.inputs) == 0 {
-		return nil, fmt.Errorf("no inputs provided")
+		return nil, nil // Skip if no inputs provided.
 	}
 	var allDocuments []*document.Document
 	for _, input := range s.inputs {

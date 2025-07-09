@@ -9,6 +9,30 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 - Shows how to add documents to the knowledge base and enable knowledge search in the agent.
 - Provides a chat interface with knowledge search, calculator, and current time tools.
 
+## Knowledge Sources Loaded
+
+The following sources are automatically loaded when you run `main.go`:
+
+| Source Type | Name / File | What It Covers |
+|-------------|-------------|----------------|
+| File        | `./data/llm.md` | Large-Language-Model (LLM) basics. |
+| Directory   | `./dir/transformer.pdf` | Concise primer on the Transformer architecture and self-attention. |
+| Directory   | `./dir/moe.txt` | Notes about Mixture-of-Experts (MoE) models. |
+| URL         | <https://en.wikipedia.org/wiki/Byte-pair_encoding> | Byte-pair encoding (BPE) algorithm. |
+| Auto Source | Mixed content (Cloud computing blurb, N-gram Wikipedia page, project README) | Cloud computing overview and N-gram language models. |
+
+These documents are embedded and indexed, enabling the `knowledge_search` tool to answer related questions.
+
+### Try Asking Questions Like
+
+```
+• What problem does self-attention solve in Transformers?
+• Explain the benefits of Mixture-of-Experts models.
+• How is Byte-pair encoding used in tokenization?
+• Give an example of an N-gram model in NLP.
+• What are common use-cases for cloud computing?
+```
+
 ## Usage
 
 1. **Configure the OpenAI Embedder**
@@ -16,9 +40,7 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
    The example uses the OpenAI embedder from `core/knowledge/embedder/openai`. You must provide a valid OpenAI API key for embedding. In the code, replace:
 
    ```go
-   embedder := openaiencoder.New(
-       openaiencoder.WithAPIKey("sk-your-openai-key"),
-   )
+   embedder := openaiencoder.New()
    ```
 
    with your actual OpenAI API key.
@@ -116,9 +138,7 @@ The knowledge integration uses the `knowledge.Knowledge` interface:
 
 ```go
 type Knowledge interface {
-    AddDocument(ctx context.Context, doc *document.Document) error
     Search(ctx context.Context, query string) (*SearchResult, error)
-    Close() error
 }
 ```
 

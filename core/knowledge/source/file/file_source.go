@@ -44,7 +44,7 @@ func New(filePaths []string, opts ...Option) *Source {
 // ReadDocuments reads all files and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.filePaths) == 0 {
-		return nil, fmt.Errorf("no file paths provided")
+		return nil, nil // Skip if no file paths provided.
 	}
 	var allDocuments []*document.Document
 	for _, filePath := range s.filePaths {

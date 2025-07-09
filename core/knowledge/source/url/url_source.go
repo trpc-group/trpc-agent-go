@@ -51,7 +51,7 @@ func New(urls []string, opts ...Option) *Source {
 // ReadDocuments downloads content from all URLs and returns documents using appropriate readers.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
 	if len(s.urls) == 0 {
-		return nil, fmt.Errorf("no URLs provided")
+		return nil, nil // Skip if no URLs provided.
 	}
 
 	var allDocuments []*document.Document
