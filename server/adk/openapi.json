@@ -1,0 +1,278 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "trpc-agent ADK HTTP API",
+    "description": "This document describes the REST interface exposed by the ADK helper server located in `server/adk/server.go`. The service is primarily consumed by the ADK Web UI but can be called by any HTTP client.\n\nNotes:\n • All requests and responses use JSON unless indicated otherwise.\n • Endpoints are CORS-enabled – no additional pre-flight details are required in this document.\n • The run_sse endpoint streams results via Server-Sent Events (SSE); its response is therefore text/event-stream instead of JSON.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local development server"
+    }
+  ],
+  "paths": {
+    "/list-apps": {
+      "get": {
+        "summary": "List the names of all registered apps (agents).",
+        "operationId": "listApps",
+        "responses": {
+          "200": {
+            "description": "List of app names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/{appName}/users/{userId}/sessions": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/userId" }
+      ],
+      "get": {
+        "summary": "List existing sessions for the given user.",
+        "operationId": "listSessions",
+        "responses": {
+          "200": {
+            "description": "Array of sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ADKSession" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new session for the given user.",
+        "operationId": "createSession",
+        "responses": {
+          "200": {
+            "description": "The newly created session.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ADKSession" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/{appName}/users/{userId}/sessions/{sessionId}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/appName" },
+        { "$ref": "#/components/parameters/userId" },
+        { "$ref": "#/components/parameters/sessionId" }
+      ],
+      "get": {
+        "summary": "Fetch session details by ID.",
+        "operationId": "getSession",
+        "responses": {
+          "200": {
+            "description": "Session information.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ADKSession" }
+              }
+            }
+          },
+          "404": { "description": "Session not found." }
+        }
+      }
+    },
+    "/run": {
+      "post": {
+        "summary": "Execute an agent invocation (non-streaming).",
+        "operationId": "runAgent",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentRunRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of invocation events. Streaming chunks are already filtered out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Event" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/run_sse": {
+      "post": {
+        "summary": "Execute an agent invocation with Server-Sent Events (SSE) streaming.",
+        "operationId": "runAgentSSE",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AgentRunRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stream of JSON-encoded events delivered as text/event-stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "appName": {
+        "name": "appName",
+        "in": "path",
+        "required": true,
+        "description": "Name of the registered app (agent).",
+        "schema": { "type": "string" }
+      },
+      "userId": {
+        "name": "userId",
+        "in": "path",
+        "required": true,
+        "description": "Unique identifier for the end user.",
+        "schema": { "type": "string" }
+      },
+      "sessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "description": "Session identifier.",
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "ADKSession": {
+        "type": "object",
+        "required": ["appName", "userId", "id", "createTime", "updateTime"],
+        "properties": {
+          "appName": { "type": "string" },
+          "userId": { "type": "string" },
+          "id": { "type": "string" },
+          "createTime": { "type": "integer", "format": "int64" },
+          "updateTime": { "type": "integer", "format": "int64" },
+          "state": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "Base-64 encoded binary data."
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Event" }
+          }
+        }
+      },
+      "AgentRunRequest": {
+        "type": "object",
+        "required": ["appName", "userId", "sessionId", "newMessage", "streaming"],
+        "description": "Parameters sent by the UI to invoke the agent.",
+        "properties": {
+          "appName": { "type": "string" },
+          "userId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "newMessage": { "$ref": "#/components/schemas/Content" },
+          "streaming": { "type": "boolean" }
+        }
+      },
+      "Content": {
+        "type": "object",
+        "required": ["role", "parts"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "Message author (user, assistant, etc.)."
+          },
+          "parts": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Part" }
+          }
+        }
+      },
+      "Part": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "inlineData": { "$ref": "#/components/schemas/InlineData" },
+          "functionCall": { "$ref": "#/components/schemas/FunctionCall" },
+          "functionResponse": { "$ref": "#/components/schemas/FunctionResponse" }
+        }
+      },
+      "InlineData": {
+        "type": "object",
+        "required": ["data", "mimeType"],
+        "properties": {
+          "data": {
+            "type": "string",
+            "description": "Base-64 encoded payload."
+          },
+          "mimeType": { "type": "string" },
+          "displayName": { "type": "string" }
+        }
+      },
+      "FunctionCall": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "args": {
+            "type": "object",
+            "description": "JSON-serialised arguments.",
+            "additionalProperties": true
+          }
+        }
+      },
+      "FunctionResponse": {
+        "type": "object",
+        "required": ["name", "response"],
+        "properties": {
+          "name": { "type": "string" },
+          "response": {
+            "oneOf": [
+              { "type": "object" },
+              { "type": "array" },
+              { "type": "string" }
+            ],
+            "description": "Arbitrary JSON response from the function."
+          },
+          "id": { "type": "string" }
+        }
+      },
+      "Event": {
+        "description": "Generic event envelope returned by the agent. The exact shape is loosely typed to avoid coupling the API spec to internal implementation details.",
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  }
+} 
