@@ -27,10 +27,10 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
-	fmt.Printf("🚀 Streamable HTTP and STDIO MCP tools usage\n")
+	fmt.Printf("🚀 MCP tools usage (STDIO, Streamable HTTP, and SSE)\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the conversation\n")
-	fmt.Printf("Available tools: calculator, current_time, echo, add, get_weather, get_news\n")
+	fmt.Printf("Available tools: calculator, current_time, echo, add, get_weather, get_news, sse_echo, sse_info\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -97,7 +97,21 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
 	)
-	fmt.Println("MCP Toolset created successfully")
+	fmt.Println("Streamable MCP Toolset created successfully")
+
+	// Create SSE MCP tools.
+	sseToolSet := mcp.NewMCPToolSet(
+		mcp.ConnectionConfig{
+			Transport: "sse",
+			ServerURL: "http://localhost:8080/sse", // SSE server URL.
+			Timeout:   10 * time.Second,
+			Headers: map[string]string{
+				"User-Agent": "trpc-agent-go/1.0.0",
+			},
+		},
+		mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+	)
+	fmt.Println("SSE MCP Toolset created successfully")
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -115,7 +129,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
-		llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, streamableToolSet}),
+		llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, streamableToolSet, sseToolSet}),
 	)
 
 	// Create runner.
@@ -128,6 +142,9 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	// Setup identifiers.
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
+
+	// Store toolsets for proper cleanup.
+	c.mcpToolSet = []*mcp.ToolSet{stdioToolSet, streamableToolSet, sseToolSet}
 
 	fmt.Printf("✅ Chat ready! Session: %s\n\n", c.sessionID)
 

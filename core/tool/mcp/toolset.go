@@ -225,10 +225,21 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 		}
 		return mcp.NewStdioClient(config, clientInfo)
 
-	case transportStreamable:
-		options := []mcp.ClientOption{
-			mcp.WithClientLogger(mcp.GetDefaultLogger()),
+	case transportSSE:
+		var options []mcp.ClientOption
+
+		if len(m.config.Headers) > 0 {
+			headers := http.Header{}
+			for k, v := range m.config.Headers {
+				headers.Set(k, v)
+			}
+			options = append(options, mcp.WithHTTPHeaders(headers))
 		}
+
+		return mcp.NewSSEClient(m.config.ServerURL, clientInfo, options...)
+
+	case transportStreamable:
+		var options []mcp.ClientOption
 
 		if len(m.config.Headers) > 0 {
 			headers := http.Header{}

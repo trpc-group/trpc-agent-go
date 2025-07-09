@@ -2,9 +2,9 @@ module trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../..
 
-go 1.23.0
+go 1.24.1
 
-toolchain go1.23.9
+toolchain go1.24.4
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
