@@ -7,8 +7,6 @@ replace trpc.group/trpc-go/trpc-agent-go => ../
 replace trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis => ../orchestration/session/redis/
 
 require (
-	github.com/PuerkitoBio/goquery v1.8.1
-	github.com/go-pdf/fpdf v0.9.0
 	github.com/redis/go-redis/v9 v9.11.0
 	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/metric v1.37.0
@@ -19,7 +17,6 @@ require (
 )
 
 require (
-	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect

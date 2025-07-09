@@ -154,11 +154,11 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 	// Initialise statistics helpers.
 	sizeBuckets := defaultSizeBuckets
 	stats := newSizeStats(sizeBuckets)
-	processedDocs := 0
 
 	totalSources := len(dk.sources)
 	log.Infof("Starting knowledge base loading with %d sources", totalSources)
 
+	var processedDocs int
 	for i, src := range dk.sources {
 		sourceName := src.Name()
 		sourceType := src.Type()
