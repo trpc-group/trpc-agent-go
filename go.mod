@@ -22,7 +22,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.37.0
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.73.0
-	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250627132814-49de882dc5e7
+	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250709022439-f9d940988a2b
 )
 
 require (
