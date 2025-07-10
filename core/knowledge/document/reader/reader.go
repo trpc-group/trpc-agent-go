@@ -16,7 +16,7 @@ type Reader interface {
 
 	// ReadFromFile reads content from a file path and returns a list of documents.
 	ReadFromFile(filePath string) ([]*document.Document, error)
-	
+
 	// ReadFromURL reads content from a URL and returns a list of documents.
 	ReadFromURL(url string) ([]*document.Document, error)
 
