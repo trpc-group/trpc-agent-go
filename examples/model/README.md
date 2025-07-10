@@ -73,8 +73,8 @@ The example demonstrates the new package structure:
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/core/model"
-    "trpc.group/trpc-go/trpc-agent-go/core/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
 // Create a new model instance

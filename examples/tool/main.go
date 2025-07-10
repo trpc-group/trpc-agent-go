@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
 func main() {
