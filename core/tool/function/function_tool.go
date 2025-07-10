@@ -20,6 +20,7 @@ type FunctionTool[I, O any] struct {
 	inputSchema  *tool.Schema
 	outputSchema *tool.Schema
 	fn           func(I) O
+	longRunning  bool
 	unmarshaler  unmarshaler
 }
 
@@ -31,6 +32,7 @@ type functionToolOptions struct {
 	name        string
 	description string
 	unmarshaler unmarshaler
+	longRunning bool
 }
 
 // WithName sets the name of the function tool.
@@ -44,6 +46,14 @@ func WithName(name string) Option {
 func WithDescription(description string) Option {
 	return func(opts *functionToolOptions) {
 		opts.description = description
+	}
+}
+
+// WithLongRunning sets whether the function tool is long-running.
+// A long-running function tool indicates that it may take a significant amount of time to complete.
+func WithLongRunning(longRunning bool) Option {
+	return func(opts *functionToolOptions) {
+		opts.longRunning = longRunning
 	}
 }
 
@@ -76,6 +86,7 @@ func NewFunctionTool[I, O any](fn func(I) O, opts ...Option) *FunctionTool[I, O]
 	return &FunctionTool[I, O]{
 		name:         options.name,
 		description:  options.description,
+		longRunning:  options.longRunning,
 		fn:           fn,
 		unmarshaler:  options.unmarshaler,
 		inputSchema:  iSchema,
@@ -99,6 +110,11 @@ func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, e
 		return nil, err
 	}
 	return ft.fn(input), nil
+}
+
+// LongRunning indicates whether the function tool is expected to run for a long time.
+func (ft *FunctionTool[I, O]) LongRunning() bool {
+	return ft.longRunning
 }
 
 // Declaration returns the tool's declaration information.
@@ -125,6 +141,7 @@ type StreamableFunctionTool[I, O any] struct {
 	inputSchema  *tool.Schema
 	outputSchema *tool.Schema
 	fn           func(I) *tool.StreamReader
+	longRunning  bool
 	unmarshaler  unmarshaler
 }
 
@@ -158,6 +175,7 @@ func NewStreamableFunctionTool[I, O any](fn func(I) *tool.StreamReader, opts ...
 	return &StreamableFunctionTool[I, O]{
 		name:         options.name,
 		description:  options.description,
+		longRunning:  options.longRunning,
 		fn:           fn,
 		unmarshaler:  options.unmarshaler,
 		inputSchema:  iSchema,
@@ -200,6 +218,11 @@ func (t *StreamableFunctionTool[I, O]) Declaration() *tool.Declaration {
 		InputSchema:  t.inputSchema,
 		OutputSchema: t.outputSchema,
 	}
+}
+
+// LongRunning indicates whether the streamable function tool is expected to run for a long time.
+func (t *StreamableFunctionTool[I, O]) LongRunning() bool {
+	return t.longRunning
 }
 
 type unmarshaler interface {
