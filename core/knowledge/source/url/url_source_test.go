@@ -62,3 +62,54 @@ func TestReadDocuments(t *testing.T) {
 		}
 	})
 }
+
+// TestSource_getFileName ensures file name inference behaves as expected.
+func TestSource_getFileName(t *testing.T) {
+	s := &Source{}
+
+	testCases := []struct {
+		name        string
+		rawURL      string
+		contentType string
+		wantSuffix  string
+	}{
+		{
+			name:        "path-provides-name",
+			rawURL:      "https://example.com/path/file.txt",
+			contentType: "text/plain",
+			wantSuffix:  "file.txt",
+		},
+		{
+			name:        "html-content-type",
+			rawURL:      "https://example.com/",
+			contentType: "text/html; charset=utf-8",
+			wantSuffix:  "index.html",
+		},
+		{
+			name:        "host-fallback",
+			rawURL:      "https://example.com/",
+			contentType: "",
+			wantSuffix:  "example.com.txt",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := neturl.Parse(tc.rawURL)
+			if err != nil {
+				t.Fatalf("failed to parse url: %v", err)
+			}
+			got := s.getFileName(parsed, tc.contentType)
+			if got != tc.wantSuffix {
+				t.Fatalf("got %s want %s", got, tc.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestReadDocuments_InvalidURL(t *testing.T) {
+	src := New([]string{"http://:@invalid"})
+	if _, err := src.ReadDocuments(context.Background()); err == nil {
+		t.Fatalf("expected error for invalid url")
+	}
+}

@@ -147,7 +147,7 @@ func TestJSONChunkingLargeDocument(t *testing.T) {
 func TestJSONChunkingSplitJSONString(t *testing.T) {
 	// Test the SplitJSONString method directly.
 	jsonStr := `{"name": "Test", "values": [1, 2, 3, 4, 5]}`
-	
+
 	chunker := NewJSONChunking(WithJSONChunkSize(50))
 	chunks, err := chunker.SplitJSONString(jsonStr, false)
 	if err != nil {
@@ -165,4 +165,4 @@ func TestJSONChunkingSplitJSONString(t *testing.T) {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
 	}
-} 
+}

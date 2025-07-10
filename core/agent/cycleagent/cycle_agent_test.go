@@ -411,3 +411,223 @@ func TestCycleAgent_WithCallbacks(t *testing.T) {
 		// Channel is still open, which means no events were sent (expected).
 	}
 }
+
+// noopAgent returns no events.
+type noopAgent struct{ name string }
+
+func (n *noopAgent) Info() agent.Info                { return agent.Info{Name: n.name} }
+func (n *noopAgent) SubAgents() []agent.Agent        { return nil }
+func (n *noopAgent) FindSubAgent(string) agent.Agent { return nil }
+func (n *noopAgent) Tools() []tool.Tool              { return nil }
+func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	close(ch)
+	return ch, nil
+}
+
+func TestCycleAgent_BeforeCallbackCustomResponse(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return &model.Response{Object: "custom", Done: true}, nil
+	})
+
+	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
+
+	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.Equal(t, "custom", e.Object)
+	}
+	require.Equal(t, 1, cnt)
+}
+
+func TestCycleAgent_BeforeCallbackError(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return nil, errors.New("boom")
+	})
+
+	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
+
+	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.NotNil(t, e.Error)
+		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
+	}
+	require.Equal(t, 1, cnt)
+}
+
+func TestCycleAgent_SubAgentErrorPropagation(t *testing.T) {
+	errAgent := &errorAgent{name: "bad"}
+	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{errAgent}})
+
+	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.NotNil(t, e.Error)
+		require.Equal(t, model.ErrorTypeFlowError, e.Error.Type)
+	}
+	require.Equal(t, 1, cnt)
+}
+
+type errorAgent struct{ name string }
+
+func (e *errorAgent) Info() agent.Info                { return agent.Info{Name: e.name} }
+func (e *errorAgent) SubAgents() []agent.Agent        { return nil }
+func (e *errorAgent) FindSubAgent(string) agent.Agent { return nil }
+func (e *errorAgent) Tools() []tool.Tool              { return nil }
+func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, errors.New("failed")
+}
+
+func TestCycleAgent_CreateSubAgentInvocation(t *testing.T) {
+	parent := New(Options{Name: "parent"})
+	base := &agent.Invocation{InvocationID: "base", AgentName: "parent", Branch: "branchA"}
+	child := &noopAgent{name: "child"}
+
+	inv := parent.createSubAgentInvocation(child, base)
+
+	require.Equal(t, "child", inv.AgentName)
+	// Branch should stay unchanged when base.Branch non-empty.
+	require.Equal(t, "branchA", inv.Branch)
+	// Ensure TransferInfo cleared.
+	require.Nil(t, inv.TransferInfo)
+}
+
+func TestCycleAgent_AfterCallback(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return &model.Response{Object: "after", Done: true}, nil
+	})
+
+	one := 1
+	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb, MaxIterations: &one})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "after", last.Object)
+}
+
+// simpleAgent emits exactly one event with the supplied configuration.
+type simpleAgent struct {
+	name      string
+	object    string
+	done      bool
+	withError bool
+	content   string
+}
+
+func (s *simpleAgent) Info() agent.Info                { return agent.Info{Name: s.name} }
+func (s *simpleAgent) SubAgents() []agent.Agent        { return nil }
+func (s *simpleAgent) FindSubAgent(string) agent.Agent { return nil }
+func (s *simpleAgent) Tools() []tool.Tool              { return nil }
+
+func (s *simpleAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		e := event.New(inv.InvocationID, s.name)
+		e.Object = s.object
+		e.Done = s.done
+		e.Choices = []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: s.content},
+		}}
+		if s.withError {
+			e.Error = &model.ResponseError{Type: model.ErrorTypeAPIError, Message: "fail"}
+		}
+		ch <- e
+	}()
+	return ch, nil
+}
+
+func TestCycleAgent_ShouldEscalate_Default(t *testing.T) {
+	ca := New(Options{Name: "loop"})
+
+	// Error event should escalate.
+	errEvt := event.New("id", "loop")
+	errEvt.Response.Error = &model.ResponseError{Type: model.ErrorTypeAPIError, Message: "x"}
+	errEvt.Object = model.ObjectTypeError
+	errEvt.Done = true
+	require.True(t, ca.shouldEscalate(errEvt))
+
+	// Non-error, done=false should not escalate.
+	normal := event.New("id2", "loop")
+	require.False(t, ca.shouldEscalate(normal))
+}
+
+func TestCycleAgent_CustomEscalationFunc(t *testing.T) {
+	// Custom escalation when content contains "STOP".
+	escalate := func(evt *event.Event) bool {
+		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content == "STOP" {
+			return true
+		}
+		return false
+	}
+
+	agent1 := &simpleAgent{name: "worker", content: "RUN", object: model.ObjectTypeToolResponse, done: true}
+	stopAgent := &simpleAgent{name: "stopper", content: "STOP", object: model.ObjectTypeToolResponse, done: true}
+
+	ca := New(Options{
+		Name:           "loop",
+		SubAgents:      []agent.Agent{agent1, stopAgent},
+		EscalationFunc: escalate,
+		MaxIterations:  ptrInt(5),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "inv", AgentName: "loop"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for range events {
+		cnt++
+	}
+	// Expected two events: one from worker, one from stopper, then escalation.
+	require.Equal(t, 2, cnt)
+}
+
+func TestCycleAgent_MaxIterations(t *testing.T) {
+	max := 3
+	worker := &simpleAgent{name: "w", content: "tick"}
+	ca := New(Options{
+		Name:          "loop",
+		SubAgents:     []agent.Agent{worker},
+		MaxIterations: &max,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events, err := ca.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "loop"})
+	require.NoError(t, err)
+
+	cnt := 0
+	for range events {
+		cnt++
+	}
+	// One event per iteration.
+	require.Equal(t, max, cnt)
+}
+
+func ptrInt(i int) *int { return &i }

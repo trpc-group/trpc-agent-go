@@ -322,3 +322,191 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 		// Channel is still open, which means no events were sent (expected).
 	}
 }
+
+// mockMinimalAgent is a lightweight agent used for invocation tests.
+type mockMinimalAgent struct {
+	name string
+}
+
+func (m *mockMinimalAgent) Info() agent.Info                     { return agent.Info{Name: m.name} }
+func (m *mockMinimalAgent) SubAgents() []agent.Agent             { return nil }
+func (m *mockMinimalAgent) FindSubAgent(name string) agent.Agent { return nil }
+func (m *mockMinimalAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	close(ch)
+	return ch, nil
+}
+func (m *mockMinimalAgent) Tools() []tool.Tool { return nil }
+
+func TestCreateSubAgentInvocation(t *testing.T) {
+	parent := New(Options{Name: "parent"})
+	base := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "parent",
+		Message:      model.Message{Role: model.RoleUser, Content: "hi"},
+		Branch:       "root",
+	}
+
+	sub := &mockMinimalAgent{name: "child"}
+	inv := parent.createSubAgentInvocation(sub, base)
+
+	require.Equal(t, "child", inv.AgentName)
+	require.Equal(t, "root.child", inv.Branch)
+	// Ensure original invocation not mutated.
+	require.Equal(t, "parent", base.AgentName)
+	require.Equal(t, "root", base.Branch)
+}
+
+func TestCreateSubAgentInvocationNoBranch(t *testing.T) {
+	parent := New(Options{Name: "parent"})
+	base := &agent.Invocation{InvocationID: "id", AgentName: "parent"}
+	sub := &mockMinimalAgent{name: "child"}
+
+	inv := parent.createSubAgentInvocation(sub, base)
+
+	require.Equal(t, "child", inv.AgentName)
+	require.Equal(t, "parent.child", inv.Branch)
+}
+
+func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {
+	a1 := &mockMinimalAgent{name: "a1"}
+	a2 := &mockMinimalAgent{name: "a2"}
+	chain := New(Options{Name: "root", SubAgents: []agent.Agent{a1, a2}})
+
+	require.Equal(t, "root", chain.Info().Name)
+
+	found := chain.FindSubAgent("a2")
+	require.NotNil(t, found)
+	require.Equal(t, "a2", found.Info().Name)
+
+	notFound := chain.FindSubAgent("missing")
+	require.Nil(t, notFound)
+}
+
+func TestChainAgent_AfterCallback(t *testing.T) {
+	// Prepare mock agents – none produce events.
+	minimal := &mockMinimalAgent{name: "child"}
+
+	// Prepare callbacks with after agent producing custom response.
+	callbacks := agent.NewAgentCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, _ error) (*model.Response, error) {
+		return &model.Response{
+			Object: "test.response",
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "done",
+				},
+			}},
+		}, nil
+	})
+
+	chain := New(Options{
+		Name:           "root",
+		SubAgents:      []agent.Agent{minimal},
+		AgentCallbacks: callbacks,
+	})
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-2",
+		AgentName:    "root",
+	}
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, inv)
+	require.NoError(t, err)
+
+	// Expect exactly one event produced by after-agent callback.
+	count := 0
+	for e := range events {
+		count++
+		require.Equal(t, "root", e.Author)
+		require.Equal(t, "test.response", e.Object)
+		require.True(t, e.Done)
+	}
+	require.Equal(t, 1, count)
+}
+
+// mockNoEventAgent is a sub-agent that never produces events (used to
+// verify short-circuit behaviour when a before-callback returns).
+type mockNoEventAgent struct{ name string }
+
+func (m *mockNoEventAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
+func (m *mockNoEventAgent) SubAgents() []agent.Agent        { return nil }
+func (m *mockNoEventAgent) FindSubAgent(string) agent.Agent { return nil }
+func (m *mockNoEventAgent) Tools() []tool.Tool              { return nil }
+func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	close(ch)
+	return ch, nil
+}
+
+func TestChainAgent_BeforeCallbackCustomResponse(t *testing.T) {
+	// Sub-agent should never run.
+	sub := &mockNoEventAgent{name: "child"}
+
+	callbacks := agent.NewAgentCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return &model.Response{
+			Object: "test.before",
+			Done:   true,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "skipped",
+				},
+			}},
+		}, nil
+	})
+
+	chain := New(Options{
+		Name:           "main",
+		SubAgents:      []agent.Agent{sub},
+		AgentCallbacks: callbacks,
+	})
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	// Collect events.
+	collected := []*event.Event{}
+	for e := range events {
+		collected = append(collected, e)
+	}
+
+	require.Len(t, collected, 1)
+	require.Equal(t, "main", collected[0].Author)
+	require.Equal(t, "test.before", collected[0].Object)
+}
+
+func TestChainAgent_BeforeCallbackError(t *testing.T) {
+	sub := &mockNoEventAgent{name: "child"}
+
+	callbacks := agent.NewAgentCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return nil, errors.New("failure in before")
+	})
+
+	chain := New(Options{
+		Name:           "main",
+		SubAgents:      []agent.Agent{sub},
+		AgentCallbacks: callbacks,
+	})
+
+	ctx := context.Background()
+	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
+	require.NoError(t, err)
+
+	// Expect exactly one error event.
+	cnt := 0
+	for e := range events {
+		cnt++
+		require.NotNil(t, e.Error)
+		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
+	}
+	require.Equal(t, 1, cnt)
+}

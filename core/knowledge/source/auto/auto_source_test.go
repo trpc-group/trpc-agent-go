@@ -2,8 +2,15 @@ package auto
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestReadDocuments verifies Auto Source handles plain text input with and
@@ -44,4 +51,66 @@ func TestReadDocuments(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestHelpers(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(tmpFile, []byte("content"), 0o644); err != nil {
+		t.Fatalf("failed to write temp file: %v", err)
+	}
+
+	src := New([]string{})
+
+	require.True(t, src.isDirectory(tmpDir))
+	require.True(t, src.isFile(tmpFile))
+
+	u := &url.URL{Scheme: "https", Host: "example.com"}
+	require.True(t, src.isURL(u.String()))
+	require.False(t, src.isURL("not a url"))
+}
+
+func TestSource_ProcessInputVariants(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Text input variant.
+	src := New([]string{"hello world"})
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil || len(docs) == 0 {
+		t.Fatalf("text input failed, err=%v docs=%d", err, len(docs))
+	}
+
+	// 2. File input variant.
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "file.txt")
+	if err := os.WriteFile(tmpFile, []byte("file content"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	src = New([]string{tmpFile})
+	docs, err = src.ReadDocuments(ctx)
+	if err != nil || len(docs) == 0 {
+		t.Fatalf("file input failed, err=%v docs=%d", err, len(docs))
+	}
+
+	// 3. Directory variant.
+	src = New([]string{tmpDir})
+	docs, err = src.ReadDocuments(ctx)
+	if err != nil || len(docs) == 0 {
+		t.Fatalf("directory input failed, err=%v docs=%d", err, len(docs))
+	}
+
+	// 4. URL variant using httptest server.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(strings.Repeat("u", 20)))
+	}))
+	defer ts.Close()
+
+	src = New([]string{ts.URL})
+	// Set small chunk size to force processing path.
+	src.chunkSize = 10
+	docs, err = src.ReadDocuments(ctx)
+	if err != nil || len(docs) == 0 {
+		t.Fatalf("url input failed, err=%v docs=%d", err, len(docs))
+	}
 }

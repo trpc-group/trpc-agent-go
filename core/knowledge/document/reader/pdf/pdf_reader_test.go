@@ -2,11 +2,15 @@ package pdf
 
 import (
 	"bytes"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/go-pdf/fpdf"
+	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 )
 
 // newTestPDF programmatically generates a small PDF containing the text
@@ -66,5 +70,69 @@ func TestReader_ReadFromFile(t *testing.T) {
 	}
 	if !strings.Contains(docs[0].Content, "Hello World") {
 		t.Fatalf("extracted content does not contain expected text; got: %q", docs[0].Content)
+	}
+}
+
+// mockChunker returns a single chunk without modification.
+type mockChunker struct{}
+
+func (mockChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return []*document.Document{doc}, nil
+}
+
+// errChunker always fails, used to exercise error path.
+type errChunker struct{}
+
+func (errChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
+	return nil, errors.New("chunk err")
+}
+
+func TestReader_ReadFromURL(t *testing.T) {
+	data := newTestPDF(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	rdr := New(WithChunking(false))
+	docs, err := rdr.ReadFromURL(server.URL + "/sample.pdf")
+	if err != nil {
+		t.Fatalf("ReadFromURL failed: %v", err)
+	}
+	if docs[0].Name != "sample" {
+		t.Fatalf("unexpected extracted name: %s", docs[0].Name)
+	}
+}
+
+func TestReader_CustomChunker(t *testing.T) {
+	data := newTestPDF(t)
+	rdr := New(
+		WithChunking(true),
+		WithChunkingStrategy(mockChunker{}),
+	)
+	docs, err := rdr.ReadFromReader("x", bytes.NewReader(data))
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("custom chunker failed: %v", err)
+	}
+}
+
+func TestReader_ChunkError(t *testing.T) {
+	data := newTestPDF(t)
+	rdr := New(WithChunkingStrategy(errChunker{}))
+	_, err := rdr.ReadFromReader("x", bytes.NewReader(data))
+	if err == nil {
+		t.Fatalf("expected chunk error")
+	}
+}
+
+func TestReader_Helpers(t *testing.T) {
+	rdr := New()
+	if rdr.Name() != "PDFReader" {
+		t.Fatalf("Name() mismatch")
+	}
+	urlName := rdr.extractFileNameFromURL("https://example.com/docs/file.pdf?x=1#top")
+	if urlName != "file" {
+		t.Fatalf("extractFileNameFromURL got %s", urlName)
 	}
 }
