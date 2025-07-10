@@ -202,6 +202,8 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithShowProgress(false),  // The default is true.
 		knowledge.WithProgressStepSize(10), // The default is 10.
 		knowledge.WithShowStats(false),     // The default is true.
+		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
 	); err != nil {
 		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}

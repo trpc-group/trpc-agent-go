@@ -12,6 +12,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/openai/openai-go v1.5.0
+	github.com/panjf2000/ants/v2 v2.6.0
 	github.com/rs/cors v1.10.1
 	github.com/stretchr/testify v1.10.0
 	github.com/yuin/goldmark v1.7.12
