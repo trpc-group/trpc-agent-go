@@ -2,14 +2,14 @@
 package docx
 
 import (
-	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	unioffice "github.com/unidoc/unioffice/document"
+	"github.com/gonfva/docxlib"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/core/knowledge/document/internal/document"
@@ -58,29 +58,40 @@ func (r *Reader) ReadFromReader(name string, reader io.Reader) ([]*document.Docu
 
 // ReadFromFile reads DOCX content from a file path and returns a list of documents.
 func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
-	// Open DOCX directly from file path.
-	docx, err := unioffice.Open(filePath)
+	// Open the file.
+	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer docx.Close()
-	// Get file name without extension.
-	fileName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	defer file.Close()
+
+	// Get file size.
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Parse the DOCX document.
+	doc, err := docxlib.Parse(file, stat.Size())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DOCX: %w", err)
+	}
+
 	// Extract text content.
-	var textContent strings.Builder
-	for _, para := range docx.Paragraphs() {
-		for _, run := range para.Runs() {
-			textContent.WriteString(run.Text())
-		}
-		textContent.WriteString("\n")
-	}
+	textContent := r.extractTextFromDoc(doc)
+
+	// Get file name without extension.
+	fileName := strings.TrimSuffix(
+		filepath.Base(filePath), filepath.Ext(filePath),
+	)
+
 	// Create document.
-	doc := idocument.CreateDocument(textContent.String(), fileName)
+	docResult := idocument.CreateDocument(textContent, fileName)
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		return r.chunkDocument(docResult)
 	}
-	return []*document.Document{doc}, nil
+	return []*document.Document{docResult}, nil
 }
 
 // ReadFromURL reads DOCX content from a URL and returns a list of documents.
@@ -98,51 +109,95 @@ func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
 
 // readFromReader reads DOCX content from an io.Reader and returns a list of documents.
 func (r *Reader) readFromReader(reader io.Reader, name string) ([]*document.Document, error) {
-	// UniOffice requires io.ReadSeeker, so buffer if necessary.
-	var readSeeker io.ReadSeeker
-	if rs, ok := reader.(io.ReadSeeker); ok {
-		readSeeker = rs
-	} else {
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, err
-		}
-		readSeeker = bytes.NewReader(data)
+	// Read all data from the reader.
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %w", err)
 	}
 
-	// Create a temporary file to use with unioffice.
-	tmpFile, err := os.CreateTemp("", "docx_reader_*.docx")
+	// Create a temporary file to work with docxlib.
+	tmpFile, err := os.CreateTemp("", "docx_*.docx")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create temporary file: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
-	defer tmpFile.Close()
+	defer os.Remove(tmpFile.Name()) // Clean up temporary file.
 
-	// Copy data to temporary file.
-	if _, err := io.Copy(tmpFile, readSeeker); err != nil {
-		return nil, err
+	// Write data to temporary file.
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		return nil, fmt.Errorf("failed to write to temporary file: %w", err)
 	}
-	// Open DOCX from temporary file.
-	docx, err := unioffice.Open(tmpFile.Name())
+
+	// Close and reopen for reading.
+	tmpFile.Close()
+	file, err := os.Open(tmpFile.Name())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to reopen temporary file: %w", err)
 	}
-	defer docx.Close()
+	defer file.Close()
+
+	// Get file size.
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Parse the DOCX document.
+	doc, err := docxlib.Parse(file, stat.Size())
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse DOCX: %w", err)
+	}
+
 	// Extract text content.
-	var textContent strings.Builder
-	for _, para := range docx.Paragraphs() {
-		for _, run := range para.Runs() {
-			textContent.WriteString(run.Text())
-		}
-		textContent.WriteString("\n")
-	}
+	textContent := r.extractTextFromDoc(doc)
+
 	// Create document.
-	doc := idocument.CreateDocument(textContent.String(), name)
+	docResult := idocument.CreateDocument(textContent, name)
 	// Apply chunking if enabled.
 	if r.chunk {
-		return r.chunkDocument(doc)
+		return r.chunkDocument(docResult)
 	}
-	return []*document.Document{doc}, nil
+	return []*document.Document{docResult}, nil
+}
+
+// extractTextFromDoc extracts all text content from a docxlib document.
+func (r *Reader) extractTextFromDoc(doc *docxlib.DocxLib) string {
+	var textContent strings.Builder
+
+	// Get all paragraphs from the document.
+	paragraphs := doc.Paragraphs()
+
+	for _, paragraph := range paragraphs {
+		// Get children (runs, hyperlinks, etc.) from the paragraph.
+		children := paragraph.Children()
+
+		for _, child := range children {
+			// Extract text from runs.
+			if child.Run != nil && child.Run.Text != nil {
+				text := strings.TrimSpace(child.Run.Text.Text)
+				if text != "" {
+					textContent.WriteString(text)
+					textContent.WriteString(" ")
+				}
+			}
+
+			// Extract text from hyperlinks.
+			if child.Link != nil && child.Link.Run.Text != nil {
+				text := strings.TrimSpace(child.Link.Run.Text.Text)
+				if text != "" {
+					textContent.WriteString(text)
+					textContent.WriteString(" ")
+				}
+			}
+		}
+
+		// Add newline after each paragraph.
+		if textContent.Len() > 0 {
+			textContent.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(textContent.String())
 }
 
 // chunkDocument applies chunking to a document.

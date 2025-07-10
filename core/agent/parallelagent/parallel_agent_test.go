@@ -239,3 +239,112 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 		// Channel is still open, which means no events were sent (expected).
 	}
 }
+
+// silentAgent emits zero events and returns immediately.
+type silentAgent struct{ name string }
+
+func (s *silentAgent) Info() agent.Info                { return agent.Info{Name: s.name} }
+func (s *silentAgent) SubAgents() []agent.Agent        { return nil }
+func (s *silentAgent) FindSubAgent(string) agent.Agent { return nil }
+func (s *silentAgent) Tools() []tool.Tool              { return nil }
+func (s *silentAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	close(ch)
+	return ch, nil
+}
+
+type failAgent struct{ name string }
+
+func (f *failAgent) Info() agent.Info                { return agent.Info{Name: f.name} }
+func (f *failAgent) SubAgents() []agent.Agent        { return nil }
+func (f *failAgent) FindSubAgent(string) agent.Agent { return nil }
+func (f *failAgent) Tools() []tool.Tool              { return nil }
+func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, errors.New("boom")
+}
+
+func TestParallelAgent_BeforeCallbackError(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return nil, errors.New("bad before")
+	})
+
+	pa := New(Options{
+		Name:           "parallel",
+		SubAgents:      []agent.Agent{&silentAgent{"a"}},
+		AgentCallbacks: cb,
+	})
+
+	events, err := pa.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var evt *event.Event
+	for e := range events {
+		evt = e
+	}
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Error)
+	require.Equal(t, agent.ErrorTypeAgentCallbackError, evt.Error.Type)
+}
+
+func TestParallelAgent_AfterCallbackCustomResponse(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		return &model.Response{Object: "after", Done: true}, nil
+	})
+
+	pa := New(Options{
+		Name:           "parallel",
+		SubAgents:      []agent.Agent{&silentAgent{"a"}},
+		AgentCallbacks: cb,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	events, err := pa.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var last *event.Event
+	for e := range events {
+		last = e
+	}
+	require.NotNil(t, last)
+	require.Equal(t, "after", last.Object)
+}
+
+func TestParallelAgent_BeforeCallbackCustomResponse(t *testing.T) {
+	cb := agent.NewAgentCallbacks()
+	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		return &model.Response{Object: "before", Done: true}, nil
+	})
+
+	pa := New(Options{Name: "parallel", SubAgents: []agent.Agent{&silentAgent{"a"}}, AgentCallbacks: cb})
+
+	events, err := pa.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
+	require.NoError(t, err)
+
+	var first *event.Event
+	for e := range events {
+		first = e
+	}
+	require.NotNil(t, first)
+	require.Equal(t, "before", first.Object)
+}
+
+func TestParallelAgent_CreateBranchInvocation(t *testing.T) {
+	sa := &silentAgent{name: "child"}
+	pa := New(Options{Name: "parent"})
+
+	base := &agent.Invocation{InvocationID: "root", AgentName: "parent"}
+	branch := pa.createBranchInvocationForSubAgent(sa, base)
+
+	// InvocationID should change and contain base ID.
+	require.NotEqual(t, base.InvocationID, branch.InvocationID)
+	require.Contains(t, branch.InvocationID, base.InvocationID)
+	// Branch should equal new invocation ID.
+	require.Equal(t, branch.InvocationID, branch.Branch)
+	// Agent properties updated.
+	require.Equal(t, "child", branch.AgentName)
+	require.Equal(t, "child", branch.Agent.Info().Name)
+}

@@ -98,4 +98,4 @@ func TestDocument_Clone(t *testing.T) {
 	if original.Content == clone.Content {
 		t.Error("Modifying clone affected original")
 	}
-} 
+}

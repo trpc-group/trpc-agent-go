@@ -2,6 +2,10 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder"
@@ -128,5 +132,72 @@ func TestGetEmbeddingValidation(t *testing.T) {
 	_, _, err = e.GetEmbeddingWithUsage(ctx, "")
 	if err == nil {
 		t.Error("expected error for empty text with usage, got nil")
+	}
+}
+
+func TestEmbedder_GetEmbedding(t *testing.T) {
+	// Prepare fake OpenAI server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Respond only to embeddings endpoint.
+		if !strings.HasSuffix(r.URL.Path, "/embeddings") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		rsp := map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"object": "embedding", "index": 0, "embedding": []float64{0.1, 0.2, 0.3}},
+			},
+			"model": "text-embedding-3-small",
+			"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+		}
+		_ = json.NewEncoder(w).Encode(rsp)
+	}))
+	defer srv.Close()
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithModel(ModelTextEmbedding3Small),
+		WithDimensions(3),
+	)
+
+	vec, err := emb.GetEmbedding(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("GetEmbedding err: %v", err)
+	}
+	if len(vec) != 3 || vec[0] != 0.1 {
+		t.Fatalf("unexpected embedding vector: %v", vec)
+	}
+
+	// Test GetEmbeddingWithUsage.
+	vec2, usage, err := emb.GetEmbeddingWithUsage(context.Background(), "hi")
+	if err != nil || len(vec2) != 3 || usage == nil {
+		t.Fatalf("GetEmbeddingWithUsage failed")
+	}
+
+	// Empty text should return error.
+	if _, err := emb.GetEmbedding(context.Background(), ""); err == nil {
+		t.Fatalf("expected error for empty text")
+	}
+
+	// Test alternate encoding format path.
+	emb2 := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithEncodingFormat(EncodingFormatBase64),
+	)
+	if _, err := emb2.GetEmbedding(context.Background(), "world"); err != nil {
+		t.Fatalf("base64 embedding failed: %v", err)
+	}
+
+	emb3 := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithModel(ModelTextEmbeddingAda002),
+	)
+	if _, err := emb3.GetEmbedding(context.Background(), "test"); err != nil {
+		t.Fatalf("ada embedding failed: %v", err)
 	}
 }

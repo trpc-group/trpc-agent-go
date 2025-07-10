@@ -135,4 +135,3 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 	}
 	s.metadata[key] = value
 }
-

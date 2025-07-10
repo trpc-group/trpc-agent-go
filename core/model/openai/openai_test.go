@@ -3,10 +3,13 @@ package openai
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
+	openaigo "github.com/openai/openai-go"
 	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 )
 
 func TestMain(m *testing.M) {
@@ -217,5 +220,108 @@ func TestOptions_Validation(t *testing.T) {
 				t.Errorf("expected base url %s, got %s", tt.opts.BaseURL, m.baseURL)
 			}
 		})
+	}
+}
+
+// stubTool implements tool.Tool for testing purposes.
+type stubTool struct{ decl *tool.Declaration }
+
+func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, nil }
+func (s stubTool) Declaration() *tool.Declaration                { return s.decl }
+
+// TestModel_convertMessages verifies that messages are converted to the
+// openai-go request format with the expected roles and fields.
+func TestModel_convertMessages(t *testing.T) {
+	m := New("dummy-model", Options{})
+
+	// Prepare test messages covering all branches.
+	msgs := []model.Message{
+		model.NewSystemMessage("system content"),
+		model.NewUserMessage("user content"),
+		{
+			Role:    model.RoleAssistant,
+			Content: "assistant content",
+			ToolCalls: []model.ToolCall{{
+				ID:   "call-1",
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "hello",
+					Arguments: []byte("{\"a\":1}"),
+				},
+			}},
+		},
+		{
+			Role:    model.RoleTool,
+			Content: "tool response",
+			ToolID:  "call-1",
+		},
+		{
+			Role:    "unknown",
+			Content: "fallback content",
+		},
+	}
+
+	converted := m.convertMessages(msgs)
+	if got, want := len(converted), len(msgs); got != want {
+		t.Fatalf("converted len=%d want=%d", got, want)
+	}
+
+	roleChecks := []func(openaigo.ChatCompletionMessageParamUnion) bool{
+		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfSystem != nil },
+		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfUser != nil },
+		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfAssistant != nil },
+		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfTool != nil },
+		func(u openaigo.ChatCompletionMessageParamUnion) bool { return u.OfUser != nil },
+	}
+
+	for i, u := range converted {
+		if !roleChecks[i](u) {
+			t.Fatalf("index %d: expected role variant not set", i)
+		}
+	}
+
+	// Assert that assistant message contains tool calls after conversion.
+	assistantUnion := converted[2]
+	if assistantUnion.OfAssistant == nil {
+		t.Fatalf("assistant union is nil")
+	}
+	if len(assistantUnion.GetToolCalls()) == 0 {
+		t.Fatalf("assistant message should contain tool calls")
+	}
+}
+
+// TestModel_convertTools ensures that tool declarations are mapped to the
+// expected OpenAI function definitions.
+func TestModel_convertTools(t *testing.T) {
+	m := New("dummy", Options{})
+
+	const toolName = "test_tool"
+	const toolDesc = "test description"
+
+	schema := &tool.Schema{Type: "object"}
+
+	toolsMap := map[string]tool.Tool{
+		toolName: stubTool{decl: &tool.Declaration{
+			Name:        toolName,
+			Description: toolDesc,
+			InputSchema: schema,
+		}},
+	}
+
+	params := m.convertTools(toolsMap)
+	if got, want := len(params), 1; got != want {
+		t.Fatalf("convertTools len=%d want=%d", got, want)
+	}
+
+	fn := params[0].Function
+	if fn.Name != toolName {
+		t.Fatalf("function name=%s want=%s", fn.Name, toolName)
+	}
+	if !fn.Description.Valid() || fn.Description.Value != toolDesc {
+		t.Fatalf("function description mismatch")
+	}
+
+	if reflect.ValueOf(fn.Parameters).IsZero() {
+		t.Fatalf("expected parameters to be populated from schema")
 	}
 }
