@@ -158,7 +158,7 @@ func TestModelCallbacks_BeforeSkip(t *testing.T) {
 	require.Equal(t, "skip-response", events[0].Response.ID)
 }
 
-func TestModelCallbacks_BeforeCustomResp(t *testing.T) {
+func TestModelCallbacks_BeforeCustom(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -192,7 +192,7 @@ func TestModelCallbacks_BeforeCustomResp(t *testing.T) {
 	require.Equal(t, "custom-before", events[0].Response.ID)
 }
 
-func TestModelCallbacks_Before_Err(t *testing.T) {
+func TestModelCallbacks_BeforeError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 

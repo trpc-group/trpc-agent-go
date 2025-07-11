@@ -15,11 +15,25 @@
 // simple tools: a calculator and a time query. It starts an HTTP server
 // compatible with ADK Web UI for manual testing.
 //
-// This example demonstrates:
-// - Setting up an LLM agent with custom tools
-// - Configuring model parameters and generation settings
-// - Creating function-based tools for calculations and time queries
-// - Starting an HTTP server for ADK Web UI integration
+// This file demonstrates how to set up a simple LLM agent with custom tools
+// (calculator and time query) and expose it via an HTTP server compatible
+// with the ADK Web UI. It is intended for manual testing and as a reference
+// for integrating tRPC agent orchestration with LLM-based tools.
+//
+// The example covers:
+// - Model and tool setup
+// - Agent configuration
+// - HTTP server integration
+//
+// Usage:
+//
+//	go run main.go
+//
+// The server will listen on :8080 by default.
+//
+// Author: Tencent, 2025
+//
+// -----------------------------------------------------------------------------
 package main
 
 import (
@@ -44,6 +58,7 @@ const defaultListenAddr = ":8080"
 // It sets up an LLM agent with calculator and time tools,
 // and starts an HTTP server for ADK Web UI compatibility.
 func main() {
+	// Parse command-line flags for server address.
 	var addr string
 	flag.StringVar(&addr, "addr", defaultListenAddr, "Listen address")
 	flag.Parse()
@@ -118,6 +133,7 @@ func main() {
 // Constants & helpers ----------------------------------------------------------
 // -----------------------------------------------------------------------------
 
+// Constants for supported calculator operations.
 const (
 	opAdd      = "add"
 	opSubtract = "subtract"
@@ -159,6 +175,7 @@ type timeResult struct {
 
 // Calculator tool implementation.
 // calculate performs the requested mathematical operation.
+// It supports add, subtract, multiply, and divide operations.
 func calculate(args calculatorArgs) calculatorResult {
 	var result float64
 	switch strings.ToLower(args.Operation) {
@@ -183,6 +200,7 @@ func calculate(args calculatorArgs) calculatorResult {
 
 // Time tool implementation.
 // getCurrentTime returns the current time for the specified timezone.
+// If the timezone is invalid or empty, it defaults to local time.
 func getCurrentTime(args timeArgs) timeResult {
 	loc := time.Local
 	zone := args.Timezone
