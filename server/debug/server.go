@@ -10,8 +10,8 @@
 //
 //
 
-// Package adk provides a HTTP server compatible with the ADK Web UI.
-package adk
+// Package debug provides a HTTP server for debugging and testing.
+package debug
 
 import (
 	"encoding/json"
@@ -27,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/adk/internal/schema"
+	"trpc.group/trpc-go/trpc-agent-go/server/debug/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
