@@ -83,7 +83,7 @@ var encoderConfig = zapcore.EncoderConfig{
 	EncodeCaller:   zapcore.ShortCallerEncoder,
 }
 
-// Logger is the underlying logging work for trpc-a2a-go.
+// Logger defines the logging interface used throughout trpc-agent-go.
 type Logger interface {
 	// Debug logs to DEBUG log. Arguments are handled in the manner of fmt.Print.
 	Debug(args ...any)
