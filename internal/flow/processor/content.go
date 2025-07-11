@@ -113,8 +113,8 @@ func (p *ContentRequestProcessor) getContents(
 	}
 
 	// Rearrange events for function call/response consistency.
-	resultEvents := p.rearrangeEventsForLatestFuncResp(filteredEvents)
-	resultEvents = p.rearrangeEventsForAsyncFuncRespInHistory(resultEvents)
+	resultEvents := p.rearrangeLatestFuncResp(filteredEvents)
+	resultEvents = p.rearrangeAsyncFuncRespInHistory(resultEvents)
 
 	// Convert events to messages.
 	var messages []model.Message
@@ -225,7 +225,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
-func (p *ContentRequestProcessor) rearrangeEventsForLatestFuncResp(
+func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	events []event.Event,
 ) []event.Event {
 	if len(events) == 0 {
@@ -293,7 +293,7 @@ func (p *ContentRequestProcessor) rearrangeEventsForLatestFuncResp(
 }
 
 // rearrangeEventsForAsyncFunctionResponsesInHistory rearranges the async function_response events in the history.
-func (p *ContentRequestProcessor) rearrangeEventsForAsyncFuncRespInHistory(
+func (p *ContentRequestProcessor) rearrangeAsyncFuncRespInHistory(
 	events []event.Event,
 ) []event.Event {
 	functionCallIDToResponseEventIndex := make(map[string]int)

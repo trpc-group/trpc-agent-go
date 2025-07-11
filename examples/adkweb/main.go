@@ -52,7 +52,8 @@ func main() {
 		calculate,
 		function.WithName("calculator"),
 		function.WithDescription(
-			"Perform basic mathematical calculations (add, subtract, multiply, divide)",
+			"Perform basic mathematical calculations "+
+				"(add, subtract, multiply, divide)",
 		),
 	)
 	// Create time tool for timezone queries.
@@ -80,7 +81,8 @@ func main() {
 			"A helpful AI assistant with calculator and time tools",
 		),
 		llmagent.WithInstruction(
-			"Use tools when appropriate for calculations or time queries. Be helpful and conversational.",
+			"Use tools when appropriate for calculations or time queries. "+
+				"Be helpful and conversational.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
@@ -118,6 +120,7 @@ const (
 )
 
 // Calculator tool input.
+// calculatorArgs holds the input for the calculator tool.
 type calculatorArgs struct {
 	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
 	A         float64 `json:"a" description:"First number"`
@@ -125,6 +128,7 @@ type calculatorArgs struct {
 }
 
 // Calculator tool output.
+// calculatorResult holds the output for the calculator tool.
 type calculatorResult struct {
 	Operation string  `json:"operation"`
 	A         float64 `json:"a"`
@@ -133,11 +137,13 @@ type calculatorResult struct {
 }
 
 // Time tool input.
+// timeArgs holds the input for the time tool.
 type timeArgs struct {
 	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
 }
 
 // Time tool output.
+// timeResult holds the output for the time tool.
 type timeResult struct {
 	Timezone string `json:"timezone"`
 	Time     string `json:"time"`
@@ -146,6 +152,7 @@ type timeResult struct {
 }
 
 // Calculator tool implementation.
+// calculate performs the requested mathematical operation.
 func calculate(args calculatorArgs) calculatorResult {
 	var result float64
 	switch strings.ToLower(args.Operation) {
@@ -169,6 +176,7 @@ func calculate(args calculatorArgs) calculatorResult {
 }
 
 // Time tool implementation.
+// getCurrentTime returns the current time for the specified timezone.
 func getCurrentTime(args timeArgs) timeResult {
 	loc := time.Local
 	zone := args.Timezone
@@ -188,5 +196,8 @@ func getCurrentTime(args timeArgs) timeResult {
 	}
 }
 
-func intPtr(i int) *int           { return &i }
+// intPtr returns a pointer to the given int value.
+func intPtr(i int) *int { return &i }
+
+// floatPtr returns a pointer to the given float64 value.
 func floatPtr(f float64) *float64 { return &f }

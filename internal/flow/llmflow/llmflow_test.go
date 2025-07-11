@@ -225,7 +225,7 @@ func TestModelCallbacks_Before_Err(t *testing.T) {
 	require.Equal(t, "before error", events[0].Error.Message)
 }
 
-func TestModelCallbacks_AfterOverrideResp(t *testing.T) {
+func TestModelCallbacks_AfterOverride(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -262,7 +262,7 @@ func TestModelCallbacks_AfterOverrideResp(t *testing.T) {
 	require.Equal(t, "after-override", events[0].Response.Object)
 }
 
-func TestModelCallbacks_After_Error(t *testing.T) {
+func TestModelCallbacks_AfterError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
