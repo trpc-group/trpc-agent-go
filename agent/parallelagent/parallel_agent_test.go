@@ -325,7 +325,7 @@ func TestParallelAgent_BeforeCallbackErr(t *testing.T) {
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, evt.Error.Type)
 }
 
-func TestParallelAgent_AfterCallbackCustomResp(t *testing.T) {
+func TestParallelAgent_AfterCallbackResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
@@ -351,7 +351,7 @@ func TestParallelAgent_AfterCallbackCustomResp(t *testing.T) {
 	require.Equal(t, "after", last.Object)
 }
 
-func TestParallelAgent_BeforeCallbackCustomResp(t *testing.T) {
+func TestParallelAgent_BeforeCallbackResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
@@ -370,7 +370,7 @@ func TestParallelAgent_BeforeCallbackCustomResp(t *testing.T) {
 	require.Equal(t, "before", first.Object)
 }
 
-func TestParallelAgent_CreateBranchInvoke(t *testing.T) {
+func TestParallelAgent_BranchInvoke(t *testing.T) {
 	sa := &silentAgent{name: "child"}
 	pa := newFromLegacy(legacyOptions{Name: "parent"})
 

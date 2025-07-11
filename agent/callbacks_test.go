@@ -24,7 +24,7 @@ import (
 // BeforeAgent Callback Tests
 // =========================
 
-func TestAgentCallbacks_Before_NoCallbacks(t *testing.T) {
+func TestAgentCallbacks_Before_NoCb(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
@@ -36,7 +36,7 @@ func TestAgentCallbacks_Before_NoCallbacks(t *testing.T) {
 	require.Nil(t, resp)
 }
 
-func TestAgentCallbacks_Before_CustomResp(t *testing.T) {
+func TestAgentCallbacks_Before_Custom(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-agent-response"}
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
@@ -91,7 +91,7 @@ func TestAgentCallbacks_Before_Multi(t *testing.T) {
 // AfterAgent Callback Tests
 // =========================
 
-func TestAgentCallbacks_After_NoCallbacks(t *testing.T) {
+func TestAgentCallbacks_After_NoCb(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
