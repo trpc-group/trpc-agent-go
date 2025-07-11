@@ -210,5 +210,6 @@ Pull requests, issues and suggestions are very welcome! Please read
 
 ## Acknowledgements
 
-Inspired by OpenAI function calling, LangChain agent interfaces and Google's
-A2A protocol. Licensed under the Apache 2.0 License.
+Inspired by Google Adk.
+
+Licensed under the Apache 2.0 License.
