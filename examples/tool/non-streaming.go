@@ -31,7 +31,10 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 
 	request := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
+			model.NewSystemMessage(
+				"You are a helpful weather guide. If you don't have real-time " +
+				"weather data, you should call the user-provided tool.",
+			),
 			model.NewUserMessage("What is the weather in New York City? "),
 		},
 		GenerationConfig: model.GenerationConfig{

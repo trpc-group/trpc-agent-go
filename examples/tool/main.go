@@ -11,6 +11,27 @@
 //
 
 // Package main demonstrates how to use the OpenAI-like model with environment variables.
+//
+// This example showcases three different interaction patterns with the LLM:
+// 1. Non-streaming.
+// 2. Streaming generation with user-supplied tool calls *during* execution.
+// 3. Streaming input/output with incremental updates.
+//
+// The focus is on illustrating how to construct a `model.Request`, attach
+// custom tools (created with `function.NewFunctionTool`), and consume the
+// resulting `model.Response` or streaming channel. The example also provides
+// guidance on configuring the model via environment variables or command-line
+// flags, masking API keys in logs, and parsing the streamed chunks.
+//
+// Run the example with (assuming the repo root):
+//
+//   go run ./examples/tool -model=gpt-4o-mini
+//
+// Make sure to export `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`) in
+// your environment beforehand. The program prints configuration parameters,
+// executes each demo function, and displays both intermediate and final
+// results so that you can observe how the LLM interface behaves under
+// different streaming strategies.
 package main
 
 import (

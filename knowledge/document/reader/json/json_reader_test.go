@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-func TestJSONReader_ReadFromReader_NoChunk(t *testing.T) {
+func TestJSONReadFromReaderNoChunk(t *testing.T) {
 	data := `{"name":"Alice","age":30}`
 
 	rdr := New(

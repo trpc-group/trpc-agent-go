@@ -71,8 +71,7 @@ func ExampleEmbedder_GetEmbedding() {
 		embedding[0], embedding[1], embedding[2])
 }
 
-// ExampleEmbedder_GetEmbeddingWithUsage demonstrates getting embeddings with usage information.
-func ExampleEmbedder_GetEmbeddingWithUsage() {
+func ExampleEmbedder_getEmbedding() {
 	// Skip this example if no API key is available.
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
