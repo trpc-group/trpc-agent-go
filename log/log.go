@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package log provides logging utilities.
 package log
 
@@ -83,7 +95,7 @@ var encoderConfig = zapcore.EncoderConfig{
 	EncodeCaller:   zapcore.ShortCallerEncoder,
 }
 
-// Logger is the underlying logging work for trpc-a2a-go.
+// Logger defines the logging interface used throughout trpc-agent-go.
 type Logger interface {
 	// Debug logs to DEBUG log. Arguments are handled in the manner of fmt.Print.
 	Debug(args ...any)

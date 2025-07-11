@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package adk provides a HTTP server compatible with the ADK Web UI.
 package adk
 
@@ -262,7 +274,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -309,7 +321,7 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

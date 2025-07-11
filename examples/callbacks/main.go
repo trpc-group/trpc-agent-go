@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates multi-turn chat using the Runner with streaming output, session management,
 // tool calling, and shows how to use AgentCallbacks, ModelCallbacks, and ToolCallbacks.
 package main
@@ -253,7 +265,7 @@ func (c *multiTurnChatWithCallbacks) startChat(ctx context.Context) error {
 
 func (c *multiTurnChatWithCallbacks) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates interactive chat using DuckDuckGo Instant Answer API.
 // The tool provides factual, encyclopedic information but not real-time data.
 package main
@@ -12,7 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -162,7 +173,7 @@ func (c *searchChat) processMessage(ctx context.Context, userMessage string) err
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
