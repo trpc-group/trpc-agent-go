@@ -101,32 +101,3 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 		}
 	}
 }
-
-// Usage Examples:
-//
-// Default weights (70% vector, 30% text):
-//   vs, err := pgvector.New(
-//       pgvector.WithUser("user"),
-//       pgvector.WithPassword("password"),
-//   )
-//
-// Custom weights (50% vector, 50% text):
-//   vs, err := pgvector.New(
-//       pgvector.WithUser("user"),
-//       pgvector.WithPassword("password"),
-//       pgvector.WithHybridSearchWeights(0.5, 0.5),
-//   )
-//
-// Prefer vector similarity (80% vector, 20% text):
-//   vs, err := pgvector.New(
-//       pgvector.WithUser("user"),
-//       pgvector.WithPassword("password"),
-//       pgvector.WithHybridSearchWeights(0.8, 0.2),
-//   )
-//
-// Prefer text relevance (30% vector, 70% text):
-//   vs, err := pgvector.New(
-//       pgvector.WithUser("user"),
-//       pgvector.WithPassword("password"),
-//       pgvector.WithHybridSearchWeights(0.3, 0.7),
-//   )
