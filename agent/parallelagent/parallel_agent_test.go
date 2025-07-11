@@ -201,7 +201,7 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 	require.True(t, hasError)
 }
 
-func TestParallelAgent_BranchInvocations(t *testing.T) {
+func TestParallelAgent_BranchInvoke(t *testing.T) {
 	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
 	parallelAgent := newFromLegacy(legacyOptions{Name: "test-parallel"})
 
@@ -368,21 +368,4 @@ func TestParallelAgent_BeforeCallbackResp(t *testing.T) {
 	}
 	require.NotNil(t, first)
 	require.Equal(t, "before", first.Object)
-}
-
-func TestParallelAgent_BranchInvoke(t *testing.T) {
-	sa := &silentAgent{name: "child"}
-	pa := newFromLegacy(legacyOptions{Name: "parent"})
-
-	base := &agent.Invocation{InvocationID: "root", AgentName: "parent"}
-	branch := pa.createBranchInvocationForSubAgent(sa, base)
-
-	// InvocationID should change and contain base ID.
-	require.NotEqual(t, base.InvocationID, branch.InvocationID)
-	require.Contains(t, branch.InvocationID, base.InvocationID)
-	// Branch should equal new invocation ID.
-	require.Equal(t, branch.InvocationID, branch.Branch)
-	// Agent properties updated.
-	require.Equal(t, "child", branch.AgentName)
-	require.Equal(t, "child", branch.Agent.Info().Name)
 }

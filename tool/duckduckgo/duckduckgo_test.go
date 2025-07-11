@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo/internal/client"
 )
 
-func TestDuckDuckGoTool_Search_WithResults(t *testing.T) {
+func TestDuckDuckGoTool_Search_Results(t *testing.T) {
 	// Mock API response with related topics
 	mockResponse := `{
 		"Abstract": "Beijing is the capital of China",
