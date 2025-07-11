@@ -16,7 +16,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -26,6 +25,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
 	"google.golang.org/grpc"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 var (

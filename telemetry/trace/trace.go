@@ -15,6 +15,8 @@ package trace
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,7 +26,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	noopt "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
-	"os"
+
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
