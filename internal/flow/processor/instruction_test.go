@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestInstructionRequestProcessor_Request(t *testing.T) {
+func TestInstructionProc_Request(t *testing.T) {
 	tests := []struct {
 		name         string
 		instruction  string
@@ -142,7 +142,7 @@ func TestInstructionRequestProcessor_Request(t *testing.T) {
 	}
 }
 
-func TestInstructionRequestProcessor_HasSysMsg(t *testing.T) {
+func TestInstructionProc_HasSysMsg(t *testing.T) {
 	tests := []struct {
 		name     string
 		messages []model.Message

@@ -124,7 +124,7 @@ func TestFlow_Interface(t *testing.T) {
 	var _ flow.Flow = f
 }
 
-func TestModelCallbacks_BeforeModel_Skip(t *testing.T) {
+func TestModelCallbacks_Before_Skip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -158,7 +158,7 @@ func TestModelCallbacks_BeforeModel_Skip(t *testing.T) {
 	require.Equal(t, "skip-response", events[0].Response.ID)
 }
 
-func TestModelCallbacks_BeforeModel_CustomResp(t *testing.T) {
+func TestModelCallbacks_Before_CustomResp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -192,7 +192,7 @@ func TestModelCallbacks_BeforeModel_CustomResp(t *testing.T) {
 	require.Equal(t, "custom-before", events[0].Response.ID)
 }
 
-func TestModelCallbacks_BeforeModel_Err(t *testing.T) {
+func TestModelCallbacks_Before_Err(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -225,7 +225,7 @@ func TestModelCallbacks_BeforeModel_Err(t *testing.T) {
 	require.Equal(t, "before error", events[0].Error.Message)
 }
 
-func TestModelCallbacks_AfterModel_OverrideResp(t *testing.T) {
+func TestModelCallbacks_After_OverrideResp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -262,7 +262,7 @@ func TestModelCallbacks_AfterModel_OverrideResp(t *testing.T) {
 	require.Equal(t, "after-override", events[0].Response.Object)
 }
 
-func TestModelCallbacks_AfterModel_Error(t *testing.T) {
+func TestModelCallbacks_After_Error(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 

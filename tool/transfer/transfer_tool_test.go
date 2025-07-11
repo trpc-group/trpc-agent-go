@@ -77,7 +77,7 @@ func TestTransferTool_Declaration(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_Success(t *testing.T) {
+func TestTransferTool_Success(t *testing.T) {
 	agentInfos := []agent.Info{
 		{Name: "calculator", Description: "A calculator agent"},
 	}
@@ -105,7 +105,7 @@ func TestTransferTool_Call_Success(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_AgentNotFound(t *testing.T) {
+func TestTransferTool_AgentNotFound(t *testing.T) {
 	agentInfos := []agent.Info{
 		{Name: "calculator", Description: "A calculator agent"},
 	}
@@ -136,7 +136,7 @@ func TestTransferTool_Call_AgentNotFound(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_NoSubAgents(t *testing.T) {
+func TestTransferTool_NoSubAgents(t *testing.T) {
 	// Test with empty agent info list.
 	agentInfos := []agent.Info{}
 

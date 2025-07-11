@@ -25,7 +25,7 @@
 //
 // Run the example with (assuming the repo root):
 //
-//   go run ./examples/tool -model=gpt-4o-mini
+//	go run ./examples/tool -model=gpt-4o-mini
 //
 // Make sure to export `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`) in
 // your environment beforehand. The program prints configuration parameters,
@@ -44,6 +44,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
+// main is the entry point of the application.
+// It demonstrates three different interaction patterns with the LLM.
 func main() {
 	// Read configuration from environment variables.
 	baseURL := getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -61,7 +63,8 @@ func main() {
 	fmt.Printf("Using configuration:\n")
 	fmt.Printf("- Model Name: %s\n", *modelName)
 	fmt.Printf("- Channel Buffer Size: 512\n")
-	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
+	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and " +
+		"OPENAI_BASE_URL from environment\n")
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance using the new package structure.
@@ -72,23 +75,27 @@ func main() {
 
 	ctx := context.Background()
 
+	// Execute non-streaming example.
 	fmt.Println("=== Non-streaming Example ===")
 	if err := nonStreamingExample(ctx, llm); err != nil {
 		log.Printf("Non-streaming example failed: %v", err)
 	}
 
+	// Execute streaming input example.
 	fmt.Println("=== Streaming Input Example ===")
 	if err := streamingInputExample(ctx, llm); err != nil {
 		log.Printf("Streaming Input example failed: %v", err)
 	}
 
+	// Execute streaming output example.
 	fmt.Println("=== Streaming Output Example ===")
 	if err := streamingOutputExample(ctx, llm); err != nil {
-		log.Printf("Streaming  Outputexample failed: %v", err)
+		log.Printf("Streaming Output example failed: %v", err)
 	}
 }
 
 // getEnv gets an environment variable with a default value.
+// If the environment variable is not set, it returns the default value.
 func getEnv(key, defaultValue string) string {
 	value := os.Getenv(key)
 	if value == "" {
@@ -98,6 +105,7 @@ func getEnv(key, defaultValue string) string {
 }
 
 // maskAPIKey masks the API key for logging purposes.
+// It returns the first 3 characters followed by asterisks for security.
 func maskAPIKey(apiKey string) string {
 	if len(apiKey) <= 6 {
 		return "***"

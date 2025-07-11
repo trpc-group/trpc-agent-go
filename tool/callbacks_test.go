@@ -174,7 +174,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 
 }
 
-func TestRunBeforeTool_MultipleCallbacks(t *testing.T) {
+func TestRunBeforeTool_Multiple(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
 	callCount := 0
@@ -324,7 +324,7 @@ func TestRunAfterTool_Error(t *testing.T) {
 	require.Nil(t, customResult)
 }
 
-func TestRunAfterTool_MultipleCallbacks(t *testing.T) {
+func TestRunAfterTool_Multiple(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 
 	callCount := 0
