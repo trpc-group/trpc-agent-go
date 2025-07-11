@@ -124,7 +124,7 @@ func TestFlow_Interface(t *testing.T) {
 	var _ flow.Flow = f
 }
 
-func TestModelCallbacks_Before_Skip(t *testing.T) {
+func TestModelCallbacks_BeforeSkip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -225,7 +225,7 @@ func TestModelCallbacks_Before_Err(t *testing.T) {
 	require.Equal(t, "before error", events[0].Error.Message)
 }
 
-func TestModelCallbacks_After_OverrideResp(t *testing.T) {
+func TestModelCallbacks_AfterOverrideResp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 

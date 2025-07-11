@@ -34,50 +34,73 @@ import (
 
 const defaultListenAddr = ":8080"
 
+// main is the entry point of the application.
+// It sets up an LLM agent with calculator and time tools,
+// and starts an HTTP server for ADK Web UI compatibility.
 func main() {
 	var addr string
 	flag.StringVar(&addr, "addr", defaultListenAddr, "Listen address")
 	flag.Parse()
 
 	// --- Model and tools setup ---
+	// Create the OpenAI model instance for LLM interactions.
 	modelName := "deepseek-chat"
 	modelInstance := openai.New(modelName, openai.Options{})
 
+	// Create calculator tool for mathematical operations.
 	calculatorTool := function.NewFunctionTool(
 		calculate,
 		function.WithName("calculator"),
-		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+		function.WithDescription(
+			"Perform basic mathematical calculations (add, subtract, multiply, divide)",
+		),
 	)
+	// Create time tool for timezone queries.
 	timeTool := function.NewFunctionTool(
 		getCurrentTime,
 		function.WithName("current_time"),
-		function.WithDescription("Get the current time and date for a specific timezone"),
+		function.WithDescription(
+			"Get the current time and date for a specific timezone",
+		),
 	)
 
+	// Configure generation parameters for the LLM.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
 		Stream:      true,
 	}
 
+	// Create the LLM agent with tools and configuration.
 	agentName := "assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
-		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithDescription(
+			"A helpful AI assistant with calculator and time tools",
+		),
+		llmagent.WithInstruction(
+			"Use tools when appropriate for calculations or time queries. Be helpful and conversational.",
+		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 	)
 
+	// Register the agent in the agent map.
 	agents := map[string]agent.Agent{
 		agentName: llmAgent,
 	}
 
+	// Create the debug server for HTTP interface.
 	server := debug.New(agents)
 
-	log.Infof("CLI server listening on %s (apps: %v)", addr, agents)
+	// Start the HTTP server and handle requests.
+	log.Infof(
+		"CLI server listening on %s (apps: %v)",
+		addr,
+		agents,
+	)
 	if err := http.ListenAndServe(addr, server.Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
