@@ -257,7 +257,7 @@ func (c *transferChat) processMessage(ctx context.Context, userMessage string) e
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

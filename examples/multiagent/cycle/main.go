@@ -159,14 +159,14 @@ func (c *cycleChat) setup(ctx context.Context) error {
 
 	// Create Cycle Agent with sub-agents and injectable escalation logic.
 	maxIterPtr := &c.maxIterations
-	cycleAgent := cycleagent.New(cycleagent.Options{
-		Name:              "multi-agent-cycle",
-		SubAgents:         []agent.Agent{generateAgent, criticAgent},
-		Tools:             []tool.Tool{scoreTool, solutionTool},
-		MaxIterations:     maxIterPtr,
-		ChannelBufferSize: defaultChannelBufferSize,
-		EscalationFunc:    qualityEscalationFunc, // Injectable quality-based escalation
-	})
+	cycleAgent := cycleagent.New(
+		"cycle-demo",
+		cycleagent.WithSubAgents([]agent.Agent{generateAgent, criticAgent}),
+		cycleagent.WithTools([]tool.Tool{scoreTool, solutionTool}),
+		cycleagent.WithMaxIterations(*maxIterPtr),
+		cycleagent.WithChannelBufferSize(defaultChannelBufferSize),
+		cycleagent.WithEscalationFunc(qualityEscalationFunc),
+	)
 
 	// Create runner with the cycle agent.
 	appName := "cycle-agent-demo"
@@ -226,7 +226,7 @@ func (c *cycleChat) processMessage(ctx context.Context, userMessage string) erro
 	message := model.NewUserMessage(userMessage)
 
 	// Run the cycle agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run cycle agent: %w", err)
 	}

@@ -130,12 +130,12 @@ func (c *chainChat) setup(ctx context.Context) error {
 	)
 
 	// Create Chain Agent with sub-agents.
-	chainAgent := chainagent.New(chainagent.Options{
-		Name:              "multi-agent-chain",
-		SubAgents:         []agent.Agent{planningAgent, researchAgent, writingAgent},
-		Tools:             []tool.Tool{webSearchTool, knowledgeTool},
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	chainAgent := chainagent.New(
+		"multi-agent-chain",
+		chainagent.WithSubAgents([]agent.Agent{planningAgent, researchAgent, writingAgent}),
+		chainagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
+		chainagent.WithChannelBufferSize(defaultChannelBufferSize),
+	)
 
 	// Create runner with the chain agent.
 	appName := "chain-agent-demo"
@@ -195,7 +195,7 @@ func (c *chainChat) processMessage(ctx context.Context, userMessage string) erro
 	message := model.NewUserMessage(userMessage)
 
 	// Run the chain agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run chain agent: %w", err)
 	}

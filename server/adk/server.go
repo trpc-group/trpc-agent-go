@@ -262,7 +262,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -309,7 +309,7 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

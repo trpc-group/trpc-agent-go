@@ -88,7 +88,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	message := model.NewUserMessage("Hello, world!")
 
 	// Run the agent.
-	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 
@@ -145,7 +145,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 	message := model.NewUserMessage("First message")
 
 	// Run the agent (should create new session).
-	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 
@@ -185,7 +185,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	emptyMessage := model.Message{} // Empty message
 
 	// Run the agent with empty message.
-	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 

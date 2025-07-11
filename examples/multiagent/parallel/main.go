@@ -129,17 +129,11 @@ func (c *parallelChat) setup(ctx context.Context) error {
 	)
 
 	// Create the parallel agent coordinator.
-	parallelAgent := parallelagent.New(parallelagent.Options{
-		Name: "parallel-coordinator",
-		SubAgents: []agent.Agent{
-			marketAgent,
-			technicalAgent,
-			riskAgent,
-			opportunityAgent,
-		},
-		Tools:             []tool.Tool{},
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	parallelAgent := parallelagent.New(
+		"parallel-demo",
+		parallelagent.WithSubAgents([]agent.Agent{marketAgent, technicalAgent, riskAgent, opportunityAgent}),
+		parallelagent.WithChannelBufferSize(defaultChannelBufferSize),
+	)
 
 	// Create runner with the parallel agent.
 	appName := "parallel-agent-demo"
@@ -227,7 +221,7 @@ func (c *parallelChat) processMessage(ctx context.Context, userMessage string) e
 	startTime := time.Now()
 
 	// Run the parallel agent system through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run parallel agents: %w", err)
 	}

@@ -253,7 +253,7 @@ func (c *multiTurnChatWithCallbacks) startChat(ctx context.Context) error {
 
 func (c *multiTurnChatWithCallbacks) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

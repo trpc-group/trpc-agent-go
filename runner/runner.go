@@ -39,7 +39,8 @@ type Runner interface {
 		userID string,
 		sessionID string,
 		message model.Message,
-		opts agent.RunOptions,
+		// Variadic run options placeholder for future extension.
+		runOpts ...agent.RunOptions,
 	) (<-chan *event.Event, error)
 }
 
@@ -80,7 +81,7 @@ func (r *runner) Run(
 	userID string,
 	sessionID string,
 	message model.Message,
-	opts agent.RunOptions,
+	runOpts ...agent.RunOptions,
 ) (<-chan *event.Event, error) {
 	ctx, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("invocation"))
 	defer span.End()
@@ -132,13 +133,17 @@ func (r *runner) Run(
 
 	// Create invocation.
 	eventCompletionCh := make(chan string)
+	var ro agent.RunOptions
+	if len(runOpts) > 0 {
+		ro = runOpts[0]
+	}
 	invocation := &agent.Invocation{
 		Agent:             r.agent,
 		Session:           sess,
 		InvocationID:      invocationID,
 		EndInvocation:     false,
 		Message:           message,
-		RunOptions:        opts,
+		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
 	}
 
