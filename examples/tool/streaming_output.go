@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // streamingOutputExample demonstrates non-streaming usage.

@@ -12,23 +12,23 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/agent"
-	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/core/event"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge"
-	openaiembedder "trpc.group/trpc-go/trpc-agent-go/core/knowledge/embedder/openai"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/source"
-	autosource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/auto"
-	dirsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/dir"
-	filesource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/file"
-	urlsource "trpc.group/trpc-go/trpc-agent-go/core/knowledge/source/url"
-	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	openaimodel "trpc.group/trpc-go/trpc-agent-go/core/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
+	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
@@ -202,6 +202,8 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithShowProgress(false),  // The default is true.
 		knowledge.WithProgressStepSize(10), // The default is 10.
 		knowledge.WithShowStats(false),     // The default is true.
+		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
 	); err != nil {
 		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}

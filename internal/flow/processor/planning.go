@@ -4,12 +4,12 @@ import (
 	"context"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/agent"
-	"trpc.group/trpc-go/trpc-agent-go/core/event"
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/planner"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/planner/builtin"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/planner/builtin"
 )
 
 // PlanningRequestProcessor implements planning request processing logic.

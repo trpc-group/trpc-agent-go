@@ -4,7 +4,7 @@ go 1.24.4
 
 replace trpc.group/trpc-go/trpc-agent-go => ../
 
-replace trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis => ../orchestration/session/redis/
+replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 
 require (
 	github.com/redis/go-redis/v9 v9.11.0
@@ -12,7 +12,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.37.0
 	go.opentelemetry.io/otel/trace v1.37.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/orchestration/session/redis v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250709022439-f9d940988a2b
 )
 
@@ -25,6 +25,8 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.1 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
+	github.com/golang/glog v1.2.4 // indirect
+	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 // indirect
@@ -35,14 +37,13 @@ require (
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
 	github.com/openai/openai-go v1.5.0 // indirect
+	github.com/panjf2000/ants/v2 v2.6.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
-	github.com/richardlehane/msoleps v1.0.3 // indirect
 	github.com/rs/cors v1.10.1 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
-	github.com/unidoc/unioffice v1.39.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.12 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect

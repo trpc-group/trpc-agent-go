@@ -10,14 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/agent"
-	"trpc.group/trpc-go/trpc-agent-go/core/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
-	"trpc.group/trpc-go/trpc-agent-go/core/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/server/adk"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const defaultListenAddr = ":8080"
