@@ -77,7 +77,7 @@ func TestDuckDuckGoTool_Search_WithResults(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_WithInstantAnswer(t *testing.T) {
+func TestDuckDuckGoTool_Search_InstantAnswer(t *testing.T) {
 	mockResponse := `{
 		"Answer": "25°C, Partly cloudy",
 		"AnswerType": "weather",
@@ -109,7 +109,7 @@ func TestDuckDuckGoTool_Search_WithInstantAnswer(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_WithDefinition(t *testing.T) {
+func TestDuckDuckGoTool_Search_Definition(t *testing.T) {
 	mockResponse := `{
 		"Definition": "Large Language Model (LLM) is a type of artificial intelligence model.",
 		"DefinitionSource": "Wikipedia",
