@@ -1,24 +1,21 @@
-//
 // Tencent is pleased to support the open source community by making tRPC available.
 //
 // Copyright (C) 2025 Tencent.
 // All rights reserved.
 //
 // If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// please note that tRPC source code is licensed under the Apache 2.0 License.
 // A copy of the Apache 2.0 License is included in this file.
 //
-//
-
 // Package main provides a standalone CLI demo showcasing how to wire the
-// trpc-agent-go orchestration layer with an LLM agent that exposes two
-// simple tools: a calculator and a time query. It starts an HTTP server
-// compatible with ADK Web UI for manual testing.
+// trpc-agent-go orchestration layer with an LLM agent that exposes two simple tools:
+// a calculator and a time query. It starts an HTTP server compatible with ADK Web UI
+// for manual testing.
 //
 // This file demonstrates how to set up a simple LLM agent with custom tools
-// (calculator and time query) and expose it via an HTTP server compatible
-// with the ADK Web UI. It is intended for manual testing and as a reference
-// for integrating tRPC agent orchestration with LLM-based tools.
+// (calculator and time query) and expose it via an HTTP server compatible with the
+// ADK Web UI. It is intended for manual testing and as a reference for integrating
+// tRPC agent orchestration with LLM-based tools.
 //
 // The example covers:
 // - Model and tool setup
@@ -73,8 +70,8 @@ func main() {
 		calculate,
 		function.WithName("calculator"),
 		function.WithDescription(
-			"Perform basic mathematical calculations "+
-				"(add, subtract, multiply, divide)",
+			// Perform basic mathematical calculations (add, subtract, multiply, divide).
+			"Perform basic mathematical calculations (add, subtract, multiply, divide)",
 		),
 	)
 	// Create time tool for timezone queries.
@@ -82,8 +79,8 @@ func main() {
 		getCurrentTime,
 		function.WithName("current_time"),
 		function.WithDescription(
-			"Get the current time and date for a "+
-				"specific timezone",
+			// Get the current time and date for a specific timezone.
+			"Get the current time and date for a specific timezone",
 		),
 	)
 
@@ -100,16 +97,17 @@ func main() {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription(
-			"A helpful AI assistant with calculator "+
-				"and time tools",
+			"A helpful AI assistant with calculator and time tools",
 		),
 		llmagent.WithInstruction(
-			"Use tools when appropriate for calculations "+
-				"or time queries. Be helpful and conversational.",
+			"Use tools when appropriate for calculations or time queries. "+
+				"Be helpful and conversational.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
-		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
+		llmagent.WithTools(
+			[]tool.Tool{calculatorTool, timeTool},
+		),
 	)
 
 	// Register the agent in the agent map.
@@ -122,6 +120,7 @@ func main() {
 
 	// Start the HTTP server and handle requests.
 	log.Infof(
+		// Log the server listening address and registered agents.
 		"CLI server listening on %s (apps: %v)",
 		addr,
 		agents,
@@ -143,7 +142,6 @@ const (
 	opDivide   = "divide"
 )
 
-// Calculator tool input.
 // calculatorArgs holds the input for the calculator tool.
 type calculatorArgs struct {
 	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
@@ -151,7 +149,6 @@ type calculatorArgs struct {
 	B         float64 `json:"b" description:"Second number"`
 }
 
-// Calculator tool output.
 // calculatorResult holds the output for the calculator tool.
 type calculatorResult struct {
 	Operation string  `json:"operation"`
@@ -160,13 +157,11 @@ type calculatorResult struct {
 	Result    float64 `json:"result"`
 }
 
-// Time tool input.
 // timeArgs holds the input for the time tool.
 type timeArgs struct {
 	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
 }
 
-// Time tool output.
 // timeResult holds the output for the time tool.
 type timeResult struct {
 	Timezone string `json:"timezone"`
@@ -180,6 +175,7 @@ type timeResult struct {
 // It supports add, subtract, multiply, and divide operations.
 func calculate(args calculatorArgs) calculatorResult {
 	var result float64
+	// Select operation based on input.
 	switch strings.ToLower(args.Operation) {
 	case opAdd:
 		result = args.A + args.B
@@ -206,6 +202,7 @@ func calculate(args calculatorArgs) calculatorResult {
 func getCurrentTime(args timeArgs) timeResult {
 	loc := time.Local
 	zone := args.Timezone
+	// Attempt to load the specified timezone.
 	if zone != "" {
 		var err error
 		loc, err = time.LoadLocation(zone)
@@ -223,17 +220,20 @@ func getCurrentTime(args timeArgs) timeResult {
 }
 
 // intPtr returns a pointer to the given int value.
-func intPtr(i int) *int { return &i }
+func intPtr(i int) *int {
+	return &i
+}
 
 // floatPtr returns a pointer to the given float64 value.
-func floatPtr(f float64) *float64 { return &f }
+func floatPtr(f float64) *float64 {
+	return &f
+}
 
-// This example demonstrates how to integrate tRPC agent orchestration with
-// LLM-based tools, providing a simple HTTP server for manual testing.
-// It is intended as a reference for developers looking to build custom
-// LLM agents with tool support in Go.
+// This example demonstrates how to integrate tRPC agent orchestration with LLM-based tools,
+// providing a simple HTTP server for manual testing. It is intended as a reference for developers
+// looking to build custom LLM agents with tool support in Go.
 //
-// The calculator tool supports basic arithmetic operations, while the time
-// tool provides current time information for a given timezone.
+// The calculator tool supports basic arithmetic operations, while the time tool provides current
+// time information for a given timezone.
 //
 // The code is structured for clarity and ease of extension.
