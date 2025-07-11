@@ -82,7 +82,8 @@ func main() {
 		getCurrentTime,
 		function.WithName("current_time"),
 		function.WithDescription(
-			"Get the current time and date for a specific timezone",
+			"Get the current time and date for a "+
+				"specific timezone",
 		),
 	)
 
@@ -99,11 +100,12 @@ func main() {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription(
-			"A helpful AI assistant with calculator and time tools",
+			"A helpful AI assistant with calculator "+
+				"and time tools",
 		),
 		llmagent.WithInstruction(
-			"Use tools when appropriate for calculations or time queries. "+
-				"Be helpful and conversational.",
+			"Use tools when appropriate for calculations "+
+				"or time queries. Be helpful and conversational.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
@@ -225,3 +227,13 @@ func intPtr(i int) *int { return &i }
 
 // floatPtr returns a pointer to the given float64 value.
 func floatPtr(f float64) *float64 { return &f }
+
+// This example demonstrates how to integrate tRPC agent orchestration with
+// LLM-based tools, providing a simple HTTP server for manual testing.
+// It is intended as a reference for developers looking to build custom
+// LLM agents with tool support in Go.
+//
+// The calculator tool supports basic arithmetic operations, while the time
+// tool provides current time information for a given timezone.
+//
+// The code is structured for clarity and ease of extension.
