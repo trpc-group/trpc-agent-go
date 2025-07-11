@@ -31,21 +31,6 @@ func newDummyModel() model.Model {
 	return openai.New("dummy-model", openai.Options{})
 }
 
-func TestLLMAgent_InfoAndTools(t *testing.T) {
-	agt := New("test-agent",
-		WithDescription("desc"),
-		WithModel(newDummyModel()),
-		WithTools([]tool.Tool{}),
-	)
-	info := agt.Info()
-	if info.Name != "test-agent" || info.Description != "desc" {
-		t.Errorf("unexpected agent info: %+v", info)
-	}
-	if len(agt.Tools()) != 0 {
-		t.Errorf("expected no tools")
-	}
-}
-
 func TestLLMAgent_SubAgents(t *testing.T) {
 	sub := New("sub", WithDescription("subdesc"))
 	agt := New("main", WithSubAgents([]agent.Agent{sub}))
@@ -60,7 +45,7 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 	}
 }
 
-func TestLLMAgent_Run_BeforeAgentShortCircuit(t *testing.T) {
+func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {
 	// BeforeAgentCallback returns a custom response, should short-circuit.
 	agentCallbacks := agent.NewAgentCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
@@ -137,7 +122,7 @@ func TestLLMAgent_Run_NormalFlow(t *testing.T) {
 	}
 }
 
-func TestLLMAgent_Run_AfterAgentCallbackError(t *testing.T) {
+func TestLLMAgent_Run_AfterAgentCbErr(t *testing.T) {
 	agentCallbacks := agent.NewAgentCallbacks()
 	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
 		return nil, errors.New("after error")

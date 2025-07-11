@@ -65,7 +65,7 @@ func newStubSpan() *stubSpan {
 	return &stubSpan{Span: baseSpan}
 }
 
-func TestTraceFunctions_NoPanicsAndCallsSetAttributes(t *testing.T) {
+func TestTraceFunctions_NoPanics(t *testing.T) {
 	span := newStubSpan()
 
 	// Prepare common objects.

@@ -57,7 +57,7 @@ func (errChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return nil, errors.New("chunk fail")
 }
 
-func TestReader_ReadFromFile_AndChunkError(t *testing.T) {
+func TestReader_ReadFile_ChunkError(t *testing.T) {
 	data := createDocx(t, "File Mode")
 	tmp, _ := os.CreateTemp(t.TempDir(), "*.docx")
 	tmp.Write(data)

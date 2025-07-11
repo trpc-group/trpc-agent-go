@@ -141,7 +141,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
 }
 
-func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
+func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := inmemory.NewSessionService()
 

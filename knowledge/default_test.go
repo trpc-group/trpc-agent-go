@@ -49,7 +49,7 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 	return docs, nil
 }
 
-func TestBuiltinKnowledge_Load_WithOptions(t *testing.T) {
+func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
 	// Create a knowledge instance with mock sources.
 	kb := New(
 		WithSources([]source.Source{
@@ -85,7 +85,7 @@ func TestBuiltinKnowledge_Load_WithOptions(t *testing.T) {
 	}
 }
 
-func TestBuiltinKnowledge_Load_WithNoSources(t *testing.T) {
+func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
 	// Create a knowledge instance with no sources.
 	kb := New()
 
@@ -200,7 +200,7 @@ func TestCalcETA_Boundaries(t *testing.T) {
 	}
 }
 
-func TestAddDocument_WithEmbedderAndStore(t *testing.T) {
+func TestAddDocument_EmbedderStore(t *testing.T) {
 	kb := &BuiltinKnowledge{}
 	kb.embedder = stubEmbedder{}
 	store := &stubVectorStore{}

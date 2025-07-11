@@ -71,7 +71,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestPlanner_BuildPlanningInstruction(t *testing.T) {
+func TestPlanner_BuildPlanInstr(t *testing.T) {
 	tests := []struct {
 		name    string
 		planner *Planner

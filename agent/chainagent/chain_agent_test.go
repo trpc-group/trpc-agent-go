@@ -371,7 +371,7 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "root", base.Branch)
 }
 
-func TestCreateSubAgentInvocationNoBranch(t *testing.T) {
+func TestCreateSubAgentInvokeNoBranch(t *testing.T) {
 	parent := New(
 		"parent",
 	)
@@ -462,7 +462,7 @@ func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 	return ch, nil
 }
 
-func TestChainAgent_BeforeCallbackCustomResponse(t *testing.T) {
+func TestChainAgent_BeforeCallbackCustomResp(t *testing.T) {
 	// Sub-agent should never run.
 	sub := &mockNoEventAgent{name: "child"}
 

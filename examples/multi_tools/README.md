@@ -62,7 +62,7 @@ export OPENAI_API_KEY="your-api-key"
 
 ### 2. Run the Example
 ```bash
-cd src/git.code.oa.com/trpc-go/trpc-agent-go/examples/multi_tools
+cd trpc.group/trpc-go/trpc-agent-go/examples/multi_tools
 go run main.go
 ```
 

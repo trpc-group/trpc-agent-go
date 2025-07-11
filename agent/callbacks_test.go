@@ -24,7 +24,7 @@ import (
 // BeforeAgent Callback Tests
 // =========================
 
-func TestAgentCallbacks_BeforeAgent_NoCallbacks(t *testing.T) {
+func TestAgentCallbacks_Before_NoCallbacks(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
@@ -36,7 +36,7 @@ func TestAgentCallbacks_BeforeAgent_NoCallbacks(t *testing.T) {
 	require.Nil(t, resp)
 }
 
-func TestAgentCallbacks_BeforeAgent_CustomResponse(t *testing.T) {
+func TestAgentCallbacks_Before_CustomResp(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-agent-response"}
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
@@ -52,7 +52,7 @@ func TestAgentCallbacks_BeforeAgent_CustomResponse(t *testing.T) {
 	require.Equal(t, customResponse, resp)
 }
 
-func TestAgentCallbacks_BeforeAgent_Error(t *testing.T) {
+func TestAgentCallbacks_Before_Err(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
 		return nil, context.DeadlineExceeded
@@ -65,10 +65,9 @@ func TestAgentCallbacks_BeforeAgent_Error(t *testing.T) {
 	resp, err := callbacks.RunBeforeAgent(context.Background(), invocation)
 	require.Error(t, err)
 	require.Nil(t, resp)
-
 }
 
-func TestAgentCallbacks_BeforeAgent_MultipleCallbacks(t *testing.T) {
+func TestAgentCallbacks_Before_Multi(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
 		return nil, nil
@@ -92,7 +91,7 @@ func TestAgentCallbacks_BeforeAgent_MultipleCallbacks(t *testing.T) {
 // AfterAgent Callback Tests
 // =========================
 
-func TestAgentCallbacks_AfterAgent_NoCallbacks(t *testing.T) {
+func TestAgentCallbacks_After_NoCallbacks(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
@@ -105,7 +104,7 @@ func TestAgentCallbacks_AfterAgent_NoCallbacks(t *testing.T) {
 	require.Nil(t, resp)
 }
 
-func TestAgentCallbacks_AfterAgent_CustomResponse(t *testing.T) {
+func TestAgentCallbacks_After_CustomResp(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	customResponse := &model.Response{ID: "custom-after-response"}
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
@@ -134,7 +133,7 @@ func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
 	require.Nil(t, resp)
 }
 
-func TestAgentCallbacks_AfterAgent_WithRunError(t *testing.T) {
+func TestAgentCallbacks_After_RunErr(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	runError := context.DeadlineExceeded
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
@@ -152,7 +151,7 @@ func TestAgentCallbacks_AfterAgent_WithRunError(t *testing.T) {
 	require.Nil(t, resp)
 }
 
-func TestAgentCallbacks_AfterAgent_MultipleCallbacks(t *testing.T) {
+func TestAgentCallbacks_After_Multi(t *testing.T) {
 	callbacks := NewAgentCallbacks()
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
 		return nil, nil

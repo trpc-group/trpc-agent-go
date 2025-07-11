@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-func TestCSVReader_ReadFromReader_NoChunk(t *testing.T) {
+func TestCSVReader_Read_NoChunk(t *testing.T) {
 	data := "name,age\nAlice,30\nBob,25\n"
 
 	rdr := New(

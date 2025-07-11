@@ -128,7 +128,7 @@ func newFromLegacy(o legacyOptions) *CycleAgent {
 	return New(o.Name, opts...)
 }
 
-func TestCycleAgent_Run_WithMaxIterations(t *testing.T) {
+func TestCycleAgent_Run_WithMaxIter(t *testing.T) {
 	// Track execution counts.
 	agent1Count := 0
 	agent2Count := 0
@@ -469,7 +469,7 @@ func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return ch, nil
 }
 
-func TestCycleAgent_BeforeCallbackCustomResponse(t *testing.T) {
+func TestCycleAgent_BeforeCallbackCustomResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "custom", Done: true}, nil
@@ -508,7 +508,7 @@ func TestCycleAgent_BeforeCallbackError(t *testing.T) {
 	require.Equal(t, 1, cnt)
 }
 
-func TestCycleAgent_SubAgentErrorPropagation(t *testing.T) {
+func TestCycleAgent_SubAgentErrProp(t *testing.T) {
 	errAgent := &errorAgent{name: "bad"}
 	ca := newFromLegacy(legacyOptions{Name: "loop", SubAgents: []agent.Agent{errAgent}})
 
@@ -534,7 +534,7 @@ func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *ev
 	return nil, errors.New("failed")
 }
 
-func TestCycleAgent_CreateSubAgentInvocation(t *testing.T) {
+func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 	parent := newFromLegacy(legacyOptions{Name: "parent"})
 	base := &agent.Invocation{InvocationID: "base", AgentName: "parent", Branch: "branchA"}
 	child := &noopAgent{name: "child"}
@@ -603,7 +603,7 @@ func (s *simpleAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 	return ch, nil
 }
 
-func TestCycleAgent_ShouldEscalate_Default(t *testing.T) {
+func TestCycleAgent_ShouldEscalateDef(t *testing.T) {
 	ca := newFromLegacy(legacyOptions{Name: "loop"})
 
 	// Error event should escalate.

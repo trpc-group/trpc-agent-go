@@ -63,7 +63,7 @@ func (p *parentAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 	return ch, nil
 }
 
-func TestTransferResponseProcessor_Success(t *testing.T) {
+func TestTransferResponseProcessor_Successful(t *testing.T) {
 	target := &mockAgent{name: "child", emit: true}
 	parent := &parentAgent{child: target}
 
@@ -91,7 +91,7 @@ func TestTransferResponseProcessor_Success(t *testing.T) {
 	require.Equal(t, "child", evts[1].Author)
 }
 
-func TestTransferResponseProcessor_TargetNotFound(t *testing.T) {
+func TestTransferResponseProcessor_Target404(t *testing.T) {
 	parent := &parentAgent{child: nil}
 	inv := &agent.Invocation{Agent: parent, AgentName: "parent", InvocationID: "inv", TransferInfo: &agent.TransferInfo{TargetAgentName: "missing"}}
 	rsp := &model.Response{ID: "r"}

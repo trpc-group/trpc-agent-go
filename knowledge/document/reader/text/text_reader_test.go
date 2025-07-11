@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-func TestTextReader_ReadFromReader_NoChunk(t *testing.T) {
+func TestTextReader_Read_NoChunk(t *testing.T) {
 	data := "Hello world!"
 
 	rdr := New(

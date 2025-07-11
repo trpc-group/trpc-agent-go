@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-func TestMarkdownReader_ReadFromReader_NoChunk(t *testing.T) {
+func TestMarkdownReader_Read_NoChunk(t *testing.T) {
 	data := "# Title\n\nThis is **markdown**."
 
 	rdr := New(

@@ -20,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGenerateJSONSchema_PrimitiveTypes(t *testing.T) {
+func TestGenerateJSONSchema_Primitives(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    any
@@ -159,7 +159,7 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 	})
 }
 
-func TestGenerateJSONSchema_NestedStructs(t *testing.T) {
+func TestGenerateJSONSchema_Nested(t *testing.T) {
 	type Address struct {
 		Street string `json:"street"`
 		City   string `json:"city"`

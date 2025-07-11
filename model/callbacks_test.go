@@ -128,7 +128,7 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 	require.Equal(t, "custom-response", resp.ID)
 }
 
-func TestModelCallbacks_MultipleCallbacks(t *testing.T) {
+func TestModelCallbacks_Multi(t *testing.T) {
 	callbacks := NewModelCallbacks()
 
 	// Add multiple callbacks - the first one should be called and stop execution.

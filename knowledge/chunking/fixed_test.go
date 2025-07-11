@@ -34,7 +34,7 @@ func TestFixedSizeChunking_Errors(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmptyDocument)
 }
 
-func TestFixedSizeChunking_SplittingAndOverlap(t *testing.T) {
+func TestFixedSizeChunking_SplitOverlap(t *testing.T) {
 	const (
 		chunkSize = 8
 		overlap   = 2

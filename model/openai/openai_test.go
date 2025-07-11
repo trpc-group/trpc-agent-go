@@ -85,7 +85,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_NilRequest(t *testing.T) {
+func TestModel_GenContent_NilReq(t *testing.T) {
 	m := New("test-model", Options{APIKey: "test-key"})
 
 	ctx := context.Background()
@@ -100,7 +100,7 @@ func TestModel_GenerateContent_NilRequest(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_ValidRequest(t *testing.T) {
+func TestModel_GenContent_ValidReq(t *testing.T) {
 	// Skip this test if no API key is provided.
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -145,7 +145,7 @@ func TestModel_GenerateContent_ValidRequest(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_CustomBaseURL(t *testing.T) {
+func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	// This test creates a model with custom base URL but doesn't make actual calls.
 	// It's mainly to test the configuration.
 
