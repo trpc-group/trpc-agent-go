@@ -146,10 +146,9 @@ const (
 
 // calculatorArgs holds the input for the calculator tool.
 type calculatorArgs struct {
-	Operation string `json:"operation" description:"The operation: " +
-		"add, subtract, multiply, divide"`
-	A float64 `json:"a" description:"First number"`
-	B float64 `json:"b" description:"Second number"`
+	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
+	A         float64 `json:"a" description:"First number"`
+	B         float64 `json:"b" description:"Second number"`
 }
 
 // calculatorResult holds the output for the calculator tool.
