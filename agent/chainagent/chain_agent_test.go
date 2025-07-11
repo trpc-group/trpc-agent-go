@@ -462,7 +462,7 @@ func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 	return ch, nil
 }
 
-func TestChainAgent_BeforeCallbackCustomResp(t *testing.T) {
+func TestChainAgent_BeforeCallbackResp(t *testing.T) {
 	// Sub-agent should never run.
 	sub := &mockNoEventAgent{name: "child"}
 

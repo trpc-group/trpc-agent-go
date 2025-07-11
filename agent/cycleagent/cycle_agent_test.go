@@ -469,7 +469,7 @@ func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return ch, nil
 }
 
-func TestCycleAgent_BeforeCallbackCustomResp(t *testing.T) {
+func TestCycleAgent_BeforeCallbackResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "custom", Done: true}, nil

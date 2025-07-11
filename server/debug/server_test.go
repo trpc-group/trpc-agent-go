@@ -262,7 +262,7 @@ func TestConvertContentToMessage(t *testing.T) {
 	}
 }
 
-func TestConvertContentToMessage_WithFunctionCall(t *testing.T) {
+func TestConvertContentToMessage_FuncCall(t *testing.T) {
 	content := schema.Content{
 		Role: "assistant",
 		Parts: []schema.Part{
