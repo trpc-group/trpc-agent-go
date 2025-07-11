@@ -14,6 +14,12 @@
 // trpc-agent-go orchestration layer with an LLM agent that exposes two
 // simple tools: a calculator and a time query. It starts an HTTP server
 // compatible with ADK Web UI for manual testing.
+//
+// This example demonstrates:
+// - Setting up an LLM agent with custom tools
+// - Configuring model parameters and generation settings
+// - Creating function-based tools for calculations and time queries
+// - Starting an HTTP server for ADK Web UI integration
 package main
 
 import (
