@@ -119,7 +119,7 @@ func newFromLegacy(o legacyOptions) *ParallelAgent {
 	return New(o.Name, opts...)
 }
 
-func TestParallelAgent_Run_Basic(t *testing.T) {
+func TestParallelAgent_Basic(t *testing.T) {
 	// Create mock sub-agents.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 2, delay: 10 * time.Millisecond}
 	subAgent2 := &mockAgent{name: "agent-2", eventCount: 1, delay: 5 * time.Millisecond}
@@ -162,7 +162,7 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 	require.Equal(t, 1, agentCounts["agent-2"])
 }
 
-func TestParallelAgent_Run_WithError(t *testing.T) {
+func TestParallelAgent_WithError(t *testing.T) {
 	// Create agents, one with error.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1}
 	subAgent2 := &mockAgent{name: "agent-2", shouldError: true}
@@ -301,7 +301,7 @@ func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return nil, errors.New("boom")
 }
 
-func TestParallelAgent_BeforeCallbackErr(t *testing.T) {
+func TestParallelAgent_BeforeErr(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("bad before")
@@ -325,7 +325,7 @@ func TestParallelAgent_BeforeCallbackErr(t *testing.T) {
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, evt.Error.Type)
 }
 
-func TestParallelAgent_AfterCallbackResp(t *testing.T) {
+func TestParallelAgent_AfterResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
@@ -351,7 +351,7 @@ func TestParallelAgent_AfterCallbackResp(t *testing.T) {
 	require.Equal(t, "after", last.Object)
 }
 
-func TestParallelAgent_BeforeCallbackResp(t *testing.T) {
+func TestParallelAgent_BeforeResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
