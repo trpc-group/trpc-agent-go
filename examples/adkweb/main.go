@@ -71,7 +71,8 @@ func main() {
 		function.WithName("calculator"),
 		function.WithDescription(
 			// Perform basic mathematical calculations (add, subtract, multiply, divide).
-			"Perform basic mathematical calculations (add, subtract, multiply, divide)",
+			"Perform basic mathematical calculations "+
+				"(add, subtract, multiply, divide)",
 		),
 	)
 	// Create time tool for timezone queries.
@@ -80,7 +81,8 @@ func main() {
 		function.WithName("current_time"),
 		function.WithDescription(
 			// Get the current time and date for a specific timezone.
-			"Get the current time and date for a specific timezone",
+			"Get the current time and date for a specific "+
+				"timezone",
 		),
 	)
 
@@ -144,9 +146,10 @@ const (
 
 // calculatorArgs holds the input for the calculator tool.
 type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
+	Operation string `json:"operation" description:"The operation: " +
+		"add, subtract, multiply, divide"`
+	A float64 `json:"a" description:"First number"`
+	B float64 `json:"b" description:"Second number"`
 }
 
 // calculatorResult holds the output for the calculator tool.
@@ -159,7 +162,8 @@ type calculatorResult struct {
 
 // timeArgs holds the input for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
+	Timezone string `json:"timezone" description:"Timezone " +
+		"(UTC, EST, PST, CST) or leave empty for local"`
 }
 
 // timeResult holds the output for the time tool.
@@ -229,11 +233,12 @@ func floatPtr(f float64) *float64 {
 	return &f
 }
 
-// This example demonstrates how to integrate tRPC agent orchestration with LLM-based tools,
-// providing a simple HTTP server for manual testing. It is intended as a reference for developers
-// looking to build custom LLM agents with tool support in Go.
+// This example demonstrates how to integrate tRPC agent orchestration
+// with LLM-based tools, providing a simple HTTP server for manual
+// testing. It is intended as a reference for developers looking to build
+// custom LLM agents with tool support in Go.
 //
-// The calculator tool supports basic arithmetic operations, while the time tool provides current
-// time information for a given timezone.
+// The calculator tool supports basic arithmetic operations, while the
+// time tool provides current time information for a given timezone.
 //
 // The code is structured for clarity and ease of extension.
