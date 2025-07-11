@@ -14,6 +14,26 @@
 // trpc-agent-go orchestration layer with an LLM agent that exposes two
 // simple tools: a calculator and a time query. It starts an HTTP server
 // compatible with ADK Web UI for manual testing.
+//
+// This file demonstrates how to set up a simple LLM agent with custom tools
+// (calculator and time query) and expose it via an HTTP server compatible
+// with the ADK Web UI. It is intended for manual testing and as a reference
+// for integrating tRPC agent orchestration with LLM-based tools.
+//
+// The example covers:
+// - Model and tool setup
+// - Agent configuration
+// - HTTP server integration
+//
+// Usage:
+//
+//	go run main.go
+//
+// The server will listen on :8080 by default.
+//
+// Author: Tencent, 2025
+//
+// -----------------------------------------------------------------------------
 package main
 
 import (
@@ -34,50 +54,78 @@ import (
 
 const defaultListenAddr = ":8080"
 
+// main is the entry point of the application.
+// It sets up an LLM agent with calculator and time tools,
+// and starts an HTTP server for ADK Web UI compatibility.
 func main() {
+	// Parse command-line flags for server address.
 	var addr string
 	flag.StringVar(&addr, "addr", defaultListenAddr, "Listen address")
 	flag.Parse()
 
 	// --- Model and tools setup ---
+	// Create the OpenAI model instance for LLM interactions.
 	modelName := "deepseek-chat"
 	modelInstance := openai.New(modelName, openai.Options{})
 
+	// Create calculator tool for mathematical operations.
 	calculatorTool := function.NewFunctionTool(
 		calculate,
 		function.WithName("calculator"),
-		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+		function.WithDescription(
+			"Perform basic mathematical calculations "+
+				"(add, subtract, multiply, divide)",
+		),
 	)
+	// Create time tool for timezone queries.
 	timeTool := function.NewFunctionTool(
 		getCurrentTime,
 		function.WithName("current_time"),
-		function.WithDescription("Get the current time and date for a specific timezone"),
+		function.WithDescription(
+			"Get the current time and date for a "+
+				"specific timezone",
+		),
 	)
 
+	// Configure generation parameters for the LLM.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
 		Stream:      true,
 	}
 
+	// Create the LLM agent with tools and configuration.
 	agentName := "assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
-		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithDescription(
+			"A helpful AI assistant with calculator "+
+				"and time tools",
+		),
+		llmagent.WithInstruction(
+			"Use tools when appropriate for calculations "+
+				"or time queries. Be helpful and conversational.",
+		),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 	)
 
+	// Register the agent in the agent map.
 	agents := map[string]agent.Agent{
 		agentName: llmAgent,
 	}
 
+	// Create the debug server for HTTP interface.
 	server := debug.New(agents)
 
-	log.Infof("CLI server listening on %s (apps: %v)", addr, agents)
+	// Start the HTTP server and handle requests.
+	log.Infof(
+		"CLI server listening on %s (apps: %v)",
+		addr,
+		agents,
+	)
 	if err := http.ListenAndServe(addr, server.Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
@@ -87,6 +135,7 @@ func main() {
 // Constants & helpers ----------------------------------------------------------
 // -----------------------------------------------------------------------------
 
+// Constants for supported calculator operations.
 const (
 	opAdd      = "add"
 	opSubtract = "subtract"
@@ -95,6 +144,7 @@ const (
 )
 
 // Calculator tool input.
+// calculatorArgs holds the input for the calculator tool.
 type calculatorArgs struct {
 	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
 	A         float64 `json:"a" description:"First number"`
@@ -102,6 +152,7 @@ type calculatorArgs struct {
 }
 
 // Calculator tool output.
+// calculatorResult holds the output for the calculator tool.
 type calculatorResult struct {
 	Operation string  `json:"operation"`
 	A         float64 `json:"a"`
@@ -110,11 +161,13 @@ type calculatorResult struct {
 }
 
 // Time tool input.
+// timeArgs holds the input for the time tool.
 type timeArgs struct {
 	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
 }
 
 // Time tool output.
+// timeResult holds the output for the time tool.
 type timeResult struct {
 	Timezone string `json:"timezone"`
 	Time     string `json:"time"`
@@ -123,6 +176,8 @@ type timeResult struct {
 }
 
 // Calculator tool implementation.
+// calculate performs the requested mathematical operation.
+// It supports add, subtract, multiply, and divide operations.
 func calculate(args calculatorArgs) calculatorResult {
 	var result float64
 	switch strings.ToLower(args.Operation) {
@@ -146,6 +201,8 @@ func calculate(args calculatorArgs) calculatorResult {
 }
 
 // Time tool implementation.
+// getCurrentTime returns the current time for the specified timezone.
+// If the timezone is invalid or empty, it defaults to local time.
 func getCurrentTime(args timeArgs) timeResult {
 	loc := time.Local
 	zone := args.Timezone
@@ -165,5 +222,18 @@ func getCurrentTime(args timeArgs) timeResult {
 	}
 }
 
-func intPtr(i int) *int           { return &i }
+// intPtr returns a pointer to the given int value.
+func intPtr(i int) *int { return &i }
+
+// floatPtr returns a pointer to the given float64 value.
 func floatPtr(f float64) *float64 { return &f }
+
+// This example demonstrates how to integrate tRPC agent orchestration with
+// LLM-based tools, providing a simple HTTP server for manual testing.
+// It is intended as a reference for developers looking to build custom
+// LLM agents with tool support in Go.
+//
+// The calculator tool supports basic arithmetic operations, while the time
+// tool provides current time information for a given timezone.
+//
+// The code is structured for clarity and ease of extension.
