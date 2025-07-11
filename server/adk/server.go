@@ -10,14 +10,14 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	"trpc.group/trpc-go/trpc-agent-go/core/agent"
-	"trpc.group/trpc-go/trpc-agent-go/core/event"
-	"trpc.group/trpc-go/trpc-agent-go/core/model"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/runner"
-	"trpc.group/trpc-go/trpc-agent-go/orchestration/session"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/orchestration/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/adk/internal/schema"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 // Server exposes HTTP endpoints compatible with the ADK Web UI. Internally it

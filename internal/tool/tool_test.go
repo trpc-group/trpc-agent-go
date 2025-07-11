@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestGenerateJSONSchema_PrimitiveTypes(t *testing.T) {

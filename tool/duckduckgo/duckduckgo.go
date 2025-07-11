@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
-	"trpc.group/trpc-go/trpc-agent-go/core/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo/internal/client"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (

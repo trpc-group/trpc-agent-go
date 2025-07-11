@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type getWeatherInput struct {

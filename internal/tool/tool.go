@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/core/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // GenerateJSONSchema generates a basic JSON schema from a reflect.Type.
