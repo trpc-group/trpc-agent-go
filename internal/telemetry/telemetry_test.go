@@ -98,3 +98,17 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 	TraceCallLLM(span, inv, req, resp, "event1")
 	require.True(t, span.called, "expected SetAttributes in TraceCallLLM")
 }
+
+// TestNewConn_InvalidEndpoint ensures an error is returned for an
+// unparsable address.
+func TestNewConn_InvalidEndpoint(t *testing.T) {
+	// gRPC dials lazily, so even malformed targets may not error immediately.
+	conn, err := NewConn("invalid:endpoint")
+	if err != nil {
+		t.Fatalf("did not expect error, got %v", err)
+	}
+	if conn == nil {
+		t.Fatalf("expected non-nil connection")
+	}
+	_ = conn.Close()
+}

@@ -22,11 +22,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Author types for events.
@@ -95,7 +95,7 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOptions,
 ) (<-chan *event.Event, error) {
-	ctx, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("invocation"))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invocation"))
 	defer span.End()
 
 	sessionKey := session.Key{

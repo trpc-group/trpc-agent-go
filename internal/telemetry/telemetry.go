@@ -14,16 +14,24 @@ package telemetry
 
 import (
 	"encoding/json"
-
-	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const (
+	ServiceName      = "telemetry"
+	ServiceVersion   = "v0.1.0"
+	ServiceNamespace = "trpc-go-agent"
 )
 
 func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
@@ -105,4 +113,18 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 	} else {
 		span.SetAttributes(attribute.String("trpc.go.agent.llm_request", "<not json serializable>"))
 	}
+}
+
+func NewConn(endpoint string) (*grpc.ClientConn, error) {
+	// It connects the OpenTelemetry Collector through gRPC connection.
+	// You can customize the endpoint using SetConfig() or environment variables.
+	conn, err := grpc.NewClient(endpoint,
+		// Note the use of insecure transport here. TLS is recommended in production.
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create gRPC connection to collector: %w", err)
+	}
+
+	return conn, err
 }

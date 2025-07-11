@@ -15,7 +15,7 @@
 // API.
 package loader
 
-import "trpc.group/trpc-go/trpc-agent-go/log"
+import "trpc.group/trpc-go/trpc-agent-go/telemetry/log"
 
 // This file provides Stats, a small helper to collect document-size statistics
 // in a concurrency-safe manner when used in combination with the Aggregator.

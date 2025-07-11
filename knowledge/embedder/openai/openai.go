@@ -22,7 +22,7 @@ import (
 	"github.com/openai/openai-go/option"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
-	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/log"
 )
 
 // Verify that Embedder implements the embedder.Embedder interface.
