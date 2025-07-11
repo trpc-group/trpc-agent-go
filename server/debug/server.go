@@ -1,5 +1,5 @@
-// Package adk provides a HTTP server compatible with the ADK Web UI.
-package adk
+// Package debug provides a HTTP server for debugging and testing.
+package debug
 
 import (
 	"encoding/json"

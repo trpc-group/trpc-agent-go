@@ -15,7 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	adk "trpc.group/trpc-go/trpc-agent-go/server/debug"
+	"trpc.group/trpc-go/trpc-agent-go/server/debug"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -63,7 +63,7 @@ func main() {
 		agentName: llmAgent,
 	}
 
-	server := adk.New(agents)
+	server := debug.New(agents)
 
 	log.Infof("CLI server listening on %s (apps: %v)", addr, agents)
 	if err := http.ListenAndServe(addr, server.Handler()); err != nil {
