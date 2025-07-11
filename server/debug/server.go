@@ -1,5 +1,17 @@
-// Package adk provides a HTTP server compatible with the ADK Web UI.
-package adk
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
+// Package debug provides a HTTP server for debugging and testing.
+package debug
 
 import (
 	"encoding/json"
@@ -15,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/adk/internal/schema"
+	"trpc.group/trpc-go/trpc-agent-go/server/debug/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -262,7 +274,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -309,7 +321,7 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
-		convertContentToMessage(req.NewMessage), agent.RunOptions{})
+		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

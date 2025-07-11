@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package model
 
 import (
@@ -116,7 +128,7 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 	require.Equal(t, "custom-response", resp.ID)
 }
 
-func TestModelCallbacks_MultipleCallbacks(t *testing.T) {
+func TestModelCallbacks_Multi(t *testing.T) {
 	callbacks := NewModelCallbacks()
 
 	// Add multiple callbacks - the first one should be called and stop execution.

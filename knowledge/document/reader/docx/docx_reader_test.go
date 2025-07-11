@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package docx
 
 import (
@@ -45,7 +57,7 @@ func (errChunker) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return nil, errors.New("chunk fail")
 }
 
-func TestReader_ReadFromFile_AndChunkError(t *testing.T) {
+func TestReader_ReadFile_ChunkError(t *testing.T) {
 	data := createDocx(t, "File Mode")
 	tmp, _ := os.CreateTemp(t.TempDir(), "*.docx")
 	tmp.Write(data)

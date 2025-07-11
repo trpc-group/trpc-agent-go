@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package tool_test
 
 import (
@@ -8,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestGenerateJSONSchema_PrimitiveTypes(t *testing.T) {
+func TestGenerateJSONSchema_Primitives(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    any
@@ -147,7 +159,7 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 	})
 }
 
-func TestGenerateJSONSchema_NestedStructs(t *testing.T) {
+func TestGenerateJSONSchema_Nested(t *testing.T) {
 	type Address struct {
 		Street string `json:"street"`
 		City   string `json:"city"`

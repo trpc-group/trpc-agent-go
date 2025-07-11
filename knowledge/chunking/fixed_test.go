@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package chunking
 
 import (
@@ -22,7 +34,7 @@ func TestFixedSizeChunking_Errors(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmptyDocument)
 }
 
-func TestFixedSizeChunking_SplittingAndOverlap(t *testing.T) {
+func TestFixedSizeChunking_SplitOverlap(t *testing.T) {
 	const (
 		chunkSize = 8
 		overlap   = 2

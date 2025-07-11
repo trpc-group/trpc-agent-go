@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package runner
 
 import (
@@ -88,7 +100,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	message := model.NewUserMessage("Hello, world!")
 
 	// Run the agent.
-	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 
@@ -129,7 +141,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
 }
 
-func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
+func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := inmemory.NewSessionService()
 
@@ -145,7 +157,7 @@ func TestRunner_SessionCreationWhenNotExists(t *testing.T) {
 	message := model.NewUserMessage("First message")
 
 	// Run the agent (should create new session).
-	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 
@@ -185,7 +197,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	emptyMessage := model.Message{} // Empty message
 
 	// Run the agent with empty message.
-	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage, agent.RunOptions{})
+	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage)
 	require.NoError(t, err)
 	require.NotNil(t, eventCh)
 

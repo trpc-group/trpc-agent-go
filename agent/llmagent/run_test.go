@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package llmagent
 
 import (
@@ -24,7 +36,7 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 	return ch, nil
 }
 
-func TestLLMAgent_Run_BeforeCallbackCustom(t *testing.T) {
+func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
@@ -40,7 +52,7 @@ func TestLLMAgent_Run_BeforeCallbackCustom(t *testing.T) {
 	require.Equal(t, "before", first.Object)
 }
 
-func TestLLMAgent_Run_BeforeCallbackError(t *testing.T) {
+func TestLLMAgent_Run_BeforeCallbackErr(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, context.Canceled
@@ -53,7 +65,7 @@ func TestLLMAgent_Run_BeforeCallbackError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestLLMAgent_Run_FlowAndAfterCallback(t *testing.T) {
+func TestLLMAgent_Run_FlowAndAfterCb(t *testing.T) {
 	after := agent.NewAgentCallbacks()
 	after.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil

@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package llmflow
 
 import (
@@ -146,7 +158,7 @@ func TestModelCallbacks_BeforeModel_Skip(t *testing.T) {
 	require.Equal(t, "skip-response", events[0].Response.ID)
 }
 
-func TestModelCallbacks_BeforeModel_CustomResponse(t *testing.T) {
+func TestModelCallbacks_BeforeModel_CustomResp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -180,7 +192,7 @@ func TestModelCallbacks_BeforeModel_CustomResponse(t *testing.T) {
 	require.Equal(t, "custom-before", events[0].Response.ID)
 }
 
-func TestModelCallbacks_BeforeModel_Error(t *testing.T) {
+func TestModelCallbacks_BeforeModel_Err(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
@@ -213,14 +225,16 @@ func TestModelCallbacks_BeforeModel_Error(t *testing.T) {
 	require.Equal(t, "before error", events[0].Error.Message)
 }
 
-func TestModelCallbacks_AfterModel_Override(t *testing.T) {
+func TestModelCallbacks_AfterModel_OverrideResp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	modelCallbacks := model.NewModelCallbacks()
-	modelCallbacks.RegisterAfterModel(func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
-		return &model.Response{Object: "after-override"}, nil
-	})
+	modelCallbacks.RegisterAfterModel(
+		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+			return &model.Response{Object: "after-override"}, nil
+		},
+	)
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
@@ -253,9 +267,11 @@ func TestModelCallbacks_AfterModel_Error(t *testing.T) {
 	defer cancel()
 
 	modelCallbacks := model.NewModelCallbacks()
-	modelCallbacks.RegisterAfterModel(func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
-		return nil, errors.New("after error")
-	})
+	modelCallbacks.RegisterAfterModel(
+		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+			return nil, errors.New("after error")
+		},
+	)
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
