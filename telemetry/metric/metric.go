@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	"go.opentelemetry.io/otel"
@@ -34,6 +35,9 @@ var (
 )
 
 // Start collects telemetry with optional configuration.
+// The environment variables described below can be used for Endpoint configuration.
+// OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT (default: "https://localhost:4317")
+// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
 func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
 	// Set default options
 	options := &options{
@@ -67,7 +71,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
 	}
 
-	Meter = otel.Meter("trpc.agent")
+	Meter = otel.Meter(itelemetry.InstrumentName)
 	return func() error {
 		if err := shutdownMeterProvider(ctx); err != nil {
 			return fmt.Errorf("failed to shutdown MeterProvider: %w", err)
@@ -76,8 +80,6 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	}, nil
 }
 
-// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
-// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp
 func metricsEndpoint() string {
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"); endpoint != "" {
 		return endpoint
@@ -115,13 +117,13 @@ type options struct {
 	serviceNamespace string
 }
 
-// Endpoint sets the metrics endpoint(host and port) the Exporter will connect to.
+// WithEndpoint sets the metrics endpoint(host and port) the Exporter will connect to.
 // The provided endpoint should resemble "example.com:4317" (no scheme or path).
 // If the OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT environment variable is set,
 // and this option is not passed, that variable value will be used.
 // If both environment variables are set, OTEL_EXPORTER_OTLP_METRICS_ENDPOINT will take precedence.
 // If an environment variable is set, and this option is passed, this option will take precedence.
-func Endpoint(endpoint string) Option {
+func WithEndpoint(endpoint string) Option {
 	return func(opts *options) {
 		opts.metricsEndpoint = endpoint
 	}

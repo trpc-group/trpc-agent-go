@@ -15,6 +15,8 @@ package trace
 import (
 	"context"
 	"fmt"
+	"os"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -24,13 +26,16 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	noopt "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
-	"os"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 var Tracer trace.Tracer = noopt.Tracer{}
 
 // Start collects telemetry with optional configuration.
+// The environment variables described below can be used for endpoint configuration.
+//
+// OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (default: "https://localhost:4317")
+// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
 func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
 	// Set default options
 	options := &options{
@@ -63,7 +68,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		return nil, fmt.Errorf("failed to initialize tracer provider: %w", err)
 	}
 	// Update global tracer
-	Tracer = otel.Tracer("trpc.agent")
+	Tracer = otel.Tracer(itelemetry.InstrumentName)
 	return func() error {
 		if err := shutdownTracerProvider(ctx); err != nil {
 			return fmt.Errorf("failed to shutdown TracerProvider: %w", err)
@@ -95,8 +100,6 @@ func WithEndpoint(endpoint string) Option {
 	}
 }
 
-// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
-// https://pkg.go.dev/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp
 func tracesEndpoint() string {
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"); endpoint != "" {
 		return endpoint

@@ -32,8 +32,10 @@ const (
 	ServiceName      = "telemetry"
 	ServiceVersion   = "v0.1.0"
 	ServiceNamespace = "trpc-go-agent"
+	InstrumentName   = "trpc.agent.go"
 )
 
+// TraceToolCall traces the invocation of a tool call.
 func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
 	span.SetAttributes(
 		semconv.GenAISystemKey.String("trpc.go.agent"),
@@ -64,6 +66,7 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	)
 }
 
+// TraceMergedToolCalls traces the invocation of a merged tool call.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		semconv.GenAISystemKey.String("trpc.go.agent"),
@@ -89,6 +92,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+// TraceCallLLM traces the invocation of an LLM call.
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	span.SetAttributes(
 		semconv.GenAISystemKey.String("trpc.go.agent"),
@@ -115,6 +119,7 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 	}
 }
 
+// NewConn creates a new gRPC connection to the OpenTelemetry Collector.
 func NewConn(endpoint string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through gRPC connection.
 	// You can customize the endpoint using SetConfig() or environment variables.

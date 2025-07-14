@@ -59,7 +59,7 @@ func TestStartAndClean(t *testing.T) {
 
 	ctx := context.Background()
 	clean, err := Start(ctx,
-		Endpoint(metricEP),
+		WithEndpoint(metricEP),
 		// Provide small custom service data to avoid environment pollution.
 	)
 	if err != nil {

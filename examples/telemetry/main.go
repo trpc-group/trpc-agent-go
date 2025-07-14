@@ -37,7 +37,7 @@ func main() {
 
 	cleanMetric, err := ametric.Start(
 		context.Background(),
-		ametric.Endpoint("localhost:4317"),
+		ametric.WithEndpoint("localhost:4317"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to start metric telemetry: %v", err)
