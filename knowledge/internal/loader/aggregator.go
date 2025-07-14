@@ -19,7 +19,7 @@ package loader
 import (
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/log"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (

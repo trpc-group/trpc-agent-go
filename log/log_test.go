@@ -15,7 +15,7 @@ package log_test
 import (
 	"testing"
 
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/log"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 func TestLog(t *testing.T) {

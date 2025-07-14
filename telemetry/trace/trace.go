@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	noopt "go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc"
+
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 

@@ -17,7 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/log"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
