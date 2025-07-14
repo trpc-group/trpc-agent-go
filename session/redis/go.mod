@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/session/redis
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../..
+replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 go 1.24.1
 

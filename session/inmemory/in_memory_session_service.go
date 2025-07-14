@@ -458,6 +458,11 @@ func (s *SessionService) AppendEvent(
 	return nil
 }
 
+// Close closes the service.
+func (s *SessionService) Close() error {
+	return nil
+}
+
 func (s *SessionService) updateSessionState(sess *session.Session, event *event.Event) {
 	sess.Events = append(sess.Events, *event)
 	if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
