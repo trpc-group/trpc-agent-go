@@ -340,7 +340,7 @@ func (a *CycleAgent) Info() agent.Info {
 		maxIterStr = fmt.Sprintf("%d", *a.maxIterations)
 	}
 	return agent.Info{
-		Name:        a.name,
+		Name: a.name,
 		Description: fmt.Sprintf(
 			"Cycle agent that runs %d sub-agents in a loop (max iterations: %s)",
 			len(a.subAgents), maxIterStr,
