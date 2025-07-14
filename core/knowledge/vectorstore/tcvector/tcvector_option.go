@@ -6,22 +6,26 @@ type Options struct {
 	url            string
 	database       string
 	collection     string
-	indexDimension int
+	indexDimension uint32
 	replicas       uint32
 	sharding       uint32
+
 	// Hybrid search scoring weights
 	vectorWeight float64 // Default: Vector similarity weight 70%
 	textWeight   float64 // Default: Text relevance weight 30%
+	language     string  // Default: zh, options: zh, en
+
 }
 
 var defaultOptions = Options{
 	indexDimension: 1536,
 	database:       "trpc-agent-go",
 	collection:     "documents",
-	replicas:       2,
-	sharding:       3,
+	replicas:       1,
+	sharding:       1,
 	vectorWeight:   0.7,
 	textWeight:     0.3,
+	language:       "en",
 }
 
 type Option func(*Options)
@@ -62,7 +66,7 @@ func WithCollection(collection string) Option {
 }
 
 // WithIndexDimension sets the vector dimension for the index
-func WithIndexDimension(dimension int) Option {
+func WithIndexDimension(dimension uint32) Option {
 	return func(o *Options) {
 		o.indexDimension = dimension
 	}
@@ -98,5 +102,12 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 			o.vectorWeight = 0.7
 			o.textWeight = 0.3
 		}
+	}
+}
+
+// WithLanguage sets the language for the vector database
+func WithLanguage(language string) Option {
+	return func(o *Options) {
+		o.language = language
 	}
 }

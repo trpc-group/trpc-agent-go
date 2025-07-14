@@ -10,6 +10,7 @@ import (
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
@@ -32,15 +33,13 @@ type VectorStore struct {
 }
 
 func New(opts ...Option) (*VectorStore, error) {
-	option := Options{}
+	option := defaultOptions
 	for _, opt := range opts {
 		opt(&option)
 	}
-	clientPool, err := tcvectordb.NewRpcClientPool(option.url, option.username, option.password, nil)
-	if err != nil {
-		return nil, err
+	if option.url == "" {
+		return nil, errors.New("tcvectordb url is required")
 	}
-
 	if option.database == "" {
 		return nil, errors.New("tcvectordb database is required")
 	}
@@ -48,17 +47,24 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, errors.New("tcvectordb collection is required")
 	}
 
+	clientPool, err := tcvectordb.NewRpcClientPool(option.url, option.username, option.password, nil)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
+	}
 	if err := initVectorDB(clientPool, option); err != nil {
 		return nil, err
 	}
 
-	return &VectorStore{pool: clientPool.(*tcvectordb.RpcClientPool), option: option}, nil
+	if clientPool, ok := clientPool.(*tcvectordb.RpcClientPool); ok {
+		return &VectorStore{pool: clientPool, option: option}, nil
+	}
+	return nil, errors.New("tcvectordb client pool is not a RpcClientPool")
 }
 
 func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 	_, err := clientPool.CreateDatabaseIfNotExists(context.Background(), options.database)
 	if err != nil {
-		return err
+		return fmt.Errorf("tcvectordb create database: %w", err)
 	}
 
 	exists, err := clientPool.ExistsCollection(context.Background(), options.database, options.collection)
@@ -66,6 +72,7 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 		return fmt.Errorf("tcvectordb create database: %w", err)
 	}
 	if exists {
+		log.Infof("tcvectordb collection %s:%s already exists", options.database, options.collection)
 		return nil
 	}
 
@@ -96,7 +103,7 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 		MetricType: tcvectordb.IP,
 	})
 
-	_, err = clientPool.CreateCollectionIfNotExists(
+	if _, err := clientPool.CreateCollectionIfNotExists(
 		context.Background(),
 		options.database,
 		options.collection,
@@ -105,8 +112,7 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 		"trpc-agent-go documents storage collection",
 		indexes,
 		nil,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("tcvectordb create collection: %w", err)
 	}
 
@@ -115,12 +121,15 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
-	if len(embedding) != vs.option.indexDimension {
+	if doc.ID == "" {
+		return fmt.Errorf("tcvectordb document id is required")
+	}
+	if len(embedding) != int(vs.option.indexDimension) {
 		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
 	}
 	embedding32 := covertToVector32(embedding)
 	now := time.Now().Unix()
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
 	if err != nil {
 		return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
 	}
@@ -141,8 +150,12 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		Vector: embedding32,
 		Fields: fields,
 	}
-	_, err = vs.pool.Upsert(ctx, vs.option.database, vs.option.collection, []tcvectordb.Document{tcDoc})
-	if err != nil {
+	if _, err := vs.pool.Upsert(
+		ctx,
+		vs.option.database,
+		vs.option.collection,
+		[]tcvectordb.Document{tcDoc},
+	); err != nil {
 		return fmt.Errorf("tcvectordb upsert document: %w", err)
 	}
 	return nil
@@ -151,7 +164,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 // Get retrieves a document by ID along with its embedding.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, fmt.Errorf("tcvectordb id is required")
+		return nil, nil, fmt.Errorf("tcvectordb document id is required")
 	}
 	result, err := vs.pool.Query(
 		ctx,
@@ -167,22 +180,13 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 		return nil, nil, fmt.Errorf("tcvectordb get document: %w", err)
 	}
 	if result.AffectedCount == 0 || len(result.Documents) == 0 {
-		return nil, nil, fmt.Errorf(
-			"tcvectordb not found document, affected count: %d, documents: %d",
-			result.AffectedCount,
-			len(result.Documents),
-		)
+		return nil, nil, fmt.Errorf("tcvectordb not found document id: %s", id)
 	}
 	if result.AffectedCount > 1 {
-		return nil, nil, fmt.Errorf(
-			"tcvectordb get multiple documents, affected count: %d, documents: %d",
-			result.AffectedCount,
-			len(result.Documents),
-		)
+		return nil, nil, fmt.Errorf("tcvectordb get multiple documents, affected count: %d", result.AffectedCount)
 	}
 
 	tcDoc := result.Documents[0]
-
 	doc, err := covertToDocument(tcDoc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcvectordb covert to document: %w", err)
@@ -191,16 +195,15 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	for i, v := range tcDoc.Vector {
 		embedding[i] = float64(v)
 	}
-
 	return doc, embedding, nil
 }
 
 // Update modifies an existing document and its embedding.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc.ID == "" {
-		return fmt.Errorf("tcvectordb id is required")
+		return fmt.Errorf("tcvectordb document id is required")
 	}
-	if len(embedding) != vs.option.indexDimension {
+	if len(embedding) != int(vs.option.indexDimension) {
 		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
 	}
 
@@ -210,7 +213,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 		updateFields[fieldName] = tcvectordb.Field{Val: doc.Name}
 	}
 	if len(doc.Content) > 0 {
-		bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+		bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
 		if err != nil {
 			return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
 		}
@@ -243,13 +246,17 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 // Delete removes a document and its embedding.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return fmt.Errorf("tcvectordb id is required")
+		return fmt.Errorf("tcvectordb document id is required")
 	}
-	_, err := vs.pool.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{
-		DocumentIds: []string{id},
-		Limit:       1,
-	})
-	if err != nil {
+	if _, err := vs.pool.Delete(
+		ctx,
+		vs.option.database,
+		vs.option.collection,
+		tcvectordb.DeleteDocumentParams{
+			DocumentIds: []string{id},
+			Limit:       1,
+		},
+	); err != nil {
 		return fmt.Errorf("tcvectordb delete document: %w", err)
 	}
 	return nil
@@ -266,7 +273,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	hasKeyword := query.Query != ""
 	hasfilter := query.Filter != nil
 
-	if hasVector && len(query.Vector) != vs.option.indexDimension {
+	// check vector dimension
+	if hasVector && len(query.Vector) != int(vs.option.indexDimension) {
 		return nil, fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(query.Vector))
 	}
 
@@ -332,7 +340,7 @@ func (vs *VectorStore) SearchByKeyword(ctx context.Context, query *vectorstore.S
 	}
 
 	// Encode the query text using BM25 for sparse vector
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
 	}
@@ -375,20 +383,13 @@ func (vs *VectorStore) SearchByKeyword(ctx context.Context, query *vectorstore.S
 
 // SearchByHybrid performs hybrid search combining dense vector similarity and BM25 keyword matching
 func (vs *VectorStore) SearchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("tcvectordb vector is required for hybrid search")
-	}
-	if query.Query == "" {
-		return nil, fmt.Errorf("tcvectordb keyword is required for hybrid search")
-	}
-
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
 
 	// Encode the query text using BM25 for sparse vector
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: "zh"})
+	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
 	}

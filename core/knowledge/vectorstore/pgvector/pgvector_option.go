@@ -12,6 +12,7 @@ type Options struct {
 	// Hybrid search scoring weights
 	vectorWeight float64 // Weight for vector similarity (0.0-1.0)
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
+	language     string  // Default: english, if you install zhparser/jieba, you can set it to your configuration
 }
 
 var defaultOptions = Options{
@@ -23,6 +24,7 @@ var defaultOptions = Options{
 	sslMode:        "disable",
 	vectorWeight:   0.7, // Default: Vector similarity weight 70%
 	textWeight:     0.3, // Default: Text relevance weight 30%
+	language:       "english",
 }
 
 type Option func(*Options)
@@ -99,5 +101,12 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 			o.vectorWeight = 0.7
 			o.textWeight = 0.3
 		}
+	}
+}
+
+// WithLanguageExtension sets the language extension for the index
+func WithLanguageExtension(languageExtension string) Option {
+	return func(o *Options) {
+		o.language = languageExtension
 	}
 }

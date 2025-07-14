@@ -50,11 +50,11 @@ const (
 
 	sqlInsertDocument = `
 		INSERT INTO %s (id, name, content, content_tsvector, embedding, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7)
+		VALUES ($1, $2, $3, to_tsvector('%s', $3), $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			content = EXCLUDED.content,
-			content_tsvector = to_tsvector('english', EXCLUDED.content),
+			content_tsvector = to_tsvector('%s', EXCLUDED.content),
 			embedding = EXCLUDED.embedding,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at`
@@ -150,7 +150,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	}
 
 	now := time.Now().Unix()
-	upsertSql := fmt.Sprintf(sqlInsertDocument, vs.option.table)
+	upsertSql := fmt.Sprintf(sqlInsertDocument, vs.option.table, vs.option.language, vs.option.language)
 	vector := pgvector.NewVector(convertToFloat32Vector(embedding))
 	metadataJSON := mapToJSON(doc.Metadata)
 
@@ -214,7 +214,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Build update using updateBuilder
-	ub := newUpdateBuilder(vs.option.table, doc.ID)
+	ub := newUpdateBuilder(vs.option.table, doc.ID, vs.option.language)
 
 	if doc.Name != "" {
 		ub.addField("name", doc.Name)
@@ -293,11 +293,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 
 // vectorSearch performs pure vector similarity search
 func (vs *VectorStore) vectorSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	if query == nil {
-		return nil, fmt.Errorf("pgvector query is required")
-	}
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("pgvector vector is required for vector search")
+		return nil, fmt.Errorf("pgvector: searching with a nil or empty vector is not supported")
 	}
 	if len(query.Vector) != vs.option.indexDimension {
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
@@ -309,7 +306,9 @@ func (vs *VectorStore) vectorSearch(ctx context.Context, query *vectorstore.Sear
 	}
 
 	// Build vector search query
-	qb := newVectorQueryBuilder(vs.option.table)
+	qb := newVectorQueryBuilder(vs.option.table, vs.option.language)
+
+	// add vector arg, used above
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
 
 	// Add filters
@@ -325,20 +324,26 @@ func (vs *VectorStore) vectorSearch(ctx context.Context, query *vectorstore.Sear
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.buildVectorSearch(limit)
+	sql, args := qb.build(limit)
 	return vs.executeSearch(ctx, sql, args)
 }
 
-// keywordSearch performs pure text keyword search using PostgreSQL full-text search
+// keywordSearch performs full-text search.
 func (vs *VectorStore) keywordSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	if query.Query == "" {
+		return nil, fmt.Errorf("pgvector keyword is required for keyword search")
+	}
+
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
 
 	// Build keyword search query with full-text search
-	qb := newKeywordQueryBuilder(vs.option.table)
-	qb.addFullTextSearch(query.Query)
+	qb := newKeywordQueryBuilder(vs.option.table, vs.option.language)
+
+	// Add keyword and score conditions
+	qb.addKeywordSearchConditions(query.Query, query.MinScore)
 
 	// Add filters
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
@@ -349,12 +354,13 @@ func (vs *VectorStore) keywordSearch(ctx context.Context, query *vectorstore.Sea
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.buildKeywordSearch(limit)
+	sql, args := qb.build(limit)
 	return vs.executeSearch(ctx, sql, args)
 }
 
 // hybridSearch combines vector similarity and keyword matching
 func (vs *VectorStore) hybridSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	// check vector dimension and keyword
 	if len(query.Vector) == 0 {
 		return nil, fmt.Errorf("pgvector vector is required for hybrid search")
 	}
@@ -371,9 +377,9 @@ func (vs *VectorStore) hybridSearch(ctx context.Context, query *vectorstore.Sear
 	}
 
 	// Build hybrid search query
-	qb := newHybridQueryBuilder(vs.option.table, vs.option.vectorWeight, vs.option.textWeight)
+	qb := newHybridQueryBuilder(vs.option.table, vs.option.language, vs.option.vectorWeight, vs.option.textWeight)
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
-	qb.addFullTextSearch(query.Query)
+	qb.addHybridFtsCondition(query.Query)
 
 	// Add filters
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
@@ -388,7 +394,7 @@ func (vs *VectorStore) hybridSearch(ctx context.Context, query *vectorstore.Sear
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.buildHybridSearch(limit)
+	sql, args := qb.build(limit)
 	return vs.executeSearch(ctx, sql, args)
 }
 
@@ -404,7 +410,7 @@ func (vs *VectorStore) filterSearch(ctx context.Context, query *vectorstore.Sear
 	}
 
 	// Build filter-only search query
-	qb := newFilterQueryBuilder(vs.option.table)
+	qb := newFilterQueryBuilder(vs.option.table, vs.option.language)
 
 	// Add filters
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
@@ -415,7 +421,7 @@ func (vs *VectorStore) filterSearch(ctx context.Context, query *vectorstore.Sear
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.buildFilterSearch(limit)
+	sql, args := qb.build(limit)
 	return vs.executeSearch(ctx, sql, args)
 }
 

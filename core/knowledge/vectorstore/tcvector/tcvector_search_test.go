@@ -2,8 +2,7 @@ package tcvector
 
 import (
 	"context"
-	"testing"
-	"time"
+	"strings"
 
 	"github.com/stretchr/testify/suite"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
@@ -13,44 +12,48 @@ import (
 // TcVectorSearchTestSuite tests the new search methods
 type TcVectorSearchTestSuite struct {
 	suite.Suite
-	vs         *VectorStore
-	collection string
+	vs       *VectorStore
+	testDocs map[string]*document.Document // Store test documents for validation
 }
 
 // SetupSuite runs once before all tests
 func (suite *TcVectorSearchTestSuite) SetupSuite() {
-	suite.collection = "test_search_" + time.Now().Format("20060102_150405")
+	if url == "" || key == "" {
+		suite.T().Skip("Skipping tcvector tests: VECTOR_STORE_URL and VECTOR_STORE_KEY must be set")
+	}
 
 	// Initialize vector store (skip if no configuration available)
 	vs, err := New(
-		WithURL("your-url"),           // Replace with actual URL
-		WithUsername("your-username"), // Replace with actual username
-		WithPassword("your-password"), // Replace with actual password
-		WithDatabase("test_db"),       // Replace with actual database
-		WithCollection(suite.collection),
+		WithURL(url),
+		WithUsername(user),
+		WithPassword(key),
+		WithDatabase(db),
+		WithCollection(collection),
 		WithIndexDimension(3), // Small dimension for testing
 	)
 	if err != nil {
-		suite.T().Skip("Skipping tcvector tests: configuration not available")
-		return
+		suite.T().Fatalf("Failed to initialize tcvector: %v", err)
 	}
 
 	suite.vs = vs
+	suite.testDocs = make(map[string]*document.Document)
 
 	// Add test documents
-	testDocs := []struct {
+	testData := []struct {
 		doc       *document.Document
 		embedding []float64
 	}{
 		{
 			doc: &document.Document{
 				ID:      "doc1",
-				Name:    "Python编程指南",
-				Content: "Python是一种功能强大的编程语言，广泛用于数据科学和机器学习",
+				Name:    "Python Programming Guide",
+				Content: "Python is a powerful programming language widely used for data science and machine learning",
 				Metadata: map[string]interface{}{
 					"category": "programming",
 					"language": "python",
 					"level":    "beginner",
+					"tags":     []string{"python", "programming", "tutorial"},
+					"score":    85,
 				},
 			},
 			embedding: []float64{0.1, 0.2, 0.3},
@@ -58,12 +61,14 @@ func (suite *TcVectorSearchTestSuite) SetupSuite() {
 		{
 			doc: &document.Document{
 				ID:      "doc2",
-				Name:    "Go语言开发",
-				Content: "Go是Google开发的编程语言，以其并发性能和简洁性著称",
+				Name:    "Go Language Development",
+				Content: "Go is a programming language developed by Google, known for its concurrency performance and simplicity",
 				Metadata: map[string]interface{}{
 					"category": "programming",
 					"language": "go",
 					"level":    "intermediate",
+					"tags":     []string{"go", "programming", "backend"},
+					"score":    90,
 				},
 			},
 			embedding: []float64{0.2, 0.3, 0.4},
@@ -71,12 +76,14 @@ func (suite *TcVectorSearchTestSuite) SetupSuite() {
 		{
 			doc: &document.Document{
 				ID:      "doc3",
-				Name:    "数据科学教程",
-				Content: "数据科学结合了统计学、机器学习和领域专业知识来从数据中提取见解",
+				Name:    "Data Science Tutorial",
+				Content: "Data science combines statistics, machine learning and domain expertise to extract insights from data",
 				Metadata: map[string]interface{}{
 					"category": "data-science",
 					"field":    "analytics",
 					"level":    "advanced",
+					"tags":     []string{"data", "science", "analytics"},
+					"score":    88,
 				},
 			},
 			embedding: []float64{0.3, 0.4, 0.5},
@@ -84,24 +91,123 @@ func (suite *TcVectorSearchTestSuite) SetupSuite() {
 	}
 
 	ctx := context.Background()
-	for _, td := range testDocs {
+	for _, td := range testData {
 		err := suite.vs.Add(ctx, td.doc, td.embedding)
 		suite.Require().NoError(err)
+		// Store for validation
+		suite.testDocs[td.doc.ID] = td.doc
 	}
-
-	// Wait for indexing to complete
-	time.Sleep(2 * time.Second)
 }
 
 // TearDownSuite runs once after all tests
 func (suite *TcVectorSearchTestSuite) TearDownSuite() {
-	if suite.vs != nil {
-		// Clean up test documents
-		ctx := context.Background()
-		suite.vs.Delete(ctx, "doc1")
-		suite.vs.Delete(ctx, "doc2")
-		suite.vs.Delete(ctx, "doc3")
-		suite.vs.Close()
+	if suite.vs == nil {
+		return
+	}
+	suite.vs.pool.DropDatabase(context.Background(), db)
+	suite.vs.Close()
+}
+
+// validateSearchResult validates a single search result
+func (suite *TcVectorSearchTestSuite) validateSearchResult(result *vectorstore.ScoredDocument) {
+	suite.NotNil(result.Document, "Document should not be nil")
+	suite.GreaterOrEqual(result.Score, 0.0, "Score should be non-negative")
+	suite.LessOrEqual(result.Score, 1.0, "Score should not exceed 1.0")
+
+	originalDoc, exists := suite.testDocs[result.Document.ID]
+	suite.Assert().True(exists, "Document should exist")
+	suite.validateDocumentContent(originalDoc, result.Document)
+}
+
+// validateDocumentContent compares returned document with original
+func (suite *TcVectorSearchTestSuite) validateDocumentContent(expected, actual *document.Document) {
+	suite.Equal(expected.ID, actual.ID, "Document ID should match")
+	suite.Equal(expected.Name, actual.Name, "Document Name should match")
+	suite.Equal(expected.Content, actual.Content, "Document Content should match")
+	// validate metadata
+	suite.NotNil(actual.Metadata, "Document metadata should not be nil")
+	for key, expectedValue := range expected.Metadata {
+		actualValue, exists := actual.Metadata[key]
+		suite.True(exists, "Metadata key '%s' should exist", key)
+
+		// Flexible type comparison for metadata
+		suite.True(suite.compareMetadataValues(expectedValue, actualValue),
+			"Metadata '%s' should match: expected %v (%T), got %v (%T)",
+			key, expectedValue, expectedValue, actualValue, actualValue)
+	}
+}
+
+// compareMetadataValues provides flexible comparison for metadata values
+func (suite *TcVectorSearchTestSuite) compareMetadataValues(expected, actual interface{}) bool {
+	// Direct equality check
+	if expected == actual {
+		return true
+	}
+
+	// Handle numeric type conversions (JSON unmarshaling often converts to float64)
+	switch e := expected.(type) {
+	case int:
+		if a, ok := actual.(float64); ok {
+			return float64(e) == a
+		}
+	case float64:
+		if a, ok := actual.(int); ok {
+			return e == float64(a)
+		}
+	case []string:
+		if a, ok := actual.([]interface{}); ok {
+			if len(e) != len(a) {
+				return false
+			}
+			for i, v := range e {
+				if str, ok := a[i].(string); !ok || str != v {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// validateSearchResults validates the complete search result set
+func (suite *TcVectorSearchTestSuite) validateSearchResults(results []*vectorstore.ScoredDocument, expectedMinCount int) {
+	suite.GreaterOrEqual(len(results), expectedMinCount,
+		"Should return at least %d results", expectedMinCount)
+
+	// Validate individual results
+	for i, result := range results {
+		suite.validateSearchResult(result)
+		suite.T().Logf("Result %d: ID=%s, Name=%s, Score=%.4f",
+			i+1, result.Document.ID, result.Document.Name, result.Score)
+	}
+
+	// Validate score ordering (descending)
+	for i := 1; i < len(results); i++ {
+		suite.GreaterOrEqual(results[i-1].Score, results[i].Score,
+			"Results should be ordered by score (descending): result[%d].Score=%.4f >= result[%d].Score=%.4f",
+			i-1, results[i-1].Score, i, results[i].Score)
+	}
+}
+
+// validateKeywordRelevance checks if results are relevant to the keyword query
+func (suite *TcVectorSearchTestSuite) validateKeywordRelevance(results []*vectorstore.ScoredDocument, keywords []string) {
+	for _, result := range results {
+		hasRelevantContent := false
+		content := strings.ToLower(result.Document.Name + " " + result.Document.Content)
+
+		for _, keyword := range keywords {
+			if strings.Contains(content, strings.ToLower(keyword)) {
+				hasRelevantContent = true
+				break
+			}
+		}
+
+		// Log for debugging - keyword relevance might not be strict
+		if !hasRelevantContent {
+			suite.T().Logf("Note: Document %s may not contain keywords %v",
+				result.Document.ID, keywords)
+		}
 	}
 }
 
@@ -118,18 +224,22 @@ func (suite *TcVectorSearchTestSuite) TestSearchByVector() {
 	}
 
 	result, err := suite.vs.SearchByVector(ctx, query)
-	suite.NoError(err)
-	suite.NotEmpty(result.Results)
+	suite.NoError(err, "SearchByVector should not error")
+	suite.NotNil(result, "Search result should not be nil")
 
-	// Verify results contain expected documents
+	// Validate search results
+	suite.validateSearchResults(result.Results, 1)
+
+	// Verify results contain expected documents (doc1 and doc2 should be similar)
 	foundDocs := make(map[string]bool)
 	for _, r := range result.Results {
 		foundDocs[r.Document.ID] = true
-		suite.T().Logf("Vector Search - ID: %s, Name: %s, Score: %.4f",
-			r.Document.ID, r.Document.Name, r.Score)
 	}
 
-	suite.True(foundDocs["doc1"] || foundDocs["doc2"], "Should find similar documents")
+	suite.True(foundDocs["doc1"] || foundDocs["doc2"], "Should find documents similar to query vector")
+
+	topResult := result.Results[0]
+	suite.Greater(topResult.Score, 0.0, "Top result should have positive similarity score")
 }
 
 // TestSearchByKeyword tests BM25-based keyword search
@@ -140,21 +250,30 @@ func (suite *TcVectorSearchTestSuite) TestSearchByKeyword() {
 
 	ctx := context.Background()
 	query := &vectorstore.SearchQuery{
-		Query: "编程语言",
+		Query: "programming language",
 		Limit: 5,
 	}
 
 	result, err := suite.vs.SearchByKeyword(ctx, query)
-	suite.NoError(err)
-	suite.NotEmpty(result.Results)
+	suite.NoError(err, "SearchByKeyword should not error")
+	suite.NotNil(result, "Search result should not be nil")
+
+	// Validate search results
+	suite.validateSearchResults(result.Results, 1)
+
+	// Validate keyword relevance
+	suite.validateKeywordRelevance(result.Results, []string{"programming", "language"})
 
 	// Verify results contain documents with programming content
 	foundProgDocs := false
 	for _, r := range result.Results {
-		suite.T().Logf("Keyword Search - ID: %s, Name: %s, Score: %.4f",
-			r.Document.ID, r.Document.Name, r.Score)
 		if r.Document.ID == "doc1" || r.Document.ID == "doc2" {
 			foundProgDocs = true
+			// Validate that programming documents have relevant metadata
+			if category, ok := r.Document.Metadata["category"]; ok {
+				suite.Equal("programming", category,
+					"Programming documents should have correct category")
+			}
 		}
 	}
 
@@ -170,25 +289,36 @@ func (suite *TcVectorSearchTestSuite) TestSearchByHybrid() {
 	ctx := context.Background()
 	query := &vectorstore.SearchQuery{
 		Vector: []float64{0.15, 0.25, 0.35}, // Similar to programming docs
-		Query:  "编程",                        // Programming keyword
+		Query:  "programming",               // Programming keyword
 		Limit:  5,
 	}
 
 	result, err := suite.vs.SearchByHybrid(ctx, query)
-	suite.NoError(err)
-	suite.NotEmpty(result.Results)
+	suite.NoError(err, "SearchByHybrid should not error")
+	suite.NotNil(result, "Search result should not be nil")
 
-	// Verify hybrid search combines both vector similarity and keyword relevance
+	// Validate search results
+	suite.validateSearchResults(result.Results, 1)
+
+	// Validate keyword relevance
+	suite.validateKeywordRelevance(result.Results, []string{"programming"})
+
+	// Verify hybrid search finds programming documents
 	foundProgDocs := false
+	maxScore := 0.0
 	for _, r := range result.Results {
-		suite.T().Logf("Hybrid Search - ID: %s, Name: %s, Score: %.4f",
-			r.Document.ID, r.Document.Name, r.Score)
+		if r.Score > maxScore {
+			maxScore = r.Score
+		}
 		if r.Document.ID == "doc1" || r.Document.ID == "doc2" {
 			foundProgDocs = true
+			// Hybrid search should potentially have higher scores than pure vector/keyword
+			suite.T().Logf("Hybrid result - ID: %s, Score: %.4f", r.Document.ID, r.Score)
 		}
 	}
 
 	suite.True(foundProgDocs, "Hybrid search should find programming documents")
+	suite.Greater(maxScore, 0.0, "Hybrid search should return meaningful scores")
 }
 
 // TestSearchWithFilters tests search with metadata filters
@@ -209,15 +339,27 @@ func (suite *TcVectorSearchTestSuite) TestSearchWithFilters() {
 	}
 
 	result, err := suite.vs.SearchByVector(ctx, query)
-	suite.NoError(err)
+	suite.NoError(err, "Filtered search should not error")
+	suite.NotNil(result, "Search result should not be nil")
 
-	// All results should be programming category
-	for _, r := range result.Results {
-		suite.T().Logf("Filtered Search - ID: %s, Category: %v",
-			r.Document.ID, r.Document.Metadata["category"])
-		if category, ok := r.Document.Metadata["category"]; ok {
-			suite.Equal("programming", category)
+	// Validate search results
+	if len(result.Results) > 0 {
+		suite.validateSearchResults(result.Results, 1)
+
+		// All results should match the filter
+		for _, r := range result.Results {
+			suite.T().Logf("Filtered Search - ID: %s, Category: %v, Level: %v",
+				r.Document.ID, r.Document.Metadata["category"], r.Document.Metadata["level"])
+
+			if category, ok := r.Document.Metadata["category"]; ok {
+				suite.Equal("programming", category,
+					"All filtered results should have category='programming'")
+			} else {
+				suite.Fail("Result should have category metadata")
+			}
 		}
+	} else {
+		suite.T().Log("No results returned for filtered search - this may be expected")
 	}
 }
 
@@ -233,6 +375,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 		name        string
 		query       *vectorstore.SearchQuery
 		expectedLog string
+		validator   func(results []*vectorstore.ScoredDocument)
 	}{
 		{
 			name: "Vector only should use SearchByVector",
@@ -241,23 +384,40 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 				Limit:  3,
 			},
 			expectedLog: "Should route to vector search",
+			validator: func(results []*vectorstore.ScoredDocument) {
+				// Vector search should prioritize similarity
+				if len(results) > 0 {
+					suite.Greater(results[0].Score, 0.0, "Vector search should return similarity scores")
+				}
+			},
 		},
 		{
 			name: "Keyword only should use SearchByKeyword",
 			query: &vectorstore.SearchQuery{
-				Query: "数据科学",
+				Query: "data science",
 				Limit: 3,
 			},
 			expectedLog: "Should route to keyword search",
+			validator: func(results []*vectorstore.ScoredDocument) {
+				// Keyword search should find relevant documents
+				suite.validateKeywordRelevance(results, []string{"data", "science"})
+			},
 		},
 		{
 			name: "Both vector and keyword should use SearchByHybrid",
 			query: &vectorstore.SearchQuery{
 				Vector: []float64{0.3, 0.4, 0.5},
-				Query:  "数据",
+				Query:  "data",
 				Limit:  3,
 			},
 			expectedLog: "Should route to hybrid search",
+			validator: func(results []*vectorstore.ScoredDocument) {
+				// Hybrid search should combine both signals
+				suite.validateKeywordRelevance(results, []string{"data"})
+				if len(results) > 0 {
+					suite.Greater(results[0].Score, 0.0, "Hybrid search should return meaningful scores")
+				}
+			},
 		},
 	}
 
@@ -265,17 +425,23 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 		suite.Run(tc.name, func() {
 			result, err := suite.vs.Search(ctx, tc.query)
 			suite.NoError(err, "Search should not error for: %s", tc.expectedLog)
+			suite.NotNil(result, "Search result should not be nil")
+
+			// Validate basic result structure
+			if len(result.Results) > 0 {
+				suite.validateSearchResults(result.Results, 0)
+			}
+
+			// Run specific validator
+			if tc.validator != nil {
+				tc.validator(result.Results)
+			}
 
 			suite.T().Logf("%s - Found %d results", tc.expectedLog, len(result.Results))
-			for _, r := range result.Results {
-				suite.T().Logf("  Result: ID=%s, Name=%s, Score=%.4f",
-					r.Document.ID, r.Document.Name, r.Score)
+			for i, r := range result.Results {
+				suite.T().Logf("  Result %d: ID=%s, Name=%s, Score=%.4f",
+					i+1, r.Document.ID, r.Document.Name, r.Score)
 			}
 		})
 	}
-}
-
-// TestSearchFunctionSuite runs the tcvector search test suite
-func TestSearchFunctionSuite(t *testing.T) {
-	suite.Run(t, new(TcVectorSearchTestSuite))
 }

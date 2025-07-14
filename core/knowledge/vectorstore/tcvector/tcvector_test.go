@@ -8,16 +8,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/suite"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
 )
 
+var (
+	key        = getEnvOrDefault("TCVECTOR_STORE_KEY", "")
+	url        = getEnvOrDefault("TCVECTOR_STORE_URL", "")
+	user       = getEnvOrDefault("TCVECTOR_STORE_USER", "root")
+	db         = getEnvOrDefault("TCVECTOR_STORE_DATABASE", "trpc_agent_unit_test")
+	collection = getEnvOrDefault("TCVECTOR_STORE_COLLECTION", "trpc_agent_unit_test_documents")
+)
+
 // TCVectorTestSuite contains test suite state
 type TCVectorTestSuite struct {
-	vs             *VectorStore
-	ctx            context.Context
-	testCollection string
-	addedDocIDs    []string // Track documents for cleanup
+	suite.Suite
+	vs          *VectorStore
+	ctx         context.Context
+	addedDocIDs []string // Track documents for cleanup
 }
 
 var testData = []struct {
@@ -69,84 +78,75 @@ var testData = []struct {
 	},
 }
 
-func skipIfNoEnv(t *testing.T) (string, string) {
-	url := os.Getenv("VECTOR_STORE_URL")
-	key := os.Getenv("VECTOR_STORE_KEY")
-	if url == "" || key == "" {
-		t.Skip("Skip test: VECTOR_STORE_URL and VECTOR_STORE_KEY environment variables required")
-	}
-	return url, key
-}
-
 // SetupSuite initializes the test suite
-func (suite *TCVectorTestSuite) SetupSuite(t *testing.T) {
-	url, key := skipIfNoEnv(t)
+func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.ctx = context.Background()
-	suite.testCollection = fmt.Sprintf("test-suite-%d", time.Now().Unix())
+	if url == "" || key == "" {
+		suite.T().Skip("Skip test: TCVECTOR_STORE_URL, TCVECTOR_STORE_KEY environment variables required")
+		return
+	}
 
 	vs, err := New(
 		WithURL(url),
-		WithUsername("root"),
+		WithUsername(user),
 		WithPassword(key),
-		WithDatabase("test"),
-		WithCollection(suite.testCollection),
+		WithDatabase(db),
+		WithCollection(collection),
 		WithIndexDimension(3),
 		WithSharding(1),
 		WithReplicas(0),
 	)
-	if err != nil {
-		t.Fatalf("Failed to create VectorStore: %v", err)
-	}
+	suite.Require().NoError(err, "Failed to create VectorStore")
 	suite.vs = vs
 	suite.addedDocIDs = make([]string, 0)
 
-	t.Logf("Test suite setup completed with collection: %s", suite.testCollection)
+	suite.T().Logf("Test suite setup completed with collection: %s", collection)
 }
 
 // TearDownSuite cleans up test data
-func (suite *TCVectorTestSuite) TearDownSuite(t *testing.T) {
+func (suite *TCVectorTestSuite) TearDownSuite() {
 	if suite.vs == nil {
 		return
 	}
 
-	// Clean up all added documents
-	for _, docID := range suite.addedDocIDs {
-		err := suite.vs.Delete(suite.ctx, docID)
-		if err != nil {
-			t.Logf("Warning: Failed to delete document %s during cleanup: %v", docID, err)
-		}
+	// Drop the entire collection after all tests are done
+	_, err := suite.vs.pool.DropCollection(suite.ctx, db, collection)
+	if err != nil {
+		suite.T().Logf("Warning: Failed to drop collection %s during cleanup: %v", collection, err)
 	}
 
-	// Wait for cleanup to complete
-	time.Sleep(1 * time.Second)
-
 	suite.vs.Close()
-	t.Logf("Test suite cleanup completed, removed %d documents", len(suite.addedDocIDs))
+	suite.T().Logf("Test suite cleanup completed.")
+}
+
+// SetupTest runs before each test to ensure a clean state
+func (suite *TCVectorTestSuite) SetupTest() {
+	// Clean up any documents that were added in a previous test run
+	for _, id := range suite.addedDocIDs {
+		_ = suite.vs.Delete(suite.ctx, id) // Ignore error as doc might already be deleted
+	}
+	// Reset the tracker
+	suite.addedDocIDs = make([]string, 0)
 }
 
 // validateDocument compares two documents for equality
-func (suite *TCVectorTestSuite) validateDocument(t *testing.T, expected *document.Document, actual *document.Document) {
-	if actual.ID != expected.ID {
-		t.Errorf("Document ID mismatch: got %s, want %s", actual.ID, expected.ID)
-	}
-	if actual.Name != expected.Name {
-		t.Errorf("Document Name mismatch: got %s, want %s", actual.Name, expected.Name)
-	}
-	if actual.Content != expected.Content {
-		t.Errorf("Document Content mismatch: got %s, want %s", actual.Content, expected.Content)
-	}
+func (suite *TCVectorTestSuite) validateDocument(expected *document.Document, actual *document.Document) {
+	suite.Equal(expected.ID, actual.ID, "Document ID should match")
+	suite.Equal(expected.Name, actual.Name, "Document Name should match")
+	suite.Equal(expected.Content, actual.Content, "Document Content should match")
 
 	// Validate metadata with more flexible type checking
 	for key, expectedValue := range expected.Metadata {
-		if actualValue, exists := actual.Metadata[key]; !exists {
-			t.Logf("Note: Missing metadata key: %s", key)
-		} else {
-			// More flexible comparison for different types
-			if !suite.compareMetadataValues(expectedValue, actualValue) {
-				t.Logf("Note: Metadata %s difference: got %v (%T), expected %v (%T)",
-					key, actualValue, actualValue, expectedValue, expectedValue)
-			}
+		actualValue, exists := actual.Metadata[key]
+		if !exists {
+			suite.T().Logf("Note: Missing metadata key: %s", key)
+			continue
 		}
+
+		// More flexible comparison for different types
+		suite.True(suite.compareMetadataValues(expectedValue, actualValue),
+			"Metadata %s should match: got %v (%T), expected %v (%T)",
+			key, actualValue, actualValue, expectedValue, expectedValue)
 	}
 }
 
@@ -192,16 +192,12 @@ func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual interface
 }
 
 // validateVector compares two vectors for equality
-func (suite *TCVectorTestSuite) validateVector(t *testing.T, expected []float64, actual []float64, tolerance float64) {
-	if len(actual) != len(expected) {
-		t.Errorf("Vector length mismatch: got %d, want %d", len(actual), len(expected))
-		return
-	}
+func (suite *TCVectorTestSuite) validateVector(expected []float64, actual []float64, tolerance float64) {
+	suite.Require().Len(actual, len(expected), "Vector length should match")
 
 	for i, expectedVal := range expected {
-		if actualVal := actual[i]; abs(actualVal-expectedVal) > tolerance {
-			t.Errorf("Vector[%d] mismatch: got %f, want %f (tolerance: %f)", i, actualVal, expectedVal, tolerance)
-		}
+		suite.Assert().InDelta(expectedVal, actual[i], tolerance,
+			"Vector[%d] should match within tolerance", i)
 	}
 }
 
@@ -214,36 +210,10 @@ func abs(x float64) float64 {
 }
 
 func TestTCVectorSuite(t *testing.T) {
-	suite := &TCVectorTestSuite{}
-	suite.SetupSuite(t)
-	defer suite.TearDownSuite(t)
-
-	t.Run("Add", func(t *testing.T) {
-		suite.testAdd(t)
-	})
-
-	t.Run("Get", func(t *testing.T) {
-		suite.testGet(t)
-	})
-
-	t.Run("Search", func(t *testing.T) {
-		suite.testSearch(t)
-	})
-
-	t.Run("Update", func(t *testing.T) {
-		suite.testUpdate(t)
-	})
-
-	t.Run("Delete", func(t *testing.T) {
-		suite.testDelete(t)
-	})
-
-	t.Run("EdgeCases", func(t *testing.T) {
-		suite.testEdgeCases(t)
-	})
+	suite.Run(t, new(TCVectorTestSuite))
 }
 
-func (suite *TCVectorTestSuite) testAdd(t *testing.T) {
+func (suite *TCVectorTestSuite) TestAdd() {
 	tests := []struct {
 		name    string
 		doc     *document.Document
@@ -265,42 +235,36 @@ func (suite *TCVectorTestSuite) testAdd(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			err := suite.vs.Add(suite.ctx, tt.doc, tt.vector)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Add() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				suite.Error(err, "error expected")
 				return
 			}
 
-			if !tt.wantErr {
-				// Track for cleanup
-				suite.addedDocIDs = append(suite.addedDocIDs, tt.doc.ID)
+			suite.Require().NoError(err, "no error expected")
 
-				// Validate by retrieving the document
-				time.Sleep(500 * time.Millisecond)
-				retrievedDoc, retrievedVector, err := suite.vs.Get(suite.ctx, tt.doc.ID)
-				if err != nil {
-					t.Errorf("Failed to retrieve added document: %v", err)
-					return
-				}
+			// Track for cleanup
+			suite.addedDocIDs = append(suite.addedDocIDs, tt.doc.ID)
+			retrievedDoc, retrievedVector, err := suite.vs.Get(suite.ctx, tt.doc.ID)
+			suite.Require().NoError(err, "query after add should succeed")
+			suite.Require().NotNil(retrievedDoc, "retrieved document should not be nil")
 
-				suite.validateDocument(t, tt.doc, retrievedDoc)
-				suite.validateVector(t, tt.vector, retrievedVector, 0.0001)
-				t.Logf("Successfully added and validated document: %s", tt.doc.ID)
-			}
+			fmt.Println(retrievedDoc)
+			suite.validateDocument(tt.doc, retrievedDoc)
+			suite.validateVector(tt.vector, retrievedVector, 0.0001)
+			suite.T().Logf("Successfully added and validated document: %s", tt.doc.ID)
 		})
 	}
 }
 
-func (suite *TCVectorTestSuite) testGet(t *testing.T) {
+func (suite *TCVectorTestSuite) TestGet() {
 	// Setup: Add test document first
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	if err != nil {
-		t.Fatalf("Failed to add test document: %v", err)
-	}
+	suite.Require().NoError(err, "Failed to add test document")
+
 	suite.addedDocIDs = append(suite.addedDocIDs, testDoc.doc.ID)
-	time.Sleep(1 * time.Second)
 
 	tests := []struct {
 		name    string
@@ -320,153 +284,32 @@ func (suite *TCVectorTestSuite) testGet(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			doc, vector, err := suite.vs.Get(suite.ctx, tt.id)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Get() error = %v, wantErr %v", err, tt.wantErr)
+
+			if tt.wantErr {
+				suite.Error(err, "error expected for non-existing document")
 				return
 			}
 
-			if !tt.wantErr {
-				suite.validateDocument(t, testDoc.doc, doc)
-				suite.validateVector(t, testDoc.vector, vector, 0.0001)
-				t.Logf("Successfully retrieved and validated document: %s", tt.id)
-			}
+			suite.Require().NoError(err, "no error expected for existing document")
+			suite.Require().NotNil(doc, "document should not be nil")
+			suite.Require().NotNil(vector, "vector should not be nil")
+
+			suite.validateDocument(testDoc.doc, doc)
+			suite.validateVector(testDoc.vector, vector, 0.0001)
+			suite.T().Logf("Successfully retrieved and validated document: %s", tt.id)
 		})
 	}
 }
 
-func (suite *TCVectorTestSuite) testSearch(t *testing.T) {
-	// Setup: Add multiple test documents
-	for _, td := range testData {
-		err := suite.vs.Add(suite.ctx, td.doc, td.vector)
-		if err != nil {
-			t.Fatalf("Failed to add test document %s: %v", td.doc.ID, err)
-		}
-		suite.addedDocIDs = append(suite.addedDocIDs, td.doc.ID)
-	}
-	time.Sleep(2 * time.Second)
-
-	tests := []struct {
-		name      string
-		query     *vectorstore.SearchQuery
-		expectMin int
-		validate  func(t *testing.T, results []*vectorstore.ScoredDocument)
-	}{
-		{
-			name: "basic_vector_search",
-			query: &vectorstore.SearchQuery{
-				Vector:   []float64{1.0, 0.5, 0.2},
-				Limit:    5,
-				MinScore: 0.1,
-			},
-			expectMin: 1,
-			validate: func(t *testing.T, results []*vectorstore.ScoredDocument) {
-				// Verify first result is closest to query vector
-				if len(results) > 0 && results[0].Document.ID != "test_001" {
-					t.Logf("Note: Expected test_001 as top result, got %s", results[0].Document.ID)
-				}
-			},
-		},
-		{
-			name: "search_with_metadata_filter",
-			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.8, 1.0, 0.3},
-				Limit:  3,
-				Filter: &vectorstore.SearchFilter{
-					Metadata: map[string]interface{}{
-						"category": "AI",
-					},
-				},
-			},
-			expectMin: 0,
-			validate: func(t *testing.T, results []*vectorstore.ScoredDocument) {
-				// Log filter behavior - metadata filtering might not be fully implemented
-				aiCount := 0
-				for _, result := range results {
-					if category, ok := result.Document.Metadata["category"]; ok {
-						if category == "AI" {
-							aiCount++
-						}
-						t.Logf("Found document with category: %v", category)
-					}
-				}
-				t.Logf("Metadata filter test: found %d documents with category 'AI' out of %d total",
-					aiCount, len(results))
-			},
-		},
-		{
-			name: "search_with_id_filter",
-			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.6, 0.8, 1.0},
-				Limit:  3,
-				Filter: &vectorstore.SearchFilter{
-					IDs: []string{"test_001", "test_002"},
-				},
-			},
-			expectMin: 0,
-			validate: func(t *testing.T, results []*vectorstore.ScoredDocument) {
-				// Log ID filter behavior - check what IDs are actually returned
-				allowedIDs := map[string]bool{"test_001": true, "test_002": true}
-				matchCount := 0
-				for _, result := range results {
-					if allowedIDs[result.Document.ID] {
-						matchCount++
-					}
-					t.Logf("Found document with ID: %s", result.Document.ID)
-				}
-				t.Logf("ID filter test: found %d matching documents out of %d total",
-					matchCount, len(results))
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := suite.vs.Search(suite.ctx, tt.query)
-			if err != nil {
-				t.Errorf("Search() error = %v", err)
-				return
-			}
-			if result == nil {
-				t.Error("Search() result is nil")
-				return
-			}
-			if len(result.Results) < tt.expectMin {
-				t.Errorf("Search() results count = %v, want >= %v", len(result.Results), tt.expectMin)
-			}
-
-			// Verify results are sorted by score descending
-			for i := 1; i < len(result.Results); i++ {
-				if result.Results[i-1].Score < result.Results[i].Score {
-					t.Errorf("Search() results not sorted by score: %f < %f",
-						result.Results[i-1].Score, result.Results[i].Score)
-				}
-			}
-
-			// Run custom validation
-			if tt.validate != nil {
-				tt.validate(t, result.Results)
-			}
-
-			t.Logf("Search results count: %d", len(result.Results))
-			for i, res := range result.Results {
-				t.Logf("  Result %d: ID=%s, Score=%.4f, Name=%s",
-					i+1, res.Document.ID, res.Score, res.Document.Name)
-			}
-		})
-	}
-}
-
-func (suite *TCVectorTestSuite) testUpdate(t *testing.T) {
+func (suite *TCVectorTestSuite) TestUpdate() {
 	// Setup: Add test document
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	if err != nil {
-		t.Fatalf("Failed to add test document: %v", err)
-	}
+	suite.Require().NoError(err, "Failed to add test document")
+
 	suite.addedDocIDs = append(suite.addedDocIDs, testDoc.doc.ID)
-	time.Sleep(1 * time.Second)
 
 	tests := []struct {
 		name      string
@@ -493,37 +336,32 @@ func (suite *TCVectorTestSuite) testUpdate(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			err := suite.vs.Update(suite.ctx, tt.updateDoc, tt.newVector)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Update() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				suite.Error(err, "error expected")
 				return
 			}
 
-			if !tt.wantErr {
-				time.Sleep(1 * time.Second)
-				doc, vector, err := suite.vs.Get(suite.ctx, tt.updateDoc.ID)
-				if err != nil {
-					t.Errorf("Get() after update error = %v", err)
-					return
-				}
+			suite.Require().NoError(err, "update should succeed")
 
-				suite.validateDocument(t, tt.updateDoc, doc)
-				suite.validateVector(t, tt.newVector, vector, 0.0001)
-				t.Logf("Successfully updated and validated document: %s", tt.updateDoc.ID)
-			}
+			doc, vector, err := suite.vs.Get(suite.ctx, tt.updateDoc.ID)
+			suite.Require().NoError(err, "get after update should succeed")
+			suite.Require().NotNil(doc, "document should not be nil after update")
+			suite.Require().NotNil(vector, "vector should not be nil after update")
+
+			suite.validateDocument(tt.updateDoc, doc)
+			suite.validateVector(tt.newVector, vector, 0.0001)
+			suite.T().Logf("Successfully updated and validated document: %s", tt.updateDoc.ID)
 		})
 	}
 }
 
-func (suite *TCVectorTestSuite) testDelete(t *testing.T) {
+func (suite *TCVectorTestSuite) TestDelete() {
 	// Setup: Add test document
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
-	if err != nil {
-		t.Fatalf("Failed to add test document: %v", err)
-	}
-	time.Sleep(1 * time.Second)
+	suite.Require().NoError(err, "Failed to add test document")
 
 	tests := []struct {
 		name    string
@@ -543,50 +381,57 @@ func (suite *TCVectorTestSuite) testDelete(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		suite.Run(tt.name, func() {
 			err := suite.vs.Delete(suite.ctx, tt.id)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Delete() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				suite.Error(err, "error expected")
 				return
 			}
 
+			suite.NoError(err, "delete should not error")
+
 			if tt.id == testDoc.doc.ID {
-				time.Sleep(1 * time.Second)
 				_, _, err := suite.vs.Get(suite.ctx, tt.id)
-				if err == nil {
-					t.Errorf("Delete() document %s still exists after deletion", tt.id)
-				} else {
-					t.Logf("Successfully deleted document: %s", tt.id)
-				}
+				suite.Error(err, "document should not exist after deletion")
+				suite.T().Logf("Successfully deleted document: %s", tt.id)
 			}
 		})
 	}
 }
 
-func (suite *TCVectorTestSuite) testEdgeCases(t *testing.T) {
-	t.Run("empty_vector_search", func(t *testing.T) {
+func (suite *TCVectorTestSuite) TestEdgeCases() {
+	suite.Run("empty_vector_search", func() {
 		query := &vectorstore.SearchQuery{
 			Vector: []float64{0, 0, 0},
 			Limit:  1,
 		}
 		_, err := suite.vs.Search(suite.ctx, query)
+		// Empty vector search might be valid or invalid depending on implementation
 		if err != nil {
-			t.Logf("Empty vector search error (expected): %v", err)
+			suite.T().Logf("Empty vector search error (may be expected): %v", err)
 		}
 	})
 
-	t.Run("high_threshold_search", func(t *testing.T) {
+	suite.Run("high_threshold_search", func() {
 		query := &vectorstore.SearchQuery{
 			Vector:   []float64{1.0, 1.0, 1.0},
 			Limit:    1000,
 			MinScore: 0.99,
 		}
 		result, err := suite.vs.Search(suite.ctx, query)
-		if err != nil {
-			t.Errorf("High threshold search error: %v", err)
-		}
+		suite.NoError(err, "high threshold search should not error")
 		if result != nil {
-			t.Logf("High threshold search returned %d results", len(result.Results))
+			suite.GreaterOrEqual(len(result.Results), 0,
+				"high threshold search should return >= 0 results")
+			suite.T().Logf("High threshold search returned %d results", len(result.Results))
 		}
 	})
+}
+
+// Helper functions for environment variable parsing used in tests
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

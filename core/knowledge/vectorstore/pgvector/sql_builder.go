@@ -8,7 +8,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-var publicFieldsStr = fmt.Sprintf("id, %s, %s, %s, %s, %s, %s", fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
+var commonFiledsStr = fmt.Sprintf("id, %s, %s, %s, %s, %s, %s", fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
 
 // updateBuilder builds UPDATE SQL statements safely
 type updateBuilder struct {
@@ -17,15 +17,17 @@ type updateBuilder struct {
 	setParts []string
 	args     []interface{}
 	argIndex int
+	language string
 }
 
-func newUpdateBuilder(table, id string) *updateBuilder {
+func newUpdateBuilder(table, id, language string) *updateBuilder {
 	return &updateBuilder{
 		table:    table,
 		id:       id,
 		setParts: []string{"updated_at = $2"},
 		args:     []interface{}{id, time.Now().Unix()},
 		argIndex: 3,
+		language: language,
 	}
 }
 
@@ -36,7 +38,7 @@ func (ub *updateBuilder) addField(field string, value interface{}) {
 }
 
 func (ub *updateBuilder) addContentTSVector(content string) {
-	ub.setParts = append(ub.setParts, fmt.Sprintf("content_tsvector = to_tsvector('english', $%d)", ub.argIndex))
+	ub.setParts = append(ub.setParts, fmt.Sprintf("content_tsvector = to_tsvector('%s', $%d)", ub.language, ub.argIndex))
 	ub.args = append(ub.args, content)
 	ub.argIndex++
 }
@@ -48,55 +50,92 @@ func (ub *updateBuilder) build() (string, []interface{}) {
 
 // queryBuilder builds SQL queries safely without string concatenation
 type queryBuilder struct {
-	table        string
-	conditions   []string
-	args         []interface{}
-	argIndex     int
-	havingClause string
-	orderClause  string
-	selectClause string
-	tsConfig     string // Text search configuration (e.g., 'english', 'simple')
+	table             string
+	conditions        []string
+	args              []interface{}
+	argIndex          int
+	havingClause      string
+	orderClause       string
+	selectClause      string
+	language          string
+	textQueryArgIndex int // Holds the argument index for the text query.
 }
 
-func newQueryBuilder(table string) *queryBuilder {
+func newQueryBuilder(table string, language string) *queryBuilder {
 	return &queryBuilder{
 		table:        table,
 		conditions:   []string{"1=1"},
 		args:         make([]interface{}, 0),
 		argIndex:     1,
-		selectClause: publicFieldsStr,
-		tsConfig:     "english", // Default to English text search configuration
+		selectClause: commonFiledsStr,
+		language:     language, // Default to English text search configuration
 	}
 }
 
 // Vector search builder
-func newVectorQueryBuilder(table string) *queryBuilder {
-	qb := newQueryBuilder(table)
-	qb.selectClause = fmt.Sprintf("%s, 1 - (embedding <=> $1) as score", publicFieldsStr)
+func newVectorQueryBuilder(table string, language string) *queryBuilder {
+	qb := newQueryBuilder(table, language)
+	qb.addSelectClause("1 - (embedding <=> $1) as score")
 	qb.orderClause = "ORDER BY embedding <=> $1"
 	return qb
 }
 
 // Keyword search builder with full-text search scoring
-func newKeywordQueryBuilder(table string) *queryBuilder {
-	qb := newQueryBuilder(table)
-	qb.selectClause = fmt.Sprintf("%s, ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) as score", publicFieldsStr, qb.tsConfig)
+func newKeywordQueryBuilder(table string, language string) *queryBuilder {
+	qb := newQueryBuilder(table, language)
+	qb.addSelectClause(fmt.Sprintf("ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) as score", qb.language))
 	qb.orderClause = "ORDER BY score DESC, created_at DESC"
 	return qb
 }
 
 // Hybrid search builder (vector + keyword)
-func newHybridQueryBuilder(table string, vectorWeight, textWeight float64) *queryBuilder {
-	qb := newQueryBuilder(table)
-	qb.selectClause = fmt.Sprintf("%s, (1 - (embedding <=> $1)) * %.3f + ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) * %.3f as score", publicFieldsStr, vectorWeight, qb.tsConfig, textWeight)
+func newHybridQueryBuilder(table string, language string, vectorWeight, textWeight float64) *queryBuilder {
+	qb := newQueryBuilder(table, language)
+	scoreExpression := fmt.Sprintf("(1 - (embedding <=> $1)) * %.3f + ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) * %.3f as score", vectorWeight, qb.language, textWeight)
+	qb.addSelectClause(scoreExpression)
 	qb.orderClause = "ORDER BY score DESC"
 	return qb
 }
 
+// addKeywordSearchConditions adds both full-text search matching and optional score filtering conditions
+func (qb *queryBuilder) addKeywordSearchConditions(query string, minScore float64) {
+	// Capture the argument index for the text query before adding it.
+	qb.textQueryArgIndex = qb.argIndex
+
+	// This condition ensures that the query matches the document's content.
+	ftsCondition := fmt.Sprintf("content_tsvector @@ plainto_tsquery('%s', $%d)", qb.language, qb.argIndex)
+	qb.conditions = append(qb.conditions, ftsCondition)
+
+	// If a minimum score is specified, add a condition to filter by it.
+	if minScore > 0 {
+		scoreCondition := fmt.Sprintf("ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%d)) >= $%d",
+			qb.language, qb.argIndex, qb.argIndex+1)
+		qb.conditions = append(qb.conditions, scoreCondition)
+
+		qb.args = append(qb.args, query, minScore)
+		qb.argIndex += 2
+	} else {
+		qb.args = append(qb.args, query)
+		qb.argIndex++
+	}
+}
+
+// addHybridFtsCondition adds full-text search condition for hybrid search
+func (qb *queryBuilder) addHybridFtsCondition(query string) {
+	// Capture the argument index for the text query. Used for scoring in SELECT.
+	qb.textQueryArgIndex = qb.argIndex
+
+	// Add the full-text search condition to the WHERE clause.
+	condition := fmt.Sprintf("content_tsvector @@ plainto_tsquery('%s', $%d)", qb.language, qb.argIndex)
+	qb.conditions = append(qb.conditions, condition)
+	qb.args = append(qb.args, query)
+	qb.argIndex++
+}
+
 // Filter-only search builder
-func newFilterQueryBuilder(table string) *queryBuilder {
-	qb := newQueryBuilder(table)
-	qb.selectClause = fmt.Sprintf("%s, 1.0 as score", publicFieldsStr)
+func newFilterQueryBuilder(table string, language string) *queryBuilder {
+	qb := newQueryBuilder(table, language)
+	qb.addSelectClause("1.0 as score")
 	qb.orderClause = "ORDER BY created_at DESC"
 	return qb
 }
@@ -106,12 +145,9 @@ func (qb *queryBuilder) addVectorArg(vector pgvector.Vector) {
 	qb.argIndex++
 }
 
-func (qb *queryBuilder) addFullTextSearch(query string) {
-	// Use pre-computed tsvector for better performance
-	condition := fmt.Sprintf("content_tsvector @@ plainto_tsquery('%s', $%d)", qb.tsConfig, qb.argIndex)
-	qb.conditions = append(qb.conditions, condition)
-	qb.args = append(qb.args, query)
-	qb.argIndex++
+// addSelectClause is a helper method to add the select clause with score calculation
+func (qb *queryBuilder) addSelectClause(scoreExpression string) {
+	qb.selectClause = fmt.Sprintf("%s, %s", commonFiledsStr, scoreExpression)
 }
 
 func (qb *queryBuilder) addIDFilter(ids []string) {
@@ -138,7 +174,8 @@ func (qb *queryBuilder) addMetadataFilter(metadata map[string]interface{}) {
 	}
 
 	// Use @> operator for containment check, more efficient with GIN index
-	condition := fmt.Sprintf("metadata @> $%d", qb.argIndex)
+	// Cast the parameter to JSONB to ensure proper type matching
+	condition := fmt.Sprintf("metadata @> $%d::jsonb", qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 
 	// Convert map to JSON string for @> operator
@@ -147,53 +184,20 @@ func (qb *queryBuilder) addMetadataFilter(metadata map[string]interface{}) {
 	qb.argIndex++
 }
 
-// addMetadataPathFilter queries specific JSON paths with various operators
-// Examples:
-//
-//	#> path extraction: metadata #> '{user,profile,name}'
-//	#>> path as text: metadata #>> '{user,profile,name}'
-//	? key exists: metadata ? 'user'
-//	?& all keys exist: metadata ?& array['user','settings']
-//	?| any key exists: metadata ?| array['user','admin']
-func (qb *queryBuilder) addMetadataPathFilter(path []string, operator string, value interface{}) {
-	var condition string
-	var arg interface{}
+func (qb *queryBuilder) addScoreFilter(minScore float64) {
+	// Use WHERE clause instead of HAVING since we don't need aggregation
+	condition := fmt.Sprintf("(1 - (embedding <=> $1)) >= %f", minScore)
+	qb.conditions = append(qb.conditions, condition)
+}
 
-	pathStr := `{` + fmt.Sprintf(`"%s"`, strings.Join(path, `","`)) + `}`
-
-	switch operator {
-	case "exists":
-		// Check if path exists
-		condition = fmt.Sprintf("metadata #> '%s' IS NOT NULL", pathStr)
-		qb.conditions = append(qb.conditions, condition)
-		return
-	case "equals":
-		// Path equals value (as JSON)
-		condition = fmt.Sprintf("metadata #> '%s' = $%d", pathStr, qb.argIndex)
-		arg = fmt.Sprintf(`"%v"`, value) // Wrap in quotes for JSON
-	case "text_equals":
-		// Path equals value (as text)
-		condition = fmt.Sprintf("metadata #>> '%s' = $%d", pathStr, qb.argIndex)
-		arg = fmt.Sprintf("%v", value)
-	case "contains":
-		// Path contains value (for arrays/objects)
-		condition = fmt.Sprintf("metadata #> '%s' @> $%d", pathStr, qb.argIndex)
-		arg = fmt.Sprintf(`"%v"`, value)
-	default:
-		return // Unsupported operator
+// build constructs the final SQL query.
+func (qb *queryBuilder) build(limit int) (string, []interface{}) {
+	finalSelectClause := qb.selectClause
+	// If a text query argument was added, format the select clause to include its index for scoring.
+	if qb.textQueryArgIndex > 0 {
+		finalSelectClause = fmt.Sprintf(qb.selectClause, qb.textQueryArgIndex)
 	}
 
-	qb.conditions = append(qb.conditions, condition)
-	qb.args = append(qb.args, arg)
-	qb.argIndex++
-}
-
-func (qb *queryBuilder) addScoreFilter(minScore float64) {
-	qb.havingClause = fmt.Sprintf(" HAVING 1 - (embedding <=> $1) >= %f", minScore)
-}
-
-// Vector search SQL builder
-func (qb *queryBuilder) buildVectorSearch(limit int) (string, []interface{}) {
 	whereClause := strings.Join(qb.conditions, " AND ")
 
 	sql := fmt.Sprintf(`
@@ -202,56 +206,7 @@ func (qb *queryBuilder) buildVectorSearch(limit int) (string, []interface{}) {
 		WHERE %s
 		%s
 		%s
-		LIMIT %d`, qb.selectClause, qb.table, whereClause, qb.havingClause, qb.orderClause, limit)
-
-	return sql, qb.args
-}
-
-// Keyword search SQL builder with full-text search
-func (qb *queryBuilder) buildKeywordSearch(limit int) (string, []interface{}) {
-	whereClause := strings.Join(qb.conditions, " AND ")
-
-	// Build the select clause with proper text search scoring
-	selectClause := fmt.Sprintf(qb.selectClause, qb.argIndex-1)
-
-	sql := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		%s
-		LIMIT %d`, selectClause, qb.table, whereClause, qb.orderClause, limit)
-
-	return sql, qb.args
-}
-
-// Hybrid search SQL builder with combined scoring
-func (qb *queryBuilder) buildHybridSearch(limit int) (string, []interface{}) {
-	whereClause := strings.Join(qb.conditions, " AND ")
-
-	// Build the select clause with combined vector and text search scoring
-	selectClause := fmt.Sprintf(qb.selectClause, qb.argIndex-1)
-
-	sql := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		%s
-		%s
-		LIMIT %d`, selectClause, qb.table, whereClause, qb.havingClause, qb.orderClause, limit)
-
-	return sql, qb.args
-}
-
-// Filter search SQL builder
-func (qb *queryBuilder) buildFilterSearch(limit int) (string, []interface{}) {
-	whereClause := strings.Join(qb.conditions, " AND ")
-
-	sql := fmt.Sprintf(`
-		SELECT %s
-		FROM %s
-		WHERE %s
-		%s
-		LIMIT %d`, qb.selectClause, qb.table, whereClause, qb.orderClause, limit)
+		LIMIT %d`, finalSelectClause, qb.table, whereClause, qb.havingClause, qb.orderClause, limit)
 
 	return sql, qb.args
 }
