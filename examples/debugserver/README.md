@@ -1,6 +1,6 @@
-# CLI Example Server
+# Debug Server Example
 
-This example shows how to start the trpc-agent-go **CLI** HTTP server and
+This example shows how to start the trpc-agent-go **Debug Server** and
 connect it to [ADK Web](https://github.com/google/adk-web).
 
 ## Prerequisites
@@ -12,7 +12,7 @@ connect it to [ADK Web](https://github.com/google/adk-web).
 
 ```bash
 # From repository root
-cd examples/cli
+cd examples/debugserver
 
 # Start the server on :8080 (default model: deepseek-chat)
 go run . -addr :8080
