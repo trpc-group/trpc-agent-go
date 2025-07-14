@@ -145,8 +145,3 @@ func (at *Tool) Declaration() *tool.Declaration {
 		OutputSchema: at.outputSchema,
 	}
 }
-
-// IsSkipSummarization returns whether summarization should be skipped.
-func (at *Tool) IsSkipSummarization() bool {
-	return at.skipSummarization
-}

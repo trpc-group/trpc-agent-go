@@ -162,7 +162,7 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 
 	agentTool := NewTool(mockAgent, WithSkipSummarization(true))
 
-	if !agentTool.IsSkipSummarization() {
+	if !agentTool.skipSummarization {
 		t.Error("Expected skip summarization to be true")
 	}
 }
