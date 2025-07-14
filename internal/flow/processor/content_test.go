@@ -26,7 +26,8 @@ func TestNewContentRequestProcessor(t *testing.T) {
 	assert.NotNil(t, processor)
 	assert.Equal(t, IncludeContentsAll, processor.IncludeContents)
 }
-func TestContentRequestProcessor_HasValidContent(t *testing.T) {
+
+func TestContentProc_HasValidContent(t *testing.T) {
 	processor := NewContentRequestProcessor()
 
 	// Event with message content.

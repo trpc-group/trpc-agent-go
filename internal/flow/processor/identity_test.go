@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestIdentityRequestProcessor_Request(t *testing.T) {
+func TestIdentityProc_Request(t *testing.T) {
 	tests := []struct {
 		name         string
 		agentName    string
@@ -118,7 +118,7 @@ func TestIdentityRequestProcessor_Request(t *testing.T) {
 	}
 }
 
-func TestIdentityRequestProcessor_HasIdMsg(t *testing.T) {
+func TestIdentityProc_HasIDMsg(t *testing.T) {
 	tests := []struct {
 		name     string
 		messages []model.Message

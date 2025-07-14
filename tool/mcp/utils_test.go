@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestConvertMCPSchemaToSchema_Basic(t *testing.T) {
+func TestConvertMCPSchema_Basic(t *testing.T) {
 	mcpSchema := map[string]any{
 		"type":        "object",
 		"description": "test schema",
@@ -43,7 +43,7 @@ func TestConvertProperties_Nil(t *testing.T) {
 	require.Nil(t, convertProperties(nil))
 }
 
-func TestConvertMCPSchemaToSchema_InvalidJSON(t *testing.T) {
+func TestConvertMCPSchema_InvalidJSON(t *testing.T) {
 	// Channel cannot marshal, expect fallback schema.
 	schema := convertMCPSchemaToSchema(make(chan int))
 	require.Equal(t, &tool.Schema{Type: "object"}, schema)

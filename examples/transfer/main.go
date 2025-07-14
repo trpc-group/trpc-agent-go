@@ -184,7 +184,8 @@ func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agen
 		"research-agent",
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized research and information gathering agent"),
-		llmagent.WithInstruction("You are a research expert. Gather comprehensive information and provide well-structured answers."),
+		llmagent.WithInstruction("You are a research expert. "+
+			"Gather comprehensive information and provide well-structured answers."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool}),

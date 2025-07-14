@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo/internal/client"
 )
 
-func TestDuckDuckGoTool_Search_WithResults(t *testing.T) {
+func TestDuckDuckGoTool_Search_Results(t *testing.T) {
 	// Mock API response with related topics
 	mockResponse := `{
 		"Abstract": "Beijing is the capital of China",
@@ -77,7 +77,7 @@ func TestDuckDuckGoTool_Search_WithResults(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_WithInstantAnswer(t *testing.T) {
+func TestDDGTool_InstantAnswer(t *testing.T) {
 	mockResponse := `{
 		"Answer": "25°C, Partly cloudy",
 		"AnswerType": "weather",
@@ -109,7 +109,7 @@ func TestDuckDuckGoTool_Search_WithInstantAnswer(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_WithDefinition(t *testing.T) {
+func TestDDGTool_Definition(t *testing.T) {
 	mockResponse := `{
 		"Definition": "Large Language Model (LLM) is a type of artificial intelligence model.",
 		"DefinitionSource": "Wikipedia",
@@ -140,7 +140,7 @@ func TestDuckDuckGoTool_Search_WithDefinition(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_EmptyQuery(t *testing.T) {
+func TestDDGTool_EmptyQuery(t *testing.T) {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	testClient := client.New("https://api.duckduckgo.com", "test-agent/1.0", httpClient)
 	ddgTool := &ddgTool{client: testClient}
@@ -155,7 +155,7 @@ func TestDuckDuckGoTool_Search_EmptyQuery(t *testing.T) {
 	}
 }
 
-func TestDuckDuckGoTool_Search_NoResults(t *testing.T) {
+func TestDDGTool_NoResults(t *testing.T) {
 	// Empty response
 	mockResponse := `{
 		"Answer": "",

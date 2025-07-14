@@ -119,7 +119,7 @@ func newFromLegacy(o legacyOptions) *ParallelAgent {
 	return New(o.Name, opts...)
 }
 
-func TestParallelAgent_Run_Basic(t *testing.T) {
+func TestParallelAgent_Basic(t *testing.T) {
 	// Create mock sub-agents.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 2, delay: 10 * time.Millisecond}
 	subAgent2 := &mockAgent{name: "agent-2", eventCount: 1, delay: 5 * time.Millisecond}
@@ -162,7 +162,7 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 	require.Equal(t, 1, agentCounts["agent-2"])
 }
 
-func TestParallelAgent_Run_WithError(t *testing.T) {
+func TestParallelAgent_WithError(t *testing.T) {
 	// Create agents, one with error.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1}
 	subAgent2 := &mockAgent{name: "agent-2", shouldError: true}
@@ -201,7 +201,7 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 	require.True(t, hasError)
 }
 
-func TestParallelAgent_BranchInvocations(t *testing.T) {
+func TestParallelAgent_BranchInvoke(t *testing.T) {
 	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
 	parallelAgent := newFromLegacy(legacyOptions{Name: "test-parallel"})
 
@@ -301,7 +301,7 @@ func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return nil, errors.New("boom")
 }
 
-func TestParallelAgent_BeforeCallbackErr(t *testing.T) {
+func TestParallelAgent_BeforeErr(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("bad before")
@@ -325,7 +325,7 @@ func TestParallelAgent_BeforeCallbackErr(t *testing.T) {
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, evt.Error.Type)
 }
 
-func TestParallelAgent_AfterCallbackCustomResp(t *testing.T) {
+func TestParallelAgent_AfterResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
@@ -351,7 +351,7 @@ func TestParallelAgent_AfterCallbackCustomResp(t *testing.T) {
 	require.Equal(t, "after", last.Object)
 }
 
-func TestParallelAgent_BeforeCallbackCustomResp(t *testing.T) {
+func TestParallelAgent_BeforeResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
@@ -368,21 +368,4 @@ func TestParallelAgent_BeforeCallbackCustomResp(t *testing.T) {
 	}
 	require.NotNil(t, first)
 	require.Equal(t, "before", first.Object)
-}
-
-func TestParallelAgent_CreateBranchInvoke(t *testing.T) {
-	sa := &silentAgent{name: "child"}
-	pa := newFromLegacy(legacyOptions{Name: "parent"})
-
-	base := &agent.Invocation{InvocationID: "root", AgentName: "parent"}
-	branch := pa.createBranchInvocationForSubAgent(sa, base)
-
-	// InvocationID should change and contain base ID.
-	require.NotEqual(t, base.InvocationID, branch.InvocationID)
-	require.Contains(t, branch.InvocationID, base.InvocationID)
-	// Branch should equal new invocation ID.
-	require.Equal(t, branch.InvocationID, branch.Branch)
-	// Agent properties updated.
-	require.Equal(t, "child", branch.AgentName)
-	require.Equal(t, "child", branch.Agent.Info().Name)
 }

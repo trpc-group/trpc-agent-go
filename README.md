@@ -13,7 +13,6 @@ language models (LLMs), hierarchical planners, memory, telemetry and a rich
 that reason, call tools, collaborate with sub-agents and keep long-term state,
 `tRPC-Agent-Go` has you covered.
 
----
 
 ## Table of Contents
 
@@ -30,7 +29,6 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
 
----
 
 ## Quick Start
 
@@ -53,7 +51,6 @@ The example shows an agent that calls **function tools** to retrieve weather and
 population data. Switch between streaming and non-streaming modes with
 `streaming_input.go` and `non-streaming.go`.
 
----
 
 ## Examples
 
@@ -100,7 +97,6 @@ The `examples` directory contains runnable demos covering every major feature.
 
 See individual `README.md` files in each example folder for usage details.
 
----
 
 ## Architecture Overview
 
@@ -133,7 +129,6 @@ Key packages:
 | `runner` | Session lifecycle, event persistence, OpenTelemetry tracing. |
 | `memory` | Abstract memory interfaces (vector DB integrations coming soon). |
 
----
 
 ## Using Built-in Agents
 
@@ -180,7 +175,6 @@ for ev := range events { /* ... */ }
 The composition API lets you nest chains, cycles, or parallels to build complex
 workflows without low-level plumbing.
 
----
 
 ## Memory & Knowledge
 
@@ -188,7 +182,6 @@ workflows without low-level plumbing.
 vector store integrations (Milvus, Pinecone, Qdrant) and long-term knowledge
 bases under `knowledge/`.
 
----
 
 ## Future Enhancements
 
@@ -198,7 +191,6 @@ bases under `knowledge/`.
 - gRPC & HTTP servers for remote agent invocation.
 - Comprehensive benchmark & test suite.
 
----
 
 ## Contributing
 
@@ -206,7 +198,6 @@ Pull requests, issues and suggestions are very welcome! Please read
 [CONTRIBUTING.md](CONTRIBUTING.md) and follow Go coding conventions. Run
 `go test ./... && go vet ./...` before submitting.
 
----
 
 ## Acknowledgements
 

@@ -101,7 +101,7 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
-func TestChainAgent_Run_Sequential(t *testing.T) {
+func TestChainAgent_Sequential(t *testing.T) {
 	// Track execution order.
 	var executionOrder []string
 
@@ -177,7 +177,7 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 	require.Equal(t, 1, agentEventCounts["agent-3"])
 }
 
-func TestChainAgent_Run_SubAgentError(t *testing.T) {
+func TestChainAgent_SubAgentError(t *testing.T) {
 	// Create mock sub-agents with one that errors.
 	subAgent1 := &mockAgent{
 		name:         "agent-1",
@@ -230,7 +230,7 @@ func TestChainAgent_Run_SubAgentError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeFlowError, lastEvent.Error.Type)
 }
 
-func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
+func TestChainAgent_EmptySubAgents(t *testing.T) {
 	// Create ChainAgent with no sub-agents.
 	chainAgent := New(
 		"test-chain",
@@ -462,7 +462,7 @@ func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 	return ch, nil
 }
 
-func TestChainAgent_BeforeCallbackCustomResp(t *testing.T) {
+func TestChainAgent_BeforeCallbackResp(t *testing.T) {
 	// Sub-agent should never run.
 	sub := &mockNoEventAgent{name: "child"}
 

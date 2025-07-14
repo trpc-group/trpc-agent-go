@@ -120,7 +120,7 @@ func TestLLMAgent_InfoAndTools(t *testing.T) {
 	require.Equal(t, "t1", ts[0].Declaration().Name)
 }
 
-func TestLLMAgent_WrapEventChannel_AfterCb(t *testing.T) {
+func TestLLMAgent_AfterCb(t *testing.T) {
 	// Prepare original event channel.
 	orig := make(chan *event.Event, 1)
 	orig <- event.New("id", "agent")
@@ -144,7 +144,7 @@ func TestLLMAgent_WrapEventChannel_AfterCb(t *testing.T) {
 	require.Equal(t, "after", objs[1])
 }
 
-func TestLLMAgent_WrapEventChannel_AfterCbNoResp(t *testing.T) {
+func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	orig := make(chan *event.Event, 1)
 	orig <- event.New("id2", "agent2")
 	close(orig)

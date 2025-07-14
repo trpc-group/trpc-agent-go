@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestBasicRequestProcessor_ProcessRequest(t *testing.T) {
+func TestBasicReqProc_ProcessReq(t *testing.T) {
 	tests := []struct {
 		name       string
 		processor  *BasicRequestProcessor

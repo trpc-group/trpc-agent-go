@@ -30,11 +30,16 @@ func streamingOutputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.8
 	maxTokens := 1000
 
-	getWeatherStreamingTool := function.NewStreamableFunctionTool[getWeatherInput, getWeatherOutput](getStreamableWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getWeatherStreamingTool := function.NewStreamableFunctionTool[getWeatherInput, getWeatherOutput](
+		getStreamableWeather, function.WithName("get_weather"),
+		function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
+			model.NewSystemMessage(
+				"You are a helpful weather guide. If you don't have real-time " +
+					"weather data, you should call the user-provided tool.",
+			),
 			model.NewUserMessage("What is the weather in XYZ City? "),
 		},
 		GenerationConfig: model.GenerationConfig{
@@ -84,7 +89,8 @@ func streamingOutputExample(ctx context.Context, llm *openai.Model) error {
 								break
 							}
 							if err != nil {
-								log.Errorf("StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, "+
+								log.Errorf("StreamableTool execution failed for %s: "+
+									"receive chunk from stream reader failed: %v, "+
 									"may merge incomplete data", toolCall.Function.Name, err)
 								break
 							}

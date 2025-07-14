@@ -93,8 +93,15 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := function.NewFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
-	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
+	calculatorTool := function.NewFunctionTool(
+		c.calculate,
+		function.WithName("calculator"),
+		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+	)
+	timeTool := function.NewFunctionTool(
+		c.getCurrentTime,
+		function.WithName("current_time"),
+		function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -108,7 +115,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
-		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
+		"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),

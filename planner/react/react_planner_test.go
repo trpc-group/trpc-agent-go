@@ -104,7 +104,7 @@ func TestPlanner_ProcessPlanResp_Empty(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanResp_ToolCalls(t *testing.T) {
+func TestPlanner_ToolCalls(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
@@ -159,7 +159,7 @@ func TestPlanner_ProcessPlanResp_ToolCalls(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanResp_FinalAns(t *testing.T) {
+func TestPlanner_FinalAns(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
