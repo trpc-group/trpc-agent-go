@@ -117,7 +117,8 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A research agent that uses React planning to structure its thinking and actions"),
-		llmagent.WithInstruction("You are a helpful research assistant. Use the React planning approach to break down complex questions into manageable steps."),
+		llmagent.WithInstruction("You are a helpful research assistant. "+
+			"Use the React planning approach to break down complex questions into manageable steps."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool, weatherTool}),
@@ -283,10 +284,15 @@ func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
 // search simulates a search tool.
 func (c *reactPlanningChat) search(args searchArgs) searchResult {
 	results := map[string]string{
-		"tokyo population":    "Tokyo has a population of approximately 14 million people in the city proper and 38 million in the greater metropolitan area.",
-		"new york population": "New York City has a population of approximately 8.3 million people, with about 20 million in the metropolitan area.",
-		"paris weather":       "Paris currently has partly cloudy skies with a temperature of 15°C (59°F). Light rain is expected later today.",
-		"compound interest":   "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), where A is the amount, P is principal, r is annual interest rate, n is number of times interest compounds per year, and t is time in years.",
+		"tokyo population": "Tokyo has a population of approximately 14 million people in the city proper and " +
+			"38 million in the greater metropolitan area.",
+		"new york population": "New York City has a population of approximately 8.3 million people, " +
+			"with about 20 million in the metropolitan area.",
+		"paris weather": "Paris currently has partly cloudy skies with a temperature of 15°C (59°F). " +
+			"Light rain is expected later today.",
+		"compound interest": "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), " + //nolint:gosec
+			"where A is the amount, P is principal, r is annual interest rate, " +
+			"n is number of times interest compounds per year, and t is time in years.",
 	}
 
 	query := strings.ToLower(args.Query)
