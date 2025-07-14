@@ -59,9 +59,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	for _, opt := range opts {
 		opt(options)
 	}
-
 	info := agent.Info()
-
 	// Generate input schema for the agent tool.
 	// For now, we'll use a simple string input schema.
 	inputSchema := &tool.Schema{
@@ -75,13 +73,11 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		},
 		Required: []string{"request"},
 	}
-
 	// Generate output schema for the agent tool.
 	outputSchema := &tool.Schema{
 		Type:        "string",
 		Description: "The response from the agent",
 	}
-
 	return &Tool{
 		agent:             agent,
 		skipSummarization: options.skipSummarization,
@@ -132,7 +128,6 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 			}
 		}
 	}
-
 	return response.String(), nil
 }
 
