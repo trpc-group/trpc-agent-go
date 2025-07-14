@@ -69,6 +69,7 @@ type ConnectionConfig struct {
 type toolSetConfig struct {
 	connectionConfig ConnectionConfig
 	toolFilter       ToolFilter
+	mcpOptions       []mcp.ClientOption // MCP client options.
 }
 
 // ToolSetOption is a function type for configuring ToolSet.
@@ -78,6 +79,14 @@ type ToolSetOption func(*toolSetConfig)
 func WithToolFilter(filter ToolFilter) ToolSetOption {
 	return func(c *toolSetConfig) {
 		c.toolFilter = filter
+	}
+}
+
+// WithMCPOptions sets additional MCP client options.
+// This can be used to pass options to the underlying MCP client.
+func WithMCPOptions(options ...mcp.ClientOption) ToolSetOption {
+	return func(c *toolSetConfig) {
+		c.mcpOptions = append(c.mcpOptions, options...)
 	}
 }
 

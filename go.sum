@@ -125,5 +125,5 @@ gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntN
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250709022439-f9d940988a2b h1:XZWYyBIM4ktPFBeONghDX5fCN/iqFSekJqMTnsUnfRI=
-trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250709022439-f9d940988a2b/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=
+trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd h1:K6mGq8XaSbXlCqyFp2rqGTIXqaCReRPOMU7nFqb9Lto=
+trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=
