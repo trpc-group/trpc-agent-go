@@ -13,7 +13,6 @@ language models (LLMs), hierarchical planners, memory, telemetry and a rich
 that reason, call tools, collaborate with sub-agents and keep long-term state,
 `tRPC-Agent-Go` has you covered.
 
-
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -28,7 +27,6 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 - [Future Enhancements](#future-enhancements)
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
-
 
 ## Quick Start
 
@@ -50,7 +48,6 @@ go run . -model="gpt-4o-mini"
 The example shows an agent that calls **function tools** to retrieve weather and
 population data. Switch between streaming and non-streaming modes with
 `streaming_input.go` and `non-streaming.go`.
-
 
 ## Examples
 
@@ -88,15 +85,14 @@ The `examples` directory contains runnable demos covering every major feature.
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
-### 6. ADK Web Demo ([examples/adkweb](examples/adkweb))
+### 6. Debug Web Demo ([examples/debugserver](examples/debugserver))
 
-- Launches an **ADK Server** that speaks ADK-compatible HTTP endpoints.
+- Launches a **debug Server** that speaks ADK-compatible HTTP endpoints.
 - Front-end: [google/adk-web](https://github.com/google/adk-web) connects via
   `/run_sse`, streams agent responses in real-time.
 - Great starting point for building your own chat UI.
 
 See individual `README.md` files in each example folder for usage details.
-
 
 ## Architecture Overview
 
@@ -121,14 +117,13 @@ See individual `README.md` files in each example folder for usage details.
 
 Key packages:
 
-| Package | Responsibility |
-|---------|----------------|
-| `agent` | Core interfaces & built-in `ChainAgent`, `ParallelAgent`, `LLMAgent`, etc. |
-| `tool` | Unified tool specification, JSON schema, execution helpers & built-ins (e.g. DuckDuckGo search). |
-| `planner` | Next-step planners: built-in & ReAct-style reasoning. |
-| `runner` | Session lifecycle, event persistence, OpenTelemetry tracing. |
-| `memory` | Abstract memory interfaces (vector DB integrations coming soon). |
-
+| Package   | Responsibility                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| `agent`   | Core interfaces & built-in `ChainAgent`, `ParallelAgent`, `LLMAgent`, etc.                       |
+| `tool`    | Unified tool specification, JSON schema, execution helpers & built-ins (e.g. DuckDuckGo search). |
+| `planner` | Next-step planners: built-in & ReAct-style reasoning.                                            |
+| `runner`  | Session lifecycle, event persistence, OpenTelemetry tracing.                                     |
+| `memory`  | Abstract memory interfaces (vector DB integrations coming soon).                                 |
 
 ## Using Built-in Agents
 
@@ -136,12 +131,12 @@ For most applications you **do not** need to implement the `agent.Agent`
 interface yourself. The framework already ships with several ready-to-use
 agents that you can compose like Lego bricks:
 
-| Agent            | Purpose                                            |
-|------------------|----------------------------------------------------|
-| `LLMAgent`       | Wraps an LLM chat-completion model as an agent.    |
-| `ChainAgent`     | Executes sub-agents sequentially.                  |
-| `ParallelAgent`  | Executes sub-agents concurrently and merges output.|
-| `CycleAgent`     | Loops over a planner + executor until stop signal. |
+| Agent           | Purpose                                             |
+| --------------- | --------------------------------------------------- |
+| `LLMAgent`      | Wraps an LLM chat-completion model as an agent.     |
+| `ChainAgent`    | Executes sub-agents sequentially.                   |
+| `ParallelAgent` | Executes sub-agents concurrently and merges output. |
+| `CycleAgent`    | Loops over a planner + executor until stop signal.  |
 
 ### Quick composition example
 
@@ -175,13 +170,11 @@ for ev := range events { /* ... */ }
 The composition API lets you nest chains, cycles, or parallels to build complex
 workflows without low-level plumbing.
 
-
 ## Memory & Knowledge
 
 `tRPC-Agent-Go` ships with an in-memory session store. Future releases will add
 vector store integrations (Milvus, Pinecone, Qdrant) and long-term knowledge
 bases under `knowledge/`.
-
 
 ## Future Enhancements
 
@@ -191,13 +184,11 @@ bases under `knowledge/`.
 - gRPC & HTTP servers for remote agent invocation.
 - Comprehensive benchmark & test suite.
 
-
 ## Contributing
 
 Pull requests, issues and suggestions are very welcome! Please read
 [CONTRIBUTING.md](CONTRIBUTING.md) and follow Go coding conventions. Run
 `go test ./... && go vet ./...` before submitting.
-
 
 ## Acknowledgements
 
