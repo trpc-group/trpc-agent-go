@@ -31,8 +31,10 @@ type AfterModelCallback func(ctx context.Context, rsp *Response, modelErr error)
 
 // ModelCallbacks holds callbacks for model operations.
 type ModelCallbacks struct {
+	// BeforeModel is a list of callbacks that are called before the model is invoked.
 	BeforeModel []BeforeModelCallback
-	AfterModel  []AfterModelCallback
+	// AfterModel is a list of callbacks that are called after the model is invoked.
+	AfterModel []AfterModelCallback
 }
 
 // NewModelCallbacks creates a new ModelCallbacks instance.
