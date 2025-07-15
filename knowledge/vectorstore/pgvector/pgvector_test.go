@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/suite"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
 var (

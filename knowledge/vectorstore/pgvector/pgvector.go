@@ -10,22 +10,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
 
 var (
-	fieldID              = "id"
-	fieldUpdatedAt       = "updated_at"
-	fieldCreatedAt       = "created_at"
-	fieldName            = "name"
-	fieldContent         = "content"
-	fieldContentTSVector = "content_tsvector"
-	fieldVector          = "embedding"
-	fieldMetadata        = "metadata"
-	defaultLimit         = 10
+	fieldID        = "id"
+	fieldUpdatedAt = "updated_at"
+	fieldCreatedAt = "created_at"
+	fieldName      = "name"
+	fieldContent   = "content"
+	fieldVector    = "embedding"
+	fieldMetadata  = "metadata"
+	defaultLimit   = 10
 )
 
 // SQL templates for better maintainability and safety
@@ -35,7 +34,6 @@ const (
 			id TEXT PRIMARY KEY,                    -- Unique document identifier, supports arbitrary length strings
 			name VARCHAR(255),                      -- Document name for display and search
 			content TEXT,                           -- Main document content with unlimited length
-			content_tsvector TSVECTOR,              -- Pre-computed text search vector for performance
 			embedding vector(%d),                   -- Vector embedding for similarity search
 			metadata JSONB,                         -- Metadata supporting complex structured data and indexing
 			created_at BIGINT,                      -- Creation timestamp (Unix timestamp)
@@ -46,15 +44,14 @@ const (
 		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING hnsw (embedding vector_cosine_ops) WITH (m = 32, ef_construction = 400)`
 
 	sqlCreateTextIndex = `
-		CREATE INDEX IF NOT EXISTS %s_content_fts_idx ON %s USING gin (content_tsvector)`
+		CREATE INDEX IF NOT EXISTS %s_content_fts_idx ON %s USING gin (to_tsvector('%s', content))`
 
-	sqlInsertDocument = `
-		INSERT INTO %s (id, name, content, content_tsvector, embedding, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, to_tsvector('%s', $3), $4, $5, $6, $7)
+	sqlUpsertDocument = `
+		INSERT INTO %s (id, name, content, embedding, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			content = EXCLUDED.content,
-			content_tsvector = to_tsvector('%s', EXCLUDED.content),
 			embedding = EXCLUDED.embedding,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at`
@@ -66,11 +63,13 @@ const (
 	sqlDocumentExists = `SELECT 1 FROM %s WHERE id = $1`
 )
 
+// VectorStore is the vector store for pgvector.
 type VectorStore struct {
 	pool   *pgxpool.Pool
-	option Options
+	option options
 }
 
+// New creates a new pgvector vector store.
 func New(opts ...Option) (*VectorStore, error) {
 	option := defaultOptions
 	for _, opt := range opts {
@@ -127,11 +126,13 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 		return fmt.Errorf("pgvector create vector index: %w", err)
 	}
 
-	// Create GIN index for full-text search on content
-	textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, vs.option.table, vs.option.table)
-	_, err = vs.pool.Exec(ctx, textIndexSQL)
-	if err != nil {
-		return fmt.Errorf("pgvector create text search index: %w", err)
+	// If tsvector is enabled, create GIN index for full-text search on content
+	if vs.option.enableTSVector {
+		textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, vs.option.table, vs.option.table, vs.option.language)
+		_, err = vs.pool.Exec(ctx, textIndexSQL)
+		if err != nil {
+			return fmt.Errorf("pgvector create text search index: %w", err)
+		}
 	}
 
 	return nil
@@ -149,12 +150,12 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d, table: %s", vs.option.indexDimension, len(embedding), vs.option.table)
 	}
 
+	upsertSQL := fmt.Sprintf(sqlUpsertDocument, vs.option.table)
 	now := time.Now().Unix()
-	upsertSql := fmt.Sprintf(sqlInsertDocument, vs.option.table, vs.option.language, vs.option.language)
 	vector := pgvector.NewVector(convertToFloat32Vector(embedding))
 	metadataJSON := mapToJSON(doc.Metadata)
 
-	_, err := vs.pool.Exec(ctx, upsertSql, doc.ID, doc.Name, doc.Content, vector, metadataJSON, now, now)
+	_, err := vs.pool.Exec(ctx, upsertSQL, doc.ID, doc.Name, doc.Content, vector, metadataJSON, now, now)
 	if err != nil {
 		return fmt.Errorf("pgvector insert document: %w", err)
 	}
@@ -168,16 +169,13 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 		return nil, nil, fmt.Errorf("pgvector id is required")
 	}
 
-	querySql := fmt.Sprintf(sqlSelectDocument, vs.option.table)
+	querySQL := fmt.Sprintf(sqlSelectDocument, vs.option.table)
 	var docID, name, content, metadataJSON string
 	var embedding pgvector.Vector
 	var createdAt, updatedAt int64
 
-	err := vs.pool.QueryRow(ctx, querySql, id).Scan(&docID, &name, &content, &embedding, &metadataJSON, &createdAt, &updatedAt)
+	err := vs.pool.QueryRow(ctx, querySQL, id).Scan(&docID, &name, &content, &embedding, &metadataJSON, &createdAt, &updatedAt)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil, fmt.Errorf("pgvector document not found: %s", id)
-		}
 		return nil, nil, fmt.Errorf("pgvector get document: %w", err)
 	}
 
@@ -222,7 +220,6 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 
 	if doc.Content != "" {
 		ub.addField("content", doc.Content)
-		ub.addContentTSVector(doc.Content) // Update tsvector when content changes
 	}
 
 	if len(embedding) > 0 {
@@ -236,8 +233,8 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 		ub.addField("metadata", mapToJSON(doc.Metadata))
 	}
 
-	updateSql, args := ub.build()
-	result, err := vs.pool.Exec(ctx, updateSql, args...)
+	updateSQL, args := ub.build()
+	result, err := vs.pool.Exec(ctx, updateSQL, args...)
 	if err != nil {
 		return fmt.Errorf("pgvector update document: %w", err)
 	}
@@ -254,9 +251,9 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("pgvector id is required")
 	}
 
-	deleteSql := fmt.Sprintf(sqlDeleteDocument, vs.option.table)
+	deleteSQL := fmt.Sprintf(sqlDeleteDocument, vs.option.table)
 
-	result, err := vs.pool.Exec(ctx, deleteSql, id)
+	result, err := vs.pool.Exec(ctx, deleteSQL, id)
 	if err != nil {
 		return fmt.Errorf("pgvector delete document: %w", err)
 	}
@@ -269,30 +266,30 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 
 // Search performs similarity search and returns the most similar documents.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	// Handle different search modes
 	if query == nil {
-		return nil, fmt.Errorf("pgvector query is required")
+		return nil, fmt.Errorf("pgvector: query is required")
 	}
-	hasVector := len(query.Vector) > 0
-	hasKeyword := query.Query != ""
 
-	if hasVector && hasKeyword {
-		// Hybrid search: combine vector similarity and keyword matching
-		return vs.hybridSearch(ctx, query)
-	} else if hasVector {
-		// Pure vector search
-		return vs.vectorSearch(ctx, query)
-	} else if hasKeyword {
-		// Pure keyword search
-		return vs.keywordSearch(ctx, query)
-	} else {
-		// No search criteria, return all documents with filters
-		return vs.filterSearch(ctx, query)
+	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
+		return nil, fmt.Errorf("pgvector: keyword or hybrid search is not supported when tsvector is disabled")
+	}
+
+	switch query.SearchMode {
+	case vectorstore.SearchModeVector:
+		return vs.searchByVector(ctx, query)
+	case vectorstore.SearchModeKeyword:
+		return vs.searchByKeyword(ctx, query)
+	case vectorstore.SearchModeHybrid:
+		return vs.searchByHybrid(ctx, query)
+	case vectorstore.SearchModeFilter:
+		return vs.searchByFilter(ctx, query)
+	default:
+		return nil, fmt.Errorf("pgvector: invalid search mode: %d", query.SearchMode)
 	}
 }
 
-// vectorSearch performs pure vector similarity search
-func (vs *VectorStore) vectorSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// searchByVector performs pure vector similarity search
+func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, fmt.Errorf("pgvector: searching with a nil or empty vector is not supported")
 	}
@@ -328,8 +325,8 @@ func (vs *VectorStore) vectorSearch(ctx context.Context, query *vectorstore.Sear
 	return vs.executeSearch(ctx, sql, args)
 }
 
-// keywordSearch performs full-text search.
-func (vs *VectorStore) keywordSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// searchByKeyword performs full-text search.
+func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
 		return nil, fmt.Errorf("pgvector keyword is required for keyword search")
 	}
@@ -358,8 +355,8 @@ func (vs *VectorStore) keywordSearch(ctx context.Context, query *vectorstore.Sea
 	return vs.executeSearch(ctx, sql, args)
 }
 
-// hybridSearch combines vector similarity and keyword matching
-func (vs *VectorStore) hybridSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// searchByHybrid combines vector similarity and keyword matching
+func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	// check vector dimension and keyword
 	if len(query.Vector) == 0 {
 		return nil, fmt.Errorf("pgvector vector is required for hybrid search")
@@ -398,8 +395,8 @@ func (vs *VectorStore) hybridSearch(ctx context.Context, query *vectorstore.Sear
 	return vs.executeSearch(ctx, sql, args)
 }
 
-// filterSearch returns documents based on filters only
-func (vs *VectorStore) filterSearch(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// searchByFilter returns documents based on filters only
+func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
 		return nil, fmt.Errorf("pgvector query is required")
 	}
@@ -483,9 +480,9 @@ func (vs *VectorStore) Close() error {
 
 // Helper functions
 func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, error) {
-	querySql := fmt.Sprintf(sqlDocumentExists, vs.option.table)
+	querySQL := fmt.Sprintf(sqlDocumentExists, vs.option.table)
 	var exists int
-	err := vs.pool.QueryRow(ctx, querySql, id).Scan(&exists)
+	err := vs.pool.QueryRow(ctx, querySQL, id).Scan(&exists)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, nil

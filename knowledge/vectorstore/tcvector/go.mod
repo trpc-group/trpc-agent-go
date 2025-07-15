@@ -1,8 +1,8 @@
-module trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore/pgvector
+module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector
 
 go 1.24.4
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../../..
+replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
 require (
 	github.com/stretchr/testify v1.10.0

@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/stretchr/testify/suite"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 // TcVectorSearchTestSuite tests the new search methods
@@ -223,7 +223,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchByVector() {
 		Limit:  5,
 	}
 
-	result, err := suite.vs.SearchByVector(ctx, query)
+	result, err := suite.vs.searchByVector(ctx, query)
 	suite.NoError(err, "SearchByVector should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -254,7 +254,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchByKeyword() {
 		Limit: 5,
 	}
 
-	result, err := suite.vs.SearchByKeyword(ctx, query)
+	result, err := suite.vs.searchByKeyword(ctx, query)
 	suite.NoError(err, "SearchByKeyword should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -293,7 +293,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchByHybrid() {
 		Limit:  5,
 	}
 
-	result, err := suite.vs.SearchByHybrid(ctx, query)
+	result, err := suite.vs.searchByHybrid(ctx, query)
 	suite.NoError(err, "SearchByHybrid should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -338,7 +338,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchWithFilters() {
 		Limit: 5,
 	}
 
-	result, err := suite.vs.SearchByVector(ctx, query)
+	result, err := suite.vs.searchByVector(ctx, query)
 	suite.NoError(err, "Filtered search should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -380,8 +380,9 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 		{
 			name: "Vector only should use SearchByVector",
 			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.1, 0.2, 0.3},
-				Limit:  3,
+				SearchMode: vectorstore.SearchModeVector,
+				Vector:     []float64{0.1, 0.2, 0.3},
+				Limit:      3,
 			},
 			expectedLog: "Should route to vector search",
 			validator: func(results []*vectorstore.ScoredDocument) {
@@ -394,8 +395,9 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 		{
 			name: "Keyword only should use SearchByKeyword",
 			query: &vectorstore.SearchQuery{
-				Query: "data science",
-				Limit: 3,
+				SearchMode: vectorstore.SearchModeKeyword,
+				Query:      "data science",
+				Limit:      3,
 			},
 			expectedLog: "Should route to keyword search",
 			validator: func(results []*vectorstore.ScoredDocument) {
@@ -406,9 +408,10 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 		{
 			name: "Both vector and keyword should use SearchByHybrid",
 			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.3, 0.4, 0.5},
-				Query:  "data",
-				Limit:  3,
+				SearchMode: vectorstore.SearchModeHybrid,
+				Vector:     []float64{0.3, 0.4, 0.5},
+				Query:      "data",
+				Limit:      3,
 			},
 			expectedLog: "Should route to hybrid search",
 			validator: func(results []*vectorstore.ScoredDocument) {
@@ -417,6 +420,28 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 				if len(results) > 0 {
 					suite.Greater(results[0].Score, 0.0, "Hybrid search should return meaningful scores")
 				}
+			},
+		},
+		{
+			name: "Filter only should use SearchByFilter",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeFilter,
+				Filter: &vectorstore.SearchFilter{
+					IDs: []string{"doc1", "doc3"},
+				},
+				Limit: 3,
+			},
+			expectedLog: "Should route to filter search",
+			validator: func(results []*vectorstore.ScoredDocument) {
+				// Filter search should return exact matches
+				suite.Len(results, 2, "Filter search should return exactly 2 results")
+				foundDocs := make(map[string]bool)
+				for _, r := range results {
+					foundDocs[r.Document.ID] = true
+					suite.Equal(1.0, r.Score, "Filter search results should have score 1.0")
+				}
+				suite.True(foundDocs["doc1"], "Should find doc1")
+				suite.True(foundDocs["doc3"], "Should find doc3")
 			},
 		},
 	}
@@ -441,6 +466,86 @@ func (suite *TcVectorSearchTestSuite) TestSearchModeSelection() {
 			for i, r := range result.Results {
 				suite.T().Logf("  Result %d: ID=%s, Name=%s, Score=%.4f",
 					i+1, r.Document.ID, r.Document.Name, r.Score)
+			}
+		})
+	}
+}
+
+// TestSearchWithDisabledTSVector ensures keyword/hybrid search fails when disabled.
+func (suite *TcVectorSearchTestSuite) TestSearchWithDisabledTSVector() {
+	// Create a new vector store with TSVector disabled
+	vs, err := New(
+		WithURL(url),
+		WithUsername(user),
+		WithPassword(key),
+		WithDatabase(db),
+		WithCollection("tsvector_disabled_test"),
+		WithIndexDimension(3),
+		WithEnableTSVector(false),
+	)
+	suite.Require().NoError(err)
+	defer vs.pool.DropCollection(context.Background(), db, "tsvector_disabled_test")
+
+	ctx := context.Background()
+
+	testCases := []struct {
+		name        string
+		query       *vectorstore.SearchQuery
+		shouldError bool
+		errorMsg    string
+	}{
+		{
+			name: "keyword search should fail when TSVector disabled",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeKeyword,
+				Query:      "test",
+			},
+			shouldError: true,
+			errorMsg:    "keyword or hybrid search is not supported",
+		},
+		{
+			name: "hybrid search should fail when TSVector disabled",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeHybrid,
+				Query:      "test",
+				Vector:     []float64{0.1, 0.2, 0.3},
+			},
+			shouldError: true,
+			errorMsg:    "keyword or hybrid search is not supported",
+		},
+		{
+			name: "vector search should work when TSVector disabled",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeVector,
+				Vector:     []float64{0.1, 0.2, 0.3},
+			},
+			shouldError: false,
+			errorMsg:    "",
+		},
+		{
+			name: "filter search should work when TSVector disabled",
+			query: &vectorstore.SearchQuery{
+				SearchMode: vectorstore.SearchModeFilter,
+				Filter: &vectorstore.SearchFilter{
+					IDs: []string{"nonexistent"},
+				},
+			},
+			shouldError: false,
+			errorMsg:    "",
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			_, err := vs.Search(ctx, tc.query)
+
+			if tc.shouldError {
+				suite.Error(err, "Expected error for %s", tc.name)
+				if tc.errorMsg != "" {
+					suite.Contains(err.Error(), tc.errorMsg, "Error message should contain expected text")
+				}
+			} else {
+				suite.NoError(err, "Expected no error for %s", tc.name)
 			}
 		})
 	}

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 var (
@@ -402,8 +402,9 @@ func (suite *TCVectorTestSuite) TestDelete() {
 func (suite *TCVectorTestSuite) TestEdgeCases() {
 	suite.Run("empty_vector_search", func() {
 		query := &vectorstore.SearchQuery{
-			Vector: []float64{0, 0, 0},
-			Limit:  1,
+			Vector:     []float64{0, 0, 0},
+			Limit:      1,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 		_, err := suite.vs.Search(suite.ctx, query)
 		// Empty vector search might be valid or invalid depending on implementation
@@ -414,9 +415,10 @@ func (suite *TCVectorTestSuite) TestEdgeCases() {
 
 	suite.Run("high_threshold_search", func() {
 		query := &vectorstore.SearchQuery{
-			Vector:   []float64{1.0, 1.0, 1.0},
-			Limit:    1000,
-			MinScore: 0.99,
+			Vector:     []float64{1.0, 1.0, 1.0},
+			Limit:      1000,
+			MinScore:   0.99,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 		result, err := suite.vs.Search(suite.ctx, query)
 		suite.NoError(err, "high threshold search should not error")

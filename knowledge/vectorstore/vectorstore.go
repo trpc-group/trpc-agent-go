@@ -56,7 +56,24 @@ type SearchQuery struct {
 
 	// Filter specifies additional filtering criteria.
 	Filter *SearchFilter
+
+	// SearchMode specifies the search mode.
+	SearchMode SearchMode
 }
+
+// SearchMode specifies the search mode.
+type SearchMode int
+
+const (
+	// SearchModeHybrid is the default search mode.
+	SearchModeHybrid SearchMode = iota
+	// SearchModeVector is the vector search mode.
+	SearchModeVector
+	// SearchModeKeyword is the keyword search mode.
+	SearchModeKeyword
+	// SearchModeFilter is the filter search mode.
+	SearchModeFilter
+)
 
 // SearchFilter represents filtering criteria for vector search.
 type SearchFilter struct {

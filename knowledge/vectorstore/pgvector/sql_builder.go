@@ -8,7 +8,8 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-var commonFiledsStr = fmt.Sprintf("id, %s, %s, %s, %s, %s, %s", fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
+var commonFiledsStr = fmt.Sprintf("%s, %s, %s, %s, %s, %s, %s",
+	fieldID, fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
 
 // updateBuilder builds UPDATE SQL statements safely
 type updateBuilder struct {
@@ -34,12 +35,6 @@ func newUpdateBuilder(table, id, language string) *updateBuilder {
 func (ub *updateBuilder) addField(field string, value interface{}) {
 	ub.setParts = append(ub.setParts, fmt.Sprintf("%s = $%d", field, ub.argIndex))
 	ub.args = append(ub.args, value)
-	ub.argIndex++
-}
-
-func (ub *updateBuilder) addContentTSVector(content string) {
-	ub.setParts = append(ub.setParts, fmt.Sprintf("content_tsvector = to_tsvector('%s', $%d)", ub.language, ub.argIndex))
-	ub.args = append(ub.args, content)
 	ub.argIndex++
 }
 
@@ -83,7 +78,7 @@ func newVectorQueryBuilder(table string, language string) *queryBuilder {
 // Keyword search builder with full-text search scoring
 func newKeywordQueryBuilder(table string, language string) *queryBuilder {
 	qb := newQueryBuilder(table, language)
-	qb.addSelectClause(fmt.Sprintf("ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) as score", qb.language))
+	qb.addSelectClause(fmt.Sprintf("ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%%d)) as score", qb.language, qb.language))
 	qb.orderClause = "ORDER BY score DESC, created_at DESC"
 	return qb
 }
@@ -91,7 +86,7 @@ func newKeywordQueryBuilder(table string, language string) *queryBuilder {
 // Hybrid search builder (vector + keyword)
 func newHybridQueryBuilder(table string, language string, vectorWeight, textWeight float64) *queryBuilder {
 	qb := newQueryBuilder(table, language)
-	scoreExpression := fmt.Sprintf("(1 - (embedding <=> $1)) * %.3f + ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%%d)) * %.3f as score", vectorWeight, qb.language, textWeight)
+	scoreExpression := fmt.Sprintf("(1 - (embedding <=> $1)) * %.3f + ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%%d)) * %.3f as score", vectorWeight, qb.language, qb.language, textWeight)
 	qb.addSelectClause(scoreExpression)
 	qb.orderClause = "ORDER BY score DESC"
 	return qb
@@ -103,13 +98,13 @@ func (qb *queryBuilder) addKeywordSearchConditions(query string, minScore float6
 	qb.textQueryArgIndex = qb.argIndex
 
 	// This condition ensures that the query matches the document's content.
-	ftsCondition := fmt.Sprintf("content_tsvector @@ plainto_tsquery('%s', $%d)", qb.language, qb.argIndex)
+	ftsCondition := fmt.Sprintf("to_tsvector('%s', content) @@ plainto_tsquery('%s', $%d)", qb.language, qb.language, qb.argIndex)
 	qb.conditions = append(qb.conditions, ftsCondition)
 
 	// If a minimum score is specified, add a condition to filter by it.
 	if minScore > 0 {
-		scoreCondition := fmt.Sprintf("ts_rank_cd(content_tsvector, plainto_tsquery('%s', $%d)) >= $%d",
-			qb.language, qb.argIndex, qb.argIndex+1)
+		scoreCondition := fmt.Sprintf("ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%d)) >= $%d",
+			qb.language, qb.language, qb.argIndex, qb.argIndex+1)
 		qb.conditions = append(qb.conditions, scoreCondition)
 
 		qb.args = append(qb.args, query, minScore)
@@ -126,7 +121,7 @@ func (qb *queryBuilder) addHybridFtsCondition(query string) {
 	qb.textQueryArgIndex = qb.argIndex
 
 	// Add the full-text search condition to the WHERE clause.
-	condition := fmt.Sprintf("content_tsvector @@ plainto_tsquery('%s', $%d)", qb.language, qb.argIndex)
+	condition := fmt.Sprintf("to_tsvector('%s', content) @@ plainto_tsquery('%s', $%d)", qb.language, qb.language, qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 	qb.args = append(qb.args, query)
 	qb.argIndex++

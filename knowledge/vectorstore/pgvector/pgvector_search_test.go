@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
 // PgVectorSearchTestSuite contains the search test suite for pgvector
@@ -251,8 +251,9 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 		{
 			name: "vector search",
 			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.1, 0.2, 0.3}, // Similar to doc1
-				Limit:  10,
+				Vector:     []float64{0.1, 0.2, 0.3}, // Similar to doc1
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeVector,
 			},
 			expectError: false,
 			minResults:  1,
@@ -266,8 +267,9 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 		{
 			name: "keyword search",
 			query: &vectorstore.SearchQuery{
-				Query: "Python programming",
-				Limit: 10,
+				Query:      "Python programming",
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeKeyword,
 			},
 			expectError: false,
 			minResults:  1,
@@ -279,9 +281,10 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 		{
 			name: "hybrid search",
 			query: &vectorstore.SearchQuery{
-				Vector: []float64{0.1, 0.2, 0.3},
-				Query:  "machine learning",
-				Limit:  10,
+				Vector:     []float64{0.1, 0.2, 0.3},
+				Query:      "machine learning",
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeHybrid,
 			},
 			expectError: false,
 			minResults:  1,
@@ -301,7 +304,8 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 						"category": "programming",
 					},
 				},
-				Limit: 10,
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeFilter,
 			},
 			expectError: false,
 			minResults:  2, // doc1 and doc2 have category=programming
@@ -324,7 +328,8 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 				Filter: &vectorstore.SearchFilter{
 					IDs: []string{"doc1", "doc3"},
 				},
-				Limit: 10,
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeVector,
 			},
 			expectError: false,
 			minResults:  2,
@@ -444,9 +449,10 @@ func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 
 			// Perform hybrid search
 			query := &vectorstore.SearchQuery{
-				Vector: []float64{0.1, 0.2, 0.3},
-				Query:  "machine learning",
-				Limit:  1,
+				Vector:     []float64{0.1, 0.2, 0.3},
+				Query:      "machine learning",
+				Limit:      1,
+				SearchMode: vectorstore.SearchModeHybrid,
 			}
 
 			result, err := vs.Search(ctx, query)
@@ -616,7 +622,8 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 				Filter: &vectorstore.SearchFilter{
 					Metadata: tc.filter,
 				},
-				Limit: 10,
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeVector,
 			}
 
 			result, err := suite.vs.Search(ctx, query)
@@ -672,9 +679,10 @@ func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 			name: "hybrid search without vector",
 			operation: func() error {
 				query := &vectorstore.SearchQuery{
-					Query: "test",
+					Query:      "test",
+					SearchMode: vectorstore.SearchModeHybrid,
 				}
-				_, err := suite.vs.hybridSearch(ctx, query)
+				_, err := suite.vs.searchByHybrid(ctx, query)
 				return err
 			},
 			wantError: true,
@@ -683,9 +691,10 @@ func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 			name: "hybrid search without keyword",
 			operation: func() error {
 				query := &vectorstore.SearchQuery{
-					Vector: []float64{0.1, 0.2, 0.3},
+					Vector:     []float64{0.1, 0.2, 0.3},
+					SearchMode: vectorstore.SearchModeHybrid,
 				}
-				_, err := suite.vs.hybridSearch(ctx, query)
+				_, err := suite.vs.searchByHybrid(ctx, query)
 				return err
 			},
 			wantError: true,
@@ -694,8 +703,9 @@ func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 			name: "search with invalid vector dimension",
 			operation: func() error {
 				query := &vectorstore.SearchQuery{
-					Vector: []float64{0.1, 0.2}, // Wrong dimension (should be 3)
-					Limit:  10,
+					Vector:     []float64{0.1, 0.2}, // Wrong dimension (should be 3)
+					Limit:      10,
+					SearchMode: vectorstore.SearchModeVector,
 				}
 				_, err := suite.vs.Search(ctx, query)
 				return err
@@ -706,13 +716,14 @@ func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 			name: "search with empty vector",
 			operation: func() error {
 				query := &vectorstore.SearchQuery{
-					Vector: []float64{},
-					Limit:  10,
+					Vector:     []float64{},
+					Limit:      10,
+					SearchMode: vectorstore.SearchModeVector,
 				}
 				_, err := suite.vs.Search(ctx, query)
 				return err
 			},
-			wantError: false,
+			wantError: true,
 		},
 	}
 
@@ -798,7 +809,8 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 					"difficulty": "beginner",
 				},
 			},
-			Limit: 10,
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -815,9 +827,10 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 
 	suite.Run("high similarity threshold", func() {
 		query := &vectorstore.SearchQuery{
-			Vector:   []float64{0.1, 0.8, 0.2}, // Very similar to advanced1
-			MinScore: 0.95,                     // High threshold
-			Limit:    10,
+			Vector:     []float64{0.1, 0.8, 0.2}, // Very similar to advanced1
+			MinScore:   0.95,                     // High threshold
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -844,7 +857,8 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 					"category": "education",
 				},
 			},
-			Limit: 10,
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeHybrid,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -931,9 +945,10 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 
 	suite.Run("vector search with medium MinScore", func() {
 		query := &vectorstore.SearchQuery{
-			Vector:   []float64{0.1, 0.9, 0.1}, // Very similar to minscore1
-			MinScore: 0.6,                      // Medium threshold
-			Limit:    10,
+			Vector:     []float64{0.1, 0.9, 0.1}, // Very similar to minscore1
+			MinScore:   0.6,                      // Medium threshold
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -955,9 +970,10 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 
 	suite.Run("keyword search with MinScore", func() {
 		query := &vectorstore.SearchQuery{
-			Query:    "artificial intelligence machine learning",
-			MinScore: 0.01, // Low threshold for keyword search (ts_rank scores are typically low)
-			Limit:    10,
+			Query:      "artificial intelligence machine learning",
+			MinScore:   0.01, // Low threshold for keyword search (ts_rank scores are typically low)
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeKeyword,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -981,10 +997,11 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 
 	suite.Run("hybrid search with MinScore", func() {
 		query := &vectorstore.SearchQuery{
-			Vector:   []float64{0.2, 0.8, 0.2},
-			Query:    "artificial intelligence programming",
-			MinScore: 0.3, // Medium threshold for hybrid search
-			Limit:    10,
+			Vector:     []float64{0.2, 0.8, 0.2},
+			Query:      "artificial intelligence programming",
+			MinScore:   0.3, // Medium threshold for hybrid search
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeHybrid,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -1008,9 +1025,10 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 
 	suite.Run("very high MinScore returns no results", func() {
 		query := &vectorstore.SearchQuery{
-			Vector:   []float64{-1.0, -1.0, -1.0}, // Vector very dissimilar to all test data
-			MinScore: 0.95,                        // High threshold that should filter out all results
-			Limit:    10,
+			Vector:     []float64{-1.0, -1.0, -1.0}, // Vector very dissimilar to all test data
+			MinScore:   0.95,                        // High threshold that should filter out all results
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -1032,8 +1050,9 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 					"category": "education",
 				},
 			},
-			MinScore: 0.5,
-			Limit:    10,
+			MinScore:   0.5,
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result, err := suite.vs.Search(ctx, query)
@@ -1057,9 +1076,10 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 	suite.Run("MinScore edge cases", func() {
 		// Test with MinScore = 0 (should return all results)
 		query1 := &vectorstore.SearchQuery{
-			Vector:   []float64{0.5, 0.5, 0.5},
-			MinScore: 0.0,
-			Limit:    10,
+			Vector:     []float64{0.5, 0.5, 0.5},
+			MinScore:   0.0,
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result1, err := suite.vs.Search(ctx, query1)
@@ -1074,9 +1094,10 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 
 		// Test with MinScore = 1.0 (perfect match only)
 		query2 := &vectorstore.SearchQuery{
-			Vector:   []float64{0.1, 0.9, 0.1}, // Exact match to minscore1
-			MinScore: 1.0,
-			Limit:    10,
+			Vector:     []float64{0.1, 0.9, 0.1}, // Exact match to minscore1
+			MinScore:   1.0,
+			Limit:      10,
+			SearchMode: vectorstore.SearchModeVector,
 		}
 
 		result2, err := suite.vs.Search(ctx, query2)
@@ -1092,4 +1113,112 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.T().Logf("MinScore edge cases: 0.0 returned %d results, 1.0 returned %d results",
 			len(result1.Results), len(result2.Results))
 	})
+}
+
+// TestSearchWithDisabledTSVector tests search behavior when TSVector is disabled
+func (suite *PgVectorSearchTestSuite) TestSearchWithDisabledTSVector() {
+	ctx := context.Background()
+
+	// Create a new vector store with TSVector disabled
+	vs, err := New(
+		WithHost(host),
+		WithPort(port),
+		WithUser(user),
+		WithPassword(password),
+		WithDatabase(database),
+		WithTable("test_no_tsvector"),
+		WithIndexDimension(3),
+		WithEnableTSVector(false), // Disable TSVector
+	)
+	if err != nil {
+		suite.T().Skipf("Skipping disabled TSVector test: failed to connect to database: %v", err)
+		return
+	}
+	defer func() {
+		vs.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_no_tsvector")
+		vs.Close()
+	}()
+
+	// Add a test document
+	doc := &document.Document{
+		ID:      "disabled_test",
+		Name:    "Test Document",
+		Content: "This is a test document for TSVector disabled testing",
+		Metadata: map[string]interface{}{
+			"category": "test",
+		},
+	}
+	embedding := []float64{0.1, 0.2, 0.3}
+
+	err = vs.Add(ctx, doc, embedding)
+	suite.NoError(err)
+
+	testCases := []struct {
+		name        string
+		query       *vectorstore.SearchQuery
+		expectError bool
+		description string
+	}{
+		{
+			name: "keyword search with disabled TSVector",
+			query: &vectorstore.SearchQuery{
+				Query:      "test document",
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeKeyword,
+			},
+			expectError: true,
+			description: "keyword search should fail when TSVector is disabled",
+		},
+		{
+			name: "hybrid search with disabled TSVector",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{0.1, 0.2, 0.3},
+				Query:      "test document",
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeHybrid,
+			},
+			expectError: true,
+			description: "hybrid search should fail when TSVector is disabled",
+		},
+		{
+			name: "vector search with disabled TSVector",
+			query: &vectorstore.SearchQuery{
+				Vector:     []float64{0.1, 0.2, 0.3},
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeVector,
+			},
+			expectError: false,
+			description: "vector search should work when TSVector is disabled",
+		},
+		{
+			name: "filter search with disabled TSVector",
+			query: &vectorstore.SearchQuery{
+				Filter: &vectorstore.SearchFilter{
+					Metadata: map[string]interface{}{
+						"category": "test",
+					},
+				},
+				Limit:      10,
+				SearchMode: vectorstore.SearchModeFilter,
+			},
+			expectError: false,
+			description: "filter search should work when TSVector is disabled",
+		},
+	}
+
+	for _, tc := range testCases {
+		suite.Run(tc.name, func() {
+			result, err := vs.Search(ctx, tc.query)
+			if tc.expectError {
+				suite.Error(err, tc.description)
+				suite.T().Logf("Expected error: %v", err)
+			} else {
+				suite.NoError(err, tc.description)
+				suite.NotNil(result, "Search result should not be nil")
+				if len(result.Results) > 0 {
+					suite.T().Logf("Search returned %d results", len(result.Results))
+				}
+			}
+		})
+	}
 }

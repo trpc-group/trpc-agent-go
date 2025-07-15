@@ -8,8 +8,8 @@ import (
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/core/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -27,11 +27,13 @@ var (
 	defaultLimit      = 10
 )
 
+// VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
 	pool   *tcvectordb.RpcClientPool
-	option Options
+	option options
 }
 
+// New creates a new tcvectordb vector store.
 func New(opts ...Option) (*VectorStore, error) {
 	option := defaultOptions
 	for _, opt := range opts {
@@ -61,7 +63,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	return nil, errors.New("tcvectordb client pool is not a RpcClientPool")
 }
 
-func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
+func initVectorDB(clientPool tcvectordb.VdbClient, options options) error {
 	_, err := clientPool.CreateDatabaseIfNotExists(context.Background(), options.database)
 	if err != nil {
 		return fmt.Errorf("tcvectordb create database: %w", err)
@@ -96,12 +98,14 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options Options) error {
 			EfConstruction: 400,
 		},
 	})
-	indexes.SparseVectorIndex = append(indexes.SparseVectorIndex, tcvectordb.SparseVectorIndex{
-		FieldName:  fieldSparseVector,
-		FieldType:  tcvectordb.SparseVector,
-		IndexType:  tcvectordb.SPARSE_INVERTED,
-		MetricType: tcvectordb.IP,
-	})
+	if options.enableTSVector {
+		indexes.SparseVectorIndex = append(indexes.SparseVectorIndex, tcvectordb.SparseVectorIndex{
+			FieldName:  fieldSparseVector,
+			FieldType:  tcvectordb.SparseVector,
+			IndexType:  tcvectordb.SPARSE_INVERTED,
+			MetricType: tcvectordb.IP,
+		})
+	}
 
 	if _, err := clientPool.CreateCollectionIfNotExists(
 		context.Background(),
@@ -129,22 +133,26 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	}
 	embedding32 := covertToVector32(embedding)
 	now := time.Now().Unix()
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-	if err != nil {
-		return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-	}
-	sparseVector, err := bm25.EncodeText(doc.Content)
-	if err != nil {
-		return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
-	}
 	fields := map[string]tcvectordb.Field{
-		fieldName:         {Val: doc.Name},
-		fieldContent:      {Val: doc.Content},
-		fieldCreatedAt:    {Val: now},
-		fieldUpdatedAt:    {Val: now},
-		fieldMetadata:     {Val: doc.Metadata},
-		fieldSparseVector: {Val: sparseVector},
+		fieldName:      {Val: doc.Name},
+		fieldContent:   {Val: doc.Content},
+		fieldCreatedAt: {Val: now},
+		fieldUpdatedAt: {Val: now},
+		fieldMetadata:  {Val: doc.Metadata},
 	}
+
+	if vs.option.enableTSVector {
+		bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
+		if err != nil {
+			return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+		}
+		sparseVector, err := bm25.EncodeText(doc.Content)
+		if err != nil {
+			return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
+		}
+		fields[fieldSparseVector] = tcvectordb.Field{Val: sparseVector}
+	}
+
 	tcDoc := tcvectordb.Document{
 		Id:     doc.ID,
 		Vector: embedding32,
@@ -213,16 +221,18 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 		updateFields[fieldName] = tcvectordb.Field{Val: doc.Name}
 	}
 	if len(doc.Content) > 0 {
-		bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-		if err != nil {
-			return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-		}
-		sparseVector, err := bm25.EncodeText(doc.Content)
-		if err != nil {
-			return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
-		}
 		updateFields[fieldContent] = tcvectordb.Field{Val: doc.Content}
-		updateFields[fieldSparseVector] = tcvectordb.Field{Val: sparseVector}
+		if vs.option.enableTSVector {
+			bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
+			if err != nil {
+				return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+			}
+			sparseVector, err := bm25.EncodeText(doc.Content)
+			if err != nil {
+				return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
+			}
+			updateFields[fieldSparseVector] = tcvectordb.Field{Val: sparseVector}
+		}
 	}
 	if len(doc.Metadata) > 0 {
 		updateFields[fieldMetadata] = tcvectordb.Field{Val: doc.Metadata}
@@ -269,34 +279,33 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	if query == nil {
 		return nil, fmt.Errorf("tcvectordb query is required")
 	}
-	hasVector := len(query.Vector) > 0
-	hasKeyword := query.Query != ""
-	hasfilter := query.Filter != nil
+	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
+		return nil, fmt.Errorf("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled")
+	}
 
-	// check vector dimension
-	if hasVector && len(query.Vector) != int(vs.option.indexDimension) {
+	switch query.SearchMode {
+	case vectorstore.SearchModeVector:
+		return vs.searchByVector(ctx, query)
+	case vectorstore.SearchModeKeyword:
+		return vs.searchByKeyword(ctx, query)
+	case vectorstore.SearchModeHybrid:
+		return vs.searchByHybrid(ctx, query)
+	case vectorstore.SearchModeFilter:
+		return vs.searchByFilter(ctx, query)
+	default:
+		return nil, fmt.Errorf("tcvectordb: invalid search mode: %d", query.SearchMode)
+	}
+}
+
+// vectorSearch performs pure vector similarity search using dense embeddings
+func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	if len(query.Vector) == 0 {
+		return nil, fmt.Errorf("tcvectordb: searching with a nil or empty vector is not supported")
+	}
+	if len(query.Vector) != int(vs.option.indexDimension) {
 		return nil, fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(query.Vector))
 	}
 
-	if hasVector && hasKeyword {
-		// Hybrid search: combine vector similarity and keyword matching
-		return vs.SearchByHybrid(ctx, query)
-	} else if hasVector {
-		// Pure vector search
-		return vs.SearchByVector(ctx, query)
-	} else if hasKeyword {
-		// Pure keyword search using BM25
-		return vs.SearchByKeyword(ctx, query)
-	} else if hasfilter {
-		// Filter-only search (if filters are provided)
-		return vs.searchByFilter(ctx, query)
-	}
-	return nil, fmt.Errorf("no filter or vector provided")
-
-}
-
-// SearchByVector performs pure vector similarity search using dense embeddings
-func (vs *VectorStore) SearchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -328,8 +337,8 @@ func (vs *VectorStore) SearchByVector(ctx context.Context, query *vectorstore.Se
 	return vs.convertSearchResult(searchResult)
 }
 
-// SearchByKeyword performs pure keyword search using BM25 sparse vectors
-func (vs *VectorStore) SearchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// keywordSearch performs pure keyword search using BM25 sparse vectors
+func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
 		return nil, fmt.Errorf("tcvectordb keyword is required for keyword search")
 	}
@@ -381,8 +390,14 @@ func (vs *VectorStore) SearchByKeyword(ctx context.Context, query *vectorstore.S
 	return vs.convertSearchResult(searchResult)
 }
 
-// SearchByHybrid performs hybrid search combining dense vector similarity and BM25 keyword matching
-func (vs *VectorStore) SearchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+// hybridSearch performs hybrid search combining dense vector similarity and BM25 keyword matching
+func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	if len(query.Vector) == 0 {
+		return nil, fmt.Errorf("tcvectordb vector is required for hybrid search")
+	}
+	if query.Query == "" {
+		return nil, fmt.Errorf("tcvectordb keyword is required for hybrid search")
+	}
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -437,7 +452,7 @@ func (vs *VectorStore) SearchByHybrid(ctx context.Context, query *vectorstore.Se
 	return vs.convertSearchResult(searchResult)
 }
 
-// searchByFilter performs filter-only search when no vector or keyword is provided
+// filterSearch performs filter-only search when no vector or keyword is provided
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Filter == nil || len(query.Filter.IDs) == 0 {
 		return &vectorstore.SearchResult{Results: make([]*vectorstore.ScoredDocument, 0)}, nil
