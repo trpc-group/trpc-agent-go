@@ -15,18 +15,18 @@ func SetClientBuilder(builder func(redisOpts ...ClientBuilderOpt) (redis.Univers
 
 // DefaultClientBuilder is the default redis client builder.
 func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
-	o := &clientBuilderOpts{}
+	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
 	}
 
-	if o.url == "" {
+	if o.URL == "" {
 		return nil, fmt.Errorf("redis: url is empty")
 	}
 
-	opts, err := redis.ParseURL(o.url)
+	opts, err := redis.ParseURL(o.URL)
 	if err != nil {
-		return nil, fmt.Errorf("redis: parse url %s: %w", o.url, err)
+		return nil, fmt.Errorf("redis: parse url %s: %w", o.URL, err)
 	}
 	universalOpts := &redis.UniversalOptions{
 		Addrs:                 []string{opts.Addr},
@@ -56,19 +56,19 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClien
 }
 
 // ClientBuilderOpt is the option for the redis client.
-type ClientBuilderOpt func(*clientBuilderOpts)
+type ClientBuilderOpt func(*ClientBuilderOpts)
 
-// clientBuilderOpts is the options for the redis client.
-type clientBuilderOpts struct {
-	url string
+// ClientBuilderOpts is the options for the redis client.
+type ClientBuilderOpts struct {
+	URL string
 }
 
 // WithClientBuilderURL sets the redis client url for clientBuilder.
 // scheme: redis://<username>:<password>@<host>:<port>/<db>?<options>
 // options: refer goredis.ParseURL
 func WithClientBuilderURL(url string) ClientBuilderOpt {
-	return func(opts *clientBuilderOpts) {
-		opts.url = url
+	return func(opts *ClientBuilderOpts) {
+		opts.URL = url
 	}
 }
 
