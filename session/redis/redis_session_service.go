@@ -52,7 +52,7 @@ type Service struct {
 }
 
 // NewService creates a new redis session service.
-func NewService(options ...ServiceOption) (*Service, error) {
+func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
 		sessionEventLimit: defaultSessionEventLimit,
 	}
@@ -64,7 +64,7 @@ func NewService(options ...ServiceOption) (*Service, error) {
 		return nil, errors.New("redis url is required")
 	}
 
-	redisClient, err := clientBuilder(&ClientBuilderOpts{URL: opts.url})
+	redisClient, err := clientBuilder(WithClientBuilderURL(opts.url))
 	if err != nil {
 		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}

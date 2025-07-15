@@ -15,18 +15,18 @@ func SetClientBuilder(builder func(redisOpts ...ClientBuilderOpt) (redis.Univers
 
 // DefaultClientBuilder is the default redis client builder.
 func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
-	o := &ClientBuilderOpts{}
+	o := &clientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
 	}
 
-	if o.URL == "" {
+	if o.url == "" {
 		return nil, fmt.Errorf("redis: url is empty")
 	}
 
-	opts, err := redis.ParseURL(o.URL)
+	opts, err := redis.ParseURL(o.url)
 	if err != nil {
-		return nil, fmt.Errorf("redis: parse url %s: %w", o.URL, err)
+		return nil, fmt.Errorf("redis: parse url %s: %w", o.url, err)
 	}
 	universalOpts := &redis.UniversalOptions{
 		Addrs:                 []string{opts.Addr},
@@ -56,19 +56,19 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClien
 }
 
 // ClientBuilderOpt is the option for the redis client.
-type ClientBuilderOpt func(*ClientBuilderOpts)
+type ClientBuilderOpt func(*clientBuilderOpts)
 
-// ClientBuilderOpts is the options for the redis client.
-type ClientBuilderOpts struct {
-	URL string
+// clientBuilderOpts is the options for the redis client.
+type clientBuilderOpts struct {
+	url string
 }
 
-// WithURL sets the redis client url for RedisClientOptions.
+// WithClientBuilderURL sets the redis client url for clientBuilder.
 // scheme: redis://<username>:<password>@<host>:<port>/<db>?<options>
 // options: refer goredis.ParseURL
 func WithClientBuilderURL(url string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) {
-		opts.URL = url
+	return func(opts *clientBuilderOpts) {
+		opts.url = url
 	}
 }
 
@@ -78,18 +78,18 @@ type ServiceOpts struct {
 	url               string
 }
 
-// ServiceOption is the option for the redis session service.
-type ServiceOption func(*ServiceOpts)
+// ServiceOpt is the option for the redis session service.
+type ServiceOpt func(*ServiceOpts)
 
 // WithSessionEventLimit sets the limit of events in a session.
-func WithSessionEventLimit(limit int) func(*ServiceOpts) {
+func WithSessionEventLimit(limit int) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.sessionEventLimit = limit
 	}
 }
 
 // WithRedisClientURL creates a redis client from URL and sets it to the service.
-func WithRedisClientURL(url string) ServiceOption {
+func WithRedisClientURL(url string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.url = url
 	}

@@ -35,7 +35,6 @@ func setupTestRedis(t testing.TB) (string, func()) {
 	cleanup := func() {
 		mr.Close()
 	}
-	// 返回正确的 Redis URL 格式，而不是裸露的地址
 	return "redis://" + mr.Addr(), cleanup
 }
 
