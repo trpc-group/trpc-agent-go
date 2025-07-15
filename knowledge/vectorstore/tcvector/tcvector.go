@@ -29,8 +29,9 @@ var (
 
 // VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
-	pool   *tcvectordb.RpcClientPool
-	option options
+	pool          *tcvectordb.RpcClientPool
+	option        options
+	sparseEncoder encoder.SparseEncoder
 }
 
 // New creates a new tcvectordb vector store.
@@ -57,8 +58,16 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, err
 	}
 
+	var sparseEncoder encoder.SparseEncoder = nil
+	if option.enableTSVector {
+		sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
+		if err != nil {
+			return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
+		}
+	}
+
 	if clientPool, ok := clientPool.(*tcvectordb.RpcClientPool); ok {
-		return &VectorStore{pool: clientPool, option: option}, nil
+		return &VectorStore{pool: clientPool, option: option, sparseEncoder: sparseEncoder}, nil
 	}
 	return nil, errors.New("tcvectordb client pool is not a RpcClientPool")
 }
@@ -142,11 +151,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	}
 
 	if vs.option.enableTSVector {
-		bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-		if err != nil {
-			return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-		}
-		sparseVector, err := bm25.EncodeText(doc.Content)
+		sparseVector, err := vs.sparseEncoder.EncodeText(doc.Content)
 		if err != nil {
 			return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
 		}
@@ -223,11 +228,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	if len(doc.Content) > 0 {
 		updateFields[fieldContent] = tcvectordb.Field{Val: doc.Content}
 		if vs.option.enableTSVector {
-			bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-			if err != nil {
-				return fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-			}
-			sparseVector, err := bm25.EncodeText(doc.Content)
+			sparseVector, err := vs.sparseEncoder.EncodeText(doc.Content)
 			if err != nil {
 				return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
 			}
@@ -349,12 +350,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	}
 
 	// Encode the query text using BM25 for sparse vector
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-	if err != nil {
-		return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-	}
-
-	querySparseVector, err := bm25.EncodeText(query.Query)
+	querySparseVector, err := vs.sparseEncoder.EncodeText(query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
@@ -404,12 +400,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	// Encode the query text using BM25 for sparse vector
-	bm25, err := encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: vs.option.language})
-	if err != nil {
-		return nil, fmt.Errorf("tcvectordb new bm25 encoder: %w", err)
-	}
-
-	querySparseVector, err := bm25.EncodeText(query.Query)
+	querySparseVector, err := vs.sparseEncoder.EncodeText(query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
