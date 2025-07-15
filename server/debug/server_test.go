@@ -393,3 +393,7 @@ func (m *mockSessionService) DeleteUserState(ctx context.Context, userKey sessio
 func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.Session, event *event.Event, options ...session.Option) error {
 	return nil
 }
+
+func (m *mockSessionService) Close() error {
+	return nil
+}

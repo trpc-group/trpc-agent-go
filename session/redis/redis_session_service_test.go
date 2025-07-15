@@ -29,20 +29,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func setupTestRedis(t testing.TB) (*redis.Client, func()) {
+func setupTestRedis(t testing.TB) (string, func()) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
-
-	client := redis.NewClient(&redis.Options{
-		Addr: mr.Addr(),
-	})
-
 	cleanup := func() {
-		client.Close()
 		mr.Close()
 	}
+	return "redis://" + mr.Addr(), cleanup
+}
 
-	return client, cleanup
+func buildRedisClient(t *testing.T, redisURL string) *redis.Client {
+	opts, err := redis.ParseURL(redisURL)
+	require.NoError(t, err)
+	return redis.NewClient(opts)
 }
 
 func TestService_CreateSession(t *testing.T) {
@@ -141,11 +140,12 @@ func TestService_CreateSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, cleanup := setupTestRedis(t)
+			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClient(client))
+			service, err := NewService(WithRedisClientURL(redisURL))
 			require.NoError(t, err)
+			defer service.Close()
 
 			key, state := tt.setup(t)
 			sess, err := service.CreateSession(context.Background(), key, state)
@@ -243,11 +243,12 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, cleanup := setupTestRedis(t)
+			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClient(client))
+			service, err := NewService(WithRedisClientURL(redisURL))
 			require.NoError(t, err)
+			defer service.Close()
 
 			// Create a session first
 			sessionKey := session.Key{
@@ -341,11 +342,12 @@ func TestService_AppendEvent_ErrorCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, cleanup := setupTestRedis(t)
+			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClient(client))
+			service, err := NewService(WithRedisClientURL(redisURL))
 			require.NoError(t, err)
+			defer service.Close()
 
 			sess := tt.setup(t, service)
 
@@ -490,11 +492,12 @@ func TestService_GetSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, cleanup := setupTestRedis(t)
+			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClient(client))
+			service, err := NewService(WithRedisClientURL(redisURL))
 			require.NoError(t, err)
+			defer service.Close()
 
 			// Setup initial data for all test cases.
 			baseTime := setup(t, service)
@@ -586,11 +589,12 @@ func TestService_Atomicity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, cleanup := setupTestRedis(t)
+			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClient(client))
+			service, err := NewService(WithRedisClientURL(redisURL))
 			require.NoError(t, err)
+			defer service.Close()
 
 			sessionKey := session.Key{
 				AppName: "testapp", UserID: "user123", SessionID: "session123",
@@ -600,6 +604,8 @@ func TestService_Atomicity(t *testing.T) {
 			require.NoError(t, err)
 
 			err = tt.setup(t, service, sessionKey)
+			client := buildRedisClient(t, redisURL)
+
 			tt.validate(t, client, service, sessionKey, err)
 		})
 	}

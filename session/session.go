@@ -101,6 +101,9 @@ type Service interface {
 
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
+
+	// Close closes the service.
+	Close() error
 }
 
 // Key is the key for a session.
