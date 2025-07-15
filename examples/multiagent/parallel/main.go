@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates a parallel multi-agent system using the trpc-agent-go framework.
 // This example shows how to coordinate multiple agents working concurrently on different aspects
 // of the same problem, with proper handling of interleaved event streams.
@@ -129,17 +141,11 @@ func (c *parallelChat) setup(ctx context.Context) error {
 	)
 
 	// Create the parallel agent coordinator.
-	parallelAgent := parallelagent.New(parallelagent.Options{
-		Name: "parallel-coordinator",
-		SubAgents: []agent.Agent{
-			marketAgent,
-			technicalAgent,
-			riskAgent,
-			opportunityAgent,
-		},
-		Tools:             []tool.Tool{},
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	parallelAgent := parallelagent.New(
+		"parallel-demo",
+		parallelagent.WithSubAgents([]agent.Agent{marketAgent, technicalAgent, riskAgent, opportunityAgent}),
+		parallelagent.WithChannelBufferSize(defaultChannelBufferSize),
+	)
 
 	// Create runner with the parallel agent.
 	appName := "parallel-agent-demo"
@@ -227,7 +233,7 @@ func (c *parallelChat) processMessage(ctx context.Context, userMessage string) e
 	startTime := time.Now()
 
 	// Run the parallel agent system through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run parallel agents: %w", err)
 	}

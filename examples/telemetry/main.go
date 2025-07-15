@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package main
 
 import (
@@ -6,7 +18,8 @@ import (
 	"log"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/telemetry"
+	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -14,17 +27,28 @@ import (
 )
 
 func main() {
-	clean, err := telemetry.Start(
+	cleanTrace, err := atrace.Start(
 		context.Background(),
-		telemetry.WithTracesEndpoint("localhost:4317"),
-		telemetry.WithMetricsEndpoint("localhost:4317"),
+		atrace.WithEndpoint("localhost:4317"),
 	)
 	if err != nil {
-		log.Fatalf("Failed to start telemetry: %v", err)
+		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
+
+	cleanMetric, err := ametric.Start(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4317"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to start metric telemetry: %v", err)
+	}
+
 	defer func() {
-		if err := clean(); err != nil {
-			log.Printf("Failed to clean up telemetry: %v", err)
+		if err := cleanTrace(); err != nil {
+			log.Printf("Failed to clean up trace telemetry: %v", err)
+		}
+		if err := cleanMetric(); err != nil {
+			log.Printf("Failed to clean up metric telemetry: %v", err)
 		}
 	}()
 
@@ -36,19 +60,19 @@ func main() {
 		attribute.String("attrC", "vanilla"),
 	}
 
-	runCount, err := telemetry.Meter.Int64Counter("run", metric.WithDescription("The number of times the iteration ran"))
+	runCount, err := ametric.Meter.Int64Counter("run", metric.WithDescription("The number of times the iteration ran"))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// Work begins
-	ctx, span := telemetry.Tracer.Start(
+	ctx, span := atrace.Tracer.Start(
 		context.Background(),
 		"CollectorExporter-Example",
 		trace.WithAttributes(commonAttrs...))
 	defer span.End()
 	for i := 0; i < 10; i++ {
-		_, iSpan := telemetry.Tracer.Start(ctx, fmt.Sprintf("Sample-%d", i))
+		_, iSpan := atrace.Tracer.Start(ctx, fmt.Sprintf("Sample-%d", i))
 		runCount.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
 		log.Printf("Doing really hard work (%d / 10)\n", i+1)
 		<-time.After(time.Second)

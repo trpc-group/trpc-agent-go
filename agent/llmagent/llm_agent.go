@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package llmagent provides an LLM agent implementation.
 package llmagent
 
@@ -14,7 +26,7 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -289,7 +301,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	// by embedding it into the context. This is necessary for tools like
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewContextWithInvocation(ctx, invocation)
-	ctx, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
 	// Ensure the invocation has a model set.
 	if invocation.Model == nil && a.model != nil {

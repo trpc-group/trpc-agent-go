@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package telemetry
 
 import (
@@ -53,7 +65,7 @@ func newStubSpan() *stubSpan {
 	return &stubSpan{Span: baseSpan}
 }
 
-func TestTraceFunctions_NoPanicsAndCallsSetAttributes(t *testing.T) {
+func TestTraceFunctions_NoPanics(t *testing.T) {
 	span := newStubSpan()
 
 	// Prepare common objects.
@@ -85,4 +97,18 @@ func TestTraceFunctions_NoPanicsAndCallsSetAttributes(t *testing.T) {
 	resp := &model.Response{}
 	TraceCallLLM(span, inv, req, resp, "event1")
 	require.True(t, span.called, "expected SetAttributes in TraceCallLLM")
+}
+
+// TestNewConn_InvalidEndpoint ensures an error is returned for an
+// unparsable address.
+func TestNewConn_InvalidEndpoint(t *testing.T) {
+	// gRPC dials lazily, so even malformed targets may not error immediately.
+	conn, err := NewConn("invalid:endpoint")
+	if err != nil {
+		t.Fatalf("did not expect error, got %v", err)
+	}
+	if conn == nil {
+		t.Fatalf("expected non-nil connection")
+	}
+	_ = conn.Close()
 }

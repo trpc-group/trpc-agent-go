@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package main
 
 import (
@@ -15,11 +27,15 @@ import (
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
-	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"),
+		function.WithDescription("Get weather at the given location"))
 
 	request := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
+			model.NewSystemMessage(
+				"You are a helpful weather guide. If you don't have real-time " +
+					"weather data, you should call the user-provided tool.",
+			),
 			model.NewUserMessage("What is the weather in New York City? "),
 		},
 		GenerationConfig: model.GenerationConfig{

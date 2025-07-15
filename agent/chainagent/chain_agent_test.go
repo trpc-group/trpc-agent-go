@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package chainagent
 
 import (
@@ -89,7 +101,7 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
-func TestChainAgent_Run_Sequential(t *testing.T) {
+func TestChainAgent_Sequential(t *testing.T) {
 	// Track execution order.
 	var executionOrder []string
 
@@ -114,11 +126,11 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 	}
 
 	// Create ChainAgent.
-	chainAgent := New(Options{
-		Name:              "test-chain",
-		SubAgents:         []agent.Agent{subAgent1, subAgent2, subAgent3},
-		ChannelBufferSize: 20,
-	})
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{subAgent1, subAgent2, subAgent3}),
+		WithChannelBufferSize(20),
+	)
 
 	// Create invocation.
 	invocation := &agent.Invocation{
@@ -165,7 +177,7 @@ func TestChainAgent_Run_Sequential(t *testing.T) {
 	require.Equal(t, 1, agentEventCounts["agent-3"])
 }
 
-func TestChainAgent_Run_SubAgentError(t *testing.T) {
+func TestChainAgent_SubAgentError(t *testing.T) {
 	// Create mock sub-agents with one that errors.
 	subAgent1 := &mockAgent{
 		name:         "agent-1",
@@ -183,10 +195,10 @@ func TestChainAgent_Run_SubAgentError(t *testing.T) {
 	}
 
 	// Create ChainAgent.
-	chainAgent := New(Options{
-		Name:      "test-chain",
-		SubAgents: []agent.Agent{subAgent1, subAgent2, subAgent3},
-	})
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{subAgent1, subAgent2, subAgent3}),
+	)
 
 	// Create invocation.
 	invocation := &agent.Invocation{
@@ -218,12 +230,12 @@ func TestChainAgent_Run_SubAgentError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeFlowError, lastEvent.Error.Type)
 }
 
-func TestChainAgent_Run_EmptySubAgents(t *testing.T) {
+func TestChainAgent_EmptySubAgents(t *testing.T) {
 	// Create ChainAgent with no sub-agents.
-	chainAgent := New(Options{
-		Name:      "test-chain",
-		SubAgents: []agent.Agent{},
-	})
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{}),
+	)
 
 	// Create invocation.
 	invocation := &agent.Invocation{
@@ -252,27 +264,27 @@ func TestChainAgent_Tools(t *testing.T) {
 	// Create some mock tools.
 	tools := []tool.Tool{} // Empty for now since we don't have concrete tool implementations.
 
-	chainAgent := New(Options{
-		Name:  "test-chain",
-		Tools: tools,
-	})
+	chainAgent := New(
+		"test-chain",
+		WithTools(tools),
+	)
 
 	require.Equal(t, len(tools), len(chainAgent.Tools()))
 }
 
 func TestChainAgent_ChannelBufferSize(t *testing.T) {
 	// Test default buffer size.
-	chainAgent1 := New(Options{
-		Name: "test-chain-1",
-	})
+	chainAgent1 := New(
+		"test-chain-1",
+	)
 	require.Equal(t, defaultChannelBufferSize, chainAgent1.channelBufferSize)
 
 	// Test custom buffer size.
 	customSize := 100
-	chainAgent2 := New(Options{
-		Name:              "test-chain-2",
-		ChannelBufferSize: customSize,
-	})
+	chainAgent2 := New(
+		"test-chain-2",
+		WithChannelBufferSize(customSize),
+	)
 	require.Equal(t, customSize, chainAgent2.channelBufferSize)
 }
 
@@ -289,11 +301,11 @@ func TestChainAgent_WithCallbacks(t *testing.T) {
 	})
 
 	// Create chain agent with callbacks.
-	chainAgent := New(Options{
-		Name:           "test-chain-agent",
-		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
-		AgentCallbacks: callbacks,
-	})
+	chainAgent := New(
+		"test-chain-agent",
+		WithSubAgents([]agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}}),
+		WithAgentCallbacks(callbacks),
+	)
 
 	// Test skip execution.
 	invocation := &agent.Invocation{
@@ -339,7 +351,9 @@ func (m *mockMinimalAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 func (m *mockMinimalAgent) Tools() []tool.Tool { return nil }
 
 func TestCreateSubAgentInvocation(t *testing.T) {
-	parent := New(Options{Name: "parent"})
+	parent := New(
+		"parent",
+	)
 	base := &agent.Invocation{
 		InvocationID: "inv-1",
 		AgentName:    "parent",
@@ -357,8 +371,10 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "root", base.Branch)
 }
 
-func TestCreateSubAgentInvocationNoBranch(t *testing.T) {
-	parent := New(Options{Name: "parent"})
+func TestCreateSubAgentInvokeNoBranch(t *testing.T) {
+	parent := New(
+		"parent",
+	)
 	base := &agent.Invocation{InvocationID: "id", AgentName: "parent"}
 	sub := &mockMinimalAgent{name: "child"}
 
@@ -371,7 +387,10 @@ func TestCreateSubAgentInvocationNoBranch(t *testing.T) {
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {
 	a1 := &mockMinimalAgent{name: "a1"}
 	a2 := &mockMinimalAgent{name: "a2"}
-	chain := New(Options{Name: "root", SubAgents: []agent.Agent{a1, a2}})
+	chain := New(
+		"root",
+		WithSubAgents([]agent.Agent{a1, a2}),
+	)
 
 	require.Equal(t, "root", chain.Info().Name)
 
@@ -403,11 +422,11 @@ func TestChainAgent_AfterCallback(t *testing.T) {
 		}, nil
 	})
 
-	chain := New(Options{
-		Name:           "root",
-		SubAgents:      []agent.Agent{minimal},
-		AgentCallbacks: callbacks,
-	})
+	chain := New(
+		"root",
+		WithSubAgents([]agent.Agent{minimal}),
+		WithAgentCallbacks(callbacks),
+	)
 
 	inv := &agent.Invocation{
 		InvocationID: "inv-2",
@@ -443,7 +462,7 @@ func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 	return ch, nil
 }
 
-func TestChainAgent_BeforeCallbackCustomResponse(t *testing.T) {
+func TestChainAgent_BeforeCallbackResp(t *testing.T) {
 	// Sub-agent should never run.
 	sub := &mockNoEventAgent{name: "child"}
 
@@ -462,11 +481,11 @@ func TestChainAgent_BeforeCallbackCustomResponse(t *testing.T) {
 		}, nil
 	})
 
-	chain := New(Options{
-		Name:           "main",
-		SubAgents:      []agent.Agent{sub},
-		AgentCallbacks: callbacks,
-	})
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
 
 	ctx := context.Background()
 	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
@@ -491,11 +510,11 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 		return nil, errors.New("failure in before")
 	})
 
-	chain := New(Options{
-		Name:           "main",
-		SubAgents:      []agent.Agent{sub},
-		AgentCallbacks: callbacks,
-	})
+	chain := New(
+		"main",
+		WithSubAgents([]agent.Agent{sub}),
+		WithAgentCallbacks(callbacks),
+	)
 
 	ctx := context.Background()
 	events, err := chain.Run(ctx, &agent.Invocation{InvocationID: "id", AgentName: "main"})
@@ -509,4 +528,28 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
 	}
 	require.Equal(t, 1, cnt)
+}
+
+// legacyOptions mirrors the old Options struct used before refactor.
+type legacyOptions struct {
+	Name              string
+	SubAgents         []agent.Agent
+	Tools             []tool.Tool
+	ChannelBufferSize int
+	AgentCallbacks    *agent.AgentCallbacks
+}
+
+// newFromLegacy adapts legacyOptions to the new functional-option constructor.
+func newFromLegacy(o legacyOptions) *ChainAgent {
+	opts := []option{WithSubAgents(o.SubAgents)}
+	if len(o.Tools) > 0 {
+		opts = append(opts, WithTools(o.Tools))
+	}
+	if o.ChannelBufferSize > 0 {
+		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
+	}
+	if o.AgentCallbacks != nil {
+		opts = append(opts, WithAgentCallbacks(o.AgentCallbacks))
+	}
+	return New(o.Name, opts...)
 }

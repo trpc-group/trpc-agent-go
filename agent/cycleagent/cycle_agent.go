@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package cycleagent provides a looping agent implementation.
 package cycleagent
 
@@ -30,42 +42,67 @@ type CycleAgent struct {
 	escalationFunc    EscalationFunc // Injectable escalation logic
 }
 
-// Options contains configuration options for creating a CycleAgent.
-type Options struct {
-	// Name is the name of the agent.
-	Name string
-	// SubAgents is the list of sub-agents to run in a loop.
-	SubAgents []agent.Agent
-	// Tools is the list of tools available to the agent.
-	Tools []tool.Tool
-	// MaxIterations is the maximum number of iterations to run the loop agent.
-	// If not set, the loop agent will run indefinitely until a sub-agent escalates.
-	MaxIterations *int
-	// ChannelBufferSize is the buffer size for event channels (default: 256).
-	ChannelBufferSize int
-	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *agent.AgentCallbacks
-	// EscalationFunc is an optional function to determine custom escalation logic.
-	// If not provided, defaults to error-based escalation.
-	EscalationFunc EscalationFunc
+// option configures CycleAgent.
+type option func(*options)
+
+type options struct {
+	subAgents         []agent.Agent
+	tools             []tool.Tool
+	maxIterations     *int
+	channelBufferSize int
+	agentCallbacks    *agent.AgentCallbacks
+	escalationFunc    EscalationFunc
 }
 
-// New creates a new CycleAgent with the given options.
-func New(opts Options) *CycleAgent {
-	// Set default channel buffer size if not specified.
-	channelBufferSize := opts.ChannelBufferSize
-	if channelBufferSize <= 0 {
-		channelBufferSize = defaultChannelBufferSize
-	}
+// WithSubAgents sets sub-agents for the loop.
+func WithSubAgents(sub []agent.Agent) option {
+	return func(o *options) { o.subAgents = sub }
+}
 
+// WithTools configures tools.
+func WithTools(tools []tool.Tool) option {
+	return func(o *options) { o.tools = tools }
+}
+
+// WithMaxIterations limits loop iterations.
+func WithMaxIterations(max int) option {
+	return func(o *options) { o.maxIterations = &max }
+}
+
+// WithChannelBufferSize sets event channel buffer.
+func WithChannelBufferSize(size int) option {
+	return func(o *options) { o.channelBufferSize = size }
+}
+
+// WithAgentCallbacks attaches callbacks.
+func WithAgentCallbacks(cb *agent.AgentCallbacks) option {
+	return func(o *options) { o.agentCallbacks = cb }
+}
+
+// WithEscalationFunc sets custom escalation detection.
+func WithEscalationFunc(f EscalationFunc) option {
+	return func(o *options) { o.escalationFunc = f }
+}
+
+// New instantiates a CycleAgent using functional options.
+func New(name string, opts ...option) *CycleAgent {
+	cfg := options{channelBufferSize: defaultChannelBufferSize}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	if cfg.channelBufferSize <= 0 {
+		cfg.channelBufferSize = defaultChannelBufferSize
+	}
 	return &CycleAgent{
-		name:              opts.Name,
-		subAgents:         opts.SubAgents,
-		tools:             opts.Tools,
-		maxIterations:     opts.MaxIterations,
-		channelBufferSize: channelBufferSize,
-		agentCallbacks:    opts.AgentCallbacks,
-		escalationFunc:    opts.EscalationFunc,
+		name:              name,
+		subAgents:         cfg.subAgents,
+		tools:             cfg.tools,
+		maxIterations:     cfg.maxIterations,
+		channelBufferSize: cfg.channelBufferSize,
+		agentCallbacks:    cfg.agentCallbacks,
+		escalationFunc:    cfg.escalationFunc,
 	}
 }
 
@@ -303,8 +340,11 @@ func (a *CycleAgent) Info() agent.Info {
 		maxIterStr = fmt.Sprintf("%d", *a.maxIterations)
 	}
 	return agent.Info{
-		Name:        a.name,
-		Description: fmt.Sprintf("Cycle agent that runs %d sub-agents in a loop (max iterations: %s)", len(a.subAgents), maxIterStr),
+		Name: a.name,
+		Description: fmt.Sprintf(
+			"Cycle agent that runs %d sub-agents in a loop (max iterations: %s)",
+			len(a.subAgents), maxIterStr,
+		),
 	}
 }
 

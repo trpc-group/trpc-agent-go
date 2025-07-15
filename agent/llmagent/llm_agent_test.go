@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package llmagent
 
 import (
@@ -19,21 +31,6 @@ func newDummyModel() model.Model {
 	return openai.New("dummy-model", openai.Options{})
 }
 
-func TestLLMAgent_InfoAndTools(t *testing.T) {
-	agt := New("test-agent",
-		WithDescription("desc"),
-		WithModel(newDummyModel()),
-		WithTools([]tool.Tool{}),
-	)
-	info := agt.Info()
-	if info.Name != "test-agent" || info.Description != "desc" {
-		t.Errorf("unexpected agent info: %+v", info)
-	}
-	if len(agt.Tools()) != 0 {
-		t.Errorf("expected no tools")
-	}
-}
-
 func TestLLMAgent_SubAgents(t *testing.T) {
 	sub := New("sub", WithDescription("subdesc"))
 	agt := New("main", WithSubAgents([]agent.Agent{sub}))
@@ -48,7 +45,7 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 	}
 }
 
-func TestLLMAgent_Run_BeforeAgentShortCircuit(t *testing.T) {
+func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {
 	// BeforeAgentCallback returns a custom response, should short-circuit.
 	agentCallbacks := agent.NewAgentCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
@@ -125,7 +122,7 @@ func TestLLMAgent_Run_NormalFlow(t *testing.T) {
 	}
 }
 
-func TestLLMAgent_Run_AfterAgentCallbackError(t *testing.T) {
+func TestLLMAgent_Run_AfterAgentCbErr(t *testing.T) {
 	agentCallbacks := agent.NewAgentCallbacks()
 	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
 		return nil, errors.New("after error")

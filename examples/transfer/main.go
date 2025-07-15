@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates agent transfer functionality with sub-agents.
 // This example shows how to create a main agent with multiple specialized
 // sub-agents and use the transfer_to_agent tool to delegate tasks.
@@ -172,7 +184,8 @@ func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agen
 		"research-agent",
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized research and information gathering agent"),
-		llmagent.WithInstruction("You are a research expert. Gather comprehensive information and provide well-structured answers."),
+		llmagent.WithInstruction("You are a research expert. "+
+			"Gather comprehensive information and provide well-structured answers."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool}),
@@ -257,7 +270,7 @@ func (c *transferChat) processMessage(ctx context.Context, userMessage string) e
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

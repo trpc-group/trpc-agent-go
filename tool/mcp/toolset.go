@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package mcp provides MCP tool set implementation.
 package mcp
 
@@ -25,6 +37,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	// Apply default configuration.
 	cfg := toolSetConfig{
 		connectionConfig: config,
+		mcpOptions:       []mcp.ClientOption{}, // Initialize mcpOptions
 	}
 
 	// Apply user options.
@@ -38,7 +51,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	}
 
 	// Create session manager
-	sessionManager := newMCPSessionManager(cfg.connectionConfig)
+	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions)
 
 	toolSet := &ToolSet{
 		config:         cfg,
@@ -154,6 +167,7 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 // mcpSessionManager manages the MCP client connection and session.
 type mcpSessionManager struct {
 	config      ConnectionConfig
+	mcpOptions  []mcp.ClientOption // MCP client options
 	client      mcp.Connector
 	mu          sync.RWMutex
 	connected   bool
@@ -161,9 +175,10 @@ type mcpSessionManager struct {
 }
 
 // newMCPSessionManager creates a new MCP session manager.
-func newMCPSessionManager(config ConnectionConfig) *mcpSessionManager {
+func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption) *mcpSessionManager {
 	manager := &mcpSessionManager{
-		config: config,
+		config:     config,
+		mcpOptions: mcpOptions,
 	}
 
 	return manager
@@ -236,6 +251,11 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 			options = append(options, mcp.WithHTTPHeaders(headers))
 		}
 
+		// Add MCP options if configured.
+		if len(m.mcpOptions) > 0 {
+			options = append(options, m.mcpOptions...)
+		}
+
 		return mcp.NewSSEClient(m.config.ServerURL, clientInfo, options...)
 
 	case transportStreamable:
@@ -247,6 +267,11 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 				headers.Set(k, v)
 			}
 			options = append(options, mcp.WithHTTPHeaders(headers))
+		}
+
+		// Add MCP options if configured.
+		if len(m.mcpOptions) > 0 {
+			options = append(options, m.mcpOptions...)
 		}
 
 		return mcp.NewClient(m.config.ServerURL, clientInfo, options...)

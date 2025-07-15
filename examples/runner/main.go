@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates multi-turn chat using the Runner with streaming
 // output, session management, and tool calling.
 package main
@@ -14,7 +26,6 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -82,8 +93,15 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	})
 
 	// Create tools.
-	calculatorTool := function.NewFunctionTool(c.calculate, function.WithName("calculator"), function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"))
-	timeTool := function.NewFunctionTool(c.getCurrentTime, function.WithName("current_time"), function.WithDescription("Get the current time and date for a specific timezone"))
+	calculatorTool := function.NewFunctionTool(
+		c.calculate,
+		function.WithName("calculator"),
+		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
+	)
+	timeTool := function.NewFunctionTool(
+		c.getCurrentTime,
+		function.WithName("current_time"),
+		function.WithDescription("Get the current time and date for a specific timezone"))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -97,7 +115,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
-		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. Be helpful and conversational."),
+		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
+		"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
@@ -189,7 +208,7 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

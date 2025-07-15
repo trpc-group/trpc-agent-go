@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package react
 
 import (
@@ -20,7 +32,7 @@ func TestNew(t *testing.T) {
 	var _ planner.Planner = p
 }
 
-func TestPlanner_BuildPlanningInstruction(t *testing.T) {
+func TestPlanner_BuildPlanInstr(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{
@@ -67,7 +79,7 @@ func TestPlanner_BuildPlanningInstruction(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanningResponse_NilResponse(t *testing.T) {
+func TestPlanner_ProcessPlanResp_Nil(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
@@ -78,7 +90,7 @@ func TestPlanner_ProcessPlanningResponse_NilResponse(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanningResponse_EmptyChoices(t *testing.T) {
+func TestPlanner_ProcessPlanResp_Empty(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
@@ -92,7 +104,7 @@ func TestPlanner_ProcessPlanningResponse_EmptyChoices(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanningResponse_WithToolCalls(t *testing.T) {
+func TestPlanner_ToolCalls(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
@@ -147,12 +159,14 @@ func TestPlanner_ProcessPlanningResponse_WithToolCalls(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanningResponse_WithFinalAnswer(t *testing.T) {
+func TestPlanner_FinalAns(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}
 
-	originalContent := PlanningTag + " Step 1: Do something\n" + ReasoningTag + " This is reasoning\n" + FinalAnswerTag + " This is the final answer."
+	originalContent := PlanningTag + " Step 1: Do something\n" +
+		ReasoningTag + " This is reasoning\n" +
+		FinalAnswerTag + " This is the final answer."
 	response := &model.Response{
 		Choices: []model.Choice{
 			{
@@ -176,7 +190,7 @@ func TestPlanner_ProcessPlanningResponse_WithFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestPlanner_ProcessPlanningResponse_WithDeltaContent(t *testing.T) {
+func TestPlanner_ProcessPlanResp_Delta(t *testing.T) {
 	p := New()
 	ctx := context.Background()
 	invocation := &agent.Invocation{}

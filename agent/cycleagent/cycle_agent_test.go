@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package cycleagent
 
 import (
@@ -84,7 +96,39 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
-func TestCycleAgent_Run_WithMaxIterations(t *testing.T) {
+// legacyOptions mirrors old Options struct for test compatibility.
+type legacyOptions struct {
+	Name              string
+	SubAgents         []agent.Agent
+	Tools             []tool.Tool
+	MaxIterations     *int
+	ChannelBufferSize int
+	AgentCallbacks    *agent.AgentCallbacks
+	EscalationFunc    EscalationFunc
+}
+
+// newFromLegacy converts legacyOptions to functional options constructor.
+func newFromLegacy(o legacyOptions) *CycleAgent {
+	opts := []option{WithSubAgents(o.SubAgents)}
+	if len(o.Tools) > 0 {
+		opts = append(opts, WithTools(o.Tools))
+	}
+	if o.MaxIterations != nil {
+		opts = append(opts, WithMaxIterations(*o.MaxIterations))
+	}
+	if o.ChannelBufferSize > 0 {
+		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
+	}
+	if o.AgentCallbacks != nil {
+		opts = append(opts, WithAgentCallbacks(o.AgentCallbacks))
+	}
+	if o.EscalationFunc != nil {
+		opts = append(opts, WithEscalationFunc(o.EscalationFunc))
+	}
+	return New(o.Name, opts...)
+}
+
+func TestCycleAgent_Run_WithMaxIter(t *testing.T) {
 	// Track execution counts.
 	agent1Count := 0
 	agent2Count := 0
@@ -95,7 +139,7 @@ func TestCycleAgent_Run_WithMaxIterations(t *testing.T) {
 
 	// Create CycleAgent with max iterations.
 	maxIter := 2
-	cycleAgent := New(Options{
+	cycleAgent := newFromLegacy(legacyOptions{
 		Name:          "test-cycle",
 		SubAgents:     []agent.Agent{subAgent1, subAgent2},
 		MaxIterations: &maxIter,
@@ -139,7 +183,7 @@ func TestCycleAgent_Run_WithEscalation(t *testing.T) {
 
 	// Create CycleAgent with high max iterations (should stop due to escalation).
 	maxIter := 10
-	cycleAgent := New(Options{
+	cycleAgent := newFromLegacy(legacyOptions{
 		Name:          "test-cycle",
 		SubAgents:     []agent.Agent{subAgent1, subAgent2},
 		MaxIterations: &maxIter,
@@ -194,7 +238,7 @@ func TestCycleAgent_Run_NoMaxIterations(t *testing.T) {
 	}
 
 	// Create CycleAgent without max iterations.
-	cycleAgent := New(Options{
+	cycleAgent := newFromLegacy(legacyOptions{
 		Name:      "test-cycle",
 		SubAgents: []agent.Agent{subAgent1, subAgent2},
 	})
@@ -301,7 +345,7 @@ func TestCycleAgent_Run_SubAgentError(t *testing.T) {
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1}
 	subAgent2 := &mockAgent{name: "agent-2", shouldError: true}
 
-	cycleAgent := New(Options{
+	cycleAgent := newFromLegacy(legacyOptions{
 		Name:      "test-cycle",
 		SubAgents: []agent.Agent{subAgent1, subAgent2},
 	})
@@ -333,7 +377,7 @@ func TestCycleAgent_Run_SubAgentError(t *testing.T) {
 }
 
 func TestCycleAgent_ShouldEscalate(t *testing.T) {
-	cycleAgent := New(Options{Name: "test"})
+	cycleAgent := newFromLegacy(legacyOptions{Name: "test"})
 
 	// Test nil event.
 	require.False(t, cycleAgent.shouldEscalate(nil))
@@ -355,11 +399,11 @@ func TestCycleAgent_ShouldEscalate(t *testing.T) {
 
 func TestCycleAgent_ChannelBufferSize(t *testing.T) {
 	// Test default.
-	agent1 := New(Options{Name: "test1"})
+	agent1 := newFromLegacy(legacyOptions{Name: "test1"})
 	require.Equal(t, defaultChannelBufferSize, agent1.channelBufferSize)
 
 	// Test custom.
-	agent2 := New(Options{Name: "test2", ChannelBufferSize: 100})
+	agent2 := newFromLegacy(legacyOptions{Name: "test2", ChannelBufferSize: 100})
 	require.Equal(t, 100, agent2.channelBufferSize)
 }
 
@@ -377,7 +421,7 @@ func TestCycleAgent_WithCallbacks(t *testing.T) {
 
 	// Create cycle agent with callbacks.
 	maxIterations := 3
-	cycleAgent := New(Options{
+	cycleAgent := newFromLegacy(legacyOptions{
 		Name:           "test-cycle-agent",
 		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
 		MaxIterations:  &maxIterations,
@@ -425,13 +469,13 @@ func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return ch, nil
 }
 
-func TestCycleAgent_BeforeCallbackCustomResponse(t *testing.T) {
+func TestCycleAgent_BeforeCallbackResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "custom", Done: true}, nil
 	})
 
-	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
+	ca := newFromLegacy(legacyOptions{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
 
 	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
 	require.NoError(t, err)
@@ -450,7 +494,7 @@ func TestCycleAgent_BeforeCallbackError(t *testing.T) {
 		return nil, errors.New("boom")
 	})
 
-	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
+	ca := newFromLegacy(legacyOptions{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb})
 
 	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
 	require.NoError(t, err)
@@ -464,9 +508,9 @@ func TestCycleAgent_BeforeCallbackError(t *testing.T) {
 	require.Equal(t, 1, cnt)
 }
 
-func TestCycleAgent_SubAgentErrorPropagation(t *testing.T) {
+func TestCycleAgent_SubAgentErrProp(t *testing.T) {
 	errAgent := &errorAgent{name: "bad"}
-	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{errAgent}})
+	ca := newFromLegacy(legacyOptions{Name: "loop", SubAgents: []agent.Agent{errAgent}})
 
 	events, err := ca.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "loop"})
 	require.NoError(t, err)
@@ -490,8 +534,8 @@ func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *ev
 	return nil, errors.New("failed")
 }
 
-func TestCycleAgent_CreateSubAgentInvocation(t *testing.T) {
-	parent := New(Options{Name: "parent"})
+func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
+	parent := newFromLegacy(legacyOptions{Name: "parent"})
 	base := &agent.Invocation{InvocationID: "base", AgentName: "parent", Branch: "branchA"}
 	child := &noopAgent{name: "child"}
 
@@ -511,7 +555,7 @@ func TestCycleAgent_AfterCallback(t *testing.T) {
 	})
 
 	one := 1
-	ca := New(Options{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb, MaxIterations: &one})
+	ca := newFromLegacy(legacyOptions{Name: "loop", SubAgents: []agent.Agent{&noopAgent{"a"}}, AgentCallbacks: cb, MaxIterations: &one})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -559,8 +603,8 @@ func (s *simpleAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 	return ch, nil
 }
 
-func TestCycleAgent_ShouldEscalate_Default(t *testing.T) {
-	ca := New(Options{Name: "loop"})
+func TestCycleAgent_ShouldEscalateDef(t *testing.T) {
+	ca := newFromLegacy(legacyOptions{Name: "loop"})
 
 	// Error event should escalate.
 	errEvt := event.New("id", "loop")
@@ -586,7 +630,7 @@ func TestCycleAgent_CustomEscalationFunc(t *testing.T) {
 	agent1 := &simpleAgent{name: "worker", content: "RUN", object: model.ObjectTypeToolResponse, done: true}
 	stopAgent := &simpleAgent{name: "stopper", content: "STOP", object: model.ObjectTypeToolResponse, done: true}
 
-	ca := New(Options{
+	ca := newFromLegacy(legacyOptions{
 		Name:           "loop",
 		SubAgents:      []agent.Agent{agent1, stopAgent},
 		EscalationFunc: escalate,
@@ -610,7 +654,7 @@ func TestCycleAgent_CustomEscalationFunc(t *testing.T) {
 func TestCycleAgent_MaxIterations(t *testing.T) {
 	max := 3
 	worker := &simpleAgent{name: "w", content: "tick"}
-	ca := New(Options{
+	ca := newFromLegacy(legacyOptions{
 		Name:          "loop",
 		SubAgents:     []agent.Agent{worker},
 		MaxIterations: &max,

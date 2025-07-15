@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package chunking
 
 import (
@@ -8,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-func TestMarkdownChunking_BasicAndOverlap(t *testing.T) {
+func TestMarkdownChunking_BasicOverlap(t *testing.T) {
 	md := `# Header 1
 
 Paragraph one with some text to exceed size.
@@ -52,7 +64,7 @@ func TestMarkdownChunking_Errors(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmptyDocument)
 }
 
-func TestRecursiveChunking_CustomSeparators(t *testing.T) {
+func TestRecursiveChunking_CustomSep(t *testing.T) {
 	text := strings.Repeat("A B C D E F ", 10) // 70 chars
 	doc := &document.Document{ID: "txt", Content: text}
 

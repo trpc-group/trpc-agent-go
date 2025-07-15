@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package transfer
 
 import (
@@ -65,7 +77,7 @@ func TestTransferTool_Declaration(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_Success(t *testing.T) {
+func TestTransferTool_Success(t *testing.T) {
 	agentInfos := []agent.Info{
 		{Name: "calculator", Description: "A calculator agent"},
 	}
@@ -93,7 +105,7 @@ func TestTransferTool_Call_Success(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_AgentNotFound(t *testing.T) {
+func TestTransferTool_AgentNotFound(t *testing.T) {
 	agentInfos := []agent.Info{
 		{Name: "calculator", Description: "A calculator agent"},
 	}
@@ -124,7 +136,7 @@ func TestTransferTool_Call_AgentNotFound(t *testing.T) {
 	}
 }
 
-func TestTransferTool_Call_NoSubAgents(t *testing.T) {
+func TestTransferTool_NoSubAgents(t *testing.T) {
 	// Test with empty agent info list.
 	agentInfos := []agent.Info{}
 

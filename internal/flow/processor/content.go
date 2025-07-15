@@ -1,3 +1,19 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+// Package processor provides content processing logic for agent requests.
+// It includes utilities for including, filtering, and rearranging session
+// events for LLM requests, as well as helpers for function call/response
+// event handling.
+//
+
 package processor
 
 import (
@@ -101,8 +117,8 @@ func (p *ContentRequestProcessor) getContents(
 	}
 
 	// Rearrange events for function call/response consistency.
-	resultEvents := p.rearrangeEventsForLatestFunctionResponse(filteredEvents)
-	resultEvents = p.rearrangeEventsForAsyncFunctionResponsesInHistory(resultEvents)
+	resultEvents := p.rearrangeLatestFuncResp(filteredEvents)
+	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Convert events to messages.
 	var messages []model.Message
@@ -213,7 +229,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
-func (p *ContentRequestProcessor) rearrangeEventsForLatestFunctionResponse(
+func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	events []event.Event,
 ) []event.Event {
 	if len(events) == 0 {
@@ -281,7 +297,7 @@ func (p *ContentRequestProcessor) rearrangeEventsForLatestFunctionResponse(
 }
 
 // rearrangeEventsForAsyncFunctionResponsesInHistory rearranges the async function_response events in the history.
-func (p *ContentRequestProcessor) rearrangeEventsForAsyncFunctionResponsesInHistory(
+func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	events []event.Event,
 ) []event.Event {
 	functionCallIDToResponseEventIndex := make(map[string]int)

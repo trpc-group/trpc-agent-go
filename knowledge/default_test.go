@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package knowledge
 
 import (
@@ -37,7 +49,7 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 	return docs, nil
 }
 
-func TestBuiltinKnowledge_Load_WithOptions(t *testing.T) {
+func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
 	// Create a knowledge instance with mock sources.
 	kb := New(
 		WithSources([]source.Source{
@@ -73,7 +85,7 @@ func TestBuiltinKnowledge_Load_WithOptions(t *testing.T) {
 	}
 }
 
-func TestBuiltinKnowledge_Load_WithNoSources(t *testing.T) {
+func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
 	// Create a knowledge instance with no sources.
 	kb := New()
 
@@ -188,7 +200,7 @@ func TestCalcETA_Boundaries(t *testing.T) {
 	}
 }
 
-func TestAddDocument_WithEmbedderAndStore(t *testing.T) {
+func TestAddDocument_EmbedderStore(t *testing.T) {
 	kb := &BuiltinKnowledge{}
 	kb.embedder = stubEmbedder{}
 	store := &stubVectorStore{}

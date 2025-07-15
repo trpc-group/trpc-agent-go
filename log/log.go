@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package log provides logging utilities.
 package log
 
@@ -29,25 +41,7 @@ var Default Logger = zap.New(
 	zap.AddCallerSkip(1),
 ).Sugar()
 
-// zapLogger keeps track of the zap atomic level for dynamic level changes
-var zapLogger *zap.Logger
 var zapLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-
-func init() {
-	// Initialize zapLogger with an atomic level that can be changed
-	zapLogger = zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(encoderConfig),
-			zapcore.AddSync(os.Stdout),
-			&zapLevel,
-		),
-		zap.AddCaller(),
-		zap.AddCallerSkip(1),
-	)
-
-	// Update the default logger to use this configurable level
-	Default = zapLogger.Sugar()
-}
 
 // SetLevel sets the log level to the specified level.
 // Valid levels are: "debug", "info", "warn", "error", "fatal"
@@ -83,7 +77,7 @@ var encoderConfig = zapcore.EncoderConfig{
 	EncodeCaller:   zapcore.ShortCallerEncoder,
 }
 
-// Logger is the underlying logging work for trpc-a2a-go.
+// Logger defines the logging interface used throughout trpc-agent-go.
 type Logger interface {
 	// Debug logs to DEBUG log. Arguments are handled in the manner of fmt.Print.
 	Debug(args ...any)

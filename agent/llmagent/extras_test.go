@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package llmagent
 
 import (
@@ -35,7 +47,7 @@ func (f *fakeKnowledge) Search(ctx context.Context, req *knowledge.SearchRequest
 	return &knowledge.SearchResult{Document: &document.Document{Content: "none"}}, nil
 }
 
-func TestRegisterTools_AddsToolSetAndKnowledge(t *testing.T) {
+func TestRegisterTools_AddsToolSet(t *testing.T) {
 	// Prepare inputs.
 	direct := []tool.Tool{&mockTool{name: "direct"}}
 
@@ -72,7 +84,7 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return ch, nil
 }
 
-func TestLLMAgent_ToolsAddsTransferWhenSubAgents(t *testing.T) {
+func TestLLMAgent_ToolsAddsTransfer(t *testing.T) {
 	coreTool := &mockTool{name: "core"}
 	sub1 := &mockAgent{name: "sub1"}
 	sub2 := &mockAgent{name: "sub2"}
@@ -95,7 +107,7 @@ func TestLLMAgent_ToolsAddsTransferWhenSubAgents(t *testing.T) {
 	require.Equal(t, "sub2", found.Info().Name)
 }
 
-func TestLLMAgent_InfoAndToolsWithoutSubAgents(t *testing.T) {
+func TestLLMAgent_InfoAndTools(t *testing.T) {
 	t1 := &mockTool{name: "t1"}
 	agent := New("my-agent", WithDescription("desc"), WithTools([]tool.Tool{t1}))
 
@@ -108,7 +120,7 @@ func TestLLMAgent_InfoAndToolsWithoutSubAgents(t *testing.T) {
 	require.Equal(t, "t1", ts[0].Declaration().Name)
 }
 
-func TestLLMAgent_WrapEventChannel_AfterCallback(t *testing.T) {
+func TestLLMAgent_AfterCb(t *testing.T) {
 	// Prepare original event channel.
 	orig := make(chan *event.Event, 1)
 	orig <- event.New("id", "agent")
@@ -132,7 +144,7 @@ func TestLLMAgent_WrapEventChannel_AfterCallback(t *testing.T) {
 	require.Equal(t, "after", objs[1])
 }
 
-func TestLLMAgent_WrapEventChannel_AfterCallbackNoResponse(t *testing.T) {
+func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	orig := make(chan *event.Event, 1)
 	orig <- event.New("id2", "agent2")
 	close(orig)

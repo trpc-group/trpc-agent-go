@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package openai
 
 import (
@@ -73,7 +85,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_NilRequest(t *testing.T) {
+func TestModel_GenContent_NilReq(t *testing.T) {
 	m := New("test-model", Options{APIKey: "test-key"})
 
 	ctx := context.Background()
@@ -88,7 +100,7 @@ func TestModel_GenerateContent_NilRequest(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_ValidRequest(t *testing.T) {
+func TestModel_GenContent_ValidReq(t *testing.T) {
 	// Skip this test if no API key is provided.
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -133,7 +145,7 @@ func TestModel_GenerateContent_ValidRequest(t *testing.T) {
 	}
 }
 
-func TestModel_GenerateContent_CustomBaseURL(t *testing.T) {
+func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	// This test creates a model with custom base URL but doesn't make actual calls.
 	// It's mainly to test the configuration.
 

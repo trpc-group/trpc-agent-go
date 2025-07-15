@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package main demonstrates React planning with LLM agents using structured
 // planning instructions, tool calling, and response processing.
 package main
@@ -13,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -106,7 +117,8 @@ func (c *reactPlanningChat) setup(ctx context.Context) error {
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A research agent that uses React planning to structure its thinking and actions"),
-		llmagent.WithInstruction("You are a helpful research assistant. Use the React planning approach to break down complex questions into manageable steps."),
+		llmagent.WithInstruction("You are a helpful research assistant. "+
+			"Use the React planning approach to break down complex questions into manageable steps."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool, weatherTool}),
@@ -176,7 +188,7 @@ func (c *reactPlanningChat) processMessage(ctx context.Context, userMessage stri
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -272,10 +284,15 @@ func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
 // search simulates a search tool.
 func (c *reactPlanningChat) search(args searchArgs) searchResult {
 	results := map[string]string{
-		"tokyo population":    "Tokyo has a population of approximately 14 million people in the city proper and 38 million in the greater metropolitan area.",
-		"new york population": "New York City has a population of approximately 8.3 million people, with about 20 million in the metropolitan area.",
-		"paris weather":       "Paris currently has partly cloudy skies with a temperature of 15°C (59°F). Light rain is expected later today.",
-		"compound interest":   "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), where A is the amount, P is principal, r is annual interest rate, n is number of times interest compounds per year, and t is time in years.",
+		"tokyo population": "Tokyo has a population of approximately 14 million people in the city proper and " +
+			"38 million in the greater metropolitan area.",
+		"new york population": "New York City has a population of approximately 8.3 million people, " +
+			"with about 20 million in the metropolitan area.",
+		"paris weather": "Paris currently has partly cloudy skies with a temperature of 15°C (59°F). " +
+			"Light rain is expected later today.",
+		"compound interest": "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), " + //nolint:gosec
+			"where A is the amount, P is principal, r is annual interest rate, " +
+			"n is number of times interest compounds per year, and t is time in years.",
 	}
 
 	query := strings.ToLower(args.Query)

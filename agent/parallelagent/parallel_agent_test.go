@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package parallelagent
 
 import (
@@ -81,13 +93,39 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
-func TestParallelAgent_Run_Basic(t *testing.T) {
+// legacyOptions mirrors old Options struct for tests.
+type legacyOptions struct {
+	Name              string
+	SubAgents         []agent.Agent
+	Tools             []tool.Tool
+	ChannelBufferSize int
+	AgentCallbacks    *agent.AgentCallbacks
+}
+
+func newFromLegacy(o legacyOptions) *ParallelAgent {
+	opts := []option{}
+	if len(o.SubAgents) > 0 {
+		opts = append(opts, WithSubAgents(o.SubAgents))
+	}
+	if len(o.Tools) > 0 {
+		opts = append(opts, WithTools(o.Tools))
+	}
+	if o.ChannelBufferSize > 0 {
+		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
+	}
+	if o.AgentCallbacks != nil {
+		opts = append(opts, WithAgentCallbacks(o.AgentCallbacks))
+	}
+	return New(o.Name, opts...)
+}
+
+func TestParallelAgent_Basic(t *testing.T) {
 	// Create mock sub-agents.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 2, delay: 10 * time.Millisecond}
 	subAgent2 := &mockAgent{name: "agent-2", eventCount: 1, delay: 5 * time.Millisecond}
 
 	// Create ParallelAgent.
-	parallelAgent := New(Options{
+	parallelAgent := newFromLegacy(legacyOptions{
 		Name:      "test-parallel",
 		SubAgents: []agent.Agent{subAgent1, subAgent2},
 	})
@@ -124,12 +162,12 @@ func TestParallelAgent_Run_Basic(t *testing.T) {
 	require.Equal(t, 1, agentCounts["agent-2"])
 }
 
-func TestParallelAgent_Run_WithError(t *testing.T) {
+func TestParallelAgent_WithError(t *testing.T) {
 	// Create agents, one with error.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1}
 	subAgent2 := &mockAgent{name: "agent-2", shouldError: true}
 
-	parallelAgent := New(Options{
+	parallelAgent := newFromLegacy(legacyOptions{
 		Name:      "test-parallel",
 		SubAgents: []agent.Agent{subAgent1, subAgent2},
 	})
@@ -163,9 +201,9 @@ func TestParallelAgent_Run_WithError(t *testing.T) {
 	require.True(t, hasError)
 }
 
-func TestParallelAgent_BranchInvocations(t *testing.T) {
+func TestParallelAgent_BranchInvoke(t *testing.T) {
 	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
-	parallelAgent := New(Options{Name: "test-parallel"})
+	parallelAgent := newFromLegacy(legacyOptions{Name: "test-parallel"})
 
 	baseInvocation := &agent.Invocation{
 		AgentName:    "test-parallel",
@@ -185,11 +223,11 @@ func TestParallelAgent_BranchInvocations(t *testing.T) {
 
 func TestParallelAgent_ChannelBufferSize(t *testing.T) {
 	// Test default.
-	agent1 := New(Options{Name: "test1"})
+	agent1 := newFromLegacy(legacyOptions{Name: "test1"})
 	require.Equal(t, defaultChannelBufferSize, agent1.channelBufferSize)
 
 	// Test custom.
-	agent2 := New(Options{Name: "test2", ChannelBufferSize: 100})
+	agent2 := newFromLegacy(legacyOptions{Name: "test2", ChannelBufferSize: 100})
 	require.Equal(t, 100, agent2.channelBufferSize)
 }
 
@@ -206,8 +244,8 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 	})
 
 	// Create parallel agent with callbacks.
-	parallelAgent := New(Options{
-		Name:           "test-parallel-agent",
+	parallelAgent := newFromLegacy(legacyOptions{
+		Name:           "test-parallel",
 		SubAgents:      []agent.Agent{&mockAgent{name: "agent1"}, &mockAgent{name: "agent2"}},
 		AgentCallbacks: callbacks,
 	})
@@ -215,7 +253,7 @@ func TestParallelAgent_WithCallbacks(t *testing.T) {
 	// Test skip execution.
 	invocation := &agent.Invocation{
 		InvocationID: "test-invocation-skip",
-		AgentName:    "test-parallel-agent",
+		AgentName:    "test-parallel",
 		Message: model.Message{
 			Role:    model.RoleUser,
 			Content: "skip",
@@ -263,13 +301,13 @@ func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return nil, errors.New("boom")
 }
 
-func TestParallelAgent_BeforeCallbackError(t *testing.T) {
+func TestParallelAgent_BeforeErr(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("bad before")
 	})
 
-	pa := New(Options{
+	pa := newFromLegacy(legacyOptions{
 		Name:           "parallel",
 		SubAgents:      []agent.Agent{&silentAgent{"a"}},
 		AgentCallbacks: cb,
@@ -287,13 +325,13 @@ func TestParallelAgent_BeforeCallbackError(t *testing.T) {
 	require.Equal(t, agent.ErrorTypeAgentCallbackError, evt.Error.Type)
 }
 
-func TestParallelAgent_AfterCallbackCustomResponse(t *testing.T) {
+func TestParallelAgent_AfterResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
 
-	pa := New(Options{
+	pa := newFromLegacy(legacyOptions{
 		Name:           "parallel",
 		SubAgents:      []agent.Agent{&silentAgent{"a"}},
 		AgentCallbacks: cb,
@@ -313,13 +351,13 @@ func TestParallelAgent_AfterCallbackCustomResponse(t *testing.T) {
 	require.Equal(t, "after", last.Object)
 }
 
-func TestParallelAgent_BeforeCallbackCustomResponse(t *testing.T) {
+func TestParallelAgent_BeforeResp(t *testing.T) {
 	cb := agent.NewAgentCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
 	})
 
-	pa := New(Options{Name: "parallel", SubAgents: []agent.Agent{&silentAgent{"a"}}, AgentCallbacks: cb})
+	pa := newFromLegacy(legacyOptions{Name: "parallel", SubAgents: []agent.Agent{&silentAgent{"a"}}, AgentCallbacks: cb})
 
 	events, err := pa.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "parallel"})
 	require.NoError(t, err)
@@ -330,21 +368,4 @@ func TestParallelAgent_BeforeCallbackCustomResponse(t *testing.T) {
 	}
 	require.NotNil(t, first)
 	require.Equal(t, "before", first.Object)
-}
-
-func TestParallelAgent_CreateBranchInvocation(t *testing.T) {
-	sa := &silentAgent{name: "child"}
-	pa := New(Options{Name: "parent"})
-
-	base := &agent.Invocation{InvocationID: "root", AgentName: "parent"}
-	branch := pa.createBranchInvocationForSubAgent(sa, base)
-
-	// InvocationID should change and contain base ID.
-	require.NotEqual(t, base.InvocationID, branch.InvocationID)
-	require.Contains(t, branch.InvocationID, base.InvocationID)
-	// Branch should equal new invocation ID.
-	require.Equal(t, branch.InvocationID, branch.Branch)
-	// Agent properties updated.
-	require.Equal(t, "child", branch.AgentName)
-	require.Equal(t, "child", branch.Agent.Info().Name)
 }

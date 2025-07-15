@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package main
 
 import (
@@ -16,12 +28,17 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.9
 	maxTokens := 1000
 
-	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"), function.WithDescription("Get weather at the given location"))
-	getPopulationTool := function.NewFunctionTool(getPopulation, function.WithName("get_population"), function.WithDescription("Get population at the given city"))
+	getWeatherTool := function.NewFunctionTool(getWeather, function.WithName("get_weather"),
+		function.WithDescription("Get weather at the given location"))
+	getPopulationTool := function.NewFunctionTool(getPopulation, function.WithName("get_population"),
+		function.WithDescription("Get population at the given city"))
 
 	request := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are a helpful weather guide. If you don't have real-time weather data, you should call tool user provided."),
+			model.NewSystemMessage(
+				"You are a helpful weather guide. If you don't have real-time " +
+					"weather data, you should call the user-provided tool.",
+			),
 			model.NewUserMessage("What is the weather and population in London City? "),
 		},
 		GenerationConfig: model.GenerationConfig{
@@ -103,7 +120,8 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 		}
 
 		if response.Done {
-			fmt.Printf("\n\nStreaming completed. Full content length: %d characters\n", len(fullContent))
+			fmt.Printf("\n\nStreaming completed. Full content length: %d characters\n",
+				len(fullContent))
 			break
 		}
 	}
@@ -129,7 +147,8 @@ func streamingInputExample(ctx context.Context, llm *openai.Model) error {
 			}
 		}
 		if response2.Done {
-			fmt.Printf("\n\nStreaming completed. Full content length: %d characters\n", len(fullContent))
+			fmt.Printf("\n\nStreaming completed. Full content length: %d characters\n",
+				len(fullContent))
 			break
 		}
 	}

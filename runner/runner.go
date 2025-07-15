@@ -1,3 +1,15 @@
+//
+// Tencent is pleased to support the open source community by making tRPC available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 // Package runner provides the core runner functionality.
 package runner
 
@@ -14,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Author types for events.
@@ -39,7 +51,8 @@ type Runner interface {
 		userID string,
 		sessionID string,
 		message model.Message,
-		opts agent.RunOptions,
+		// Variadic run options placeholder for future extension.
+		runOpts ...agent.RunOptions,
 	) (<-chan *event.Event, error)
 }
 
@@ -80,9 +93,9 @@ func (r *runner) Run(
 	userID string,
 	sessionID string,
 	message model.Message,
-	opts agent.RunOptions,
+	runOpts ...agent.RunOptions,
 ) (<-chan *event.Event, error) {
-	ctx, span := telemetry.Tracer.Start(ctx, fmt.Sprintf("invocation"))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invocation"))
 	defer span.End()
 
 	sessionKey := session.Key{
@@ -132,13 +145,17 @@ func (r *runner) Run(
 
 	// Create invocation.
 	eventCompletionCh := make(chan string)
+	var ro agent.RunOptions
+	if len(runOpts) > 0 {
+		ro = runOpts[0]
+	}
 	invocation := &agent.Invocation{
 		Agent:             r.agent,
 		Session:           sess,
 		InvocationID:      invocationID,
 		EndInvocation:     false,
 		Message:           message,
-		RunOptions:        opts,
+		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
 	}
 
