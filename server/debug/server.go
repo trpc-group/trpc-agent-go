@@ -14,6 +14,7 @@
 package debug
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -319,8 +320,7 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
+	out, err := rn.Run(context.Background(), req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -355,7 +355,6 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
-			break // send only once
 		}
 	}
 
@@ -466,8 +465,7 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 						respObj = choice.Message.Content // raw string fallback
 					}
 				}
-
-				parts = append(parts, buildFunctionResponsePart(respObj, choice.Message.ToolID))
+				parts = append(parts, buildFunctionResponsePart(respObj, choice.Message.ToolID, choice.Message.ToolName))
 			}
 		}
 	}
@@ -613,10 +611,10 @@ func buildFunctionCallPart(tc model.ToolCall) map[string]interface{} {
 // respObj can be either a structured object (decoded JSON) or the original
 // raw string when JSON decoding fails. The name field is currently unknown
 // from the upstream payload, so we intentionally leave it blank.
-func buildFunctionResponsePart(respObj interface{}, id string) map[string]interface{} {
+func buildFunctionResponsePart(respObj interface{}, id string, name string) map[string]interface{} {
 	return map[string]interface{}{
 		keyFunctionResponse: map[string]interface{}{
-			"name":     "", // Name is unavailable in the response payload.
+			"name":     name,
 			"response": respObj,
 			"id":       id,
 		},

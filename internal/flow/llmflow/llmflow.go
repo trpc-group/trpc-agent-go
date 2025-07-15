@@ -391,6 +391,7 @@ func (f *Flow) handleFunctionCalls(
 			if choice == nil {
 				return
 			}
+			choice.Message.ToolName = toolCall.Function.Name
 			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*choice})
 			toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
 			tl, ok := tools[toolCall.Function.Name]
