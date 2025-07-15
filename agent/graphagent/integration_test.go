@@ -1,5 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making tRPC available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.
 // All rights reserved.
@@ -91,7 +91,7 @@ func TestGraphAgentIntegration(t *testing.T) {
 	for event := range events {
 		eventCount++
 		t.Logf("Event %d: Author=%s, Done=%v", eventCount, event.Author, event.Response.Done)
-		
+
 		if event.Response != nil && event.Response.Done {
 			completionFound = true
 			break
@@ -114,13 +114,13 @@ type integrationTestAgent struct {
 
 func (ta *integrationTestAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, 1)
-	
+
 	go func() {
 		defer close(eventChan)
-		
+
 		// Simulate some processing
 		time.Sleep(10 * time.Millisecond)
-		
+
 		response := &model.Response{
 			Choices: []model.Choice{
 				{
@@ -133,10 +133,10 @@ func (ta *integrationTestAgent) Run(ctx context.Context, invocation *agent.Invoc
 			},
 			Done: true,
 		}
-		
+
 		eventChan <- event.NewResponseEvent(invocation.InvocationID, ta.name, response)
 	}()
-	
+
 	return eventChan, nil
 }
 

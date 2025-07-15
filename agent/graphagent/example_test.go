@@ -1,5 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making tRPC available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.
 // All rights reserved.
@@ -32,7 +32,7 @@ type mockAgent struct {
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, 1)
-	
+
 	// Create a simple response event
 	response := &model.Response{
 		Choices: []model.Choice{
@@ -46,11 +46,11 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 		},
 		Done: true,
 	}
-	
+
 	event := event.NewResponseEvent(invocation.InvocationID, m.name, response)
 	eventChan <- event
 	close(eventChan)
-	
+
 	return eventChan, nil
 }
 
@@ -79,9 +79,9 @@ func TestGraphAgent(t *testing.T) {
 		name:        "analyzer",
 		description: "Analyzes input data",
 	}
-	
+
 	processorAgent := &mockAgent{
-		name:        "processor", 
+		name:        "processor",
 		description: "Processes analyzed data",
 	}
 
