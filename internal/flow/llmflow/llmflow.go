@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (
@@ -191,6 +192,10 @@ func (f *Flow) runOneStep(
 			}
 		}
 
+		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+			llmEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
+		}
+
 		// Send the LLM response event.
 		lastEvent = llmEvent
 		select {
@@ -335,24 +340,30 @@ func (f *Flow) handleFunctionCalls(
 
 	var toolCallResponsesEvents []*event.Event
 	// Execute each tool call.
-	for i, toolCall := range functionCallEvent.Response.Choices[0].Message.ToolCalls {
-		ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
-		ctxWithInvocation, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
-		choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
-		toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{choice})
-		toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
-		tl, ok := tools[toolCall.Function.Name]
-		var declaration *tool.Declaration
-		if !ok {
-			declaration = &tool.Declaration{
-				Name:        "<not found>",
-				Description: "<not found>",
+	toolCalls := functionCallEvent.Response.Choices[0].Message.ToolCalls
+	for i, toolCall := range toolCalls {
+		func(index int, toolCall model.ToolCall) {
+			ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
+			ctxWithInvocation, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
+			defer span.End()
+			choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
+			if choice == nil {
+				return
 			}
-		} else {
-			declaration = tl.Declaration()
-		}
-		itelemetry.TraceToolCall(span, declaration, toolCall.Function.Arguments, toolCallResponseEvent)
-		span.End()
+			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*choice})
+			toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
+			tl, ok := tools[toolCall.Function.Name]
+			var declaration *tool.Declaration
+			if !ok {
+				declaration = &tool.Declaration{
+					Name:        "<not found>",
+					Description: "<not found>",
+				}
+			} else {
+				declaration = tl.Declaration()
+			}
+			itelemetry.TraceToolCall(span, declaration, toolCall.Function.Arguments, toolCallResponseEvent)
+		}(i, toolCall)
 	}
 
 	var mergedEvent *event.Event
@@ -374,6 +385,24 @@ func (f *Flow) handleFunctionCalls(
 	return mergedEvent, nil
 }
 
+func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool.Tool) map[string]struct{} {
+	longRunningToolIDs := make(map[string]struct{})
+	for _, toolCall := range ToolCalls {
+		t, ok := tools[toolCall.Function.Name]
+		if !ok {
+			continue
+		}
+		caller, ok := t.(function.LongRunner)
+		if !ok {
+			continue
+		}
+		if caller.LongRunning() {
+			longRunningToolIDs[toolCall.ID] = struct{}{}
+		}
+	}
+	return longRunningToolIDs
+}
+
 // executeToolCall executes a single tool call and returns the choice.
 func (f *Flow) executeToolCall(
 	ctx context.Context,
@@ -381,7 +410,7 @@ func (f *Flow) executeToolCall(
 	toolCall model.ToolCall,
 	tools map[string]tool.Tool,
 	index int,
-) model.Choice {
+) *model.Choice {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
@@ -396,6 +425,12 @@ func (f *Flow) executeToolCall(
 	if err != nil {
 		return f.createErrorChoice(index, toolCall.ID, err.Error())
 	}
+	//  allow to return nil not provide function response.
+	if r, ok := tl.(function.LongRunner); ok && r.LongRunning() {
+		if result == nil {
+			return nil
+		}
+	}
 
 	// Marshal the result to JSON.
 	resultBytes, err := json.Marshal(result)
@@ -406,7 +441,7 @@ func (f *Flow) executeToolCall(
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
 
-	return model.Choice{
+	return &model.Choice{
 		Index: index,
 		Message: model.Message{
 			Role:    model.RoleTool,
@@ -530,8 +565,8 @@ func (f *Flow) executeStreamableTool(
 }
 
 // createErrorChoice creates an error choice for tool execution failures.
-func (f *Flow) createErrorChoice(index int, toolID string, errorMsg string) model.Choice {
-	return model.Choice{
+func (f *Flow) createErrorChoice(index int, toolID string, errorMsg string) *model.Choice {
+	return &model.Choice{
 		Index: index,
 		Message: model.Message{
 			Role:    model.RoleTool,
