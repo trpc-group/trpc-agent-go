@@ -64,7 +64,7 @@ func NewService(options ...ServiceOption) (*Service, error) {
 		return nil, errors.New("redis url is required")
 	}
 
-	redisClient, err := clientBuilder(&ClientBuilderOpts{url: opts.url})
+	redisClient, err := clientBuilder(&ClientBuilderOpts{URL: opts.url})
 	if err != nil {
 		return nil, fmt.Errorf("create redis client failed: %w", err)
 	}

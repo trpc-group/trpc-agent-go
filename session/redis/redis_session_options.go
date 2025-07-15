@@ -6,22 +6,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-var clientBuilder func(*ClientBuilderOpts) (redis.UniversalClient, error) = DefaultClientBuilder
+var clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) = DefaultClientBuilder
 
 // SetClientBuilder sets the redis client builder.
-func SetClientBuilder(builder func(redisOpts *ClientBuilderOpts) (redis.UniversalClient, error)) {
+func SetClientBuilder(builder func(redisOpts ...ClientBuilderOpt) (redis.UniversalClient, error)) {
 	clientBuilder = builder
 }
 
 // DefaultClientBuilder is the default redis client builder.
-func DefaultClientBuilder(redisOpts *ClientBuilderOpts) (redis.UniversalClient, error) {
-	if redisOpts.url == "" {
+func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
+	o := &ClientBuilderOpts{}
+	for _, opt := range builderOpts {
+		opt(o)
+	}
+
+	if o.URL == "" {
 		return nil, fmt.Errorf("redis: url is empty")
 	}
 
-	opts, err := redis.ParseURL(redisOpts.url)
+	opts, err := redis.ParseURL(o.URL)
 	if err != nil {
-		return nil, fmt.Errorf("redis: parse url %s: %w", redisOpts.url, err)
+		return nil, fmt.Errorf("redis: parse url %s: %w", o.URL, err)
 	}
 	universalOpts := &redis.UniversalOptions{
 		Addrs:                 []string{opts.Addr},
@@ -55,7 +60,7 @@ type ClientBuilderOpt func(*ClientBuilderOpts)
 
 // ClientBuilderOpts is the options for the redis client.
 type ClientBuilderOpts struct {
-	url string
+	URL string
 }
 
 // WithURL sets the redis client url for RedisClientOptions.
@@ -63,7 +68,7 @@ type ClientBuilderOpts struct {
 // options: refer goredis.ParseURL
 func WithClientBuilderURL(url string) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
-		opts.url = url
+		opts.URL = url
 	}
 }
 
