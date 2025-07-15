@@ -281,7 +281,12 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return nil, fmt.Errorf("tcvectordb query is required")
 	}
 	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
-		return nil, fmt.Errorf("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled")
+		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		if len(query.Vector) > 0 {
+			return vs.searchByVector(ctx, query)
+		} else {
+			return vs.searchByFilter(ctx, query)
+		}
 	}
 
 	switch query.SearchMode {

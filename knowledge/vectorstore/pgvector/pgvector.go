@@ -12,6 +12,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
@@ -270,10 +271,15 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return nil, fmt.Errorf("pgvector: query is required")
 	}
 
-	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
-		return nil, fmt.Errorf("pgvector: keyword or hybrid search is not supported when tsvector is disabled")
+	if !vs.option.enableTSVector &&
+		(query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
+		log.Infof("pgvector: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
+		if len(query.Vector) > 0 {
+			return vs.searchByVector(ctx, query)
+		} else {
+			return vs.searchByFilter(ctx, query)
+		}
 	}
-
 	switch query.SearchMode {
 	case vectorstore.SearchModeVector:
 		return vs.searchByVector(ctx, query)
