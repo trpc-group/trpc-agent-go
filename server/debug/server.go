@@ -14,6 +14,7 @@
 package debug
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -319,8 +320,7 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	out, err := rn.Run(r.Context(), req.UserID, req.SessionID,
+	out, err := rn.Run(context.Background(), req.UserID, req.SessionID,
 		convertContentToMessage(req.NewMessage))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -355,7 +355,6 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
-			break // send only once
 		}
 	}
 
@@ -616,6 +615,7 @@ func buildFunctionCallPart(tc model.ToolCall) map[string]interface{} {
 func buildFunctionResponsePart(respObj interface{}, id string) map[string]interface{} {
 	return map[string]interface{}{
 		keyFunctionResponse: map[string]interface{}{
+			// TODO: fix this
 			"name":     "", // Name is unavailable in the response payload.
 			"response": respObj,
 			"id":       id,
