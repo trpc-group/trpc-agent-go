@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -162,84 +163,29 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
-		// Create event from response using the clean constructor.
-		llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
-		// Set branch for hierarchical event filtering.
-		llmEvent.Branch = invocation.Branch
-		log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
-		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmEvent.ID)
-		// Run after model callbacks if they exist.
-		if invocation.ModelCallbacks != nil {
-			customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
-			if err != nil {
-				log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					model.ErrorTypeFlowError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-					return lastEvent, ctx.Err()
-				}
-				return lastEvent, err
-			}
-			if customResponse != nil {
-				response = customResponse
-				llmEvent.Response = response
-			}
+		llmEvent, err := f.processLLMResponseEvent(ctx, invocation, llmRequest, response, eventChan, span)
+		if err != nil {
+			return lastEvent, err
 		}
-
-		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-			llmEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
-		}
-
-		// Send the LLM response event.
 		lastEvent = llmEvent
-		select {
-		case eventChan <- llmEvent:
-		case <-ctx.Done():
-			return lastEvent, ctx.Err()
-		}
-		// Check if wrappedChan is closed, prevent infinite writing.
-		if ctx.Err() != nil {
-			return lastEvent, ctx.Err()
+
+		if err := f.checkContextCancelled(ctx); err != nil {
+			return lastEvent, err
 		}
 
 		// 4. Handle function calls if present in the response.
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-			functionResponseEvent, err := f.handleFunctionCalls(
-				ctx,
-				invocation,
-				llmEvent,
-				llmRequest.Tools,
-			)
+			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmEvent, llmRequest.Tools, eventChan)
 			if err != nil {
-				log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					model.ErrorTypeFlowError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-					return lastEvent, ctx.Err()
-				}
-			} else if functionResponseEvent != nil {
-				lastEvent = functionResponseEvent
-				select {
-				case eventChan <- functionResponseEvent:
-				case <-ctx.Done():
-					return lastEvent, ctx.Err()
-				}
+				return lastEvent, err
+			}
+			if functionResponseEvent != nil {
 				// Check if wrappedChan is closed, prevent infinite writing.
-				if ctx.Err() != nil {
-					return lastEvent, ctx.Err()
+				lastEvent = functionResponseEvent
+				if err := f.checkContextCancelled(ctx); err != nil {
+					return lastEvent, err
 				}
+
 				// Wait for completion of events that require it.
 				if lastEvent.RequiresCompletion {
 					select {
@@ -258,15 +204,111 @@ func (f *Flow) runOneStep(
 
 		// 5. Postprocess each response.
 		f.postprocess(ctx, invocation, response, eventChan)
-
-		// Check context cancellation.
-		select {
-		case <-ctx.Done():
-			return lastEvent, ctx.Err()
-		default:
+		if err := f.checkContextCancelled(ctx); err != nil {
+			return lastEvent, err
 		}
 	}
 	return lastEvent, nil
+}
+
+// processLLMResponseEvent handles a single LLM response event, including after model callback and sending event.
+func (f *Flow) processLLMResponseEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	response *model.Response,
+	eventChan chan<- *event.Event,
+	span oteltrace.Span,
+) (*event.Event, error) {
+	// Create event from response using the clean constructor.
+	llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
+	// Set branch for hierarchical event filtering.
+	llmEvent.Branch = invocation.Branch
+	log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
+	itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmEvent.ID)
+	// Run after model callbacks if they exist.
+	if invocation.ModelCallbacks != nil {
+		customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+		if err != nil {
+			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+			errorEvent := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				model.ErrorTypeFlowError,
+				err.Error(),
+			)
+			select {
+			case eventChan <- errorEvent:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return nil, err
+		}
+		if customResponse != nil {
+			response = customResponse
+			llmEvent.Response = response
+		}
+	}
+
+	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+		llmEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
+	}
+
+	// Send the LLM response event.
+	select {
+	case eventChan <- llmEvent:
+	case <-ctx.Done():
+		return llmEvent, ctx.Err()
+	}
+	return llmEvent, nil
+}
+
+// handleFunctionCallsAndSendEvent handles function calls and sends the resulting event to the channel.
+func (f *Flow) handleFunctionCallsAndSendEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmEvent *event.Event,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	functionResponseEvent, err := f.handleFunctionCalls(
+		ctx,
+		invocation,
+		llmEvent,
+		tools,
+	)
+	if err != nil {
+		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return nil, err
+	} else if functionResponseEvent != nil {
+		select {
+		case eventChan <- functionResponseEvent:
+		case <-ctx.Done():
+			return functionResponseEvent, ctx.Err()
+		}
+	}
+	return functionResponseEvent, nil
+}
+
+// checkContextCancelled checks if the context is cancelled and returns error if so.
+func (f *Flow) checkContextCancelled(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -343,7 +385,6 @@ func (f *Flow) handleFunctionCalls(
 	toolCalls := functionCallEvent.Response.Choices[0].Message.ToolCalls
 	for i, toolCall := range toolCalls {
 		func(index int, toolCall model.ToolCall) {
-			ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
 			ctxWithInvocation, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
 			defer span.End()
 			choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)

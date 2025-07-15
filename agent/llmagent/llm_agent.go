@@ -387,7 +387,7 @@ func (a *LLMAgent) wrapEventChannel(
 				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
-					"agent_callback_error",
+					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
 				select {

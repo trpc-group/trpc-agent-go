@@ -36,8 +36,10 @@ type AfterAgentCallback func(ctx context.Context, invocation *Invocation, runErr
 
 // AgentCallbacks holds callbacks for agent operations.
 type AgentCallbacks struct {
+	// BeforeAgent is a list of callbacks that are called before the agent runs.
 	BeforeAgent []BeforeAgentCallback
-	AfterAgent  []AfterAgentCallback
+	// AfterAgent is a list of callbacks that are called after the agent runs.
+	AfterAgent []AfterAgentCallback
 }
 
 // NewAgentCallbacks creates a new AgentCallbacks instance.
