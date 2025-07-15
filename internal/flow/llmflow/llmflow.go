@@ -339,6 +339,7 @@ func (f *Flow) handleFunctionCalls(
 		ctxWithInvocation := agent.NewContextWithInvocation(ctx, invocation)
 		ctxWithInvocation, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
 		choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
+		choice.Message.ToolName = toolCall.Function.Name
 		toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{choice})
 		toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
 		tl, ok := tools[toolCall.Function.Name]
