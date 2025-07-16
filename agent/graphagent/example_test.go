@@ -14,162 +14,112 @@ package graphagent_test
 
 import (
 	"context"
-	"testing"
+	"fmt"
+	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// mockAgent is a simple mock agent for testing.
-type mockAgent struct {
-	name        string
-	description string
-}
-
-func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 1)
-
-	// Create a simple response event
-	response := &model.Response{
-		Choices: []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: "Mock agent response: " + invocation.Message.Content,
-				},
-			},
-		},
-		Done: true,
-	}
-
-	event := event.NewResponseEvent(invocation.InvocationID, m.name, response)
-	eventChan <- event
-	close(eventChan)
-
-	return eventChan, nil
-}
-
-func (m *mockAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (m *mockAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        m.name,
-		Description: m.description,
-	}
-}
-
-func (m *mockAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (m *mockAgent) FindSubAgent(name string) agent.Agent {
-	return nil
-}
-
-func TestGraphAgent(t *testing.T) {
-	// Create mock sub-agents
-	analyzerAgent := &mockAgent{
-		name:        "analyzer",
-		description: "Analyzes input data",
-	}
-
-	processorAgent := &mockAgent{
-		name:        "processor",
-		description: "Processes analyzed data",
-	}
-
-	// Create a graph that uses these agents
-	g, err := graph.NewBuilder().
-		AddStartNode("start", "Start Processing").
-		AddAgentNode("analyze", "Analyze Data", "Analyzes the input using analyzer agent", "analyzer").
-		AddFunctionNode("transform", "Transform", "Transforms data between agents", func(ctx context.Context, state graph.State) (graph.State, error) {
-			// Transform the output from analyzer for processor
-			if output, ok := state["last_agent_output"].(string); ok {
-				state["input"] = "Transformed: " + output
-			}
-			return state, nil
+// ExampleNew demonstrates basic usage of GraphAgent.
+func ExampleNew() {
+	// Create a simple graph using the new StateGraph API
+	schema := graph.NewStateSchema().
+		AddField("input", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
 		}).
-		AddAgentNode("process", "Process Data", "Processes the analyzed data using processor agent", "processor").
-		AddEndNode("end", "End Processing").
-		AddEdge("start", "analyze").
-		AddEdge("analyze", "transform").
-		AddEdge("transform", "process").
-		AddEdge("process", "end").
-		Build()
+		AddField("output", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			input := state["input"].(string)
+			return graph.State{"output": "processed: " + input}, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
 
 	if err != nil {
-		t.Fatalf("Failed to build graph: %v", err)
+		panic(err)
 	}
 
-	// Create graph agent with sub-agents
-	graphAgent, err := graphagent.New("workflow-agent", g,
-		graphagent.WithDescription("A workflow agent that coordinates multiple sub-agents"),
-		graphagent.WithSubAgents([]agent.Agent{analyzerAgent, processorAgent}),
-		graphagent.WithInitialState(graph.State{
-			"workflow_id": "test-workflow-123",
-		}),
-	)
+	// Create GraphAgent
+	graphAgent, err := graphagent.New("example-agent", g,
+		graphagent.WithDescription("Example graph agent"),
+		graphagent.WithInitialState(graph.State{"input": "hello world"}))
 
 	if err != nil {
-		t.Fatalf("Failed to create graph agent: %v", err)
+		panic(err)
 	}
 
-	// Test the agent info
-	info := graphAgent.Info()
-	if info.Name != "workflow-agent" {
-		t.Errorf("Expected agent name 'workflow-agent', got '%s'", info.Name)
-	}
+	fmt.Printf("Created agent: %s\n", graphAgent.Info().Name)
+	fmt.Printf("Description: %s\n", graphAgent.Info().Description)
 
-	// Test sub-agents
-	subAgents := graphAgent.SubAgents()
-	if len(subAgents) != 2 {
-		t.Errorf("Expected 2 sub-agents, got %d", len(subAgents))
-	}
-
-	// Test finding sub-agent
-	foundAgent := graphAgent.FindSubAgent("analyzer")
-	if foundAgent == nil {
-		t.Error("Expected to find 'analyzer' sub-agent")
-	}
-	if foundAgent != nil && foundAgent.Info().Name != "analyzer" {
-		t.Errorf("Expected found agent name 'analyzer', got '%s'", foundAgent.Info().Name)
-	}
+	// Output:
+	// Created agent: example-agent
+	// Description: Example graph agent
 }
 
-func ExampleGraphAgent() {
-	// Create a simple processing agent
-	processingAgent := &mockAgent{
-		name:        "processor",
-		description: "Processes data",
+// ExampleGraphAgent_Run demonstrates running a GraphAgent.
+func ExampleGraphAgent_Run() {
+	// Create a simple processing graph
+	schema := graph.NewStateSchema().
+		AddField("message", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField("response", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("respond", func(ctx context.Context, state graph.State) (any, error) {
+			message := state["message"].(string)
+			return graph.State{"response": "Echo: " + message}, nil
+		}).
+		SetEntryPoint("respond").
+		SetFinishPoint("respond").
+		Compile()
+
+	if err != nil {
+		panic(err)
 	}
 
-	// Create a simple workflow graph
-	workflowGraph, _ := graph.NewBuilder().
-		AddStartNode("start", "Start").
-		AddFunctionNode("prepare", "Prepare Data", "Prepares data for processing", func(ctx context.Context, state graph.State) (graph.State, error) {
-			state["prepared"] = true
-			return state, nil
-		}).
-		AddAgentNode("process", "Process", "Process the data", "processor").
-		AddEndNode("end", "End").
-		AddEdge("start", "prepare").
-		AddEdge("prepare", "process").
-		AddEdge("process", "end").
-		Build()
+	// Create GraphAgent
+	graphAgent, err := graphagent.New("echo-agent", g,
+		graphagent.WithInitialState(graph.State{"message": "Hello, Graph!"}))
 
-	// Create the graph agent
-	workflowAgent, _ := graphagent.New("workflow", workflowGraph,
-		graphagent.WithDescription("A simple workflow agent"),
-		graphagent.WithSubAgents([]agent.Agent{processingAgent}),
-	)
+	if err != nil {
+		panic(err)
+	}
 
-	// The workflow agent can now be used like any other agent
-	_ = workflowAgent.Info().Name // "workflow"
+	// Create invocation
+	invocation := &agent.Invocation{
+		Agent:        graphAgent,
+		AgentName:    "echo-agent",
+		InvocationID: "example-invocation",
+	}
+
+	// Run the agent
+	events, err := graphAgent.Run(context.Background(), invocation)
+	if err != nil {
+		panic(err)
+	}
+
+	// Count events
+	eventCount := 0
+	for range events {
+		eventCount++
+	}
+
+	fmt.Printf("Agent executed successfully with %d events\n", eventCount)
+
+	// Output:
+	// Agent executed successfully with 2 events
 }

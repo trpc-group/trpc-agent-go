@@ -14,6 +14,7 @@ package graph
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -22,258 +23,172 @@ func TestNewBuilder(t *testing.T) {
 	if builder == nil {
 		t.Fatal("Expected non-nil builder")
 	}
-	if builder.graph == nil {
-		t.Error("Expected builder to have initialized graph")
-	}
-}
-
-func TestBuilderAddStartNode(t *testing.T) {
-	builder := NewBuilder()
-
-	result := builder.AddStartNode("start", "Start Node")
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
-	}
-
-	node, exists := builder.graph.GetNode("start")
-	if !exists {
-		t.Error("Expected start node to be added")
-	}
-	if node.Type != NodeTypeStart {
-		t.Errorf("Expected node type %s, got %s", NodeTypeStart, node.Type)
-	}
-	if node.Name != "Start Node" {
-		t.Errorf("Expected node name 'Start Node', got '%s'", node.Name)
-	}
-}
-
-func TestBuilderAddEndNode(t *testing.T) {
-	builder := NewBuilder()
-
-	result := builder.AddEndNode("end", "End Node")
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
-	}
-
-	node, exists := builder.graph.GetNode("end")
-	if !exists {
-		t.Error("Expected end node to be added")
-	}
-	if node.Type != NodeTypeEnd {
-		t.Errorf("Expected node type %s, got %s", NodeTypeEnd, node.Type)
+	if builder.stateGraph == nil {
+		t.Error("Expected builder to have initialized state graph")
 	}
 }
 
 func TestBuilderAddFunctionNode(t *testing.T) {
 	builder := NewBuilder()
 
-	testFunc := func(ctx context.Context, state State) (State, error) {
-		return state, nil
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return State{"processed": true}, nil
 	}
 
-	result := builder.AddFunctionNode("func", "Function Node",
-		"Test function", testFunc)
+	result := builder.AddFunctionNode("test", "Test Node", "Test description", testFunc)
 	if result != builder {
 		t.Error("Expected fluent interface to return builder")
 	}
 
-	node, exists := builder.graph.GetNode("func")
-	if !exists {
-		t.Error("Expected function node to be added")
+	graph, err := builder.
+		SetEntryPoint("test").
+		SetFinishPoint("test").
+		Build()
+	if err != nil {
+		t.Fatalf("Failed to build graph: %v", err)
 	}
-	if node.Type != NodeTypeFunction {
-		t.Errorf("Expected node type %s, got %s", NodeTypeFunction, node.Type)
+
+	node, exists := graph.GetNode("test")
+	if !exists {
+		t.Error("Expected test node to be added")
+	}
+	if node.Name != "Test Node" {
+		t.Errorf("Expected node name 'Test Node', got '%s'", node.Name)
 	}
 	if node.Function == nil {
-		t.Error("Expected function to be set")
-	}
-	if node.Description != "Test function" {
-		t.Errorf("Expected description 'Test function', got '%s'",
-			node.Description)
+		t.Error("Expected node to have function")
 	}
 }
 
-func TestBuilderAddAgentNode(t *testing.T) {
+func TestBuilderEdges(t *testing.T) {
 	builder := NewBuilder()
 
-	result := builder.AddAgentNode("agent", "Agent Node",
-		"Test agent", "test-agent")
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		return State{"processed": true}, nil
 	}
 
-	node, exists := builder.graph.GetNode("agent")
-	if !exists {
-		t.Error("Expected agent node to be added")
-	}
-	if node.Type != NodeTypeAgent {
-		t.Errorf("Expected node type %s, got %s", NodeTypeAgent, node.Type)
-	}
-	if node.AgentName != "test-agent" {
-		t.Errorf("Expected agent name 'test-agent', got '%s'",
-			node.AgentName)
-	}
-}
-
-func TestBuilderAddConditionNode(t *testing.T) {
-	builder := NewBuilder()
-
-	conditionFunc := func(ctx context.Context, state State) (string, error) {
-		return "next", nil
-	}
-
-	result := builder.AddConditionNode("condition", "Condition Node",
-		"Test condition", conditionFunc)
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
-	}
-
-	node, exists := builder.graph.GetNode("condition")
-	if !exists {
-		t.Error("Expected condition node to be added")
-	}
-	if node.Type != NodeTypeCondition {
-		t.Errorf("Expected node type %s, got %s", NodeTypeCondition,
-			node.Type)
-	}
-	if node.Condition == nil {
-		t.Error("Expected condition function to be set")
-	}
-}
-
-func TestBuilderAddEdge(t *testing.T) {
-	builder := NewBuilder()
-
-	// Add nodes first.
-	builder.AddStartNode("start", "Start")
-	builder.AddEndNode("end", "End")
-
-	result := builder.AddEdge("start", "end")
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
-	}
-
-	edges := builder.graph.GetEdges("start")
-	if len(edges) != 1 {
-		t.Errorf("Expected 1 edge, got %d", len(edges))
-	}
-	if edges[0].To != "end" {
-		t.Errorf("Expected edge to 'end', got '%s'", edges[0].To)
-	}
-}
-
-func TestBuilderAddConditionalEdge(t *testing.T) {
-	builder := NewBuilder()
-
-	// Add nodes first.
-	builder.AddStartNode("start", "Start")
-	builder.AddEndNode("end", "End")
-
-	result := builder.AddConditionalEdge("start", "end", "condition")
-	if result != builder {
-		t.Error("Expected fluent interface to return builder")
-	}
-
-	edges := builder.graph.GetEdges("start")
-	if len(edges) != 1 {
-		t.Errorf("Expected 1 edge, got %d", len(edges))
-	}
-	if edges[0].Condition != "condition" {
-		t.Errorf("Expected edge condition 'condition', got '%s'",
-			edges[0].Condition)
-	}
-}
-
-func TestBuilderBuild(t *testing.T) {
-	builder := NewBuilder()
-
-	// Create valid graph.
-	builder.AddStartNode("start", "Start")
-	builder.AddEndNode("end", "End")
-	builder.AddEdge("start", "end")
-
-	graph, err := builder.Build()
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
-	if graph == nil {
-		t.Fatal("Expected non-nil graph")
-	}
-
-	// Test validation is called.
-	err = graph.Validate()
-	if err != nil {
-		t.Errorf("Expected valid graph, got error: %v", err)
-	}
-}
-
-func TestBuilderBuildInvalid(t *testing.T) {
-	builder := NewBuilder()
-
-	// Create invalid graph (no start node).
-	builder.AddEndNode("end", "End")
-
-	_, err := builder.Build()
-	if err == nil {
-		t.Error("Expected error for invalid graph")
-	}
-}
-
-func TestBuilderMustBuild(t *testing.T) {
-	builder := NewBuilder()
-
-	// Create valid graph.
-	builder.AddStartNode("start", "Start")
-	builder.AddEndNode("end", "End")
-	builder.AddEdge("start", "end")
-
-	// Should not panic.
-	graph := builder.MustBuild()
-	if graph == nil {
-		t.Fatal("Expected non-nil graph")
-	}
-}
-
-func TestBuilderMustBuildPanic(t *testing.T) {
-	builder := NewBuilder()
-
-	// Create invalid graph.
-	builder.AddEndNode("end", "End")
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Expected panic for invalid graph")
-		}
-	}()
-
-	builder.MustBuild()
-}
-
-func TestBuilderChaining(t *testing.T) {
-	// Test that all methods can be chained.
-	graph, err := NewBuilder().
-		AddStartNode("start", "Start").
-		AddFunctionNode("func", "Function", "Test",
-			func(ctx context.Context, state State) (State, error) {
-				return state, nil
-			}).
-		AddAgentNode("agent", "Agent", "Test", "test-agent").
-		AddConditionNode("condition", "Condition", "Test",
-			func(ctx context.Context, state State) (string, error) {
-				return "next", nil
-			}).
-		AddEndNode("end", "End").
-		AddEdge("start", "func").
-		AddEdge("func", "agent").
-		AddEdge("agent", "condition").
-		AddEdge("condition", "end").
-		AddConditionalEdge("condition", "end", "default").
+	graph, err := builder.
+		AddFunctionNode("node1", "Node 1", "First node", testFunc).
+		AddFunctionNode("node2", "Node 2", "Second node", testFunc).
+		SetEntryPoint("node1").
+		AddEdge("node1", "node2").
+		SetFinishPoint("node2").
 		Build()
 
 	if err != nil {
-		t.Fatalf("Expected no error from chained building, got %v", err)
+		t.Fatalf("Failed to build graph: %v", err)
 	}
-	if graph == nil {
-		t.Fatal("Expected non-nil graph from chained building")
+
+	if graph.GetEntryPoint() != "node1" {
+		t.Errorf("Expected entry point 'node1', got '%s'", graph.GetEntryPoint())
+	}
+
+	edges := graph.GetEdges("node1")
+	if len(edges) != 1 {
+		t.Errorf("Expected 1 edge from node1, got %d", len(edges))
+	}
+	if edges[0].To != "node2" {
+		t.Errorf("Expected edge to node2, got %s", edges[0].To)
+	}
+}
+
+func TestStateGraphBasic(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("input", StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: DefaultReducer,
+		}).
+		AddField("output", StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: DefaultReducer,
+		})
+
+	sg := NewStateGraph(schema)
+	if sg == nil {
+		t.Fatal("Expected non-nil StateGraph")
+	}
+
+	testFunc := func(ctx context.Context, state State) (any, error) {
+		input := state["input"].(string)
+		return State{"output": "processed: " + input}, nil
+	}
+
+	graph, err := sg.
+		AddNode("process", testFunc).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+
+	if err != nil {
+		t.Fatalf("Failed to compile graph: %v", err)
+	}
+
+	node, exists := graph.GetNode("process")
+	if !exists {
+		t.Error("Expected process node to exist")
+	}
+	if node.Function == nil {
+		t.Error("Expected node to have function")
+	}
+}
+
+func TestConditionalEdges(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("input", StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: DefaultReducer,
+		}).
+		AddField("result", StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: DefaultReducer,
+		})
+
+	routingFunc := func(ctx context.Context, state State) (string, error) {
+		input := state["input"].(string)
+		if len(input) > 5 {
+			return "long", nil
+		}
+		return "short", nil
+	}
+
+	passThrough := func(ctx context.Context, state State) (any, error) {
+		return State(state), nil
+	}
+
+	processLong := func(ctx context.Context, state State) (any, error) {
+		return State{"result": "long processing"}, nil
+	}
+
+	processShort := func(ctx context.Context, state State) (any, error) {
+		return State{"result": "short processing"}, nil
+	}
+
+	graph, err := NewStateGraph(schema).
+		AddNode("router", passThrough).
+		AddNode("long_process", processLong).
+		AddNode("short_process", processShort).
+		SetEntryPoint("router").
+		AddConditionalEdges("router", routingFunc, map[string]string{
+			"long":  "long_process",
+			"short": "short_process",
+		}).
+		SetFinishPoint("long_process").
+		SetFinishPoint("short_process").
+		Compile()
+
+	if err != nil {
+		t.Fatalf("Failed to compile graph: %v", err)
+	}
+
+	// Check that conditional edge was added
+	condEdge, exists := graph.GetConditionalEdge("router")
+	if !exists {
+		t.Error("Expected conditional edge to exist")
+	}
+	if condEdge.PathMap["long"] != "long_process" {
+		t.Error("Expected correct path mapping for 'long'")
+	}
+	if condEdge.PathMap["short"] != "short_process" {
+		t.Error("Expected correct path mapping for 'short'")
 	}
 }

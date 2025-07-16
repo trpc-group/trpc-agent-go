@@ -20,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -106,24 +105,12 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		opt(&options)
 	}
 
-	// Create agent resolver
-	resolver := &agentResolver{
-		subAgents:         make(map[string]agent.Agent),
-		channelBufferSize: options.ChannelBufferSize,
-	}
-
-	// Register sub-agents
-	for _, subAgent := range options.SubAgents {
-		resolver.subAgents[subAgent.Info().Name] = subAgent
-	}
-
 	// Set default channel buffer size if not specified.
 	if options.ChannelBufferSize == 0 {
 		options.ChannelBufferSize = 256
 	}
 
-	// Create executor
-	executor, err := graph.NewExecutor(g, resolver,
+	executor, err := graph.NewExecutor(g,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create graph executor: %w", err)
@@ -190,90 +177,4 @@ func (ga *GraphAgent) FindSubAgent(name string) agent.Agent {
 		}
 	}
 	return nil
-}
-
-// agentResolver implements graph.AgentResolver.
-type agentResolver struct {
-	subAgents         map[string]agent.Agent
-	channelBufferSize int
-}
-
-// ResolveAgent resolves an agent name to an agent executor.
-func (ar *agentResolver) ResolveAgent(name string) (graph.AgentExecutor, error) {
-	agent, exists := ar.subAgents[name]
-	if !exists {
-		return nil, fmt.Errorf("agent %s not found", name)
-	}
-	return &agentExecutor{
-		agent:             agent,
-		channelBufferSize: ar.channelBufferSize,
-	}, nil
-}
-
-// agentExecutor wraps an agent.Agent to implement graph.AgentExecutor.
-type agentExecutor struct {
-	agent             agent.Agent
-	channelBufferSize int
-}
-
-// Execute executes the agent with the given state.
-func (ae *agentExecutor) Execute(ctx context.Context, state graph.State) (graph.State, <-chan *event.Event, error) {
-	// Extract message from state
-	var message model.Message
-	if msg, ok := state["message"].(model.Message); ok {
-		message = msg
-	} else if input, ok := state["input"].(string); ok {
-		message = model.Message{
-			Role:    model.RoleUser,
-			Content: input,
-		}
-	} else {
-		message = model.Message{
-			Role:    model.RoleUser,
-			Content: "Execute agent task",
-		}
-	}
-
-	// Create a minimal invocation
-	invocation := &agent.Invocation{
-		Agent:        ae.agent,
-		AgentName:    ae.agent.Info().Name,
-		InvocationID: fmt.Sprintf("graph-agent-%s", ae.agent.Info().Name),
-		Message:      message,
-	}
-
-	// Run the agent
-	eventChan, err := ae.agent.Run(ctx, invocation)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Create output state
-	outputState := state.Clone()
-
-	// Create a new channel to forward events and collect results
-	forwardChan := make(chan *event.Event, ae.channelBufferSize)
-
-	go func() {
-		defer close(forwardChan)
-		var lastMessage string
-
-		for event := range eventChan {
-			// Forward the event
-			forwardChan <- event
-
-			// Extract message content from choices
-			if event.Response != nil && len(event.Response.Choices) > 0 {
-				lastMessage = event.Response.Choices[0].Message.Content
-			}
-		}
-
-		// Update state with agent output
-		if lastMessage != "" {
-			outputState["output"] = lastMessage
-			outputState["last_agent_output"] = lastMessage
-		}
-	}()
-
-	return outputState, forwardChan, nil
 }

@@ -10,8 +10,9 @@
 //
 //
 
-// Package main demonstrates a comprehensive document processing workflow
-// using GraphAgent with the Runner.
+// Package main demonstrates a document processing workflow using the graph package.
+// This example shows how to build and execute graphs with conditional routing,
+// LLM nodes, and function nodes.
 package main
 
 import (
@@ -21,12 +22,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -37,13 +37,53 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+// State key constants for type safety and maintainability.
+const (
+	// Core message and input fields
+	StateKeyMessages  = "messages"
+	StateKeyInput     = "input"
+	StateKeyMessage   = "message"
+	StateKeyUserInput = "user_input"
+
+	// Document processing fields
+	StateKeyDocumentLength  = "document_length"
+	StateKeyWordCount       = "word_count"
+	StateKeyComplexityLevel = "complexity_level"
+	StateKeyQualityScore    = "quality_score"
+	StateKeyProcessingType  = "processing_type"
+
+	// Workflow control fields
+	StateKeyProcessingStage  = "processing_stage"
+	StateKeyLastResponse     = "last_response"
+	StateKeyProcessedContent = "processed_content"
+	StateKeyFinalOutput      = "final_output"
+	StateKeyResult           = "result"
+
+	// Workflow metadata fields
+	StateKeyWorkflowVersion  = "workflow_version"
+	StateKeyProcessingMode   = "processing_mode"
+	StateKeyQualityThreshold = "quality_threshold"
+	StateKeySession          = "session"
+)
+
+// Complexity level constants for type safety.
+const (
+	ComplexitySimple   = "simple"
+	ComplexityModerate = "moderate"
+	ComplexityComplex  = "complex"
+)
+
+// Quality routing constants.
+const (
+	QualityGood = "good"
+	QualityPoor = "poor"
+)
+
 const (
 	// Default model name for deepseek-chat.
 	defaultModelName = "deepseek-chat"
 	// Default channel buffer size.
 	defaultChannelBufferSize = 512
-	// Application name.
-	appName = "document-workflow"
 )
 
 var (
@@ -57,7 +97,7 @@ func main() {
 	// Parse command line flags.
 	flag.Parse()
 
-	fmt.Printf("🚀 Document Processing Workflow with GraphAgent\n")
+	fmt.Printf("🚀 Document Processing Workflow Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Interactive: %v\n", *interactive)
 	fmt.Println(strings.Repeat("=", 50))
@@ -98,10 +138,24 @@ func (w *documentWorkflow) run() error {
 	return w.runExamples(ctx)
 }
 
-// setup creates the runner with graph agent.
+// setup creates the graph agent and runner.
 func (w *documentWorkflow) setup(ctx context.Context) error {
-	// Create the document processing graph agent.
-	graphAgent, err := w.createDocumentProcessingAgent()
+	// Create the document processing graph.
+	workflowGraph, err := w.createDocumentProcessingGraph()
+	if err != nil {
+		return fmt.Errorf("failed to create graph: %w", err)
+	}
+
+	// Create GraphAgent from the compiled graph.
+	graphAgent, err := graphagent.New("document-processor", workflowGraph,
+		graphagent.WithDescription("Comprehensive document processing workflow"),
+		graphagent.WithChannelBufferSize(defaultChannelBufferSize),
+		graphagent.WithInitialState(graph.State{
+			StateKeyWorkflowVersion:  "2.0",
+			StateKeyProcessingMode:   "comprehensive",
+			StateKeyQualityThreshold: 0.75,
+		}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create graph agent: %w", err)
 	}
@@ -109,7 +163,8 @@ func (w *documentWorkflow) setup(ctx context.Context) error {
 	// Create session service.
 	sessionService := inmemory.NewSessionService()
 
-	// Create runner.
+	// Create runner with the graph agent.
+	appName := "document-workflow"
 	w.runner = runner.NewRunner(
 		appName,
 		graphAgent,
@@ -124,156 +179,38 @@ func (w *documentWorkflow) setup(ctx context.Context) error {
 	return nil
 }
 
-// createDocumentProcessingAgent creates a comprehensive document processing
-// graph agent.
-func (w *documentWorkflow) createDocumentProcessingAgent() (*graphagent.GraphAgent, error) {
-	// Create specialized agents for different processing stages.
-	validatorAgent, err := w.createValidatorAgent()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create validator agent: %w", err)
-	}
+// createDocumentProcessingGraph creates a document processing workflow graph.
+func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error) {
+	// Create extended state schema for messages and metadata.
+	schema := graph.ExtendedMessagesStateSchema()
 
-	analyzerAgent, err := w.createAnalyzerAgent()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create analyzer agent: %w", err)
-	}
-
-	summarizerAgent, err := w.createSummarizerAgent()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create summarizer agent: %w", err)
-	}
-
-	enhancerAgent, err := w.createEnhancerAgent()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create enhancer agent: %w", err)
-	}
-
-	// Create the document processing workflow graph.
-	workflowGraph, err := graph.NewBuilder().
-		// Start the workflow.
-		AddStartNode("start", "Start Document Processing").
-
-		// Input validation and preprocessing.
-		AddFunctionNode("preprocess", "Preprocess Input",
-			"Preprocesses and validates input document",
-			w.preprocessDocument).
-
-		// Document validation using AI agent.
-		AddAgentNode("validate", "Validate Document",
-			"Validates document format and content quality",
-			"validator").
-
-		// Document analysis and classification.
-		AddAgentNode("analyze", "Analyze Document",
-			"Analyzes document type, complexity, and key themes",
-			"analyzer").
-
-		// Route based on document complexity.
-		AddConditionNode("route_complexity", "Route by Complexity",
-			"Routes processing based on document complexity",
-			w.routeByComplexity).
-
-		// Simple processing path.
-		AddFunctionNode("simple_process", "Simple Processing",
-			"Handles straightforward document processing",
-			w.simpleProcessing).
-
-		// Complex processing path with summarization.
-		AddAgentNode("summarize", "Summarize Document",
-			"Creates comprehensive summary for complex documents",
-			"summarizer").
-
-		// Quality assessment.
-		AddFunctionNode("assess_quality", "Assess Quality",
-			"Assesses the quality of processed content",
-			w.assessQuality).
-
-		// Quality-based routing.
-		AddConditionNode("route_quality", "Route by Quality",
-			"Routes based on content quality assessment",
-			w.routeByQuality).
-
-		// Enhancement for low-quality content.
-		AddAgentNode("enhance", "Enhance Content",
-			"Enhances and improves content quality",
-			"enhancer").
-
-		// Final output formatting.
-		AddFunctionNode("format_output", "Format Output",
-			"Formats the final processed document",
-			w.formatOutput).
-
-		// End the workflow.
-		AddEndNode("end", "Processing Complete").
-
-		// Define the workflow edges.
-		AddEdge("start", "preprocess").
-		AddEdge("preprocess", "validate").
-		AddEdge("validate", "analyze").
-		AddEdge("analyze", "route_complexity").
-		AddEdge("route_complexity", "simple_process").
-		AddEdge("route_complexity", "summarize").
-		AddEdge("simple_process", "assess_quality").
-		AddEdge("summarize", "assess_quality").
-		AddEdge("assess_quality", "route_quality").
-		AddEdge("route_quality", "enhance").
-		AddEdge("route_quality", "format_output").
-		AddEdge("enhance", "format_output").
-		AddEdge("format_output", "end").
-		Build()
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to build workflow graph: %w", err)
-	}
-
-	// Create graph agent with all sub-agents.
-	return graphagent.New("document-processor", workflowGraph,
-		graphagent.WithDescription("Comprehensive document processing workflow"),
-		graphagent.WithSubAgents([]agent.Agent{
-			validatorAgent,
-			analyzerAgent,
-			summarizerAgent,
-			enhancerAgent,
-		}),
-		graphagent.WithChannelBufferSize(defaultChannelBufferSize),
-		graphagent.WithInitialState(graph.State{
-			"workflow_version":  "2.0",
-			"processing_mode":   "comprehensive",
-			"quality_threshold": 0.75,
-		}),
-	)
-}
-
-// createValidatorAgent creates an agent for document validation.
-func (w *documentWorkflow) createValidatorAgent() (*llmagent.LLMAgent, error) {
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
+	// Add custom fields for our workflow.
+	schema.AddField(StateKeyDocumentLength, graph.StateField{
+		Type:    reflect.TypeOf(0),
+		Reducer: graph.DefaultReducer,
 	})
 
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1000),
-		Temperature: floatPtr(0.3), // Lower temperature for validation.
-		Stream:      true,
-	}
+	schema.AddField(StateKeyWordCount, graph.StateField{
+		Type:    reflect.TypeOf(0),
+		Reducer: graph.DefaultReducer,
+	})
 
-	return llmagent.New("validator",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("Document validation specialist"),
-		llmagent.WithInstruction(`You are a document validation expert. 
-Your task is to:
-1. Check document format and structure
-2. Identify potential issues or inconsistencies
-3. Assess content completeness
-4. Provide validation feedback
+	schema.AddField(StateKeyComplexityLevel, graph.StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: graph.DefaultReducer,
+	})
 
-Always respond with clear validation results and any recommendations.`),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(defaultChannelBufferSize),
-	), nil
-}
+	schema.AddField(StateKeyQualityScore, graph.StateField{
+		Type:    reflect.TypeOf(0.0),
+		Reducer: graph.DefaultReducer,
+	})
 
-// createAnalyzerAgent creates an agent for document analysis.
-func (w *documentWorkflow) createAnalyzerAgent() (*llmagent.LLMAgent, error) {
+	schema.AddField(StateKeyProcessingType, graph.StateField{
+		Type:    reflect.TypeOf(""),
+		Reducer: graph.DefaultReducer,
+	})
+
+	// Create model instance.
 	modelInstance := openai.New(*modelName, openai.Options{
 		ChannelBufferSize: defaultChannelBufferSize,
 	})
@@ -285,164 +222,224 @@ func (w *documentWorkflow) createAnalyzerAgent() (*llmagent.LLMAgent, error) {
 		function.WithDescription("Analyzes document complexity level"),
 	)
 
-	themeTool := function.NewFunctionTool(
-		w.extractThemes,
-		function.WithName("extract_themes"),
-		function.WithDescription("Extracts key themes from document"),
-	)
+	// Create builder with schema.
+	builder := graph.NewBuilderWithSchema(schema)
 
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.4),
-		Stream:      true,
-	}
+	// Build the workflow graph.
+	builder.
+		// Add preprocessing node.
+		AddFunctionNode("preprocess", "Preprocess Document",
+			"Validates and preprocesses the input document",
+			w.preprocessDocument).
 
-	return llmagent.New("analyzer",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("Document analysis specialist"),
-		llmagent.WithInstruction(`You are a document analysis expert. 
-Your task is to:
-1. Classify document type and genre
-2. Assess complexity level (simple, moderate, complex)
-3. Extract key themes and topics
-4. Identify main concepts and relationships
+		// Add LLM analyzer node.
+		AddLLMNode("analyze", "Document Analyzer", modelInstance,
+			`You are a document analysis expert. Analyze the provided document and:
+1. Classify the document type and complexity (simple, moderate, complex)
+2. Extract key themes and topics
+3. Assess content quality
+Use the analyze_complexity tool for detailed analysis.
+Respond with a structured analysis including complexity level and key insights.`,
+			map[string]tool.Tool{"analyze_complexity": complexityTool}).
 
-Use the available tools to perform detailed analysis. 
-Provide structured analysis results.`),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(defaultChannelBufferSize),
-		llmagent.WithTools([]tool.Tool{complexityTool, themeTool}),
-	), nil
-}
+		// Add complexity routing.
+		AddFunctionNode("route_complexity", "Route by Complexity",
+			"Routes processing based on document complexity",
+			w.routeComplexity).
 
-// createSummarizerAgent creates an agent for document summarization.
-func (w *documentWorkflow) createSummarizerAgent() (*llmagent.LLMAgent, error) {
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
+		// Add simple processing path.
+		AddFunctionNode("simple_process", "Simple Processing",
+			"Handles straightforward document processing",
+			w.simpleProcessing).
+
+		// Add LLM summarizer node for complex documents.
+		AddLLMNode("summarize", "Document Summarizer", modelInstance,
+			`You are a document summarization expert. Create a comprehensive yet concise summary of the provided document.
+Focus on:
+1. Key points and main arguments
+2. Important details and insights
+3. Logical structure and flow
+4. Conclusions and implications
+Provide a well-structured summary that preserves the essential information.`,
+			nil).
+
+		// Add quality assessment.
+		AddFunctionNode("assess_quality", "Assess Quality",
+			"Evaluates the quality of processed content",
+			w.assessQuality).
+
+		// Add quality routing.
+		AddFunctionNode("route_quality", "Route by Quality",
+			"Routes based on content quality assessment",
+			w.routeQuality).
+
+		// Add LLM enhancer for low-quality content.
+		AddLLMNode("enhance", "Content Enhancer", modelInstance,
+			`You are a content enhancement expert. Improve the provided content by:
+1. Enhancing clarity and readability
+2. Improving structure and organization
+3. Adding relevant details where appropriate
+4. Ensuring consistency and coherence
+Focus on making the content more engaging and professional while preserving the original meaning.`,
+			nil).
+
+		// Add final formatting.
+		AddFunctionNode("format_output", "Format Output",
+			"Formats the final processed document",
+			w.formatOutput).
+
+		// Set up the workflow routing.
+		SetEntryPoint("preprocess").
+		SetFinishPoint("format_output")
+
+	// Add workflow edges.
+	builder.
+		AddEdge("preprocess", "analyze").
+		AddEdge("analyze", "route_complexity")
+
+		// Add conditional routing for complexity.
+	builder.GetStateGraph().AddConditionalEdges("route_complexity", w.complexityCondition, map[string]string{
+		ComplexitySimple:  "simple_process",
+		ComplexityComplex: "summarize",
 	})
 
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.5),
-		Stream:      true,
-	}
+	builder.
+		AddEdge("simple_process", "assess_quality").
+		AddEdge("summarize", "assess_quality").
+		AddEdge("assess_quality", "route_quality")
 
-	return llmagent.New("summarizer",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("Document summarization specialist"),
-		llmagent.WithInstruction(`You are a document summarization expert. 
-Your task is to:
-1. Create comprehensive yet concise summaries
-2. Preserve key information and main points
-3. Maintain logical structure and flow
-4. Highlight important insights and conclusions
-
-Create summaries that are informative and well-structured.`),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(defaultChannelBufferSize),
-	), nil
-}
-
-// createEnhancerAgent creates an agent for content enhancement.
-func (w *documentWorkflow) createEnhancerAgent() (*llmagent.LLMAgent, error) {
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
+	// Add conditional routing for quality.
+	builder.GetStateGraph().AddConditionalEdges("route_quality", w.qualityCondition, map[string]string{
+		QualityGood: "format_output",
+		QualityPoor: "enhance",
 	})
 
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.6),
-		Stream:      true,
-	}
+	builder.AddEdge("enhance", "format_output")
 
-	return llmagent.New("enhancer",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("Content enhancement specialist"),
-		llmagent.WithInstruction(`You are a content enhancement expert. 
-Your task is to:
-1. Improve clarity and readability
-2. Enhance structure and organization
-3. Add relevant details where needed
-4. Ensure consistency and coherence
-
-Focus on making content more engaging and professional.`),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(defaultChannelBufferSize),
-	), nil
+	// Build and return the graph.
+	return builder.Build()
 }
 
-// Graph function node implementations.
+// Node function implementations.
 
 func (w *documentWorkflow) preprocessDocument(ctx context.Context,
-	state graph.State) (graph.State, error) {
-	input, ok := state["input"].(string)
-	if !ok {
-		return state, fmt.Errorf("input must be a string")
+	state graph.State) (any, error) {
+
+	// Get input from GraphAgent's state fields
+	var input string
+
+	// Try 'input' field first (GraphAgent stores user input here)
+	if userInput, ok := state[StateKeyInput].(string); ok && userInput != "" {
+		input = userInput
+	} else if messageInput, ok := state[StateKeyMessage].(string); ok && messageInput != "" {
+		// Try 'message' field as fallback
+		input = messageInput
+	} else if messages, ok := state[StateKeyMessages].([]model.Message); ok && len(messages) > 0 {
+		// Fallback to messages array if available
+		for i := len(messages) - 1; i >= 0; i-- {
+			if messages[i].Role == model.RoleUser {
+				input = messages[i].Content
+				break
+			}
+		}
 	}
 
-	// Basic preprocessing.
+	if input == "" {
+		return nil, fmt.Errorf("no input document found (checked input, message, and messages fields)")
+	}
+
+	// Basic preprocessing
 	input = strings.TrimSpace(input)
 	if len(input) < 10 {
-		return state, fmt.Errorf("document too short for processing")
+		return nil, fmt.Errorf("document too short for processing (minimum 10 characters)")
 	}
 
-	state["preprocessed"] = true
-	state["document_length"] = len(input)
-	state["word_count"] = len(strings.Fields(input))
-	state["preprocessing_time"] = time.Now()
-
-	return state, nil
+	// Use StateBuilder for cleaner state construction
+	return NewStateBuilder().
+		SetDocumentLength(len(input)).
+		SetWordCount(len(strings.Fields(input))).
+		SetUserInput(input).
+		Build(), nil
 }
 
-func (w *documentWorkflow) routeByComplexity(ctx context.Context,
+func (w *documentWorkflow) routeComplexity(ctx context.Context,
+	state graph.State) (any, error) {
+
+	// This is just a pass-through node; actual routing happens via conditional edges.
+	return graph.State{
+		StateKeyProcessingStage: "complexity_routing",
+	}, nil
+}
+
+func (w *documentWorkflow) complexityCondition(ctx context.Context,
 	state graph.State) (string, error) {
-	// Check if we have complexity analysis from the analyzer agent.
-	if output, ok := state["last_agent_output"].(string); ok {
-		// Simple heuristic: look for complexity indicators in agent output.
-		outputLower := strings.ToLower(output)
-		if strings.Contains(outputLower, "complex") ||
-			strings.Contains(outputLower, "advanced") ||
-			strings.Contains(outputLower, "sophisticated") {
-			return "summarize", nil
+
+	// Check if we have complexity analysis from the analyzer.
+	if lastResponse, ok := state[StateKeyLastResponse].(string); ok {
+		responseLower := strings.ToLower(lastResponse)
+		if strings.Contains(responseLower, "complex") ||
+			strings.Contains(responseLower, "advanced") ||
+			strings.Contains(responseLower, "sophisticated") {
+			return ComplexityComplex, nil
 		}
 	}
 
 	// Fallback to document length heuristic.
-	if wordCount, ok := state["word_count"].(int); ok {
+	if wordCount, ok := state[StateKeyWordCount].(int); ok {
 		if wordCount > 200 {
-			return "summarize", nil
+			return ComplexityComplex, nil
 		}
 	}
 
-	return "simple_process", nil
+	return ComplexitySimple, nil
 }
 
 func (w *documentWorkflow) simpleProcessing(ctx context.Context,
-	state graph.State) (graph.State, error) {
-	input := state["input"].(string)
+	state graph.State) (any, error) {
 
-	// Simple processing: basic formatting and structure.
-	processed := fmt.Sprintf("PROCESSED DOCUMENT:\n\n%s\n\nProcessing completed at: %s",
-		input, time.Now().Format(time.RFC3339))
+	// Use StateHelper for type-safe access
+	helper := NewStateHelper(state)
 
-	state["processed_content"] = processed
-	state["processing_type"] = "simple"
-	state["complexity_level"] = "simple"
+	input, err := helper.GetUserInput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user input: %w", err)
+	}
 
-	return state, nil
+	wordCount, err := helper.GetWordCount()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get word count: %w", err)
+	}
+
+	// Simple processing: basic formatting and structure
+	processed := fmt.Sprintf("=== PROCESSED DOCUMENT ===\n\n%s\n\n"+
+		"=== PROCESSING DETAILS ===\n"+
+		"- Processing Type: Simple\n"+
+		"- Word Count: %d\n"+
+		"- Processed At: %s\n",
+		input,
+		wordCount,
+		time.Now().Format(time.RFC3339))
+
+	// Use StateBuilder for clean state updates
+	return NewStateBuilder().
+		SetProcessedContent(processed).
+		SetProcessingType("simple").
+		SetComplexityLevel(ComplexitySimple).
+		Build(), nil
 }
 
 func (w *documentWorkflow) assessQuality(ctx context.Context,
-	state graph.State) (graph.State, error) {
+	state graph.State) (any, error) {
+
 	var content string
 
-	// Get content from either simple processing or summarization.
-	if processed, ok := state["processed_content"].(string); ok {
+	// Get content from either simple processing or LLM response.
+	if processed, ok := state[StateKeyProcessedContent].(string); ok {
 		content = processed
-	} else if output, ok := state["last_agent_output"].(string); ok {
-		content = output
+	} else if lastResponse, ok := state[StateKeyLastResponse].(string); ok {
+		content = lastResponse
 	} else {
-		return state, fmt.Errorf("no content found for quality assessment")
+		return nil, fmt.Errorf("no content found for quality assessment")
 	}
 
 	// Simple quality assessment based on content characteristics.
@@ -454,7 +451,8 @@ func (w *documentWorkflow) assessQuality(ctx context.Context,
 	}
 
 	// Structure factor (presence of formatting).
-	if strings.Contains(content, "\n") {
+	if strings.Contains(content, "\n") &&
+		(strings.Contains(content, "===") || strings.Contains(content, "##")) {
 		quality += 0.1
 	}
 
@@ -464,52 +462,91 @@ func (w *documentWorkflow) assessQuality(ctx context.Context,
 		quality += 0.15
 	}
 
-	state["quality_score"] = quality
-	state["assessment_time"] = time.Now()
+	// Complexity bonus.
+	if complexityLevel, ok := state[StateKeyComplexityLevel].(string); ok && complexityLevel == ComplexityComplex {
+		quality += 0.05
+	}
 
-	return state, nil
+	return graph.State{
+		StateKeyQualityScore: quality,
+	}, nil
 }
 
-func (w *documentWorkflow) routeByQuality(ctx context.Context,
-	state graph.State) (string, error) {
-	threshold := state["quality_threshold"].(float64)
-	quality := state["quality_score"].(float64)
+func (w *documentWorkflow) routeQuality(ctx context.Context,
+	state graph.State) (any, error) {
 
-	if quality >= threshold {
-		return "format_output", nil
+	// This is just a pass-through node; actual routing happens via conditional edges.
+	return graph.State{
+		StateKeyProcessingStage: "quality_routing",
+	}, nil
+}
+
+func (w *documentWorkflow) qualityCondition(ctx context.Context,
+	state graph.State) (string, error) {
+
+	qualityScore, ok := state[StateKeyQualityScore].(float64)
+	if !ok {
+		return QualityPoor, fmt.Errorf("quality score not found")
 	}
-	return "enhance", nil
+
+	threshold := 0.75
+	if qualityScore >= threshold {
+		return QualityGood, nil
+	}
+	return QualityPoor, nil
 }
 
 func (w *documentWorkflow) formatOutput(ctx context.Context,
-	state graph.State) (graph.State, error) {
+	state graph.State) (any, error) {
+
 	var content string
 
 	// Get the final content.
-	if enhanced, ok := state["last_agent_output"].(string); ok {
+	if enhanced, ok := state[StateKeyLastResponse].(string); ok {
 		content = enhanced
-	} else if processed, ok := state["processed_content"].(string); ok {
+	} else if processed, ok := state[StateKeyProcessedContent].(string); ok {
 		content = processed
 	} else {
-		return state, fmt.Errorf("no content found for formatting")
+		return nil, fmt.Errorf("no content found for formatting")
 	}
 
 	// Create final formatted output.
-	workflowVersion := state["workflow_version"].(string)
-	processingMode := state["processing_mode"].(string)
-	qualityScore := state["quality_score"].(float64)
+	processingType, _ := state[StateKeyProcessingType].(string)
+	complexityLevel, _ := state[StateKeyComplexityLevel].(string)
+	qualityScore, _ := state[StateKeyQualityScore].(float64)
+	wordCount, _ := state[StateKeyWordCount].(int)
 
-	finalOutput := map[string]interface{}{
-		"content":          content,
-		"workflow_version": workflowVersion,
-		"processing_mode":  processingMode,
-		"quality_score":    qualityScore,
-		"completed_at":     time.Now(),
-		"status":           "success",
-	}
+	finalOutput := fmt.Sprintf(`
+╔══════════════════════════════════════════════════════════════════╗
+║                    DOCUMENT PROCESSING RESULTS                   ║
+╚══════════════════════════════════════════════════════════════════╝
 
-	state["final_output"] = finalOutput
-	return state, nil
+%s
+
+╔══════════════════════════════════════════════════════════════════╗
+║                         PROCESSING DETAILS                       ║
+╚══════════════════════════════════════════════════════════════════╝
+
+📊 Processing Statistics:
+   • Processing Type: %s
+   • Complexity Level: %s
+   • Quality Score: %.2f
+   • Word Count: %d
+   • Completed At: %s
+
+✅ Processing completed successfully!
+`,
+		content,
+		processingType,
+		complexityLevel,
+		qualityScore,
+		wordCount,
+		time.Now().Format("2006-01-02 15:04:05"))
+
+	return graph.State{
+		StateKeyFinalOutput: finalOutput,
+		StateKeyResult:      finalOutput,
+	}, nil
 }
 
 // Tool function implementations.
@@ -526,13 +563,13 @@ func (w *documentWorkflow) analyzeComplexity(args complexityArgs) complexityResu
 	var score float64
 
 	if wordCount < 50 {
-		level = "simple"
+		level = ComplexitySimple
 		score = 0.3
 	} else if wordCount < 200 {
-		level = "moderate"
+		level = ComplexityModerate
 		score = 0.6
 	} else {
-		level = "complex"
+		level = ComplexityComplex
 		score = 0.9
 	}
 
@@ -541,37 +578,6 @@ func (w *documentWorkflow) analyzeComplexity(args complexityArgs) complexityResu
 		Score:         score,
 		WordCount:     wordCount,
 		SentenceCount: sentenceCount,
-	}
-}
-
-func (w *documentWorkflow) extractThemes(args themeArgs) themeResult {
-	text := strings.ToLower(args.Text)
-
-	// Simple theme extraction based on keyword frequency.
-	themes := []string{}
-
-	// Business themes.
-	if strings.Contains(text, "business") || strings.Contains(text, "market") {
-		themes = append(themes, "business")
-	}
-
-	// Technical themes.
-	if strings.Contains(text, "technical") || strings.Contains(text, "technology") {
-		themes = append(themes, "technology")
-	}
-
-	// Academic themes.
-	if strings.Contains(text, "research") || strings.Contains(text, "study") {
-		themes = append(themes, "academic")
-	}
-
-	if len(themes) == 0 {
-		themes = append(themes, "general")
-	}
-
-	return themeResult{
-		Themes:     themes,
-		Confidence: 0.7,
 	}
 }
 
@@ -615,7 +621,7 @@ func (w *documentWorkflow) runExamples(ctx context.Context) error {
 
 	for _, example := range examples {
 		fmt.Printf("\n🔄 Processing: %s\n", example.name)
-		fmt.Println(strings.Repeat("-", 40))
+		fmt.Println(strings.Repeat("-", 60))
 
 		if err := w.processDocument(ctx, example.content); err != nil {
 			fmt.Printf("❌ Error processing %s: %v\n", example.name, err)
@@ -675,6 +681,8 @@ func (w *documentWorkflow) startInteractiveMode(ctx context.Context) error {
 // processDocument processes a single document through the workflow.
 func (w *documentWorkflow) processDocument(ctx context.Context,
 	content string) error {
+
+	// Create user message.
 	message := model.NewUserMessage(content)
 
 	// Run the workflow through the runner.
@@ -690,18 +698,17 @@ func (w *documentWorkflow) processDocument(ctx context.Context,
 // processStreamingResponse handles the streaming workflow response.
 func (w *documentWorkflow) processStreamingResponse(
 	eventChan <-chan *event.Event) error {
-	fmt.Print("🤖 Workflow: ")
 
 	var (
-		fullContent     string
 		workflowStarted bool
 		stageCount      int
+		finalResult     string
 	)
 
 	for event := range eventChan {
 		// Handle errors.
 		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+			fmt.Printf("❌ Error: %s\n", event.Error.Message)
 			continue
 		}
 
@@ -712,10 +719,15 @@ func (w *documentWorkflow) processStreamingResponse(
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				if !workflowStarted {
+					fmt.Print("🤖 Workflow: ")
 					workflowStarted = true
 				}
 				fmt.Print(choice.Delta.Content)
-				fullContent += choice.Delta.Content
+			}
+
+			// Store final result if this is a completion.
+			if choice.Message.Content != "" && event.Done {
+				finalResult = choice.Message.Content
 			}
 		}
 
@@ -723,34 +735,24 @@ func (w *documentWorkflow) processStreamingResponse(
 		if event.Author == graph.AuthorGraphExecutor {
 			stageCount++
 			if stageCount > 1 && len(event.Response.Choices) > 0 {
-				fmt.Printf("\n🔄 Stage %d: %s\n", stageCount,
-					event.Response.Choices[0].Message.Content)
+				content := event.Response.Choices[0].Message.Content
+				if content != "" {
+					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
+				}
 			}
 		}
 
-		// Check if this is the final event.
-		if event.Done && !w.isIntermediateEvent(event) {
-			fmt.Printf("\n")
+		// Handle completion.
+		if event.Done {
+			// Check if we have a final output in the completion message.
+			if finalResult != "" && strings.Contains(finalResult, "DOCUMENT PROCESSING RESULTS") {
+				fmt.Printf("\n\n%s\n", finalResult)
+			}
 			break
 		}
 	}
 
 	return nil
-}
-
-// isIntermediateEvent checks if an event is intermediate (not final).
-func (w *documentWorkflow) isIntermediateEvent(event *event.Event) bool {
-	// Check if this is a workflow stage event.
-	if event.Author == graph.AuthorGraphExecutor && !event.Response.Done {
-		return true
-	}
-
-	// Check if this is a tool response.
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	return false
 }
 
 // showHelp displays available commands.
@@ -781,22 +783,4 @@ type complexityResult struct {
 	Score         float64 `json:"score"`
 	WordCount     int     `json:"word_count"`
 	SentenceCount int     `json:"sentence_count"`
-}
-
-type themeArgs struct {
-	Text string `json:"text" description:"Text to extract themes from"`
-}
-
-type themeResult struct {
-	Themes     []string `json:"themes"`
-	Confidence float64  `json:"confidence"`
-}
-
-// Helper functions for creating pointers to primitive types.
-func intPtr(i int) *int {
-	return &i
-}
-
-func floatPtr(f float64) *float64 {
-	return &f
 }

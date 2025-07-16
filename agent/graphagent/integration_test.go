@@ -14,147 +14,87 @@ package graphagent
 
 import (
 	"context"
+	"reflect"
 	"testing"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// TestGraphAgentIntegration tests the full integration of graph and graph agent.
-func TestGraphAgentIntegration(t *testing.T) {
-	// Create a simple test agent
-	testAgent := &integrationTestAgent{name: "test-agent"}
+func TestBasicIntegration(t *testing.T) {
+	// Create a simple workflow graph using the new API
+	schema := graph.NewStateSchema().
+		AddField("input", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField("prepared", graph.StateField{
+			Type:    reflect.TypeOf(false),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField("processed", graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField("finalized", graph.StateField{
+			Type:    reflect.TypeOf(false),
+			Reducer: graph.DefaultReducer,
+		})
 
-	// Create a simple workflow graph
-	workflowGraph, err := graph.NewBuilder().
-		AddStartNode("start", "Start").
-		AddFunctionNode("prepare", "Prepare", "Prepares data", func(ctx context.Context, state graph.State) (graph.State, error) {
-			state["prepared"] = true
-			state["input"] = "prepared data"
-			return state, nil
+	workflowGraph, err := graph.NewStateGraph(schema).
+		AddNode("prepare", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{
+				"prepared": true,
+				"input":    "prepared data",
+			}, nil
 		}).
-		AddAgentNode("process", "Process", "Processes with agent", "test-agent").
-		AddFunctionNode("finalize", "Finalize", "Finalizes result", func(ctx context.Context, state graph.State) (graph.State, error) {
-			state["finalized"] = true
-			return state, nil
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			input := state["input"].(string)
+			return graph.State{"processed": "processed: " + input}, nil
 		}).
-		AddEndNode("end", "End").
-		AddEdge("start", "prepare").
+		AddNode("finalize", func(ctx context.Context, state graph.State) (any, error) {
+			return graph.State{"finalized": true}, nil
+		}).
+		SetEntryPoint("prepare").
 		AddEdge("prepare", "process").
 		AddEdge("process", "finalize").
-		AddEdge("finalize", "end").
-		Build()
+		SetFinishPoint("finalize").
+		Compile()
 
 	if err != nil {
-		t.Fatalf("Failed to build graph: %v", err)
+		t.Fatalf("Failed to build workflow graph: %v", err)
 	}
 
-	// Create graph agent
-	graphAgent, err := New("integration-test", workflowGraph,
-		WithDescription("Integration test agent"),
-		WithSubAgents([]agent.Agent{testAgent}),
-		WithInitialState(graph.State{"test": true}),
-	)
+	// Create GraphAgent with the workflow
+	graphAgent, err := New("workflow-agent", workflowGraph,
+		WithDescription("Integration test workflow agent"),
+		WithInitialState(graph.State{"input": "initial data"}))
 
 	if err != nil {
 		t.Fatalf("Failed to create graph agent: %v", err)
 	}
 
-	// Create invocation
+	// Test running the workflow
 	invocation := &agent.Invocation{
 		Agent:        graphAgent,
-		AgentName:    graphAgent.Info().Name,
-		InvocationID: "integration-test-123",
-		Message: model.Message{
-			Role:    model.RoleUser,
-			Content: "Test message",
-		},
+		AgentName:    "workflow-agent",
+		InvocationID: "integration-test",
 	}
 
-	// Run the graph agent
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	events, err := graphAgent.Run(ctx, invocation)
+	events, err := graphAgent.Run(context.Background(), invocation)
 	if err != nil {
 		t.Fatalf("Failed to run graph agent: %v", err)
 	}
 
-	// Collect events
-	var eventCount int
-	var completionFound bool
-
-	for event := range events {
+	// Collect all events
+	eventCount := 0
+	for range events {
 		eventCount++
-		t.Logf("Event %d: Author=%s, Done=%v", eventCount, event.Author, event.Response.Done)
-
-		if event.Response != nil && event.Response.Done {
-			completionFound = true
-			break
-		}
-	}
-
-	if !completionFound {
-		t.Error("Expected to find completion event")
 	}
 
 	if eventCount == 0 {
-		t.Error("Expected to receive events")
+		t.Error("Expected at least one event from workflow execution")
 	}
-}
 
-// integrationTestAgent is a simple test agent implementation.
-type integrationTestAgent struct {
-	name string
-}
-
-func (ta *integrationTestAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 1)
-
-	go func() {
-		defer close(eventChan)
-
-		// Simulate some processing
-		time.Sleep(10 * time.Millisecond)
-
-		response := &model.Response{
-			Choices: []model.Choice{
-				{
-					Index: 0,
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: "Test agent processed: " + invocation.Message.Content,
-					},
-				},
-			},
-			Done: true,
-		}
-
-		eventChan <- event.NewResponseEvent(invocation.InvocationID, ta.name, response)
-	}()
-
-	return eventChan, nil
-}
-
-func (ta *integrationTestAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (ta *integrationTestAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        ta.name,
-		Description: "Test agent for integration testing",
-	}
-}
-
-func (ta *integrationTestAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (ta *integrationTestAgent) FindSubAgent(name string) agent.Agent {
-	return nil
+	t.Logf("Integration test completed successfully with %d events", eventCount)
 }
