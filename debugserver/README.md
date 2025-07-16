@@ -5,14 +5,14 @@ connect it to [ADK Web](https://github.com/google/adk-web).
 
 ## Prerequisites
 
-* Go 1.24+
-* NodeJS & npm (for running ADK Web UI)
+- Go 1.24+
+- NodeJS & npm (for running ADK Web UI)
 
 ## Running the Server
 
 ```bash
 # From repository root
-cd examples/debugserver
+cd debugserver
 
 # Start the server on :8080 (default model: deepseek-chat)
 go run . -addr :8080
@@ -31,11 +31,11 @@ npm install
 npm run serve --backend=http://localhost:8080
 ```
 
-Open <http://localhost:4200> in your browser.  In the left sidebar choose the
-`assistant` application, create a new session and start chatting.  Messages will be
+Open <http://localhost:4200> in your browser. In the left sidebar choose the
+`assistant` application, create a new session and start chatting. Messages will be
 sent to the Go server which streams responses in real-time via the `/run_sse`
 endpoint.
 
 ---
 
-Feel free to replace the agent logic or add more tools in `main.go` as needed. 
+Feel free to replace the agent logic or add more tools in `main.go` as needed.
