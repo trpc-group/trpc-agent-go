@@ -21,6 +21,10 @@ var (
 	collection = getEnvOrDefault("TCVECTOR_STORE_COLLECTION", "trpc_agent_unit_test_documents")
 )
 
+func TestTCVectorSuite(t *testing.T) {
+	suite.Run(t, new(TCVectorTestSuite))
+}
+
 // TCVectorTestSuite contains test suite state
 type TCVectorTestSuite struct {
 	suite.Suite
@@ -101,6 +105,8 @@ func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.addedDocIDs = make([]string, 0)
 
 	suite.T().Logf("Test suite setup completed with collection: %s", collection)
+	// sleep 3 seconds to ensure the collection is ready
+	time.Sleep(3 * time.Second)
 }
 
 // TearDownSuite cleans up test data
@@ -207,10 +213,6 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
-}
-
-func TestTCVectorSuite(t *testing.T) {
-	suite.Run(t, new(TCVectorTestSuite))
 }
 
 func (suite *TCVectorTestSuite) TestAdd() {

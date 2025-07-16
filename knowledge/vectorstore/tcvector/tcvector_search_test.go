@@ -3,6 +3,8 @@ package tcvector
 import (
 	"context"
 	"strings"
+	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -14,6 +16,10 @@ type TcVectorSearchTestSuite struct {
 	suite.Suite
 	vs       *VectorStore
 	testDocs map[string]*document.Document // Store test documents for validation
+}
+
+func TestTcVectorSearchSuite(t *testing.T) {
+	suite.Run(t, new(TcVectorSearchTestSuite))
 }
 
 // SetupSuite runs once before all tests
@@ -29,11 +35,16 @@ func (suite *TcVectorSearchTestSuite) SetupSuite() {
 		WithPassword(key),
 		WithDatabase(db),
 		WithCollection(collection),
+		WithLanguage("en"),
 		WithIndexDimension(3), // Small dimension for testing
+		WithEnableTSVector(true),
 	)
 	if err != nil {
 		suite.T().Fatalf("Failed to initialize tcvector: %v", err)
 	}
+
+	// sleep 3 seconds to ensure the collection is ready
+	time.Sleep(3 * time.Second)
 
 	suite.vs = vs
 	suite.testDocs = make(map[string]*document.Document)
@@ -97,6 +108,7 @@ func (suite *TcVectorSearchTestSuite) SetupSuite() {
 		// Store for validation
 		suite.testDocs[td.doc.ID] = td.doc
 	}
+	suite.T().Log("test docs loaded")
 }
 
 // TearDownSuite runs once after all tests
@@ -106,6 +118,13 @@ func (suite *TcVectorSearchTestSuite) TearDownSuite() {
 	}
 	suite.vs.pool.DropDatabase(context.Background(), db)
 	suite.vs.Close()
+}
+
+// SetupTest runs before each test
+func (suite *TcVectorSearchTestSuite) SetupTest() {
+	if suite.vs == nil {
+		suite.T().Skip("Vector store not initialized")
+	}
 }
 
 // validateSearchResult validates a single search result
@@ -172,14 +191,12 @@ func (suite *TcVectorSearchTestSuite) compareMetadataValues(expected, actual int
 
 // validateSearchResults validates the complete search result set
 func (suite *TcVectorSearchTestSuite) validateSearchResults(results []*vectorstore.ScoredDocument, expectedMinCount int) {
-	suite.GreaterOrEqual(len(results), expectedMinCount,
-		"Should return at least %d results", expectedMinCount)
+	suite.GreaterOrEqual(len(results), expectedMinCount, "Should return at least %d results", expectedMinCount)
 
 	// Validate individual results
 	for i, result := range results {
 		suite.validateSearchResult(result)
-		suite.T().Logf("Result %d: ID=%s, Name=%s, Score=%.4f",
-			i+1, result.Document.ID, result.Document.Name, result.Score)
+		suite.T().Logf("Result %d: ID=%s, Name=%s, Score=%.4f", i+1, result.Document.ID, result.Document.Name, result.Score)
 	}
 
 	// Validate score ordering (descending)
@@ -213,17 +230,14 @@ func (suite *TcVectorSearchTestSuite) validateKeywordRelevance(results []*vector
 
 // TestSearchByVector tests pure vector similarity search
 func (suite *TcVectorSearchTestSuite) TestSearchByVector() {
-	if suite.vs == nil {
-		suite.T().Skip("Vector store not initialized")
-	}
-
 	ctx := context.Background()
 	query := &vectorstore.SearchQuery{
-		Vector: []float64{0.15, 0.25, 0.35}, // Similar to doc1 and doc2
-		Limit:  5,
+		Vector:     []float64{0.15, 0.25, 0.35}, // Similar to doc1 and doc2
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeVector,
 	}
 
-	result, err := suite.vs.searchByVector(ctx, query)
+	result, err := suite.vs.Search(ctx, query)
 	suite.NoError(err, "SearchByVector should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -244,17 +258,14 @@ func (suite *TcVectorSearchTestSuite) TestSearchByVector() {
 
 // TestSearchByKeyword tests BM25-based keyword search
 func (suite *TcVectorSearchTestSuite) TestSearchByKeyword() {
-	if suite.vs == nil {
-		suite.T().Skip("Vector store not initialized")
-	}
-
 	ctx := context.Background()
 	query := &vectorstore.SearchQuery{
-		Query: "programming language",
-		Limit: 5,
+		Query:      "programming language",
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeKeyword,
 	}
 
-	result, err := suite.vs.searchByKeyword(ctx, query)
+	result, err := suite.vs.Search(ctx, query)
 	suite.NoError(err, "SearchByKeyword should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -271,8 +282,7 @@ func (suite *TcVectorSearchTestSuite) TestSearchByKeyword() {
 			foundProgDocs = true
 			// Validate that programming documents have relevant metadata
 			if category, ok := r.Document.Metadata["category"]; ok {
-				suite.Equal("programming", category,
-					"Programming documents should have correct category")
+				suite.Equal("programming", category, "Programming documents should have correct category")
 			}
 		}
 	}
@@ -288,12 +298,13 @@ func (suite *TcVectorSearchTestSuite) TestSearchByHybrid() {
 
 	ctx := context.Background()
 	query := &vectorstore.SearchQuery{
-		Vector: []float64{0.15, 0.25, 0.35}, // Similar to programming docs
-		Query:  "programming",               // Programming keyword
-		Limit:  5,
+		Vector:     []float64{0.15, 0.25, 0.35}, // Similar to programming docs
+		Query:      "programming",               // Programming keyword
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeHybrid,
 	}
 
-	result, err := suite.vs.searchByHybrid(ctx, query)
+	result, err := suite.vs.Search(ctx, query)
 	suite.NoError(err, "SearchByHybrid should not error")
 	suite.NotNil(result, "Search result should not be nil")
 
@@ -335,10 +346,11 @@ func (suite *TcVectorSearchTestSuite) TestSearchWithFilters() {
 				"category": "programming",
 			},
 		},
-		Limit: 5,
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeFilter,
 	}
 
-	result, err := suite.vs.searchByVector(ctx, query)
+	result, err := suite.vs.Search(ctx, query)
 	suite.NoError(err, "Filtered search should not error")
 	suite.NotNil(result, "Search result should not be nil")
 

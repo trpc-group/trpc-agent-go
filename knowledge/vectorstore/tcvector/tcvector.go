@@ -150,19 +150,20 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		fieldMetadata:  {Val: doc.Metadata},
 	}
 
-	if vs.option.enableTSVector {
-		sparseVector, err := vs.sparseEncoder.EncodeText(doc.Content)
-		if err != nil {
-			return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
-		}
-		fields[fieldSparseVector] = tcvectordb.Field{Val: sparseVector}
-	}
-
 	tcDoc := tcvectordb.Document{
 		Id:     doc.ID,
 		Vector: embedding32,
 		Fields: fields,
 	}
+
+	if vs.option.enableTSVector {
+		sparseVector, err := vs.sparseEncoder.EncodeText(doc.Content)
+		if err != nil {
+			return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
+		}
+		tcDoc.SparseVector = sparseVector
+	}
+
 	if _, err := vs.pool.Upsert(
 		ctx,
 		vs.option.database,
@@ -354,31 +355,20 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		limit = defaultLimit
 	}
 
-	// Encode the query text using BM25 for sparse vector
-	querySparseVector, err := vs.sparseEncoder.EncodeText(query.Query)
+	querySparseVector, err := vs.sparseEncoder.EncodeQueries([]string{query.Query})
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
-
-	queryParams := tcvectordb.HybridSearchDocumentParams{
+	queryParams := tcvectordb.FullTextSearchParams{
 		Limit:          &limit,
 		RetrieveVector: true,
-		Match: []*tcvectordb.MatchOption{
-			{
-				FieldName: fieldSparseVector,
-				Data:      querySparseVector,
-			},
-		},
-		// Use RRF (Reciprocal Rank Fusion) for combining scores
-		Rerank: &tcvectordb.RerankOption{
-			Method:    tcvectordb.RerankRrf, // Use RRF method
-			FieldList: []string{fieldSparseVector},
-			Weight:    []float32{1},
-			RrfK:      60, // Default RRF K value
+		Match: &tcvectordb.FullTextSearchMatchOption{
+			FieldName: fieldSparseVector,
+			Data:      querySparseVector,
 		},
 	}
 
-	searchResult, err := vs.pool.HybridSearch(
+	searchResult, err := vs.pool.FullTextSearch(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -405,7 +395,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	// Encode the query text using BM25 for sparse vector
-	querySparseVector, err := vs.sparseEncoder.EncodeText(query.Query)
+	querySparseVector, err := vs.sparseEncoder.EncodeQuery(query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
