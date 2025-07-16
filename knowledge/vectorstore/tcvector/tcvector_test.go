@@ -2,6 +2,7 @@ package tcvector
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -15,11 +16,15 @@ import (
 
 var (
 	key        = getEnvOrDefault("TCVECTOR_STORE_KEY", "")
-	url        = getEnvOrDefault("TCVECTOR_STORE_URL", "")
+	urlStr     = getEnvOrDefault("TCVECTOR_STORE_URL", "")
 	user       = getEnvOrDefault("TCVECTOR_STORE_USER", "root")
 	db         = getEnvOrDefault("TCVECTOR_STORE_DATABASE", "trpc_agent_unit_test")
 	collection = getEnvOrDefault("TCVECTOR_STORE_COLLECTION", "trpc_agent_unit_test_documents")
 )
+
+func TestTCVectorSuite(t *testing.T) {
+	suite.Run(t, new(TCVectorTestSuite))
+}
 
 // TCVectorTestSuite contains test suite state
 type TCVectorTestSuite struct {
@@ -81,13 +86,13 @@ var testData = []struct {
 // SetupSuite initializes the test suite
 func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.ctx = context.Background()
-	if url == "" || key == "" {
+	if urlStr == "" || key == "" {
 		suite.T().Skip("Skip test: TCVECTOR_STORE_URL, TCVECTOR_STORE_KEY environment variables required")
 		return
 	}
 
 	vs, err := New(
-		WithURL(url),
+		WithURL(urlStr),
 		WithUsername(user),
 		WithPassword(key),
 		WithDatabase(db),
@@ -101,6 +106,8 @@ func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.addedDocIDs = make([]string, 0)
 
 	suite.T().Logf("Test suite setup completed with collection: %s", collection)
+	// sleep 3 seconds to ensure the collection is ready
+	time.Sleep(3 * time.Second)
 }
 
 // TearDownSuite cleans up test data
@@ -109,14 +116,8 @@ func (suite *TCVectorTestSuite) TearDownSuite() {
 		return
 	}
 
-	// Drop the entire collection after all tests are done
-	_, err := suite.vs.pool.DropCollection(suite.ctx, db, collection)
-	if err != nil {
-		suite.T().Logf("Warning: Failed to drop collection %s during cleanup: %v", collection, err)
-	}
-
+	suite.vs.client.DropDatabase(suite.ctx, db)
 	suite.vs.Close()
-	suite.T().Logf("Test suite cleanup completed.")
 }
 
 // SetupTest runs before each test to ensure a clean state
@@ -158,18 +159,20 @@ func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual interface
 	}
 
 	// Handle numeric type conversions
-	switch e := expected.(type) {
-	case int:
-		if a, ok := actual.(float64); ok {
-			return float64(e) == a
-		}
+	switch a := actual.(type) {
+	case json.Number:
+		eStr := fmt.Sprintf("%v", expected)
+		return eStr == a.String()
+	case string:
+		eStr := fmt.Sprintf("%v", expected)
+		return eStr == actual
 	case float64:
-		if a, ok := actual.(int); ok {
-			return e == float64(a)
+		if e, ok := expected.(float64); ok {
+			return e == actual
 		}
 	case int64:
-		if a, ok := actual.(float64); ok {
-			return float64(e) == a
+		if e, ok := expected.(int64); ok {
+			return e == actual
 		}
 	}
 
@@ -199,18 +202,6 @@ func (suite *TCVectorTestSuite) validateVector(expected []float64, actual []floa
 		suite.Assert().InDelta(expectedVal, actual[i], tolerance,
 			"Vector[%d] should match within tolerance", i)
 	}
-}
-
-// abs returns absolute value of float64
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func TestTCVectorSuite(t *testing.T) {
-	suite.Run(t, new(TCVectorTestSuite))
 }
 
 func (suite *TCVectorTestSuite) TestAdd() {
