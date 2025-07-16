@@ -1,9 +1,6 @@
 package tcvector
 
 import (
-	"fmt"
-	"net/url"
-
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 )
 
@@ -27,52 +24,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, err
 	for _, opt := range builderOpts {
 		opt(opts)
 	}
-	url, username, password, err := parseVectorDBURL(opts.URL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse vector db url: %w", err)
-	}
-	return tcvectordb.NewClient(url, username, password, nil)
-}
-
-// parseVectorDBURL parses the vector db url and returns the username, password and key.
-// the url format is like: tcvectordb://username:key@host:port
-func parseVectorDBURL(urlStr string) (string, string, string, error) {
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to parse URL: %v", err)
-	}
-	if parsedURL.Scheme != "tcvectordb" {
-		return "", "", "", fmt.Errorf("invalid scheme: expected 'tcvectordb', got '%s'", parsedURL.Scheme)
-	}
-	if parsedURL.User == nil {
-		return "", "", "", fmt.Errorf("missing username and key in URL")
-	}
-	username := parsedURL.User.Username()
-	key, _ := parsedURL.User.Password()
-	if username == "" {
-		return "", "", "", fmt.Errorf("missing username in URL")
-	}
-	if key == "" {
-		return "", "", "", fmt.Errorf("missing key in URL")
-	}
-	host := parsedURL.Hostname()
-	port := parsedURL.Port()
-	if port == "" {
-		port = "80"
-	}
-	return fmt.Sprintf("http://%s:%s", host, port), username, key, nil
-}
-
-// getVectorDBURL gets the vector db url from the url string.
-func getVectorDBURL(urlStr string, username string, key string) (string, error) {
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse URL: %v", err)
-	}
-	if parsedURL.Scheme != "http" {
-		return "", fmt.Errorf("only http is supported")
-	}
-	return fmt.Sprintf("tcvectordb://%s:%s@%s:%s", username, key, parsedURL.Hostname(), parsedURL.Port()), nil
+	return tcvectordb.NewClient(opts.HTTPURL, opts.UserName, opts.Key, nil)
 }
 
 // ClientBuilderOpt is the option for the tcvectordb client.
@@ -80,14 +32,29 @@ type ClientBuilderOpt func(*ClientBuilderOpts)
 
 // ClientBuilderOpts is the options for the tcvectordb client.
 type ClientBuilderOpts struct {
-	URL string
+	HTTPURL  string
+	UserName string
+	Key      string
 }
 
-// WithClientBuilderURL sets the url for the tcvectordb client.
-// the url format is like: tcvectordb://username:key@host:port
-func WithClientBuilderURL(url string) ClientBuilderOpt {
+// WithClientBuilderHTTPURL sets the http url for the tcvectordb client.
+func WithClientBuilderHTTPURL(httpURL string) ClientBuilderOpt {
 	return func(o *ClientBuilderOpts) {
-		o.URL = url
+		o.HTTPURL = httpURL
+	}
+}
+
+// WithClientBuilderUserName sets the username for the tcvectordb client.
+func WithClientBuilderUserName(userName string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) {
+		o.UserName = userName
+	}
+}
+
+// WithClientBuilderKey sets the key for the tcvectordb client.
+func WithClientBuilderKey(key string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) {
+		o.Key = key
 	}
 }
 

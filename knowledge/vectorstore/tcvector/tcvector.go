@@ -50,11 +50,11 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, errors.New("tcvectordb collection is required")
 	}
 
-	builderURL, err := getVectorDBURL(option.url, option.username, option.password)
-	if err != nil {
-		return nil, fmt.Errorf("tcvectordb get generated db url: %w", err)
-	}
-	c, err := clientBuilder(WithClientBuilderURL(builderURL))
+	c, err := clientBuilder(
+		WithClientBuilderHTTPURL(option.url),
+		WithClientBuilderUserName(option.username),
+		WithClientBuilderKey(option.password),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
 	}
