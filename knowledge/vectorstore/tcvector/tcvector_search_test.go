@@ -2,6 +2,8 @@ package tcvector
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -24,13 +26,13 @@ func TestTcVectorSearchSuite(t *testing.T) {
 
 // SetupSuite runs once before all tests
 func (suite *TcVectorSearchTestSuite) SetupSuite() {
-	if url == "" || key == "" {
+	if urlStr == "" || key == "" {
 		suite.T().Skip("Skipping tcvector tests: VECTOR_STORE_URL and VECTOR_STORE_KEY must be set")
 	}
 
 	// Initialize vector store (skip if no configuration available)
 	vs, err := New(
-		WithURL(url),
+		WithURL(urlStr),
 		WithUsername(user),
 		WithPassword(key),
 		WithDatabase(db),
@@ -116,7 +118,7 @@ func (suite *TcVectorSearchTestSuite) TearDownSuite() {
 	if suite.vs == nil {
 		return
 	}
-	suite.vs.pool.DropDatabase(context.Background(), db)
+	suite.vs.client.DropDatabase(context.Background(), db)
 	suite.vs.Close()
 }
 
@@ -164,27 +166,45 @@ func (suite *TcVectorSearchTestSuite) compareMetadataValues(expected, actual int
 	}
 
 	// Handle numeric type conversions (JSON unmarshaling often converts to float64)
-	switch e := expected.(type) {
+	switch a := actual.(type) {
+	case json.Number:
+		eStr := fmt.Sprintf("%v", expected)
+		return eStr == a.String()
 	case int:
-		if a, ok := actual.(float64); ok {
-			return float64(e) == a
+		if e, ok := expected.(int); ok {
+			return e == a
 		}
 	case float64:
-		if a, ok := actual.(int); ok {
-			return e == float64(a)
+		fmt.Printf("float64: expected %v, actual %v\n", expected, actual)
+		e, ok := expected.(float64)
+		fmt.Printf("float64: e %v, ok %v\n", e, ok)
+		if e, ok := expected.(float64); ok {
+			return e == a
 		}
 	case []string:
-		if a, ok := actual.([]interface{}); ok {
+		if e, ok := expected.([]string); ok {
 			if len(e) != len(a) {
 				return false
 			}
-			for i, v := range e {
-				if str, ok := a[i].(string); !ok || str != v {
+			for i, v := range a {
+				if v != e[i] {
 					return false
 				}
 			}
-			return true
 		}
+		return true
+	case []interface{}:
+		if e, ok := expected.([]interface{}); ok {
+			if len(e) != len(a) {
+				return false
+			}
+			for i, v := range a {
+				if !suite.compareMetadataValues(e[i], v) {
+					return false
+				}
+			}
+		}
+		return true
 	}
 	return false
 }

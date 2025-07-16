@@ -29,7 +29,7 @@ var (
 
 // VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
-	pool          *tcvectordb.RpcClientPool
+	client        ClientInterface
 	option        options
 	sparseEncoder encoder.SparseEncoder
 }
@@ -50,11 +50,15 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, errors.New("tcvectordb collection is required")
 	}
 
-	clientPool, err := tcvectordb.NewRpcClientPool(option.url, option.username, option.password, nil)
+	builderURL, err := getVectorDBURL(option.url, option.username, option.password)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb get generated db url: %w", err)
+	}
+	c, err := clientBuilder(WithClientBuilderURL(builderURL))
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
 	}
-	if err := initVectorDB(clientPool, option); err != nil {
+	if err := initVectorDB(c, option); err != nil {
 		return nil, err
 	}
 
@@ -66,24 +70,26 @@ func New(opts ...Option) (*VectorStore, error) {
 		}
 	}
 
-	if clientPool, ok := clientPool.(*tcvectordb.RpcClientPool); ok {
-		return &VectorStore{pool: clientPool, option: option, sparseEncoder: sparseEncoder}, nil
-	}
-	return nil, errors.New("tcvectordb client pool is not a RpcClientPool")
+	return &VectorStore{client: c, option: option, sparseEncoder: sparseEncoder}, nil
 }
 
-func initVectorDB(clientPool tcvectordb.VdbClient, options options) error {
-	_, err := clientPool.CreateDatabaseIfNotExists(context.Background(), options.database)
+func initVectorDB(client ClientInterface, options options) error {
+	_, err := client.CreateDatabaseIfNotExists(context.Background(), options.database)
 	if err != nil {
 		return fmt.Errorf("tcvectordb create database: %w", err)
+	}
+	db := client.Database(options.database)
+	if db == nil {
+		return fmt.Errorf("tcvectordb database %s not found", options.database)
 	}
 
-	exists, err := clientPool.ExistsCollection(context.Background(), options.database, options.collection)
+	// check collection exists
+	exists, err := db.ExistsCollection(context.Background(), options.collection)
 	if err != nil {
-		return fmt.Errorf("tcvectordb create database: %w", err)
+		return fmt.Errorf("tcvectordb check collection exists: %w", err)
 	}
 	if exists {
-		log.Infof("tcvectordb collection %s:%s already exists", options.database, options.collection)
+		log.Infof("tcvectordb collection %s already exists", options.collection)
 		return nil
 	}
 
@@ -116,9 +122,8 @@ func initVectorDB(clientPool tcvectordb.VdbClient, options options) error {
 		})
 	}
 
-	if _, err := clientPool.CreateCollectionIfNotExists(
+	if _, err := db.CreateCollectionIfNotExists(
 		context.Background(),
-		options.database,
 		options.collection,
 		options.sharding,
 		options.replicas,
@@ -164,7 +169,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		tcDoc.SparseVector = sparseVector
 	}
 
-	if _, err := vs.pool.Upsert(
+	if _, err := vs.client.Upsert(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -180,7 +185,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	if id == "" {
 		return nil, nil, fmt.Errorf("tcvectordb document id is required")
 	}
-	result, err := vs.pool.Query(
+	result, err := vs.client.Query(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -226,26 +231,31 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	if len(doc.Name) > 0 {
 		updateFields[fieldName] = tcvectordb.Field{Val: doc.Name}
 	}
+
+	var sparseVector []encoder.SparseVecItem
+	var err error
 	if len(doc.Content) > 0 {
 		updateFields[fieldContent] = tcvectordb.Field{Val: doc.Content}
 		if vs.option.enableTSVector {
-			sparseVector, err := vs.sparseEncoder.EncodeText(doc.Content)
+			sparseVector, err = vs.sparseEncoder.EncodeText(doc.Content)
 			if err != nil {
 				return fmt.Errorf("tcvectordb bm25 encode text: %w", err)
 			}
-			updateFields[fieldSparseVector] = tcvectordb.Field{Val: sparseVector}
 		}
 	}
 	if len(doc.Metadata) > 0 {
 		updateFields[fieldMetadata] = tcvectordb.Field{Val: doc.Metadata}
 	}
 
-	embedding32 := covertToVector32(embedding)
-	result, err := vs.pool.Update(ctx, vs.option.database, vs.option.collection, tcvectordb.UpdateDocumentParams{
-		QueryIds:     []string{doc.ID},
-		UpdateVector: embedding32,
-		UpdateFields: updateFields,
-	})
+	updateParams := tcvectordb.UpdateDocumentParams{}
+	updateParams.QueryIds = []string{doc.ID}
+	updateParams.UpdateFields = updateFields
+	updateParams.UpdateVector = covertToVector32(embedding)
+	if len(sparseVector) > 0 {
+		updateParams.UpdateSparseVec = sparseVector
+	}
+
+	result, err := vs.client.Update(ctx, vs.option.database, vs.option.collection, updateParams)
 	if err != nil {
 		return fmt.Errorf("tcvectordb update document: %w", err)
 	}
@@ -260,7 +270,7 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("tcvectordb document id is required")
 	}
-	if _, err := vs.pool.Delete(
+	if _, err := vs.client.Delete(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -330,7 +340,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	}
 
 	vector32 := covertToVector32(query.Vector)
-	searchResult, err := vs.pool.Search(
+	searchResult, err := vs.client.Search(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -368,7 +378,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		},
 	}
 
-	searchResult, err := vs.pool.FullTextSearch(
+	searchResult, err := vs.client.FullTextSearch(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -425,7 +435,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 			RrfK:      60, // Default RRF K value
 		},
 	}
-	searchResult, err := vs.pool.HybridSearch(
+	searchResult, err := vs.client.HybridSearch(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -451,7 +461,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		Limit:          int64(limit),
 		RetrieveVector: true,
 	}
-	result, err := vs.pool.Query(
+	result, err := vs.client.Query(
 		ctx,
 		vs.option.database,
 		vs.option.collection,
@@ -466,7 +476,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 
 // Close closes the vector store connection.
 func (vs *VectorStore) Close() error {
-	vs.pool.Close()
+	vs.client.Close()
 	return nil
 }
 
