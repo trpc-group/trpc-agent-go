@@ -51,7 +51,11 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		return
 	}
 
-	log.Debugf("Identity request processor: processing request for agent %s", invocation.AgentName)
+	agentName := ""
+	if invocation != nil {
+		agentName = invocation.AgentName
+	}
+	log.Debugf("Identity request processor: processing request for agent %s", agentName)
 
 	// Initialize messages slice if nil.
 	if req.Messages == nil {
