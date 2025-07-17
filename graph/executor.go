@@ -30,6 +30,7 @@ const (
 type Executor struct {
 	graph             *Graph
 	channelBufferSize int
+	maxSteps          int
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -39,12 +40,21 @@ type ExecutorOption func(*ExecutorOptions)
 type ExecutorOptions struct {
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// MaxSteps is the maximum number of steps for graph execution.
+	MaxSteps int
 }
 
 // WithChannelBufferSize sets the buffer size for event channels.
 func WithChannelBufferSize(size int) ExecutorOption {
 	return func(opts *ExecutorOptions) {
 		opts.ChannelBufferSize = size
+	}
+}
+
+// WithMaxSteps sets the maximum number of steps for graph execution.
+func WithMaxSteps(maxSteps int) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.MaxSteps = maxSteps
 	}
 }
 
@@ -55,6 +65,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	}
 	var options ExecutorOptions
 	options.ChannelBufferSize = 256 // Default buffer size.
+	options.MaxSteps = 100          // Default max steps.
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
@@ -62,6 +73,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	return &Executor{
 		graph:             graph,
 		channelBufferSize: options.ChannelBufferSize,
+		maxSteps:          options.MaxSteps,
 	}, nil
 }
 
@@ -102,7 +114,7 @@ func (e *Executor) executeGraph(ctx context.Context, execCtx *ExecutionContext) 
 	}
 	// Track visited nodes to detect infinite loops
 	var stepCount int
-	maxSteps := 100 // Configurable recursion limit
+	maxSteps := e.maxSteps // Configurable recursion limit
 	for {
 		select {
 		case <-ctx.Done():
