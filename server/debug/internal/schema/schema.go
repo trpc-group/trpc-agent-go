@@ -18,13 +18,13 @@ package schema
 // ADKSession mirrors the structure expected by ADK Web UI for a session.
 // Field names follow the camel-case convention required by the UI.
 type ADKSession struct {
-	AppName    string                   `json:"appName"`
-	UserID     string                   `json:"userId"`
-	ID         string                   `json:"id"`
-	CreateTime int64                    `json:"createTime"`
-	UpdateTime int64                    `json:"updateTime"`
-	State      map[string][]byte        `json:"state"`
-	Events     []map[string]interface{} `json:"events"`
+	AppName        string                   `json:"appName"`
+	UserID         string                   `json:"userId"`
+	ID             string                   `json:"id"`
+	CreateTime     int64                    `json:"createTime"`
+	LastUpdateTime int64                    `json:"lastUpdateTime"`
+	State          map[string][]byte        `json:"state"`
+	Events         []map[string]interface{} `json:"events"`
 }
 
 // -----------------------------------------------------------------------------
