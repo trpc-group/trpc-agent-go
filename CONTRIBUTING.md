@@ -141,7 +141,7 @@ New files that you contribute should use the standard copyright header:
 
 ```go
 //
-// Tencent is pleased to support the open source community by making tRPC available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.
 // All rights reserved.
