@@ -1,4 +1,4 @@
-module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector
+module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector
 
 go 1.24.4
 
