@@ -19,23 +19,23 @@ import (
 )
 
 func TestNewBuilder(t *testing.T) {
-	builder := NewBuilder()
+	builder := NewStateGraph(NewStateSchema())
 	if builder == nil {
 		t.Fatal("Expected non-nil builder")
 	}
-	if builder.stateGraph == nil {
+	if builder.graph == nil {
 		t.Error("Expected builder to have initialized state graph")
 	}
 }
 
 func TestBuilderAddFunctionNode(t *testing.T) {
-	builder := NewBuilder()
+	builder := NewStateGraph(NewStateSchema())
 
 	testFunc := func(ctx context.Context, state State) (any, error) {
 		return State{"processed": true}, nil
 	}
 
-	result := builder.AddFunctionNode("test", "Test Node", "Test description", testFunc)
+	result := builder.AddNode("test", testFunc)
 	if result != builder {
 		t.Error("Expected fluent interface to return builder")
 	}
@@ -43,12 +43,12 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 	graph, err := builder.
 		SetEntryPoint("test").
 		SetFinishPoint("test").
-		Build()
+		Compile()
 	if err != nil {
 		t.Fatalf("Failed to build graph: %v", err)
 	}
 
-	node, exists := graph.GetNode("test")
+	node, exists := graph.Node("test")
 	if !exists {
 		t.Error("Expected test node to be added")
 	}
@@ -61,29 +61,29 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 }
 
 func TestBuilderEdges(t *testing.T) {
-	builder := NewBuilder()
+	builder := NewStateGraph(NewStateSchema())
 
 	testFunc := func(ctx context.Context, state State) (any, error) {
 		return State{"processed": true}, nil
 	}
 
 	graph, err := builder.
-		AddFunctionNode("node1", "Node 1", "First node", testFunc).
-		AddFunctionNode("node2", "Node 2", "Second node", testFunc).
+		AddNode("node1", testFunc).
+		AddNode("node2", testFunc).
 		SetEntryPoint("node1").
 		AddEdge("node1", "node2").
 		SetFinishPoint("node2").
-		Build()
+		Compile()
 
 	if err != nil {
 		t.Fatalf("Failed to build graph: %v", err)
 	}
 
-	if graph.GetEntryPoint() != "node1" {
-		t.Errorf("Expected entry point 'node1', got '%s'", graph.GetEntryPoint())
+	if graph.EntryPoint() != "node1" {
+		t.Errorf("Expected entry point 'node1', got '%s'", graph.EntryPoint())
 	}
 
-	edges := graph.GetEdges("node1")
+	edges := graph.Edges("node1")
 	if len(edges) != 1 {
 		t.Errorf("Expected 1 edge from node1, got %d", len(edges))
 	}
@@ -94,11 +94,11 @@ func TestBuilderEdges(t *testing.T) {
 
 func TestStateGraphBasic(t *testing.T) {
 	schema := NewStateSchema().
-		AddField("input", StateField{
+		AddField(StateKeyUserInput, StateField{
 			Type:    reflect.TypeOf(""),
 			Reducer: DefaultReducer,
 		}).
-		AddField("output", StateField{
+		AddField(StateKeyLastResponse, StateField{
 			Type:    reflect.TypeOf(""),
 			Reducer: DefaultReducer,
 		})
@@ -109,8 +109,8 @@ func TestStateGraphBasic(t *testing.T) {
 	}
 
 	testFunc := func(ctx context.Context, state State) (any, error) {
-		input := state["input"].(string)
-		return State{"output": "processed: " + input}, nil
+		input := state[StateKeyUserInput].(string)
+		return State{StateKeyLastResponse: "processed: " + input}, nil
 	}
 
 	graph, err := sg.
@@ -123,7 +123,7 @@ func TestStateGraphBasic(t *testing.T) {
 		t.Fatalf("Failed to compile graph: %v", err)
 	}
 
-	node, exists := graph.GetNode("process")
+	node, exists := graph.Node("process")
 	if !exists {
 		t.Error("Expected process node to exist")
 	}
@@ -134,17 +134,17 @@ func TestStateGraphBasic(t *testing.T) {
 
 func TestConditionalEdges(t *testing.T) {
 	schema := NewStateSchema().
-		AddField("input", StateField{
+		AddField(StateKeyUserInput, StateField{
 			Type:    reflect.TypeOf(""),
 			Reducer: DefaultReducer,
 		}).
-		AddField("result", StateField{
+		AddField(StateKeyLastResponse, StateField{
 			Type:    reflect.TypeOf(""),
 			Reducer: DefaultReducer,
 		})
 
 	routingFunc := func(ctx context.Context, state State) (string, error) {
-		input := state["input"].(string)
+		input := state[StateKeyUserInput].(string)
 		if len(input) > 5 {
 			return "long", nil
 		}
@@ -181,7 +181,7 @@ func TestConditionalEdges(t *testing.T) {
 	}
 
 	// Check that conditional edge was added
-	condEdge, exists := graph.GetConditionalEdge("router")
+	condEdge, exists := graph.ConditionalEdge("router")
 	if !exists {
 		t.Error("Expected conditional edge to exist")
 	}

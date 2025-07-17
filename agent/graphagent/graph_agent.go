@@ -135,18 +135,14 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	if initialState == nil {
 		initialState = make(graph.State)
 	}
-
 	// Add invocation message to state
 	if invocation.Message.Content != "" {
-		initialState["input"] = invocation.Message.Content
-		initialState["message"] = invocation.Message
+		initialState[graph.StateKeyUserInput] = invocation.Message.Content
 	}
-
 	// Add session context if available
 	if invocation.Session != nil {
-		initialState["session"] = invocation.Session
+		initialState[graph.StateKeySession] = invocation.Session
 	}
-
 	// Execute the graph
 	return ga.executor.Execute(ctx, initialState, invocation.InvocationID)
 }

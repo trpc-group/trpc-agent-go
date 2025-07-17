@@ -50,13 +50,13 @@ func TestAddNode(t *testing.T) {
 		Function: testFunc,
 	}
 
-	err := g.AddNode(node)
+	err := g.addNode(node)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
 	// Verify node was added.
-	retrievedNode, exists := g.GetNode("test-node")
+	retrievedNode, exists := g.Node("test-node")
 	if !exists {
 		t.Error("Expected node to exist")
 	}
@@ -77,18 +77,18 @@ func TestAddEdge(t *testing.T) {
 	node1 := &Node{ID: "node1", Name: "Node 1", Function: testFunc}
 	node2 := &Node{ID: "node2", Name: "Node 2", Function: testFunc}
 
-	g.AddNode(node1)
-	g.AddNode(node2)
+	g.addNode(node1)
+	g.addNode(node2)
 
 	// Test adding valid edge.
 	edge := &Edge{From: "node1", To: "node2"}
-	err := g.AddEdge(edge)
+	err := g.addEdge(edge)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
 	// Verify edge was added.
-	edges := g.GetEdges("node1")
+	edges := g.Edges("node1")
 	if len(edges) != 1 {
 		t.Errorf("Expected 1 edge, got %d", len(edges))
 	}
