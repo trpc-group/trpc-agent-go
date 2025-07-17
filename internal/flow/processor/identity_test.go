@@ -14,6 +14,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -22,70 +23,66 @@ import (
 )
 
 func TestIdentityProc_Request(t *testing.T) {
+	invocation := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "test-123",
+	}
+
 	tests := []struct {
 		name         string
 		agentName    string
 		description  string
-		request      *model.Request
-		invocation   *agent.Invocation
+		messages     []model.Message
 		wantMessages int
 		wantContent  string
 	}{
 		{
-			name:        "adds identity with name and description",
-			agentName:   "TestBot",
-			description: "A helpful testing assistant",
-			request: &model.Request{
-				Messages: []model.Message{},
-			},
-			invocation: &agent.Invocation{
-				AgentName:    "test-agent",
-				InvocationID: "test-123",
-			},
+			name:         "adds identity with name and description",
+			agentName:    "TestBot",
+			description:  "A helpful testing assistant",
+			messages:     []model.Message{},
 			wantMessages: 1,
 			wantContent:  "You are TestBot. A helpful testing assistant",
 		},
 		{
-			name:        "adds identity with name only",
-			agentName:   "TestBot",
-			description: "",
-			request: &model.Request{
-				Messages: []model.Message{},
-			},
-			invocation: &agent.Invocation{
-				AgentName:    "test-agent",
-				InvocationID: "test-123",
-			},
+			name:         "adds identity with name only",
+			agentName:    "TestBot",
+			description:  "",
+			messages:     []model.Message{},
 			wantMessages: 1,
 			wantContent:  "You are TestBot.",
 		},
 		{
-			name:        "adds identity with description only",
-			agentName:   "",
-			description: "A helpful assistant",
-			request: &model.Request{
-				Messages: []model.Message{},
-			},
-			invocation: &agent.Invocation{
-				AgentName:    "test-agent",
-				InvocationID: "test-123",
-			},
+			name:         "adds identity with description only",
+			agentName:    "",
+			description:  "A helpful assistant",
+			messages:     []model.Message{},
 			wantMessages: 1,
 			wantContent:  "A helpful assistant",
 		},
 		{
-			name:        "no identity information",
-			agentName:   "",
-			description: "",
-			request: &model.Request{
-				Messages: []model.Message{},
-			},
-			invocation: &agent.Invocation{
-				AgentName:    "test-agent",
-				InvocationID: "test-123",
-			},
+			name:         "no identity information",
+			agentName:    "",
+			description:  "",
+			messages:     []model.Message{},
 			wantMessages: 0,
 			wantContent:  "",
+		},
+		{
+			name:         "prepends identity to existing system message",
+			agentName:    "TestBot",
+			description:  "A helpful assistant",
+			messages:     []model.Message{model.NewSystemMessage("You have access to tools.")},
+			wantMessages: 1,
+			wantContent:  "You are TestBot. A helpful assistant",
+		},
+		{
+			name:         "doesn't duplicate identity when already exists",
+			agentName:    "TestBot",
+			description:  "",
+			messages:     []model.Message{model.NewSystemMessage("You are TestBot. You have access to tools.")},
+			wantMessages: 1,
+			wantContent:  "You are TestBot.",
 		},
 	}
 
@@ -95,64 +92,25 @@ func TestIdentityProc_Request(t *testing.T) {
 			eventCh := make(chan *event.Event, 10)
 			ctx := context.Background()
 
-			processor.ProcessRequest(ctx, tt.invocation, tt.request, eventCh)
+			request := &model.Request{Messages: tt.messages}
+			processor.ProcessRequest(ctx, invocation, request, eventCh)
 
-			if len(tt.request.Messages) != tt.wantMessages {
-				t.Errorf("ProcessRequest() got %d messages, want %d", len(tt.request.Messages), tt.wantMessages)
+			if len(request.Messages) != tt.wantMessages {
+				t.Errorf("ProcessRequest() got %d messages, want %d", len(request.Messages), tt.wantMessages)
 			}
 
 			// Check if identity was added correctly
 			if tt.wantContent != "" && tt.wantMessages > 0 {
 				found := false
-				for _, msg := range tt.request.Messages {
-					if msg.Role == model.RoleSystem && msg.Content == tt.wantContent {
+				for _, msg := range request.Messages {
+					if msg.Role == model.RoleSystem && strings.Contains(msg.Content, tt.wantContent) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("ProcessRequest() identity message with content '%s' not found in messages", tt.wantContent)
+					t.Errorf("ProcessRequest() identity content '%s' not found in system messages", tt.wantContent)
 				}
-			}
-		})
-	}
-}
-
-func TestIdentityProc_HasIDMsg(t *testing.T) {
-	tests := []struct {
-		name     string
-		messages []model.Message
-		identity string
-		want     bool
-	}{
-		{
-			name:     "empty messages",
-			messages: []model.Message{},
-			identity: "You are TestBot.",
-			want:     false,
-		},
-		{
-			name: "no matching identity",
-			messages: []model.Message{
-				model.NewSystemMessage("Different identity"),
-			},
-			identity: "You are TestBot.",
-			want:     false,
-		},
-		{
-			name: "has matching identity",
-			messages: []model.Message{
-				model.NewSystemMessage("You are TestBot."),
-			},
-			identity: "You are TestBot.",
-			want:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hasIdentityMessage(tt.messages, tt.identity); got != tt.want {
-				t.Errorf("hasIdentityMessage() = %v, want %v", got, tt.want)
 			}
 		})
 	}

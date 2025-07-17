@@ -14,6 +14,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -50,7 +51,11 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		return
 	}
 
-	log.Debugf("Identity request processor: processing request for agent %s", invocation.AgentName)
+	agentName := ""
+	if invocation != nil {
+		agentName = invocation.AgentName
+	}
+	log.Debugf("Identity request processor: processing request for agent %s", agentName)
 
 	// Initialize messages slice if nil.
 	if req.Messages == nil {
@@ -67,11 +72,22 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		identityContent = p.Description
 	}
 
-	// Add identity as a system message if we have content and it's not already present.
-	if identityContent != "" && !hasIdentityMessage(req.Messages, identityContent) {
-		identityMsg := model.NewSystemMessage(identityContent)
-		req.Messages = append([]model.Message{identityMsg}, req.Messages...)
-		log.Debugf("Identity request processor: added identity message")
+	if identityContent != "" {
+		// Find existing system message or create new one
+		systemMsgIndex := findSystemMessageIndex(req.Messages)
+		if systemMsgIndex >= 0 {
+			// There's already a system message, check if it contains identity
+			if !containsIdentity(req.Messages[systemMsgIndex].Content, identityContent) {
+				// Prepend identity to existing system message
+				req.Messages[systemMsgIndex].Content = identityContent + "\n\n" + req.Messages[systemMsgIndex].Content
+				log.Debugf("Identity request processor: prepended identity to existing system message")
+			}
+		} else {
+			// No existing system message, create new one
+			identityMsg := model.NewSystemMessage(identityContent)
+			req.Messages = append([]model.Message{identityMsg}, req.Messages...)
+			log.Debugf("Identity request processor: added identity message")
+		}
 	}
 
 	// Send a preprocessing event.
@@ -88,12 +104,7 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	}
 }
 
-// hasIdentityMessage checks if there's already an identity message in the messages.
-func hasIdentityMessage(messages []model.Message, identity string) bool {
-	for _, msg := range messages {
-		if msg.Role == model.RoleSystem && msg.Content == identity {
-			return true
-		}
-	}
-	return false
+// containsIdentity checks if the given content already contains the identity.
+func containsIdentity(content, identity string) bool {
+	return strings.Contains(content, identity)
 }

@@ -14,6 +14,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -50,25 +51,51 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 		return
 	}
 
-	log.Debugf("Instruction request processor: processing request for agent %s", invocation.AgentName)
+	agentName := ""
+	if invocation != nil {
+		agentName = invocation.AgentName
+	}
+	log.Debugf("Instruction request processor: processing request for agent %s", agentName)
 
 	// Initialize messages slice if nil.
 	if req.Messages == nil {
 		req.Messages = make([]model.Message, 0)
 	}
 
-	// Add system prompt if specified and not already present.
-	if p.SystemPrompt != "" && !hasInstructionSystemMessage(req.Messages, p.SystemPrompt) {
-		systemMsg := model.NewSystemMessage(p.SystemPrompt)
-		req.Messages = append([]model.Message{systemMsg}, req.Messages...)
-		log.Debugf("Instruction request processor: added system prompt")
-	}
+	// Find existing system message or create new one
+	systemMsgIndex := findSystemMessageIndex(req.Messages)
 
-	// Add instruction as a system message if not already present.
-	if p.Instruction != "" && !hasInstructionSystemMessage(req.Messages, p.Instruction) {
-		instructionMsg := model.NewSystemMessage(p.Instruction)
-		req.Messages = append([]model.Message{instructionMsg}, req.Messages...)
-		log.Debugf("Instruction request processor: added instruction message")
+	if systemMsgIndex >= 0 {
+		// There's already a system message, check if it contains instruction
+		if p.Instruction != "" && !containsInstruction(req.Messages[systemMsgIndex].Content, p.Instruction) {
+			// Append instruction to existing system message
+			req.Messages[systemMsgIndex].Content += "\n\n" + p.Instruction
+			log.Debugf("Instruction request processor: appended instruction to existing system message")
+		}
+		// Also check if SystemPrompt needs to be added
+		if p.SystemPrompt != "" && !containsInstruction(req.Messages[systemMsgIndex].Content, p.SystemPrompt) {
+			// Prepend SystemPrompt to existing system message
+			req.Messages[systemMsgIndex].Content = p.SystemPrompt + "\n\n" + req.Messages[systemMsgIndex].Content
+			log.Debugf("Instruction request processor: prepended system prompt to existing system message")
+		}
+	} else {
+		// No existing system message, create a combined one if needed
+		var systemContent string
+		if p.SystemPrompt != "" {
+			systemContent = p.SystemPrompt
+		}
+		if p.Instruction != "" {
+			if systemContent != "" {
+				systemContent += "\n\n" + p.Instruction
+			} else {
+				systemContent = p.Instruction
+			}
+		}
+		if systemContent != "" {
+			systemMsg := model.NewSystemMessage(systemContent)
+			req.Messages = append([]model.Message{systemMsg}, req.Messages...)
+			log.Debugf("Instruction request processor: added combined system message")
+		}
 	}
 
 	// Send a preprocessing event.
@@ -85,12 +112,19 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	}
 }
 
-// hasInstructionSystemMessage checks if there's already a system message with the given content in the messages.
-func hasInstructionSystemMessage(messages []model.Message, content string) bool {
-	for _, msg := range messages {
-		if msg.Role == model.RoleSystem && msg.Content == content {
-			return true
+// findSystemMessageIndex finds the index of the first system message in the messages slice.
+// Returns -1 if no system message is found.
+func findSystemMessageIndex(messages []model.Message) int {
+	for i, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// containsInstruction checks if the given content already contains the instruction.
+func containsInstruction(content, instruction string) bool {
+	// strings.Contains handles both exact match and substring cases
+	return strings.Contains(content, instruction)
 }
