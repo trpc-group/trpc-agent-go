@@ -1,0 +1,4 @@
+INDEX:000 | TITLE: Golang Code Standards (Only follow the content below)
+INDEX:001 | TOC: [TOC]
+INDEX:002 | SUBSECTION: 1.1 [REQUIRED] Formatting | All code must be formatted using `gofmt`.
+INDEX:003 | SUBSECTION: 1.2 [RECOMMENDED] Line Breaks | It is recommended that a line of code should not exceed `120 columns`. If exceeded, use reasonable line breaking methods. Exceptions: function signatures (though this might indicate you need to reconsider if too many parameters are being passed), long string literals (if they contain newline characters `\n`, consider using raw string literals `` `raw string literal` ``), import module statements, tool-generated code, struct tags
