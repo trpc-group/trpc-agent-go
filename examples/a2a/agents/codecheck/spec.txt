@@ -1,4 +1,4 @@
-INDEX:000 | TITLE: Golang 代码规范(只需尊寻以下内容)
+INDEX:000 | TITLE: Golang Code Standards (Only follow the content below)
 INDEX:001 | TOC: [TOC]
-INDEX:002 | SUBSECTION: 1.1 【必须】格式化 | 代码都必须用 `gofmt` 格式化。
-INDEX:003 | SUBSECTION: 1.2 【推荐】换行 | 建议一行代码不要超过`120列`，超过的情况，使用合理的换行方法换行。例外场景：函数签名（当然，这可能意味着你需要重新考虑是否传递了过多参数）、长字符串文字（如果存在换行符 `\n`，应考虑使用原始字符串字面量 `` `raw string literal` ``）、import 模块语句、工具生成代码、struct tag
+INDEX:002 | SUBSECTION: 1.1 [REQUIRED] Formatting | All code must be formatted using `gofmt`.
+INDEX:003 | SUBSECTION: 1.2 [RECOMMENDED] Line Breaks | It is recommended that a line of code should not exceed `120 columns`. If exceeded, use reasonable line breaking methods. Exceptions: function signatures (though this might indicate you need to reconsider if too many parameters are being passed), long string literals (if they contain newline characters `\n`, consider using raw string literals `` `raw string literal` ``), import module statements, tool-generated code, struct tags

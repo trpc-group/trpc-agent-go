@@ -123,7 +123,7 @@ func main() {
 func buildAgentCard(host string, port int) server.AgentCard {
 	return server.AgentCard{
 		Name:        agentName,
-		Description: "A agent that check code quality by Go Language Standard",
+		Description: "Check code quality by Go Language Standard; Query the golang standard/spec that user needed",
 		URL:         fmt.Sprintf("http://%s:%d/", host, port),
 		Version:     "1.0.0",
 		Provider: &server.AgentProvider{
@@ -141,15 +141,12 @@ func buildAgentCard(host string, port int) server.AgentCard {
 			{
 				ID:          "code_check",
 				Name:        "code_check",
-				Description: utils.StringPtr("Check code quality by Go Language Standard"),
+				Description: utils.StringPtr("Check code quality by Go Language Standard; Query the golang standard/spec that user needed"),
 				Tags:        []string{"code", "check", "golang"},
 				Examples: []string{
 					`
-					package main
-
-					func main() {
-						fmt.Println("Hello, World!")
-					}
+					Analyze the code and check code quality by Go Language Standard.
+					Query the golang standard spec/standard file.
 					`,
 				},
 				InputModes:  []string{"text"},
