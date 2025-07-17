@@ -327,8 +327,8 @@ func TestConvertSessionToADKFormat(t *testing.T) {
 		t.Error("expected non-zero CreateTime")
 	}
 
-	if adkSession.UpdateTime == 0 {
-		t.Error("expected non-zero UpdateTime")
+	if adkSession.LastUpdateTime == 0 {
+		t.Error("expected non-zero LastUpdateTime")
 	}
 
 	if len(adkSession.State) != 1 {

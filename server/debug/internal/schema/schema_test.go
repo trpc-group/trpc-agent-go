@@ -19,13 +19,13 @@ import (
 
 func TestADKSession_MarshalJSON(t *testing.T) {
 	session := ADKSession{
-		AppName:    "test-app",
-		UserID:     "test-user",
-		ID:         "test-session-id",
-		CreateTime: 1234567890,
-		UpdateTime: 1234567891,
-		State:      map[string][]byte{"key1": []byte("value1")},
-		Events:     []map[string]interface{}{},
+		AppName:        "test-app",
+		UserID:         "test-user",
+		ID:             "test-session-id",
+		CreateTime:     1234567890,
+		LastUpdateTime: 1234567891,
+		State:          map[string][]byte{"key1": []byte("value1")},
+		Events:         []map[string]interface{}{},
 	}
 
 	data, err := json.Marshal(session)
@@ -54,8 +54,8 @@ func TestADKSession_MarshalJSON(t *testing.T) {
 		t.Errorf("expected CreateTime 1234567890, got %d", unmarshaled.CreateTime)
 	}
 
-	if unmarshaled.UpdateTime != 1234567891 {
-		t.Errorf("expected UpdateTime 1234567891, got %d", unmarshaled.UpdateTime)
+	if unmarshaled.LastUpdateTime != 1234567891 {
+		t.Errorf("expected LastUpdateTime 1234567891, got %d", unmarshaled.LastUpdateTime)
 	}
 }
 
