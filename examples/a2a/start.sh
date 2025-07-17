@@ -110,10 +110,13 @@ start_agents() {
     # 创建日志目录
     mkdir -p logs
     
+    # 获取模型名称
+    MODEL_NAME=${OPENAI_MODEL:-gpt-4o-mini}
+    
     # 启动代码检查代理 (先启动)
     print_info "启动代码检查代理 (端口 8082)..."
     cd agents/codecheck
-    nohup ./codecc_agent > ../../logs/codecc_agent.log 2>&1 &
+    nohup ./codecc_agent -model="$MODEL_NAME" > ../../logs/codecc_agent.log 2>&1 &
     CODECC_PID=$!
     cd ../..
     echo $CODECC_PID > logs/codecc_agent.pid
@@ -122,7 +125,7 @@ start_agents() {
     # 启动入口代理 (后启动)
     print_info "启动入口代理 (端口 8081)..."
     cd agents/entrance
-    nohup ./entrance_agent > ../../logs/entrance_agent.log 2>&1 &
+    nohup ./entrance_agent -model="$MODEL_NAME" > ../../logs/entrance_agent.log 2>&1 &
     ENTRANCE_PID=$!
     cd ../..
     echo $ENTRANCE_PID > logs/entrance_agent.pid
