@@ -14,6 +14,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -57,7 +58,7 @@ func TestInstructionProc_Request(t *testing.T) {
 			wantMessages: 1,
 		},
 		{
-			name:         "adds both instruction and system prompt",
+			name:         "adds both instruction and system prompt as one message",
 			instruction:  "Be concise",
 			systemPrompt: "You are helpful",
 			request: &model.Request{
@@ -67,7 +68,7 @@ func TestInstructionProc_Request(t *testing.T) {
 				AgentName:    "test-agent",
 				InvocationID: "test-123",
 			},
-			wantMessages: 2,
+			wantMessages: 1,
 		},
 		{
 			name:         "no instruction or system prompt provided",
@@ -83,12 +84,27 @@ func TestInstructionProc_Request(t *testing.T) {
 			wantMessages: 0,
 		},
 		{
-			name:         "doesn't duplicate instruction",
+			name:         "doesn't duplicate instruction when already exists",
 			instruction:  "Be helpful",
 			systemPrompt: "",
 			request: &model.Request{
 				Messages: []model.Message{
 					model.NewSystemMessage("Be helpful"),
+				},
+			},
+			invocation: &agent.Invocation{
+				AgentName:    "test-agent",
+				InvocationID: "test-123",
+			},
+			wantMessages: 1,
+		},
+		{
+			name:         "appends instruction to existing system message",
+			instruction:  "Be concise",
+			systemPrompt: "",
+			request: &model.Request{
+				Messages: []model.Message{
+					model.NewSystemMessage("You are helpful"),
 				},
 			},
 			invocation: &agent.Invocation{
@@ -112,71 +128,77 @@ func TestInstructionProc_Request(t *testing.T) {
 			}
 
 			// Check if instruction was added correctly
-			if tt.instruction != "" {
+			if tt.instruction != "" && tt.wantMessages > 0 {
 				found := false
 				for _, msg := range tt.request.Messages {
-					if msg.Role == model.RoleSystem && msg.Content == tt.instruction {
+					if msg.Role == model.RoleSystem && strings.Contains(msg.Content, tt.instruction) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("ProcessRequest() instruction message not found in messages")
+					t.Errorf("ProcessRequest() instruction content not found in system messages")
 				}
 			}
 
 			// Check if system prompt was added correctly
-			if tt.systemPrompt != "" {
+			if tt.systemPrompt != "" && tt.wantMessages > 0 {
 				found := false
 				for _, msg := range tt.request.Messages {
-					if msg.Role == model.RoleSystem && msg.Content == tt.systemPrompt {
+					if msg.Role == model.RoleSystem && strings.Contains(msg.Content, tt.systemPrompt) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("ProcessRequest() system prompt message not found in messages")
+					t.Errorf("ProcessRequest() system prompt content not found in system messages")
 				}
 			}
 		})
 	}
 }
 
-func TestInstructionProc_HasSysMsg(t *testing.T) {
+func TestFindSystemMessageIndex(t *testing.T) {
 	tests := []struct {
 		name     string
 		messages []model.Message
-		content  string
-		want     bool
+		want     int
 	}{
 		{
 			name:     "empty messages",
 			messages: []model.Message{},
-			content:  "Be helpful",
-			want:     false,
+			want:     -1,
 		},
 		{
-			name: "no matching content",
+			name: "no system message",
 			messages: []model.Message{
-				model.NewSystemMessage("Different content"),
+				{Role: model.RoleUser, Content: "Hello"},
 			},
-			content: "Be helpful",
-			want:    false,
+			want: -1,
 		},
 		{
-			name: "has matching content",
+			name: "has system message at start",
 			messages: []model.Message{
-				model.NewSystemMessage("Be helpful"),
+				model.NewSystemMessage("System prompt"),
+				{Role: model.RoleUser, Content: "Hello"},
 			},
-			content: "Be helpful",
-			want:    true,
+			want: 0,
+		},
+		{
+			name: "has system message in middle",
+			messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+				model.NewSystemMessage("System prompt"),
+				{Role: model.RoleAssistant, Content: "Hi"},
+			},
+			want: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hasInstructionSystemMessage(tt.messages, tt.content); got != tt.want {
-				t.Errorf("hasInstructionSystemMessage() = %v, want %v", got, tt.want)
+			if got := findSystemMessageIndex(tt.messages); got != tt.want {
+				t.Errorf("findSystemMessageIndex() = %v, want %v", got, tt.want)
 			}
 		})
 	}
