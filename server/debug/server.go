@@ -374,8 +374,8 @@ func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 		AppName:        s.AppName,
 		UserID:         s.UserID,
 		ID:             s.ID,
-		CreateTime:     s.CreatedAt.UnixMilli(),
-		LastUpdateTime: s.UpdatedAt.UnixMilli(),
+		CreateTime:     s.CreatedAt.Unix(),
+		LastUpdateTime: s.UpdatedAt.Unix(),
 		State:          map[string][]byte(s.State),
 		Events:         adkEvents,
 	}
@@ -401,7 +401,7 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 			"requestedAuthConfigs": map[string]interface{}{},
 		},
 		"id":        id,
-		"timestamp": e.Timestamp.UnixMilli(),
+		"timestamp": e.Timestamp.Unix(),
 	}
 
 	// ---------------------------------------------------------------------
