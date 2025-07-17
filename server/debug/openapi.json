@@ -172,13 +172,13 @@
     "schemas": {
       "ADKSession": {
         "type": "object",
-        "required": ["appName", "userId", "id", "createTime", "updateTime"],
+        "required": ["appName", "userId", "id", "createTime", "lastUpdateTime"],
         "properties": {
           "appName": { "type": "string" },
           "userId": { "type": "string" },
           "id": { "type": "string" },
           "createTime": { "type": "integer", "format": "int64" },
-          "updateTime": { "type": "integer", "format": "int64" },
+          "lastUpdateTime": { "type": "integer", "format": "int64" },
           "state": {
             "type": "object",
             "additionalProperties": {

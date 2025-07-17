@@ -7,7 +7,6 @@ replace trpc.group/trpc-go/trpc-agent-go => ../
 replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 
 require (
-	github.com/redis/go-redis/v9 v9.11.0
 	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/metric v1.37.0
 	go.opentelemetry.io/otel/trace v1.37.0
@@ -39,6 +38,7 @@ require (
 	github.com/openai/openai-go v1.5.0 // indirect
 	github.com/panjf2000/ants/v2 v2.6.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
+	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/rs/cors v1.10.1 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

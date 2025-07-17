@@ -371,13 +371,13 @@ func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 		}
 	}
 	return schema.ADKSession{
-		AppName:    s.AppName,
-		UserID:     s.UserID,
-		ID:         s.ID,
-		CreateTime: s.CreatedAt.UnixMilli(),
-		UpdateTime: s.UpdatedAt.UnixMilli(),
-		State:      map[string][]byte(s.State),
-		Events:     adkEvents,
+		AppName:        s.AppName,
+		UserID:         s.UserID,
+		ID:             s.ID,
+		CreateTime:     s.CreatedAt.UnixMilli(),
+		LastUpdateTime: s.UpdatedAt.UnixMilli(),
+		State:          map[string][]byte(s.State),
+		Events:         adkEvents,
 	}
 }
 
