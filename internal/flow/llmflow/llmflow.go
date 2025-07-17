@@ -153,7 +153,7 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
-	ctx, span := trace.Tracer.Start(ctx, "call_llm")
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
 	defer span.End()
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
@@ -385,7 +385,8 @@ func (f *Flow) handleFunctionCalls(
 	toolCalls := functionCallEvent.Response.Choices[0].Message.ToolCalls
 	for i, toolCall := range toolCalls {
 		func(index int, toolCall model.ToolCall) {
-			ctxWithInvocation, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
+			ctxWithInvocation, span := trace.Tracer.Start(ctx,
+				fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name))
 			defer span.End()
 			choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
 			if choice == nil {
@@ -419,7 +420,7 @@ func (f *Flow) handleFunctionCalls(
 	mergedEvent.RequiresCompletion = true
 	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
-		_, span := trace.Tracer.Start(ctx, "execute_tool (merged)")
+		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
 		span.End()
 	}

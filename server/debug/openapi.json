@@ -143,6 +143,63 @@
           }
         }
       }
+    },
+    "/debug/trace/{event_id}": {
+      "parameters": [
+        {
+          "name": "event_id",
+          "in": "path",
+          "required": true,
+          "description": "Event identifier to retrieve trace information for.",
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "summary": "Retrieve trace information for a specific event.",
+        "operationId": "getEventTrace",
+        "responses": {
+          "200": {
+            "description": "Trace attributes for the event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Trace attributes as key-value pairs."
+                }
+              }
+            }
+          },
+          "404": { "description": "Trace not found." }
+        }
+      }
+    },
+    "/debug/trace/session/{session_id}": {
+      "parameters": [
+        {
+          "name": "session_id",
+          "in": "path",
+          "required": true,
+          "description": "Session identifier to retrieve trace spans for.",
+          "schema": { "type": "string" }
+        }
+      ],
+      "get": {
+        "summary": "Retrieve all trace spans for a specific session.",
+        "operationId": "getSessionTrace",
+        "responses": {
+          "200": {
+            "description": "Array of trace spans for the session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Span" }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -266,6 +323,22 @@
             "description": "Arbitrary JSON response from the function."
           },
           "id": { "type": "string" }
+        }
+      },
+      "Span": {
+        "type": "object",
+        "required": ["name", "span_id", "trace_id", "start_time", "end_time"],
+        "properties": {
+          "name": { "type": "string" },
+          "span_id": { "type": "string" },
+          "trace_id": { "type": "string" },
+          "start_time": { "type": "integer", "format": "int64" },
+          "end_time": { "type": "integer", "format": "int64" },
+          "attributes": {
+            "type": "object",
+            "description": "Trace attributes as key-value pairs."
+          },
+          "parent_span_id": { "type": "string" }
         }
       },
       "Event": {
