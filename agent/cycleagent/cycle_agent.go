@@ -128,6 +128,7 @@ func (a *CycleAgent) createSubAgentInvocation(
 	} else {
 		subInvocation.Branch = a.name
 	}
+
 	return &subInvocation
 }
 
