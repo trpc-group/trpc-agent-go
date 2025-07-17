@@ -206,19 +206,7 @@ Remember: only output the final result itself, no other text.`,
 
 	// Add workflow edges.
 	stateGraph.AddEdge("preprocess", "analyze")
-	stateGraph.AddConditionalEdges("analyze", func(ctx context.Context, state graph.State) (string, error) {
-		if msgs, ok := state[graph.StateKeyMessages].([]model.Message); ok {
-			if len(msgs) > 0 {
-				if len(msgs[len(msgs)-1].ToolCalls) > 0 {
-					return "tools", nil
-				}
-			}
-		}
-		return "route_complexity", nil
-	}, map[string]string{
-		"tools":            "tools",
-		"route_complexity": "route_complexity",
-	})
+	stateGraph.AddToolsConditionalEdges("analyze", "tools", "route_complexity")
 	stateGraph.AddEdge("tools", "analyze")
 
 	// Add conditional routing for complexity.

@@ -134,6 +134,36 @@ func (sg *StateGraph) AddConditionalEdges(
 	return sg
 }
 
+// AddToolsConditionalEdges adds conditional routing from a LLM node to a tools node.
+// If the last message has tool calls, route to the tools node.
+// Otherwise, route to the fallback node.
+func (sg *StateGraph) AddToolsConditionalEdges(
+	fromLLMNode string,
+	toToolsNode string,
+	fallbackNode string,
+) *StateGraph {
+	condition := func(ctx context.Context, state State) (string, error) {
+		if msgs, ok := state[StateKeyMessages].([]model.Message); ok {
+			if len(msgs) > 0 {
+				if len(msgs[len(msgs)-1].ToolCalls) > 0 {
+					return toToolsNode, nil
+				}
+			}
+		}
+		return fallbackNode, nil
+	}
+	condEdge := &ConditionalEdge{
+		From:      fromLLMNode,
+		Condition: condition,
+		PathMap: map[string]string{
+			toToolsNode:  toToolsNode,
+			fallbackNode: fallbackNode,
+		},
+	}
+	sg.graph.addConditionalEdge(condEdge)
+	return sg
+}
+
 // SetEntryPoint sets the entry point of the graph.
 // This is equivalent to addEdge(Start, nodeId).
 func (sg *StateGraph) SetEntryPoint(nodeID string) *StateGraph {
