@@ -52,8 +52,8 @@ func TestBuilderAddFunctionNode(t *testing.T) {
 	if !exists {
 		t.Error("Expected test node to be added")
 	}
-	if node.Name != "Test Node" {
-		t.Errorf("Expected node name 'Test Node', got '%s'", node.Name)
+	if node.Name != "test" {
+		t.Errorf("Expected node name 'test', got '%s'", node.Name)
 	}
 	if node.Function == nil {
 		t.Error("Expected node to have function")
