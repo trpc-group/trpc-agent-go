@@ -15,8 +15,6 @@
 // packages. They only exist to facilitate request/response marshalling.
 package schema
 
-import "go.opentelemetry.io/otel/attribute"
-
 // ADKSession mirrors the structure expected by ADK Web UI for a session.
 // Field names follow the camel-case convention required by the UI.
 type ADKSession struct {
@@ -31,13 +29,13 @@ type ADKSession struct {
 
 // Span represents a single span in the trace.
 type Span struct {
-	Name         string        `json:"name"`
-	SpanID       string        `json:"span_id"`
-	TraceID      string        `json:"trace_id"`
-	StartTime    int64         `json:"start_time"`
-	EndTime      int64         `json:"end_time"`
-	Attributes   attribute.Set `json:"attributes"`
-	ParentSpanID string        `json:"parent_span_id"`
+	Name         string         `json:"name"`
+	SpanID       string         `json:"span_id"`
+	TraceID      string         `json:"trace_id"`
+	StartTime    int64          `json:"start_time"`
+	EndTime      int64          `json:"end_time"`
+	Attributes   map[string]any `json:"attributes"`
+	ParentSpanID string         `json:"parent_span_id"`
 }
 
 // -----------------------------------------------------------------------------
@@ -86,4 +84,8 @@ type AgentRunRequest struct {
 	SessionID  string  `json:"sessionId"`
 	NewMessage Content `json:"newMessage"`
 	Streaming  bool    `json:"streaming"`
+}
+
+type TraceLLMRequest struct {
+	Contents []Content `json:"contents"`
 }

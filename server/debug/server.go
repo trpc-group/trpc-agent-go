@@ -142,8 +142,9 @@ func (e *apiServerSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.
 		}
 		allAttrs := append(baseAttrs, span.Attributes()...)
 		attributes := attribute.NewSet(allAttrs...)
-		if attributes.HasValue(keyEventID) {
-			e.traces[keyEventID] = attributes
+
+		if eventID, ok := attributes.Value(keyEventID); ok {
+			e.traces[eventID.AsString()] = attributes
 		}
 	}
 	return nil
@@ -154,12 +155,12 @@ func (e *apiServerSpanExporter) Shutdown(_ context.Context) error {
 }
 
 type inMemoryExporter struct {
-	sessionTraces map[string][]string // key: session_id, value: []event_id
+	sessionTraces map[string]map[string]struct{} // key: session_id, value: map[event_id]struct{}
 	spans         []sdktrace.ReadOnlySpan
 }
 
 func newInMemoryExporter() *inMemoryExporter {
-	return &inMemoryExporter{sessionTraces: make(map[string][]string)}
+	return &inMemoryExporter{sessionTraces: make(map[string]map[string]struct{})}
 }
 func (e *inMemoryExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
 	for _, span := range spans {
@@ -170,12 +171,14 @@ func (e *inMemoryExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadO
 			if attr.Key != keySessionID {
 				continue
 			}
-			traceID := span.SpanContext().TraceID().String()
 			sessionID := attr.Value.AsString()
+			traceID := span.SpanContext().TraceID().String()
 			if _, ok := e.sessionTraces[sessionID]; !ok {
-				e.sessionTraces[sessionID] = []string{traceID}
+				e.sessionTraces[sessionID] = map[string]struct{}{
+					traceID: {},
+				}
 			} else {
-				e.sessionTraces[sessionID] = append(e.sessionTraces[sessionID], traceID)
+				e.sessionTraces[sessionID][traceID] = struct{}{}
 			}
 			break
 		}
@@ -191,7 +194,7 @@ func (e *inMemoryExporter) Shutdown(_ context.Context) error {
 func (e *inMemoryExporter) getFinishedSpans(sessionID string) []sdktrace.ReadOnlySpan {
 	traceIDs := e.sessionTraces[sessionID]
 	var spans []sdktrace.ReadOnlySpan
-	for _, traceID := range traceIDs {
+	for traceID := range traceIDs {
 		for _, s := range e.spans {
 			if s.SpanContext().TraceID().String() == traceID {
 				spans = append(spans, s)
@@ -250,7 +253,7 @@ func (s *Server) handleEventTrace(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("Trace not found"))
 		return
 	}
-	s.writeJSON(w, trace)
+	s.writeJSON(w, buildTraceAttributes(trace))
 }
 
 func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
@@ -259,18 +262,47 @@ func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
 	sessionID := vars["session_id"]
 	var spans []schema.Span
 	for _, span := range s.memoryExporter.getFinishedSpans(sessionID) {
+		result := buildTraceAttributes(attribute.NewSet(span.Attributes()...))
 		spans = append(spans, schema.Span{
 			Name:         span.Name(),
 			SpanID:       span.SpanContext().SpanID().String(),
 			TraceID:      span.SpanContext().TraceID().String(),
-			StartTime:    span.StartTime().Unix(),
-			EndTime:      span.EndTime().Unix(),
-			Attributes:   attribute.NewSet(span.Attributes()...),
+			StartTime:    span.StartTime().UnixNano(),
+			EndTime:      span.EndTime().UnixNano(),
+			Attributes:   result,
 			ParentSpanID: span.Parent().SpanID().String(),
 		})
 	}
-	log.Info("handleSessionTrace called: spans=%v", spans)
 	s.writeJSON(w, spans)
+}
+
+func buildTraceAttributes(attributes attribute.Set) map[string]any {
+	result := make(map[string]any)
+	for iter := attributes.Iter(); iter.Next(); {
+		attr := iter.Attribute()
+		if attr.Key == keyLLMRequest {
+			var req model.Request
+			if err := json.Unmarshal([]byte(attr.Value.AsString()), &req); err != nil {
+				var contents []schema.Content
+				for _, c := range req.Messages {
+					contents = append(contents, schema.Content{
+						Role: c.Role.String(),
+						Parts: []schema.Part{
+							schema.Part{
+								Text: c.Content,
+							},
+						},
+					})
+				}
+				result[string(attr.Key)] = schema.TraceLLMRequest{
+					Contents: contents,
+				}
+			} else {
+				result[string(attr.Key)] = attr.Value.AsString()
+			}
+		}
+	}
+	return result
 }
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {

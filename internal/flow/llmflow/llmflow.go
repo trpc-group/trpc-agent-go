@@ -628,7 +628,7 @@ func newToolCallResponseEvent(
 	// Create function response event.
 	return &event.Event{
 		Response: &model.Response{
-			ID:        "tool-response-" + eventID,
+			ID:        eventID,
 			Object:    model.ObjectTypeToolResponse,
 			Created:   time.Now().Unix(),
 			Model:     functionCallEvent.Response.Model,
@@ -659,7 +659,7 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	baseEvent := es[0]
 	return &event.Event{
 		Response: &model.Response{
-			ID:        "tool-response-" + eventID,
+			ID:        eventID,
 			Object:    model.ObjectTypeToolResponse,
 			Created:   time.Now().Unix(),
 			Model:     baseEvent.Response.Model,
