@@ -23,14 +23,20 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/debug/internal/schema"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Server exposes HTTP endpoints compatible with the ADK Web UI. Internally it
@@ -44,6 +50,9 @@ type Server struct {
 
 	sessionSvc session.Service
 	runnerOpts []runner.Option // Extra options applied when creating a runner.
+
+	traces         map[string]attribute.Set // key: event_id
+	memoryExporter *inMemoryExporter
 }
 
 // Option configures the Server instance.
@@ -65,10 +74,12 @@ func WithRunnerOptions(opts ...runner.Option) Option {
 // behaviour can be tweaked via functional options.
 func New(agents map[string]agent.Agent, opts ...Option) *Server {
 	s := &Server{
-		agents:     agents,
-		router:     mux.NewRouter(),
-		runners:    make(map[string]runner.Runner),
-		sessionSvc: sessioninmemory.NewSessionService(),
+		agents:         agents,
+		router:         mux.NewRouter(),
+		runners:        make(map[string]runner.Runner),
+		traces:         make(map[string]attribute.Set),
+		memoryExporter: newInMemoryExporter(),
+		sessionSvc:     sessioninmemory.NewSessionService(),
 	}
 
 	// Apply user-provided options.
@@ -86,7 +97,115 @@ func New(agents map[string]agent.Agent, opts ...Option) *Server {
 	})
 	s.router.Use(c.Handler)
 	s.registerRoutes()
+
+	provider := sdktrace.NewTracerProvider()
+	provider.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(newApiServerSpanExporter(s.traces)))
+	provider.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(s.memoryExporter))
+	otel.SetTracerProvider(provider)
+	atrace.Tracer = otel.Tracer(itelemetry.InstrumentName)
+	setTraceInfo()
 	return s
+}
+
+const (
+	keyEventID      = "gcp.vertex.agent.event_id"
+	keySessionID    = "gcp.vertex.agent.session_id"
+	keyInvocationID = "gcp.vertex.agent.invocation_id"
+	keyLLMRequest   = "gcp.vertex.agent.llm_request"
+	keyLLMResponse  = "gcp.vertex.agent.llm_response"
+)
+
+func setTraceInfo() {
+	itelemetry.KeyEventID = keyEventID
+	itelemetry.KeySessionID = keySessionID
+	itelemetry.KeyLLMRequest = keyLLMRequest
+	itelemetry.KeyLLMResponse = keyLLMResponse
+	itelemetry.KeyInvocationID = keyInvocationID
+}
+
+type apiServerSpanExporter struct {
+	traces map[string]attribute.Set
+}
+
+func newApiServerSpanExporter(ts map[string]attribute.Set) *apiServerSpanExporter {
+	return &apiServerSpanExporter{traces: ts}
+}
+
+func (e *apiServerSpanExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	for _, span := range spans {
+		if name := span.Name(); name != itelemetry.SpanNameCallLLM && !strings.HasPrefix(name, itelemetry.SpanNamePrefixExecuteTool) {
+			continue
+		}
+		baseAttrs := []attribute.KeyValue{
+			attribute.String("trace_id", span.SpanContext().TraceID().String()),
+			attribute.String("span_id", span.SpanContext().SpanID().String()),
+		}
+		allAttrs := append(baseAttrs, span.Attributes()...)
+		attributes := attribute.NewSet(allAttrs...)
+
+		if eventID, ok := attributes.Value(keyEventID); ok {
+			e.traces[eventID.AsString()] = attributes
+		}
+	}
+	return nil
+}
+
+func (e *apiServerSpanExporter) Shutdown(_ context.Context) error {
+	return nil
+}
+
+type inMemoryExporter struct {
+	sessionTraces map[string]map[string]struct{} // key: session_id, value: map[event_id]struct{}
+	spans         []sdktrace.ReadOnlySpan
+}
+
+func newInMemoryExporter() *inMemoryExporter {
+	return &inMemoryExporter{sessionTraces: make(map[string]map[string]struct{})}
+}
+func (e *inMemoryExporter) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
+	for _, span := range spans {
+		if span.Name() != itelemetry.SpanNameCallLLM {
+			continue
+		}
+		for _, attr := range span.Attributes() {
+			if attr.Key != keySessionID {
+				continue
+			}
+			sessionID := attr.Value.AsString()
+			traceID := span.SpanContext().TraceID().String()
+			if _, ok := e.sessionTraces[sessionID]; !ok {
+				e.sessionTraces[sessionID] = map[string]struct{}{
+					traceID: {},
+				}
+			} else {
+				e.sessionTraces[sessionID][traceID] = struct{}{}
+			}
+			break
+		}
+	}
+	e.spans = append(e.spans, spans...)
+	return nil
+}
+
+func (e *inMemoryExporter) Shutdown(_ context.Context) error {
+	return nil
+}
+
+func (e *inMemoryExporter) getFinishedSpans(sessionID string) []sdktrace.ReadOnlySpan {
+	traceIDs := e.sessionTraces[sessionID]
+	var spans []sdktrace.ReadOnlySpan
+	for traceID := range traceIDs {
+		for _, s := range e.spans {
+			if s.SpanContext().TraceID().String() == traceID {
+				spans = append(spans, s)
+			}
+		}
+	}
+	return spans
+}
+
+func (e *inMemoryExporter) clear() {
+	e.spans = make([]sdktrace.ReadOnlySpan, 0)
 }
 
 // Handler returns the http.Handler for the server.
@@ -104,6 +223,12 @@ func (s *Server) registerRoutes() {
 	s.router.HandleFunc("/apps/{appName}/users/{userId}/sessions/{sessionId}",
 		s.handleGetSession).Methods(http.MethodGet)
 
+	// Debug APIs
+	s.router.HandleFunc("/debug/trace/{event_id}",
+		s.handleEventTrace).Methods(http.MethodGet)
+	s.router.HandleFunc("/debug/trace/session/{session_id}",
+		s.handleSessionTrace).Methods(http.MethodGet)
+
 	// Runner APIs.
 	s.router.HandleFunc("/run", s.handleRun).Methods(http.MethodPost)
 	s.router.HandleFunc("/run_sse", s.handleRunSSE).Methods(http.MethodPost)
@@ -117,6 +242,68 @@ func (s *Server) registerRoutes() {
 }
 
 // ---- Handlers -----------------------------------------------------------
+
+func (s *Server) handleEventTrace(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleEventTrace called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	eventID := vars["event_id"]
+	trace, ok := s.traces[eventID]
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("Trace not found"))
+		return
+	}
+	s.writeJSON(w, buildTraceAttributes(trace))
+}
+
+func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
+	log.Infof("handleSessionTrace called: path=%s", r.URL.Path)
+	vars := mux.Vars(r)
+	sessionID := vars["session_id"]
+	var spans []schema.Span
+	for _, span := range s.memoryExporter.getFinishedSpans(sessionID) {
+		result := buildTraceAttributes(attribute.NewSet(span.Attributes()...))
+		spans = append(spans, schema.Span{
+			Name:         span.Name(),
+			SpanID:       span.SpanContext().SpanID().String(),
+			TraceID:      span.SpanContext().TraceID().String(),
+			StartTime:    span.StartTime().UnixNano(),
+			EndTime:      span.EndTime().UnixNano(),
+			Attributes:   result,
+			ParentSpanID: span.Parent().SpanID().String(),
+		})
+	}
+	s.writeJSON(w, spans)
+}
+
+func buildTraceAttributes(attributes attribute.Set) map[string]any {
+	result := make(map[string]any)
+	for iter := attributes.Iter(); iter.Next(); {
+		attr := iter.Attribute()
+		if attr.Key == keyLLMRequest {
+			var req model.Request
+			if err := json.Unmarshal([]byte(attr.Value.AsString()), &req); err != nil {
+				var contents []schema.Content
+				for _, c := range req.Messages {
+					contents = append(contents, schema.Content{
+						Role: c.Role.String(),
+						Parts: []schema.Part{
+							schema.Part{
+								Text: c.Content,
+							},
+						},
+					})
+				}
+				result[string(attr.Key)] = schema.TraceLLMRequest{
+					Contents: contents,
+				}
+			} else {
+				result[string(attr.Key)] = attr.Value.AsString()
+			}
+		}
+	}
+	return result
+}
 
 func (s *Server) handleListApps(w http.ResponseWriter, r *http.Request) {
 	log.Infof("handleListApps called: path=%s", r.URL.Path)

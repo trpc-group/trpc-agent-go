@@ -27,6 +27,17 @@ type ADKSession struct {
 	Events         []map[string]interface{} `json:"events"`
 }
 
+// Span represents a single span in the trace.
+type Span struct {
+	Name         string         `json:"name"`
+	SpanID       string         `json:"span_id"`
+	TraceID      string         `json:"trace_id"`
+	StartTime    int64          `json:"start_time"`
+	EndTime      int64          `json:"end_time"`
+	Attributes   map[string]any `json:"attributes"`
+	ParentSpanID string         `json:"parent_span_id"`
+}
+
 // -----------------------------------------------------------------------------
 // Incoming request payloads ----------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -73,4 +84,8 @@ type AgentRunRequest struct {
 	SessionID  string  `json:"sessionId"`
 	NewMessage Content `json:"newMessage"`
 	Streaming  bool    `json:"streaming"`
+}
+
+type TraceLLMRequest struct {
+	Contents []Content `json:"contents"`
 }
