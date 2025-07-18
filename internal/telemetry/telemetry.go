@@ -33,6 +33,17 @@ const (
 	ServiceVersion   = "v0.1.0"
 	ServiceNamespace = "trpc-go-agent"
 	InstrumentName   = "trpc.agent.go"
+
+	SpanNameCallLLM           = "call_llm"
+	SpanNamePrefixExecuteTool = "execute_tool"
+)
+
+var (
+	KeyEventID      = "trpc.go.agent.event_id"
+	KeySessionID    = "trpc.go.agent.session_id"
+	KeyInvocationID = "trpc.go.agent.invocation_id"
+	KeyLLMRequest   = "trpc.go.agent.llm_request"
+	KeyLLMResponse  = "trpc.go.agent.llm_response"
 )
 
 // TraceToolCall traces the invocation of a tool call.
@@ -42,7 +53,7 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 		semconv.GenAIOperationNameExecuteTool,
 		semconv.GenAIToolName(declaration.Name),
 		semconv.GenAIToolDescription(declaration.Description),
-		attribute.String("trpc.go.agent.event_id", rspEvent.ID),
+		attribute.String(KeyEventID, rspEvent.ID),
 		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
 	)
 
@@ -61,8 +72,8 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	// Setting empty llm request and response (as UI expect these) while not
 	// applicable for tool_response.
 	span.SetAttributes(
-		attribute.String("trpc.go.agent.llm_request", "{}"),
-		attribute.String("trpc.go.agent.llm_response", "{}"),
+		attribute.String(KeyLLMRequest, "{}"),
+		attribute.String(KeyLLMResponse, "{}"),
 	)
 }
 
@@ -73,7 +84,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		semconv.GenAIOperationNameExecuteTool,
 		semconv.GenAIToolName("(merged tools)"),
 		semconv.GenAIToolDescription("(merged tools)"),
-		attribute.String("trpc.go.agent.event_id", rspEvent.ID),
+		attribute.String(KeyEventID, rspEvent.ID),
 		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
 		attribute.String("trpc.go.agent.tool_call_args", "N/A"),
 	)
@@ -87,8 +98,8 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	// Setting empty llm request and response (as UI expect these) while not
 	// applicable for tool_response.
 	span.SetAttributes(
-		attribute.String("trpc.go.agent.llm_request", "{}"),
-		attribute.String("trpc.go.agent.llm_response", "{}"),
+		attribute.String(KeyLLMRequest, "{}"),
+		attribute.String(KeyLLMResponse, "{}"),
 	)
 }
 
@@ -96,26 +107,26 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	span.SetAttributes(
 		semconv.GenAISystemKey.String("trpc.go.agent"),
-		attribute.String("trpc.go.agent.invokcation_id", invoke.InvocationID),
-		attribute.String("trpc.go.agent.session_id", invoke.Session.ID),
-		attribute.String("trpc.go.agent.event_id", eventID),
+		attribute.String(KeyInvocationID, invoke.InvocationID),
+		attribute.String(KeySessionID, invoke.Session.ID),
+		attribute.String(KeyEventID, eventID),
 		semconv.GenAIRequestModelKey.String(invoke.Model.Info().Name),
 	)
 
 	if bts, err := json.Marshal(req); err == nil {
 		span.SetAttributes(
-			attribute.String("trpc.go.agent.llm_request", string(bts)),
+			attribute.String(KeyLLMRequest, string(bts)),
 		)
 	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.llm_request", "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
 	}
 
 	if bts, err := json.Marshal(rsp); err == nil {
 		span.SetAttributes(
-			attribute.String("trpc.go.agent.llm_request", string(bts)),
+			attribute.String(KeyLLMResponse, string(bts)),
 		)
 	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.llm_request", "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
 	}
 }
 
