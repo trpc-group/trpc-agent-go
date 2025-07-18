@@ -77,13 +77,14 @@ type Options struct {
 
 // GraphAgent is an agent that executes a graph.
 type GraphAgent struct {
-	name           string
-	description    string
-	graph          *graph.Graph
-	executor       *graph.Executor
-	tools          []tool.Tool
-	agentCallbacks *agent.AgentCallbacks
-	initialState   graph.State
+	name              string
+	description       string
+	graph             *graph.Graph
+	executor          *graph.Executor
+	tools             []tool.Tool
+	agentCallbacks    *agent.AgentCallbacks
+	initialState      graph.State
+	channelBufferSize int
 }
 
 // New creates a new GraphAgent with the given graph and options.
@@ -107,33 +108,60 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 	}
 
 	return &GraphAgent{
-		name:           name,
-		description:    options.Description,
-		graph:          g,
-		executor:       executor,
-		tools:          options.Tools,
-		agentCallbacks: options.AgentCallbacks,
-		initialState:   options.InitialState,
+		name:              name,
+		description:       options.Description,
+		graph:             g,
+		executor:          executor,
+		tools:             options.Tools,
+		agentCallbacks:    options.AgentCallbacks,
+		initialState:      options.InitialState,
+		channelBufferSize: options.ChannelBufferSize,
 	}, nil
 }
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Prepare initial state
+	// Prepare initial state.
 	initialState := ga.initialState
 	if initialState == nil {
 		initialState = make(graph.State)
 	}
-	// Add invocation message to state
+	// Add invocation message to state.
 	if invocation.Message.Content != "" {
 		initialState[graph.StateKeyUserInput] = invocation.Message.Content
 	}
-	// Add session context if available
+	// Add session context if available.
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
 	}
-	// Execute the graph
-	return ga.executor.Execute(ctx, initialState, invocation.InvocationID)
+	// Set agent callbacks if available.
+	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
+		invocation.AgentCallbacks = ga.agentCallbacks
+	}
+	// Execute the graph.
+	if invocation.AgentCallbacks != nil {
+		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("before agent callback failed: %w", err)
+		}
+		if customResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			// Create an event from the custom response.
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			eventChan <- customEvent
+			close(eventChan)
+			return eventChan, nil
+		}
+	}
+	eventChan, err := ga.executor.Execute(ctx, initialState, invocation.InvocationID)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.AgentCallbacks != nil {
+		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
+	}
+	return eventChan, nil
 }
 
 // Tools returns the list of tools that this agent has access to.
@@ -159,4 +187,55 @@ func (ga *GraphAgent) SubAgents() []agent.Agent {
 func (ga *GraphAgent) FindSubAgent(name string) agent.Agent {
 	// GraphAgent does not support sub-agents.
 	return nil
+}
+
+// wrapEventChannel wraps the event channel to apply after agent callbacks.
+func (ga *GraphAgent) wrapEventChannel(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	originalChan <-chan *event.Event,
+) <-chan *event.Event {
+	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
+	go func() {
+		defer close(wrappedChan)
+		// Forward all events from the original channel
+		for evt := range originalChan {
+			select {
+			case wrappedChan <- evt:
+			case <-ctx.Done():
+				return
+			}
+		}
+		// After all events are processed, run after agent callbacks
+		customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		if err != nil {
+			// Send error event.
+			errorEvent := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				agent.ErrorTypeAgentCallbackError,
+				err.Error(),
+			)
+			select {
+			case wrappedChan <- errorEvent:
+			case <-ctx.Done():
+				return
+			}
+			return
+		}
+		if customResponse != nil {
+			// Create an event from the custom response.
+			customEvent := event.NewResponseEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				customResponse,
+			)
+			select {
+			case wrappedChan <- customEvent:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return wrappedChan
 }
