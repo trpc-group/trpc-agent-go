@@ -40,13 +40,6 @@ func WithTools(tools []tool.Tool) Option {
 	}
 }
 
-// WithSubAgents sets the list of sub-agents available to the agent.
-func WithSubAgents(subAgents []agent.Agent) Option {
-	return func(opts *Options) {
-		opts.SubAgents = subAgents
-	}
-}
-
 // WithAgentCallbacks sets the agent callbacks.
 func WithAgentCallbacks(callbacks *agent.AgentCallbacks) Option {
 	return func(opts *Options) {
@@ -74,8 +67,6 @@ type Options struct {
 	Description string
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
-	// SubAgents is the list of sub-agents available to the agent.
-	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.AgentCallbacks
 	// InitialState is the initial state for graph execution.
@@ -91,7 +82,6 @@ type GraphAgent struct {
 	graph          *graph.Graph
 	executor       *graph.Executor
 	tools          []tool.Tool
-	subAgents      []agent.Agent
 	agentCallbacks *agent.AgentCallbacks
 	initialState   graph.State
 }
@@ -122,7 +112,6 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		graph:          g,
 		executor:       executor,
 		tools:          options.Tools,
-		subAgents:      options.SubAgents,
 		agentCallbacks: options.AgentCallbacks,
 		initialState:   options.InitialState,
 	}, nil
@@ -162,15 +151,12 @@ func (ga *GraphAgent) Info() agent.Info {
 
 // SubAgents returns the list of sub-agents available to this agent.
 func (ga *GraphAgent) SubAgents() []agent.Agent {
-	return ga.subAgents
+	// GraphAgent does not support sub-agents.
+	return nil
 }
 
 // FindSubAgent finds a sub-agent by name.
 func (ga *GraphAgent) FindSubAgent(name string) agent.Agent {
-	for _, subAgent := range ga.subAgents {
-		if subAgent.Info().Name == name {
-			return subAgent
-		}
-	}
+	// GraphAgent does not support sub-agents.
 	return nil
 }
