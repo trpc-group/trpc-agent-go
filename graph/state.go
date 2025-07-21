@@ -23,6 +23,10 @@ const (
 	StateKeyMetadata = "metadata"
 	// StateKeyExecContext is the key of the execution context.
 	StateKeyExecContext = "exec_context"
+	// StateKeyToolCallbacks is the key of the tool callbacks.
+	StateKeyToolCallbacks = "tool_callbacks"
+	// StateKeyModelCallbacks is the key of the model callbacks.
+	StateKeyModelCallbacks = "model_callbacks"
 )
 
 // State represents the state that flows through the graph.

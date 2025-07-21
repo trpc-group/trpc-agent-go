@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -81,8 +82,11 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 func (e *Executor) Execute(
 	ctx context.Context,
 	initialState State,
-	invocationID string,
+	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
+	if invocation == nil {
+		return nil, errors.New("invocation is nil")
+	}
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	go func() {
 		defer close(eventChan)
@@ -90,12 +94,15 @@ func (e *Executor) Execute(
 			Graph:        e.graph,
 			State:        initialState.Clone(),
 			EventChan:    eventChan,
-			InvocationID: invocationID,
+			InvocationID: invocation.InvocationID,
 		}
 		execCtx.State[StateKeyExecContext] = execCtx
+		execCtx.State[StateKeyToolCallbacks] = invocation.ToolCallbacks
+		execCtx.State[StateKeyModelCallbacks] = invocation.ModelCallbacks
 		if err := e.executeGraph(ctx, execCtx); err != nil {
 			// Send error event.
-			errorEvent := event.NewErrorEvent(invocationID, AuthorGraphExecutor,
+			errorEvent := event.NewErrorEvent(
+				invocation.InvocationID, AuthorGraphExecutor,
 				ErrorTypeGraphExecution, err.Error())
 			select {
 			case eventChan <- errorEvent:

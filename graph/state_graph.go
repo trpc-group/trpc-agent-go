@@ -218,6 +218,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 				messages = append(messages, model.NewUserMessage(input))
 			}
 		}
+		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.ModelCallbacks)
 		var invocationID string
 		var eventChan chan<- *event.Event
 		if execCtx, exists := state[StateKeyExecContext]; exists {
@@ -235,15 +236,23 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 				Stream: true,
 			},
 		}
-		// Generate content.
-		responseChan, err := llmModel.GenerateContent(ctx, request)
+		responseChan, err := runModel(ctx, modelCallbacks, llmModel, request)
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate content: %w", err)
+			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		// Process response.
 		var finalResponse *model.Response
 		var toolCalls []model.ToolCall
 		for response := range responseChan {
+			if modelCallbacks != nil {
+				customResponse, err := modelCallbacks.RunAfterModel(ctx, response, nil)
+				if err != nil {
+					return nil, fmt.Errorf("callback after model error: %w", err)
+				}
+				if customResponse != nil {
+					response = customResponse
+				}
+			}
 			if eventChan != nil && !response.Done {
 				select {
 				case eventChan <- event.NewResponseEvent(invocationID, llmModel.Info().Name, response):
@@ -274,6 +283,32 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 	}
 }
 
+func runModel(
+	ctx context.Context,
+	modelCallbacks *model.ModelCallbacks,
+	llmModel model.Model,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	if modelCallbacks != nil {
+		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
+		if err != nil {
+			return nil, fmt.Errorf("callback before model error: %w", err)
+		}
+		if customResponse != nil {
+			responseChan := make(chan *model.Response, 1)
+			responseChan <- customResponse
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
+	// Generate content.
+	responseChan, err := llmModel.GenerateContent(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate content: %w", err)
+	}
+	return responseChan, nil
+}
+
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
 // This implements tools node functionality using the tools package interface.
 func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
@@ -284,6 +319,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 				messages = msgs
 			}
 		}
+		toolCallbacks, _ := state[StateKeyToolCallbacks].(*tool.ToolCallbacks)
 		if len(messages) == 0 {
 			return nil, errors.New("no messages in state")
 		}
@@ -299,24 +335,56 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 			if t == nil {
 				return nil, fmt.Errorf("tool %s not found", name)
 			}
-			if callableTool, ok := t.(tool.CallableTool); ok {
-				result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
-				if err != nil {
-					return nil, fmt.Errorf("tool %s call failed: %w", name, err)
-				}
-				content, err := json.Marshal(result)
-				if err != nil {
-					return nil, fmt.Errorf("failed to marshal tool result: %w", err)
-				}
-				newMessages = append(newMessages, model.NewToolMessage(id, name, string(content)))
-			} else {
-				return nil, fmt.Errorf("tool %s is not callable", name)
+			result, err := runTool(ctx, toolCall, toolCallbacks, t)
+			if err != nil {
+				return nil, fmt.Errorf("tool %s call failed: %w", name, err)
 			}
+			content, err := json.Marshal(result)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal tool result: %w", err)
+			}
+			newMessages = append(newMessages, model.NewToolMessage(id, name, string(content)))
 		}
 		return State{
 			StateKeyMessages: newMessages,
 		}, nil
 	}
+}
+
+func runTool(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	toolCallbacks *tool.ToolCallbacks,
+	t tool.Tool,
+) (any, error) {
+	if toolCallbacks != nil {
+		customResult, err := toolCallbacks.RunBeforeTool(
+			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("callback before tool error: %w", err)
+		}
+		if customResult != nil {
+			return customResult, nil
+		}
+	}
+	if callableTool, ok := t.(tool.CallableTool); ok {
+		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+		}
+		if toolCallbacks != nil {
+			customResult, err := toolCallbacks.RunAfterTool(
+				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
+			if err != nil {
+				return nil, fmt.Errorf("callback after tool error: %w", err)
+			}
+			if customResult != nil {
+				return customResult, nil
+			}
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // MessagesStateSchema creates a state schema optimized for message-based workflows.

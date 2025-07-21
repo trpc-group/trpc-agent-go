@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -47,6 +48,20 @@ func WithAgentCallbacks(callbacks *agent.AgentCallbacks) Option {
 	}
 }
 
+// WithModelCallbacks sets the model callbacks.
+func WithModelCallbacks(callbacks *model.ModelCallbacks) Option {
+	return func(opts *Options) {
+		opts.ModelCallbacks = callbacks
+	}
+}
+
+// WithToolCallbacks sets the tool callbacks.
+func WithToolCallbacks(callbacks *tool.ToolCallbacks) Option {
+	return func(opts *Options) {
+		opts.ToolCallbacks = callbacks
+	}
+}
+
 // WithInitialState sets the initial state for graph execution.
 func WithInitialState(state graph.State) Option {
 	return func(opts *Options) {
@@ -69,6 +84,10 @@ type Options struct {
 	Tools []tool.Tool
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.AgentCallbacks
+	// ModelCallbacks contains callbacks for model operations.
+	ModelCallbacks *model.ModelCallbacks
+	// ToolCallbacks contains callbacks for tool operations.
+	ToolCallbacks *tool.ToolCallbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -83,6 +102,8 @@ type GraphAgent struct {
 	executor          *graph.Executor
 	tools             []tool.Tool
 	agentCallbacks    *agent.AgentCallbacks
+	modelCallbacks    *model.ModelCallbacks
+	toolCallbacks     *tool.ToolCallbacks
 	initialState      graph.State
 	channelBufferSize int
 }
@@ -114,6 +135,8 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executor:          executor,
 		tools:             options.Tools,
 		agentCallbacks:    options.AgentCallbacks,
+		modelCallbacks:    options.ModelCallbacks,
+		toolCallbacks:     options.ToolCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
 	}, nil
@@ -138,6 +161,14 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
 		invocation.AgentCallbacks = ga.agentCallbacks
 	}
+	// Set model callbacks if available.
+	if invocation.ModelCallbacks == nil && ga.modelCallbacks != nil {
+		invocation.ModelCallbacks = ga.modelCallbacks
+	}
+	// Set tool callbacks if available.
+	if invocation.ToolCallbacks == nil && ga.toolCallbacks != nil {
+		invocation.ToolCallbacks = ga.toolCallbacks
+	}
 	// Execute the graph.
 	if invocation.AgentCallbacks != nil {
 		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
@@ -154,7 +185,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			return eventChan, nil
 		}
 	}
-	eventChan, err := ga.executor.Execute(ctx, initialState, invocation.InvocationID)
+	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
 	if err != nil {
 		return nil, err
 	}
