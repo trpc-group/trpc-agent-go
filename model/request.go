@@ -73,6 +73,16 @@ func NewUserMessage(content string) Message {
 	}
 }
 
+// NewToolMessage creates a new tool message.
+func NewToolMessage(toolID, toolName, content string) Message {
+	return Message{
+		Role:     RoleTool,
+		ToolID:   toolID,
+		ToolName: toolName,
+		Content:  content,
+	}
+}
+
 // NewAssistantMessage creates a new assistant message.
 func NewAssistantMessage(content string) Message {
 	return Message{

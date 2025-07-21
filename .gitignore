@@ -17,3 +17,4 @@ claude3.7.sh
 dpskv3.sh
 .cursorignore
 !LICENSE
+.kiro
