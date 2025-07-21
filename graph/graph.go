@@ -1,0 +1,287 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
+// Package graph provides graph-based execution functionality.
+package graph
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+)
+
+// Special node identifiers for graph routing.
+const (
+	// Start represents the virtual start node for routing.
+	Start = "__start__"
+	// End represents the virtual end node for routing.
+	End = "__end__"
+)
+
+// Error types for graph execution.
+const (
+	ErrorTypeGraphExecution  = "graph_execution_error"
+	ErrorTypeInvalidNode     = "invalid_node_error"
+	ErrorTypeInvalidState    = "invalid_state_error"
+	ErrorTypeInvalidEdge     = "invalid_edge_error"
+	ErrorTypeConditionalEdge = "conditional_edge_error"
+	ErrorTypeStateValidation = "state_validation_error"
+	ErrorTypeNodeExecution   = "node_execution_error"
+	ErrorTypeCircularRef     = "circular_reference_error"
+	ErrorTypeConcurrency     = "concurrency_error"
+	ErrorTypeTimeout         = "timeout_error"
+	ErrorTypeModelGeneration = "model_generation_error"
+)
+
+// NodeFunc is a function that can be executed by a node.
+// Node function signature: (state) -> updated_state or Command.
+type NodeFunc func(ctx context.Context, state State) (any, error)
+
+// NodeResult represents the result of executing a node function.
+// It can be either a State update or a Command for combined state update + routing.
+type NodeResult any
+
+// ConditionalFunc is a function that determines the next node(s) based on state.
+// Conditional edge function signature.
+type ConditionalFunc func(ctx context.Context, state State) (string, error)
+
+// MultiConditionalFunc returns multiple next nodes for parallel execution.
+type MultiConditionalFunc func(ctx context.Context, state State) ([]string, error)
+
+// Node represents a node in the graph.
+// Nodes are primarily functions with metadata.
+type Node struct {
+	ID          string
+	Name        string
+	Description string
+	Function    NodeFunc
+}
+
+// Edge represents an edge in the graph.
+// Simplified edge pattern.
+type Edge struct {
+	From string
+	To   string
+}
+
+// ConditionalEdge represents a conditional edge with routing logic.
+type ConditionalEdge struct {
+	From      string
+	Condition ConditionalFunc
+	PathMap   map[string]string // Maps condition result to target node.
+}
+
+// Graph represents a directed graph of nodes and edges.
+// This is the compiled runtime structure created by StateGraph.Compile().
+// Users typically don't create Graph instances directly. Instead, use:
+//   - StateGraph for building graphs with compatible patterns.
+//
+// The Graph type is the immutable runtime representation that gets executed
+// by the Executor.
+type Graph struct {
+	mu               sync.RWMutex
+	schema           *StateSchema
+	nodes            map[string]*Node
+	edges            map[string][]*Edge
+	conditionalEdges map[string]*ConditionalEdge
+	entryPoint       string
+}
+
+// New creates a new empty graph with the given state schema.
+func New(schema *StateSchema) *Graph {
+	if schema == nil {
+		schema = NewStateSchema()
+	}
+
+	return &Graph{
+		schema:           schema,
+		nodes:            make(map[string]*Node),
+		edges:            make(map[string][]*Edge),
+		conditionalEdges: make(map[string]*ConditionalEdge),
+	}
+}
+
+// Node returns a node by ID.
+func (g *Graph) Node(id string) (*Node, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	node, exists := g.nodes[id]
+	return node, exists
+}
+
+// Edges returns all outgoing edges from a node.
+func (g *Graph) Edges(nodeID string) []*Edge {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.edges[nodeID]
+}
+
+// ConditionalEdge returns the conditional edge from a node.
+func (g *Graph) ConditionalEdge(nodeID string) (*ConditionalEdge, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	edge, exists := g.conditionalEdges[nodeID]
+	return edge, exists
+}
+
+// EntryPoint returns the entry point node ID.
+func (g *Graph) EntryPoint() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.entryPoint
+}
+
+// Schema returns the state schema.
+func (g *Graph) Schema() *StateSchema {
+	return g.schema
+}
+
+// validate validates the graph structure.
+func (g *Graph) validate() error {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if g.entryPoint == "" {
+		return fmt.Errorf("graph must have an entry point")
+	}
+	if _, exists := g.nodes[g.entryPoint]; !exists {
+		return fmt.Errorf("entry point node %s does not exist", g.entryPoint)
+	}
+	// Check that all nodes are reachable from entry point
+	visited := make(map[string]bool)
+	if err := g.dfsValidate(g.entryPoint, visited); err != nil {
+		return err
+	}
+	// Check for unreachable nodes
+	for nodeID := range g.nodes {
+		if !visited[nodeID] {
+			return fmt.Errorf("node %s is not reachable from entry point", nodeID)
+		}
+	}
+	return nil
+}
+
+// dfsValidate performs depth-first search validation.
+func (g *Graph) dfsValidate(nodeID string, visited map[string]bool) error {
+	if visited[nodeID] {
+		return nil // Already visited, cycles are allowed
+	}
+	visited[nodeID] = true
+	// Check regular edges
+	edges := g.edges[nodeID]
+	for _, edge := range edges {
+		if edge.To != End {
+			if err := g.dfsValidate(edge.To, visited); err != nil {
+				return err
+			}
+		}
+	}
+	// Check conditional edges
+	if condEdge, exists := g.conditionalEdges[nodeID]; exists {
+		for _, to := range condEdge.PathMap {
+			if to != End {
+				if err := g.dfsValidate(to, visited); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ExecutionContext contains context for graph execution.
+type ExecutionContext struct {
+	Graph        *Graph
+	State        State
+	EventChan    chan<- *event.Event
+	InvocationID string
+}
+
+// Command represents a command that combines state updates with routing.
+type Command struct {
+	Update State
+	GoTo   string
+}
+
+// addNode adds a node to the graph.
+func (g *Graph) addNode(node *Node) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if node.ID == "" {
+		return fmt.Errorf("node ID cannot be empty for %+v", node)
+	}
+	if _, exists := g.nodes[node.ID]; exists {
+		return fmt.Errorf("node with ID %s already exists for %+v", node.ID, node)
+	}
+	g.nodes[node.ID] = node
+	return nil
+}
+
+// addEdge adds an edge to the graph.
+func (g *Graph) addEdge(edge *Edge) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if edge.From == "" || edge.To == "" {
+		return fmt.Errorf("edge from and to cannot be empty")
+	}
+	// Allow Start and End as special nodes
+	if edge.From != Start {
+		if _, exists := g.nodes[edge.From]; !exists {
+			return fmt.Errorf("source node %s does not exist", edge.From)
+		}
+	}
+	if edge.To != End {
+		if _, exists := g.nodes[edge.To]; !exists {
+			return fmt.Errorf("target node %s does not exist", edge.To)
+		}
+	}
+	g.edges[edge.From] = append(g.edges[edge.From], edge)
+	return nil
+}
+
+// addConditionalEdge adds a conditional edge to the graph.
+func (g *Graph) addConditionalEdge(condEdge *ConditionalEdge) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if condEdge.From == "" {
+		return fmt.Errorf("conditional edge from cannot be empty")
+	}
+	if condEdge.From != Start {
+		if _, exists := g.nodes[condEdge.From]; !exists {
+			return fmt.Errorf("source node %s does not exist", condEdge.From)
+		}
+	}
+	// Validate all target nodes in path map
+	for _, to := range condEdge.PathMap {
+		if to != End {
+			if _, exists := g.nodes[to]; !exists {
+				return fmt.Errorf("target node %s does not exist", to)
+			}
+		}
+	}
+	g.conditionalEdges[condEdge.From] = condEdge
+	return nil
+}
+
+// setEntryPoint sets the entry point of the graph.
+func (g *Graph) setEntryPoint(nodeID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if nodeID != "" {
+		if _, exists := g.nodes[nodeID]; !exists {
+			return fmt.Errorf("entry point node %s does not exist", nodeID)
+		}
+	}
+	g.entryPoint = nodeID
+	return nil
+}
