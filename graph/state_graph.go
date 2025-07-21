@@ -19,8 +19,12 @@ import (
 	"fmt"
 	"reflect"
 
+	"go.opentelemetry.io/otel/attribute"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -201,6 +205,9 @@ func (sg *StateGraph) MustCompile() *Graph {
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]tool.Tool) NodeFunc {
 	return func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
+		defer span.End()
+
 		// Extract messages from state or create new ones
 		var messages []model.Message
 		if msgData, exists := state[StateKeyMessages]; exists {
@@ -238,6 +245,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 		}
 		responseChan, err := runModel(ctx, modelCallbacks, llmModel, request)
 		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 		// Process response.
@@ -247,6 +255,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			if modelCallbacks != nil {
 				customResponse, err := modelCallbacks.RunAfterModel(ctx, response, nil)
 				if err != nil {
+					span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 					return nil, fmt.Errorf("callback after model error: %w", err)
 				}
 				if customResponse != nil {
@@ -254,13 +263,20 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 				}
 			}
 			if eventChan != nil && !response.Done {
+				llmEvent := event.NewResponseEvent(invocationID, llmModel.Info().Name, response)
+				// Trace the LLM call using the telemetry package.
+				itelemetry.TraceCallLLM(span, &agent.Invocation{
+					InvocationID: invocationID,
+					Model:        llmModel,
+				}, request, response, llmEvent.ID)
 				select {
-				case eventChan <- event.NewResponseEvent(invocationID, llmModel.Info().Name, response):
+				case eventChan <- llmEvent:
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
 			}
 			if response.Error != nil {
+				span.SetAttributes(attribute.String("trpc.go.agent.error", response.Error.Message))
 				return nil, fmt.Errorf("model API error: %s", response.Error.Message)
 			}
 			if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
@@ -269,6 +285,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			finalResponse = response
 		}
 		if finalResponse == nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
 			return nil, errors.New("no response received from model")
 		}
 		newMessage := model.Message{
@@ -289,9 +306,18 @@ func runModel(
 	llmModel model.Model,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
+	ctx, span := trace.Tracer.Start(ctx, "run_model")
+	defer span.End()
+
+	// Set span attributes for model execution.
+	span.SetAttributes(
+		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
+	)
+
 	if modelCallbacks != nil {
 		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
 		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback before model error: %w", err)
 		}
 		if customResponse != nil {
@@ -304,6 +330,7 @@ func runModel(
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
+		span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 	return responseChan, nil
@@ -313,6 +340,9 @@ func runModel(
 // This implements tools node functionality using the tools package interface.
 func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 	return func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, "tools_node_execution")
+		defer span.End()
+
 		var messages []model.Message
 		if msgData, exists := state[StateKeyMessages]; exists {
 			if msgs, ok := msgData.([]model.Message); ok {
@@ -321,10 +351,12 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		}
 		toolCallbacks, _ := state[StateKeyToolCallbacks].(*tool.ToolCallbacks)
 		if len(messages) == 0 {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", "no messages in state"))
 			return nil, errors.New("no messages in state")
 		}
 		lastMessage := messages[len(messages)-1]
 		if lastMessage.Role != model.RoleAssistant {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", "last message is not an assistant message"))
 			return nil, errors.New("last message is not an assistant message")
 		}
 		toolCalls := lastMessage.ToolCalls
@@ -333,14 +365,17 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 			id, name := toolCall.ID, toolCall.Function.Name
 			t := tools[name]
 			if t == nil {
+				span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
 				return nil, fmt.Errorf("tool %s not found", name)
 			}
 			result, err := runTool(ctx, toolCall, toolCallbacks, t)
 			if err != nil {
+				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 				return nil, fmt.Errorf("tool %s call failed: %w", name, err)
 			}
 			content, err := json.Marshal(result)
 			if err != nil {
+				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 				return nil, fmt.Errorf("failed to marshal tool result: %w", err)
 			}
 			newMessages = append(newMessages, model.NewToolMessage(id, name, string(content)))
@@ -357,10 +392,21 @@ func runTool(
 	toolCallbacks *tool.ToolCallbacks,
 	t tool.Tool,
 ) (any, error) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
+	defer span.End()
+
+	// Set span attributes for tool execution.
+	span.SetAttributes(
+		attribute.String("trpc.go.agent.tool_name", toolCall.Function.Name),
+		attribute.String("trpc.go.agent.tool_id", toolCall.ID),
+		attribute.String("trpc.go.agent.tool_description", t.Declaration().Description),
+	)
+
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
 			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
 		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
@@ -370,12 +416,14 @@ func runTool(
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
 				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
 			if err != nil {
+				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 				return nil, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
@@ -384,6 +432,7 @@ func runTool(
 		}
 		return result, nil
 	}
+	span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s is not callable", toolCall.Function.Name)))
 	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 

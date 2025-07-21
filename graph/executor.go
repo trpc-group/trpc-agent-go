@@ -17,9 +17,11 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 const (
@@ -87,6 +89,10 @@ func (e *Executor) Execute(
 	if invocation == nil {
 		return nil, errors.New("invocation is nil")
 	}
+
+	ctx, span := trace.Tracer.Start(ctx, "execute_graph")
+	defer span.End()
+
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	go func() {
 		defer close(eventChan)
@@ -172,6 +178,18 @@ func (e *Executor) executeNode(ctx context.Context, execCtx *ExecutionContext, n
 	if !exists {
 		return "", fmt.Errorf("node %s not found", nodeID)
 	}
+
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_node %s", nodeID))
+	defer span.End()
+
+	// Set span attributes for node execution.
+	span.SetAttributes(
+		attribute.String("trpc.go.agent.node_id", nodeID),
+		attribute.String("trpc.go.agent.node_name", node.Name),
+		attribute.String("trpc.go.agent.node_description", node.Description),
+		attribute.String("trpc.go.agent.invocation_id", execCtx.InvocationID),
+	)
+
 	// Send node start event if we have an event channel.
 	if execCtx.EventChan != nil {
 		startEvent := event.New(execCtx.InvocationID, AuthorGraphExecutor)
@@ -194,6 +212,8 @@ func (e *Executor) executeNode(ctx context.Context, execCtx *ExecutionContext, n
 	if node.Function != nil {
 		result, err := node.Function(ctx, execCtx.State)
 		if err != nil {
+			// Set error attributes on span.
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return "", fmt.Errorf("node function execution failed: %w", err)
 		}
 		// Handle different result types.
@@ -205,6 +225,7 @@ func (e *Executor) executeNode(ctx context.Context, execCtx *ExecutionContext, n
 
 			// Return the specified routing target.
 			if command.GoTo != "" {
+				span.SetAttributes(attribute.String("trpc.go.agent.next_node", command.GoTo))
 				return command.GoTo, nil
 			}
 		} else if newState, ok := result.(State); ok {
@@ -215,7 +236,11 @@ func (e *Executor) executeNode(ctx context.Context, execCtx *ExecutionContext, n
 		}
 	}
 	// Determine next node using edges and conditional logic.
-	return e.selectNextNode(ctx, execCtx, nodeID)
+	nextNode, err := e.selectNextNode(ctx, execCtx, nodeID)
+	if err == nil {
+		span.SetAttributes(attribute.String("trpc.go.agent.next_node", nextNode))
+	}
+	return nextNode, err
 }
 
 // selectNextNode selects the next node based on edges and conditional logic.
