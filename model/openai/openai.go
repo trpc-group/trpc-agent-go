@@ -40,8 +40,42 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// DefaultHTTPClient is the default HTTP client for OpenAI.
-var DefaultHTTPClient HTTPClient = &http.Client{}
+// HTTPClientNewFunc is the function type for creating a new HTTP client.
+type HTTPClientNewFunc func(opts ...HTTPClientOption) HTTPClient
+
+// DefaultNewHTTPClient is the default HTTP client for OpenAI.
+var DefaultNewHTTPClient HTTPClientNewFunc = func(opts ...HTTPClientOption) HTTPClient {
+	options := &HTTPClientOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+	return &http.Client{
+		Transport: options.Transport,
+	}
+}
+
+// HTTPClientOption is the option for the HTTP client.
+type HTTPClientOption func(*HTTPClientOptions)
+
+// WithHTTPClientName is the option for the HTTP client name.
+func WithHTTPClientName(name string) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Name = name
+	}
+}
+
+// WithHTTPClientTransport is the option for the HTTP client transport.
+func WithHTTPClientTransport(transport http.RoundTripper) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Transport = transport
+	}
+}
+
+// HTTPClientOptions is the options for the HTTP client.
+type HTTPClientOptions struct {
+	Name      string
+	Transport http.RoundTripper
+}
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
@@ -57,6 +91,7 @@ type Options struct {
 	APIKey            string
 	BaseURL           string // Optional: for OpenAI-compatible APIs
 	ChannelBufferSize int    // Buffer size for response channels (default: 256)
+	HTTPClientOptions []HTTPClientOption
 }
 
 // New creates a new OpenAI-like model.
@@ -71,7 +106,7 @@ func New(name string, opts Options) *Model {
 		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
 	}
 
-	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultHTTPClient))
+	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(opts.HTTPClientOptions...)))
 
 	client := openai.NewClient(clientOpts...)
 
