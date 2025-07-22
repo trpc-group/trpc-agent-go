@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -33,6 +34,14 @@ const (
 
 	defaultChannelBufferSize = 256
 )
+
+// HTTPClient is the interface for the HTTP client.
+type HTTPClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+// DefaultHTTPClient is the default HTTP client for OpenAI.
+var DefaultHTTPClient HTTPClient = &http.Client{}
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
@@ -61,6 +70,8 @@ func New(name string, opts Options) *Model {
 	if opts.BaseURL != "" {
 		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
 	}
+
+	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultHTTPClient))
 
 	client := openai.NewClient(clientOpts...)
 
