@@ -55,6 +55,26 @@ type Event struct {
 // Option is a function that can be used to configure the Event.
 type Option func(*Event)
 
+// WithBranch sets the branch for the event.
+func WithBranch(branch string) Option {
+	return func(e *Event) {
+		e.Branch = branch
+	}
+}
+
+// WithResponse sets the response for the event.
+func WithResponse(response *model.Response) Option {
+	return func(e *Event) {
+		e.Response = response
+	}
+}
+
+func WithObject(o string) Option {
+	return func(e *Event) {
+		e.Object = o
+	}
+}
+
 // New creates a new Event with generated ID and timestamp.
 func New(invocationID, author string, opts ...Option) *Event {
 	e := &Event{

@@ -28,7 +28,7 @@ import (
 
 func main() {
 	// Read configuration from command line flags.
-	modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("Creating LLMAgent with configuration:\n")
@@ -98,6 +98,7 @@ func main() {
 
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
+
 			if choice.Message.Content != "" {
 				fmt.Printf("Message Content: %s\n", choice.Message.Content)
 			}

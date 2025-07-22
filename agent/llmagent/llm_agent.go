@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
@@ -73,6 +74,12 @@ func WithGenerationConfig(config model.GenerationConfig) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(opts *Options) {
 		opts.ChannelBufferSize = size
+	}
+}
+
+func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
+	return func(opts *Options) {
+		opts.codeExecutor = ce
 	}
 }
 
@@ -150,6 +157,7 @@ type Options struct {
 	GenerationConfig model.GenerationConfig
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	codeExecutor      codeexecutor.CodeExecutor
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
@@ -179,6 +187,7 @@ type LLMAgent struct {
 	genConfig      model.GenerationConfig
 	flow           flow.Flow
 	tools          []tool.Tool // Tools supported by the agent
+	codeExecutor   codeexecutor.CodeExecutor
 	planner        planner.Planner
 	subAgents      []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks *agent.AgentCallbacks
@@ -236,6 +245,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
+	// TODO: is ok before TransferResponseProcessor?
+	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()
@@ -263,6 +275,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		systemPrompt:   options.GlobalInstruction,
 		genConfig:      options.GenerationConfig,
 		flow:           llmFlow,
+		codeExecutor:   options.codeExecutor, // TODO: should pass codeExecutor to NewCodeExecutionResponseProcessor?
 		tools:          tools,
 		planner:        options.Planner,
 		subAgents:      options.SubAgents,
@@ -452,4 +465,8 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 		}
 	}
 	return nil
+}
+
+func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
+	return a.codeExecutor
 }
