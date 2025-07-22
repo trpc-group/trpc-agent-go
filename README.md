@@ -18,7 +18,7 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 - [Quick Start](#quick-start)
 - [Examples](#examples)
   - [Tool Usage](#1-tool-usage-examplestool)
-  - [LLM-only Agent](#2-llma-only-agent-examplesllmagent)
+  - [LLM-only Agent](#2-llm-only-agent-examplesllmagent)
   - [Multi-Agent Runners](#3-multi-agent-runners-examplesmultiagent)
   - [Telemetry & Tracing](#4-telemetry--tracing-examplestelemetry)
 - [Architecture Overview](#architecture-overview)
@@ -32,7 +32,7 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 
 ### Prerequisites
 
-1. Go 1.24 or later.
+1. Go 1.24.1 or later.
 2. An LLM provider key (e.g. `OPENAI_API_KEY`).
 
 ```bash
@@ -59,7 +59,7 @@ The `examples` directory contains runnable demos covering every major feature.
 - Let the LLM decide when to invoke a tool.
 - Streaming vs. non-streaming interaction patterns.
 
-### 2. LLMA-Only Agent ([examples/llmagent](examples/llmagent))
+### 2. LLM-Only Agent ([examples/llmagent](examples/llmagent))
 
 - Wrap any chat-completion model as an `LLMAgent`.
 - Configure system instructions, temperature, max tokens, etc.
@@ -76,7 +76,7 @@ The `examples` directory contains runnable demos covering every major feature.
 - OpenTelemetry hooks across model, tool and runner layers.
 - Export traces to OTLP endpoint for real-time analysis.
 
-### 5. MCP Integration ([tool/mcp](tool/mcp))
+### 5. MCP Integration ([examples/mcp_tool](examples/mcp_tool))
 
 - Wrapper utilities around **trpc-mcp-go**, an implementation of the
   **Model Context Protocol (MCP)**.
@@ -144,14 +144,14 @@ agents that you can compose like Lego bricks:
 // 1. Create a base LLM agent.
 base := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("gpt-4o-mini", nil)),
+    llmagent.WithModel(openai.New("gpt-4o-mini", openai.Options{})),
 )
 
 // 2. Create a second LLM agent with a different instruction.
 translator := llmagent.New(
     "translator",
     llmagent.WithInstruction("Translate everything to French"),
-    llmagent.WithModel(openai.New("gpt-3.5-turbo", nil)),
+    llmagent.WithModel(openai.New("gpt-3.5-turbo", openai.Options{})),
 )
 
 // 3. Combine them in a chain.
