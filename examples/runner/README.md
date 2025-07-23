@@ -7,7 +7,7 @@ This example demonstrates a clean multi-turn chat interface using the `Runner` o
 This implementation showcases the essential features for building conversational AI applications:
 
 - **🔄 Multi-turn Conversations**: Maintains context across multiple exchanges
-- **🌊 Streaming Output**: Real-time character-by-character response generation
+- **🌊 Flexible Output**: Support for both streaming (real-time) and non-streaming (batch) response modes
 - **💾 Session Management**: Conversation state preservation and continuity
 - **🔧 Tool Integration**: Working calculator and time tools with proper execution
 - **🚀 Simple Interface**: Clean, focused chat experience
@@ -15,7 +15,7 @@ This implementation showcases the essential features for building conversational
 ### Key Features
 
 - **Context Preservation**: The assistant remembers previous conversation turns
-- **Streaming Responses**: Live, responsive output for better user experience
+- **Flexible Response Modes**: Choose between streaming (real-time) or non-streaming (batch) output
 - **Session Continuity**: Consistent conversation state across the chat session
 - **Tool Call Execution**: Proper execution and display of tool calling procedures
 - **Tool Visualization**: Clear indication of tool calls, arguments, and responses
@@ -40,6 +40,7 @@ This implementation showcases the essential features for building conversational
 | `-model` | Name of the model to use | `deepseek-chat` |
 | `-session` | Session service: `inmemory` or `redis` | `inmemory` |
 | `-redis-addr` | Redis server address (when using redis session) | `localhost:6379` |
+| `-streaming` | Enable streaming mode for responses | `true` |
 
 ## Usage
 
@@ -71,6 +72,46 @@ If you have `MODEL_NAME` set in your environment:
 
 ```bash
 source ~/.bashrc && go run main.go -model "$MODEL_NAME"
+```
+
+### Response Modes
+
+Choose between streaming and non-streaming responses:
+
+```bash
+# Default streaming mode (real-time character output)
+go run main.go
+
+# Non-streaming mode (complete response at once)
+go run main.go -streaming=false
+
+# Combined with other options
+go run main.go -model gpt-4o -streaming=false -session redis
+```
+
+**When to use each mode:**
+- **Streaming mode** (`-streaming=true`, default): Best for interactive chat where you want to see responses appear in real-time, providing immediate feedback and better user experience.
+- **Non-streaming mode** (`-streaming=false`): Better for automated scripts, batch processing, or when you need the complete response before processing it further.
+
+### Help and Available Options
+
+To see all available command line options:
+
+```bash
+go run main.go --help
+```
+
+Output:
+```
+Usage of ./runner:
+  -model string
+        Name of the model to use (default "deepseek-chat")
+  -redis-addr string
+        Redis address (default "localhost:6379")
+  -session string
+        Name of the session service to use, inmemory / redis (default "inmemory")
+  -streaming
+        Enable streaming mode for responses (default true)
 ```
 
 ## Implemented Tools
@@ -109,9 +150,11 @@ When you ask for calculations or time information, you'll see:
 The interface is simple and intuitive:
 
 ```
-🚀 Multi-turn Chat with Runner
+🚀 Multi-turn Chat with Runner + Tools
 Model: gpt-4o-mini
+Streaming: true
 Type 'exit' to end the conversation
+Available tools: calculator, current_time
 ==================================================
 ✅ Chat ready! Session: chat-session-1703123456
 
