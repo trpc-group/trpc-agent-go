@@ -40,6 +40,7 @@ var (
 	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
 	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
+	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
 func main() {
@@ -48,6 +49,7 @@ func main() {
 
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
 	fmt.Println(strings.Repeat("=", 50))
@@ -55,6 +57,7 @@ func main() {
 	// Create and run the chat.
 	chat := &multiTurnChat{
 		modelName: *modelName,
+		streaming: *streaming,
 	}
 
 	if err := chat.run(); err != nil {
@@ -65,6 +68,7 @@ func main() {
 // multiTurnChat manages the conversation.
 type multiTurnChat struct {
 	modelName string
+	streaming bool
 	runner    runner.Runner
 	userID    string
 	sessionID string
@@ -105,7 +109,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      c.streaming,
 	}
 
 	agentName := "chat-assistant"
@@ -211,12 +215,12 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
 
-	// Process streaming response.
-	return c.processStreamingResponse(eventChan)
+	// Process response.
+	return c.processResponse(eventChan)
 }
 
-// processStreamingResponse handles the streaming response with tool call visualization.
-func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) error {
+// processResponse handles both streaming and non-streaming responses with tool call visualization.
+func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("🤖 Assistant: ")
 
 	var (
@@ -265,20 +269,29 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			}
 		}
 
-		// Process streaming content.
+		// Process content (streaming or non-streaming).
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 
-			// Handle streaming delta content.
-			if choice.Delta.Content != "" {
+			// Handle content based on streaming mode.
+			var content string
+			if c.streaming {
+				// Streaming mode: use delta content.
+				content = choice.Delta.Content
+			} else {
+				// Non-streaming mode: use full message content.
+				content = choice.Message.Content
+			}
+
+			if content != "" {
 				if !assistantStarted {
 					if toolCallsDetected {
 						fmt.Printf("\n🤖 Assistant: ")
 					}
 					assistantStarted = true
 				}
-				fmt.Print(choice.Delta.Content)
-				fullContent += choice.Delta.Content
+				fmt.Print(content)
+				fullContent += content
 			}
 		}
 
