@@ -81,9 +81,7 @@ func (c *transferChat) run() error {
 // setup creates the runner with main agent and sub-agents.
 func (c *transferChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create sub-agents.
 	mathAgent := c.createMathAgent(modelInstance)

@@ -63,7 +63,7 @@ func main() {
 	// --- Model and tools setup ---
 	// Create the OpenAI model instance for LLM interactions.
 	modelName := "deepseek-chat"
-	modelInstance := openai.New(modelName, openai.Options{})
+	modelInstance := openai.New(modelName)
 
 	// Create calculator tool for mathematical operations.
 	calculatorTool := function.NewFunctionTool(

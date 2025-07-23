@@ -162,9 +162,7 @@ func buildAgentCard(host string, agentList []tool.Tool) server.AgentCard {
 
 func buildGlobalRunner(modelName string, agentList []tool.Tool) runner.Runner {
 	// Create OpenAI model.
-	modelInstance := openai.New(modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(modelName, openai.WithChannelBufferSize(512))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{

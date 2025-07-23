@@ -193,7 +193,7 @@ func TestServer_handleCreateSession(t *testing.T) {
 
 func TestServer_handleRun(t *testing.T) {
 	// Create a real LLM agent for this test.
-	modelInstance := openai.New("test-model", openai.Options{})
+	modelInstance := openai.New("test-model")
 	llmAgent := llmagent.New(
 		"test-agent",
 		llmagent.WithModel(modelInstance),

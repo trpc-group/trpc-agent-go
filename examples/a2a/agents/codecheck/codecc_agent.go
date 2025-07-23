@@ -158,9 +158,7 @@ func buildAgentCard(host string, port int) server.AgentCard {
 
 func buildGlobalRunner(modelName string) runner.Runner {
 	// Create OpenAI model.
-	modelInstance := openai.New(modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(modelName, openai.WithChannelBufferSize(512))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{

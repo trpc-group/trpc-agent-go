@@ -21,7 +21,7 @@ import (
 	"time"
 
 	openai "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -86,24 +86,52 @@ type Model struct {
 	channelBufferSize int
 }
 
-// Options contains configuration options for creating a Model.
-type Options struct {
+// options contains configuration options for creating a Model.
+type options struct {
 	APIKey            string
 	BaseURL           string // Optional: for OpenAI-compatible APIs
 	ChannelBufferSize int    // Buffer size for response channels (default: 256)
 	HTTPClientOptions []HTTPClientOption
 }
 
-// New creates a new OpenAI-like model.
-func New(name string, opts Options) *Model {
-	var clientOpts []option.RequestOption
+// Option is a function that configures an OpenAI model.
+type Option func(*options)
 
-	if opts.APIKey != "" {
-		clientOpts = append(clientOpts, option.WithAPIKey(opts.APIKey))
+// WithAPIKey sets the API key for the OpenAI client.
+func WithAPIKey(key string) Option {
+	return func(opts *options) {
+		opts.APIKey = key
+	}
+}
+
+// WithBaseURL sets the base URL for the OpenAI client.
+func WithBaseURL(url string) Option {
+	return func(opts *options) {
+		opts.BaseURL = url
+	}
+}
+
+// WithChannelBufferSize sets the channel buffer size for the OpenAI client.
+func WithChannelBufferSize(size int) Option {
+	return func(opts *options) {
+		opts.ChannelBufferSize = size
+	}
+}
+
+// New creates a new OpenAI-like model.
+func New(name string, opts ...Option) *Model {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	var clientOpts []openaiopt.RequestOption
+
+	if o.APIKey != "" {
+		clientOpts = append(clientOpts, openaiopt.WithAPIKey(o.APIKey))
 	}
 
-	if opts.BaseURL != "" {
-		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
+	if o.BaseURL != "" {
+		clientOpts = append(clientOpts, openaiopt.WithBaseURL(o.BaseURL))
 	}
 
 	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(opts.HTTPClientOptions...)))
@@ -111,7 +139,7 @@ func New(name string, opts Options) *Model {
 	client := openai.NewClient(clientOpts...)
 
 	// Set default channel buffer size if not specified.
-	channelBufferSize := opts.ChannelBufferSize
+	channelBufferSize := o.ChannelBufferSize
 	if channelBufferSize <= 0 {
 		channelBufferSize = defaultChannelBufferSize
 	}
@@ -119,8 +147,8 @@ func New(name string, opts Options) *Model {
 	return &Model{
 		client:            client,
 		name:              name,
-		baseURL:           opts.BaseURL,
-		apiKey:            opts.APIKey,
+		baseURL:           o.BaseURL,
+		apiKey:            o.APIKey,
 		channelBufferSize: channelBufferSize,
 	}
 }
@@ -175,12 +203,12 @@ func (m *Model) GenerateContent(
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
-	var opts []option.RequestOption
+	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled != nil {
-		opts = append(opts, option.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
+		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
 	}
 	if request.ThinkingTokens != nil {
-		opts = append(opts, option.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
+		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
 	}
 
 	// Add streaming options if needed.
@@ -303,7 +331,7 @@ func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
-	opts ...option.RequestOption,
+	opts ...openaiopt.RequestOption,
 ) {
 	stream := m.client.Chat.Completions.NewStreaming(
 		ctx, chatRequest, opts...)
@@ -424,7 +452,7 @@ func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
-	opts ...option.RequestOption,
+	opts ...openaiopt.RequestOption,
 ) {
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
