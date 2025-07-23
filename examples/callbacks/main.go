@@ -72,9 +72,7 @@ func (c *multiTurnChatWithCallbacks) run() error {
 }
 
 func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create tools.
 	calculatorTool := function.NewFunctionTool(

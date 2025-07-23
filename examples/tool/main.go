@@ -68,10 +68,7 @@ func main() {
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance using the new package structure.
-	llm := openai.New(*modelName, openai.Options{
-		APIKey:  apiKey,
-		BaseURL: baseURL,
-	})
+	llm := openai.New(*modelName, openai.WithAPIKey(apiKey), openai.WithBaseURL(baseURL))
 
 	ctx := context.Background()
 

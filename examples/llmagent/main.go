@@ -38,9 +38,7 @@ func main() {
 
 	// Create a model instance.
 	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: 50, // Larger buffer for agent use.
-	})
+	modelInstance := openai.New(*modelName, openai.WithChannelBufferSize(50)) // Larger buffer for agent use.
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{

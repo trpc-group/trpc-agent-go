@@ -78,9 +78,7 @@ func (c *searchChat) run() error {
 // setup creates the runner with LLM agent and DuckDuckGo search tool.
 func (c *searchChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create DuckDuckGo search tool.
 	// For basic usage:

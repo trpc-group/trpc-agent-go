@@ -45,9 +45,7 @@ type askForApprovalOutput struct {
 func newLLMAgent() *llmagent.LLMAgent {
 	return llmagent.New(
 		"reimbursement_agent",
-		llmagent.WithModel(openai.New("deepseek-chat", openai.Options{
-			ChannelBufferSize: 512,
-		})),
+		llmagent.WithModel(openai.New("deepseek-chat", openai.WithChannelBufferSize(512))),
 		llmagent.WithDescription("A helpful AI agent for reimbursement"),
 		llmagent.WithInstruction(`
 You are an agent whose job is to handle the reimbursement process for the employees. 

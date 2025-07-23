@@ -33,31 +33,31 @@ func TestNew(t *testing.T) {
 	tests := []struct {
 		name        string
 		modelName   string
-		opts        Options
+		opts        []Option
 		expectError bool
 	}{
 		{
 			name:      "valid openai model",
 			modelName: "gpt-3.5-turbo",
-			opts: Options{
-				APIKey: "test-key",
+			opts: []Option{
+				WithAPIKey("test-key"),
 			},
 			expectError: false,
 		},
 		{
 			name:      "valid model with base url",
 			modelName: "custom-model",
-			opts: Options{
-				APIKey:  "test-key",
-				BaseURL: "https://api.custom.com",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithBaseURL("https://api.custom.com"),
 			},
 			expectError: false,
 		},
 		{
 			name:      "empty api key",
 			modelName: "gpt-3.5-turbo",
-			opts: Options{
-				APIKey: "",
+			opts: []Option{
+				WithAPIKey(""),
 			},
 			expectError: false, // Should still create model, but may fail on actual calls
 		},
@@ -65,28 +65,33 @@ func TestNew(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := New(tt.modelName, tt.opts)
+			m := New(tt.modelName, tt.opts...)
 			if m == nil {
 				t.Fatal("expected model to be created, got nil")
+			}
+
+			o := options{}
+			for _, opt := range tt.opts {
+				opt(&o)
 			}
 
 			if m.name != tt.modelName {
 				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
 			}
 
-			if m.apiKey != tt.opts.APIKey {
-				t.Errorf("expected api key %s, got %s", tt.opts.APIKey, m.apiKey)
+			if m.apiKey != o.APIKey {
+				t.Errorf("expected api key %s, got %s", o.APIKey, m.apiKey)
 			}
 
-			if m.baseURL != tt.opts.BaseURL {
-				t.Errorf("expected base url %s, got %s", tt.opts.BaseURL, m.baseURL)
+			if m.baseURL != o.BaseURL {
+				t.Errorf("expected base url %s, got %s", o.BaseURL, m.baseURL)
 			}
 		})
 	}
 }
 
 func TestModel_GenContent_NilReq(t *testing.T) {
-	m := New("test-model", Options{APIKey: "test-key"})
+	m := New("test-model", WithAPIKey("test-key"))
 
 	ctx := context.Background()
 	_, err := m.GenerateContent(ctx, nil)
@@ -107,7 +112,7 @@ func TestModel_GenContent_ValidReq(t *testing.T) {
 		t.Skip("OPENAI_API_KEY not set, skipping integration test")
 	}
 
-	m := New("gpt-3.5-turbo", Options{APIKey: apiKey})
+	m := New("gpt-3.5-turbo", WithAPIKey(apiKey))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -150,10 +155,7 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 	// It's mainly to test the configuration.
 
 	customBaseURL := "https://api.custom-openai.com"
-	m := New("custom-model", Options{
-		APIKey:  "test-key",
-		BaseURL: customBaseURL,
-	})
+	m := New("custom-model", WithAPIKey("test-key"), WithBaseURL(customBaseURL))
 
 	if m.baseURL != customBaseURL {
 		t.Errorf("expected base URL %s, got %s", customBaseURL, m.baseURL)
@@ -190,46 +192,51 @@ func TestModel_GenContent_CustomBaseURL(t *testing.T) {
 func TestOptions_Validation(t *testing.T) {
 	tests := []struct {
 		name string
-		opts Options
+		opts []Option
 	}{
 		{
 			name: "empty options",
-			opts: Options{},
+			opts: []Option{},
 		},
 		{
 			name: "only api key",
-			opts: Options{
-				APIKey: "test-key",
+			opts: []Option{
+				WithAPIKey("test-key"),
 			},
 		},
 		{
 			name: "only base url",
-			opts: Options{
-				BaseURL: "https://api.example.com",
+			opts: []Option{
+				WithBaseURL("https://api.example.com"),
 			},
 		},
 		{
 			name: "both api key and base url",
-			opts: Options{
-				APIKey:  "test-key",
-				BaseURL: "https://api.example.com",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithBaseURL("https://api.example.com"),
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := New("test-model", tt.opts)
+			m := New("test-model", tt.opts...)
 			if m == nil {
 				t.Fatal("expected model to be created")
 			}
 
-			if m.apiKey != tt.opts.APIKey {
-				t.Errorf("expected api key %s, got %s", tt.opts.APIKey, m.apiKey)
+			o := options{}
+			for _, opt := range tt.opts {
+				opt(&o)
 			}
 
-			if m.baseURL != tt.opts.BaseURL {
-				t.Errorf("expected base url %s, got %s", tt.opts.BaseURL, m.baseURL)
+			if m.apiKey != o.APIKey {
+				t.Errorf("expected api key %s, got %s", o.APIKey, m.apiKey)
+			}
+
+			if m.baseURL != o.BaseURL {
+				t.Errorf("expected base url %s, got %s", o.BaseURL, m.baseURL)
 			}
 		})
 	}
@@ -244,7 +251,7 @@ func (s stubTool) Declaration() *tool.Declaration                { return s.decl
 // TestModel_convertMessages verifies that messages are converted to the
 // openai-go request format with the expected roles and fields.
 func TestModel_convertMessages(t *testing.T) {
-	m := New("dummy-model", Options{})
+	m := New("dummy-model")
 
 	// Prepare test messages covering all branches.
 	msgs := []model.Message{
@@ -305,7 +312,7 @@ func TestModel_convertMessages(t *testing.T) {
 // TestModel_convertTools ensures that tool declarations are mapped to the
 // expected OpenAI function definitions.
 func TestModel_convertTools(t *testing.T) {
-	m := New("dummy", Options{})
+	m := New("dummy")
 
 	const toolName = "test_tool"
 	const toolDesc = "test description"

@@ -82,9 +82,7 @@ func (c *agentToolChat) run() error {
 // setup creates the runner with LLM agent and tools including agent tools.
 func (c *agentToolChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create tools.
 	calculatorTool := function.NewFunctionTool(
