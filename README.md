@@ -71,12 +71,19 @@ The `examples` directory contains runnable demos covering every major feature.
 - **ParallelAgent** – run sub-agents concurrently and merge results.
 - **CycleAgent** – iterate until a termination condition is met.
 
-### 4. Telemetry & Tracing ([examples/telemetry](examples/telemetry))
+### 4. Graph Agent ([examples/graph](examples/graph))
+
+- **GraphAgent** – demonstrates building and executing complex, conditional
+  workflows using the `graph` and `agent/graph` packages. It shows
+  how to construct a graph-based agent, manage state safely, implement
+  conditional routing, and orchestrate execution with the Runner.
+
+### 5. Telemetry & Tracing ([examples/telemetry](examples/telemetry))
 
 - OpenTelemetry hooks across model, tool and runner layers.
 - Export traces to OTLP endpoint for real-time analysis.
 
-### 5. MCP Integration ([examples/mcp_tool](examples/mcp_tool))
+### 6. MCP Integration ([examples/mcp_tool](examples/mcp_tool))
 
 - Wrapper utilities around **trpc-mcp-go**, an implementation of the
   **Model Context Protocol (MCP)**.
@@ -85,7 +92,7 @@ The `examples` directory contains runnable demos covering every major feature.
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
-### 6. Debug Web Demo ([examples/debugserver](examples/debugserver))
+### 7. Debug Web Demo ([examples/debugserver](examples/debugserver))
 
 - Launches a **debug Server** that speaks ADK-compatible HTTP endpoints.
 - Front-end: [google/adk-web](https://github.com/google/adk-web) connects via
