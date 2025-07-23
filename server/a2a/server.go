@@ -1,3 +1,4 @@
+// package a2a is the a2a server with multi agents.
 package a2a
 
 import (
@@ -6,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
@@ -19,8 +19,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
-
-var userIDHeader = "X-User-ID"
 
 // Server is the a2a server with multi agents.
 type Server struct {
@@ -186,27 +184,16 @@ func (s *Server) buildA2AServer(path string, agent agent.Agent, sessionService s
 		return nil, err
 	}
 
-	authProvider := &userAuthProvider{}
-	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, a2a.WithAuthProvider(authProvider))
+	opts := []a2a.Option{
+		a2a.WithAuthProvider(&defautAuthProvider{}),
+	}
+	// if other AuthProvider is set, user info should be covered
+	opts = append(opts, s.opts.extraOptions...)
+	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
 		return nil, err
 	}
-
 	return a2aServer, nil
-}
-
-// userAuthProvider is a simple auth provider that always returns nil.
-type userAuthProvider struct{}
-
-// Authenticate implements auth.AuthProvider.
-func (p *userAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
-	userID := r.Header.Get(userIDHeader)
-	if userID == "" {
-		userID = uuid.New().String()
-	}
-	return &auth.User{
-		ID: userID,
-	}, nil
 }
 
 // messageProcessor is the message processor for the a2a server.
@@ -268,7 +255,7 @@ func (m *messageProcessor) processMessage(
 	}
 
 	agentMsg := model.NewUserMessage(text)
-	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, agentMsg, agent.RunOptions{})
+	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, agentMsg)
 	if err != nil {
 		log.Errorf("failed to run agent: %v", err)
 		return nil, err
