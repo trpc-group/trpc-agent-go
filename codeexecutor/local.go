@@ -1,15 +1,210 @@
 package codeexecutor
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
-// LocalCodeExecutor that unsafely execute code in the current local context
+	"trpc.group/trpc-go/trpc-agent-go/log"
+)
+
+// LocalCodeExecutor that unsafely execute code in the current local command line.
 type LocalCodeExecutor struct {
+	WorkDir        string        // Working directory for code execution
+	Timeout        time.Duration // The timeout for the execution of any single code block
+	CleanTempFiles bool          // Whether to clean temporary files after execution
+}
+
+// LocalCodeExecutorOption defines a function type for configuring LocalCodeExecutor
+type LocalCodeExecutorOption func(*LocalCodeExecutor)
+
+// WithWorkDir sets the working directory for code execution
+func WithWorkDir(workDir string) LocalCodeExecutorOption {
+	return func(l *LocalCodeExecutor) {
+		l.WorkDir = workDir
+	}
+}
+
+// WithTimeout sets the timeout for code execution
+func WithTimeout(timeout time.Duration) LocalCodeExecutorOption {
+	return func(l *LocalCodeExecutor) {
+		l.Timeout = timeout
+	}
+}
+
+// WithCleanTempFiles sets whether to clean temporary files after execution
+func WithCleanTempFiles(clean bool) LocalCodeExecutorOption {
+	return func(l *LocalCodeExecutor) {
+		l.CleanTempFiles = clean
+	}
+}
+
+// NewLocalCodeExecutor creates a new LocalCodeExecutor with the given options
+func NewLocalCodeExecutor(options ...LocalCodeExecutorOption) *LocalCodeExecutor {
+	executor := &LocalCodeExecutor{
+		Timeout:        1 * time.Second,
+		CleanTempFiles: true,
+	}
+
+	for _, option := range options {
+		option(executor)
+	}
+
+	return executor
 }
 
 // ExecuteCode executes the code in the local environment and returns the result.
 func (l *LocalCodeExecutor) ExecuteCode(ctx context.Context, input CodeExecutionInput) (CodeExecutionResult, error) {
-	// Implementation for local code execution
-	return CodeExecutionResult{}, nil
+	var output strings.Builder
+
+	// Determine working directory
+	var workDir string
+	var shouldCleanup bool
+
+	if l.WorkDir != "" {
+		// Use specified working directory
+		workDir = l.WorkDir
+		// Ensure the directory exists
+		if err := os.MkdirAll(workDir, 0755); err != nil {
+			return CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
+		}
+		// Never cleanup user-specified work directories
+		shouldCleanup = false
+	} else {
+		// Create a temporary directory for execution
+		tempDir, err := os.MkdirTemp("", "codeexec_"+input.ExecutionID)
+		if err != nil {
+			return CodeExecutionResult{}, fmt.Errorf("failed to create temp directory: %w", err)
+		}
+		workDir = tempDir
+		// Cleanup temp directory based on CleanTempFiles setting
+		shouldCleanup = l.CleanTempFiles
+	}
+
+	if shouldCleanup {
+		defer os.RemoveAll(workDir)
+	}
+
+	// Execute each code block
+	for i, block := range input.CodeBlocks {
+		blockOutput, err := l.executeCodeBlock(ctx, workDir, block, i)
+		if err != nil {
+			output.WriteString(fmt.Sprintf("Error executing code block %d: %v\n", i, err))
+			continue
+		}
+		// Combine stdout and stderr into output
+		if blockOutput != "" {
+			output.WriteString(blockOutput)
+		}
+	}
+
+	// LocalCodeExecutor only outputs to Output, no output files
+	return CodeExecutionResult{
+		Output:      output.String(),
+		OutputFiles: []File{}, // Empty slice, no output files
+	}, nil
+}
+
+// executeCodeBlock executes a single code block based on its language
+func (l *LocalCodeExecutor) executeCodeBlock(ctx context.Context, workDir string, block CodeBlock, blockIndex int) (output string, err error) {
+	filePath, err := l.prepareCodeFile(workDir, block, blockIndex)
+	if err != nil {
+		return "", err
+	}
+
+	if l.CleanTempFiles {
+		defer func() {
+			if removeErr := os.Remove(filePath); removeErr != nil {
+				log.Warnf("Failed to remove temp file %s: %v", filePath, removeErr)
+			}
+		}()
+	}
+
+	cmdArgs := l.buildCommandArgs(block.Language, filePath)
+	if len(cmdArgs) == 0 {
+		return "", fmt.Errorf("unsupported language: %s", block.Language)
+	}
+
+	return l.executeCommand(ctx, workDir, cmdArgs)
+}
+
+// prepareCodeFile prepares the file content, writes it to disk, and returns the file path
+func (l *LocalCodeExecutor) prepareCodeFile(workDir string, block CodeBlock, blockIndex int) (filePath string, err error) {
+	var filename, content string
+
+	switch strings.ToLower(block.Language) {
+	case "python", "py", "python3":
+		filename = fmt.Sprintf("code_%d.py", blockIndex)
+		content = block.Code
+	case "go":
+		filename = fmt.Sprintf("code_%d.go", blockIndex)
+		content = fmt.Sprintf("package main\n\n%s", block.Code)
+	case "bash", "sh":
+		filename = fmt.Sprintf("code_%d.sh", blockIndex)
+		content = block.Code
+	default:
+		return "", fmt.Errorf("unsupported language: %s", block.Language)
+	}
+
+	// Create full file path
+	filePath = filepath.Join(workDir, filename)
+
+	// Get appropriate file mode for the language
+	fileMode := l.getFileMode(block.Language)
+
+	// Write code file to disk
+	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
+		return "", fmt.Errorf("failed to write %s file: %w", block.Language, err)
+	}
+
+	return filePath, nil
+}
+
+// getFileMode returns the appropriate file mode for the language
+func (l *LocalCodeExecutor) getFileMode(language string) os.FileMode {
+	switch strings.ToLower(language) {
+	case "bash", "sh":
+		return 0755 // Executable for shell scripts
+	default:
+		return 0644 // Regular file mode
+	}
+}
+
+// buildCommandArgs returns the command arguments for executing the file
+func (l *LocalCodeExecutor) buildCommandArgs(language, filePath string) []string {
+	switch strings.ToLower(language) {
+	case "python", "py", "python3":
+		return []string{"python3", filePath}
+	case "go":
+		return []string{"go", "run", filePath}
+	case "bash", "sh":
+		return []string{"bash", filePath}
+	default:
+		return nil
+	}
+}
+
+// executeCommand executes the command with proper timeout and context handling
+func (l *LocalCodeExecutor) executeCommand(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
+	// Set timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, l.Timeout)
+	defer cancel()
+
+	// Create command with timeout context
+	cmd := exec.CommandContext(timeoutCtx, cmdArgs[0], cmdArgs[1:]...)
+	cmd.Dir = workDir
+
+	// Execute the command
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+
+	return string(output), nil
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the local executor.

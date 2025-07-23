@@ -14,13 +14,11 @@ type CodeExecutor interface {
 
 type CodeExecutionInput struct {
 	CodeBlocks  []CodeBlock
-	InputFiles  []File
 	ExecutionID string
 }
 
 type CodeExecutionResult struct {
-	Stdout      string
-	Stderr      string
+	Output      string
 	OutputFiles []File
 }
 
@@ -77,11 +75,8 @@ func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
 // BuildCodeExecutionResult formats the code execution result into a human-readable string.
 // TODO: Consdier moving to internal/codeexecutor
 func BuildCodeExecutionResult(codeExecutionResult CodeExecutionResult) string {
-	if codeExecutionResult.Stderr != "" {
-		return fmt.Sprintf("Code execution result:\n%s\n", codeExecutionResult.Stderr)
-	}
-	if codeExecutionResult.Stdout != "" && len(codeExecutionResult.OutputFiles) == 0 {
-		return fmt.Sprintf("Code execution result:\n%s\n", codeExecutionResult.Stdout)
+	if codeExecutionResult.Output != "" && len(codeExecutionResult.OutputFiles) == 0 {
+		return fmt.Sprintf("Code execution result:\n%s\n", codeExecutionResult.Output)
 	}
 	if len(codeExecutionResult.OutputFiles) != 0 {
 		var filesNames []string
