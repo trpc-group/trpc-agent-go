@@ -79,9 +79,7 @@ import (
 
 // Create a new model instance
 // The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-llm := openai.New(modelName, openai.Options{
-    ChannelBufferSize: 512, // Optional: configure buffer size
-})
+llm := openai.New(modelName, openai.WithChannelBufferSize(512))
 
 // Use the model
 request := &model.Request{

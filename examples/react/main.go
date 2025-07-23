@@ -81,9 +81,7 @@ func (c *reactPlanningChat) run() error {
 // setup creates the runner with LLM agent and React planner.
 func (c *reactPlanningChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create tools for demonstration.
 	searchTool := function.NewFunctionTool(

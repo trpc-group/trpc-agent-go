@@ -91,9 +91,7 @@ func (c *knowledgeChat) run() error {
 // setup creates the runner with LLM agent, knowledge base, and tools.
 func (c *knowledgeChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openaimodel.New(c.modelName, openaimodel.Options{
-		ChannelBufferSize: 512,
-	})
+	modelInstance := openaimodel.New(c.modelName, openaimodel.WithChannelBufferSize(512))
 
 	// Create knowledge base with sample documents.
 	if err := c.setupKnowledgeBase(ctx); err != nil {
