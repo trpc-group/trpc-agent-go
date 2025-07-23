@@ -458,6 +458,14 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
+			response.Choices[i] = model.Choice{
+				Index: int(choice.Index),
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: choice.Message.Content,
+				},
+			}
+
 			response.Choices[i].Message.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
@@ -468,14 +476,6 @@ func (m *Model) handleNonStreamingResponse(
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
 				}
-			}
-
-			response.Choices[i] = model.Choice{
-				Index: int(choice.Index),
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: choice.Message.Content,
-				},
 			}
 
 			// Handle finish reason - FinishReason is a plain string.
