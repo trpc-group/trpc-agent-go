@@ -151,14 +151,14 @@ agents that you can compose like Lego bricks:
 // 1. Create a base LLM agent.
 base := llmagent.New(
     "assistant",
-    llmagent.WithModel(openai.New("gpt-4o-mini", openai.Options{})),
+    llmagent.WithModel(openai.New("gpt-4o-mini")),
 )
 
 // 2. Create a second LLM agent with a different instruction.
 translator := llmagent.New(
     "translator",
     llmagent.WithInstruction("Translate everything to French"),
-    llmagent.WithModel(openai.New("gpt-3.5-turbo", openai.Options{})),
+    llmagent.WithModel(openai.New("gpt-3.5-turbo")),
 )
 
 // 3. Combine them in a chain.

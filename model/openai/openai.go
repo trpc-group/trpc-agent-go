@@ -23,7 +23,6 @@ import (
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
-
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -134,7 +133,7 @@ func New(name string, opts ...Option) *Model {
 		clientOpts = append(clientOpts, openaiopt.WithBaseURL(o.BaseURL))
 	}
 
-	clientOpts = append(clientOpts, option.WithHTTPClient(DefaultNewHTTPClient(opts.HTTPClientOptions...)))
+	clientOpts = append(clientOpts, openaiopt.WithHTTPClient(DefaultNewHTTPClient(o.HTTPClientOptions...)))
 
 	client := openai.NewClient(clientOpts...)
 
