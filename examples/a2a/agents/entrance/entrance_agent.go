@@ -94,7 +94,7 @@ func buildEntranceAgent(modelName string, agentList []tool.Tool) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      false, // Enable streaming
 	}
 
 	desc := "A entrance agent, it will delegate the task to the sub-agent by a2a protocol, or try to solve the task by itself, agent list:"
@@ -136,7 +136,7 @@ func buildAgentCard(host string, agentList []tool.Tool) a2aserver.AgentCard {
 			URL:          stringPtr("https://trpc.group/trpc-go/"),
 		},
 		Capabilities: a2aserver.AgentCapabilities{
-			Streaming:              boolPtr(false),
+			Streaming:              boolPtr(true),
 			PushNotifications:      boolPtr(false),
 			StateTransitionHistory: boolPtr(false),
 		},

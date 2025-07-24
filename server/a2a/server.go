@@ -389,8 +389,14 @@ func (m *messageProcessor) processSingleEvent(agentEvent *event.Event, batchCont
 	if len(agentEvent.Response.Choices) > 0 {
 		choice := agentEvent.Response.Choices[0]
 		var content string
+
+		// Smart content extraction: prefer Delta for streaming, Message for non-streaming
 		if choice.Delta.Content != "" {
+			// Streaming mode: use delta content
 			content = choice.Delta.Content
+		} else if choice.Message.Content != "" {
+			// Non-streaming mode: use message content
+			content = choice.Message.Content
 		}
 
 		if content != "" {
@@ -485,8 +491,13 @@ func processAgentResponse(eventChan <-chan *event.Event) (string, error) {
 		// Process streaming content.
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
+			// Smart content extraction: prefer Delta for streaming, Message for non-streaming
 			if choice.Delta.Content != "" {
+				// Streaming mode: use delta content
 				fullContent += choice.Delta.Content
+			} else if choice.Message.Content != "" {
+				// Non-streaming mode: use message content
+				fullContent += choice.Message.Content
 			}
 		}
 		if event.Done {

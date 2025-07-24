@@ -26,7 +26,7 @@ const (
 
 func main() {
 	// Parse command-line flags.
-	host := flag.String("host", "localhost:8088", "Host to listen on")
+	host := flag.String("host", "21.6.224.104:8088", "Host to listen on")
 	modelName := flag.String("model", "deepseek-chat", "Model to use")
 	flag.Parse()
 
@@ -80,7 +80,7 @@ func buildCodeCheckAgent(modelName string) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      false,
 	}
 
 	readSpecTool := function.NewFunctionTool(
