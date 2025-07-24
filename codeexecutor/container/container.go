@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -18,6 +19,8 @@ type CodeExecutor struct {
 	CleanContainers bool          // Whether to clean containers after execution
 	WorkDir         string        // Host working directory to mount in container
 	DockerImage     string        // Docker image to use for execution
+	AutoRemove      bool          // If true, will automatically remove the Docker container when it is stopped.
+	ContainerName   string        // Name of the Docker container which is created. If empty, will autogenerate a name.
 }
 
 // ExecutorOption defines a function type for configuring CodeExecutor
@@ -50,19 +53,42 @@ func WithContainerWorkDir(workDir string) ExecutorOption {
 	}
 }
 
+// WithAutoRemove sets whether to automatically remove containers after execution
+func WithAutoRemove(autoRemove bool) ExecutorOption {
+	return func(c *CodeExecutor) {
+		c.AutoRemove = autoRemove
+	}
+}
+
+// WithContainerName sets the name of the Docker container
+func WithContainerName(name string) ExecutorOption {
+	return func(c *CodeExecutor) {
+		c.ContainerName = name
+	}
+}
+
 // New creates a new CodeExecutor with the given options
 func New(options ...ExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
 		Timeout:         60 * time.Second,
 		CleanContainers: true,
 		DockerImage:     "python:3-slim",
+		AutoRemove:      true,
 	}
 
 	for _, option := range options {
 		option(executor)
 	}
+	if executor.ContainerName == "" {
+		executor.ContainerName = generateContainerName()
+	}
 
 	return executor
+}
+
+// generateContainerName generates a unique container name
+func generateContainerName() string {
+	return fmt.Sprintf("trpc.go.agent-code-exec-%s", uuid.New().String())
 }
 
 // ExecuteCode executes the code in a containerized environment and returns the result.
@@ -209,13 +235,21 @@ func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, c
 	// Build Docker command
 	dockerArgs := []string{
 		"run",
-		"--rm",                                      // Remove container after execution
+	}
+
+	// Add --rm flag based on AutoRemove setting
+	if c.AutoRemove {
+		dockerArgs = append(dockerArgs, "--rm") // Remove container after execution
+	}
+
+	dockerArgs = append(dockerArgs,
 		"-v", fmt.Sprintf("%s:/workspace", workDir), // Mount work directory
 		"-w", "/workspace", // Set working directory in container
 		"--network", "none", // Disable network access for security
 		"--memory", "256m", // Limit memory usage
 		"--cpus", "1.0", // Limit CPU usage
-	}
+		"--name", c.ContainerName, // Use specified container name or generate one
+	)
 
 	// Don't add container name when using --rm, as it causes conflicts
 	dockerArgs = append(dockerArgs, c.DockerImage)
@@ -226,8 +260,6 @@ func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, c
 
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()
-
-	// No need for cleanup goroutine since we're using --rm
 
 	if err != nil {
 		// Include both error and output for better debugging
