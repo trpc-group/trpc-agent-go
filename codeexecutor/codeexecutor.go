@@ -22,6 +22,23 @@ type CodeExecutionResult struct {
 	OutputFiles []File
 }
 
+// String implements the Stringer interface, formatting the code execution result into a human-readable string.
+func (r CodeExecutionResult) String() string {
+	if r.Output != "" && len(r.OutputFiles) == 0 {
+		return fmt.Sprintf("Code execution result:\n%s\n", r.Output)
+	}
+	if len(r.OutputFiles) != 0 {
+		var filesNames []string
+		for _, file := range r.OutputFiles {
+			filesNames = append(filesNames, file.Name)
+		}
+
+		return "Code execution result:\n Saved artifacts:\n" + strings.Join(filesNames, "\n")
+	}
+
+	return "Code execution result: No output or errors."
+}
+
 type File struct {
 	Name     string
 	Content  string
@@ -41,9 +58,8 @@ type CodeBlockDelimiter struct {
 // ExtractCodeBlock extracts code blocks from the input string using regex.
 // It returns a slice of CodeBlock containing the extracted code and language
 // example:
-// input: "```python\nprint('Hello, World!')```"
+// input: "```python\nprint('Hello, World!')```", delimiter: CodeBlockDelimiter{Start: "```", End: "```"}
 // output: []CodeBlock{{Code: "print('Hello, World!')", Language: "python"}}
-// TODO: Consdier moving to internal/codeexecutor
 func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
 	var blocks []CodeBlock
 
@@ -70,22 +86,4 @@ func ExtractCodeBlock(input string, delimiter CodeBlockDelimiter) []CodeBlock {
 	}
 
 	return blocks
-}
-
-// BuildCodeExecutionResult formats the code execution result into a human-readable string.
-// TODO: Consdier moving to internal/codeexecutor
-func BuildCodeExecutionResult(codeExecutionResult CodeExecutionResult) string {
-	if codeExecutionResult.Output != "" && len(codeExecutionResult.OutputFiles) == 0 {
-		return fmt.Sprintf("Code execution result:\n%s\n", codeExecutionResult.Output)
-	}
-	if len(codeExecutionResult.OutputFiles) != 0 {
-		var filesNames []string
-		for _, file := range codeExecutionResult.OutputFiles {
-			filesNames = append(filesNames, file.Name)
-		}
-
-		return "Code execution result:\n Saved artifacts:\n" + strings.Join(filesNames, "\n")
-	}
-
-	return "Code execution result: No output or errors."
 }

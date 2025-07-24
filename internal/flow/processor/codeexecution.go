@@ -69,7 +69,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
-					Message: model.Message{Role: model.RoleAssistant, Content: codeexecutor.BuildCodeExecutionResult(codeExecutionResult)},
+					Message: model.Message{Role: model.RoleAssistant, Content: codeExecutionResult.String()},
 				},
 			},
 		}))

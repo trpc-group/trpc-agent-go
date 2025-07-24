@@ -283,7 +283,7 @@ func TestContainerCodeExecutor_NoDocker(t *testing.T) {
 
 	// Test that the executor is created successfully
 	assert.NotNil(t, executor)
-	assert.Equal(t, 30*time.Second, executor.Timeout) // Default timeout
+	assert.Equal(t, 60*time.Second, executor.Timeout) // Default timeout
 	assert.True(t, executor.CleanContainers)          // Default cleanup behavior
 }
 
@@ -324,7 +324,7 @@ console.log("JavaScript in container");
 	assert.NoError(t, err)
 
 	// Step 3: Format and verify result
-	formattedResult := codeexecutor.BuildCodeExecutionResult(result)
+	formattedResult := result.String()
 
 	assert.Contains(t, result.Output, "Python in container")
 	assert.Contains(t, result.Output, "Bash in container")

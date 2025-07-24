@@ -461,7 +461,7 @@ Some more text here.`,
 					Output:      "",
 					OutputFiles: []codeexecutor.File{},
 				}
-				formattedResult := codeexecutor.BuildCodeExecutionResult(result)
+				formattedResult := result.String()
 				for _, expectedOutput := range tt.outputContains {
 					assert.Contains(t, formattedResult, expectedOutput)
 				}
@@ -480,10 +480,8 @@ Some more text here.`,
 			result, err := executor.ExecuteCode(ctx, executionInput)
 			assert.NoError(t, err, "ExecuteCode should not return an error")
 
-			// Step 3: Format the result using BuildCodeExecutionResult
-			formattedResult := codeexecutor.BuildCodeExecutionResult(result)
-
-			// Debug output
+			// Step 3: Format the result using String method
+			formattedResult := result.String() // Debug output
 			t.Logf("Extracted %d blocks", len(blocks))
 			for i, block := range blocks {
 				t.Logf("Block %d - Language: %s, Code: %q", i, block.Language, block.Code)
@@ -552,7 +550,7 @@ ls -la test.txt
 	assert.NoError(t, err)
 
 	// Step 3: Format and verify result
-	formattedResult := codeexecutor.BuildCodeExecutionResult(result)
+	formattedResult := result.String()
 
 	assert.Contains(t, result.Output, "Hello from file")
 	assert.Contains(t, result.Output, "test.txt")
@@ -602,7 +600,7 @@ nonexistent-command-that-will-fail
 	assert.NoError(t, err) // ExecuteCode itself shouldn't error
 
 	// Step 3: Verify error handling in output
-	formattedResult := codeexecutor.BuildCodeExecutionResult(result)
+	formattedResult := result.String()
 
 	// Should contain successful output
 	if isExecutableAvailable("python") {
@@ -653,9 +651,8 @@ cat temp_file.txt
 		result, err := executor.ExecuteCode(context.Background(), executionInput)
 		assert.NoError(t, err)
 
-		formattedResult := codeexecutor.BuildCodeExecutionResult(result)
 		assert.Contains(t, result.Output, "Temporary content")
-		assert.Contains(t, formattedResult, "Code execution result:")
+		assert.Contains(t, result.String(), "Code execution result:")
 
 		// Code files should still exist
 		codeFiles, err := filepath.Glob(filepath.Join(tempDir, "code_*.sh"))
@@ -678,9 +675,8 @@ cat temp_file.txt
 		result, err := executor.ExecuteCode(context.Background(), executionInput)
 		assert.NoError(t, err)
 
-		formattedResult := codeexecutor.BuildCodeExecutionResult(result)
 		assert.Contains(t, result.Output, "Temporary content")
-		assert.Contains(t, formattedResult, "Code execution result:")
+		assert.Contains(t, result.String(), "Code execution result:")
 
 		// Code files should be cleaned up (though this is timing-dependent, so we might not catch it reliably)
 		// The important thing is that execution succeeded

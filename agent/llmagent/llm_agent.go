@@ -245,7 +245,6 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, planningResponseProcessor)
 	}
 
-	// TODO: is ok before TransferResponseProcessor?
 	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
 
 	// Add transfer response processor if sub-agents are configured.
