@@ -188,6 +188,7 @@ func (f *Flow) runOneStep(
 
 				// Wait for completion of events that require it.
 				if lastEvent.RequiresCompletion {
+					log.Debug("Waiting for completion of event %s", lastEvent.CompletionID)
 					select {
 					case completedID := <-invocation.EventCompletionCh:
 						if completedID == lastEvent.CompletionID {
@@ -203,6 +204,7 @@ func (f *Flow) runOneStep(
 		}
 
 		// 5. Postprocess each response.
+		log.Infof("Postprocessing response for agent %s", invocation.AgentName)
 		f.postprocess(ctx, invocation, response, eventChan)
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
