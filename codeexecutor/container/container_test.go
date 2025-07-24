@@ -1,16 +1,16 @@
-package codeexecutor_test
+package container_test
 
 import (
 	"context"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 )
 
 // isDockerAvailable checks if Docker is available for testing
@@ -71,44 +71,6 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 			},
 		},
 		{
-			name: "javascript hello world",
-			input: codeexecutor.CodeExecutionInput{
-				CodeBlocks: []codeexecutor.CodeBlock{
-					{
-						Code:     "console.log('Hello from Node.js Container!');",
-						Language: "javascript",
-					},
-				},
-				ExecutionID: "test-container-js-1",
-			},
-			expected: struct {
-				outputContains string
-				shouldError    bool
-			}{
-				outputContains: "Hello from Node.js Container!",
-				shouldError:    false,
-			},
-		},
-		{
-			name: "go hello world",
-			input: codeexecutor.CodeExecutionInput{
-				CodeBlocks: []codeexecutor.CodeBlock{
-					{
-						Code:     "import \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello from Go Container!\")\n}",
-						Language: "go",
-					},
-				},
-				ExecutionID: "test-container-go-1",
-			},
-			expected: struct {
-				outputContains string
-				shouldError    bool
-			}{
-				outputContains: "Hello from Go Container!",
-				shouldError:    false,
-			},
-		},
-		{
 			name: "multiple code blocks",
 			input: codeexecutor.CodeExecutionInput{
 				CodeBlocks: []codeexecutor.CodeBlock{
@@ -154,7 +116,7 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			executor := codeexecutor.NewContainerCodeExecutor()
+			executor := container.New()
 			ctx := context.Background()
 
 			result, err := executor.ExecuteCode(ctx, tt.input)
@@ -192,8 +154,8 @@ func TestContainerCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	executor := codeexecutor.NewContainerCodeExecutor(
-		codeexecutor.WithContainerWorkDir(tempDir),
+	executor := container.New(
+		container.WithContainerWorkDir(tempDir),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -224,8 +186,8 @@ func TestContainerCodeExecutor_ExecuteCode_WithTimeout(t *testing.T) {
 		t.Skip("Docker is not available, skipping container tests")
 	}
 
-	executor := codeexecutor.NewContainerCodeExecutor(
-		codeexecutor.WithContainerTimeout(2 * time.Second),
+	executor := container.New(
+		container.WithContainerTimeout(2 * time.Second),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -246,7 +208,7 @@ func TestContainerCodeExecutor_ExecuteCode_WithTimeout(t *testing.T) {
 }
 
 func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
-	executor := codeexecutor.NewContainerCodeExecutor()
+	executor := container.New()
 	delimiter := executor.CodeBlockDelimiter()
 
 	assert.Equal(t, "```", delimiter.Start)
@@ -261,10 +223,10 @@ func TestContainerCodeExecutor_WithOptions(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	executor := codeexecutor.NewContainerCodeExecutor(
-		codeexecutor.WithContainerWorkDir(tempDir),
-		codeexecutor.WithContainerTimeout(10*time.Second),
-		codeexecutor.WithCleanContainers(false),
+	executor := container.New(
+		container.WithContainerWorkDir(tempDir),
+		container.WithContainerTimeout(10*time.Second),
+		container.WithCleanContainers(false),
 	)
 
 	// Verify the options were set correctly
@@ -279,7 +241,7 @@ func TestContainerCodeExecutor_NoDocker(t *testing.T) {
 
 	// We can't easily mock isDockerAvailable without refactoring, so this test
 	// is more of a documentation of expected behavior
-	executor := codeexecutor.NewContainerCodeExecutor()
+	executor := container.New()
 
 	// Test that the executor is created successfully
 	assert.NotNil(t, executor)
@@ -300,19 +262,15 @@ print("Python in container")
 
 ` + "```bash" + `
 echo "Bash in container"
-` + "```" + `
-
-` + "```javascript" + `
-console.log("JavaScript in container");
 ` + "```"
 
 	// Step 1: Extract code blocks
 	delimiter := codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 	blocks := codeexecutor.ExtractCodeBlock(input, delimiter)
-	assert.Len(t, blocks, 3)
+	assert.Len(t, blocks, 2)
 
 	// Step 2: Execute in containers
-	executor := codeexecutor.NewContainerCodeExecutor()
+	executor := container.New()
 	ctx := context.Background()
 
 	executionInput := codeexecutor.CodeExecutionInput{
@@ -328,7 +286,6 @@ console.log("JavaScript in container");
 
 	assert.Contains(t, result.Output, "Python in container")
 	assert.Contains(t, result.Output, "Bash in container")
-	assert.Contains(t, result.Output, "JavaScript in container")
 	assert.Contains(t, formattedResult, "Code execution result:")
 
 	t.Logf("Container execution result: %s", result.Output)

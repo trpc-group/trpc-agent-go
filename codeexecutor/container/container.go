@@ -1,4 +1,4 @@
-package codeexecutor
+package container
 
 import (
 	"context"
@@ -8,44 +8,54 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-// ContainerCodeExecutor that executes code in a containerized environment.
-type ContainerCodeExecutor struct {
+// Executor that executes code in a containerized environment.
+type Executor struct {
 	Timeout         time.Duration // The timeout for the execution of any single code block
 	CleanContainers bool          // Whether to clean containers after execution
 	WorkDir         string        // Host working directory to mount in container
+	DockerImage     string        // Docker image to use for execution
 }
 
-// ContainerCodeExecutorOption defines a function type for configuring ContainerCodeExecutor
-type ContainerCodeExecutorOption func(*ContainerCodeExecutor)
+// ExecutorOption defines a function type for configuring Executor
+type ExecutorOption func(*Executor)
+
+func WithDockerImage(image string) ExecutorOption {
+	return func(c *Executor) {
+		c.DockerImage = image
+	}
+}
 
 // WithContainerTimeout sets the timeout for code execution
-func WithContainerTimeout(timeout time.Duration) ContainerCodeExecutorOption {
-	return func(c *ContainerCodeExecutor) {
+func WithContainerTimeout(timeout time.Duration) ExecutorOption {
+	return func(c *Executor) {
 		c.Timeout = timeout
 	}
 }
 
 // WithCleanContainers sets whether to clean containers after execution
-func WithCleanContainers(clean bool) ContainerCodeExecutorOption {
-	return func(c *ContainerCodeExecutor) {
+func WithCleanContainers(clean bool) ExecutorOption {
+	return func(c *Executor) {
 		c.CleanContainers = clean
 	}
 }
 
 // WithContainerWorkDir sets the working directory for code execution
-func WithContainerWorkDir(workDir string) ContainerCodeExecutorOption {
-	return func(c *ContainerCodeExecutor) {
+func WithContainerWorkDir(workDir string) ExecutorOption {
+	return func(c *Executor) {
 		c.WorkDir = workDir
 	}
 }
 
-// NewContainerCodeExecutor creates a new ContainerCodeExecutor with the given options
-func NewContainerCodeExecutor(options ...ContainerCodeExecutorOption) *ContainerCodeExecutor {
-	executor := &ContainerCodeExecutor{
+// New creates a new Executor with the given options
+func New(options ...ExecutorOption) *Executor {
+	executor := &Executor{
 		Timeout:         60 * time.Second,
 		CleanContainers: true,
+		DockerImage:     "python:3-slim",
 	}
 
 	for _, option := range options {
@@ -56,12 +66,12 @@ func NewContainerCodeExecutor(options ...ContainerCodeExecutorOption) *Container
 }
 
 // ExecuteCode executes the code in a containerized environment and returns the result.
-func (c *ContainerCodeExecutor) ExecuteCode(ctx context.Context, input CodeExecutionInput) (CodeExecutionResult, error) {
+func (c *Executor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	var output strings.Builder
 
 	// Check if Docker is available
 	if !c.isDockerAvailable() {
-		return CodeExecutionResult{}, fmt.Errorf("docker is not available or not running")
+		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("docker is not available or not running")
 	}
 
 	// Determine working directory
@@ -73,7 +83,7 @@ func (c *ContainerCodeExecutor) ExecuteCode(ctx context.Context, input CodeExecu
 		workDir = c.WorkDir
 		// Ensure the directory exists
 		if err := os.MkdirAll(workDir, 0755); err != nil {
-			return CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
+			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
 		}
 		shouldCleanup = false
 	} else {
@@ -81,14 +91,14 @@ func (c *ContainerCodeExecutor) ExecuteCode(ctx context.Context, input CodeExecu
 		// Use user's home directory for Docker volume mount compatibility (Colima/Docker Desktop)
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			return CodeExecutionResult{}, fmt.Errorf("failed to get user home directory: %w", err)
+			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to get user home directory: %w", err)
 		}
 		tempDir, err := os.MkdirTemp(filepath.Join(homeDir, ".tmp"), "containerexec_"+input.ExecutionID)
 		if err != nil {
 			// Fallback to system temp if home temp creation fails
 			tempDir, err = os.MkdirTemp("", "containerexec_"+input.ExecutionID)
 			if err != nil {
-				return CodeExecutionResult{}, fmt.Errorf("failed to create temp directory: %w", err)
+				return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create temp directory: %w", err)
 			}
 		}
 		workDir = tempDir
@@ -111,20 +121,20 @@ func (c *ContainerCodeExecutor) ExecuteCode(ctx context.Context, input CodeExecu
 		}
 	}
 
-	return CodeExecutionResult{
+	return codeexecutor.CodeExecutionResult{
 		Output:      output.String(),
-		OutputFiles: []File{}, // TODO: Implement output file extraction from containers
+		OutputFiles: []codeexecutor.File{}, // TODO: Implement output file extraction from containers
 	}, nil
 }
 
 // isDockerAvailable checks if Docker is available and running
-func (c *ContainerCodeExecutor) isDockerAvailable() bool {
+func (c *Executor) isDockerAvailable() bool {
 	cmd := exec.Command("docker", "version")
 	return cmd.Run() == nil
 }
 
 // executeCodeBlock executes a single code block in a container
-func (c *ContainerCodeExecutor) executeCodeBlock(ctx context.Context, workDir string, block CodeBlock, blockIndex int) (output string, err error) {
+func (c *Executor) executeCodeBlock(ctx context.Context, workDir string, block codeexecutor.CodeBlock, blockIndex int) (output string, err error) {
 	// Prepare code file
 	filePath, err := c.prepareCodeFile(workDir, block, blockIndex)
 	if err != nil {
@@ -137,17 +147,17 @@ func (c *ContainerCodeExecutor) executeCodeBlock(ctx context.Context, workDir st
 	}
 
 	// Get Docker image and command for the language
-	dockerImage, dockerCmd, err := c.getDockerImageAndCommand(block.Language, filepath.Base(filePath))
+	dockerCmd, err := c.buildCommand(block.Language, filepath.Base(filePath))
 	if err != nil {
 		return "", err
 	}
 
 	// Execute in container
-	return c.executeInContainer(ctx, workDir, dockerImage, dockerCmd)
+	return c.executeInContainer(ctx, workDir, dockerCmd)
 }
 
 // prepareCodeFile prepares the code file for container execution
-func (c *ContainerCodeExecutor) prepareCodeFile(workDir string, block CodeBlock, blockIndex int) (filePath string, err error) {
+func (c *Executor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock, blockIndex int) (filePath string, err error) {
 	var filename, content string
 
 	switch strings.ToLower(block.Language) {
@@ -178,24 +188,22 @@ func (c *ContainerCodeExecutor) prepareCodeFile(workDir string, block CodeBlock,
 	return filePath, nil
 }
 
-// getDockerImageAndCommand returns the Docker image and command for the language
-func (c *ContainerCodeExecutor) getDockerImageAndCommand(language, filename string) (string, []string, error) {
+// buildCommand builds command for the language
+func (c *Executor) buildCommand(language, filename string) ([]string, error) {
 	switch strings.ToLower(language) {
 	case "python", "py", "python3":
-		return "python:3.11-slim", []string{"python", filename}, nil
+		return []string{"python", filename}, nil
 	case "go":
-		return "golang:1.21-alpine", []string{"go", "run", filename}, nil
+		return []string{"go", "run", filename}, nil
 	case "bash", "sh":
-		return "alpine:latest", []string{"sh", filename}, nil
-	case "node", "nodejs", "javascript", "js":
-		return "node:18-alpine", []string{"node", filename}, nil
+		return []string{"sh", filename}, nil
 	default:
-		return "", nil, fmt.Errorf("unsupported language: %s", language)
+		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 }
 
 // executeInContainer executes the command in a Docker container
-func (c *ContainerCodeExecutor) executeInContainer(ctx context.Context, workDir, dockerImage string, cmdArgs []string) (string, error) {
+func (c *Executor) executeInContainer(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
 	// Set timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
@@ -212,7 +220,7 @@ func (c *ContainerCodeExecutor) executeInContainer(ctx context.Context, workDir,
 	}
 
 	// Don't add container name when using --rm, as it causes conflicts
-	dockerArgs = append(dockerArgs, dockerImage)
+	dockerArgs = append(dockerArgs, c.DockerImage)
 	dockerArgs = append(dockerArgs, cmdArgs...)
 
 	// Create and execute Docker command
@@ -235,8 +243,8 @@ func (c *ContainerCodeExecutor) executeInContainer(ctx context.Context, workDir,
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the container executor.
-func (c *ContainerCodeExecutor) CodeBlockDelimiter() CodeBlockDelimiter {
-	return CodeBlockDelimiter{
+func (c *Executor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
 		End:   "```",
 	}
