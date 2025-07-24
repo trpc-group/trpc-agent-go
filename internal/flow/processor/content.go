@@ -71,6 +71,18 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		req.Messages = append(req.Messages, sessionMessages...)
 	}
 
+	// Include the current invocation message if:
+	// 1. It has content, AND
+	// 2. There's no session OR the session has no events
+	// This prevents duplication when using Runner (which adds user message to session)
+	// while ensuring standalone usage works (where invocation.Message is the source)
+	if invocation.Message.Content != "" &&
+		(invocation.Session == nil || len(invocation.Session.Events) == 0) {
+		req.Messages = append(req.Messages, invocation.Message)
+		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
+			invocation.Message.Role)
+	}
+
 	// Send a preprocessing event.
 	if invocation != nil {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
