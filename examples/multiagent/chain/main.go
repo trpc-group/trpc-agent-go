@@ -87,9 +87,7 @@ func (c *chainChat) run() error {
 // setup creates the runner with chain agent and sub-agents.
 func (c *chainChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
 	// Create shared tools for research agent.
 	webSearchTool := function.NewFunctionTool(

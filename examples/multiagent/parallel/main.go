@@ -84,9 +84,7 @@ func (c *parallelChat) displayWelcomeMessage() {
 // setup creates the runner with parallel agent and sub-agents.
 func (c *parallelChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
 	// Create generation config.
 	// Note: Streaming disabled for parallel agents to avoid character-level interleaving

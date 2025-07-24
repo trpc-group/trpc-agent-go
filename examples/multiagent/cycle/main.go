@@ -92,9 +92,7 @@ func (c *cycleChat) run() error {
 // setup creates the runner with cycle agent and sub-agents.
 func (c *cycleChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
 	// Create shared tools for the cycle.
 	scoreTool := function.NewFunctionTool(

@@ -138,9 +138,7 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
 	schema := graph.MessagesStateSchema()
 
 	// Create model instance.
-	modelInstance := openai.New(*modelName, openai.Options{
-		ChannelBufferSize: defaultChannelBufferSize,
-	})
+	modelInstance := openai.New(*modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
 	// Create analysis tools.
 	complexityTool := function.NewFunctionTool(

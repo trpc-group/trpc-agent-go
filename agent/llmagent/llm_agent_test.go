@@ -28,7 +28,7 @@ import (
 )
 
 func newDummyModel() model.Model {
-	return openai.New("dummy-model", openai.Options{})
+	return openai.New("dummy-model")
 }
 
 func TestLLMAgent_SubAgents(t *testing.T) {
