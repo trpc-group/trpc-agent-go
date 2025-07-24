@@ -15,12 +15,11 @@ import (
 
 // CodeExecutor that executes code in a containerized environment.
 type CodeExecutor struct {
-	Timeout         time.Duration // The timeout for the execution of any single code block
-	CleanContainers bool          // Whether to clean containers after execution
-	WorkDir         string        // Host working directory to mount in container
-	DockerImage     string        // Docker image to use for execution
-	AutoRemove      bool          // If true, will automatically remove the Docker container when it is stopped.
-	ContainerName   string        // Name of the Docker container which is created. If empty, will autogenerate a name.
+	Timeout       time.Duration // The timeout for the execution of any single code block
+	WorkDir       string        // Host working directory to mount in container
+	DockerImage   string        // Docker image to use for execution
+	AutoRemove    bool          // If true, will automatically remove the Docker container when it is stopped.
+	ContainerName string        // Name of the Docker container which is created. If empty, will autogenerate a name.
 }
 
 // ExecutorOption defines a function type for configuring CodeExecutor
@@ -39,15 +38,8 @@ func WithContainerTimeout(timeout time.Duration) ExecutorOption {
 	}
 }
 
-// WithCleanContainers sets whether to clean containers after execution
-func WithCleanContainers(clean bool) ExecutorOption {
-	return func(c *CodeExecutor) {
-		c.CleanContainers = clean
-	}
-}
-
-// WithContainerWorkDir sets the working directory for code execution
-func WithContainerWorkDir(workDir string) ExecutorOption {
+// WithWorkDir sets the working directory for code execution
+func WithWorkDir(workDir string) ExecutorOption {
 	return func(c *CodeExecutor) {
 		c.WorkDir = workDir
 	}
@@ -70,10 +62,9 @@ func WithContainerName(name string) ExecutorOption {
 // New creates a new CodeExecutor with the given options
 func New(options ...ExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
-		Timeout:         60 * time.Second,
-		CleanContainers: true,
-		DockerImage:     "python:3-slim",
-		AutoRemove:      true,
+		Timeout:     60 * time.Second,
+		DockerImage: "python:3-slim",
+		AutoRemove:  true,
 	}
 
 	for _, option := range options {

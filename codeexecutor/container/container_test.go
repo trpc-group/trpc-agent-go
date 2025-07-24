@@ -157,7 +157,7 @@ func TestContainerCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	executor := container.New(
-		container.WithContainerWorkDir(tempDir),
+		container.WithWorkDir(tempDir),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -226,15 +226,13 @@ func TestContainerCodeExecutor_WithOptions(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	executor := container.New(
-		container.WithContainerWorkDir(tempDir),
+		container.WithWorkDir(tempDir),
 		container.WithContainerTimeout(10*time.Second),
-		container.WithCleanContainers(false),
 	)
 
 	// Verify the options were set correctly
 	assert.Equal(t, tempDir, executor.WorkDir)
 	assert.Equal(t, 10*time.Second, executor.Timeout)
-	assert.False(t, executor.CleanContainers)
 }
 
 func TestContainerCodeExecutor_NoDocker(t *testing.T) {
@@ -248,7 +246,6 @@ func TestContainerCodeExecutor_NoDocker(t *testing.T) {
 	// Test that the executor is created successfully
 	assert.NotNil(t, executor)
 	assert.Equal(t, 60*time.Second, executor.Timeout) // Default timeout
-	assert.True(t, executor.CleanContainers)          // Default cleanup behavior
 }
 
 func TestContainerCodeExecutor_IntegrationTest(t *testing.T) {
