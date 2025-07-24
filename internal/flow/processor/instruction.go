@@ -57,11 +57,6 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	}
 	log.Debugf("Instruction request processor: processing request for agent %s", agentName)
 
-	// Initialize messages slice if nil.
-	if req.Messages == nil {
-		req.Messages = make([]model.Message, 0)
-	}
-
 	// Find existing system message or create new one
 	systemMsgIndex := findSystemMessageIndex(req.Messages)
 
