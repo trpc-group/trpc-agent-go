@@ -2,16 +2,17 @@ module trpc.group/trpc-go/trpc-agent-go/session/redis
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
-go 1.24.1
+replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
 
-toolchain go1.24.4
+go 1.24.4
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.11.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-20250724115439-0333ea52a262
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.0-00010101000000-000000000000
 )
 
 require (
