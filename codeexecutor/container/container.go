@@ -193,8 +193,6 @@ func (c *CodeExecutor) buildCommand(language, filename string) ([]string, error)
 	switch strings.ToLower(language) {
 	case "python", "py", "python3":
 		return []string{"python", filename}, nil
-	case "go":
-		return []string{"go", "run", filename}, nil
 	case "bash", "sh":
 		return []string{"sh", filename}, nil
 	default:
