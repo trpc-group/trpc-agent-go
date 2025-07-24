@@ -1,4 +1,4 @@
-package codeexecutor_test
+package local_test
 
 import (
 	"context"
@@ -11,7 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
 func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
@@ -158,7 +160,7 @@ func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 				}
 			}
 
-			executor := codeexecutor.NewLocalCodeExecutor()
+			executor := local.New()
 			ctx := context.Background()
 
 			result, err := executor.ExecuteCode(ctx, tt.input)
@@ -178,7 +180,7 @@ func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 					"Expected output to contain '%s', but got: '%s'", tt.expected.outputContains, result.Output)
 			}
 
-			// OutputFiles should always be empty for LocalCodeExecutor
+			// OutputFiles should always be empty for CodeExecutor
 			assert.Empty(t, result.OutputFiles)
 		})
 	}
@@ -196,8 +198,8 @@ func TestLocalCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	executor := codeexecutor.NewLocalCodeExecutor(
-		codeexecutor.WithWorkDir(tempDir),
+	executor := local.New(
+		local.WithWorkDir(tempDir),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -224,7 +226,7 @@ func TestLocalCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_ExecuteCode_WithoutWorkDir(t *testing.T) {
-	executor := codeexecutor.NewLocalCodeExecutor()
+	executor := local.New()
 
 	input := codeexecutor.CodeExecutionInput{
 		CodeBlocks: []codeexecutor.CodeBlock{
@@ -245,7 +247,7 @@ func TestLocalCodeExecutor_ExecuteCode_WithoutWorkDir(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_ExecuteCode_ContextCancellation(t *testing.T) {
-	executor := codeexecutor.NewLocalCodeExecutor()
+	executor := local.New()
 
 	input := codeexecutor.CodeExecutionInput{
 		CodeBlocks: []codeexecutor.CodeBlock{
@@ -267,7 +269,7 @@ func TestLocalCodeExecutor_ExecuteCode_ContextCancellation(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_CodeBlockDelimiter(t *testing.T) {
-	executor := codeexecutor.NewLocalCodeExecutor()
+	executor := local.New()
 	delimiter := executor.CodeBlockDelimiter()
 
 	assert.Equal(t, "```", delimiter.Start)
@@ -283,8 +285,8 @@ func TestLocalCodeExecutor_ExecuteCode_InvalidWorkDir(t *testing.T) {
 
 	invalidWorkDir := filepath.Join(tempFile.Name(), "subdir") // Try to create dir under a file
 
-	executor := codeexecutor.NewLocalCodeExecutor(
-		codeexecutor.WithWorkDir(invalidWorkDir),
+	executor := local.New(
+		local.WithWorkDir(invalidWorkDir),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -310,10 +312,10 @@ func TestLocalCodeExecutor_WithOptions(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	executor := codeexecutor.NewLocalCodeExecutor(
-		codeexecutor.WithWorkDir(tempDir),
-		codeexecutor.WithTimeout(5*time.Second),
-		codeexecutor.WithCleanTempFiles(false),
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithTimeout(5*time.Second),
+		local.WithCleanTempFiles(false),
 	)
 
 	// Verify the options were set correctly
@@ -323,8 +325,8 @@ func TestLocalCodeExecutor_WithOptions(t *testing.T) {
 }
 
 func TestLocalCodeExecutor_WithTimeout(t *testing.T) {
-	executor := codeexecutor.NewLocalCodeExecutor(
-		codeexecutor.WithTimeout(1 * time.Second),
+	executor := local.New(
+		local.WithTimeout(1 * time.Second),
 	)
 
 	input := codeexecutor.CodeExecutionInput{
@@ -469,7 +471,7 @@ Some more text here.`,
 			}
 
 			// Step 2: Execute the extracted code blocks
-			executor := codeexecutor.NewLocalCodeExecutor()
+			executor := local.New()
 			ctx := context.Background()
 
 			executionInput := codeexecutor.CodeExecutionInput{
@@ -499,7 +501,7 @@ Some more text here.`,
 					expectedOutput, result.Output, formattedResult)
 			}
 
-			// Verify OutputFiles is always empty for LocalCodeExecutor
+			// Verify OutputFiles is always empty for CodeExecutor
 			assert.Empty(t, result.OutputFiles)
 
 			// Verify formatted result starts with expected prefix
@@ -535,9 +537,9 @@ ls -la test.txt
 	assert.Len(t, blocks, 2)
 
 	// Step 2: Execute with custom work directory
-	executor := codeexecutor.NewLocalCodeExecutor(
-		codeexecutor.WithWorkDir(tempDir),
-		codeexecutor.WithCleanTempFiles(false), // Don't clean so we can verify file exists
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithCleanTempFiles(false), // Don't clean so we can verify file exists
 	)
 
 	ctx := context.Background()
@@ -588,7 +590,7 @@ nonexistent-command-that-will-fail
 	assert.Len(t, blocks, 3)
 
 	// Step 2: Execute blocks
-	executor := codeexecutor.NewLocalCodeExecutor()
+	executor := local.New()
 	ctx := context.Background()
 
 	executionInput := codeexecutor.CodeExecutionInput{
@@ -638,9 +640,9 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = false
 	t.Run("with_clean_temp_files_false", func(t *testing.T) {
-		executor := codeexecutor.NewLocalCodeExecutor(
-			codeexecutor.WithWorkDir(tempDir),
-			codeexecutor.WithCleanTempFiles(false),
+		executor := local.New(
+			local.WithWorkDir(tempDir),
+			local.WithCleanTempFiles(false),
 		)
 
 		executionInput := codeexecutor.CodeExecutionInput{
@@ -662,9 +664,9 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = true (default)
 	t.Run("with_clean_temp_files_true", func(t *testing.T) {
-		executor := codeexecutor.NewLocalCodeExecutor(
-			codeexecutor.WithWorkDir(tempDir),
-			codeexecutor.WithCleanTempFiles(true),
+		executor := local.New(
+			local.WithWorkDir(tempDir),
+			local.WithCleanTempFiles(true),
 		)
 
 		executionInput := codeexecutor.CodeExecutionInput{

@@ -12,47 +12,47 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-// Executor that executes code in a containerized environment.
-type Executor struct {
+// CodeExecutor that executes code in a containerized environment.
+type CodeExecutor struct {
 	Timeout         time.Duration // The timeout for the execution of any single code block
 	CleanContainers bool          // Whether to clean containers after execution
 	WorkDir         string        // Host working directory to mount in container
 	DockerImage     string        // Docker image to use for execution
 }
 
-// ExecutorOption defines a function type for configuring Executor
-type ExecutorOption func(*Executor)
+// ExecutorOption defines a function type for configuring CodeExecutor
+type ExecutorOption func(*CodeExecutor)
 
 func WithDockerImage(image string) ExecutorOption {
-	return func(c *Executor) {
+	return func(c *CodeExecutor) {
 		c.DockerImage = image
 	}
 }
 
 // WithContainerTimeout sets the timeout for code execution
 func WithContainerTimeout(timeout time.Duration) ExecutorOption {
-	return func(c *Executor) {
+	return func(c *CodeExecutor) {
 		c.Timeout = timeout
 	}
 }
 
 // WithCleanContainers sets whether to clean containers after execution
 func WithCleanContainers(clean bool) ExecutorOption {
-	return func(c *Executor) {
+	return func(c *CodeExecutor) {
 		c.CleanContainers = clean
 	}
 }
 
 // WithContainerWorkDir sets the working directory for code execution
 func WithContainerWorkDir(workDir string) ExecutorOption {
-	return func(c *Executor) {
+	return func(c *CodeExecutor) {
 		c.WorkDir = workDir
 	}
 }
 
-// New creates a new Executor with the given options
-func New(options ...ExecutorOption) *Executor {
-	executor := &Executor{
+// New creates a new CodeExecutor with the given options
+func New(options ...ExecutorOption) *CodeExecutor {
+	executor := &CodeExecutor{
 		Timeout:         60 * time.Second,
 		CleanContainers: true,
 		DockerImage:     "python:3-slim",
@@ -66,7 +66,7 @@ func New(options ...ExecutorOption) *Executor {
 }
 
 // ExecuteCode executes the code in a containerized environment and returns the result.
-func (c *Executor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	var output strings.Builder
 
 	// Check if Docker is available
@@ -128,13 +128,13 @@ func (c *Executor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecu
 }
 
 // isDockerAvailable checks if Docker is available and running
-func (c *Executor) isDockerAvailable() bool {
+func (c *CodeExecutor) isDockerAvailable() bool {
 	cmd := exec.Command("docker", "version")
 	return cmd.Run() == nil
 }
 
 // executeCodeBlock executes a single code block in a container
-func (c *Executor) executeCodeBlock(ctx context.Context, workDir string, block codeexecutor.CodeBlock, blockIndex int) (output string, err error) {
+func (c *CodeExecutor) executeCodeBlock(ctx context.Context, workDir string, block codeexecutor.CodeBlock, blockIndex int) (output string, err error) {
 	// Prepare code file
 	filePath, err := c.prepareCodeFile(workDir, block, blockIndex)
 	if err != nil {
@@ -157,7 +157,7 @@ func (c *Executor) executeCodeBlock(ctx context.Context, workDir string, block c
 }
 
 // prepareCodeFile prepares the code file for container execution
-func (c *Executor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock, blockIndex int) (filePath string, err error) {
+func (c *CodeExecutor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock, blockIndex int) (filePath string, err error) {
 	var filename, content string
 
 	switch strings.ToLower(block.Language) {
@@ -189,7 +189,7 @@ func (c *Executor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock,
 }
 
 // buildCommand builds command for the language
-func (c *Executor) buildCommand(language, filename string) ([]string, error) {
+func (c *CodeExecutor) buildCommand(language, filename string) ([]string, error) {
 	switch strings.ToLower(language) {
 	case "python", "py", "python3":
 		return []string{"python", filename}, nil
@@ -203,7 +203,7 @@ func (c *Executor) buildCommand(language, filename string) ([]string, error) {
 }
 
 // executeInContainer executes the command in a Docker container
-func (c *Executor) executeInContainer(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
+func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
 	// Set timeout
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
@@ -243,7 +243,7 @@ func (c *Executor) executeInContainer(ctx context.Context, workDir string, cmdAr
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the container executor.
-func (c *Executor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
 		End:   "```",

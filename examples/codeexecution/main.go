@@ -21,7 +21,7 @@ import (
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -71,7 +71,7 @@ You should NEVER install any package on your own like pip install ....
 		llmagent.WithChannelBufferSize(20),
 		// codeexecutor.NewContainerCodeExecutor() is also available.
 		// can use llmagent.WithCodeExecutor(codeexecutor.NewContainerCodeExecutor()),
-		llmagent.WithCodeExecutor(codeexecutor.NewLocalCodeExecutor()),
+		llmagent.WithCodeExecutor(local.New()),
 	)
 
 	r := runner.NewRunner(
