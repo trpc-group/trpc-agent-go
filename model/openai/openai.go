@@ -83,7 +83,14 @@ type Model struct {
 	baseURL           string
 	apiKey            string
 	channelBufferSize int
+	onChatRequest     onChatRequestFunc
+	onChatResponse    onChatResponseFunc
+	onChatChunk       onChatChunkFunc
 }
+
+type onChatRequestFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
+type onChatResponseFunc func(ctx context.Context, chatResponse *openai.ChatCompletion)
+type onChatChunkFunc func(ctx context.Context, chatChunk *openai.ChatCompletionChunk)
 
 // options contains configuration options for creating a Model.
 type options struct {
@@ -91,6 +98,9 @@ type options struct {
 	BaseURL           string // Optional: for OpenAI-compatible APIs
 	ChannelBufferSize int    // Buffer size for response channels (default: 256)
 	HTTPClientOptions []HTTPClientOption
+	OnChatRequest     onChatRequestFunc
+	OnChatResponse    onChatResponseFunc
+	OnChatChunk       onChatChunkFunc
 }
 
 // Option is a function that configures an OpenAI model.
@@ -117,6 +127,27 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
+// WithOnChatRequest sets the function to be called before sending a chat request.
+func WithOnChatRequest(fn onChatRequestFunc) Option {
+	return func(opts *options) {
+		opts.OnChatRequest = fn
+	}
+}
+
+// WithOnChatResponse sets the function to be called after receiving a chat response.
+// Used for non-streaming responses.
+func WithOnChatResponse(fn onChatResponseFunc) Option {
+	return func(opts *options) {
+		opts.OnChatResponse = fn
+	}
+}
+
+// WithOnChatChunk sets the function to be called after receiving a chat chunk.
+func WithOnChatChunk(fn onChatChunkFunc) Option {
+	return func(opts *options) {
+		opts.OnChatChunk = fn
+	}
+}
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{}
@@ -149,6 +180,9 @@ func New(name string, opts ...Option) *Model {
 		baseURL:           o.BaseURL,
 		apiKey:            o.APIKey,
 		channelBufferSize: channelBufferSize,
+		onChatRequest:     o.OnChatRequest,
+		onChatResponse:    o.OnChatResponse,
+		onChatChunk:       o.OnChatChunk,
 	}
 }
 
@@ -219,6 +253,10 @@ func (m *Model) GenerateContent(
 
 	go func() {
 		defer close(responseChan)
+
+		if m.onChatRequest != nil {
+			m.onChatRequest(ctx, &chatRequest)
+		}
 
 		if request.Stream {
 			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
@@ -342,6 +380,10 @@ func (m *Model) handleStreamingResponse(
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
 
+		if m.onChatChunk != nil {
+			m.onChatChunk(ctx, &chunk)
+		}
+
 		response := &model.Response{
 			ID:        chunk.ID,
 			Object:    string(chunk.Object), // Convert constant to string
@@ -455,6 +497,9 @@ func (m *Model) handleNonStreamingResponse(
 ) {
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
+	if m.onChatResponse != nil {
+		m.onChatResponse(ctx, chatCompletion)
+	}
 	if err != nil {
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
