@@ -7,16 +7,21 @@ import (
 	"strings"
 )
 
+// CodeExecutor is an interface for executing code blocks in different environments.
 type CodeExecutor interface {
+	// ExecuteCode executes the code blocks provided in the input and returns the result.
 	ExecuteCode(context.Context, CodeExecutionInput) (CodeExecutionResult, error)
+	// CodeBlockDelimiter returns the delimiters used for code blocks.
 	CodeBlockDelimiter() CodeBlockDelimiter
 }
 
+// CodeExecutionInput represents the input for code execution, containing code blocks and an execution ID.
 type CodeExecutionInput struct {
 	CodeBlocks  []CodeBlock
 	ExecutionID string
 }
 
+// CodeExecutionResult represents the result of code execution, including output and any generated files.
 type CodeExecutionResult struct {
 	Output      string
 	OutputFiles []File
@@ -39,17 +44,20 @@ func (r CodeExecutionResult) String() string {
 	return "Code execution result: No output or errors."
 }
 
+// File represents a file generated during code execution.
 type File struct {
 	Name     string
 	Content  string
 	MIMEType string
 }
 
+// CodeBlock represents a single block of code to be executed.
 type CodeBlock struct {
 	Code     string
 	Language string
 }
 
+// CodeBlockDelimiter defines the start and end delimiters for code blocks.
 type CodeBlockDelimiter struct {
 	Start string
 	End   string

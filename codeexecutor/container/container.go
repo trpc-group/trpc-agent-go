@@ -21,6 +21,7 @@ type CodeExecutor struct {
 	DockerImage   string        // Docker image to use for execution
 	AutoRemove    bool          // If true, will automatically remove the Docker container when it is stopped.
 	ContainerName string        // Name of the Docker container which is created. If empty, will autogenerate a name.
+	StopContainer bool          // If true, will automatically stop the container when stop is called.
 }
 
 // ExecutorOption defines a function type for configuring CodeExecutor
@@ -68,32 +69,115 @@ func WithContainerName(name string) ExecutorOption {
 	}
 }
 
+// WithStopContainer sets whether to automatically stop containers when stop is called
+func WithStopContainer(stopContainer bool) ExecutorOption {
+	return func(c *CodeExecutor) {
+		c.StopContainer = stopContainer
+	}
+}
+
 const (
 	defaultDockerImage         = "python:3-slim"
 	defaultTimeout             = 60 * time.Second
 	defaultContainerNamePrefix = "trpc.go.agent-code-exec-"
+	defaultContainerWorkingDir = "/workspace"
 )
 
 // New creates a new CodeExecutor with the given options
 func New(options ...ExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
-		Timeout:     defaultTimeout,
-		DockerImage: defaultDockerImage,
-		AutoRemove:  true,
+		Timeout:       defaultTimeout,
+		DockerImage:   defaultDockerImage,
+		AutoRemove:    true,
+		StopContainer: true,
 	}
 
 	for _, option := range options {
 		option(executor)
 	}
-	if executor.ContainerName == "" {
-		executor.ContainerName = generateContainerName()
-	}
-	if executor.BindDir == "" {
-		// Default to the same as WorkDir if BindDir is not set
-		executor.BindDir = executor.WorkDir
-	}
+
+	executor.start(context.Background())
 
 	return executor
+}
+
+func (c *CodeExecutor) start(ctx context.Context) error {
+	// Check if Docker is available
+	if !c.isDockerAvailable() {
+		return fmt.Errorf("docker is not available or not running")
+	}
+
+	// Initialize working directory if not provided
+	if c.WorkDir == "" {
+		// Create a temporary directory for execution
+		// Use user's home directory for Docker volume mount compatibility (Colima/Docker Desktop)
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			tempDir, err := os.MkdirTemp(filepath.Join(homeDir, ".tmp"), fmt.Sprintf("containerexec_%s_", uuid.New().String()[:8]))
+			if err == nil {
+				c.WorkDir = tempDir
+			}
+		}
+		// Fallback to system temp if home temp creation fails
+		if c.WorkDir == "" {
+			tempDir, err := os.MkdirTemp("", fmt.Sprintf("containerexec_%s_", uuid.New().String()[:8]))
+			if err == nil {
+				c.WorkDir = tempDir
+			}
+		}
+	} else {
+		// Ensure the specified directory exists
+		os.MkdirAll(c.WorkDir, 0755)
+	}
+
+	// Set up bind directory if not provided
+	if c.BindDir == "" {
+		c.BindDir = c.WorkDir
+	}
+
+	// Generate container name if not provided
+	if c.ContainerName == "" {
+		c.ContainerName = generateContainerName()
+	}
+
+	return nil
+}
+
+// Stop cleans up resources and stops the code executor.
+// If a temporary working directory was created, it will be removed.
+// If StopContainer is true, will stop the Docker container (but not remove it).
+func (c *CodeExecutor) Stop() error {
+	var lastErr error
+
+	// Stop container if requested and not using AutoRemove
+	if c.StopContainer && !c.AutoRemove && c.ContainerName != "" {
+		// Try to stop the container
+		stopCmd := exec.Command("docker", "stop", c.ContainerName)
+		if err := stopCmd.Run(); err != nil {
+			// Don't fail if container is already stopped or doesn't exist
+			// Just record the error and continue
+			lastErr = fmt.Errorf("failed to stop container %s: %w", c.ContainerName, err)
+		}
+	}
+
+	// Clean up temporary working directory if it was auto-created
+	if c.WorkDir != "" && strings.Contains(c.WorkDir, "containerexec_") {
+		if err := os.RemoveAll(c.WorkDir); err != nil {
+			if lastErr != nil {
+				lastErr = fmt.Errorf("%v; failed to cleanup work directory: %w", lastErr, err)
+			} else {
+				lastErr = fmt.Errorf("failed to cleanup work directory: %w", err)
+			}
+		}
+		c.WorkDir = ""
+	}
+
+	return lastErr
+}
+
+// Close is an alias for Stop to implement io.Closer interface if needed
+func (c *CodeExecutor) Close() error {
+	return c.Stop()
 }
 
 // generateContainerName generates a unique container name
@@ -110,44 +194,9 @@ func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("docker is not available or not running")
 	}
 
-	// Determine working directory
-	var workDir string
-	var shouldCleanup bool
-
-	if c.WorkDir != "" {
-		// Use specified working directory
-		workDir = c.WorkDir
-		// Ensure the directory exists
-		if err := os.MkdirAll(workDir, 0755); err != nil {
-			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
-		}
-		shouldCleanup = false
-	} else {
-		// Create a temporary directory for execution
-		// Use user's home directory for Docker volume mount compatibility (Colima/Docker Desktop)
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to get user home directory: %w", err)
-		}
-		tempDir, err := os.MkdirTemp(filepath.Join(homeDir, ".tmp"), "containerexec_"+input.ExecutionID)
-		if err != nil {
-			// Fallback to system temp if home temp creation fails
-			tempDir, err = os.MkdirTemp("", "containerexec_"+input.ExecutionID)
-			if err != nil {
-				return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create temp directory: %w", err)
-			}
-		}
-		workDir = tempDir
-		shouldCleanup = true
-	}
-
-	if shouldCleanup {
-		defer os.RemoveAll(workDir)
-	}
-
 	// Execute each code block
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := c.executeCodeBlock(ctx, workDir, block, i)
+		blockOutput, err := c.executeCodeBlock(ctx, c.WorkDir, block, i)
 		if err != nil {
 			output.WriteString(fmt.Sprintf("Error executing code block %d: %v\n", i, err))
 			continue
@@ -259,8 +308,8 @@ func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, c
 	}
 
 	dockerArgs = append(dockerArgs,
-		"-v", fmt.Sprintf("%s:/workspace", bindDir), // Mount bind directory to workspace
-		"-w", "/workspace", // Set working directory in container
+		"-v", fmt.Sprintf("%s:%s", bindDir, defaultContainerWorkingDir), // Mount bind directory to workspace
+		"-w", defaultContainerWorkingDir, // Set working directory in container
 		"--network", "none", // Disable network access for security
 		"--memory", "256m", // Limit memory usage
 		"--cpus", "1.0", // Limit CPU usage
