@@ -143,11 +143,13 @@ func WithOnChatResponse(fn onChatResponseFunc) Option {
 }
 
 // WithOnChatChunk sets the function to be called after receiving a chat chunk.
+// Used for streaming responses.
 func WithOnChatChunk(fn onChatChunkFunc) Option {
 	return func(opts *options) {
 		opts.OnChatChunk = fn
 	}
 }
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{}
