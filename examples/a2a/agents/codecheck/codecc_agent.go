@@ -26,7 +26,7 @@ const (
 
 func main() {
 	// Parse command-line flags.
-	host := flag.String("host", "21.6.224.104:8088", "Host to listen on")
+	host := flag.String("host", "localhost:8088", "Host to listen on")
 	modelName := flag.String("model", "deepseek-chat", "Model to use")
 	flag.Parse()
 
