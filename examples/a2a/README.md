@@ -71,25 +71,25 @@ cd examples/a2a/agents/entrance
 ```bash
 # Terminal 3: Connect to the entrance agent
 cd examples/a2a/client
-./client -url http://localhost:8081
+./client -url http://localhost:8087/a2a/entrance/
 
 # Or connect to the code check agent
-./client -url http://localhost:8082
+./client -url http://localhost:8088/a2a/codecheck/
 ```
 
 ## Agent Descriptions
 
 ### Entrance Agent
-- **Port**: 8081  
+- **Port**: 8087  
 - **Function**: Acts as the system entry point, can call other agents
-- **URL**: http://localhost:8081
-- **Agent Card**: http://localhost:8081/.well-known/agent.json
+- **URL**: http://localhost:8087/a2a/entrance/
+- **Agent Card**: http://localhost:8087/.well-known/agent.json
 
 ### Code Check Agent
-- **Port**: 8082
+- **Port**: 8088
 - **Function**: Analyzes Go code quality, checks compliance with Go language standards
-- **URL**: http://localhost:8082  
-- **Agent Card**: http://localhost:8082/.well-known/agent.json
+- **URL**: http://localhost:8088/a2a/codecheck/  
+- **Agent Card**: http://localhost:8088/.well-known/agent.json
 
 
 
@@ -98,9 +98,9 @@ cd examples/a2a/client
 ### Conversing with the Entrance Agent
 
 ```bash
-$ ./client -url http://localhost:8081
+$ ./client -url http://localhost:8087/a2a/entrance/
 🚀 A2A Interactive Client
-Agent URL: http://localhost:8081
+Agent URL: http://localhost:8087/a2a/entrance/
 Type 'exit' to quit
 ==================================================
 🔗 Connecting to agent...
@@ -184,8 +184,8 @@ export OPENAI_MODEL="deepseek-chat"
 1. **Connection Failure**
    ```bash
    # Check if agents are running
-   curl http://localhost:8081/.well-known/agent.json
-   curl http://localhost:8082/.well-known/agent.json
+   curl http://localhost:8087/.well-known/agent.json
+   curl http://localhost:8088/.well-known/agent.json
    ```
 
 2. **API Key Error**
@@ -198,8 +198,8 @@ export OPENAI_MODEL="deepseek-chat"
 3. **Port Occupation**
    ```bash
    # Check port usage
-   lsof -i :8081
-   lsof -i :8082
+   lsof -i :8087
+   lsof -i :8088
    ```
 
 ## More Information
