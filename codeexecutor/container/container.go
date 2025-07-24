@@ -17,6 +17,7 @@ import (
 type CodeExecutor struct {
 	Timeout       time.Duration // The timeout for the execution of any single code block
 	WorkDir       string        // Host working directory to mount in container
+	BindDir       string        // The directory that will be bound to the code executor container.
 	DockerImage   string        // Docker image to use for execution
 	AutoRemove    bool          // If true, will automatically remove the Docker container when it is stopped.
 	ContainerName string        // Name of the Docker container which is created. If empty, will autogenerate a name.
@@ -45,6 +46,14 @@ func WithWorkDir(workDir string) ExecutorOption {
 	}
 }
 
+// WithBindDir sets the bind directory for container volume mounting
+// Useful for cases where you want to spawn the container from within a container.
+func WithBindDir(bindDir string) ExecutorOption {
+	return func(c *CodeExecutor) {
+		c.BindDir = bindDir
+	}
+}
+
 // WithAutoRemove sets whether to automatically remove containers after execution
 func WithAutoRemove(autoRemove bool) ExecutorOption {
 	return func(c *CodeExecutor) {
@@ -59,11 +68,17 @@ func WithContainerName(name string) ExecutorOption {
 	}
 }
 
+const (
+	defaultDockerImage         = "python:3-slim"
+	defaultTimeout             = 60 * time.Second
+	defaultContainerNamePrefix = "trpc.go.agent-code-exec-"
+)
+
 // New creates a new CodeExecutor with the given options
 func New(options ...ExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
-		Timeout:     60 * time.Second,
-		DockerImage: "python:3-slim",
+		Timeout:     defaultTimeout,
+		DockerImage: defaultDockerImage,
 		AutoRemove:  true,
 	}
 
@@ -73,13 +88,17 @@ func New(options ...ExecutorOption) *CodeExecutor {
 	if executor.ContainerName == "" {
 		executor.ContainerName = generateContainerName()
 	}
+	if executor.BindDir == "" {
+		// Default to the same as WorkDir if BindDir is not set
+		executor.BindDir = executor.WorkDir
+	}
 
 	return executor
 }
 
 // generateContainerName generates a unique container name
 func generateContainerName() string {
-	return fmt.Sprintf("trpc.go.agent-code-exec-%s", uuid.New().String())
+	return fmt.Sprintf("%s%s", defaultContainerNamePrefix, uuid.New().String())
 }
 
 // ExecuteCode executes the code in a containerized environment and returns the result.
@@ -223,6 +242,12 @@ func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, c
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 
+	// Determine bind directory - if not specified, use workDir
+	bindDir := c.BindDir
+	if bindDir == "" {
+		bindDir = workDir
+	}
+
 	// Build Docker command
 	dockerArgs := []string{
 		"run",
@@ -234,7 +259,7 @@ func (c *CodeExecutor) executeInContainer(ctx context.Context, workDir string, c
 	}
 
 	dockerArgs = append(dockerArgs,
-		"-v", fmt.Sprintf("%s:/workspace", workDir), // Mount work directory
+		"-v", fmt.Sprintf("%s:/workspace", bindDir), // Mount bind directory to workspace
 		"-w", "/workspace", // Set working directory in container
 		"--network", "none", // Disable network access for security
 		"--memory", "256m", // Limit memory usage
