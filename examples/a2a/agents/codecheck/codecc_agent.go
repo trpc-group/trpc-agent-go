@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,13 +33,14 @@ func main() {
 	codeCheckAgent := buildCodeCheckAgent(*modelName)
 
 	// Create agent card
-	agentCard := buildAgentCard(*host)
+	agentCard := buildAgentCard()
 
 	// Create a2a server with the agent
 	server, err := a2a.New(
 		a2a.WithHost(*host),
-		a2a.WithAgents(map[string]agent.Agent{"codecheck": codeCheckAgent}),
-		a2a.WithAgentCard(map[string]a2aserver.AgentCard{"codecheck": agentCard}),
+		a2a.WithAgent(codeCheckAgent),
+		a2a.WithAgentCard(agentCard),
+		a2a.WithExtraA2AOptions(a2aserver.WithBasePath("/a2a/codecheck/")),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -53,7 +53,7 @@ func main() {
 	// Start the server in a goroutine.
 	go func() {
 		log.Infof("Starting server on %s...", *host)
-		if err := server.Start(); err != nil {
+		if err := server.Start(*host); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
@@ -102,11 +102,10 @@ func buildCodeCheckAgent(modelName string) agent.Agent {
 	return llmAgent
 }
 
-func buildAgentCard(host string) a2aserver.AgentCard {
+func buildAgentCard() a2aserver.AgentCard {
 	return a2aserver.AgentCard{
 		Name:        agentName,
 		Description: "Check code quality by Go Language Standard; Query the golang standard/spec that user needed",
-		URL:         fmt.Sprintf("http://%s/a2a/codecheck/", host),
 		Version:     "1.0.0",
 		Provider: &a2aserver.AgentProvider{
 			Organization: "tRPC-Go",

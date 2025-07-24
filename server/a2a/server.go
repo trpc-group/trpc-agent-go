@@ -1,11 +1,10 @@
-// package a2a is the a2a server with multi agents.
+// package a2a provides utilities for creating a2a servers.
 package a2a
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -21,125 +20,36 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-// Server is the a2a server with multi agents.
-type Server struct {
-	a2aEndpoints map[string]*a2aEndpoint
-	opts         *options
-	handler      http.Handler
-	httpServer   *http.Server
-}
-
-// a2aEndpoint is the a2a server endpoint.
-type a2aEndpoint struct {
-	server *a2a.A2AServer
-	agent  agent.Agent
-}
-
 // New creates a new a2a server.
-func New(opts ...Option) (*Server, error) {
-	s := &Server{
-		opts: defaultOptions,
-	}
+func New(opts ...Option) (*a2a.A2AServer, error) {
+	options := defaultOptions
 	for _, opt := range opts {
-		opt(s.opts)
+		opt(options)
 	}
 
-	if s.opts.sessionService == nil {
-		s.opts.sessionService = inmemory.NewSessionService()
+	if options.sessionService == nil {
+		options.sessionService = inmemory.NewSessionService()
 	}
 
-	if len(s.opts.agents) == 0 {
-		return nil, errors.New("agents are required")
+	if options.agent == nil {
+		return nil, errors.New("agent is required")
 	}
 
-	if err := s.initA2AServer(); err != nil {
-		return nil, fmt.Errorf("failed to init a2a server: %w", err)
+	if options.host == "" {
+		return nil, errors.New("host is required")
 	}
 
-	// combine all a2a endpoints in one http handler
-	handler := http.NewServeMux()
-	for path, endpoint := range s.a2aEndpoints {
-		prefix := fmt.Sprintf("/a2a/%s/", path)
-		router := s.getAgentRouter(endpoint)
-		handler.Handle(prefix, router)
-		log.Infof("Registered agent '%s' at %s", endpoint.agent.Info().Name, fmt.Sprintf("http://%s%s", s.opts.host, prefix))
-	}
-	s.handler = handler
-
-	return s, nil
+	return buildA2AServer(options)
 }
 
-// Start starts the a2a server.
-func (s *Server) Start() error {
-	if s.handler == nil {
-		return errors.New("Server not initialized")
+func buildAgentCard(options *options) a2a.AgentCard {
+	if options.agentCard != nil {
+		return *options.agentCard
 	}
-	s.httpServer = &http.Server{
-		Addr:    s.opts.host,
-		Handler: s.handler,
-	}
-	log.Infof("Starting a2a server at %s", s.opts.host)
-	return s.httpServer.ListenAndServe()
-}
-
-// Stop stops the a2a server.
-func (s *Server) Stop(ctx context.Context) error {
-	if s.httpServer == nil {
-		return errors.New("http server is nil")
-	}
-	if err := s.httpServer.Shutdown(ctx); err != nil {
-		return fmt.Errorf("failed to stop a2a server: %w", err)
-	}
-	log.Infof("Stopped a2a server at %s", s.opts.host)
-	return nil
-}
-
-// Host returns the host of the a2a server.
-func (s *Server) Host() string {
-	return s.opts.host
-}
-
-// Handler returns the http handler for the server.
-func (s *Server) Handler() http.Handler {
-	return s.handler
-}
-
-func (s *Server) getAgentRouter(endpoint *a2aEndpoint) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		endpoint.server.Handler().ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) initA2AServer() error {
-	if s.opts == nil || len(s.opts.agents) == 0 {
-		return errors.New("agents are required")
-	}
-
-	a2aEndpoints := make(map[string]*a2aEndpoint)
-	for path, agent := range s.opts.agents {
-		server, err := s.buildA2AServer(path, agent, s.opts.sessionService)
-		if err != nil {
-			return fmt.Errorf("buildA2AServer failed: %w", err)
-		}
-		a2aEndpoints[path] = &a2aEndpoint{
-			agent:  agent,
-			server: server,
-		}
-	}
-	s.a2aEndpoints = a2aEndpoints
-	return nil
-}
-
-func (s *Server) buildAgentCard(path string, agent agent.Agent) a2a.AgentCard {
-	url := fmt.Sprintf("http://%s/a2a/%s/", s.opts.host, path)
-	if s.opts.agentCards != nil {
-		if agentCard, ok := s.opts.agentCards[path]; ok {
-			agentCard.URL = url
-			return agentCard
-		}
-	}
+	agent := options.agent
 	desc := agent.Info().Description
 	name := agent.Info().Name
+	url := fmt.Sprintf("http://%s", options.host)
 	return a2a.AgentCard{
 		Name:        name,
 		Description: desc,
@@ -161,7 +71,7 @@ func (s *Server) buildAgentCard(path string, agent agent.Agent) a2a.AgentCard {
 	}
 }
 
-func (s *Server) buildProcessor(path string, agent agent.Agent, sessionService session.Service) *messageProcessor {
+func buildProcessor(agent agent.Agent, sessionService session.Service) *messageProcessor {
 	agentName := agent.Info().Name
 	runner := runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
 	return &messageProcessor{
@@ -169,30 +79,40 @@ func (s *Server) buildProcessor(path string, agent agent.Agent, sessionService s
 	}
 }
 
-func (s *Server) buildA2AServer(path string, agent agent.Agent, sessionService session.Service) (*a2a.A2AServer, error) {
-	agentCard := s.buildAgentCard(path, agent)
+func buildA2AServer(options *options) (*a2a.A2AServer, error) {
+	agent := options.agent
+	sessionService := options.sessionService
+
+	agentCard := buildAgentCard(options)
 
 	var processor taskmanager.MessageProcessor
-	if s.opts.processorBuilder != nil {
-		processor = s.opts.processorBuilder(path, agent, sessionService)
+	if options.processorBuilder != nil {
+		processor = options.processorBuilder(agent, sessionService)
 	} else {
-		processor = s.buildProcessor(path, agent, sessionService)
+		processor = buildProcessor(agent, sessionService)
 	}
 
 	// Create a task manager that wraps the session service
-	taskManager, err := taskmanager.NewMemoryTaskManager(processor, taskmanager.WithMaxHistoryLength(1))
-	if err != nil {
-		return nil, err
+	var taskManager taskmanager.TaskManager
+	var err error
+	if options.taskManagerBuilder != nil {
+		taskManager = options.taskManagerBuilder(processor)
+	} else {
+		taskManager, err = taskmanager.NewMemoryTaskManager(processor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create task manager: %w", err)
+		}
 	}
 
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defautAuthProvider{}),
 	}
+
 	// if other AuthProvider is set, user info should be covered
-	opts = append(opts, s.opts.extraOptions...)
+	opts = append(opts, options.extraOptions...)
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create a2a server: %w", err)
 	}
 	return a2aServer, nil
 }

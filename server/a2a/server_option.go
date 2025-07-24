@@ -38,7 +38,10 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 }
 
 // ProcessorBuilder returns a message processor for the given agent.
-type ProcessorBuilder func(path string, agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
+type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
+
+// TaskManagerBuilder returns a task manager for the given agent.
+type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
 type defautAuthProvider struct{}
 
@@ -55,12 +58,13 @@ func (d *defautAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 }
 
 type options struct {
-	sessionService   session.Service
-	agents           map[string]agent.Agent
-	agentCards       map[string]a2a.AgentCard
-	processorBuilder ProcessorBuilder
-	host             string
-	extraOptions     []a2a.Option
+	sessionService     session.Service
+	agent              agent.Agent
+	agentCard          *a2a.AgentCard
+	processorBuilder   ProcessorBuilder
+	taskManagerBuilder TaskManagerBuilder
+	host               string
+	extraOptions       []a2a.Option
 }
 
 // Option is a function that configures a Server.
@@ -77,19 +81,17 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
-// WithAgents sets the agents to use.
-// Key of map will be used to set the path of a2a server.
-// For example, if the key is "agent1", the path will be "/a2a/agent1/".
-func WithAgents(agents map[string]agent.Agent) Option {
+// WithAgent sets the agent to use.
+func WithAgent(agent agent.Agent) Option {
 	return func(opts *options) {
-		opts.agents = agents
+		opts.agent = agent
 	}
 }
 
-// WithAgentCard sets the agent cards to use, the key should be the same as the path of a2a server.
-func WithAgentCard(agentCards map[string]a2a.AgentCard) Option {
+// WithAgentCard sets the agent card to use.
+func WithAgentCard(agentCard a2a.AgentCard) Option {
 	return func(opts *options) {
-		opts.agentCards = agentCards
+		opts.agentCard = &agentCard
 	}
 }
 
@@ -111,5 +113,12 @@ func WithHost(host string) Option {
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)
+	}
+}
+
+// WithTaskManagerBuilder sets the task manager builder to use.
+func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
+	return func(opts *options) {
+		opts.taskManagerBuilder = builder
 	}
 }

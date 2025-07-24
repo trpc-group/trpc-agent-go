@@ -49,12 +49,9 @@ func main() {
 	// Create a2a server with the agent
 	server, err := a2a.New(
 		a2a.WithHost(*host),
-		a2a.WithAgents(map[string]agent.Agent{
-			"entrance": entranceAgent,
-		}),
-		a2a.WithAgentCard(map[string]a2aserver.AgentCard{
-			"entrance": agentCard,
-		}),
+		a2a.WithAgent(entranceAgent),
+		a2a.WithAgentCard(agentCard),
+		a2a.WithExtraA2AOptions(a2aserver.WithBasePath("/a2a/entrance/")),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -67,7 +64,7 @@ func main() {
 	// Start the server in a goroutine.
 	go func() {
 		log.Infof("Starting server on %s...", *host)
-		if err := server.Start(); err != nil {
+		if err := server.Start(*host); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
