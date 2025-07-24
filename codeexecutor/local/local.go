@@ -180,8 +180,6 @@ func (l *CodeExecutor) buildCommandArgs(language, filePath string) []string {
 	switch strings.ToLower(language) {
 	case "python", "py", "python3":
 		return []string{"python3", filePath}
-	case "go":
-		return []string{"go", "run", filePath}
 	case "bash", "sh":
 		return []string{"bash", filePath}
 	default:

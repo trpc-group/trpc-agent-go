@@ -47,26 +47,6 @@ func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 			skipIfMissing: "python",
 		},
 		{
-			name: "go hello world",
-			input: codeexecutor.CodeExecutionInput{
-				CodeBlocks: []codeexecutor.CodeBlock{
-					{
-						Code:     "import \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"Hello, Go!\")\n}",
-						Language: "go",
-					},
-				},
-				ExecutionID: "test-go-1",
-			},
-			expected: struct {
-				outputContains string
-				shouldError    bool
-			}{
-				outputContains: "Hello, Go!",
-				shouldError:    false,
-			},
-			skipIfMissing: "go",
-		},
-		{
 			name: "bash echo",
 			input: codeexecutor.CodeExecutionInput{
 				CodeBlocks: []codeexecutor.CodeBlock{
@@ -380,13 +360,7 @@ print("Python says hello")
 
 And some Go code:
 
-` + "```go" + `
-import "fmt"
-
-func main() {
-    fmt.Println("Go says hello")
-}
-` + "```" + `
+` + `
 
 Finally, some bash:
 
@@ -394,9 +368,9 @@ Finally, some bash:
 echo "Bash says hello"
 ` + "```",
 			delimiter:      codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"},
-			expectedBlocks: 3,
-			outputContains: []string{"Python says hello", "Go says hello", "Bash says hello"},
-			skipIfMissing:  []string{"python", "go", "bash"},
+			expectedBlocks: 2,
+			outputContains: []string{"Python says hello", "Bash says hello"},
+			skipIfMissing:  []string{"python", "bash"},
 		},
 		{
 			name: "custom delimiter with python code",

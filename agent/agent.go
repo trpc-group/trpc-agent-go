@@ -37,8 +37,6 @@ type Agent interface {
 	// These tools represent the capabilities available to the agent during invocations.
 	Tools() []tool.Tool
 
-	// CodeExecutor() codeexecutor.CodeExecutor
-
 	// Info returns the basic information about this agent.
 	Info() Info
 

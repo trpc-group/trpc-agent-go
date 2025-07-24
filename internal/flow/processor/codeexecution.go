@@ -19,31 +19,26 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, rsp *model.Response, ch chan<- *event.Event) {
-	log.Infof("CodeExecutionResponseProcessor: sent post event")
+	log.Infof("CodeExecutionResponseProcessor: invocation-id: %s", invocation.InvocationID)
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
 	if !ok || ce == nil {
-		log.Info("CodeExecutionResponseProcessor: Agent does not implement CodeExecutor interface, skipping code execution.")
 		return
 	}
 	e := ce.CodeExecutor()
 	if e == nil {
-		log.Info("CodeExecutionResponseProcessor: CodeExecutor is nil, skipping code execution.")
 		return
 	}
 
 	// [Step 1] Extract code from the model predict response
 	if rsp.IsPartial {
-		log.Info("CodeExecutionResponseProcessor: Skipping partial response.")
 		return
 	}
 	if len(rsp.Choices) == 0 {
-		log.Info("CodeExecutionResponseProcessor: No choices in response, skipping code execution.")
 		return
 	}
 
 	codeBlocks := codeexecutor.ExtractCodeBlock(rsp.Choices[0].Message.Content, e.CodeBlockDelimiter())
 	if len(codeBlocks) == 0 {
-		log.Info("CodeExecutionResponseProcessor: No code blocks found in response, skipping code execution.")
 		return
 	}
 

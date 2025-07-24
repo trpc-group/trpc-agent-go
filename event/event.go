@@ -69,6 +69,7 @@ func WithResponse(response *model.Response) Option {
 	}
 }
 
+// WithObject sets the object for the event.
 func WithObject(o string) Option {
 	return func(e *Event) {
 		e.Object = o
