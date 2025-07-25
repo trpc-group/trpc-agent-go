@@ -61,15 +61,15 @@ check_env() {
 check_ports() {
     print_info "Checking port occupancy..."
     
-    if lsof -i :8082 >/dev/null 2>&1; then
-        print_warning "Port 8082 is already in use"
+    if lsof -i :8088 >/dev/null 2>&1; then
+        print_warning "Port 8088 is already in use"
         echo "Attempting to close the process using the port..."
         pkill -f "codecc_agent" || true
         sleep 2
     fi
     
-    if lsof -i :8081 >/dev/null 2>&1; then
-        print_warning "Port 8081 is already in use"
+    if lsof -i :8087 >/dev/null 2>&1; then
+        print_warning "Port 8087 is already in use"
         echo "Attempting to close the process using the port..."
         pkill -f "entrance_agent" || true
         sleep 2
@@ -114,7 +114,7 @@ start_agents() {
     MODEL_NAME=${OPENAI_MODEL:-deepseek-chat}
     
     # Start code check agent (first)
-    print_info "Starting code check agent (port 8082)..."
+    print_info "Starting code check agent (port 8088)..."
     cd agents/codecheck
     nohup ./codecc_agent -model="$MODEL_NAME" > ../../logs/codecc_agent.log 2>&1 &
     CODECC_PID=$!
@@ -123,7 +123,7 @@ start_agents() {
     sleep 2
     
     # Start entrance agent (second)
-    print_info "Starting entrance agent (port 8081)..."
+    print_info "Starting entrance agent (port 8087)..."
     cd agents/entrance
     nohup ./entrance_agent -model="$MODEL_NAME" > ../../logs/entrance_agent.log 2>&1 &
     ENTRANCE_PID=$!
@@ -139,19 +139,19 @@ check_agents() {
     print_info "Checking agent health status..."
     
     # Check code check agent (first)
-    if curl -s http://localhost:8082/.well-known/agent.json >/dev/null; then
-        print_success "Code check agent (8082) running normally"
+    if curl -s http://localhost:8088/.well-known/agent.json >/dev/null; then
+        print_success "Code check agent (8088) running normally"
     else
-        print_error "Code check agent (8082) failed to start"
+        print_error "Code check agent (8088) failed to start"
         show_logs
         exit 1
     fi
     
     # Check entrance agent (second)
-    if curl -s http://localhost:8081/.well-known/agent.json >/dev/null; then
-        print_success "Entrance agent (8081) running normally"
+    if curl -s http://localhost:8087/.well-known/agent.json >/dev/null; then
+        print_success "Entrance agent (8087) running normally"
     else
-        print_error "Entrance agent (8081) failed to start"
+        print_error "Entrance agent (8087) failed to start"
         show_logs
         exit 1
     fi
@@ -185,12 +185,12 @@ show_agent_info() {
     echo "┌─────────────────────────────────────────────────────────────────┐"
     echo "│                     A2A Agent Service                           │"
     echo "├─────────────────────────────────────────────────────────────────┤"
-    echo "│   Entrance Agent  │ http://localhost:8081                       │"
-    echo "│   Code Check Agent│ http://localhost:8082                       │"
+    echo "│   Entrance Agent  │ http://localhost:8087/a2a/entrance/         │"
+    echo "│   Code Check Agent│ http://localhost:8088/a2a/codecheck/        │"
     echo "├─────────────────────────────────────────────────────────────────┤"
     echo "│   Agent Cards     |                                             │"
-    echo "│   Entrance Agent  │ http://localhost:8081/.well-known/agent.json│"
-    echo "│   Code Check Agent│ http://localhost:8082/.well-known/agent.json|"
+    echo "│   Entrance Agent  │ http://localhost:8087/.well-known/agent.json│"
+    echo "│   Code Check Agent│ http://localhost:8088/.well-known/agent.json|"
     echo "└─────────────────────────────────────────────────────────────────┘"
     echo ""
 }
@@ -199,8 +199,8 @@ show_agent_info() {
 client_menu() {
     echo ""
     print_info "Select an agent to connect to:"
-    echo "1) Entrance Agent (http://localhost:8081)"
-    echo "2) Code Check Agent (http://localhost:8082)"
+    echo "1) Entrance Agent (http://localhost:8087/a2a/entrance/)"
+    echo "2) Code Check Agent (http://localhost:8088/a2a/codecheck/)"
     echo "3) Custom URL"
     echo "4) Exit"
     echo ""
@@ -210,13 +210,13 @@ client_menu() {
         1)
             print_info "Connecting to Entrance Agent..."
             cd client
-            ./client -url http://localhost:8081
+            ./client -url http://localhost:8087/a2a/entrance/
             cd ..
             ;;
         2)
             print_info "Connecting to Code Check Agent..."
             cd client
-            ./client -url http://localhost:8082
+            ./client -url http://localhost:8088/a2a/codecheck/
             cd ..
             ;;
         3)

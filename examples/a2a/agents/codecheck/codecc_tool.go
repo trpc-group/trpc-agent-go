@@ -14,7 +14,7 @@ type readSpecResult struct {
 }
 
 func readSpecFile(args readSpecArgs) readSpecResult {
-	log.Infof("read spec file asdkjdasklfjasldfjlasdfjl")
+	log.Infof("reading spec file")
 	spec, err := os.ReadFile("./spec.txt")
 	if err != nil {
 		log.Errorf("failed to read spec file: %v", err)
