@@ -258,5 +258,7 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
+trpc.group/trpc-go/trpc-a2a-go v0.2.1 h1:v2U4e74wAmgD019+Xw8GTSn7ZJaz+enBfWbLshyhZQs=
+trpc.group/trpc-go/trpc-a2a-go v0.2.1/go.mod h1:lu052zH/pTlTBwWMU/E3UckR0U9ajL1NlhiRkIF9R6A=
 trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd h1:K6mGq8XaSbXlCqyFp2rqGTIXqaCReRPOMU7nFqb9Lto=
 trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=
