@@ -4,8 +4,6 @@ go 1.24.1
 
 toolchain go1.24.4
 
-replace trpc.group/trpc-go/trpc-a2a-go => /data/home/homerpan/workspace/trpc-a2a-go
-
 require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/gomutex/godocx v0.1.5
