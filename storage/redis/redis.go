@@ -10,8 +10,8 @@
 //
 //
 
-// Package redisstorage provides the redis instance info management.
-package redisstorage
+// Package redis provides the redis instance info management.
+package redis
 
 import (
 	"fmt"
