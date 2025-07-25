@@ -171,7 +171,8 @@ func (p *ContentRequestProcessor) hasValidContent(evt *event.Event) bool {
 }
 
 // isEventBelongsToBranch checks if an event belongs to a specific branch.
-// Event belongs to a branch when event.branch is prefix of the invocation branch.
+// For chain agents, events from the same chain are included.
+// For hierarchical agents, event branch must be a prefix of invocation branch.
 func (p *ContentRequestProcessor) isEventBelongsToBranch(
 	invocationBranch string,
 	evt *event.Event,
@@ -179,7 +180,32 @@ func (p *ContentRequestProcessor) isEventBelongsToBranch(
 	if invocationBranch == "" || evt.Branch == "" {
 		return true
 	}
+
+	// Check if both are from the same chain.
+	if p.areSameChainAgents(invocationBranch, evt.Branch) {
+		return true
+	}
+
+	// For hierarchical agents, use prefix matching.
 	return strings.HasPrefix(invocationBranch, evt.Branch)
+}
+
+// areSameChainAgents checks if two branches represent agents in the same chain.
+func (p *ContentRequestProcessor) areSameChainAgents(invocationBranch, eventBranch string) bool {
+	invocationChain := p.extractChainPrefix(invocationBranch)
+	eventChain := p.extractChainPrefix(eventBranch)
+
+	return invocationChain == eventChain &&
+		strings.Contains(invocationBranch, ".") &&
+		strings.Contains(eventBranch, ".")
+}
+
+// extractChainPrefix extracts the chain identifier from a branch.
+func (p *ContentRequestProcessor) extractChainPrefix(branch string) string {
+	if dotIndex := strings.LastIndex(branch, "."); dotIndex != -1 {
+		return branch[:dotIndex]
+	}
+	return branch
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
