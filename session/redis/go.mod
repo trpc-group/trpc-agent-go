@@ -1,10 +1,10 @@
 module trpc.group/trpc-go/trpc-agent-go/session/redis
 
+go 1.24.1
+
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
-
-go 1.24.1
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
