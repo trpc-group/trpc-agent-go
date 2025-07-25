@@ -29,7 +29,8 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// [Step 1] Extract code from the model predict response
+	// [Step 1] Extract code from the model predict response,
+	// and truncate the content to the part with the first code block().
 	if rsp.IsPartial {
 		return
 	}
@@ -41,8 +42,19 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	if len(codeBlocks) == 0 {
 		return
 	}
+	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
-	//  [Step 2] Executes the code and emits Events for execution result.
+	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
+	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		event.WithResponse(&model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{Role: model.RoleAssistant, Content: truncatedContent},
+				},
+			},
+		}))
+
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
 		CodeBlocks:  codeBlocks,
 		ExecutionID: invocation.Session.ID,
@@ -68,5 +80,6 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 				},
 			},
 		}))
-
+	//  [Step 3] Skip processing the original model response to continue code generation loop.
+	rsp.Choices[0].Message.Content = ""
 }
