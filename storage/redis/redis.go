@@ -25,16 +25,18 @@ func init() {
 
 var redisRegistry = map[string][]ClientBuilderOpt{}
 
-var clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) = DefaultClientBuilder
+type clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error)
+
+var globalBuilder clientBuilder = DefaultClientBuilder
 
 // SetClientBuilder sets the redis client builder.
-func SetClientBuilder(builder func(redisOpts ...ClientBuilderOpt) (redis.UniversalClient, error)) {
-	clientBuilder = builder
+func SetClientBuilder(builder clientBuilder) {
+	globalBuilder = builder
 }
 
 // GetClientBuilder gets the redis client builder.
-func GetClientBuilder() func(redisOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
-	return clientBuilder
+func GetClientBuilder() clientBuilder {
+	return globalBuilder
 }
 
 // DefaultClientBuilder is the default redis client builder.
