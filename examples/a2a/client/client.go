@@ -19,7 +19,7 @@ import (
 
 func main() {
 	// Parse command line flags
-	agentURL := flag.String("url", "http://localhost:8081", "A2A agent URL")
+	agentURL := flag.String("url", "http://localhost:8081/a2a/entrance/", "A2A agent URL")
 	flag.Parse()
 
 	fmt.Printf("🚀 A2A Interactive Client\n")

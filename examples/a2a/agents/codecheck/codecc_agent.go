@@ -3,103 +3,47 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"trpc.group/trpc-go/trpc-a2a-go/protocol"
-	"trpc.group/trpc-go/trpc-a2a-go/server"
-	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
+	a2aserver "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	utils "trpc.group/trpc-go/trpc-agent-go/examples/a2a/agents"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-var (
-	port          = 8082
-	agentName     = "CodeCheckAgent"
-	globalRunner  runner.Runner
-	defaultUserID = "default"
+const (
+	agentName = "CodeCheckAgent"
 )
-
-// codeCheckProcessor implements the taskmanager.MessageProcessor interface.
-type codeCheckProcessor struct{}
-
-// ProcessMessage implements the taskmanager.MessageProcessor interface.
-func (p *codeCheckProcessor) ProcessMessage(
-	ctx context.Context,
-	message protocol.Message,
-	options taskmanager.ProcessOptions,
-	handler taskmanager.TaskHandler,
-) (*taskmanager.MessageProcessingResult, error) {
-	ctxID := handler.GetContextID()
-	if ctxID == "" {
-		log.Errorf("context ID is empty")
-		return nil, fmt.Errorf("context ID is empty")
-	}
-
-	text := utils.ExtractTextFromMessage(message)
-	if text == "" {
-		log.Infof("input is empty!")
-		message := protocol.NewMessage(protocol.MessageRoleUser, []protocol.Part{
-			protocol.NewTextPart(""),
-		})
-		return &taskmanager.MessageProcessingResult{
-			Result: &message,
-		}, nil
-	}
-
-	log.Debugf("process non streaming message: %s", text)
-	agentMsg := model.NewUserMessage(text)
-	agentMsgChan, err := globalRunner.Run(ctx, defaultUserID, ctxID, agentMsg, agent.RunOptions{})
-	if err != nil {
-		log.Errorf("failed to run agent: %v", err)
-		return nil, err
-	}
-	content, err := utils.ProcessStreamingResponse(agentMsgChan)
-	if err != nil {
-		log.Errorf("failed to process streaming response: %v", err)
-		return nil, err
-	}
-	log.Debugf("process done")
-	message = protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart(content)})
-	return &taskmanager.MessageProcessingResult{
-		Result: &message,
-	}, nil
-}
 
 func main() {
 	// Parse command-line flags.
-	host := flag.String("host", "localhost", "Host to listen on")
+	host := flag.String("host", "localhost:8088", "Host to listen on")
 	modelName := flag.String("model", "deepseek-chat", "Model to use")
 	flag.Parse()
 
-	agentCard := buildAgentCard(*host, port)
+	// Build the code check agent
+	codeCheckAgent := buildCodeCheckAgent(*modelName)
 
-	// Create the message processor.
-	processor := &codeCheckProcessor{}
+	// Create agent card
+	agentCard := buildAgentCard()
 
-	// Create task manager and inject processor.
-	taskManager, err := taskmanager.NewMemoryTaskManager(
-		processor,
+	// Create a2a server with the agent
+	server, err := a2a.New(
+		a2a.WithHost(*host),
+		a2a.WithAgent(codeCheckAgent),
+		a2a.WithAgentCard(agentCard),
+		a2a.WithExtraA2AOptions(a2aserver.WithBasePath("/a2a/codecheck/")),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create task manager: %v", err)
-	}
-
-	globalRunner = buildGlobalRunner(*modelName)
-
-	srv, err := server.NewA2AServer(agentCard, taskManager)
-	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		log.Fatalf("Failed to create a2a server: %v", err)
 	}
 
 	// Set up a channel to listen for termination signals.
@@ -108,9 +52,8 @@ func main() {
 
 	// Start the server in a goroutine.
 	go func() {
-		serverAddr := fmt.Sprintf("%s:%d", *host, port)
-		log.Infof("Starting server on %s...", serverAddr)
-		if err := srv.Start(serverAddr); err != nil {
+		log.Infof("Starting server on %s...", *host)
+		if err := server.Start(*host); err != nil {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
@@ -118,53 +61,24 @@ func main() {
 	// Wait for termination signal.
 	sig := <-sigChan
 	log.Infof("Received signal %v, shutting down...", sig)
-}
 
-func buildAgentCard(host string, port int) server.AgentCard {
-	return server.AgentCard{
-		Name:        agentName,
-		Description: "Check code quality by Go Language Standard; Query the golang standard/spec that user needed",
-		URL:         fmt.Sprintf("http://%s:%d/", host, port),
-		Version:     "1.0.0",
-		Provider: &server.AgentProvider{
-			Organization: "tRPC-Go",
-			URL:          utils.StringPtr("https://trpc.group/trpc-go/"),
-		},
-		Capabilities: server.AgentCapabilities{
-			Streaming:              utils.BoolPtr(false),
-			PushNotifications:      utils.BoolPtr(false),
-			StateTransitionHistory: utils.BoolPtr(false),
-		},
-		DefaultInputModes:  []string{"text"},
-		DefaultOutputModes: []string{"text"},
-		Skills: []server.AgentSkill{
-			{
-				ID:          "code_check",
-				Name:        "code_check",
-				Description: utils.StringPtr("Check code quality by Go Language Standard; Query the golang standard/spec that user needed"),
-				Tags:        []string{"code", "check", "golang"},
-				Examples: []string{
-					`
-					Analyze the code and check code quality by Go Language Standard.
-					Query the golang standard spec/standard file.
-					`,
-				},
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-			},
-		},
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Stop(ctx); err != nil {
+		log.Errorf("Failed to stop server gracefully: %v", err)
 	}
 }
 
-func buildGlobalRunner(modelName string) runner.Runner {
+func buildCodeCheckAgent(modelName string) agent.Agent {
 	// Create OpenAI model.
 	modelInstance := openai.New(modelName, openai.WithChannelBufferSize(512))
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   utils.IntPtr(2000),
-		Temperature: utils.FloatPtr(0.7),
-		Stream:      true, // Enable streaming
+		MaxTokens:   intPtr(2000),
+		Temperature: floatPtr(0.7),
+		Stream:      false,
 	}
 
 	readSpecTool := function.NewFunctionTool(
@@ -180,11 +94,59 @@ func buildGlobalRunner(modelName string) runner.Runner {
 		llmagent.WithInstruction("Analyze the code and check code quality by Go Language Standard"),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
-		llmagent.WithTools([]tool.Tool{
-			readSpecTool,
-		}),
+		llmagent.WithTools([]tool.Tool{readSpecTool}),
 	)
 
-	sessionService := inmemory.NewSessionService()
-	return runner.NewRunner(agentName, llmAgent, runner.WithSessionService(sessionService))
+	return llmAgent
+}
+
+func buildAgentCard() a2aserver.AgentCard {
+	return a2aserver.AgentCard{
+		Name:        agentName,
+		Description: "Check code quality by Go Language Standard; Query the golang standard/spec that user needed",
+		Version:     "1.0.0",
+		Provider: &a2aserver.AgentProvider{
+			Organization: "tRPC-Go",
+			URL:          stringPtr("https://trpc.group/trpc-go/"),
+		},
+		Capabilities: a2aserver.AgentCapabilities{
+			Streaming:              boolPtr(true),
+			PushNotifications:      boolPtr(false),
+			StateTransitionHistory: boolPtr(false),
+		},
+		DefaultInputModes:  []string{"text"},
+		DefaultOutputModes: []string{"text"},
+		Skills: []a2aserver.AgentSkill{
+			{
+				ID:          "code_check",
+				Name:        "code_check",
+				Description: stringPtr("Check code quality by Go Language Standard; Query the golang standard/spec that user needed"),
+				Tags:        []string{"code", "check", "golang"},
+				Examples: []string{
+					`
+					Analyze the code and check code quality by Go Language Standard.
+					Query the golang standard spec/standard file.
+					`,
+				},
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+			},
+		},
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
+
+func intPtr(i int) *int {
+	return &i
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func floatPtr(f float64) *float64 {
+	return &f
 }
