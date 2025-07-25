@@ -28,14 +28,30 @@ type IdentityRequestProcessor struct {
 	AgentName string
 	// Description is the description of the agent.
 	Description string
+
+	addNameToInstruction bool
+}
+
+// Option is a function that can be used to configure the identity request processor.
+type Option func(*IdentityRequestProcessor)
+
+// WithAddNameToInstruction adds the agent name to the instruction if true.
+func WithAddNameToInstruction(addNameToInstruction bool) Option {
+	return func(p *IdentityRequestProcessor) {
+		p.addNameToInstruction = addNameToInstruction
+	}
 }
 
 // NewIdentityRequestProcessor creates a new identity request processor.
-func NewIdentityRequestProcessor(agentName, description string) *IdentityRequestProcessor {
-	return &IdentityRequestProcessor{
+func NewIdentityRequestProcessor(agentName, description string, opts ...Option) *IdentityRequestProcessor {
+	p := &IdentityRequestProcessor{
 		AgentName:   agentName,
 		Description: description,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // ProcessRequest implements the flow.RequestProcessor interface.
@@ -64,12 +80,11 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 
 	// Create identity message if we have name or description.
 	var identityContent string
-	if p.AgentName != "" && p.Description != "" {
-		identityContent = "You are " + p.AgentName + ". " + p.Description
-	} else if p.AgentName != "" {
-		identityContent = "You are " + p.AgentName + "."
-	} else if p.Description != "" {
-		identityContent = p.Description
+	if p.addNameToInstruction && p.AgentName != "" {
+		identityContent = "You are " + p.AgentName + ". "
+	}
+	if p.Description != "" {
+		identityContent += p.Description
 	}
 
 	if identityContent != "" {

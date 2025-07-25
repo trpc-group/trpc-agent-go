@@ -133,6 +133,13 @@ func WithKnowledge(kb knowledge.Knowledge) Option {
 	}
 }
 
+// WithAddNameToInstruction adds the agent name to the instruction if true.
+func WithAddNameToInstruction(addNameToInstruction bool) Option {
+	return func(opts *Options) {
+		opts.AddNameToInstruction = addNameToInstruction
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -167,6 +174,8 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
+	// AddNameToInstruction adds the agent name to the instruction if true.
+	AddNameToInstruction bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -219,7 +228,11 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// 4. Identity processor - sets agent identity.
 	if name != "" || options.Description != "" {
-		identityProcessor := processor.NewIdentityRequestProcessor(name, options.Description)
+		identityProcessor := processor.NewIdentityRequestProcessor(
+			name,
+			options.Description,
+			processor.WithAddNameToInstruction(options.AddNameToInstruction),
+		)
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
