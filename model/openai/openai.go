@@ -78,19 +78,29 @@ type HTTPClientOptions struct {
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
-	client            openai.Client
-	name              string
-	baseURL           string
-	apiKey            string
-	channelBufferSize int
+	client               openai.Client
+	name                 string
+	baseURL              string
+	apiKey               string
+	channelBufferSize    int
+	chatRequestCallback  chatRequestCallbackFunc
+	chatResponseCallback chatResponseCallbackFunc
+	chatChunkCallback    chatChunkCallbackFunc
 }
+
+type chatRequestCallbackFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
+type chatResponseCallbackFunc func(ctx context.Context, chatResponse *openai.ChatCompletion)
+type chatChunkCallbackFunc func(ctx context.Context, chatChunk *openai.ChatCompletionChunk)
 
 // options contains configuration options for creating a Model.
 type options struct {
-	APIKey            string
-	BaseURL           string // Optional: for OpenAI-compatible APIs
-	ChannelBufferSize int    // Buffer size for response channels (default: 256)
-	HTTPClientOptions []HTTPClientOption
+	APIKey               string
+	BaseURL              string // Optional: for OpenAI-compatible APIs
+	ChannelBufferSize    int    // Buffer size for response channels (default: 256)
+	HTTPClientOptions    []HTTPClientOption
+	ChatRequestCallback  chatRequestCallbackFunc
+	ChatResponseCallback chatResponseCallbackFunc
+	ChatChunkCallback    chatChunkCallbackFunc
 }
 
 // Option is a function that configures an OpenAI model.
@@ -114,6 +124,29 @@ func WithBaseURL(url string) Option {
 func WithChannelBufferSize(size int) Option {
 	return func(opts *options) {
 		opts.ChannelBufferSize = size
+	}
+}
+
+// WithChatRequestCallback sets the function to be called before sending a chat request.
+func WithChatRequestCallback(fn chatRequestCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatRequestCallback = fn
+	}
+}
+
+// WithChatResponseCallback sets the function to be called after receiving a chat response.
+// Used for non-streaming responses.
+func WithChatResponseCallback(fn chatResponseCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatResponseCallback = fn
+	}
+}
+
+// WithChatChunkCallback sets the function to be called after receiving a chat chunk.
+// Used for streaming responses.
+func WithChatChunkCallback(fn chatChunkCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatChunkCallback = fn
 	}
 }
 
@@ -144,11 +177,14 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	return &Model{
-		client:            client,
-		name:              name,
-		baseURL:           o.BaseURL,
-		apiKey:            o.APIKey,
-		channelBufferSize: channelBufferSize,
+		client:               client,
+		name:                 name,
+		baseURL:              o.BaseURL,
+		apiKey:               o.APIKey,
+		channelBufferSize:    channelBufferSize,
+		chatRequestCallback:  o.ChatRequestCallback,
+		chatResponseCallback: o.ChatResponseCallback,
+		chatChunkCallback:    o.ChatChunkCallback,
 	}
 }
 
@@ -219,6 +255,10 @@ func (m *Model) GenerateContent(
 
 	go func() {
 		defer close(responseChan)
+
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, &chatRequest)
+		}
 
 		if request.Stream {
 			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
@@ -342,6 +382,10 @@ func (m *Model) handleStreamingResponse(
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
 
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, &chunk)
+		}
+
 		response := &model.Response{
 			ID:        chunk.ID,
 			Object:    string(chunk.Object), // Convert constant to string
@@ -455,6 +499,9 @@ func (m *Model) handleNonStreamingResponse(
 ) {
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
+	if m.chatResponseCallback != nil {
+		m.chatResponseCallback(ctx, chatCompletion)
+	}
 	if err != nil {
 		errorResponse := &model.Response{
 			Error: &model.ResponseError{
