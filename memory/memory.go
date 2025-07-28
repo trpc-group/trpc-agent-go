@@ -21,7 +21,7 @@ import (
 // Service defines the interface for memory service operations.
 type Service interface {
 	// AddMemory adds a new memory for a user.
-	AddMemory(ctx context.Context, userID string, memory string) error
+	AddMemory(ctx context.Context, userID string, memory string, input string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.
 	UpdateMemory(ctx context.Context, userID string, id string, memory string) error

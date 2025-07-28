@@ -119,13 +119,13 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryStr string, topics []string) *memory.MemoryEntry {
+func createMemoryEntry(userID string, memoryStr string, input string, topics []string) *memory.MemoryEntry {
 	now := time.Now()
 
 	// Create Memory object.
 	memoryObj := &memory.Memory{
 		Memory:      memoryStr,
-		Input:       memoryStr,
+		Input:       input,
 		Topics:      topics,
 		LastUpdated: &now,
 	}
@@ -144,13 +144,12 @@ func createMemoryEntry(userID string, memoryStr string, topics []string) *memory
 }
 
 // AddMemory adds a new memory for a user.
-func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr string) error {
+func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr string, input string, topics []string) error {
 	appName := defaultAppName // Default app name for now.
 	app := s.getAppMemories(appName)
 
-	// Create memory entry with empty topics for now.
-	// Topics can be added later through a separate API or tool.
-	memoryEntry := createMemoryEntry(userID, memoryStr, nil)
+	// Create memory entry with provided input and topics.
+	memoryEntry := createMemoryEntry(userID, memoryStr, input, topics)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()

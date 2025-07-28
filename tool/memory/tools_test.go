@@ -34,7 +34,8 @@ func TestMemoryAddTool(t *testing.T) {
 	// Test adding memory.
 	args := map[string]interface{}{
 		"memory": "User likes coffee",
-		"topic":  "preferences",
+		"input":  "User said: I like coffee",
+		"topics": []string{"preferences"},
 	}
 	jsonArgs, _ := json.Marshal(args)
 
@@ -68,9 +69,9 @@ func TestMemorySearchTool(t *testing.T) {
 	userID := "test-user"
 
 	// Add some test memories.
-	service.AddMemory(context.Background(), userID, "User likes coffee")
-	service.AddMemory(context.Background(), userID, "User works as a developer")
-	service.AddMemory(context.Background(), userID, "User has a dog")
+	service.AddMemory(context.Background(), userID, "User likes coffee", "User said: I like coffee", nil)
+	service.AddMemory(context.Background(), userID, "User works as a developer", "User said: I work as a developer", nil)
+	service.AddMemory(context.Background(), userID, "User has a dog", "User said: I have a dog", nil)
 
 	tool := NewMemorySearchTool(service, userID)
 
@@ -111,8 +112,8 @@ func TestMemoryLoadTool(t *testing.T) {
 	userID := "test-user"
 
 	// Add some test memories.
-	service.AddMemory(context.Background(), userID, "User likes coffee")
-	service.AddMemory(context.Background(), userID, "User works as a developer")
+	service.AddMemory(context.Background(), userID, "User likes coffee", "User said: I like coffee", nil)
+	service.AddMemory(context.Background(), userID, "User works as a developer", "User said: I work as a developer", nil)
 
 	tool := NewMemoryLoadTool(service, userID)
 

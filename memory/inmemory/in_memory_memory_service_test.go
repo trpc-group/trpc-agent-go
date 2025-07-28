@@ -31,9 +31,11 @@ func TestMemoryService_AddMemory(t *testing.T) {
 	ctx := context.Background()
 	userID := "test-user"
 	memoryStr := "Test memory content"
+	inputStr := "User said: I am Java, and I like Go programming"
+	topics := []string{"test", "memory"}
 
 	// Test adding memory.
-	err := service.AddMemory(ctx, userID, memoryStr)
+	err := service.AddMemory(ctx, userID, memoryStr, inputStr, topics)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -49,15 +51,21 @@ func TestMemoryService_AddMemory(t *testing.T) {
 	if memories[0].Memory.Memory != memoryStr {
 		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory.Memory)
 	}
+	if memories[0].Memory.Input != inputStr {
+		t.Fatalf("Expected input content %s, got %s", inputStr, memories[0].Memory.Input)
+	}
+	if len(memories[0].Memory.Topics) != 2 {
+		t.Fatalf("Expected 2 topics, got %d", len(memories[0].Memory.Topics))
+	}
 
 	// Test memory limit.
 	service = NewMemoryService(WithMemoryLimit(1))
-	err = service.AddMemory(ctx, userID, "first memory")
+	err = service.AddMemory(ctx, userID, "first memory", "first input", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	err = service.AddMemory(ctx, userID, "second memory")
+	err = service.AddMemory(ctx, userID, "second memory", "second input", nil)
 	if err == nil {
 		t.Fatal("AddMemory should fail when memory limit is exceeded")
 	}
@@ -69,9 +77,10 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	userID := "test-user"
 	originalMemory := "Original memory"
 	updatedMemory := "Updated memory"
+	originalInput := "User said: original input"
 
 	// Add initial memory.
-	err := service.AddMemory(ctx, userID, originalMemory)
+	err := service.AddMemory(ctx, userID, originalMemory, originalInput, nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -114,9 +123,10 @@ func TestMemoryService_DeleteMemory(t *testing.T) {
 	ctx := context.Background()
 	userID := "test-user"
 	memoryStr := "Memory to delete"
+	inputStr := "User said: delete this memory"
 
 	// Add memory.
-	err := service.AddMemory(ctx, userID, memoryStr)
+	err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -161,15 +171,15 @@ func TestMemoryService_ClearMemories(t *testing.T) {
 	userID2 := "user2"
 
 	// Add memories for two users.
-	err := service.AddMemory(ctx, userID1, "Memory 1 for user 1")
+	err := service.AddMemory(ctx, userID1, "Memory 1 for user 1", "Input 1 for user 1", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
-	err = service.AddMemory(ctx, userID1, "Memory 2 for user 1")
+	err = service.AddMemory(ctx, userID1, "Memory 2 for user 1", "Input 2 for user 1", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
-	err = service.AddMemory(ctx, userID2, "Memory for user 2")
+	err = service.AddMemory(ctx, userID2, "Memory for user 2", "Input for user 2", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -213,7 +223,8 @@ func TestMemoryService_SearchMemories(t *testing.T) {
 	}
 
 	for _, memory := range memories {
-		err := service.AddMemory(ctx, userID, memory)
+		input := fmt.Sprintf("User said: %s", memory)
+		err := service.AddMemory(ctx, userID, memory, input, nil)
 		if err != nil {
 			t.Fatalf("AddMemory failed: %v", err)
 		}
@@ -255,7 +266,8 @@ func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {
 	// Add multiple memories.
 	for i := 0; i < 5; i++ {
 		memoryStr := fmt.Sprintf("Memory %d", i)
-		err := service.AddMemory(ctx, userID, memoryStr)
+		inputStr := fmt.Sprintf("User said: %s", memoryStr)
+		err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
 		if err != nil {
 			t.Fatalf("AddMemory failed: %v", err)
 		}
@@ -290,7 +302,8 @@ func TestMemoryService_Concurrency(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(index int) {
 			memoryStr := fmt.Sprintf("Memory %d", index)
-			err := service.AddMemory(ctx, userID, memoryStr)
+			inputStr := fmt.Sprintf("User said: %s", memoryStr)
+			err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
 			if err != nil {
 				t.Errorf("AddMemory failed: %v", err)
 			}

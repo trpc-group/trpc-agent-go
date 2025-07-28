@@ -49,13 +49,17 @@ func (m *MemoryAddTool) Declaration() *tool.Declaration {
 					Type:        "string",
 					Description: "The memory content to store. Should be a concise summary of important information about the user.",
 				},
+				"input": {
+					Type:        "string",
+					Description: "The original user input that led to this memory.",
+				},
 				"topics": {
 					Type:        "array",
 					Items:       &tool.Schema{Type: "string"},
 					Description: "Optional topics for categorizing the memory. Can be multiple topics.",
 				},
 			},
-			Required: []string{"memory"},
+			Required: []string{"memory", "input"},
 		},
 	}
 }
@@ -68,6 +72,7 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 
 	var args struct {
 		Memory string   `json:"memory"`
+		Input  string   `json:"input"`
 		Topics []string `json:"topics,omitempty"`
 	}
 
@@ -79,8 +84,12 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		return nil, errors.New("memory content cannot be empty")
 	}
 
+	if args.Input == "" {
+		return nil, errors.New("input content cannot be empty")
+	}
+
 	// Add memory to the service.
-	err := m.memoryService.AddMemory(ctx, m.userID, args.Memory)
+	err := m.memoryService.AddMemory(ctx, m.userID, args.Memory, args.Input, args.Topics)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add memory: %v", err)
 	}
@@ -89,6 +98,7 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		"success": true,
 		"message": "Memory added successfully",
 		"memory":  args.Memory,
+		"input":   args.Input,
 		"topics":  args.Topics,
 	}, nil
 }
