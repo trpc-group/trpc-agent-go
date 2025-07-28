@@ -27,6 +27,13 @@ import (
 
 var _ memory.Service = (*MemoryService)(nil)
 
+const (
+	// appName is the name of the application.
+	defaultAppName = "default"
+	// defaultMemoryLimit is the default limit of memories per user.
+	defaultMemoryLimit = 1000
+)
+
 // appMemories stores memories for one app.
 type appMemories struct {
 	mu       sync.RWMutex
@@ -66,7 +73,7 @@ func WithMemoryLimit(limit int) ServiceOpt {
 // NewMemoryService creates a new in-memory memory service.
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := serviceOpts{
-		memoryLimit: 1000, // Default limit of 1000 memories per user.
+		memoryLimit: defaultMemoryLimit,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -99,7 +106,7 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 }
 
 // generateMemoryID generates a unique ID for memory based on content.
-func generateMemoryID(memoryData map[string]interface{}) string {
+func generateMemoryID(memoryData map[string]any) string {
 	// Sort keys to ensure consistent ID generation.
 	keys := make([]string, 0, len(memoryData))
 	for k := range memoryData {
@@ -120,7 +127,7 @@ func generateMemoryID(memoryData map[string]interface{}) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryData map[string]interface{}) *memory.MemoryEntry {
+func createMemoryEntry(userID string, memoryData map[string]any) *memory.MemoryEntry {
 	now := time.Now()
 	id := generateMemoryID(memoryData)
 
@@ -135,11 +142,11 @@ func createMemoryEntry(userID string, memoryData map[string]interface{}) *memory
 
 // AddMemory adds a new memory for a user.
 func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr string) error {
-	appName := "default" // Default app name for now.
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	// Create memory data.
-	memoryData := map[string]interface{}{
+	memoryData := map[string]any{
 		"memory": memoryStr,
 		"input":  memoryStr,
 	}
@@ -160,7 +167,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr 
 
 // UpdateMemory updates an existing memory for a user.
 func (s *MemoryService) UpdateMemory(ctx context.Context, userID string, id string, memoryStr string) error {
-	appName := "default"
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	app.mu.Lock()
@@ -182,7 +189,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, userID string, id stri
 
 // DeleteMemory deletes a memory for a user.
 func (s *MemoryService) DeleteMemory(ctx context.Context, userID string, id string) error {
-	appName := "default"
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	app.mu.Lock()
@@ -198,7 +205,7 @@ func (s *MemoryService) DeleteMemory(ctx context.Context, userID string, id stri
 
 // ClearMemories clears all memories for a user.
 func (s *MemoryService) ClearMemories(ctx context.Context, userID string) error {
-	appName := "default"
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	app.mu.Lock()
@@ -215,7 +222,7 @@ func (s *MemoryService) ClearMemories(ctx context.Context, userID string) error 
 
 // ReadMemories reads memories for a user.
 func (s *MemoryService) ReadMemories(ctx context.Context, userID string, limit int) ([]*memory.MemoryEntry, error) {
-	appName := "default"
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	app.mu.RLock()
@@ -243,7 +250,7 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userID string, limit i
 
 // SearchMemories searches memories for a user.
 func (s *MemoryService) SearchMemories(ctx context.Context, userID string, query string) ([]*memory.MemoryEntry, error) {
-	appName := "default"
+	appName := defaultAppName
 	app := s.getAppMemories(appName)
 
 	app.mu.RLock()

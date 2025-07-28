@@ -49,9 +49,9 @@ type Memory struct {
 
 // MemoryEntry represents a memory entry stored in the system.
 type MemoryEntry struct {
-	Memory    map[string]interface{} `json:"memory"`    // Memory data (serialized Memory object).
-	UserID    string                 `json:"userId"`    // User ID.
-	CreatedAt time.Time              `json:"createdAt"` // Creation time.
-	UpdatedAt time.Time              `json:"updatedAt"` // Update time.
-	ID        string                 `json:"id"`        // Auto-generated ID.
+	Memory    map[string]any `json:"memory"`    // Memory data (serialized Memory object).
+	UserID    string         `json:"userId"`    // User ID.
+	CreatedAt time.Time      `json:"createdAt"` // Creation time.
+	UpdatedAt time.Time      `json:"updatedAt"` // Update time.
+	ID        string         `json:"id"`        // Auto-generated ID.
 }
