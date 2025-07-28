@@ -198,9 +198,14 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	if len(evt.Choices) == 0 {
 		return *evt
 	}
-
 	// Create a new event with user context.
 	convertedEvent := *evt
+	// Construct a new response and make explicit copy to avoid
+	// modifying the original response.
+	convertedEvent.Response = &model.Response{}
+	if evt.Response != nil {
+		*convertedEvent.Response = *evt.Response
+	}
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
