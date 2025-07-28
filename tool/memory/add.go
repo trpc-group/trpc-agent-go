@@ -49,9 +49,10 @@ func (m *MemoryAddTool) Declaration() *tool.Declaration {
 					Type:        "string",
 					Description: "The memory content to store. Should be a concise summary of important information about the user.",
 				},
-				"topic": {
-					Type:        "string",
-					Description: "Optional topic for categorizing the memory.",
+				"topics": {
+					Type:        "array",
+					Items:       &tool.Schema{Type: "string"},
+					Description: "Optional topics for categorizing the memory. Can be multiple topics.",
 				},
 			},
 			Required: []string{"memory"},
@@ -66,8 +67,8 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 	}
 
 	var args struct {
-		Memory string `json:"memory"`
-		Topic  string `json:"topic,omitempty"`
+		Memory string   `json:"memory"`
+		Topics []string `json:"topics,omitempty"`
 	}
 
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
@@ -88,6 +89,6 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		"success": true,
 		"message": "Memory added successfully",
 		"memory":  args.Memory,
-		"topic":   args.Topic,
+		"topics":  args.Topics,
 	}, nil
 }

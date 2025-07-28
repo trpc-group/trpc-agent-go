@@ -92,13 +92,12 @@ func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, erro
 	// Convert memories to a simpler format for the LLM.
 	var results []map[string]any
 	for _, memory := range memories {
-		if memoryContent, ok := memory.Memory["memory"].(string); ok {
-			results = append(results, map[string]any{
-				"id":      memory.ID,
-				"memory":  memoryContent,
-				"created": memory.CreatedAt.Format("2006-01-02 15:04:05"),
-			})
-		}
+		results = append(results, map[string]any{
+			"id":      memory.ID,
+			"memory":  memory.Memory.Memory,
+			"topics":  memory.Memory.Topics,
+			"created": memory.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
 	}
 
 	return map[string]any{

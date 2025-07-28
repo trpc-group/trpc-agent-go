@@ -46,8 +46,8 @@ func TestMemoryService_AddMemory(t *testing.T) {
 	if len(memories) != 1 {
 		t.Fatalf("Expected 1 memory, got %d", len(memories))
 	}
-	if memories[0].Memory["memory"] != memoryStr {
-		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory["memory"])
+	if memories[0].Memory.Memory != memoryStr {
+		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory.Memory)
 	}
 
 	// Test memory limit.
@@ -98,8 +98,8 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
-	if memories[0].Memory["memory"] != updatedMemory {
-		t.Fatalf("Expected updated memory %s, got %s", updatedMemory, memories[0].Memory["memory"])
+	if memories[0].Memory.Memory != updatedMemory {
+		t.Fatalf("Expected updated memory %s, got %s", updatedMemory, memories[0].Memory.Memory)
 	}
 
 	// Test updating non-existent memory.

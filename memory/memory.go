@@ -41,17 +41,18 @@ type Service interface {
 
 // Memory represents a memory entry with content and metadata.
 type Memory struct {
-	Memory string `json:"memory"`          // Memory content.
-	ID     string `json:"id,omitempty"`    // Memory ID.
-	Topic  string `json:"topic,omitempty"` // Memory topic.
-	Input  string `json:"input,omitempty"` // Input content.
+	Memory      string     `json:"memory"`                 // Memory content.
+	MemoryID    string     `json:"memory_id,omitempty"`    // Memory ID.
+	Topics      []string   `json:"topics,omitempty"`       // Memory topics (array).
+	Input       string     `json:"input,omitempty"`        // Input content.
+	LastUpdated *time.Time `json:"last_updated,omitempty"` // Last update time.
 }
 
 // MemoryEntry represents a memory entry stored in the system.
 type MemoryEntry struct {
-	Memory    map[string]any `json:"memory"`    // Memory data (serialized Memory object).
-	UserID    string         `json:"userId"`    // User ID.
-	CreatedAt time.Time      `json:"createdAt"` // Creation time.
-	UpdatedAt time.Time      `json:"updatedAt"` // Update time.
-	ID        string         `json:"id"`        // Auto-generated ID.
+	Memory    *Memory   `json:"memory"`     // Direct Memory object reference.
+	UserID    string    `json:"user_id"`    // User ID.
+	CreatedAt time.Time `json:"created_at"` // Creation time.
+	UpdatedAt time.Time `json:"updated_at"` // Update time.
+	ID        string    `json:"id"`         // Auto-generated ID.
 }

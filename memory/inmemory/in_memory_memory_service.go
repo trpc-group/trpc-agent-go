@@ -28,7 +28,7 @@ import (
 var _ memory.Service = (*MemoryService)(nil)
 
 const (
-	// appName is the name of the application.
+	// defaultAppName is the default app name for the memory service.
 	defaultAppName = "default"
 	// defaultMemoryLimit is the default limit of memories per user.
 	defaultMemoryLimit = 1000
@@ -106,20 +106,12 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 }
 
 // generateMemoryID generates a unique ID for memory based on content.
-func generateMemoryID(memoryData map[string]any) string {
-	// Sort keys to ensure consistent ID generation.
-	keys := make([]string, 0, len(memoryData))
-	for k := range memoryData {
-		keys = append(keys, k)
+func generateMemoryID(memory *memory.Memory) string {
+	// Create a consistent string representation for ID generation.
+	content := fmt.Sprintf("memory:%s|input:%s", memory.Memory, memory.Input)
+	if len(memory.Topics) > 0 {
+		content += fmt.Sprintf("|topics:%s", strings.Join(memory.Topics, ","))
 	}
-	sort.Strings(keys)
-
-	// Create a consistent string representation.
-	var parts []string
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s:%v", k, memoryData[k]))
-	}
-	content := strings.Join(parts, "|")
 
 	// Generate MD5 hash.
 	hash := md5.Sum([]byte(content))
@@ -127,12 +119,23 @@ func generateMemoryID(memoryData map[string]any) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryData map[string]any) *memory.MemoryEntry {
+func createMemoryEntry(userID string, memoryStr string, topics []string) *memory.MemoryEntry {
 	now := time.Now()
-	id := generateMemoryID(memoryData)
+
+	// Create Memory object.
+	memoryObj := &memory.Memory{
+		Memory:      memoryStr,
+		Input:       memoryStr,
+		Topics:      topics,
+		LastUpdated: &now,
+	}
+
+	// Generate ID.
+	id := generateMemoryID(memoryObj)
+	memoryObj.MemoryID = id
 
 	return &memory.MemoryEntry{
-		Memory:    memoryData,
+		Memory:    memoryObj,
 		UserID:    userID,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -142,16 +145,12 @@ func createMemoryEntry(userID string, memoryData map[string]any) *memory.MemoryE
 
 // AddMemory adds a new memory for a user.
 func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr string) error {
-	appName := defaultAppName
+	appName := defaultAppName // Default app name for now.
 	app := s.getAppMemories(appName)
 
-	// Create memory data.
-	memoryData := map[string]any{
-		"memory": memoryStr,
-		"input":  memoryStr,
-	}
-
-	memoryEntry := createMemoryEntry(userID, memoryData)
+	// Create memory entry with empty topics for now.
+	// Topics can be added later through a separate API or tool.
+	memoryEntry := createMemoryEntry(userID, memoryStr, nil)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -179,9 +178,11 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, userID string, id stri
 	}
 
 	// Update memory data.
-	memoryEntry.Memory["memory"] = memoryStr
-	memoryEntry.Memory["input"] = memoryStr
-	memoryEntry.UpdatedAt = time.Now()
+	now := time.Now()
+	memoryEntry.Memory.Memory = memoryStr
+	memoryEntry.Memory.Input = memoryStr
+	memoryEntry.Memory.LastUpdated = &now
+	memoryEntry.UpdatedAt = now
 
 	app.memories[id] = memoryEntry
 	return nil
@@ -256,8 +257,8 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userID string, query
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	var results []*memory.MemoryEntry
 	queryLower := strings.ToLower(query)
+	var results []*memory.MemoryEntry
 
 	for _, memoryEntry := range app.memories {
 		if memoryEntry.UserID != userID {
@@ -265,17 +266,19 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userID string, query
 		}
 
 		// Simple string search in memory content.
-		if memory, ok := memoryEntry.Memory["memory"].(string); ok {
-			if strings.Contains(strings.ToLower(memory), queryLower) {
+		if strings.Contains(strings.ToLower(memoryEntry.Memory.Memory), queryLower) {
+			results = append(results, memoryEntry)
+			continue
+		}
+
+		// Search in topics.
+		for _, topic := range memoryEntry.Memory.Topics {
+			if strings.Contains(strings.ToLower(topic), queryLower) {
 				results = append(results, memoryEntry)
+				break
 			}
 		}
 	}
-
-	// Sort by creation time (newest first).
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].CreatedAt.After(results[j].CreatedAt)
-	})
 
 	return results, nil
 }
