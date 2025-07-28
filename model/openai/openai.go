@@ -150,6 +150,13 @@ func WithChatChunkCallback(fn chatChunkCallbackFunc) Option {
 	}
 }
 
+// WithHTTPClientOptions sets the HTTP client options for the OpenAI client.
+func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
+	return func(opts *options) {
+		opts.HTTPClientOptions = httpOpts
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{}
