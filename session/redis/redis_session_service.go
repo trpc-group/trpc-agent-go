@@ -10,6 +10,7 @@
 //
 //
 
+// Package redis provides the redis session service.
 package redis
 
 import (
@@ -24,6 +25,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
 var _ session.Service = (*Service)(nil)
@@ -60,13 +62,27 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	if opts.url == "" {
-		return nil, errors.New("redis url is required")
+	if opts.url == "" && opts.instanceName == "" {
+		return nil, errors.New("redis url or instance name is required")
 	}
 
-	redisClient, err := clientBuilder(WithClientBuilderURL(opts.url))
-	if err != nil {
-		return nil, fmt.Errorf("create redis client failed: %w", err)
+	var redisClient redis.UniversalClient
+	var err error
+	builder := storage.GetClientBuilder()
+	if opts.url != "" {
+		redisClient, err = builder(storage.WithClientBuilderURL(opts.url))
+		if err != nil {
+			return nil, fmt.Errorf("create redis client from url failed: %w", err)
+		}
+	} else if opts.instanceName != "" {
+		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
+		if !ok {
+			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
+		}
+		redisClient, err = builder(builderOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
+		}
 	}
 
 	return &Service{opts: opts, redisClient: redisClient}, nil
