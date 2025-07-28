@@ -105,10 +105,12 @@ func (a *ChainAgent) createSubAgentInvocation(
 	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
 
 	// Set branch info to track sequence in multi-agent scenarios.
+	// Do not include sub-agent name in branch, so that the chain sub-agents can
+	// observe each other's events.
 	if baseInvocation.Branch != "" {
-		subInvocation.Branch = baseInvocation.Branch + "." + subAgent.Info().Name
+		subInvocation.Branch = baseInvocation.Branch
 	} else {
-		subInvocation.Branch = a.name + "." + subAgent.Info().Name
+		subInvocation.Branch = a.name
 	}
 
 	return &subInvocation
