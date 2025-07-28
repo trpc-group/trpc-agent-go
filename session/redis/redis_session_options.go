@@ -1,81 +1,22 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.
+// All rights reserved.
+//
+// If you have downloaded a copy of the tRPC source code from Tencent,
+// please note that tRPC source code is licensed under the  Apache 2.0 License,
+// A copy of the Apache 2.0 License is included in this file.
+//
+//
+
 package redis
-
-import (
-	"fmt"
-
-	"github.com/redis/go-redis/v9"
-)
-
-var clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) = DefaultClientBuilder
-
-// SetClientBuilder sets the redis client builder.
-func SetClientBuilder(builder func(redisOpts ...ClientBuilderOpt) (redis.UniversalClient, error)) {
-	clientBuilder = builder
-}
-
-// DefaultClientBuilder is the default redis client builder.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error) {
-	o := &ClientBuilderOpts{}
-	for _, opt := range builderOpts {
-		opt(o)
-	}
-
-	if o.URL == "" {
-		return nil, fmt.Errorf("redis: url is empty")
-	}
-
-	opts, err := redis.ParseURL(o.URL)
-	if err != nil {
-		return nil, fmt.Errorf("redis: parse url %s: %w", o.URL, err)
-	}
-	universalOpts := &redis.UniversalOptions{
-		Addrs:                 []string{opts.Addr},
-		DB:                    opts.DB,
-		Username:              opts.Username,
-		Password:              opts.Password,
-		Protocol:              opts.Protocol,
-		ClientName:            opts.ClientName,
-		TLSConfig:             opts.TLSConfig,
-		MaxRetries:            opts.MaxRetries,
-		MinRetryBackoff:       opts.MinRetryBackoff,
-		MaxRetryBackoff:       opts.MaxRetryBackoff,
-		DialTimeout:           opts.DialTimeout,
-		ReadTimeout:           opts.ReadTimeout,
-		WriteTimeout:          opts.WriteTimeout,
-		ContextTimeoutEnabled: opts.ContextTimeoutEnabled,
-		PoolFIFO:              opts.PoolFIFO,
-		PoolSize:              opts.PoolSize,
-		PoolTimeout:           opts.PoolTimeout,
-		MinIdleConns:          opts.MinIdleConns,
-		MaxIdleConns:          opts.MaxIdleConns,
-		MaxActiveConns:        opts.MaxActiveConns,
-		ConnMaxIdleTime:       opts.ConnMaxIdleTime,
-		ConnMaxLifetime:       opts.ConnMaxLifetime,
-	}
-	return redis.NewUniversalClient(universalOpts), nil
-}
-
-// ClientBuilderOpt is the option for the redis client.
-type ClientBuilderOpt func(*ClientBuilderOpts)
-
-// ClientBuilderOpts is the options for the redis client.
-type ClientBuilderOpts struct {
-	URL string
-}
-
-// WithClientBuilderURL sets the redis client url for clientBuilder.
-// scheme: redis://<username>:<password>@<host>:<port>/<db>?<options>
-// options: refer goredis.ParseURL
-func WithClientBuilderURL(url string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) {
-		opts.URL = url
-	}
-}
 
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
 	sessionEventLimit int
 	url               string
+	instanceName      string
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -92,5 +33,14 @@ func WithSessionEventLimit(limit int) ServiceOpt {
 func WithRedisClientURL(url string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.url = url
+	}
+}
+
+// WithRedisInstance uses a redis instance from storage.
+// Note: WithRedisClientURL has higher priority than WithRedisInstance.
+// If both are specified, WithRedisClientURL will be used.
+func WithRedisInstance(instanceName string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.instanceName = instanceName
 	}
 }
