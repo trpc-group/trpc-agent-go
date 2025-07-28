@@ -59,16 +59,16 @@ func New(options ...CodeExecutorOption) *CodeExecutor {
 }
 
 // ExecuteCode executes the code in the local environment and returns the result.
-func (l *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+func (e *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
 	var output strings.Builder
 
 	// Determine working directory
 	var workDir string
 	var shouldCleanup bool
 
-	if l.WorkDir != "" {
+	if e.WorkDir != "" {
 		// Use specified working directory
-		workDir = l.WorkDir
+		workDir = e.WorkDir
 		// Ensure the directory exists
 		if err := os.MkdirAll(workDir, 0755); err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
@@ -83,7 +83,7 @@ func (l *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 		}
 		workDir = tempDir
 		// Cleanup temp directory based on CleanTempFiles setting
-		shouldCleanup = l.CleanTempFiles
+		shouldCleanup = e.CleanTempFiles
 	}
 
 	if shouldCleanup {
@@ -92,7 +92,7 @@ func (l *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 
 	// Execute each code block
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := l.executeCodeBlock(ctx, workDir, block, i)
+		blockOutput, err := e.executeCodeBlock(ctx, workDir, block, i)
 		if err != nil {
 			output.WriteString(fmt.Sprintf("Error executing code block %d: %v\n", i, err))
 			continue
@@ -111,13 +111,13 @@ func (l *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 }
 
 // executeCodeBlock executes a single code block based on its language
-func (l *CodeExecutor) executeCodeBlock(ctx context.Context, workDir string, block codeexecutor.CodeBlock, blockIndex int) (output string, err error) {
-	filePath, err := l.prepareCodeFile(workDir, block, blockIndex)
+func (e *CodeExecutor) executeCodeBlock(ctx context.Context, workDir string, block codeexecutor.CodeBlock, blockIndex int) (output string, err error) {
+	filePath, err := e.prepareCodeFile(workDir, block, blockIndex)
 	if err != nil {
 		return "", err
 	}
 
-	if l.CleanTempFiles {
+	if e.CleanTempFiles {
 		defer func() {
 			if removeErr := os.Remove(filePath); removeErr != nil {
 				log.Warnf("Failed to remove temp file %s: %v", filePath, removeErr)
@@ -125,16 +125,16 @@ func (l *CodeExecutor) executeCodeBlock(ctx context.Context, workDir string, blo
 		}()
 	}
 
-	cmdArgs := l.buildCommandArgs(block.Language, filePath)
+	cmdArgs := e.buildCommandArgs(block.Language, filePath)
 	if len(cmdArgs) == 0 {
 		return "", fmt.Errorf("unsupported language: %s", block.Language)
 	}
 
-	return l.executeCommand(ctx, workDir, cmdArgs)
+	return e.executeCommand(ctx, workDir, cmdArgs)
 }
 
 // prepareCodeFile prepares the file content, writes it to disk, and returns the file path
-func (l *CodeExecutor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock, blockIndex int) (filePath string, err error) {
+func (e *CodeExecutor) prepareCodeFile(workDir string, block codeexecutor.CodeBlock, blockIndex int) (filePath string, err error) {
 	var filename, content string
 
 	switch strings.ToLower(block.Language) {
@@ -155,7 +155,7 @@ func (l *CodeExecutor) prepareCodeFile(workDir string, block codeexecutor.CodeBl
 	filePath = filepath.Join(workDir, filename)
 
 	// Get appropriate file mode for the language
-	fileMode := l.getFileMode(block.Language)
+	fileMode := e.getFileMode(block.Language)
 
 	// Write code file to disk
 	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
@@ -166,7 +166,7 @@ func (l *CodeExecutor) prepareCodeFile(workDir string, block codeexecutor.CodeBl
 }
 
 // getFileMode returns the appropriate file mode for the language
-func (l *CodeExecutor) getFileMode(language string) os.FileMode {
+func (e *CodeExecutor) getFileMode(language string) os.FileMode {
 	switch strings.ToLower(language) {
 	case "bash", "sh":
 		return 0755 // Executable for shell scripts
@@ -176,7 +176,7 @@ func (l *CodeExecutor) getFileMode(language string) os.FileMode {
 }
 
 // buildCommandArgs returns the command arguments for executing the file
-func (l *CodeExecutor) buildCommandArgs(language, filePath string) []string {
+func (e *CodeExecutor) buildCommandArgs(language, filePath string) []string {
 	switch strings.ToLower(language) {
 	case "python", "py", "python3":
 		return []string{"python3", filePath}
@@ -188,9 +188,9 @@ func (l *CodeExecutor) buildCommandArgs(language, filePath string) []string {
 }
 
 // executeCommand executes the command with proper timeout and context handling
-func (l *CodeExecutor) executeCommand(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
+func (e *CodeExecutor) executeCommand(ctx context.Context, workDir string, cmdArgs []string) (string, error) {
 	// Set timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, l.Timeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, e.Timeout)
 	defer cancel()
 
 	// Create command with timeout context
@@ -207,7 +207,7 @@ func (l *CodeExecutor) executeCommand(ctx context.Context, workDir string, cmdAr
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the local executor.
-func (l *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{
 		Start: "```",
 		End:   "```",

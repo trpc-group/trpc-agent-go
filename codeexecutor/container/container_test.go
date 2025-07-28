@@ -1,29 +1,109 @@
-package container_test
+package container
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"testing"
-	"time"
 
+	tcontainer "github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 )
 
-// isDockerAvailable checks if Docker is available for testing
-func isDockerAvailable() bool {
-	cmd := exec.Command("docker", "version")
-	return cmd.Run() == nil
+func isDockerDaemonRunning() (bool, string) {
+	// Check if docker command exists
+	cmd := exec.Command("docker", "--version")
+	if err := cmd.Run(); err != nil {
+		return false, "Docker command not found. Please install Docker."
+	}
+
+	// Check if Docker daemon is running by using docker info
+	// This will work regardless of the socket path as docker will use the correct one
+	cmd = exec.Command("docker", "info")
+	if err := cmd.Run(); err != nil {
+		return false, "Docker daemon is not running or not accessible. Please start Docker daemon."
+	}
+
+	return true, ""
+}
+
+// "unix:///Users/amdahliu/.colima/default/docker.sock"
+const testHost = "unix:///Users/amdahliu/.colima/default/docker.sock" // "unix:///var/run/docker.sock"
+
+func TestContainerCodeExecutor_Basic(t *testing.T) {
+	available, reason := isDockerDaemonRunning()
+	if !available {
+		t.Skipf("Skipping container tests: %s", reason)
+	}
+
+	// Test with python:3.9-slim image (commonly available)
+	executor, err := New(
+		WithContainerConfig(tcontainer.Config{
+			Image: "python:3.9-slim",
+			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
+
+		}),
+		WithHost(testHost),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		executor.Close()
+	})
+
+	// Test simple Python code execution
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{
+				Code:     "print('Hello from container!')",
+				Language: "python",
+			},
+		},
+		ExecutionID: "test-1",
+	}
+
+	result, err := executor.ExecuteCode(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Failed to execute code: %v", err)
+	}
+
+	expectedOutput := "Hello from container!\n"
+	if result.Output != expectedOutput {
+		t.Errorf("Expected output %q, got %q", expectedOutput, result.Output)
+	}
+}
+
+func TestContainerCodeExecutor_WithOptions(t *testing.T) {
+	// Test option functions
+	host := "unix:///var/run/docker.sock"
+	image := "python:3.8"
+	dockerPath := "/tmp/test"
+
+	executor := &CodeExecutor{}
+
+	WithHost(host)(executor)
+	if executor.host != host {
+		t.Errorf("Expected host %s, got %s", host, executor.host)
+	}
+
+	WithContainerConfig(tcontainer.Config{
+		Image: image,
+	})(executor)
+	if executor.containerConfig.Image != image {
+		t.Errorf("Expected image %s, got %s", image, executor.containerConfig.Image)
+	}
+
+	WithDockerFilePath(dockerPath)(executor)
+	// Note: dockerFilePath gets converted to absolute path, so we just check it's not empty
+	if executor.dockerFilePath == "" {
+		t.Error("Expected dockerFilePath to be set")
+	}
 }
 
 func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
-	if !isDockerAvailable() {
-		t.Skip("Docker is not available, skipping container tests")
+	available, reason := isDockerDaemonRunning()
+	if !available {
+		t.Skipf("Skipping container tests: %s", reason)
 	}
 
 	tests := []struct {
@@ -115,10 +195,22 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 			},
 		},
 	}
+	executor, err := New(
+		WithContainerConfig(tcontainer.Config{
+			Image: "python:3.9-slim",
+			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
 
+		}),
+		WithHost(testHost),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		executor.Close()
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			executor := container.New()
+
+			require.NoError(t, err)
 			ctx := context.Background()
 
 			result, err := executor.ExecuteCode(ctx, tt.input)
@@ -144,113 +236,33 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 	}
 }
 
-func TestContainerCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
-	if !isDockerAvailable() {
-		t.Skip("Docker is not available, skipping container tests")
-	}
-
-	// Create a temporary directory for testing in user's home for Docker compatibility
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	tempDir, err := os.MkdirTemp(filepath.Join(homeDir, ".tmp"), "test-container-workdir-")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	executor := container.New(
-		container.WithWorkDir(tempDir),
-	)
-
-	input := codeexecutor.CodeExecutionInput{
-		CodeBlocks: []codeexecutor.CodeBlock{
-			{
-				Code:     "echo 'Testing Container WorkDir' > test_output.txt\ncat test_output.txt",
-				Language: "bash",
-			},
-		},
-		ExecutionID: "test-container-workdir-1",
-	}
-
-	ctx := context.Background()
-	result, err := executor.ExecuteCode(ctx, input)
-
-	assert.NoError(t, err)
-	assert.Contains(t, result.Output, "Testing Container WorkDir")
-	assert.Empty(t, result.OutputFiles)
-
-	// Verify that the file was created in the specified work directory
-	outputFile := filepath.Join(tempDir, "test_output.txt")
-	_, err = os.Stat(outputFile)
-	assert.NoError(t, err, "File should exist in work directory")
-}
-
-func TestContainerCodeExecutor_ExecuteCode_WithTimeout(t *testing.T) {
-	if !isDockerAvailable() {
-		t.Skip("Docker is not available, skipping container tests")
-	}
-
-	executor := container.New(
-		container.WithContainerTimeout(2 * time.Second),
-	)
-
-	input := codeexecutor.CodeExecutionInput{
-		CodeBlocks: []codeexecutor.CodeBlock{
-			{
-				Code:     "import time\ntime.sleep(5)", // Sleep longer than timeout
-				Language: "python",
-			},
-		},
-		ExecutionID: "test-container-timeout-1",
-	}
-
-	ctx := context.Background()
-	result, err := executor.ExecuteCode(ctx, input)
-
-	assert.NoError(t, err) // ExecuteCode itself doesn't return error for block execution failures
-	assert.Contains(t, result.Output, "Error executing code block")
-}
-
 func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
-	executor := container.New()
+	if available, reason := isDockerDaemonRunning(); !available {
+		t.Skipf("Skipping container tests: %s", reason)
+
+	}
+	executor, err := New(
+		WithContainerConfig(tcontainer.Config{
+			Image: "python:3.9-slim",
+			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
+
+		}),
+		WithHost(testHost),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		executor.Close()
+	})
 	delimiter := executor.CodeBlockDelimiter()
 
 	assert.Equal(t, "```", delimiter.Start)
 	assert.Equal(t, "```", delimiter.End)
 }
 
-func TestContainerCodeExecutor_WithOptions(t *testing.T) {
-	// Test creating executor with multiple options
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	tempDir, err := os.MkdirTemp(filepath.Join(homeDir, ".tmp"), "test-container-options-")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	executor := container.New(
-		container.WithWorkDir(tempDir),
-		container.WithContainerTimeout(10*time.Second),
-	)
-
-	// Verify the options were set correctly
-	assert.Equal(t, tempDir, executor.WorkDir)
-	assert.Equal(t, 10*time.Second, executor.Timeout)
-}
-
-func TestContainerCodeExecutor_NoDocker(t *testing.T) {
-	// Mock a scenario where Docker is not available by creating an executor
-	// and then testing the error case (this test will run even without Docker)
-
-	// We can't easily mock isDockerAvailable without refactoring, so this test
-	// is more of a documentation of expected behavior
-	executor := container.New()
-
-	// Test that the executor is created successfully
-	assert.NotNil(t, executor)
-	assert.Equal(t, 60*time.Second, executor.Timeout) // Default timeout
-}
-
 func TestContainerCodeExecutor_IntegrationTest(t *testing.T) {
-	if !isDockerAvailable() {
-		t.Skip("Docker is not available, skipping container integration tests")
+	available, reason := isDockerDaemonRunning()
+	if !available {
+		t.Skipf("Skipping container integration tests: %s", reason)
 	}
 
 	input := `Let's test container execution with multiple languages:
@@ -269,7 +281,17 @@ echo "Bash in container"
 	assert.Len(t, blocks, 2)
 
 	// Step 2: Execute in containers
-	executor := container.New()
+	executor, err := New(
+		WithContainerConfig(tcontainer.Config{
+			Image: "python:3.9-slim",
+			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
+		}),
+		WithHost(testHost),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		executor.Close()
+	})
 	ctx := context.Background()
 
 	executionInput := codeexecutor.CodeExecutionInput{
