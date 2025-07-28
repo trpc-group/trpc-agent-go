@@ -43,10 +43,9 @@ func main() {
 	// Parse command line flags.
 	flag.Parse()
 
-	fmt.Printf("🧠 Memory Chat with trpc-agent-go\n")
+	fmt.Printf("🧠 Multi Turn Chat with Memory\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
-	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: memory_add, memory_search, memory_load\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -84,7 +83,7 @@ func (c *memoryChat) run() error {
 }
 
 // setup creates the runner with LLM agent and memory tools.
-func (c *memoryChat) setup(ctx context.Context) error {
+func (c *memoryChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 

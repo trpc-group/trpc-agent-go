@@ -221,6 +221,42 @@ All memory operations are clearly displayed, showing:
 - Memory tools directly access the memory service
 - No complex integration required - tools handle memory operations
 
+### Memory Tools Registration
+
+When using MemoryService, you need to register the three memory tools manually:
+
+```go
+// Create memory service.
+memoryService := memoryinmemory.NewMemoryService()
+
+// Create memory tools.
+memoryTools := toolmemory.GetMemoryTools(memoryService, userID)
+
+// Create agent with memory tools.
+agent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithDescription("A helpful AI assistant with memory capabilities."),
+    llmagent.WithInstruction("Use memory tools to provide personalized assistance."),
+    llmagent.WithTools(memoryTools), // Register the three memory tools.
+)
+
+// Create runner with memory service.
+runner := runner.NewRunner(
+    "memory-chat",
+    agent,
+    runner.WithMemoryService(memoryService),
+)
+```
+
+**Required Memory Tools:**
+
+- **memory_add**: Allows LLM to actively add user-related memories
+- **memory_search**: Allows LLM to search for relevant memories
+- **memory_load**: Allows LLM to load user memory overview
+
+**Note:** Currently, memory tools need to be manually registered with the agent. The MemoryService in the runner is used for storage and management, but the tools must be explicitly added to the agent's tool list.
+
 ### Memory Tools
 
 - **MemoryAddTool**: Allows LLM to actively add user-related memories
