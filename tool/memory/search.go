@@ -23,16 +23,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemorySearchTool is a tool for searching memories.
-type MemorySearchTool struct {
+// SearchTool is a tool for searching memories.
+type SearchTool struct {
 	memoryService memory.Service
 	appName       string
 	userID        string
 }
 
-// NewMemorySearchTool creates a new MemorySearchTool.
-func NewMemorySearchTool(memoryService memory.Service, appName string, userID string) *MemorySearchTool {
-	return &MemorySearchTool{
+// NewSearchTool creates a new SearchTool.
+func NewSearchTool(memoryService memory.Service, appName string, userID string) *SearchTool {
+	return &SearchTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -40,7 +40,7 @@ func NewMemorySearchTool(memoryService memory.Service, appName string, userID st
 }
 
 // Declaration returns the tool declaration.
-func (m *MemorySearchTool) Declaration() *tool.Declaration {
+func (m *SearchTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_search",
 		Description: "Search for memories related to a query. Use this when you want to find relevant information " +
@@ -61,7 +61,7 @@ func (m *MemorySearchTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory search tool.
-func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *SearchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

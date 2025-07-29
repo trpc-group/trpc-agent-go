@@ -8,23 +8,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// CustomMemoryAddTool is a custom implementation for testing.
-type CustomMemoryAddTool struct {
-	*MemoryAddTool
+// CustomAddTool is a custom implementation for testing.
+type CustomAddTool struct {
+	*AddTool
 	customBehavior string
 }
 
-// NewCustomMemoryAddTool creates a new custom memory add tool.
-func NewCustomMemoryAddTool(memoryService memory.Service, appName string, userID string, customBehavior string) *CustomMemoryAddTool {
-	return &CustomMemoryAddTool{
-		MemoryAddTool:  NewMemoryAddTool(memoryService, appName, userID),
+// NewCustomAddTool creates a new custom memory add tool.
+func NewCustomAddTool(memoryService memory.Service, appName string, userID string, customBehavior string) *CustomAddTool {
+	return &CustomAddTool{
+		AddTool:        NewAddTool(memoryService, appName, userID),
 		customBehavior: customBehavior,
 	}
 }
 
 // Declaration returns the tool declaration with custom description.
-func (c *CustomMemoryAddTool) Declaration() *tool.Declaration {
-	decl := c.MemoryAddTool.Declaration()
+func (c *CustomAddTool) Declaration() *tool.Declaration {
+	decl := c.AddTool.Declaration()
 	decl.Description = "CUSTOM: " + decl.Description + " (" + c.customBehavior + ")"
 	return decl
 }
@@ -42,34 +42,34 @@ func TestNewMemoryTools_Default(t *testing.T) {
 	}
 
 	// Verify tool types.
-	_, ok := tools[0].(*MemoryAddTool)
+	_, ok := tools[0].(*AddTool)
 	if !ok {
-		t.Fatal("Expected MemoryAddTool")
+		t.Fatal("Expected AddTool")
 	}
 
-	_, ok = tools[1].(*MemoryUpdateTool)
+	_, ok = tools[1].(*UpdateTool)
 	if !ok {
-		t.Fatal("Expected MemoryUpdateTool")
+		t.Fatal("Expected UpdateTool")
 	}
 
-	_, ok = tools[2].(*MemoryDeleteTool)
+	_, ok = tools[2].(*DeleteTool)
 	if !ok {
-		t.Fatal("Expected MemoryDeleteTool")
+		t.Fatal("Expected DeleteTool")
 	}
 
-	_, ok = tools[3].(*MemoryClearTool)
+	_, ok = tools[3].(*ClearTool)
 	if !ok {
-		t.Fatal("Expected MemoryClearTool")
+		t.Fatal("Expected ClearTool")
 	}
 
-	_, ok = tools[4].(*MemorySearchTool)
+	_, ok = tools[4].(*SearchTool)
 	if !ok {
-		t.Fatal("Expected MemorySearchTool")
+		t.Fatal("Expected SearchTool")
 	}
 
-	_, ok = tools[5].(*MemoryLoadTool)
+	_, ok = tools[5].(*LoadTool)
 	if !ok {
-		t.Fatal("Expected MemoryLoadTool")
+		t.Fatal("Expected LoadTool")
 	}
 }
 
@@ -79,7 +79,7 @@ func TestNewMemoryTools_CustomTool(t *testing.T) {
 	userID := "test-user"
 
 	// Test with custom add tool.
-	customAddTool := NewCustomMemoryAddTool(service, appName, userID, "enhanced-logging")
+	customAddTool := NewCustomAddTool(service, appName, userID, "enhanced-logging")
 	tools := NewMemoryTools(service, appName, userID, WithAddTool(customAddTool))
 
 	if len(tools) != 6 {
@@ -87,9 +87,9 @@ func TestNewMemoryTools_CustomTool(t *testing.T) {
 	}
 
 	// Verify custom tool is used.
-	customTool, ok := tools[0].(*CustomMemoryAddTool)
+	customTool, ok := tools[0].(*CustomAddTool)
 	if !ok {
-		t.Fatal("Expected CustomMemoryAddTool")
+		t.Fatal("Expected CustomAddTool")
 	}
 
 	if customTool.customBehavior != "enhanced-logging" {
@@ -97,9 +97,9 @@ func TestNewMemoryTools_CustomTool(t *testing.T) {
 	}
 
 	// Verify other tools are still default.
-	_, ok = tools[1].(*MemoryUpdateTool)
+	_, ok = tools[1].(*UpdateTool)
 	if !ok {
-		t.Fatal("Expected MemoryUpdateTool")
+		t.Fatal("Expected UpdateTool")
 	}
 }
 
@@ -109,8 +109,8 @@ func TestNewMemoryTools_MultipleCustomTools(t *testing.T) {
 	userID := "test-user"
 
 	// Test multiple custom tools.
-	customAddTool := NewCustomMemoryAddTool(service, appName, userID, "enhanced-logging")
-	customSearchTool := NewCustomMemoryAddTool(service, appName, userID, "analytics")
+	customAddTool := NewCustomAddTool(service, appName, userID, "enhanced-logging")
+	customSearchTool := NewCustomAddTool(service, appName, userID, "analytics")
 	tools := NewMemoryTools(
 		service, appName, userID,
 		WithAddTool(customAddTool),
@@ -122,9 +122,9 @@ func TestNewMemoryTools_MultipleCustomTools(t *testing.T) {
 	}
 
 	// Verify custom add tool is used.
-	customTool, ok := tools[0].(*CustomMemoryAddTool)
+	customTool, ok := tools[0].(*CustomAddTool)
 	if !ok {
-		t.Fatal("Expected CustomMemoryAddTool")
+		t.Fatal("Expected CustomAddTool")
 	}
 
 	if customTool.customBehavior != "enhanced-logging" {
@@ -132,9 +132,9 @@ func TestNewMemoryTools_MultipleCustomTools(t *testing.T) {
 	}
 
 	// Verify custom search tool is used.
-	customSearchToolResult, ok := tools[4].(*CustomMemoryAddTool)
+	customSearchToolResult, ok := tools[4].(*CustomAddTool)
 	if !ok {
-		t.Fatal("Expected CustomMemoryAddTool for search")
+		t.Fatal("Expected CustomAddTool for search")
 	}
 
 	if customSearchToolResult.customBehavior != "analytics" {
@@ -142,9 +142,9 @@ func TestNewMemoryTools_MultipleCustomTools(t *testing.T) {
 	}
 
 	// Verify other tools are still default.
-	_, ok = tools[1].(*MemoryUpdateTool)
+	_, ok = tools[1].(*UpdateTool)
 	if !ok {
-		t.Fatal("Expected MemoryUpdateTool")
+		t.Fatal("Expected UpdateTool")
 	}
 }
 
@@ -155,7 +155,7 @@ func TestNewMemoryToolsOptions(t *testing.T) {
 
 	// Test direct options usage.
 	options := NewMemoryToolsOptions(service, appName, userID)
-	customAddTool := NewCustomMemoryAddTool(service, appName, userID, "direct-usage")
+	customAddTool := NewCustomAddTool(service, appName, userID, "direct-usage")
 	options.AddTool = customAddTool
 
 	tools := options.BuildTools()
@@ -165,9 +165,9 @@ func TestNewMemoryToolsOptions(t *testing.T) {
 	}
 
 	// Verify custom tool is used.
-	customTool, ok := tools[0].(*CustomMemoryAddTool)
+	customTool, ok := tools[0].(*CustomAddTool)
 	if !ok {
-		t.Fatal("Expected CustomMemoryAddTool")
+		t.Fatal("Expected CustomAddTool")
 	}
 
 	if customTool.customBehavior != "direct-usage" {
@@ -175,8 +175,8 @@ func TestNewMemoryToolsOptions(t *testing.T) {
 	}
 
 	// Verify other tools are default.
-	_, ok = tools[1].(*MemoryUpdateTool)
+	_, ok = tools[1].(*UpdateTool)
 	if !ok {
-		t.Fatal("Expected MemoryUpdateTool")
+		t.Fatal("Expected UpdateTool")
 	}
 }

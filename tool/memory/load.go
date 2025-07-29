@@ -23,16 +23,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryLoadTool is a tool for loading recent memories.
-type MemoryLoadTool struct {
+// LoadTool is a tool for loading recent memories.
+type LoadTool struct {
 	memoryService memory.Service
 	appName       string
 	userID        string
 }
 
-// NewMemoryLoadTool creates a new MemoryLoadTool.
-func NewMemoryLoadTool(memoryService memory.Service, appName string, userID string) *MemoryLoadTool {
-	return &MemoryLoadTool{
+// NewLoadTool creates a new LoadTool.
+func NewLoadTool(memoryService memory.Service, appName string, userID string) *LoadTool {
+	return &LoadTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -40,7 +40,7 @@ func NewMemoryLoadTool(memoryService memory.Service, appName string, userID stri
 }
 
 // Declaration returns the tool declaration.
-func (m *MemoryLoadTool) Declaration() *tool.Declaration {
+func (m *LoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_load",
 		Description: "Load recent memories for the user. Use this when you want to get an overview of what you know " +
@@ -60,7 +60,7 @@ func (m *MemoryLoadTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory load tool.
-func (m *MemoryLoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *LoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

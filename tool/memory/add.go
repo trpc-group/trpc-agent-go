@@ -23,16 +23,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryAddTool provides a tool for LLM to add memories.
-type MemoryAddTool struct {
+// AddTool provides a tool for LLM to add memories.
+type AddTool struct {
 	memoryService memory.Service
 	userID        string
 	appName       string
 }
 
-// NewMemoryAddTool creates a new MemoryAddTool.
-func NewMemoryAddTool(memoryService memory.Service, appName string, userID string) *MemoryAddTool {
-	return &MemoryAddTool{
+// NewAddTool creates a new AddTool.
+func NewAddTool(memoryService memory.Service, appName string, userID string) *AddTool {
+	return &AddTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -40,7 +40,7 @@ func NewMemoryAddTool(memoryService memory.Service, appName string, userID strin
 }
 
 // Declaration returns the tool declaration.
-func (m *MemoryAddTool) Declaration() *tool.Declaration {
+func (m *AddTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_add",
 		Description: "Add a new memory for the user. Use this when you want to remember important information " +
@@ -76,7 +76,7 @@ func (m *MemoryAddTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory add tool.
-func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *AddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

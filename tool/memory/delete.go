@@ -22,16 +22,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryDeleteTool is a tool for deleting memories.
-type MemoryDeleteTool struct {
+// DeleteTool is a tool for deleting memories.
+type DeleteTool struct {
 	memoryService memory.Service
 	appName       string
 	userID        string
 }
 
-// NewMemoryDeleteTool creates a new MemoryDeleteTool.
-func NewMemoryDeleteTool(memoryService memory.Service, appName string, userID string) *MemoryDeleteTool {
-	return &MemoryDeleteTool{
+// NewDeleteTool creates a new DeleteTool.
+func NewDeleteTool(memoryService memory.Service, appName string, userID string) *DeleteTool {
+	return &DeleteTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -39,7 +39,7 @@ func NewMemoryDeleteTool(memoryService memory.Service, appName string, userID st
 }
 
 // Declaration returns the tool declaration.
-func (m *MemoryDeleteTool) Declaration() *tool.Declaration {
+func (m *DeleteTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_delete",
 		Description: "Delete a specific memory for the user. Use this when the user asks for a memory to be forgotten " +
@@ -60,7 +60,7 @@ func (m *MemoryDeleteTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory delete tool.
-func (m *MemoryDeleteTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *DeleteTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

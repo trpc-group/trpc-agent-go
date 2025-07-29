@@ -21,11 +21,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 )
 
-func TestMemoryAddTool(t *testing.T) {
+func TestAddTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
 	appName := "test-app"
 	userID := "test-user"
-	tool := NewMemoryAddTool(service, appName, userID)
+	tool := NewAddTool(service, appName, userID)
 
 	// Test adding memory.
 	args := map[string]interface{}{
@@ -72,7 +72,7 @@ func TestMemoryAddTool(t *testing.T) {
 	}
 }
 
-func TestMemorySearchTool(t *testing.T) {
+func TestSearchTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
 	appName := "test-app"
 	userID := "test-user"
@@ -86,7 +86,7 @@ func TestMemorySearchTool(t *testing.T) {
 	service.AddMemory(context.Background(), userKey, "User works as a developer", "User said: I work as a developer", nil)
 	service.AddMemory(context.Background(), userKey, "User has a dog", "User said: I have a dog", nil)
 
-	tool := NewMemorySearchTool(service, appName, userID)
+	tool := NewSearchTool(service, appName, userID)
 
 	// Test searching for coffee.
 	args := map[string]interface{}{
@@ -117,7 +117,7 @@ func TestMemorySearchTool(t *testing.T) {
 	}
 }
 
-func TestMemoryLoadTool(t *testing.T) {
+func TestLoadTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
 	appName := "test-app"
 	userID := "test-user"
@@ -130,7 +130,7 @@ func TestMemoryLoadTool(t *testing.T) {
 	service.AddMemory(context.Background(), userKey, "User likes coffee", "User said: I like coffee", nil)
 	service.AddMemory(context.Background(), userKey, "User works as a developer", "User said: I work as a developer", nil)
 
-	tool := NewMemoryLoadTool(service, appName, userID)
+	tool := NewLoadTool(service, appName, userID)
 
 	// Test loading memories with limit.
 	args := map[string]interface{}{
@@ -169,9 +169,9 @@ func TestNewMemoryTools(t *testing.T) {
 	}
 
 	// Verify tool types.
-	addTool, ok := tools[0].(*MemoryAddTool)
+	addTool, ok := tools[0].(*AddTool)
 	if !ok {
-		t.Fatal("Expected MemoryAddTool")
+		t.Fatal("Expected AddTool")
 	}
 	if addTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, addTool.appName)
@@ -180,9 +180,9 @@ func TestNewMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, addTool.userID)
 	}
 
-	updateTool, ok := tools[1].(*MemoryUpdateTool)
+	updateTool, ok := tools[1].(*UpdateTool)
 	if !ok {
-		t.Fatal("Expected MemoryUpdateTool")
+		t.Fatal("Expected UpdateTool")
 	}
 	if updateTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, updateTool.appName)
@@ -191,9 +191,9 @@ func TestNewMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, updateTool.userID)
 	}
 
-	deleteTool, ok := tools[2].(*MemoryDeleteTool)
+	deleteTool, ok := tools[2].(*DeleteTool)
 	if !ok {
-		t.Fatal("Expected MemoryDeleteTool")
+		t.Fatal("Expected DeleteTool")
 	}
 	if deleteTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, deleteTool.appName)
@@ -202,9 +202,9 @@ func TestNewMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, deleteTool.userID)
 	}
 
-	clearTool, ok := tools[3].(*MemoryClearTool)
+	clearTool, ok := tools[3].(*ClearTool)
 	if !ok {
-		t.Fatal("Expected MemoryClearTool")
+		t.Fatal("Expected ClearTool")
 	}
 	if clearTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, clearTool.appName)
@@ -213,9 +213,9 @@ func TestNewMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, clearTool.userID)
 	}
 
-	searchTool, ok := tools[4].(*MemorySearchTool)
+	searchTool, ok := tools[4].(*SearchTool)
 	if !ok {
-		t.Fatal("Expected MemorySearchTool")
+		t.Fatal("Expected SearchTool")
 	}
 	if searchTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, searchTool.appName)
@@ -224,9 +224,9 @@ func TestNewMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, searchTool.userID)
 	}
 
-	loadTool, ok := tools[5].(*MemoryLoadTool)
+	loadTool, ok := tools[5].(*LoadTool)
 	if !ok {
-		t.Fatal("Expected MemoryLoadTool")
+		t.Fatal("Expected LoadTool")
 	}
 	if loadTool.appName != appName {
 		t.Fatalf("Expected appName %s, got %s", appName, loadTool.appName)

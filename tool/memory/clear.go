@@ -20,16 +20,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryClearTool is a tool for clearing all memories.
-type MemoryClearTool struct {
+// ClearTool is a tool for clearing all memories.
+type ClearTool struct {
 	memoryService memory.Service
 	appName       string
 	userID        string
 }
 
-// NewMemoryClearTool creates a new MemoryClearTool.
-func NewMemoryClearTool(memoryService memory.Service, appName string, userID string) *MemoryClearTool {
-	return &MemoryClearTool{
+// NewClearTool creates a new ClearTool.
+func NewClearTool(memoryService memory.Service, appName string, userID string) *ClearTool {
+	return &ClearTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -37,7 +37,7 @@ func NewMemoryClearTool(memoryService memory.Service, appName string, userID str
 }
 
 // Declaration returns the tool declaration.
-func (m *MemoryClearTool) Declaration() *tool.Declaration {
+func (m *ClearTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_clear",
 		Description: "Clear all memories for the user. Use this when the user asks for all memories to be forgotten " +
@@ -50,7 +50,7 @@ func (m *MemoryClearTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory clear tool.
-func (m *MemoryClearTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *ClearTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

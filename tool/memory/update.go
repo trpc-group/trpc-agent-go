@@ -22,16 +22,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryUpdateTool is a tool for updating existing memories.
-type MemoryUpdateTool struct {
+// UpdateTool is a tool for updating existing memories.
+type UpdateTool struct {
 	memoryService memory.Service
 	appName       string
 	userID        string
 }
 
-// NewMemoryUpdateTool creates a new MemoryUpdateTool.
-func NewMemoryUpdateTool(memoryService memory.Service, appName string, userID string) *MemoryUpdateTool {
-	return &MemoryUpdateTool{
+// NewUpdateTool creates a new UpdateTool.
+func NewUpdateTool(memoryService memory.Service, appName string, userID string) *UpdateTool {
+	return &UpdateTool{
 		memoryService: memoryService,
 		appName:       appName,
 		userID:        userID,
@@ -39,7 +39,7 @@ func NewMemoryUpdateTool(memoryService memory.Service, appName string, userID st
 }
 
 // Declaration returns the tool declaration.
-func (m *MemoryUpdateTool) Declaration() *tool.Declaration {
+func (m *UpdateTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "memory_update",
 		Description: "Update an existing memory for the user. Use this when you need to modify or append information " +
@@ -76,7 +76,7 @@ func (m *MemoryUpdateTool) Declaration() *tool.Declaration {
 }
 
 // Call executes the memory update tool.
-func (m *MemoryUpdateTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (m *UpdateTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if m.memoryService == nil {
 		return nil, errors.New("memory service not available")
 	}

@@ -101,12 +101,12 @@ func (o *MemoryToolsOptions) BuildTools() []tool.Tool {
 	}
 
 	// Add tools based on options with lazy loading.
-	addTool(o.AddTool, func() tool.Tool { return NewMemoryAddTool(o.memoryService, o.appName, o.userID) })
-	addTool(o.UpdateTool, func() tool.Tool { return NewMemoryUpdateTool(o.memoryService, o.appName, o.userID) })
-	addTool(o.DeleteTool, func() tool.Tool { return NewMemoryDeleteTool(o.memoryService, o.appName, o.userID) })
-	addTool(o.ClearTool, func() tool.Tool { return NewMemoryClearTool(o.memoryService, o.appName, o.userID) })
-	addTool(o.SearchTool, func() tool.Tool { return NewMemorySearchTool(o.memoryService, o.appName, o.userID) })
-	addTool(o.LoadTool, func() tool.Tool { return NewMemoryLoadTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.AddTool, func() tool.Tool { return NewAddTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.UpdateTool, func() tool.Tool { return NewUpdateTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.DeleteTool, func() tool.Tool { return NewDeleteTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.ClearTool, func() tool.Tool { return NewClearTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.SearchTool, func() tool.Tool { return NewSearchTool(o.memoryService, o.appName, o.userID) })
+	addTool(o.LoadTool, func() tool.Tool { return NewLoadTool(o.memoryService, o.appName, o.userID) })
 
 	return tools
 }
