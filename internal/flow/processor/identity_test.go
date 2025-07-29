@@ -88,7 +88,11 @@ func TestIdentityProc_Request(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			processor := NewIdentityRequestProcessor(tt.agentName, tt.description)
+			processor := NewIdentityRequestProcessor(
+				tt.agentName,
+				tt.description,
+				WithAddNameToInstruction(true),
+			)
 			eventCh := make(chan *event.Event, 10)
 			ctx := context.Background()
 

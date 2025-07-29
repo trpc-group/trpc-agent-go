@@ -14,12 +14,14 @@ package openai
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
 	openaigo "github.com/openai/openai-go"
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -342,5 +344,817 @@ func TestModel_convertTools(t *testing.T) {
 
 	if reflect.ValueOf(fn.Parameters).IsZero() {
 		t.Fatalf("expected parameters to be populated from schema")
+	}
+}
+
+// TestModel_Callbacks tests that callback functions are properly called with
+// the correct parameters including the request parameter.
+func TestModel_Callbacks(t *testing.T) {
+	// Skip this test if no API key is provided.
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping integration test")
+	}
+
+	t.Run("chat request callback", func(t *testing.T) {
+		var capturedRequest *openaigo.ChatCompletionNewParams
+		var capturedCtx context.Context
+		callbackCalled := make(chan struct{})
+
+		requestCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			capturedCtx = ctx
+			capturedRequest = req
+			close(callbackCalled)
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatRequestCallback(requestCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Wait for callback to be called.
+		select {
+		case <-callbackCalled:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for request callback")
+		}
+
+		// Consume responses.
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Verify the callback was called with correct parameters.
+		if capturedCtx == nil {
+			t.Fatal("expected context to be captured in callback")
+		}
+		if capturedRequest == nil {
+			t.Fatal("expected request to be captured in callback")
+		}
+		if capturedRequest.Model != "gpt-3.5-turbo" {
+			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+		}
+	})
+
+	t.Run("chat response callback", func(t *testing.T) {
+		var capturedRequest *openaigo.ChatCompletionNewParams
+		var capturedResponse *openaigo.ChatCompletion
+		var capturedCtx context.Context
+		callbackCalled := make(chan struct{})
+
+		responseCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+			capturedCtx = ctx
+			capturedRequest = req
+			capturedResponse = resp
+			close(callbackCalled)
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatResponseCallback(responseCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Consume responses to trigger the callback.
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Wait for callback to be called.
+		select {
+		case <-callbackCalled:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for response callback")
+		}
+
+		// Verify the callback was called with correct parameters.
+		if capturedCtx == nil {
+			t.Fatal("expected context to be captured in callback")
+		}
+		if capturedRequest == nil {
+			t.Fatal("expected request to be captured in callback")
+		}
+		// Note: capturedResponse might be nil if there was an API error.
+		// We only check if it's not nil when we expect a successful response.
+		if capturedRequest.Model != "gpt-3.5-turbo" {
+			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+		}
+		// Only check response model if we got a successful response.
+		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo" {
+			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo", capturedResponse.Model)
+		}
+	})
+
+	t.Run("chat chunk callback", func(t *testing.T) {
+		var capturedRequest *openaigo.ChatCompletionNewParams
+		var capturedChunk *openaigo.ChatCompletionChunk
+		var capturedCtx context.Context
+		chunkCount := 0
+		callbackCalled := make(chan struct{})
+
+		chunkCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, chunk *openaigo.ChatCompletionChunk) {
+			capturedCtx = ctx
+			capturedRequest = req
+			capturedChunk = chunk
+			chunkCount++
+			if chunkCount == 1 {
+				close(callbackCalled)
+			}
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatChunkCallback(chunkCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Wait for callback to be called or for responses to complete.
+		select {
+		case <-callbackCalled:
+			// Callback was called, consume remaining responses.
+			for response := range responseChan {
+				if response.Done {
+					break
+				}
+			}
+		case <-time.After(15 * time.Second):
+			// Timeout - consume responses anyway to avoid blocking.
+			t.Log("timeout waiting for chunk callback, consuming responses")
+			for response := range responseChan {
+				if response.Done {
+					break
+				}
+			}
+			// Don't fail the test if callback wasn't called - it might be due to API issues.
+			t.Skip("skipping chunk callback test due to timeout - API might be slow or failing")
+		}
+
+		// Verify the callback was called with correct parameters (if it was called).
+		if capturedCtx != nil {
+			if capturedRequest == nil {
+				t.Fatal("expected request to be captured in callback")
+			}
+			if capturedChunk == nil {
+				t.Fatal("expected chunk to be captured in callback")
+			}
+			if capturedRequest.Model != "gpt-3.5-turbo" {
+				t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+			}
+			if chunkCount == 0 {
+				t.Fatal("expected chunk callback to be called at least once")
+			}
+		}
+	})
+
+	t.Run("multiple callbacks", func(t *testing.T) {
+		requestCalled := false
+		responseCalled := false
+		chunkCalled := false
+		requestCallbackDone := make(chan struct{})
+		responseCallbackDone := make(chan struct{})
+
+		requestCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			requestCalled = true
+			close(requestCallbackDone)
+		}
+
+		responseCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+			responseCalled = true
+			close(responseCallbackDone)
+		}
+
+		chunkCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, chunk *openaigo.ChatCompletionChunk) {
+			chunkCalled = true
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatRequestCallback(requestCallback),
+			WithChatResponseCallback(responseCallback),
+			WithChatChunkCallback(chunkCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Wait for request callback.
+		select {
+		case <-requestCallbackDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for request callback")
+		}
+
+		// Consume responses to trigger the response callback.
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Wait for response callback.
+		select {
+		case <-responseCallbackDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for response callback")
+		}
+
+		// Verify appropriate callbacks were called.
+		if !requestCalled {
+			t.Error("expected request callback to be called")
+		}
+		if !responseCalled {
+			t.Error("expected response callback to be called")
+		}
+		// Chunk callback should not be called for non-streaming requests.
+		if chunkCalled {
+			t.Error("expected chunk callback not to be called for non-streaming requests")
+		}
+	})
+
+	t.Run("nil callbacks", func(t *testing.T) {
+		// Test that the model works correctly when callbacks are nil.
+		m := New("gpt-3.5-turbo", WithAPIKey(apiKey))
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Should not panic when callbacks are nil.
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+	})
+}
+
+// TestModel_CallbackParameters verifies that callback functions receive the
+// correct parameter types and values.
+func TestModel_CallbackParameters(t *testing.T) {
+	// Skip this test if no API key is provided.
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping integration test")
+	}
+
+	t.Run("callback parameter types", func(t *testing.T) {
+		var requestParam *openaigo.ChatCompletionNewParams
+		var responseParam *openaigo.ChatCompletion
+		var chunkParam *openaigo.ChatCompletionChunk
+		requestCallbackDone := make(chan struct{})
+		responseCallbackDone := make(chan struct{})
+
+		requestCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			requestParam = req
+			close(requestCallbackDone)
+		}
+
+		responseCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+			responseParam = resp
+			close(responseCallbackDone)
+		}
+
+		chunkCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, chunk *openaigo.ChatCompletionChunk) {
+			chunkParam = chunk
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatRequestCallback(requestCallback),
+			WithChatResponseCallback(responseCallback),
+			WithChatChunkCallback(chunkCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("test message"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: false,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Wait for request callback.
+		select {
+		case <-requestCallbackDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for request callback")
+		}
+
+		// Consume responses to trigger the response callback.
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Wait for response callback.
+		select {
+		case <-responseCallbackDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("timeout waiting for response callback")
+		}
+
+		// Verify parameter types are correct.
+		if requestParam == nil {
+			t.Fatal("expected request parameter to be set")
+		}
+		if reflect.TypeOf(requestParam) != reflect.TypeOf(&openaigo.ChatCompletionNewParams{}) {
+			t.Errorf("expected request parameter type %T, got %T", &openaigo.ChatCompletionNewParams{}, requestParam)
+		}
+
+		// Note: responseParam might be nil if there was an API error.
+		// We only check the type if we got a successful response.
+		if responseParam != nil {
+			if reflect.TypeOf(responseParam) != reflect.TypeOf(&openaigo.ChatCompletion{}) {
+				t.Errorf("expected response parameter type %T, got %T", &openaigo.ChatCompletion{}, responseParam)
+			}
+		}
+
+		// Chunk parameter should be nil for non-streaming requests.
+		if chunkParam != nil {
+			t.Error("expected chunk parameter to be nil for non-streaming requests")
+		}
+	})
+}
+
+// TestModel_CallbackAssignment tests that callback functions are properly
+// assigned to the model during creation.
+func TestModel_CallbackAssignment(t *testing.T) {
+	t.Run("callback assignment", func(t *testing.T) {
+		requestCalled := false
+		responseCalled := false
+		chunkCalled := false
+
+		requestCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			requestCalled = true
+		}
+
+		responseCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+			responseCalled = true
+		}
+
+		chunkCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, chunk *openaigo.ChatCompletionChunk) {
+			chunkCalled = true
+		}
+
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(requestCallback),
+			WithChatResponseCallback(responseCallback),
+			WithChatChunkCallback(chunkCallback),
+		)
+
+		// Verify that callbacks are assigned.
+		if m.chatRequestCallback == nil {
+			t.Error("expected chat request callback to be assigned")
+		}
+		if m.chatResponseCallback == nil {
+			t.Error("expected chat response callback to be assigned")
+		}
+		if m.chatChunkCallback == nil {
+			t.Error("expected chat chunk callback to be assigned")
+		}
+
+		// Test that callbacks can be called without panicking.
+		ctx := context.Background()
+		req := &openaigo.ChatCompletionNewParams{
+			Model: "test-model",
+		}
+
+		// Test request callback.
+		m.chatRequestCallback(ctx, req)
+		if !requestCalled {
+			t.Error("expected request callback to be called")
+		}
+
+		// Test response callback.
+		resp := &openaigo.ChatCompletion{
+			Model: "test-model",
+		}
+		m.chatResponseCallback(ctx, req, resp)
+		if !responseCalled {
+			t.Error("expected response callback to be called")
+		}
+
+		// Test chunk callback.
+		chunk := &openaigo.ChatCompletionChunk{
+			Model: "test-model",
+		}
+		m.chatChunkCallback(ctx, req, chunk)
+		if !chunkCalled {
+			t.Error("expected chunk callback to be called")
+		}
+	})
+
+	t.Run("nil callback assignment", func(t *testing.T) {
+		m := New("test-model", WithAPIKey("test-key"))
+
+		// Verify that callbacks are nil when not provided.
+		if m.chatRequestCallback != nil {
+			t.Error("expected chat request callback to be nil")
+		}
+		if m.chatResponseCallback != nil {
+			t.Error("expected chat response callback to be nil")
+		}
+		if m.chatChunkCallback != nil {
+			t.Error("expected chat chunk callback to be nil")
+		}
+	})
+}
+
+// TestModel_CallbackSignature tests that the callback function signatures
+// match the expected types from the diff.
+func TestModel_CallbackSignature(t *testing.T) {
+	t.Run("callback signature verification", func(t *testing.T) {
+		// Test that we can create callback functions with the correct signatures.
+		var requestCallback chatRequestCallbackFunc
+		var responseCallback chatResponseCallbackFunc
+		var chunkCallback chatChunkCallbackFunc
+
+		// These assignments should compile without errors.
+		requestCallback = func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			// Callback implementation.
+		}
+
+		responseCallback = func(ctx context.Context, req *openaigo.ChatCompletionNewParams, resp *openaigo.ChatCompletion) {
+			// Callback implementation.
+		}
+
+		chunkCallback = func(ctx context.Context, req *openaigo.ChatCompletionNewParams, chunk *openaigo.ChatCompletionChunk) {
+			// Callback implementation.
+		}
+
+		// Verify that the callbacks can be called with the correct parameters.
+		ctx := context.Background()
+		req := &openaigo.ChatCompletionNewParams{
+			Model: "test-model",
+		}
+		resp := &openaigo.ChatCompletion{
+			Model: "test-model",
+		}
+		chunk := &openaigo.ChatCompletionChunk{
+			Model: "test-model",
+		}
+
+		// These calls should not panic.
+		requestCallback(ctx, req)
+		responseCallback(ctx, req, resp)
+		chunkCallback(ctx, req, chunk)
+
+		// Test passes if no panic occurs.
+	})
+}
+
+// TestWithOpenAIOptions tests the WithOpenAIOptions functionality.
+func TestWithOpenAIOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		modelName   string
+		opts        []Option
+		expectError bool
+	}{
+		{
+			name:      "with middleware option",
+			modelName: "gpt-3.5-turbo",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithOpenAIOptions(
+					openaiopt.WithMiddleware(
+						func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+							// Test middleware that adds a custom header.
+							req.Header.Set("X-Test-Middleware", "test-value")
+							return next(req)
+						},
+					),
+				),
+			},
+			expectError: false,
+		},
+		{
+			name:      "with multiple openai options",
+			modelName: "gpt-4",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithOpenAIOptions(
+					openaiopt.WithHeader("User-Agent", "test-user-agent"),
+					openaiopt.WithMaxRetries(3),
+				),
+			},
+			expectError: false,
+		},
+		{
+			name:      "with empty openai options",
+			modelName: "gpt-3.5-turbo",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithOpenAIOptions(),
+			},
+			expectError: false,
+		},
+		{
+			name:      "with openai options and other options",
+			modelName: "custom-model",
+			opts: []Option{
+				WithAPIKey("test-key"),
+				WithBaseURL("https://api.custom.com"),
+				WithChannelBufferSize(512),
+				WithOpenAIOptions(
+					openaiopt.WithMaxRetries(5),
+				),
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(tt.modelName, tt.opts...)
+			if m == nil {
+				t.Fatal("expected model to be created, got nil")
+			}
+
+			// Verify that the model was created with the expected name.
+			if m.name != tt.modelName {
+				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
+			}
+
+			// Verify that the model was created successfully.
+			if m.name != tt.modelName {
+				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
+			}
+		})
+	}
+}
+
+// TestWithOpenAIOptions_OptionsStruct tests that the options struct correctly
+// stores and applies OpenAI options.
+func TestWithOpenAIOptions_OptionsStruct(t *testing.T) {
+	// Create options with OpenAI options.
+	o := &options{}
+
+	// Apply WithOpenAIOptions.
+	WithOpenAIOptions(
+		openaiopt.WithMaxRetries(3),
+		openaiopt.WithHeader("User-Agent", "test-agent"),
+	)(o)
+
+	// Verify that OpenAI options were stored.
+	if len(o.OpenAIOptions) != 2 {
+		t.Errorf("expected 2 OpenAI options, got %d", len(o.OpenAIOptions))
+	}
+
+	// Apply additional options.
+	WithOpenAIOptions(
+		openaiopt.WithRequestTimeout(30 * time.Second),
+	)(o)
+
+	// Verify that options were appended.
+	if len(o.OpenAIOptions) != 3 {
+		t.Errorf("expected 3 OpenAI options after append, got %d", len(o.OpenAIOptions))
+	}
+}
+
+// TestWithOpenAIOptions_Integration tests that OpenAI options are properly
+// integrated into the client creation process.
+func TestWithOpenAIOptions_Integration(t *testing.T) {
+	// Create a model with OpenAI options.
+	m := New("test-model",
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithMaxRetries(5),
+			openaiopt.WithHeader("User-Agent", "integration-test"),
+		),
+	)
+
+	if m == nil {
+		t.Fatal("expected model to be created")
+	}
+
+	// Verify that the model can be used to create a request.
+	ctx := context.Background()
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("test message"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	// This should not panic and should create a response channel.
+	responseChan, err := m.GenerateContent(ctx, request)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	// Verify that the response channel was created.
+	if responseChan == nil {
+		t.Fatal("expected response channel to be created")
+	}
+
+	// Clean up by consuming the channel.
+	go func() {
+		for range responseChan {
+			// Consume all responses.
+		}
+	}()
+}
+
+// TestWithOpenAIOptions_Middleware tests the middleware functionality
+// specifically.
+func TestWithOpenAIOptions_Middleware(t *testing.T) {
+	middlewareCalled := false
+
+	// Create a model with middleware that tracks calls.
+	m := New("test-model",
+		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithMiddleware(
+				func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+					middlewareCalled = true
+					// Add a test header to verify middleware is working.
+					req.Header.Set("X-Middleware-Test", "test-value")
+					return next(req)
+				},
+			),
+		),
+	)
+
+	if m == nil {
+		t.Fatal("expected model to be created")
+	}
+
+	// Create a request to trigger the middleware.
+	ctx := context.Background()
+	request := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("test message"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	}
+
+	// This will likely fail due to invalid API key, but middleware should be called.
+	responseChan, err := m.GenerateContent(ctx, request)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+
+	// Consume one response to trigger the middleware.
+	select {
+	case <-responseChan:
+		// Middleware should have been called during the request.
+		if !middlewareCalled {
+			t.Error("expected middleware to be called")
+		}
+	case <-time.After(5 * time.Second):
+		t.Log("Request timed out as expected with test credentials")
+	}
+}
+
+// TestWithOpenAIOptions_CombinedOptions tests that OpenAI options work
+// correctly when combined with other options.
+func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
+	// Test with all available options.
+	m := New("test-model",
+		WithAPIKey("test-key"),
+		WithBaseURL("https://api.example.com"),
+		WithChannelBufferSize(1024),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			// Test callback.
+		}),
+		WithChatResponseCallback(func(
+			ctx context.Context,
+			req *openaigo.ChatCompletionNewParams,
+			resp *openaigo.ChatCompletion,
+		) {
+			// Test callback.
+		}),
+		WithChatChunkCallback(func(
+			ctx context.Context,
+			req *openaigo.ChatCompletionNewParams,
+			chunk *openaigo.ChatCompletionChunk,
+		) {
+			// Test callback.
+		}),
+		WithHTTPClientOptions(
+			WithHTTPClientName("test-client"),
+		),
+		WithOpenAIOptions(
+			openaiopt.WithMaxRetries(3),
+			openaiopt.WithHeader("User-Agent", "combined-test"),
+		),
+	)
+
+	if m == nil {
+		t.Fatal("expected model to be created")
+	}
+
+	// Verify that all options were applied correctly.
+	if m.name != "test-model" {
+		t.Errorf("expected model name 'test-model', got %s", m.name)
+	}
+
+	if m.apiKey != "test-key" {
+		t.Errorf("expected API key 'test-key', got %s", m.apiKey)
+	}
+
+	if m.baseURL != "https://api.example.com" {
+		t.Errorf("expected base URL 'https://api.example.com', got %s", m.baseURL)
+	}
+
+	if m.channelBufferSize != 1024 {
+		t.Errorf("expected channel buffer size 1024, got %d", m.channelBufferSize)
+	}
+
+	// Verify that callbacks were set.
+	if m.chatRequestCallback == nil {
+		t.Error("expected chat request callback to be set")
+	}
+
+	if m.chatResponseCallback == nil {
+		t.Error("expected chat response callback to be set")
+	}
+
+	if m.chatChunkCallback == nil {
+		t.Error("expected chat chunk callback to be set")
 	}
 }

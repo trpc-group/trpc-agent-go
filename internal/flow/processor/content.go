@@ -198,9 +198,8 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	if len(evt.Choices) == 0 {
 		return *evt
 	}
-
 	// Create a new event with user context.
-	convertedEvent := *evt
+	convertedEvent := evt.Clone()
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
@@ -236,8 +235,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 			},
 		}
 	}
-
-	return convertedEvent
+	return *convertedEvent
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.

@@ -280,6 +280,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 			return vs.searchByFilter(ctx, query)
 		}
 	}
+
+	// default is hybrid search
 	switch query.SearchMode {
 	case vectorstore.SearchModeVector:
 		return vs.searchByVector(ctx, query)
@@ -328,7 +330,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	}
 
 	sql, args := qb.build(limit)
-	return vs.executeSearch(ctx, sql, args)
+	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeVector)
 }
 
 // searchByKeyword performs full-text search.
@@ -358,7 +360,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	}
 
 	sql, args := qb.build(limit)
-	return vs.executeSearch(ctx, sql, args)
+	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeKeyword)
 }
 
 // searchByHybrid combines vector similarity and keyword matching
@@ -370,8 +372,12 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	if len(query.Vector) != vs.option.indexDimension {
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
 	}
+
+	vectorWeight := vs.option.vectorWeight
+	textWeight := vs.option.textWeight
 	if query.Query == "" {
-		return nil, fmt.Errorf("pgvector keyword is required for hybrid search")
+		vectorWeight = 1.0
+		textWeight = 0.0
 	}
 
 	limit := query.Limit
@@ -380,9 +386,13 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	// Build hybrid search query
-	qb := newHybridQueryBuilder(vs.option.table, vs.option.language, vs.option.vectorWeight, vs.option.textWeight)
+	qb := newHybridQueryBuilder(vs.option.table, vs.option.language, vectorWeight, textWeight)
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
-	qb.addHybridFtsCondition(query.Query)
+
+	// Add full-text search condition only if query text is provided
+	if query.Query != "" {
+		qb.addHybridFtsCondition(query.Query)
+	}
 
 	// Add filters
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
@@ -398,7 +408,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	sql, args := qb.build(limit)
-	return vs.executeSearch(ctx, sql, args)
+	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeHybrid)
 }
 
 // searchByFilter returns documents based on filters only
@@ -425,11 +435,11 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	}
 
 	sql, args := qb.build(limit)
-	return vs.executeSearch(ctx, sql, args)
+	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeFilter)
 }
 
 // executeSearch executes the search query and returns results
-func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []interface{}) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []interface{}, searchMode vectorstore.SearchMode) (*vectorstore.SearchResult, error) {
 	rows, err := vs.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector search documents: %w", err)
@@ -456,6 +466,7 @@ func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []int
 			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
 		}
 
+		log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, sql: %v", score, docID, searchMode, sql)
 		doc := &document.Document{
 			ID:        docID,
 			Name:      name,

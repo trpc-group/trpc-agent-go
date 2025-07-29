@@ -21,15 +21,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// ToolError represents an error that occurred during tool execution.
+type ToolError struct {
+	Message string
+}
+
+// Error returns the error message.
+func (e *ToolError) Error() string {
+	return e.Message
+}
+
+// NewError creates a new ToolError.
+func NewError(message string) error {
+	return &ToolError{Message: message}
+}
+
 func TestNewToolCallbacks(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 	require.NotNil(t, callbacks)
 	require.Empty(t, callbacks.BeforeTool)
 	require.Empty(t, callbacks.AfterTool)
 }
 
 func TestRegisterBeforeTool(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callback := func(
 		ctx context.Context,
@@ -46,7 +61,7 @@ func TestRegisterBeforeTool(t *testing.T) {
 }
 
 func TestRegisterAfterTool(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callback := func(
 		ctx context.Context,
@@ -65,7 +80,7 @@ func TestRegisterAfterTool(t *testing.T) {
 }
 
 func TestRunBeforeTool_Empty(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	declaration := &tool.Declaration{
 		Name:        "test-tool",
@@ -82,7 +97,7 @@ func TestRunBeforeTool_Empty(t *testing.T) {
 }
 
 func TestRunBeforeTool_Skip(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callback := func(
 		ctx context.Context,
@@ -110,7 +125,7 @@ func TestRunBeforeTool_Skip(t *testing.T) {
 }
 
 func TestRunBeforeTool_CustomResult(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	expectedResult := map[string]string{"result": "custom"}
 
@@ -144,7 +159,7 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 }
 
 func TestRunBeforeTool_Error(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	expectedErr := "callback error"
 
@@ -154,7 +169,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 		toolDeclaration *tool.Declaration,
 		jsonArgs []byte,
 	) (any, error) {
-		return nil, tool.NewError(expectedErr)
+		return nil, NewError(expectedErr)
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -175,7 +190,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 }
 
 func TestRunBeforeTool_Multiple(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callCount := 0
 
@@ -222,7 +237,7 @@ func TestRunBeforeTool_Multiple(t *testing.T) {
 }
 
 func TestRunAfterTool_Empty(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	declaration := &tool.Declaration{
 		Name:        "test-tool",
@@ -239,7 +254,7 @@ func TestRunAfterTool_Empty(t *testing.T) {
 }
 
 func TestRunAfterTool_Override(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	expectedResult := map[string]string{"result": "overridden"}
 
@@ -268,7 +283,7 @@ func TestRunAfterTool_Override(t *testing.T) {
 }
 
 func TestRunAfterTool_WithError(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
 		if runErr != nil {
@@ -286,7 +301,7 @@ func TestRunAfterTool_WithError(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
-	runErr := tool.NewError("tool execution error")
+	runErr := NewError("tool execution error")
 
 	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, runErr)
 
@@ -299,12 +314,12 @@ func TestRunAfterTool_WithError(t *testing.T) {
 }
 
 func TestRunAfterTool_Error(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	expectedErr := "callback error"
 
 	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		return nil, tool.NewError(expectedErr)
+		return nil, NewError(expectedErr)
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -325,7 +340,7 @@ func TestRunAfterTool_Error(t *testing.T) {
 }
 
 func TestRunAfterTool_Multiple(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	callCount := 0
 
@@ -375,7 +390,7 @@ func (m *MockTool) Declaration() *tool.Declaration {
 }
 
 func TestToolCallbacks_Integration(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	// Add before callback that logs and modifies args.
 	callbacks.RegisterBeforeTool(func(
@@ -432,7 +447,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 	// Test error handling.
 	declaration = &tool.Declaration{Name: "error-tool", Description: "A tool with error"}
 	args = []byte(`{"test": "value"}`)
-	runErr := tool.NewError("execution error")
+	runErr := NewError("execution error")
 
 	customResult, err = callbacks.RunAfterTool(context.Background(), "error-tool", declaration, args, nil, runErr)
 	require.NoError(t, err)
@@ -453,7 +468,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 }
 
 func TestToolCallbacks_EdgeCases(t *testing.T) {
-	callbacks := tool.NewToolCallbacks()
+	callbacks := tool.NewCallbacks()
 
 	// Test with nil declaration.
 	args := []byte(`{"test": "value"}`)

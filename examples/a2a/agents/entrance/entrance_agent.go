@@ -89,7 +89,7 @@ func buildEntranceAgent(modelName string, agentList []tool.Tool) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      false, // Enable streaming
+		Stream:      true, // Enable streaming
 	}
 
 	desc := "A entrance agent, it will delegate the task to the sub-agent by a2a protocol, or try to solve the task by itself, agent list:"

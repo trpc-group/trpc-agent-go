@@ -288,7 +288,7 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 					contents = append(contents, schema.Content{
 						Role: c.Role.String(),
 						Parts: []schema.Part{
-							schema.Part{
+							{
 								Text: c.Content,
 							},
 						},
@@ -568,18 +568,10 @@ func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 	}
 }
 
-// convertEventToADKFormat converts trpc-agent Event to ADK Web UI expected
-// format. The isStreaming flag indicates whether the UI is currently
-// displaying token-level streaming (true) or expecting a single complete
-// response (false). In streaming mode we suppress the final aggregated
-// "done" event content to avoid duplication.
-func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interface{} {
-	// ---------------------------------------------------------------------
-	// Basic envelope ------------------------------------------------------
-	// ---------------------------------------------------------------------
+// buildADKEventEnvelope creates the basic ADK event envelope.
+func buildADKEventEnvelope(e *event.Event) map[string]interface{} {
 	id := eventID(e)
-
-	adkEvent := map[string]interface{}{
+	return map[string]interface{}{
 		"invocationId": e.InvocationID,
 		"author":       e.Author,
 		"actions": map[string]interface{}{
@@ -590,10 +582,10 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 		"id":        id,
 		"timestamp": e.Timestamp.Unix(),
 	}
+}
 
-	// ---------------------------------------------------------------------
-	// Determine role for content ------------------------------------------
-	// ---------------------------------------------------------------------
+// determineEventRole determines the role for the event content.
+func determineEventRole(e *event.Event) string {
 	role := e.Author // fallback
 	if e.Response != nil {
 		if e.Response.Object == model.ObjectTypeToolResponse {
@@ -602,85 +594,142 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 			role = string(e.Response.Choices[0].Message.Role)
 		}
 	}
+	return role
+}
 
+// buildEventParts constructs the parts array for the event content.
+func buildEventParts(e *event.Event) []map[string]interface{} {
+	var parts []map[string]interface{}
+
+	if e.Response == nil {
+		return parts
+	}
+
+	// Handle normal / streaming assistant or model messages.
+	for _, choice := range e.Response.Choices {
+		// Regular text (full message).
+		if choice.Message.Content != "" {
+			// For tool response events, we do NOT include the raw JSON string as a
+			// separate text part, otherwise the ADK Web UI will render duplicated
+			// information (both as plain text and as function_response). Keeping
+			// only the structured function_response part provides a cleaner view.
+			if e.Response.Object != model.ObjectTypeToolResponse {
+				parts = append(parts, map[string]interface{}{keyText: choice.Message.Content})
+			}
+		}
+
+		// Tool calls in full message.
+		for _, tc := range choice.Message.ToolCalls {
+			parts = append(parts, buildFunctionCallPart(tc))
+		}
+
+		// Streaming delta text.
+		if choice.Delta.Content != "" {
+			parts = append(parts, map[string]interface{}{keyText: choice.Delta.Content})
+		}
+		// Tool calls in streaming delta.
+		for _, tc := range choice.Delta.ToolCalls {
+			parts = append(parts, buildFunctionCallPart(tc))
+		}
+	}
+
+	// Tool response events.
+	if e.Response.Object == model.ObjectTypeToolResponse {
+		for _, choice := range e.Response.Choices {
+			var respObj interface{}
+			if choice.Message.Content != "" {
+				if err := json.Unmarshal([]byte(choice.Message.Content), &respObj); err != nil {
+					respObj = choice.Message.Content // raw string fallback
+				}
+			}
+			parts = append(parts, buildFunctionResponsePart(respObj, choice.Message.ToolID, choice.Message.ToolName))
+		}
+	}
+
+	return parts
+}
+
+// filterEventParts filters parts based on streaming mode and event type.
+func filterEventParts(e *event.Event, parts []map[string]interface{}, isStreaming bool) []map[string]interface{} {
+	if e.Response == nil {
+		return parts
+	}
+
+	if isStreaming {
+		// Drop duplicate aggregated message at end of streaming sequence.
+		if !e.Response.IsPartial && e.Response.Done {
+			return nil
+		}
+	} else {
+		// Non-streaming endpoint should include:
+		//   1. Final assistant messages (Done == true)
+		//   2. Tool response events (object == tool.response)
+		//   3. Function call events which contain ToolCalls.
+		toolResp := isToolResponse(e)
+		hasToolCall := false
+		if len(e.Response.Choices) > 0 && len(e.Response.Choices[0].Message.ToolCalls) > 0 {
+			hasToolCall = true
+		}
+		if !e.Response.Done && !toolResp && !hasToolCall {
+			return nil
+		}
+	}
+
+	return parts
+}
+
+// addResponseMetadata adds response-level metadata to the ADK event.
+func addResponseMetadata(adkEvent map[string]interface{}, e *event.Event) {
+	if e.Response == nil {
+		return
+	}
+
+	adkEvent["done"] = e.Response.Done
+	adkEvent["partial"] = e.Response.IsPartial
+	if e.Response.Object != "" {
+		adkEvent["object"] = e.Response.Object
+	}
+	if e.Response.Created != 0 {
+		adkEvent["created"] = e.Response.Created
+	}
+	if e.Response.Model != "" {
+		adkEvent["model"] = e.Response.Model
+	}
+}
+
+// addUsageMetadata adds usage metadata to the ADK event.
+func addUsageMetadata(adkEvent map[string]interface{}, e *event.Event) {
+	if e.Usage == nil {
+		return
+	}
+
+	adkEvent["usageMetadata"] = map[string]interface{}{
+		"promptTokenCount":     e.Usage.PromptTokens,
+		"candidatesTokenCount": e.Usage.CompletionTokens,
+		"totalTokenCount":      e.Usage.TotalTokens,
+	}
+}
+
+// convertEventToADKFormat converts trpc-agent Event to ADK Web UI expected
+// format. The isStreaming flag indicates whether the UI is currently
+// displaying token-level streaming (true) or expecting a single complete
+// response (false). In streaming mode we suppress the final aggregated
+// "done" event content to avoid duplication.
+func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interface{} {
+	// Build basic envelope.
+	adkEvent := buildADKEventEnvelope(e)
+
+	// Determine role and build content.
+	role := determineEventRole(e)
 	content := map[string]interface{}{
 		"role": role,
 	}
 
-	var parts []map[string]interface{}
+	// Build parts.
+	parts := buildEventParts(e)
 
-	// ---------------------------------------------------------------------
-	// Construct parts ------------------------------------------------------
-	// ---------------------------------------------------------------------
-	if e.Response != nil {
-		// Handle normal / streaming assistant or model messages.
-		for _, choice := range e.Response.Choices {
-			// Regular text (full message).
-			if choice.Message.Content != "" {
-				// For tool response events, we do NOT include the raw JSON string as a
-				// separate text part, otherwise the ADK Web UI will render duplicated
-				// information (both as plain text and as function_response). Keeping
-				// only the structured function_response part provides a cleaner view.
-				if e.Response.Object != model.ObjectTypeToolResponse {
-					parts = append(parts, map[string]interface{}{keyText: choice.Message.Content})
-				}
-			}
-
-			// Tool calls in full message.
-			for _, tc := range choice.Message.ToolCalls {
-				parts = append(parts, buildFunctionCallPart(tc))
-			}
-
-			// Streaming delta text.
-			if choice.Delta.Content != "" {
-				parts = append(parts, map[string]interface{}{keyText: choice.Delta.Content})
-			}
-			// Tool calls in streaming delta.
-			for _, tc := range choice.Delta.ToolCalls {
-				parts = append(parts, buildFunctionCallPart(tc))
-			}
-		}
-
-		// -----------------------------------------------------------------
-		// Tool response events -------------------------------------------
-		// -----------------------------------------------------------------
-		if e.Response.Object == model.ObjectTypeToolResponse {
-			for _, choice := range e.Response.Choices {
-				var respObj interface{}
-				if choice.Message.Content != "" {
-					if err := json.Unmarshal([]byte(choice.Message.Content), &respObj); err != nil {
-						respObj = choice.Message.Content // raw string fallback
-					}
-				}
-				parts = append(parts, buildFunctionResponsePart(respObj, choice.Message.ToolID, choice.Message.ToolName))
-			}
-		}
-	}
-
-	// ---------------------------------------------------------------------
-	// Streaming vs non-streaming filtering --------------------------------
-	// ---------------------------------------------------------------------
-	if e.Response != nil {
-		if isStreaming {
-			// Drop duplicate aggregated message at end of streaming sequence.
-			if !e.Response.IsPartial && e.Response.Done {
-				parts = nil
-			}
-		} else {
-			// Non-streaming endpoint should include:
-			//   1. Final assistant messages (Done == true)
-			//   2. Tool response events (object == tool.response)
-			//   3. Function call events which contain ToolCalls.
-			toolResp := isToolResponse(e)
-			hasToolCall := false
-			if len(e.Response.Choices) > 0 && len(e.Response.Choices[0].Message.ToolCalls) > 0 {
-				hasToolCall = true
-			}
-			if !e.Response.Done && !toolResp && !hasToolCall {
-				return nil
-			}
-		}
-	}
+	// Filter parts based on streaming mode.
+	parts = filterEventParts(e, parts, isStreaming)
 
 	// Skip event if no meaningful parts.
 	if len(parts) == 0 {
@@ -690,31 +739,10 @@ func convertEventToADKFormat(e *event.Event, isStreaming bool) map[string]interf
 	content["parts"] = parts
 	adkEvent["content"] = content
 
-	// ---------------------------------------------------------------------
-	// Response-level metadata --------------------------------------------
-	// ---------------------------------------------------------------------
-	if e.Response != nil {
-		adkEvent["done"] = e.Response.Done
-		adkEvent["partial"] = e.Response.IsPartial
-		if e.Response.Object != "" {
-			adkEvent["object"] = e.Response.Object
-		}
-		if e.Response.Created != 0 {
-			adkEvent["created"] = e.Response.Created
-		}
-		if e.Response.Model != "" {
-			adkEvent["model"] = e.Response.Model
-		}
-	}
+	// Add metadata.
+	addResponseMetadata(adkEvent, e)
+	addUsageMetadata(adkEvent, e)
 
-	// Add usage metadata if available.
-	if e.Usage != nil {
-		adkEvent["usageMetadata"] = map[string]interface{}{
-			"promptTokenCount":     e.Usage.PromptTokens,
-			"candidatesTokenCount": e.Usage.CompletionTokens,
-			"totalTokenCount":      e.Usage.TotalTokens,
-		}
-	}
 	return adkEvent
 }
 

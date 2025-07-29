@@ -61,6 +61,9 @@ func ExampleEmbedder_GetEmbedding() {
 		context.Background(),
 		gemini.WithModel(gemini.ModelGeminiEmbeddingExp0307),
 	)
+	if err != nil {
+		log.Fatalf("Failed to create embedder: %v", err)
+	}
 
 	// Generate embedding for some text.
 	ctx := context.Background()

@@ -377,17 +377,17 @@ func (c *cycleChat) getAgentEmoji(agentName string) string {
 }
 
 // recordScore allows the critic agent to record its quality assessment decision.
-func (c *cycleChat) recordScore(args scoreArgs) scoreResult {
+func (c *cycleChat) recordScore(_ context.Context, args scoreArgs) (scoreResult, error) {
 	return scoreResult{
 		Score:            args.Score,
 		NeedsImprovement: args.NeedsImprovement,
 		Feedback:         args.Feedback,
 		Timestamp:        time.Now().Format("15:04:05"),
-	}
+	}, nil
 }
 
 // storeSolution simulates storing solution iterations.
-func (c *cycleChat) storeSolution(args solutionArgs) solutionResult {
+func (c *cycleChat) storeSolution(_ context.Context, args solutionArgs) (solutionResult, error) {
 	timestamp := time.Now().Format("15:04:05")
 
 	return solutionResult{
@@ -395,7 +395,7 @@ func (c *cycleChat) storeSolution(args solutionArgs) solutionResult {
 		Version:   args.Version,
 		Timestamp: timestamp,
 		Stored:    true,
-	}
+	}, nil
 }
 
 // scoreArgs represents arguments for recording quality scores.

@@ -52,6 +52,20 @@ type Event struct {
 	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }
 
+// Clone creates a deep copy of the event.
+func (e *Event) Clone() *Event {
+	if e == nil {
+		return nil
+	}
+	clone := *e
+	clone.Response = e.Response.Clone()
+	clone.LongRunningToolIDs = make(map[string]struct{})
+	for k := range e.LongRunningToolIDs {
+		clone.LongRunningToolIDs[k] = struct{}{}
+	}
+	return &clone
+}
+
 // Option is a function that can be used to configure the Event.
 type Option func(*Event)
 

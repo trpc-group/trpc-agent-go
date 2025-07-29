@@ -20,7 +20,7 @@ import (
 )
 
 func TestModelCallbacks_BeforeModel(t *testing.T) {
-	callbacks := NewModelCallbacks()
+	callbacks := NewCallbacks()
 
 	// Test callback that returns a custom response.
 	customResponse := &Response{
@@ -60,7 +60,7 @@ func TestModelCallbacks_BeforeModel(t *testing.T) {
 }
 
 func TestModelCallbacks_BeforeModelSkip(t *testing.T) {
-	callbacks := NewModelCallbacks()
+	callbacks := NewCallbacks()
 
 	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, error) {
 		return nil, nil
@@ -82,7 +82,7 @@ func TestModelCallbacks_BeforeModelSkip(t *testing.T) {
 }
 
 func TestModelCallbacks_AfterModel(t *testing.T) {
-	callbacks := NewModelCallbacks()
+	callbacks := NewCallbacks()
 
 	// Test callback that overrides the response.
 	customResponse := &Response{
@@ -129,7 +129,7 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 }
 
 func TestModelCallbacks_Multi(t *testing.T) {
-	callbacks := NewModelCallbacks()
+	callbacks := NewCallbacks()
 
 	// Add multiple callbacks - the first one should be called and stop execution.
 	callbacks.RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, error) {
