@@ -42,14 +42,17 @@ func NewMemorySearchTool(memoryService memory.Service, appName string, userID st
 // Declaration returns the tool declaration.
 func (m *MemorySearchTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        "memory_search",
-		Description: "Search for memories related to a query. Use this when you want to find relevant information from the user's memory.",
+		Name: "memory_search",
+		Description: "Search for memories related to a query. Use this when you want to find relevant information " +
+			"from the user's memory to provide personalized responses. Search through both memory content and topics " +
+			"to find relevant information about the user's preferences, background, or past interactions.",
 		InputSchema: &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
 				"query": {
-					Type:        "string",
-					Description: "The search query to find relevant memories.",
+					Type: "string",
+					Description: "The search query to find relevant memories. Can be keywords, topics, or specific " +
+						"information you're looking for about the user.",
 				},
 			},
 			Required: []string{"query"},
@@ -87,21 +90,21 @@ func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, erro
 		return nil, fmt.Errorf("failed to search memories: %v", err)
 	}
 
-	// Convert memories to a simpler format for the LLM.
-	var results []map[string]any
+	// Convert memories to MemoryResult format.
+	var results []MemoryResult
 	for _, memory := range memories {
-		results = append(results, map[string]any{
-			"id":      memory.ID,
-			"memory":  memory.Memory.Memory,
-			"topics":  memory.Memory.Topics,
-			"created": memory.CreatedAt.Format("2006-01-02 15:04:05"),
+		results = append(results, MemoryResult{
+			ID:      memory.ID,
+			Memory:  memory.Memory.Memory,
+			Topics:  memory.Memory.Topics,
+			Created: memory.CreatedAt,
 		})
 	}
 
-	return map[string]any{
-		"success": true,
-		"query":   args.Query,
-		"results": results,
-		"count":   len(results),
+	return SearchMemoryResponse{
+		Success: true,
+		Query:   args.Query,
+		Results: results,
+		Count:   len(results),
 	}, nil
 }

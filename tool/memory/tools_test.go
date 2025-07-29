@@ -40,13 +40,17 @@ func TestMemoryAddTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]any)
+	resultStruct, ok := result.(AddMemoryResponse)
 	if !ok {
-		t.Fatal("Expected map result")
+		t.Fatal("Expected AddMemoryResponse")
 	}
 
-	if resultMap["success"] != true {
+	if !resultStruct.Success {
 		t.Fatal("Expected success to be true")
+	}
+
+	if resultStruct.Memory != "User likes coffee" {
+		t.Fatalf("Expected memory 'User likes coffee', got %s", resultStruct.Memory)
 	}
 
 	// Verify memory was added.
@@ -95,26 +99,21 @@ func TestMemorySearchTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]any)
+	resultStruct, ok := result.(SearchMemoryResponse)
 	if !ok {
-		t.Fatal("Expected map result")
+		t.Fatal("Expected SearchMemoryResponse")
 	}
 
-	if resultMap["success"] != true {
+	if !resultStruct.Success {
 		t.Fatal("Expected success to be true")
 	}
 
-	results, ok := resultMap["results"].([]map[string]any)
-	if !ok {
-		t.Fatal("Expected results array")
+	if len(resultStruct.Results) != 1 {
+		t.Fatalf("Expected 1 result, got %d", len(resultStruct.Results))
 	}
 
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 result, got %d", len(results))
-	}
-
-	if results[0]["memory"] != "User likes coffee" {
-		t.Fatalf("Expected memory 'User likes coffee', got %s", results[0]["memory"])
+	if resultStruct.Results[0].Memory != "User likes coffee" {
+		t.Fatalf("Expected memory 'User likes coffee', got %s", resultStruct.Results[0].Memory)
 	}
 }
 
@@ -144,22 +143,17 @@ func TestMemoryLoadTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]any)
+	resultStruct, ok := result.(LoadMemoryResponse)
 	if !ok {
-		t.Fatal("Expected map result")
+		t.Fatal("Expected LoadMemoryResponse")
 	}
 
-	if resultMap["success"] != true {
+	if !resultStruct.Success {
 		t.Fatal("Expected success to be true")
 	}
 
-	results, ok := resultMap["results"].([]map[string]any)
-	if !ok {
-		t.Fatal("Expected results array")
-	}
-
-	if len(results) != 1 {
-		t.Fatalf("Expected 1 result with limit, got %d", len(results))
+	if len(resultStruct.Results) != 1 {
+		t.Fatalf("Expected 1 result with limit, got %d", len(resultStruct.Results))
 	}
 }
 
@@ -170,8 +164,8 @@ func TestGetMemoryTools(t *testing.T) {
 
 	tools := GetMemoryTools(service, appName, userID)
 
-	if len(tools) != 3 {
-		t.Fatalf("Expected 3 tools, got %d", len(tools))
+	if len(tools) != 6 {
+		t.Fatalf("Expected 6 tools, got %d", len(tools))
 	}
 
 	// Verify tool types.
@@ -186,7 +180,40 @@ func TestGetMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, addTool.userID)
 	}
 
-	searchTool, ok := tools[1].(*MemorySearchTool)
+	updateTool, ok := tools[1].(*MemoryUpdateTool)
+	if !ok {
+		t.Fatal("Expected MemoryUpdateTool")
+	}
+	if updateTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, updateTool.appName)
+	}
+	if updateTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, updateTool.userID)
+	}
+
+	deleteTool, ok := tools[2].(*MemoryDeleteTool)
+	if !ok {
+		t.Fatal("Expected MemoryDeleteTool")
+	}
+	if deleteTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, deleteTool.appName)
+	}
+	if deleteTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, deleteTool.userID)
+	}
+
+	clearTool, ok := tools[3].(*MemoryClearTool)
+	if !ok {
+		t.Fatal("Expected MemoryClearTool")
+	}
+	if clearTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, clearTool.appName)
+	}
+	if clearTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, clearTool.userID)
+	}
+
+	searchTool, ok := tools[4].(*MemorySearchTool)
 	if !ok {
 		t.Fatal("Expected MemorySearchTool")
 	}
@@ -197,7 +224,7 @@ func TestGetMemoryTools(t *testing.T) {
 		t.Fatalf("Expected userID %s, got %s", userID, searchTool.userID)
 	}
 
-	loadTool, ok := tools[2].(*MemoryLoadTool)
+	loadTool, ok := tools[5].(*MemoryLoadTool)
 	if !ok {
 		t.Fatal("Expected MemoryLoadTool")
 	}

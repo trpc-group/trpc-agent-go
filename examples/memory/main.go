@@ -46,7 +46,7 @@ func main() {
 	fmt.Printf("🧠 Multi Turn Chat with Memory\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
-	fmt.Printf("Available tools: memory_add, memory_search, memory_load\n")
+	fmt.Printf("Available tools: memory_add, memory_update, memory_delete, memory_clear, memory_search, memory_load\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.

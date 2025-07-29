@@ -42,23 +42,32 @@ func NewMemoryAddTool(memoryService memory.Service, appName string, userID strin
 // Declaration returns the tool declaration.
 func (m *MemoryAddTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        "memory_add",
-		Description: "Add a new memory for the user. Use this when you want to remember important information about the user.",
+		Name: "memory_add",
+		Description: "Add a new memory for the user. Use this when you want to remember important information " +
+			"about the user that could personalize future interactions. Memories should include details like: " +
+			"personal facts (name, age, occupation, location, interests, preferences), significant life events, " +
+			"important context about the user's situation, what the user likes/dislikes, opinions, beliefs, values, " +
+			"or any other details that provide valuable insights into the user's personality or needs. Create brief, " +
+			"third-person statements that encapsulate the most important aspect of the user's input " +
+			"without adding extraneous information.",
 		InputSchema: &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
 				"memory": {
-					Type:        "string",
-					Description: "The memory content to store. Should be a concise summary of important information about the user.",
+					Type: "string",
+					Description: "The memory content to store. Should be a brief, third-person statement that " +
+						"captures key information about the user. Example: 'User's name is John Doe' or " +
+						"'User likes coffee and works as a developer'.",
 				},
 				"input": {
 					Type:        "string",
 					Description: "The original user input that led to this memory.",
 				},
 				"topics": {
-					Type:        "array",
-					Items:       &tool.Schema{Type: "string"},
-					Description: "Optional topics for categorizing the memory. Can be multiple topics.",
+					Type:  "array",
+					Items: &tool.Schema{Type: "string"},
+					Description: "Optional topics for categorizing the memory (e.g. ['name', 'hobbies', 'location', " +
+						"'work', 'preferences']). Can be multiple topics.",
 				},
 			},
 			Required: []string{"memory", "input"},
@@ -102,11 +111,11 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		return nil, fmt.Errorf("failed to add memory: %v", err)
 	}
 
-	return map[string]any{
-		"success": true,
-		"message": "Memory added successfully",
-		"memory":  args.Memory,
-		"input":   args.Input,
-		"topics":  args.Topics,
+	return AddMemoryResponse{
+		Success: true,
+		Message: "Memory added successfully",
+		Memory:  args.Memory,
+		Input:   args.Input,
+		Topics:  args.Topics,
 	}, nil
 }

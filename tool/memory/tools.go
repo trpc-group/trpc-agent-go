@@ -22,6 +22,9 @@ import (
 func GetMemoryTools(memoryService memory.Service, appName string, userID string) []tool.Tool {
 	return []tool.Tool{
 		NewMemoryAddTool(memoryService, appName, userID),
+		NewMemoryUpdateTool(memoryService, appName, userID),
+		NewMemoryDeleteTool(memoryService, appName, userID),
+		NewMemoryClearTool(memoryService, appName, userID),
 		NewMemorySearchTool(memoryService, appName, userID),
 		NewMemoryLoadTool(memoryService, appName, userID),
 	}

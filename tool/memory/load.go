@@ -42,14 +42,17 @@ func NewMemoryLoadTool(memoryService memory.Service, appName string, userID stri
 // Declaration returns the tool declaration.
 func (m *MemoryLoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        "memory_load",
-		Description: "Load recent memories for the user. Use this when you want to recall recent information about the user.",
+		Name: "memory_load",
+		Description: "Load recent memories for the user. Use this when you want to get an overview of what you know " +
+			"about the user to provide personalized assistance. This helps you understand the user's background, " +
+			"preferences, and past interactions to tailor your responses accordingly.",
 		InputSchema: &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
 				"limit": {
-					Type:        "integer",
-					Description: "Maximum number of memories to load (default: 10).",
+					Type: "integer",
+					Description: "Maximum number of memories to load (default: 10). Use a higher number to get more " +
+						"context about the user.",
 				},
 			},
 		},
@@ -87,21 +90,21 @@ func (m *MemoryLoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error)
 		return nil, fmt.Errorf("failed to load memories: %v", err)
 	}
 
-	// Convert memories to a simpler format for the LLM.
-	var results []map[string]any
+	// Convert memories to MemoryResult format.
+	var results []MemoryResult
 	for _, memory := range memories {
-		results = append(results, map[string]any{
-			"id":      memory.ID,
-			"memory":  memory.Memory.Memory,
-			"topics":  memory.Memory.Topics,
-			"created": memory.CreatedAt.Format("2006-01-02 15:04:05"),
+		results = append(results, MemoryResult{
+			ID:      memory.ID,
+			Memory:  memory.Memory.Memory,
+			Topics:  memory.Memory.Topics,
+			Created: memory.CreatedAt,
 		})
 	}
 
-	return map[string]any{
-		"success": true,
-		"limit":   args.Limit,
-		"results": results,
-		"count":   len(results),
+	return LoadMemoryResponse{
+		Success: true,
+		Limit:   args.Limit,
+		Results: results,
+		Count:   len(results),
 	}, nil
 }
