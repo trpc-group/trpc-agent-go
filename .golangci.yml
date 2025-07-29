@@ -28,7 +28,10 @@ linters:
     - gosec
     - ineffassign
 
-run:
-  skip-files:
+issues:
+  exclude-files:
     - ".*.pb.go"
-    - ".*_mock.go" 
+    - ".*_mock.go"
+
+output:
+  format: colored-line-number 

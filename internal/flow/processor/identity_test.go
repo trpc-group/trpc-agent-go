@@ -89,7 +89,7 @@ func TestIdentityProc_Request(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			processor := NewIdentityRequestProcessor(
-				tt.agentName, 
+				tt.agentName,
 				tt.description,
 				WithAddNameToInstruction(true),
 			)
