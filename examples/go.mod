@@ -97,6 +97,6 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.0-00010101000000-000000000000 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.0-00010101000000-000000000000 // indirect
 )
