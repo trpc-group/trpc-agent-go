@@ -153,7 +153,8 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 
 	// Check memory limit.
 	if len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
-		return fmt.Errorf("memory limit exceeded for user %s", userKey.UserID)
+		return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
+			userKey.UserID, s.opts.memoryLimit, len(app.memories[userKey.UserID]))
 	}
 
 	// Initialize user map if not exists.
