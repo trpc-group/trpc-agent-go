@@ -43,9 +43,9 @@ type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) ta
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
-type defautAuthProvider struct{}
+type defaultAuthProvider struct{}
 
-func (d *defautAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
+func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
 	}

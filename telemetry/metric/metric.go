@@ -10,6 +10,8 @@
 //
 //
 
+// Package metric provides metrics collection functionality for the trpc-agent-go framework.
+// It integrates with OpenTelemetry to provide comprehensive metrics capabilities.
 package metric
 
 import (
