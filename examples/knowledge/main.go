@@ -21,6 +21,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +34,11 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
+	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -42,8 +47,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+// command line flags
 var (
-	modelName = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	modelName   = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	vectorStore = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+)
+
+// environment variables to configure tcvector
+var (
+	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
+	tcvectorUsername = getEnvOrDefault("TCVECTOR_USERNAME", "")
+	tcvectorPassword = getEnvOrDefault("TCVECTOR_PASSWORD", "")
+)
+
+// environment variables to configure pgvector
+var (
+	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
+	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
+	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
+	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "")
+)
+
+// environment variables to configure for openai embedder
+var (
+	openaiEmbeddingModel = getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")
 )
 
 func main() {
@@ -58,7 +86,8 @@ func main() {
 
 	// Create and run the chat.
 	chat := &knowledgeChat{
-		modelName: *modelName,
+		modelName:   *modelName,
+		vectorStore: *vectorStore,
 	}
 
 	if err := chat.run(); err != nil {
@@ -68,11 +97,12 @@ func main() {
 
 // knowledgeChat manages the conversation with knowledge integration.
 type knowledgeChat struct {
-	modelName string
-	runner    runner.Runner
-	userID    string
-	sessionID string
-	kb        *knowledge.BuiltinKnowledge
+	modelName   string
+	vectorStore string
+	runner      runner.Runner
+	userID      string
+	sessionID   string
+	kb          *knowledge.BuiltinKnowledge
 }
 
 // run starts the interactive chat session.
@@ -150,13 +180,53 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 	return nil
 }
 
+// setupVectorDB creates the appropriate vector store based on the selected type.
+func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
+	switch c.vectorStore {
+	case "inmemory":
+		return vectorinmemory.New(), nil
+	case "pgvector":
+		port, err := strconv.Atoi(pgvectorPort)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse pgvector port: %w", err)
+		}
+		vectorStore, err := vectorpgvector.New(
+			vectorpgvector.WithHost(pgvectorHost),
+			vectorpgvector.WithPort(port),
+			vectorpgvector.WithUser(pgvectorUser),
+			vectorpgvector.WithPassword(pgvectorPassword),
+			vectorpgvector.WithDatabase(pgvectorDatabase),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pgvector store: %w", err)
+		}
+		return vectorStore, nil
+	case "tcvector":
+		vectorStore, err := vectortcvector.New(
+			vectortcvector.WithURL(tcvectorURL),
+			vectortcvector.WithUsername(tcvectorUsername),
+			vectortcvector.WithPassword(tcvectorPassword),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
+		}
+		return vectorStore, nil
+	default:
+		return nil, fmt.Errorf("unsupported vector store type: %s", c.vectorStore)
+	}
+}
+
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
-	// Create in-memory vector store.
-	vectorStore := vectorinmemory.New()
+	// Create vector store.
+	vectorStore, err := c.setupVectorDB()
+	if err != nil {
+		return err
+	}
 
-	// Use OpenAI embedder for demonstration (replace with your API key).
-	embedder := openaiembedder.New()
+	embedder := openaiembedder.New(
+		openaiembedder.WithModel(openaiEmbeddingModel),
+	)
 
 	// Create diverse sources showcasing different types.
 	sources := []source.Source{
@@ -483,4 +553,12 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
+}
+
+// getEnvOrDefault returns the environment variable value or a default value if not set.
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }
