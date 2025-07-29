@@ -15,8 +15,10 @@ package json
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,16 +120,25 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 }
 
 // ReadFromURL reads JSON content from a URL and returns a list of documents.
-func (r *Reader) ReadFromURL(url string) ([]*document.Document, error) {
+func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
+	// Validate URL before making HTTP request.
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
+	}
+
 	// Download JSON from URL.
-	resp, err := http.Get(url)
+	resp, err := http.Get(parsedURL.String())
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	// Get file name from URL.
-	fileName := r.extractFileNameFromURL(url)
+	fileName := r.extractFileNameFromURL(urlStr)
 
 	return r.ReadFromReader(fileName, resp.Body)
 }

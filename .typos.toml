@@ -1,0 +1,29 @@
+# Typos check: https://github.com/crate-ci/typos
+
+# Ignore specific file types
+[type.csr]
+extend-glob = ["*.csr"]
+check-file = false
+
+# Ignore specific files and patterns
+[files]
+extend-exclude = [
+  "LICENSE",
+  "*.sum",
+  "go.sum",
+  "*.trpc.go",
+  "*.pb.go",
+  "*_string.go",
+  "*.gen.go",
+  "examples/"
+]
+
+# Allow specific identifiers
+[default.extend-identifiers]
+O_WRONLY = "O_WRONLY"
+
+# Allow specific words
+[default.extend-words]
+unmarshaling = "unmarshaling" 
+Unarshaling = "Unmarshaling" 
+ba = "ba"

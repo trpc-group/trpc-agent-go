@@ -86,6 +86,7 @@ type AgentRunRequest struct {
 	Streaming  bool    `json:"streaming"`
 }
 
+// TraceLLMRequest represents a trace request for LLM operations.
 type TraceLLMRequest struct {
 	Contents []Content `json:"contents"`
 }

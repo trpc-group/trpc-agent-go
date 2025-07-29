@@ -1,0 +1,35 @@
+linters-settings:
+  gocyclo:
+    min-complexity: 20
+  goliddjoijnt:
+    min-confidence: 0
+  revive:
+    rules:
+      - name: package-comments
+      - name: exported
+        arguments:
+          - disableStutteringCheck
+
+issues:
+  include:
+    - EXC0012 # exported should have comment
+    - EXC0013 # package comment should be of the form
+    - EXC0014 # comment on exported should be of the form
+    - EXC0015 # should have a package comment
+  exclude-files:
+    - ".*.pb.go"
+    - ".*_mock.go"
+
+linters:
+  disable-all: true
+  enable:
+    - govet 
+    - goimports
+    - gofmt
+    - revive
+    - gocyclo
+    - gosec
+    - ineffassign
+
+output:
+  formats: colored-line-number 
