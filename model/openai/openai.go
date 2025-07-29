@@ -89,8 +89,8 @@ type Model struct {
 }
 
 type chatRequestCallbackFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
-type chatResponseCallbackFunc func(ctx context.Context, chatResponse *openai.ChatCompletion)
-type chatChunkCallbackFunc func(ctx context.Context, chatChunk *openai.ChatCompletionChunk)
+type chatResponseCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatResponse *openai.ChatCompletion)
+type chatChunkCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatChunk *openai.ChatCompletionChunk)
 
 // options contains configuration options for creating a Model.
 type options struct {
@@ -412,7 +412,7 @@ func (m *Model) handleStreamingResponse(
 		acc.AddChunk(chunk)
 
 		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, &chunk)
+			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
 		response := &model.Response{
@@ -529,7 +529,7 @@ func (m *Model) handleNonStreamingResponse(
 	chatCompletion, err := m.client.Chat.Completions.New(
 		ctx, chatRequest, opts...)
 	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, chatCompletion)
+		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
 	}
 	if err != nil {
 		errorResponse := &model.Response{
