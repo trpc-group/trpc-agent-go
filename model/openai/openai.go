@@ -101,6 +101,7 @@ type options struct {
 	ChatRequestCallback  chatRequestCallbackFunc
 	ChatResponseCallback chatResponseCallbackFunc
 	ChatChunkCallback    chatChunkCallbackFunc
+	OpenAIOptions        []openaiopt.RequestOption
 }
 
 // Option is a function that configures an OpenAI model.
@@ -157,6 +158,26 @@ func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 	}
 }
 
+// WithOpenAIOptions sets the OpenAI options for the OpenAI client.
+// E.g. use its middleware option:
+//
+//	import (
+//		openai "github.com/openai/openai-go"
+//		openaiopt "github.com/openai/openai-go/option"
+//	)
+//
+//	WithOpenAIOptions(openaiopt.WithMiddleware(
+//		func(req *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+//			// do something
+//			return next(req)
+//		}
+//	)))
+func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
+	return func(opts *options) {
+		opts.OpenAIOptions = append(opts.OpenAIOptions, openaiOpts...)
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{}
@@ -174,6 +195,7 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	clientOpts = append(clientOpts, openaiopt.WithHTTPClient(DefaultNewHTTPClient(o.HTTPClientOptions...)))
+	clientOpts = append(clientOpts, o.OpenAIOptions...)
 
 	client := openai.NewClient(clientOpts...)
 
