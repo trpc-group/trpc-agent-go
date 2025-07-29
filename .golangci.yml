@@ -32,4 +32,4 @@ linters:
     - ineffassign
 
 output:
-  format: colored-line-number 
+  formats: colored-line-number 
