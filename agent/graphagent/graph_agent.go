@@ -42,21 +42,21 @@ func WithTools(tools []tool.Tool) Option {
 }
 
 // WithAgentCallbacks sets the agent callbacks.
-func WithAgentCallbacks(callbacks *agent.AgentCallbacks) Option {
+func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
 		opts.AgentCallbacks = callbacks
 	}
 }
 
 // WithModelCallbacks sets the model callbacks.
-func WithModelCallbacks(callbacks *model.ModelCallbacks) Option {
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ModelCallbacks = callbacks
 	}
 }
 
 // WithToolCallbacks sets the tool callbacks.
-func WithToolCallbacks(callbacks *tool.ToolCallbacks) Option {
+func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ToolCallbacks = callbacks
 	}
@@ -83,11 +83,11 @@ type Options struct {
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *agent.AgentCallbacks
+	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.ModelCallbacks
+	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.ToolCallbacks
+	ToolCallbacks *tool.Callbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -101,9 +101,9 @@ type GraphAgent struct {
 	graph             *graph.Graph
 	executor          *graph.Executor
 	tools             []tool.Tool
-	agentCallbacks    *agent.AgentCallbacks
-	modelCallbacks    *model.ModelCallbacks
-	toolCallbacks     *tool.ToolCallbacks
+	agentCallbacks    *agent.Callbacks
+	modelCallbacks    *model.Callbacks
+	toolCallbacks     *tool.Callbacks
 	initialState      graph.State
 	channelBufferSize int
 }

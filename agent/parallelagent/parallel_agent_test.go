@@ -99,7 +99,7 @@ type legacyOptions struct {
 	SubAgents         []agent.Agent
 	Tools             []tool.Tool
 	ChannelBufferSize int
-	AgentCallbacks    *agent.AgentCallbacks
+	AgentCallbacks    *agent.Callbacks
 }
 
 func newFromLegacy(o legacyOptions) *ParallelAgent {
@@ -233,7 +233,7 @@ func TestParallelAgent_ChannelBufferSize(t *testing.T) {
 
 func TestParallelAgent_WithCallbacks(t *testing.T) {
 	// Create agent callbacks.
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 
 	// Test before agent callback that skips execution.
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
@@ -302,7 +302,7 @@ func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 }
 
 func TestParallelAgent_BeforeErr(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("bad before")
 	})
@@ -326,7 +326,7 @@ func TestParallelAgent_BeforeErr(t *testing.T) {
 }
 
 func TestParallelAgent_AfterResp(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
@@ -352,7 +352,7 @@ func TestParallelAgent_AfterResp(t *testing.T) {
 }
 
 func TestParallelAgent_BeforeResp(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
 	})

@@ -126,7 +126,7 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 	orig <- event.New("id", "agent")
 	close(orig)
 
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
@@ -149,7 +149,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	orig <- event.New("id2", "agent2")
 	close(orig)
 
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		// Return nil response and nil error to exercise no-op branch.
 		return nil, nil
@@ -224,8 +224,8 @@ func (d *dummyPlanner) ProcessPlanningResponse(ctx context.Context, inv *agent.I
 func TestLLMAgent_WithVariousOptions(t *testing.T) {
 	max := 42
 	genConfig := model.GenerationConfig{MaxTokens: &max}
-	mc := model.NewModelCallbacks()
-	tc := tool.NewToolCallbacks()
+	mc := model.NewCallbacks()
+	tc := tool.NewCallbacks()
 
 	a := New("opts",
 		WithInstruction("instr"),

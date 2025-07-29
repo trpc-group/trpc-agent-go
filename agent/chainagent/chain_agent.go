@@ -31,7 +31,7 @@ type ChainAgent struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 }
 
 // option configures internal settings for ChainAgent.
@@ -41,7 +41,7 @@ type options struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 }
 
 // WithSubAgents sets the sub-agents executed in sequence.
@@ -60,7 +60,7 @@ func WithChannelBufferSize(size int) option {
 }
 
 // WithAgentCallbacks attaches agent lifecycle callbacks.
-func WithAgentCallbacks(cb *agent.AgentCallbacks) option {
+func WithAgentCallbacks(cb *agent.Callbacks) option {
 	return func(o *options) { o.agentCallbacks = cb }
 }
 

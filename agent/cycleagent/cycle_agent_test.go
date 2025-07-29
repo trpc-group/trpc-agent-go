@@ -103,7 +103,7 @@ type legacyOptions struct {
 	Tools             []tool.Tool
 	MaxIterations     *int
 	ChannelBufferSize int
-	AgentCallbacks    *agent.AgentCallbacks
+	AgentCallbacks    *agent.Callbacks
 	EscalationFunc    EscalationFunc
 }
 
@@ -409,7 +409,7 @@ func TestCycleAgent_ChannelBufferSize(t *testing.T) {
 
 func TestCycleAgent_WithCallbacks(t *testing.T) {
 	// Create agent callbacks.
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 
 	// Test before agent callback that skips execution.
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
@@ -470,7 +470,7 @@ func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 }
 
 func TestCycleAgent_BeforeCallbackResp(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "custom", Done: true}, nil
 	})
@@ -489,7 +489,7 @@ func TestCycleAgent_BeforeCallbackResp(t *testing.T) {
 }
 
 func TestCycleAgent_BeforeCallbackError(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("boom")
 	})
@@ -549,7 +549,7 @@ func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 }
 
 func TestCycleAgent_AfterCallback(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
