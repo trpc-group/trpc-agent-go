@@ -10,6 +10,8 @@
 //
 //
 
+// Package planner provides interfaces and implementations for planning
+// capabilities in the trpc-agent-go framework.
 package planner
 
 import (

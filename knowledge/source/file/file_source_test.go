@@ -33,7 +33,7 @@ func TestReadDocuments(t *testing.T) {
 
 	// Prepare sample content about 50 characters to ensure multiple chunks.
 	content := strings.Repeat("0123456789", 5) // 50 chars
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestSetReaderAndMetadata(t *testing.T) {
 	tmpDir := t.TempDir()
 	const fileName = "sample.txt"
 	filePath := filepath.Join(tmpDir, fileName)
-	if err := os.WriteFile(filePath, []byte("hello world"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("hello world"), 0600); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 

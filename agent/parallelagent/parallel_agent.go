@@ -110,124 +110,181 @@ func (a *ParallelAgent) createBranchInvocationForSubAgent(
 	return &branchInvocation
 }
 
+// setupInvocation prepares the invocation for execution.
+func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent name if not already set.
+	if invocation.AgentName == "" {
+		invocation.AgentName = a.name
+	}
+
+	// Set agent callbacks if available.
+	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
+		invocation.AgentCallbacks = a.agentCallbacks
+	}
+}
+
+// handleBeforeAgentCallbacks handles pre-execution callbacks.
+func (a *ParallelAgent) handleBeforeAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) bool {
+	if invocation.AgentCallbacks == nil {
+		return false
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response and then close.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	return false // Continue execution
+}
+
+// startSubAgents starts all sub-agents in parallel and returns their event channels.
+func (a *ParallelAgent) startSubAgents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) []<-chan *event.Event {
+	// Start all sub-agents in parallel.
+	var wg sync.WaitGroup
+	eventChans := make([]<-chan *event.Event, len(a.subAgents))
+
+	for i, subAgent := range a.subAgents {
+		wg.Add(1)
+		go func(idx int, sa agent.Agent) {
+			defer wg.Done()
+
+			// Create branch invocation for this sub-agent.
+			branchInvocation := a.createBranchInvocationForSubAgent(sa, invocation)
+
+			// Run the sub-agent.
+			subEventChan, err := sa.Run(ctx, branchInvocation)
+			if err != nil {
+				// Send error event.
+				errorEvent := event.NewErrorEvent(
+					invocation.InvocationID,
+					invocation.AgentName,
+					model.ErrorTypeFlowError,
+					err.Error(),
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			eventChans[idx] = subEventChan
+		}(i, subAgent)
+	}
+
+	// Wait for all sub-agents to start.
+	wg.Wait()
+	return eventChans
+}
+
+// handleAfterAgentCallbacks handles post-execution callbacks.
+func (a *ParallelAgent) handleAfterAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	if invocation.AgentCallbacks == nil {
+		return
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+	}
+}
+
 // Run implements the agent.Agent interface.
 // It executes sub-agents in parallel and merges their event streams.
-func (a *ParallelAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+func (a *ParallelAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
 	go func() {
 		defer close(eventChan)
-
-		// Set agent name if not already set.
-		if invocation.AgentName == "" {
-			invocation.AgentName = a.name
-		}
-
-		// Set agent callbacks if available.
-		if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-			invocation.AgentCallbacks = a.agentCallbacks
-		}
-
-		// Run before agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response and then close.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-		}
-
-		// Create context that can be cancelled to stop all sub-agents.
-		subCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		// Start all sub-agents in parallel.
-		var wg sync.WaitGroup
-		eventChans := make([]<-chan *event.Event, len(a.subAgents))
-
-		for i, subAgent := range a.subAgents {
-			wg.Add(1)
-			go func(idx int, sa agent.Agent) {
-				defer wg.Done()
-
-				// Create branch invocation for this sub-agent.
-				branchInvocation := a.createBranchInvocationForSubAgent(sa, invocation)
-
-				// Run the sub-agent.
-				subEventChan, err := sa.Run(subCtx, branchInvocation)
-				if err != nil {
-					// Send error event.
-					errorEvent := event.NewErrorEvent(
-						invocation.InvocationID,
-						invocation.AgentName,
-						model.ErrorTypeFlowError,
-						err.Error(),
-					)
-					select {
-					case eventChan <- errorEvent:
-					case <-subCtx.Done():
-					}
-					return
-				}
-
-				eventChans[idx] = subEventChan
-			}(i, subAgent)
-		}
-
-		// Wait for all sub-agents to start.
-		wg.Wait()
-
-		// Merge events from all sub-agents.
-		a.mergeEventStreams(subCtx, eventChans, eventChan)
-
-		// Run after agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-			}
-		}
+		a.executeParallelRun(ctx, invocation, eventChan)
 	}()
 
 	return eventChan, nil
+}
+
+// executeParallelRun handles the main execution logic for parallel agent.
+func (a *ParallelAgent) executeParallelRun(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	// Setup invocation.
+	a.setupInvocation(invocation)
+
+	// Handle before agent callbacks.
+	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+		return
+	}
+
+	// Start sub-agents.
+	eventChans := a.startSubAgents(ctx, invocation, eventChan)
+
+	// Merge events from all sub-agents.
+	a.mergeEventStreams(ctx, eventChans, eventChan)
+
+	// Handle after agent callbacks.
+	a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
 }
 
 // mergeEventStreams merges multiple event channels into a single output channel.

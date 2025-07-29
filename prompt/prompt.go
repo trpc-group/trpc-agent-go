@@ -10,6 +10,8 @@
 //
 //
 
+// Package prompt provides interfaces and utilities for managing prompts in the
+// trpc-agent-go framework.
 package prompt
 
 // Prompt is the interface that all prompts must implement.

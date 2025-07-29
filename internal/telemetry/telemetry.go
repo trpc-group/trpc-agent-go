@@ -10,6 +10,8 @@
 //
 //
 
+// Package telemetry provides telemetry and observability functionality for the trpc-agent-go framework.
+// It includes tracing, metrics, and monitoring capabilities for agent operations.
 package telemetry
 
 import (
@@ -28,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// telemetry service constants.
 const (
 	ServiceName      = "telemetry"
 	ServiceVersion   = "v0.1.0"
@@ -38,6 +41,7 @@ const (
 	SpanNamePrefixExecuteTool = "execute_tool"
 )
 
+// telemetry attributes constants.
 var (
 	KeyEventID      = "trpc.go.agent.event_id"
 	KeySessionID    = "trpc.go.agent.session_id"

@@ -123,113 +123,169 @@ func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 	go func() {
 		defer close(eventChan)
-
-		// Set agent name if not already set.
-		if invocation.AgentName == "" {
-			invocation.AgentName = a.name
-		}
-
-		// Set agent callbacks if available.
-		if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-			invocation.AgentCallbacks = a.agentCallbacks
-		}
-
-		// Run before agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response and then close.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-		}
-
-		// Run each sub-agent in sequence.
-		for _, subAgent := range a.subAgents {
-			// Create clean invocation for sub-agent - no shared state mutation.
-			subInvocation := a.createSubAgentInvocation(subAgent, invocation)
-
-			// Run the sub-agent.
-			subEventChan, err := subAgent.Run(ctx, subInvocation)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					model.ErrorTypeFlowError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			// Forward all events from the sub-agent.
-			for subEvent := range subEventChan {
-				select {
-				case eventChan <- subEvent:
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			// Check if context was cancelled.
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-		}
-
-		// Run after agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-			}
-		}
+		a.executeChainRun(ctx, invocation, eventChan)
 	}()
 
 	return eventChan, nil
+}
+
+// executeChainRun handles the main execution logic for chain agent.
+func (a *ChainAgent) executeChainRun(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	// Setup invocation.
+	a.setupInvocation(invocation)
+
+	// Handle before agent callbacks.
+	if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+		return
+	}
+
+	// Execute sub-agents in sequence.
+	a.executeSubAgents(ctx, invocation, eventChan)
+
+	// Handle after agent callbacks.
+	a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
+}
+
+// setupInvocation prepares the invocation for execution.
+func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent name if not already set.
+	if invocation.AgentName == "" {
+		invocation.AgentName = a.name
+	}
+
+	// Set agent callbacks if available.
+	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
+		invocation.AgentCallbacks = a.agentCallbacks
+	}
+}
+
+// handleBeforeAgentCallbacks handles pre-execution callbacks.
+func (a *ChainAgent) handleBeforeAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) bool {
+	if invocation.AgentCallbacks == nil {
+		return false
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response and then close.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	return false // Continue execution
+}
+
+// executeSubAgents runs all sub-agents in sequence.
+func (a *ChainAgent) executeSubAgents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	for _, subAgent := range a.subAgents {
+		// Create clean invocation for sub-agent - no shared state mutation.
+		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
+
+		// Run the sub-agent.
+		subEventChan, err := subAgent.Run(ctx, subInvocation)
+		if err != nil {
+			// Send error event.
+			errorEvent := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				model.ErrorTypeFlowError,
+				err.Error(),
+			)
+			select {
+			case eventChan <- errorEvent:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		// Forward all events from the sub-agent.
+		for subEvent := range subEventChan {
+			select {
+			case eventChan <- subEvent:
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		// Check if context was cancelled.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
+}
+
+// handleAfterAgentCallbacks handles post-execution callbacks.
+func (a *ChainAgent) handleAfterAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	if invocation.AgentCallbacks == nil {
+		return
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+	}
 }
 
 // Tools implements the agent.Agent interface.

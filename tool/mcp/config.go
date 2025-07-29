@@ -33,8 +33,10 @@ const (
 	// transportStreamable is the streamable HTTP transport.
 	transportStreamable transport = "streamable"
 
-	FilterModeInclude filterMode = "include" // Only include listed tools
-	FilterModeExclude filterMode = "exclude" // Exclude listed tools
+	// FilterModeInclude specifies that only listed tools should be included.
+	FilterModeInclude filterMode = "include"
+	// FilterModeExclude specifies that listed tools should be excluded.
+	FilterModeExclude filterMode = "exclude"
 )
 
 // Default configurations.

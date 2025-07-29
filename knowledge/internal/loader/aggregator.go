@@ -13,7 +13,6 @@
 // Package loader contains internal helper utilities for concurrent knowledge
 // base loading. Aggregator collects progress and statistics events from loader
 // goroutines and logs them in a single place.
-
 package loader
 
 import (

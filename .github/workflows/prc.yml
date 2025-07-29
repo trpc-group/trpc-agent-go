@@ -1,0 +1,60 @@
+name: Pull Request Check
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read # Use with `only-new-issues` option.
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    - name: Build
+      run: go build -v ./...
+    - name: Test
+      run: go test -v -coverprofile=coverage.out ./...
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: coverage.out
+        flags: unittests
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - uses: actions/checkout@v3
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest 
+          only-new-issues: true
+          args: --timeout=10m
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: typos 
+      uses: crate-ci/typos@master
+  go-apidiff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0 
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    - uses: joelanford/go-apidiff@main 

@@ -10,6 +10,8 @@
 //
 //
 
+// Package trace provides distributed tracing functionality for the trpc-agent-go framework.
+// It integrates with OpenTelemetry to provide comprehensive tracing capabilities.
 package trace
 
 import (
@@ -30,6 +32,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
+// Tracer is the global tracer instance for telemetry.
 var Tracer trace.Tracer = noopt.Tracer{}
 
 // Start collects telemetry with optional configuration.

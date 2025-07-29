@@ -16,6 +16,7 @@ package gemini
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -72,6 +73,7 @@ const (
 	TaskTypeFactVerification = "FACT_VERIFICATION"
 
 	// GoogleAPIKeyEnv is the environment variable name for the Google API key.
+	// nolint:gosec // This is just the environment variable name, not a hardcoded credential.
 	GoogleAPIKeyEnv = "GOOGLE_API_KEY"
 )
 
@@ -245,6 +247,10 @@ func (e *Embedder) response(ctx context.Context, text string) (*genai.EmbedConte
 	// Create request.
 	request := *e.requestOptions
 	if request.OutputDimensionality == nil {
+		// Check for integer overflow before conversion.
+		if e.dimensions > math.MaxInt32 || e.dimensions < math.MinInt32 {
+			return nil, fmt.Errorf("dimensions value %d is out of range for int32", e.dimensions)
+		}
 		d := int32(e.dimensions)
 		request.OutputDimensionality = &d
 	}

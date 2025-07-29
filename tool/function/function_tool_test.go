@@ -65,7 +65,7 @@ func toArguments(t *testing.T, v any) json.RawMessage {
 
 // Test input/output types for streaming functions
 type streamTestInput struct {
-	ArticalID int `json:"articalID,omitempty"`
+	ArticleID int `json:"articleID,omitempty"`
 }
 
 type streamTestOutput struct {
@@ -81,7 +81,7 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 	go func() {
 		defer stream.Writer.Close()
 
-		articals := []struct {
+		articles := []struct {
 			Title     string
 			Body      string
 			Reference string
@@ -103,10 +103,10 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 			},
 		}
 
-		id := input.ArticalID
+		id := input.ArticleID
 		// send the article title
 		output := streamTestOutput{
-			Title: articals[id%len(articals)].Title,
+			Title: articles[id%len(articles)].Title,
 		}
 		chunk := tool.StreamChunk{
 			Content:  output,
@@ -119,7 +119,7 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 		time.Sleep(10 * time.Millisecond)
 
 		// send the article body in two parts
-		body := articals[id%len(articals)].Body
+		body := articles[id%len(articles)].Body
 		output = streamTestOutput{
 			Body: body[:len(body)/2],
 		}
@@ -147,7 +147,7 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 
 		// send the article reference
 		output = streamTestOutput{
-			Reference: articals[id%len(articals)].Reference,
+			Reference: articles[id%len(articles)].Reference,
 		}
 		chunk = tool.StreamChunk{
 			Content:  output,
@@ -169,7 +169,7 @@ func Test_StreamableFunctionTool(t *testing.T) {
 	st := function.NewStreamableFunctionTool[streamTestInput, streamTestOutput](streamableFunc,
 		function.WithName("StreamableFunction"),
 		function.WithDescription("Streams articles based on the provided article ID."))
-	reader, err := st.StreamableCall(context.Background(), toArguments(t, streamTestInput{ArticalID: 1}))
+	reader, err := st.StreamableCall(context.Background(), toArguments(t, streamTestInput{ArticleID: 1}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

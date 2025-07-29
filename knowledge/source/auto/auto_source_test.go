@@ -68,7 +68,7 @@ func TestReadDocuments(t *testing.T) {
 func TestHelpers(t *testing.T) {
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(tmpFile, []byte("content"), 0o644); err != nil {
+	if err := os.WriteFile(tmpFile, []byte("content"), 0600); err != nil {
 		t.Fatalf("failed to write temp file: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestSource_ProcessInputVariants(t *testing.T) {
 	// 2. File input variant.
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "file.txt")
-	if err := os.WriteFile(tmpFile, []byte("file content"), 0o644); err != nil {
+	if err := os.WriteFile(tmpFile, []byte("file content"), 0600); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
 	src = New([]string{tmpFile})

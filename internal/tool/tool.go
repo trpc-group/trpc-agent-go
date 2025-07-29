@@ -10,6 +10,8 @@
 //
 //
 
+// Package tool provides internal utilities for tool schema generation and
+// management in the trpc-agent-go framework.
 package tool
 
 import (

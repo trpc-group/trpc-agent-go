@@ -179,6 +179,172 @@ func (a *CycleAgent) isEscalationCheckEvent(evt *event.Event) bool {
 	return false
 }
 
+// setupInvocation prepares the invocation for execution.
+func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent name if not already set.
+	if invocation.AgentName == "" {
+		invocation.AgentName = a.name
+	}
+
+	// Set agent callbacks if available.
+	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
+		invocation.AgentCallbacks = a.agentCallbacks
+	}
+}
+
+// handleBeforeAgentCallbacks handles pre-execution callbacks.
+func (a *CycleAgent) handleBeforeAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) bool {
+	if invocation.AgentCallbacks == nil {
+		return false
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response and then close.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	return false // Continue execution
+}
+
+// runSubAgent executes a single sub-agent and forwards its events.
+func (a *CycleAgent) runSubAgent(
+	ctx context.Context,
+	subAgent agent.Agent,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) bool {
+	// Create a proper invocation for the sub-agent with correct attribution.
+	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
+
+	// Run the sub-agent.
+	subEventChan, err := subAgent.Run(ctx, subInvocation)
+	if err != nil {
+		// Send error event and escalate.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates escalation
+	}
+
+	// Forward events from the sub-agent and check for escalation.
+	for subEvent := range subEventChan {
+		select {
+		case eventChan <- subEvent:
+		case <-ctx.Done():
+			return true // Indicates early return
+		}
+
+		// Check if this event indicates escalation.
+		if a.shouldEscalate(subEvent) {
+			return true // Indicates escalation
+		}
+	}
+
+	return false // No escalation
+}
+
+// runSubAgentsLoop executes all sub-agents in sequence.
+func (a *CycleAgent) runSubAgentsLoop(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) bool {
+	for _, subAgent := range a.subAgents {
+		// Check if context was cancelled.
+		select {
+		case <-ctx.Done():
+			return true // Indicates early return
+		default:
+		}
+
+		// Run the sub-agent.
+		if a.runSubAgent(ctx, subAgent, invocation, eventChan) {
+			return true // Indicates escalation or early return
+		}
+
+		// Check if context was cancelled.
+		select {
+		case <-ctx.Done():
+			return true // Indicates early return
+		default:
+		}
+	}
+	return false // No escalation
+}
+
+// handleAfterAgentCallbacks handles post-execution callbacks.
+func (a *CycleAgent) handleAfterAgentCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) {
+	if invocation.AgentCallbacks == nil {
+		return
+	}
+
+	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	if err != nil {
+		// Send error event.
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			err.Error(),
+		)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return
+	}
+	if customResponse != nil {
+		// Create an event from the custom response.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+	}
+}
+
 // Run implements the agent.Agent interface.
 // It executes sub-agents in a loop until escalation or max iterations.
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -187,45 +353,15 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	go func() {
 		defer close(eventChan)
 
-		// Set agent name if not already set.
-		if invocation.AgentName == "" {
-			invocation.AgentName = a.name
+		// Setup invocation.
+		a.setupInvocation(invocation)
+
+		// Handle before agent callbacks.
+		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
+			return
 		}
 
-		// Set agent callbacks if available.
-		if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-			invocation.AgentCallbacks = a.agentCallbacks
-		}
-
-		// Run before agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response and then close.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-		}
-
-		timesLooped := 0
+		var timesLooped int
 
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
@@ -236,91 +372,16 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 			default:
 			}
 
-			// Run each sub-agent in sequence within the loop.
-			shouldBreak := false
-			for _, subAgent := range a.subAgents {
-				// Create a proper invocation for the sub-agent with correct attribution.
-				subInvocation := a.createSubAgentInvocation(subAgent, invocation)
-
-				// Run the sub-agent.
-				subEventChan, err := subAgent.Run(ctx, subInvocation)
-				if err != nil {
-					// Send error event and escalate.
-					errorEvent := event.NewErrorEvent(
-						invocation.InvocationID,
-						invocation.AgentName,
-						model.ErrorTypeFlowError,
-						err.Error(),
-					)
-					select {
-					case eventChan <- errorEvent:
-					case <-ctx.Done():
-					}
-					return
-				}
-
-				// Forward events from the sub-agent and check for escalation.
-				for subEvent := range subEventChan {
-					select {
-					case eventChan <- subEvent:
-					case <-ctx.Done():
-						return
-					}
-
-					// Check if this event indicates escalation.
-					if a.shouldEscalate(subEvent) {
-						shouldBreak = true
-						break
-					}
-				}
-
-				// If escalation was detected, break out of the sub-agent loop.
-				if shouldBreak {
-					break
-				}
-
-				// Check if context was cancelled.
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-
-			// If escalation was detected, break out of the main loop.
-			if shouldBreak {
-				break
+			// Run sub-agents loop.
+			if a.runSubAgentsLoop(ctx, invocation, eventChan) {
+				break // Escalation or early return
 			}
 
 			timesLooped++
 		}
 
-		// Run after agent callbacks if they exist.
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
-			if err != nil {
-				// Send error event.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
-				return
-			}
-			if customResponse != nil {
-				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case eventChan <- customEvent:
-				case <-ctx.Done():
-				}
-			}
-		}
+		// Handle after agent callbacks.
+		a.handleAfterAgentCallbacks(ctx, invocation, eventChan)
 	}()
 
 	return eventChan, nil

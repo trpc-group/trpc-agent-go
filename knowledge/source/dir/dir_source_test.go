@@ -33,7 +33,7 @@ func TestReadDocuments(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		filePath := filepath.Join(tmpDir, "file"+strconv.Itoa(i)+".txt")
 		content := strings.Repeat("0123456789", 5) // 50 chars
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
 			t.Fatalf("failed to write temp file: %v", err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestGetFilePaths(t *testing.T) {
 	//     nested.txt
 
 	mustWrite := func(path, content string) {
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatalf("failed to write file %s: %v", path, err)
 		}
 	}
@@ -133,7 +133,7 @@ func TestReadDocuments_Basic(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "sample.txt")
-	if err := os.WriteFile(filePath, []byte("sample content"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("sample content"), 0600); err != nil {
 		t.Fatalf("failed to write sample file: %v", err)
 	}
 
@@ -173,8 +173,8 @@ func TestSource_FileExtensionFilter(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	// create files .txt and .json
-	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(root, "b.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(root, "b.json"), []byte("{}"), 0o600)
 
 	src := New([]string{root}, WithFileExtensions([]string{".txt"}))
 	docs, err := src.ReadDocuments(ctx)
@@ -191,7 +191,7 @@ func TestSource_Recursive(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "sub")
 	os.Mkdir(sub, 0o755)
-	os.WriteFile(filepath.Join(sub, "c.txt"), []byte("y"), 0o644)
+	os.WriteFile(filepath.Join(sub, "c.txt"), []byte("y"), 0o600)
 
 	src := New([]string{root}, WithRecursive(true))
 	docs, err := src.ReadDocuments(ctx)

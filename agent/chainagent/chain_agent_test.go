@@ -365,7 +365,7 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	inv := parent.createSubAgentInvocation(sub, base)
 
 	require.Equal(t, "child", inv.AgentName)
-	require.Equal(t, "root.child", inv.Branch)
+	require.Equal(t, "root", inv.Branch)
 	// Ensure original invocation not mutated.
 	require.Equal(t, "parent", base.AgentName)
 	require.Equal(t, "root", base.Branch)
@@ -381,7 +381,7 @@ func TestCreateSubAgentInvokeNoBranch(t *testing.T) {
 	inv := parent.createSubAgentInvocation(sub, base)
 
 	require.Equal(t, "child", inv.AgentName)
-	require.Equal(t, "parent.child", inv.Branch)
+	require.Equal(t, "parent", inv.Branch)
 }
 
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {
