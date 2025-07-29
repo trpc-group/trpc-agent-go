@@ -425,7 +425,7 @@ func (c *transferChat) isToolEvent(event *event.Event) bool {
 // Tool implementations for demonstration.
 
 // calculate performs mathematical operations.
-func (c *transferChat) calculate(args calcArgs) calcResult {
+func (c *transferChat) calculate(_ context.Context, args calcArgs) (calcResult, error) {
 	var result float64
 	switch args.Operation {
 	case "add":
@@ -442,7 +442,7 @@ func (c *transferChat) calculate(args calcArgs) calcResult {
 				B:         args.B,
 				Result:    0,
 				Error:     "Division by zero",
-			}
+			}, fmt.Errorf("division by zero")
 		}
 		result = args.A / args.B
 	case "power":
@@ -457,7 +457,7 @@ func (c *transferChat) calculate(args calcArgs) calcResult {
 			B:         args.B,
 			Result:    0,
 			Error:     "Unknown operation",
-		}
+		}, fmt.Errorf("unknown operation")
 	}
 
 	return calcResult{
@@ -465,11 +465,11 @@ func (c *transferChat) calculate(args calcArgs) calcResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // getWeather returns weather information for a location.
-func (c *transferChat) getWeather(args weatherArgs) weatherResult {
+func (c *transferChat) getWeather(_ context.Context, args weatherArgs) (weatherResult, error) {
 	// Simulate weather data based on location.
 	weather := map[string]weatherResult{
 		"tokyo": {
@@ -497,7 +497,7 @@ func (c *transferChat) getWeather(args weatherArgs) weatherResult {
 
 	location := strings.ToLower(args.Location)
 	if result, exists := weather[location]; exists {
-		return result
+		return result, nil
 	}
 
 	// Default response for unknown locations.
@@ -507,11 +507,11 @@ func (c *transferChat) getWeather(args weatherArgs) weatherResult {
 		Condition:      "Clear",
 		Humidity:       50,
 		Recommendation: "Weather data not available, but looks pleasant",
-	}
+	}, nil
 }
 
 // search performs information search.
-func (c *transferChat) search(args searchArgs) searchResult {
+func (c *transferChat) search(_ context.Context, args searchArgs) (searchResult, error) {
 	// Simulate search results based on query.
 	query := strings.ToLower(args.Query)
 
@@ -549,7 +549,7 @@ func (c *transferChat) search(args searchArgs) searchResult {
 		Query:   args.Query,
 		Results: results,
 		Count:   len(results),
-	}
+	}, nil
 }
 
 // Data structures for tool arguments and results.

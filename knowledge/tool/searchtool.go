@@ -39,15 +39,14 @@ type KnowledgeSearchResponse struct {
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
-	searchFunc := func(req KnowledgeSearchRequest) KnowledgeSearchResponse {
-		ctx := context.Background()
+	searchFunc := func(ctx context.Context, req KnowledgeSearchRequest) (KnowledgeSearchResponse, error) {
 
 		// Validate input.
 		if req.Query == "" {
 			return KnowledgeSearchResponse{
 				Success: false,
 				Message: "Query cannot be empty",
-			}
+			}, fmt.Errorf("query cannot be empty")
 		}
 
 		// Create search request - for tools, we don't have conversation history yet.
@@ -63,7 +62,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 			return KnowledgeSearchResponse{
 				Success: false,
 				Message: fmt.Sprintf("Search failed: %v", err),
-			}
+			}, fmt.Errorf("search failed")
 		}
 
 		// Handle no results.
@@ -71,7 +70,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 			return KnowledgeSearchResponse{
 				Success: true,
 				Message: "No relevant information found",
-			}
+			}, fmt.Errorf("no relevant information found")
 		}
 
 		// Return successful result.
@@ -80,7 +79,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 			Text:    result.Text,
 			Score:   result.Score,
 			Message: fmt.Sprintf("Found relevant content (score: %.2f)", result.Score),
-		}
+		}, nil
 	}
 
 	return function.NewFunctionTool(

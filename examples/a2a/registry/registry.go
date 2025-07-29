@@ -114,7 +114,7 @@ func (a *a2aAgent) createSendMessageTool(
 	toolName := fmt.Sprintf("non_streaming_%s", agentName)
 
 	return toolName, function.NewFunctionTool(
-		func(params agentCallReq) protocol.MessageResult {
+		func(ctx context.Context, params agentCallReq) (protocol.MessageResult, error) {
 			message := protocol.Message{
 				Role:  protocol.MessageRoleAgent,
 				Parts: []protocol.Part{protocol.NewTextPart(params.Message)},
@@ -122,12 +122,7 @@ func (a *a2aAgent) createSendMessageTool(
 			sendMessageParams := protocol.SendMessageParams{
 				Message: message,
 			}
-			result, err := a.sendMessageToAgent(sendMessageParams)
-			if err != nil {
-				log.Errorf("Error sending message to %s: %v\n", agentName, err)
-				return protocol.MessageResult{}
-			}
-			return result
+			return a.sendMessageToAgent(sendMessageParams)
 		},
 		function.WithName(toolName),
 		function.WithDescription(description),

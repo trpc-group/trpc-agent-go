@@ -31,8 +31,8 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	type outputArgs struct {
 		Result int `json:"result"`
 	}
-	fn := func(args inputArgs) outputArgs {
-		return outputArgs{Result: args.A + args.B}
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A + args.B}, nil
 	}
 	fTool := function.NewFunctionTool(fn,
 		function.WithName("SumFunction"),

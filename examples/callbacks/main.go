@@ -359,7 +359,7 @@ func (c *multiTurnChatWithCallbacks) isToolEvent(event *event.Event) bool {
 
 // CallableTool implementations.
 
-func (c *multiTurnChatWithCallbacks) calculate(args calculatorArgs) map[string]any {
+func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args calculatorArgs) (map[string]any, error) {
 	var result float64
 	switch strings.ToLower(args.Operation) {
 	case "add", "+":
@@ -382,10 +382,10 @@ func (c *multiTurnChatWithCallbacks) calculate(args calculatorArgs) map[string]a
 		"a":         args.A,
 		"b":         args.B,
 		"result":    result,
-	}
+	}, nil
 }
 
-func (c *multiTurnChatWithCallbacks) getCurrentTime(args timeArgs) map[string]any {
+func (c *multiTurnChatWithCallbacks) getCurrentTime(ctx context.Context, args timeArgs) (map[string]any, error) {
 	now := time.Now()
 	var t time.Time
 	timezone := args.Timezone
@@ -410,7 +410,7 @@ func (c *multiTurnChatWithCallbacks) getCurrentTime(args timeArgs) map[string]an
 		"time":     t.Format("15:04:05"),
 		"date":     t.Format("2006-01-02"),
 		"weekday":  t.Weekday().String(),
-	}
+	}, nil
 }
 
 type calculatorArgs struct {
