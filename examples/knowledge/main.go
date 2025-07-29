@@ -465,7 +465,7 @@ func (c *knowledgeChat) startNewSession() {
 // Tool implementations.
 
 // calculate performs mathematical calculations.
-func (c *knowledgeChat) calculate(args calculatorArgs) calculatorResult {
+func (c *knowledgeChat) calculate(_ context.Context, args calculatorArgs) (calculatorResult, error) {
 	var result float64
 
 	switch strings.ToLower(args.Operation) {
@@ -488,11 +488,11 @@ func (c *knowledgeChat) calculate(args calculatorArgs) calculatorResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // getCurrentTime returns the current time and date.
-func (c *knowledgeChat) getCurrentTime(args timeArgs) timeResult {
+func (c *knowledgeChat) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
 	now := time.Now()
 	loc := now.Location()
 
@@ -516,7 +516,7 @@ func (c *knowledgeChat) getCurrentTime(args timeArgs) timeResult {
 		Time:     now.Format("15:04:05"),
 		Date:     now.Format("2006-01-02"),
 		Weekday:  now.Format("Monday"),
-	}
+	}, nil
 }
 
 // Tool argument and result types.

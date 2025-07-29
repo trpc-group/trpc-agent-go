@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -25,9 +26,9 @@ type getWeatherOutput struct {
 	Weather string `json:"weather"`
 }
 
-func getWeather(i getWeatherInput) getWeatherOutput {
+func getWeather(_ context.Context, i getWeatherInput) (getWeatherOutput, error) {
 	// In a real implementation, this function would call a weather API
-	return getWeatherOutput{Weather: "Sunny, 25°C"}
+	return getWeatherOutput{Weather: "Sunny, 25°C"}, nil
 }
 
 func getStreamableWeather(input getWeatherInput) *tool.StreamReader {
@@ -62,7 +63,7 @@ type getPopulationOutput struct {
 	Population int `json:"population"`
 }
 
-func getPopulation(i getPopulationInput) getPopulationOutput {
+func getPopulation(_ context.Context, i getPopulationInput) (getPopulationOutput, error) {
 	// In a real implementation, this function would call a population API
-	return getPopulationOutput{Population: 8000000} // Example population for London
+	return getPopulationOutput{Population: 8000000}, nil // Example population for London
 }

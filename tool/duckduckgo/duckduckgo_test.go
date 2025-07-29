@@ -13,11 +13,14 @@
 package duckduckgo
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo/internal/client"
 )
@@ -57,7 +60,8 @@ func TestDuckDuckGoTool_Search_Results(t *testing.T) {
 
 	// Test search
 	req := searchRequest{Query: "Beijing weather"}
-	result := ddgTool.search(req)
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
 
 	// Validate results
 	if result.Query != "Beijing weather" {
@@ -98,7 +102,8 @@ func TestDDGTool_InstantAnswer(t *testing.T) {
 	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
 	ddgTool := &ddgTool{client: testClient}
 	req := searchRequest{Query: "weather Beijing"}
-	result := ddgTool.search(req)
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
 
 	// Should create a summary result when no RelatedTopics but has Answer
 	if len(result.Results) != 1 {
@@ -130,7 +135,8 @@ func TestDDGTool_Definition(t *testing.T) {
 	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
 	ddgTool := &ddgTool{client: testClient}
 	req := searchRequest{Query: "LLM definition"}
-	result := ddgTool.search(req)
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
 
 	if !contains(result.Summary, "Definition:") {
 		t.Errorf("Expected summary to contain definition, got: %s", result.Summary)
@@ -145,7 +151,7 @@ func TestDDGTool_EmptyQuery(t *testing.T) {
 	testClient := client.New("https://api.duckduckgo.com", "test-agent/1.0", httpClient)
 	ddgTool := &ddgTool{client: testClient}
 	req := searchRequest{Query: ""}
-	result := ddgTool.search(req)
+	result, _ := ddgTool.search(context.Background(), req)
 
 	if !contains(result.Summary, "Error: Empty search query") {
 		t.Errorf("Expected error message for empty query, got: %s", result.Summary)
@@ -176,7 +182,8 @@ func TestDDGTool_NoResults(t *testing.T) {
 	testClient := client.New(server.URL, "test-agent/1.0", httpClient)
 	ddgTool := &ddgTool{client: testClient}
 	req := searchRequest{Query: "nonexistent query"}
-	result := ddgTool.search(req)
+	result, err := ddgTool.search(context.Background(), req)
+	require.NoError(t, err)
 
 	if len(result.Results) != 0 {
 		t.Errorf("Expected 0 results for empty response, got %d", len(result.Results))

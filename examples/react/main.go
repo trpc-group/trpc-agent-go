@@ -280,7 +280,7 @@ func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
 // Tool implementations for demonstration.
 
 // search simulates a search tool.
-func (c *reactPlanningChat) search(args searchArgs) searchResult {
+func (c *reactPlanningChat) search(_ context.Context, args searchArgs) (searchResult, error) {
 	results := map[string]string{
 		"tokyo population": "Tokyo has a population of approximately 14 million people in the city proper and " +
 			"38 million in the greater metropolitan area.",
@@ -300,7 +300,7 @@ func (c *reactPlanningChat) search(args searchArgs) searchResult {
 				Query:   args.Query,
 				Results: []string{result},
 				Count:   1,
-			}
+			}, nil
 		}
 	}
 
@@ -308,11 +308,11 @@ func (c *reactPlanningChat) search(args searchArgs) searchResult {
 		Query:   args.Query,
 		Results: []string{fmt.Sprintf("Found general information about: %s", args.Query)},
 		Count:   1,
-	}
+	}, nil
 }
 
 // calculate performs mathematical calculations.
-func (c *reactPlanningChat) calculate(args calcArgs) calcResult {
+func (c *reactPlanningChat) calculate(_ context.Context, args calcArgs) (calcResult, error) {
 	var result float64
 
 	switch strings.ToLower(args.Operation) {
@@ -335,11 +335,11 @@ func (c *reactPlanningChat) calculate(args calcArgs) calcResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // getWeather simulates weather information retrieval.
-func (c *reactPlanningChat) getWeather(args weatherArgs) weatherResult {
+func (c *reactPlanningChat) getWeather(_ context.Context, args weatherArgs) (weatherResult, error) {
 	weatherData := map[string]weatherResult{
 		"paris": {
 			Location:       "Paris, France",
@@ -366,7 +366,7 @@ func (c *reactPlanningChat) getWeather(args weatherArgs) weatherResult {
 
 	location := strings.ToLower(args.Location)
 	if weather, exists := weatherData[location]; exists {
-		return weather
+		return weather, nil
 	}
 
 	return weatherResult{
@@ -375,7 +375,7 @@ func (c *reactPlanningChat) getWeather(args weatherArgs) weatherResult {
 		Condition:      "Unknown",
 		Humidity:       60,
 		Recommendation: "Check local weather sources for accurate information",
-	}
+	}, nil
 }
 
 // Tool argument and result types.

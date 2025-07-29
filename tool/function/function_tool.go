@@ -31,7 +31,7 @@ type FunctionTool[I, O any] struct {
 	description  string
 	inputSchema  *tool.Schema
 	outputSchema *tool.Schema
-	fn           func(I) O
+	fn           func(context.Context, I) (O, error)
 	longRunning  bool
 	unmarshaler  unmarshaler
 }
@@ -77,7 +77,7 @@ func WithLongRunning(longRunning bool) Option {
 //
 // Returns:
 //   - A pointer to the newly created FunctionTool.
-func NewFunctionTool[I, O any](fn func(I) O, opts ...Option) *FunctionTool[I, O] {
+func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...Option) *FunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
 		unmarshaler: &jsonUnmarshaler{},
@@ -121,7 +121,7 @@ func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, e
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
 	}
-	return ft.fn(input), nil
+	return ft.fn(ctx, input)
 }
 
 // LongRunning indicates whether the function tool is expected to run for a long time.

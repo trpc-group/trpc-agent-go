@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -8,18 +9,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-func reimburse(_ reimburseInput) reimburseOutput {
+func reimburse(_ context.Context, _ reimburseInput) (reimburseOutput, error) {
 	return reimburseOutput{
 		Status: "ok",
-	}
+	}, nil
 }
 
-func askForApproval(i askForApprovalInput) askForApprovalOutput {
+func askForApproval(_ context.Context, i askForApprovalInput) (askForApprovalOutput, error) {
 	return askForApprovalOutput{
 		Status:   "pending",
 		Amount:   i.Amount,
 		TicketID: "reimbursement-ticket-001",
-	}
+	}, nil
 }
 
 type reimburseInput struct {

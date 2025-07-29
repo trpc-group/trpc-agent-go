@@ -312,7 +312,7 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
 
 // Tool function implementations.
 
-func (w *documentWorkflow) analyzeComplexity(args complexityArgs) complexityResult {
+func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args complexityArgs) (complexityResult, error) {
 	text := args.Text
 
 	// Simple complexity analysis.
@@ -339,7 +339,7 @@ func (w *documentWorkflow) analyzeComplexity(args complexityArgs) complexityResu
 		Score:         score,
 		WordCount:     wordCount,
 		SentenceCount: sentenceCount,
-	}
+	}, nil
 }
 
 // runExamples runs predefined workflow examples.

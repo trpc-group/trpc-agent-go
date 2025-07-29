@@ -34,6 +34,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"net/http"
 	"strings"
@@ -176,7 +177,7 @@ type timeResult struct {
 // Calculator tool implementation.
 // calculate performs the requested mathematical operation.
 // It supports add, subtract, multiply, and divide operations.
-func calculate(args calculatorArgs) calculatorResult {
+func calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
 	var result float64
 	// Select operation based on input.
 	switch strings.ToLower(args.Operation) {
@@ -196,13 +197,13 @@ func calculate(args calculatorArgs) calculatorResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // Time tool implementation.
 // getCurrentTime returns the current time for the specified timezone.
 // If the timezone is invalid or empty, it defaults to local time.
-func getCurrentTime(args timeArgs) timeResult {
+func getCurrentTime(ctx context.Context, args timeArgs) (timeResult, error) {
 	loc := time.Local
 	zone := args.Timezone
 	// Attempt to load the specified timezone.
@@ -219,7 +220,7 @@ func getCurrentTime(args timeArgs) timeResult {
 		Time:     now.Format("15:04:05"),
 		Date:     now.Format("2006-01-02"),
 		Weekday:  now.Weekday().String(),
-	}
+	}, nil
 }
 
 // intPtr returns a pointer to the given int value.
