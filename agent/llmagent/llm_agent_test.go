@@ -47,7 +47,7 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 
 func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {
 	// BeforeAgentCallback returns a custom response, should short-circuit.
-	agentCallbacks := agent.NewAgentCallbacks()
+	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{
 			Choices: []model.Choice{{
@@ -68,7 +68,7 @@ func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {
 }
 
 func TestLLMAgent_Run_BeforeAgentError(t *testing.T) {
-	agentCallbacks := agent.NewAgentCallbacks()
+	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("fail")
 	})
@@ -82,7 +82,7 @@ func TestLLMAgent_Run_BeforeAgentError(t *testing.T) {
 
 func TestLLMAgent_Run_AfterAgentCallback(t *testing.T) {
 	// AfterAgentCallback should append a custom event after normal flow.
-	agentCallbacks := agent.NewAgentCallbacks()
+	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
 		return &model.Response{
 			Choices: []model.Choice{{
@@ -123,7 +123,7 @@ func TestLLMAgent_Run_NormalFlow(t *testing.T) {
 }
 
 func TestLLMAgent_Run_AfterAgentCbErr(t *testing.T) {
-	agentCallbacks := agent.NewAgentCallbacks()
+	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
 		return nil, errors.New("after error")
 	})
