@@ -24,10 +24,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -133,6 +135,15 @@ func WithKnowledge(kb knowledge.Knowledge) Option {
 	}
 }
 
+// WithMemory sets the memory service for the agent.
+// If provided, the memory tools will be automatically added to the agent's tools.
+// The memory tools will get appName and userID from the agent invocation context at runtime.
+func WithMemory(memoryService memory.Service) Option {
+	return func(opts *Options) {
+		opts.Memory = memoryService
+	}
+}
+
 // WithAddNameToInstruction adds the agent name to the instruction if true.
 func WithAddNameToInstruction(addNameToInstruction bool) Option {
 	return func(opts *Options) {
@@ -174,6 +185,9 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
+	// Memory is the memory service for the agent.
+	// If provided, the memory tools will be automatically added.
+	Memory memory.Service
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
 }
@@ -266,7 +280,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	)
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge)
+	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
 
 	return &LLMAgent{
 		name:           name,
@@ -285,7 +299,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 }
 
-func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge) []tool.Tool {
+func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
 	// Start with direct tools.
 	allTools := make([]tool.Tool, 0, len(tools))
 	allTools = append(allTools, tools...)
@@ -302,6 +316,15 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 	// Add knowledge search tool if knowledge base is provided.
 	if kb != nil {
 		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
+	}
+
+	// Add memory tool if memory service is provided.
+	if memory != nil {
+		memoryToolSet := toolmemory.NewMemoryToolSet(memory)
+		tools := memoryToolSet.Tools(context.Background())
+		for _, t := range tools {
+			allTools = append(allTools, t)
+		}
 	}
 
 	return allTools

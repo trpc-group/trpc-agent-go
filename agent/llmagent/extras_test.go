@@ -15,13 +15,16 @@ package llmagent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -56,7 +59,7 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 
 	kb := &fakeKnowledge{}
 
-	all := registerTools(direct, []tool.ToolSet{ts}, kb)
+	all := registerTools(direct, []tool.ToolSet{ts}, kb, nil)
 
 	// Expect 1 direct + 1 from set + 1 knowledge search tool.
 	require.Equal(t, 3, len(all))
@@ -246,4 +249,94 @@ func TestLLMAgent_WithVariousOptions(t *testing.T) {
 	if info := a.Info(); info.Name != "opts" {
 		t.Fatalf("unexpected name %s", info.Name)
 	}
+}
+
+func TestLLMAgent_WithMemory(t *testing.T) {
+	// Create a mock memory service.
+	memoryService := &mockMemoryService{}
+
+	// Create agent with memory service.
+	agt := New("test-agent",
+		WithModel(newDummyModel()),
+		WithMemory(memoryService),
+	)
+
+	// Check that the memory tools were automatically added.
+	tools := agt.Tools()
+	foundMemoryTools := false
+	for _, toolItem := range tools {
+		decl := toolItem.Declaration()
+		if decl.Name == "memory_add" || decl.Name == "memory_update" ||
+			decl.Name == "memory_delete" || decl.Name == "memory_clear" ||
+			decl.Name == "memory_search" || decl.Name == "memory_load" {
+			foundMemoryTools = true
+			break
+		}
+	}
+
+	if !foundMemoryTools {
+		t.Errorf("expected memory tools to be automatically added")
+	}
+
+	// Verify that the tools can be called.
+	for _, toolItem := range tools {
+		decl := toolItem.Declaration()
+		if decl.Name == "memory_add" {
+			// Check if it's a callable tool.
+			if callableTool, ok := toolItem.(tool.CallableTool); ok {
+				// Test the tool with a simple memory add.
+				// Create mock session and invocation for the tool call.
+				mockSession := &session.Session{
+					ID:        "test-session",
+					AppName:   "test-app",
+					UserID:    "test-user",
+					State:     session.StateMap{},
+					Events:    []event.Event{},
+					UpdatedAt: time.Now(),
+					CreatedAt: time.Now(),
+				}
+				mockInvocation := &agent.Invocation{
+					AgentName: "test-agent",
+					Session:   mockSession,
+				}
+				ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
+
+				result, err := callableTool.Call(ctx, []byte(`{"memory": "test memory", "topics": ["test"]}`))
+				if err != nil {
+					t.Errorf("memory add tool call failed: %v", err)
+				}
+				if result == nil {
+					t.Errorf("expected non-nil result from memory add")
+				}
+			}
+			break
+		}
+	}
+}
+
+// mockMemoryService minimal implementation for testing.
+type mockMemoryService struct{}
+
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error {
+	return nil
+}
+
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+	return nil
+}
+
+func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+	return nil
+}
+
+func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	return nil
+}
+
+func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	return []*memory.Entry{}, nil
+}
+
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+	return []*memory.Entry{}, nil
 }

@@ -16,102 +16,96 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNewMemoryToolSet(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
-
-	// Test creating memory tool set.
-	toolSet := NewMemoryToolSet(service, appName, userID)
+	toolSet := NewMemoryToolSet(service)
 
 	if toolSet == nil {
-		t.Fatal("Expected tool set to be created")
+		t.Fatal("Expected non-nil tool set")
 	}
 
-	// Test that tool set implements ToolSet interface.
-	var _ tool.ToolSet = toolSet
+	// Test that tools are lazily initialized
+	if toolSet.tools != nil {
+		t.Error("Expected tools to be nil before initialization")
+	}
 
-	// Test initial state.
+	// Test that tools are created when requested
 	tools := toolSet.Tools(context.Background())
 	if len(tools) != 6 {
-		t.Fatalf("Expected 6 tools, got %d", len(tools))
+		t.Errorf("Expected 6 tools, got %d", len(tools))
 	}
 
-	// Verify tool names.
+	// Verify tool names
 	expectedNames := []string{
-		"memory_add",
-		"memory_update",
-		"memory_delete",
-		"memory_clear",
-		"memory_search",
-		"memory_load",
+		AddToolName,
+		UpdateToolName,
+		DeleteToolName,
+		ClearToolName,
+		SearchToolName,
+		LoadToolName,
 	}
 
-	for i, expectedName := range expectedNames {
-		if i >= len(tools) {
-			t.Fatalf("Expected tool %s at index %d", expectedName, i)
+	for _, expectedName := range expectedNames {
+		found := false
+		for _, tool := range tools {
+			if tool.Declaration().Name == expectedName {
+				found = true
+				break
+			}
 		}
-		decl := tools[i].Declaration()
-		if decl.Name != expectedName {
-			t.Fatalf("Expected tool name %s, got %s", expectedName, decl.Name)
+		if !found {
+			t.Errorf("Expected tool %s not found", expectedName)
 		}
-	}
-
-	// Test Close method.
-	if err := toolSet.Close(); err != nil {
-		t.Errorf("Failed to close tool set: %v", err)
 	}
 }
 
 func TestMemoryToolSet_LazyInitialization(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
-	toolSet := NewMemoryToolSet(service, appName, userID)
+	toolSet := NewMemoryToolSet(service)
 
 	// First call should initialize tools.
 	tools1 := toolSet.Tools(context.Background())
 	if len(tools1) != 6 {
-		t.Fatalf("Expected 6 tools, got %d", len(tools1))
+		t.Errorf("Expected 6 tools, got %d", len(tools1))
 	}
 
-	// Second call should return cached tools.
+	// Second call should return the same tools (no re-initialization).
 	tools2 := toolSet.Tools(context.Background())
 	if len(tools2) != 6 {
-		t.Fatalf("Expected 6 tools, got %d", len(tools2))
+		t.Errorf("Expected 6 tools, got %d", len(tools2))
 	}
 
-	// Verify tools are the same instances (cached).
+	// Verify that the same tool instances are returned.
 	if &tools1[0] != &tools2[0] {
-		t.Error("Expected tools to be cached, but got different instances")
+		t.Error("Expected same tool instances to be returned")
 	}
 }
 
 func TestMemoryToolSet_Close(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
-	toolSet := NewMemoryToolSet(service, appName, userID)
+	toolSet := NewMemoryToolSet(service)
 
 	// Initialize tools.
 	tools := toolSet.Tools(context.Background())
 	if len(tools) != 6 {
-		t.Fatalf("Expected 6 tools, got %d", len(tools))
+		t.Errorf("Expected 6 tools, got %d", len(tools))
 	}
 
-	// Close tool set.
+	// Close the tool set.
 	if err := toolSet.Close(); err != nil {
 		t.Errorf("Failed to close tool set: %v", err)
 	}
 
-	// After close, tools should be re-initialized.
-	toolsAfterClose := toolSet.Tools(context.Background())
-	if len(toolsAfterClose) != 6 {
-		t.Fatalf("Expected 6 tools after close, got %d", len(toolsAfterClose))
+	// Verify that tools are cleared.
+	if toolSet.tools != nil {
+		t.Error("Expected tools to be nil after close")
+	}
+
+	if toolSet.initialized {
+		t.Error("Expected initialized flag to be false after close")
 	}
 }

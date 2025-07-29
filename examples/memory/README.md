@@ -12,6 +12,7 @@ This implementation showcases the essential features for building AI application
 - **💾 Session Management**: Conversation state preservation and continuity
 - **🔧 Memory Tool Integration**: Working memory tools with proper execution
 - **🚀 Simple Interface**: Clean, focused chat experience with memory capabilities
+- **⚡ Automatic Integration**: Memory tools are automatically registered via `WithMemory()`
 
 ### Key Features
 
@@ -22,6 +23,60 @@ This implementation showcases the essential features for building AI application
 - **Memory Tool Execution**: Proper execution and display of memory tool calling procedures
 - **Memory Visualization**: Clear indication of memory operations, arguments, and responses
 - **Error Handling**: Graceful error recovery and reporting
+- **Automatic Tool Registration**: Memory tools are automatically added to the agent via `WithMemory()`
+
+## Architecture
+
+### Memory Integration
+
+The memory functionality is integrated using the `WithMemory()` option, similar to how knowledge is integrated with `WithKnowledge()`:
+
+```go
+// Create memory service
+memoryService := memoryinmemory.NewMemoryService()
+
+// Create LLM agent with automatic memory tool registration
+llmAgent := llmagent.New(
+    agentName,
+    llmagent.WithModel(modelInstance),
+    llmagent.WithMemory(memoryService), // Automatic memory tool registration
+)
+
+// Create runner (no memory service needed here)
+runner := runner.NewRunner(
+    appName,
+    llmAgent,
+    runner.WithSessionService(sessionService),
+)
+```
+
+### Runtime Context Resolution
+
+Memory tools automatically get `appName` and `userID` from the execution context at runtime:
+
+1. **Agent Invocation Context**: Tools first try to get app/user from the agent invocation context
+2. **Context Values**: If not found, tools look for `appName` and `userID` in the context values
+3. **Default Values**: As a fallback, tools use default values to ensure functionality
+
+This design provides:
+
+- **Framework-Business Decoupling**: The framework doesn't need to know about specific apps and users
+- **Multi-tenancy Support**: A single memory service can serve multiple apps and users
+- **Runtime Flexibility**: App and user can be determined dynamically at runtime
+- **Backward Compatibility**: Default values ensure basic functionality works
+
+### Available Memory Tools
+
+The following memory tools are automatically registered when using `WithMemory()`:
+
+| Tool Name       | Description                   | Parameters                                                           |
+| --------------- | ----------------------------- | -------------------------------------------------------------------- |
+| `memory_add`    | Add a new memory entry        | `memory` (string), `topics` (array of strings)                       |
+| `memory_update` | Update an existing memory     | `memory_id` (string), `memory` (string), `topics` (array of strings) |
+| `memory_delete` | Delete a memory entry         | `memory_id` (string)                                                 |
+| `memory_clear`  | Clear all memories for a user | None                                                                 |
+| `memory_search` | Search memories by query      | `query` (string)                                                     |
+| `memory_load`   | Load recent memories          | `limit` (number, optional)                                           |
 
 ## Prerequisites
 

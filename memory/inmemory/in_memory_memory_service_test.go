@@ -91,7 +91,7 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	}
 
 	// Update the memory.
-	err = service.UpdateMemory(ctx, memoryKey, "updated memory")
+	err = service.UpdateMemory(ctx, memoryKey, "updated memory", []string{"updated"})
 	if err != nil {
 		t.Fatalf("UpdateMemory failed: %v", err)
 	}

@@ -31,8 +31,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 )
 
 var (
@@ -95,46 +93,40 @@ func (c *memoryChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
 
-	// Create memory tools using ToolSet interface.
-	appName := "memory-chat"
-	memoryToolSet := toolmemory.NewMemoryToolSet(memoryService, appName, c.userID)
-	callableTools := memoryToolSet.Tools(context.Background())
-
-	// Convert CallableTool to Tool for llmagent.WithTools
-	memoryTools := make([]tool.Tool, len(callableTools))
-	for i, callableTool := range callableTools {
-		memoryTools[i] = callableTool
-	}
-
-	// Create LLM agent with memory tools.
+	// Create LLM agent with memory service.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
 		Stream:      c.streaming,
 	}
 
+	appName := "memory-chat"
 	agentName := "memory-assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with memory capabilities. "+
 			"I can remember important information about you and recall it when needed."),
-		llmagent.WithInstruction("Use memory tools to provide personalized assistance. "+
-			"Use memory_add to remember important information about the user. "+
-			"Use memory_search to find relevant information when the user asks about something. "+
-			"Use memory_load to get an overview of what you know about the user. "+
-			"Be helpful and conversational."),
+		llmagent.WithInstruction("You have access to memory tools to provide personalized assistance. "+
+			"IMPORTANT: When users share personal information about themselves (name, preferences, experiences, etc.), "+
+			"ALWAYS use memory_add to remember this information. "+
+			"Examples of when to use memory_add: "+
+			"- User tells you their name: 'I am Jack' → use memory_add to remember 'User is named Jack' "+
+			"- User shares preferences: 'I like coffee' → use memory_add to remember 'User likes coffee' "+
+			"- User shares experiences: 'I had beef tonight' → use memory_add to remember 'User had beef for dinner and enjoyed it' "+
+			"When users ask about themselves or their preferences, use memory_search to find relevant information. "+
+			"When users ask 'tell me about myself' or similar, use memory_load to get an overview. "+
+			"Be helpful, conversational, and proactive about remembering user information."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
-		llmagent.WithTools(memoryTools),
+		llmagent.WithMemory(memoryService), // This will automatically add memory tools.
 	)
 
-	// Create runner with memory service.
+	// Create runner.
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessioninmemory.NewSessionService()),
-		runner.WithMemoryService(memoryService),
 	)
 
 	fmt.Printf("✅ Memory chat ready! Session: %s\n\n", c.sessionID)
@@ -149,7 +141,7 @@ func (c *memoryChat) startChat(ctx context.Context) error {
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /memory   - Show user memories")
 	fmt.Println("   /new      - Start a new session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
 
 	for {

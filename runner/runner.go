@@ -23,8 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/memory"
-	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -46,13 +44,6 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
-// WithMemoryService sets the memory service to use.
-func WithMemoryService(service memory.Service) Option {
-	return func(opts *Options) {
-		opts.memoryService = service
-	}
-}
-
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -70,13 +61,11 @@ type runner struct {
 	appName        string
 	agent          agent.Agent
 	sessionService session.Service
-	memoryService  memory.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
 	sessionService session.Service
-	memoryService  memory.Service
 }
 
 // NewRunner creates a new Runner.
@@ -92,16 +81,10 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		options.sessionService = sessioninmemory.NewSessionService()
 	}
 
-	// Set default Memory Service.
-	if options.memoryService == nil {
-		options.memoryService = memoryinmemory.NewMemoryService()
-	}
-
 	return &runner{
 		appName:        appName,
 		agent:          agent,
 		sessionService: options.sessionService,
-		memoryService:  options.memoryService,
 	}
 }
 

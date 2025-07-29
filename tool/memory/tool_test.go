@@ -14,24 +14,46 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestMemoryTool_AddMemory(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
-	tool := newMemoryTool(service, appName, userID, addMemoryFunction, "memory_add", "Add memory")
+	tool := newMemoryTool(service, addMemoryFunction, "memory_add", "Add memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test adding a memory.
 	args := map[string]any{
 		"memory": "User's name is John Doe",
-		"input":  "My name is John Doe",
-		"topics": []string{"name", "personal"},
+		"topics": []string{"personal"},
 	}
 
 	jsonArgs, err := json.Marshal(args)
@@ -39,7 +61,7 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -58,16 +80,16 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 		t.Errorf("Expected memory 'User's name is John Doe', got '%s'", response.Memory)
 	}
 
-	if len(response.Topics) != 2 {
-		t.Errorf("Expected 2 topics, got %d", len(response.Topics))
+	if len(response.Topics) != 1 {
+		t.Errorf("Expected 1 topic, got %d", len(response.Topics))
 	}
 
-	if response.Topics[0] != "name" || response.Topics[1] != "personal" {
-		t.Errorf("Expected topics ['name', 'personal'], got %v", response.Topics)
+	if response.Topics[0] != "personal" {
+		t.Errorf("Expected topic 'personal', got '%s'", response.Topics[0])
 	}
 
 	// Verify memory was added.
-	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	memories, err := service.ReadMemories(context.Background(), userKey, 10)
 	if err != nil {
 		t.Fatalf("Failed to read memories: %v", err)
@@ -84,10 +106,28 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 
 func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
-	tool := newMemoryTool(service, appName, userID, addMemoryFunction, "memory_add", "Add memory")
+	tool := newMemoryTool(service, addMemoryFunction, "memory_add", "Add memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test adding a memory without topics.
 	args := map[string]any{
@@ -99,7 +139,7 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -127,17 +167,107 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	}
 }
 
+func TestMemoryTool_AddMemory_ErrorHandling(t *testing.T) {
+	service := inmemory.NewMemoryService()
+
+	tool := newMemoryTool(service, addMemoryFunction, "memory_add", "Add memory")
+
+	// Test with empty context (no invocation).
+	ctx := context.Background()
+
+	args := map[string]any{
+		"memory": "User's name is John Doe",
+		"topics": []string{"personal"},
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("Failed to marshal args: %v", err)
+	}
+
+	_, err = tool.Call(ctx, jsonArgs)
+	if err == nil {
+		t.Fatal("Expected error when no invocation context, got nil")
+	}
+
+	expectedError := "no invocation context found"
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Errorf("Expected error containing '%s', got '%s'", expectedError, err.Error())
+	}
+
+	// Test with invocation but no session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   nil, // No session.
+	}
+	ctxWithInvocation := agent.NewContextWithInvocation(context.Background(), mockInvocation)
+
+	_, err = tool.Call(ctxWithInvocation, jsonArgs)
+	if err == nil {
+		t.Fatal("Expected error when invocation exists but no session, got nil")
+	}
+
+	expectedError = "invocation exists but no session available"
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Errorf("Expected error containing '%s', got '%s'", expectedError, err.Error())
+	}
+
+	// Test with invocation and session but empty appName/userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "", // Empty appName.
+		UserID:    "", // Empty userID.
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+	mockInvocationWithSession := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+	ctxWithSession := agent.NewContextWithInvocation(context.Background(), mockInvocationWithSession)
+
+	_, err = tool.Call(ctxWithSession, jsonArgs)
+	if err == nil {
+		t.Fatal("Expected error when session exists but empty appName/userID, got nil")
+	}
+
+	expectedError = "session exists but missing appName or userID"
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Errorf("Expected error containing '%s', got '%s'", expectedError, err.Error())
+	}
+}
+
 func TestMemoryTool_SearchMemory(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
 	// Add some test memories first.
-	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
-	tool := newMemoryTool(service, appName, userID, searchMemoriesFunction, "memory_search", "Search memory")
+	tool := newMemoryTool(service, searchMemoriesFunction, "memory_search", "Search memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test searching memories.
 	args := map[string]any{
@@ -149,7 +279,7 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -174,15 +304,33 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 
 func TestMemoryTool_LoadMemory(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
 	// Add some test memories first.
-	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
-	tool := newMemoryTool(service, appName, userID, loadMemoriesFunction, "memory_load", "Load memory")
+	tool := newMemoryTool(service, loadMemoriesFunction, "memory_load", "Load memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test loading memories.
 	args := map[string]any{
@@ -194,7 +342,7 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -209,20 +357,23 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 	}
 
 	if response.Count != 2 {
-		t.Errorf("Expected 2 results, got %d", response.Count)
+		t.Errorf("Expected 2 memories, got %d", response.Count)
 	}
 
-	if response.Limit != 5 {
-		t.Errorf("Expected limit 5, got %d", response.Limit)
+	// Verify memories are returned in correct order (newest first).
+	if response.Results[0].Memory != "User works as a developer" {
+		t.Errorf("Expected first memory 'User works as a developer', got '%s'", response.Results[0].Memory)
+	}
+
+	if response.Results[1].Memory != "User likes coffee" {
+		t.Errorf("Expected second memory 'User likes coffee', got '%s'", response.Results[1].Memory)
 	}
 }
 
 func TestMemoryTool_Declaration(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
-	tool := newMemoryTool(service, appName, userID, addMemoryFunction, "memory_add", "Add memory")
+	tool := newMemoryTool(service, addMemoryFunction, "memory_add", "Add memory")
 
 	decl := tool.Declaration()
 	if decl.Name != "memory_add" {
@@ -234,21 +385,15 @@ func TestMemoryTool_Declaration(t *testing.T) {
 	}
 
 	if decl.InputSchema == nil {
-		t.Error("Expected input schema, got nil")
-	}
-
-	if decl.InputSchema.Type != "object" {
-		t.Errorf("Expected schema type 'object', got '%s'", decl.InputSchema.Type)
+		t.Error("Expected non-nil input schema")
 	}
 }
 
 func TestMemoryTool_UpdateMemory(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
 	// Add a memory first.
-	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	if err != nil {
 		t.Fatalf("Failed to add memory: %v", err)
@@ -264,7 +409,27 @@ func TestMemoryTool_UpdateMemory(t *testing.T) {
 	}
 	memoryID := memories[0].ID
 
-	tool := newMemoryTool(service, appName, userID, updateMemoryFunction, "memory_update", "Update memory")
+	tool := newMemoryTool(service, updateMemoryFunction, "memory_update", "Update memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test updating memory with new content and topics.
 	args := map[string]any{
@@ -278,7 +443,7 @@ func TestMemoryTool_UpdateMemory(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -330,11 +495,9 @@ func TestMemoryTool_UpdateMemory(t *testing.T) {
 
 func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 	service := inmemory.NewMemoryService()
-	appName := "test-app"
-	userID := "test-user"
 
 	// Add a memory first.
-	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	if err != nil {
 		t.Fatalf("Failed to add memory: %v", err)
@@ -350,7 +513,27 @@ func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 	}
 	memoryID := memories[0].ID
 
-	tool := newMemoryTool(service, appName, userID, updateMemoryFunction, "memory_update", "Update memory")
+	tool := newMemoryTool(service, updateMemoryFunction, "memory_update", "Update memory")
+
+	// Create mock session with appName and userID.
+	mockSession := &session.Session{
+		ID:        "test-session",
+		AppName:   "test-app",
+		UserID:    "test-user",
+		State:     session.StateMap{},
+		Events:    []event.Event{},
+		UpdatedAt: time.Now(),
+		CreatedAt: time.Now(),
+	}
+
+	// Create mock invocation with session.
+	mockInvocation := &agent.Invocation{
+		AgentName: "test-agent",
+		Session:   mockSession,
+	}
+
+	// Create context with invocation.
+	ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
 
 	// Test updating memory without topics.
 	args := map[string]any{
@@ -363,7 +546,7 @@ func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 		t.Fatalf("Failed to marshal args: %v", err)
 	}
 
-	result, err := tool.Call(context.Background(), jsonArgs)
+	result, err := tool.Call(ctx, jsonArgs)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}

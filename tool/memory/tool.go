@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -25,8 +26,6 @@ import (
 // memoryTool wraps a memory service method as a function tool.
 type memoryTool struct {
 	service  memory.Service
-	appName  string
-	userID   string
 	function func(context.Context, memory.Service, string, string, any) (any, error)
 	name     string
 	desc     string
@@ -35,16 +34,12 @@ type memoryTool struct {
 // newMemoryTool creates a new memory function tool.
 func newMemoryTool(
 	service memory.Service,
-	appName string,
-	userID string,
 	fn func(context.Context, memory.Service, string, string, any) (any, error),
 	name string,
 	desc string,
 ) *memoryTool {
 	return &memoryTool{
 		service:  service,
-		appName:  appName,
-		userID:   userID,
 		function: fn,
 		name:     name,
 		desc:     desc,
@@ -57,13 +52,19 @@ func (m *memoryTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		return nil, errors.New("memory service not available")
 	}
 
+	// Get appName and userID from context
+	appName, userID, err := getAppAndUserFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get app and user from context: %v", err)
+	}
+
 	// Parse arguments based on the function type
 	var args any
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
 		return nil, fmt.Errorf("failed to parse arguments: %v", err)
 	}
 
-	return m.function(ctx, m.service, m.appName, m.userID, args)
+	return m.function(ctx, m.service, appName, userID, args)
 }
 
 // Declaration returns the tool declaration.
@@ -170,6 +171,30 @@ func (m *memoryTool) getInputSchema() *tool.Schema {
 	default:
 		return &tool.Schema{Type: "object"}
 	}
+}
+
+// getAppAndUserFromContext extracts appName and userID from the context.
+// This function looks for these values in the agent invocation context.
+func getAppAndUserFromContext(ctx context.Context) (string, string, error) {
+	// Try to get from agent invocation context.
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return "", "", errors.New("no invocation context found")
+	}
+
+	// Try to get from session.
+	if invocation.Session == nil {
+		return "", "", errors.New("invocation exists but no session available")
+	}
+
+	// Session has AppName and UserID fields.
+	if invocation.Session.AppName != "" && invocation.Session.UserID != "" {
+		return invocation.Session.AppName, invocation.Session.UserID, nil
+	}
+
+	// Return error if session exists but missing required fields.
+	return "", "", fmt.Errorf("session exists but missing appName or userID: appName=%s, userID=%s",
+		invocation.Session.AppName, invocation.Session.UserID)
 }
 
 // Memory function implementations.
