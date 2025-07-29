@@ -105,7 +105,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	}
 
 	opts := []a2a.Option{
-		a2a.WithAuthProvider(&defautAuthProvider{}),
+		a2a.WithAuthProvider(&defaultAuthProvider{}),
 	}
 
 	// if other AuthProvider is set, user info should be covered
