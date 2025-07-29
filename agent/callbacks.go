@@ -34,33 +34,33 @@ type BeforeAgentCallback func(ctx context.Context, invocation *Invocation) (*mod
 // - error: if not nil, this error will be returned.
 type AfterAgentCallback func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error)
 
-// AgentCallbacks holds callbacks for agent operations.
-type AgentCallbacks struct {
+// Callbacks holds callbacks for agent operations.
+type Callbacks struct {
 	// BeforeAgent is a list of callbacks that are called before the agent runs.
 	BeforeAgent []BeforeAgentCallback
 	// AfterAgent is a list of callbacks that are called after the agent runs.
 	AfterAgent []AfterAgentCallback
 }
 
-// NewAgentCallbacks creates a new AgentCallbacks instance.
-func NewAgentCallbacks() *AgentCallbacks {
-	return &AgentCallbacks{}
+// NewCallbacks creates a new Callbacks instance for agent.
+func NewCallbacks() *Callbacks {
+	return &Callbacks{}
 }
 
 // RegisterBeforeAgent registers a before agent callback.
-func (c *AgentCallbacks) RegisterBeforeAgent(cb BeforeAgentCallback) {
+func (c *Callbacks) RegisterBeforeAgent(cb BeforeAgentCallback) {
 	c.BeforeAgent = append(c.BeforeAgent, cb)
 }
 
 // RegisterAfterAgent registers an after agent callback.
-func (c *AgentCallbacks) RegisterAfterAgent(cb AfterAgentCallback) {
+func (c *Callbacks) RegisterAfterAgent(cb AfterAgentCallback) {
 	c.AfterAgent = append(c.AfterAgent, cb)
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *AgentCallbacks) RunBeforeAgent(
+func (c *Callbacks) RunBeforeAgent(
 	ctx context.Context,
 	invocation *Invocation,
 ) (*model.Response, error) {
@@ -79,7 +79,7 @@ func (c *AgentCallbacks) RunBeforeAgent(
 // RunAfterAgent runs all after agent callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *AgentCallbacks) RunAfterAgent(
+func (c *Callbacks) RunAfterAgent(
 	ctx context.Context,
 	invocation *Invocation,
 	runErr error,

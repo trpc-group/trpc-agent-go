@@ -29,33 +29,33 @@ type BeforeModelCallback func(ctx context.Context, req *Request) (*Response, err
 // - error: if not nil, this error will be returned.
 type AfterModelCallback func(ctx context.Context, rsp *Response, modelErr error) (*Response, error)
 
-// ModelCallbacks holds callbacks for model operations.
-type ModelCallbacks struct {
+// Callbacks holds callbacks for model operations.
+type Callbacks struct {
 	// BeforeModel is a list of callbacks that are called before the model is invoked.
 	BeforeModel []BeforeModelCallback
 	// AfterModel is a list of callbacks that are called after the model is invoked.
 	AfterModel []AfterModelCallback
 }
 
-// NewModelCallbacks creates a new ModelCallbacks instance.
-func NewModelCallbacks() *ModelCallbacks {
-	return &ModelCallbacks{}
+// NewCallbacks creates a new Callbacks instance for model.
+func NewCallbacks() *Callbacks {
+	return &Callbacks{}
 }
 
 // RegisterBeforeModel registers a before model callback.
-func (c *ModelCallbacks) RegisterBeforeModel(cb BeforeModelCallback) {
+func (c *Callbacks) RegisterBeforeModel(cb BeforeModelCallback) {
 	c.BeforeModel = append(c.BeforeModel, cb)
 }
 
 // RegisterAfterModel registers an after model callback.
-func (c *ModelCallbacks) RegisterAfterModel(cb AfterModelCallback) {
+func (c *Callbacks) RegisterAfterModel(cb AfterModelCallback) {
 	c.AfterModel = append(c.AfterModel, cb)
 }
 
 // RunBeforeModel runs all before model callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *ModelCallbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response, error) {
+func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response, error) {
 	for _, cb := range c.BeforeModel {
 		customResponse, err := cb(ctx, req)
 		if err != nil {
@@ -71,7 +71,7 @@ func (c *ModelCallbacks) RunBeforeModel(ctx context.Context, req *Request) (*Res
 // RunAfterModel runs all after model callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *ModelCallbacks) RunAfterModel(ctx context.Context, rsp *Response, modelErr error) (*Response, error) {
+func (c *Callbacks) RunAfterModel(ctx context.Context, rsp *Response, modelErr error) (*Response, error) {
 	for _, cb := range c.AfterModel {
 		customResponse, err := cb(ctx, rsp, modelErr)
 		if err != nil {

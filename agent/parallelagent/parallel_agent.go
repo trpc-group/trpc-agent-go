@@ -36,7 +36,7 @@ type ParallelAgent struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 }
 
 // option configures ParallelAgent.
@@ -46,7 +46,7 @@ type options struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 }
 
 // WithSubAgents sets the parallel sub-agents.
@@ -65,7 +65,7 @@ func WithChannelBufferSize(size int) option {
 }
 
 // WithAgentCallbacks attaches callbacks.
-func WithAgentCallbacks(cb *agent.AgentCallbacks) option {
+func WithAgentCallbacks(cb *agent.Callbacks) option {
 	return func(o *options) { o.agentCallbacks = cb }
 }
 

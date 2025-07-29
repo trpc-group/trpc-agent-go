@@ -38,7 +38,7 @@ type CycleAgent struct {
 	tools             []tool.Tool
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 	escalationFunc    EscalationFunc // Injectable escalation logic
 }
 
@@ -50,7 +50,7 @@ type options struct {
 	tools             []tool.Tool
 	maxIterations     *int
 	channelBufferSize int
-	agentCallbacks    *agent.AgentCallbacks
+	agentCallbacks    *agent.Callbacks
 	escalationFunc    EscalationFunc
 }
 
@@ -75,7 +75,7 @@ func WithChannelBufferSize(size int) option {
 }
 
 // WithAgentCallbacks attaches callbacks.
-func WithAgentCallbacks(cb *agent.AgentCallbacks) option {
+func WithAgentCallbacks(cb *agent.Callbacks) option {
 	return func(o *options) { o.agentCallbacks = cb }
 }
 

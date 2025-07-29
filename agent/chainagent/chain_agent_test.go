@@ -290,7 +290,7 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 
 func TestChainAgent_WithCallbacks(t *testing.T) {
 	// Create agent callbacks.
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 
 	// Test before agent callback that skips execution
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
@@ -407,7 +407,7 @@ func TestChainAgent_AfterCallback(t *testing.T) {
 	minimal := &mockMinimalAgent{name: "child"}
 
 	// Prepare callbacks with after agent producing custom response.
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 	callbacks.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, _ error) (*model.Response, error) {
 		return &model.Response{
 			Object: "test.response",
@@ -466,7 +466,7 @@ func TestChainAgent_BeforeCallbackResp(t *testing.T) {
 	// Sub-agent should never run.
 	sub := &mockNoEventAgent{name: "child"}
 
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{
 			Object: "test.before",
@@ -505,7 +505,7 @@ func TestChainAgent_BeforeCallbackResp(t *testing.T) {
 func TestChainAgent_BeforeCallbackError(t *testing.T) {
 	sub := &mockNoEventAgent{name: "child"}
 
-	callbacks := agent.NewAgentCallbacks()
+	callbacks := agent.NewCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, errors.New("failure in before")
 	})
@@ -536,7 +536,7 @@ type legacyOptions struct {
 	SubAgents         []agent.Agent
 	Tools             []tool.Tool
 	ChannelBufferSize int
-	AgentCallbacks    *agent.AgentCallbacks
+	AgentCallbacks    *agent.Callbacks
 }
 
 // newFromLegacy adapts legacyOptions to the new functional-option constructor.

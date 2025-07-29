@@ -128,7 +128,7 @@ func TestModelCallbacks_BeforeSkip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return &model.Response{ID: "skip-response"}, nil // Return custom response to skip model call
 	})
@@ -162,7 +162,7 @@ func TestModelCBs_BeforeCustom(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return &model.Response{ID: "custom-before"}, nil
 	})
@@ -196,7 +196,7 @@ func TestModelCallbacks_BeforeError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return nil, errors.New("before error")
 	})
@@ -229,7 +229,7 @@ func TestModelCBs_AfterOverride(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterAfterModel(
 		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
 			return &model.Response{Object: "after-override"}, nil
@@ -266,7 +266,7 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	modelCallbacks := model.NewModelCallbacks()
+	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterAfterModel(
 		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
 			return nil, errors.New("after error")

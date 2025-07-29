@@ -55,11 +55,11 @@ type Invocation struct {
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
 	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *AgentCallbacks
+	AgentCallbacks *Callbacks
 	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.ModelCallbacks
+	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.ToolCallbacks
+	ToolCallbacks *tool.Callbacks
 }
 
 type invocationKey struct{}

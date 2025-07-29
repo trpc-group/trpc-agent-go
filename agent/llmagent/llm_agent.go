@@ -105,21 +105,21 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 }
 
 // WithAgentCallbacks sets the agent callbacks.
-func WithAgentCallbacks(callbacks *agent.AgentCallbacks) Option {
+func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
 		opts.AgentCallbacks = callbacks
 	}
 }
 
 // WithModelCallbacks sets the model callbacks.
-func WithModelCallbacks(callbacks *model.ModelCallbacks) Option {
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ModelCallbacks = callbacks
 	}
 }
 
 // WithToolCallbacks sets the tool callbacks.
-func WithToolCallbacks(callbacks *tool.ToolCallbacks) Option {
+func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ToolCallbacks = callbacks
 	}
@@ -166,11 +166,11 @@ type Options struct {
 	// SubAgents is the list of sub-agents available to the agent.
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *agent.AgentCallbacks
+	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.ModelCallbacks
+	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.ToolCallbacks
+	ToolCallbacks *tool.Callbacks
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
@@ -190,9 +190,9 @@ type LLMAgent struct {
 	tools          []tool.Tool // Tools supported by the agent
 	planner        planner.Planner
 	subAgents      []agent.Agent // Sub-agents that can be delegated to
-	agentCallbacks *agent.AgentCallbacks
-	modelCallbacks *model.ModelCallbacks
-	toolCallbacks  *tool.ToolCallbacks
+	agentCallbacks *agent.Callbacks
+	modelCallbacks *model.Callbacks
+	toolCallbacks  *tool.Callbacks
 }
 
 // New creates a new LLMAgent with the given options.

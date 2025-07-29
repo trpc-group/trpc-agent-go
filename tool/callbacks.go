@@ -29,33 +29,33 @@ type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclarati
 // - error: if not nil, this error will be returned.
 type AfterToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte, result any, runErr error) (any, error)
 
-// ToolCallbacks holds callbacks for tool operations.
-type ToolCallbacks struct {
+// Callbacks holds callbacks for tool operations.
+type Callbacks struct {
 	// BeforeTool is a list of callbacks that are called before the tool is executed.
 	BeforeTool []BeforeToolCallback
 	// AfterTool is a list of callbacks that are called after the tool is executed.
 	AfterTool []AfterToolCallback
 }
 
-// NewToolCallbacks creates a new ToolCallbacks instance.
-func NewToolCallbacks() *ToolCallbacks {
-	return &ToolCallbacks{}
+// NewCallbacks creates a new Callbacks instance for tool.
+func NewCallbacks() *Callbacks {
+	return &Callbacks{}
 }
 
 // RegisterBeforeTool registers a before tool callback.
-func (c *ToolCallbacks) RegisterBeforeTool(cb BeforeToolCallback) {
+func (c *Callbacks) RegisterBeforeTool(cb BeforeToolCallback) {
 	c.BeforeTool = append(c.BeforeTool, cb)
 }
 
 // RegisterAfterTool registers an after tool callback.
-func (c *ToolCallbacks) RegisterAfterTool(cb AfterToolCallback) {
+func (c *Callbacks) RegisterAfterTool(cb AfterToolCallback) {
 	c.AfterTool = append(c.AfterTool, cb)
 }
 
 // RunBeforeTool runs all before tool callbacks in order.
 // Returns (customResult, error).
 // If any callback returns a custom result, stop and return.
-func (c *ToolCallbacks) RunBeforeTool(
+func (c *Callbacks) RunBeforeTool(
 	ctx context.Context,
 	toolName string,
 	toolDeclaration *Declaration,
@@ -76,7 +76,7 @@ func (c *ToolCallbacks) RunBeforeTool(
 // RunAfterTool runs all after tool callbacks in order.
 // Returns (customResult, error).
 // If any callback returns a custom result, stop and return.
-func (c *ToolCallbacks) RunAfterTool(
+func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	toolName string,
 	toolDeclaration *Declaration,

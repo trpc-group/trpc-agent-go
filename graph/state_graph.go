@@ -214,7 +214,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 
 		// Extract execution context.
 		invocationID, eventChan := extractExecutionContext(state)
-		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.ModelCallbacks)
+		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 
 		// Create request.
 		request := &model.Request{
@@ -301,7 +301,7 @@ func extractExecutionContext(state State) (string, chan<- *event.Event) {
 func processModelResponse(
 	ctx context.Context,
 	response *model.Response,
-	modelCallbacks *model.ModelCallbacks,
+	modelCallbacks *model.Callbacks,
 	eventChan chan<- *event.Event,
 	invocationID string,
 	llmModel model.Model,
@@ -340,7 +340,7 @@ func processModelResponse(
 
 func runModel(
 	ctx context.Context,
-	modelCallbacks *model.ModelCallbacks,
+	modelCallbacks *model.Callbacks,
 	llmModel model.Model,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
@@ -387,7 +387,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 				messages = msgs
 			}
 		}
-		toolCallbacks, _ := state[StateKeyToolCallbacks].(*tool.ToolCallbacks)
+		toolCallbacks, _ := state[StateKeyToolCallbacks].(*tool.Callbacks)
 		if len(messages) == 0 {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", "no messages in state"))
 			return nil, errors.New("no messages in state")
@@ -427,7 +427,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 func runTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
-	toolCallbacks *tool.ToolCallbacks,
+	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
 ) (any, error) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
