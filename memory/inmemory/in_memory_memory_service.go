@@ -15,7 +15,7 @@ package inmemory
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -111,8 +111,8 @@ func generateMemoryID(memory *memory.Memory) string {
 		content += fmt.Sprintf("|topics:%s", strings.Join(memory.Topics, ","))
 	}
 
-	// Generate MD5 hash.
-	hash := md5.Sum([]byte(content))
+	// Generate SHA256 hash.
+	hash := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("%x", hash)
 }
 
