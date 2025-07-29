@@ -37,11 +37,10 @@ func TestMemoryService_AddMemory(t *testing.T) {
 		UserID:  "test-user",
 	}
 	memoryStr := "Test memory content"
-	inputStr := "User said: This is the original input."
 	topics := []string{"test", "memory"}
 
 	// Test adding memory.
-	err := service.AddMemory(ctx, userKey, memoryStr, inputStr, topics)
+	err := service.AddMemory(ctx, userKey, memoryStr, topics)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -60,10 +59,6 @@ func TestMemoryService_AddMemory(t *testing.T) {
 		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory.Memory)
 	}
 
-	if memories[0].Memory.Input != inputStr {
-		t.Fatalf("Expected input content %s, got %s", inputStr, memories[0].Memory.Input)
-	}
-
 	if len(memories[0].Memory.Topics) != 2 {
 		t.Fatalf("Expected 2 topics, got %d", len(memories[0].Memory.Topics))
 	}
@@ -78,7 +73,7 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	}
 
 	// Add a memory first.
-	err := service.AddMemory(ctx, userKey, "first memory", "first input", nil)
+	err := service.AddMemory(ctx, userKey, "first memory", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -121,7 +116,7 @@ func TestMemoryService_DeleteMemory(t *testing.T) {
 	}
 
 	// Add a memory first.
-	err := service.AddMemory(ctx, userKey, "test memory", "test input", nil)
+	err := service.AddMemory(ctx, userKey, "test memory", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -164,12 +159,12 @@ func TestMemoryService_ClearMemories(t *testing.T) {
 	}
 
 	// Add multiple memories.
-	err := service.AddMemory(ctx, userKey, "first memory", "first input", nil)
+	err := service.AddMemory(ctx, userKey, "first memory", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	err = service.AddMemory(ctx, userKey, "second memory", "second input", nil)
+	err = service.AddMemory(ctx, userKey, "second memory", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -210,12 +205,12 @@ func TestMemoryService_SearchMemories(t *testing.T) {
 	}
 
 	// Add memories with different content.
-	err := service.AddMemory(ctx, userKey, "User likes coffee", "User said: I like coffee", []string{"preferences"})
+	err := service.AddMemory(ctx, userKey, "User likes coffee", []string{"preferences"})
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	err = service.AddMemory(ctx, userKey, "User works as a developer", "User said: I work as a developer", []string{"work"})
+	err = service.AddMemory(ctx, userKey, "User works as a developer", []string{"work"})
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
@@ -261,7 +256,7 @@ func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {
 
 	// Add multiple memories.
 	for i := 0; i < 5; i++ {
-		err := service.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), fmt.Sprintf("input %d", i), nil)
+		err := service.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), nil)
 		if err != nil {
 			t.Fatalf("AddMemory failed: %v", err)
 		}
@@ -309,8 +304,7 @@ func TestMemoryService_Concurrency(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < memoriesPerGoroutine; j++ {
 				memoryStr := fmt.Sprintf("memory from goroutine %d, item %d", id, j)
-				inputStr := fmt.Sprintf("input from goroutine %d, item %d", id, j)
-				err := service.AddMemory(ctx, userKey, memoryStr, inputStr, nil)
+				err := service.AddMemory(ctx, userKey, memoryStr, nil)
 				if err != nil {
 					errChan <- fmt.Errorf("goroutine %d failed to add memory %d: %v", id, j, err)
 				}

@@ -106,7 +106,7 @@ func (s *MemoryService) getAppMemories(appName string) *appMemories {
 // generateMemoryID generates a unique ID for memory based on content.
 func generateMemoryID(memory *memory.Memory) string {
 	// Create a consistent string representation for ID generation.
-	content := fmt.Sprintf("memory:%s|input:%s", memory.Memory, memory.Input)
+	content := fmt.Sprintf("memory:%s", memory.Memory)
 	if len(memory.Topics) > 0 {
 		content += fmt.Sprintf("|topics:%s", strings.Join(memory.Topics, ","))
 	}
@@ -117,13 +117,12 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryStr string, input string, topics []string) *memory.Entry {
+func createMemoryEntry(userID string, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
 	memoryObj := &memory.Memory{
 		Memory:      memoryStr,
-		Input:       input,
 		Topics:      topics,
 		LastUpdated: &now,
 	}
@@ -138,15 +137,15 @@ func createMemoryEntry(userID string, memoryStr string, input string, topics []s
 }
 
 // AddMemory adds a new memory for a user.
-func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, input string, topics []string) error {
+func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
 
 	app := s.getAppMemories(userKey.AppName)
 
-	// Create memory entry with provided input and topics.
-	memoryEntry := createMemoryEntry(userKey.UserID, memoryStr, input, topics)
+	// Create memory entry with provided topics.
+	memoryEntry := createMemoryEntry(userKey.UserID, memoryStr, topics)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()

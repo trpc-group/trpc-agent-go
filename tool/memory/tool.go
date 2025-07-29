@@ -102,17 +102,13 @@ func (m *memoryTool) getInputSchema() *tool.Schema {
 					Description: "The memory content to store. Should be a brief, third-person statement that " +
 						"captures key information about the user.",
 				},
-				"input": {
-					Type:        "string",
-					Description: "The original user input that led to this memory.",
-				},
 				"topics": {
 					Type:        "array",
 					Items:       &tool.Schema{Type: "string"},
 					Description: "Optional topics for categorizing the memory.",
 				},
 			},
-			Required: []string{"memory", "input"},
+			Required: []string{"memory"},
 		}
 	case UpdateToolName:
 		return &tool.Schema{
@@ -185,11 +181,6 @@ func addMemoryFunction(ctx context.Context, service memory.Service, appName stri
 		return nil, errors.New("memory content is required")
 	}
 
-	inputStr, ok := argsMap["input"].(string)
-	if !ok || inputStr == "" {
-		return nil, errors.New("input content is required")
-	}
-
 	var topics []string
 	if topicsInterface, ok := argsMap["topics"]; ok {
 		if topicsSlice, ok := topicsInterface.([]any); ok {
@@ -206,7 +197,7 @@ func addMemoryFunction(ctx context.Context, service memory.Service, appName stri
 	}
 
 	userKey := memory.UserKey{AppName: appName, UserID: userID}
-	err := service.AddMemory(ctx, userKey, memoryStr, inputStr, topics)
+	err := service.AddMemory(ctx, userKey, memoryStr, topics)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add memory: %v", err)
 	}
@@ -215,7 +206,6 @@ func addMemoryFunction(ctx context.Context, service memory.Service, appName stri
 		Success: true,
 		Message: "Memory added successfully",
 		Memory:  memoryStr,
-		Input:   inputStr,
 		Topics:  topics,
 	}, nil
 }
@@ -248,7 +238,6 @@ func updateMemoryFunction(ctx context.Context, service memory.Service, appName s
 		Message:  "Memory updated successfully",
 		MemoryID: memoryID,
 		Memory:   memoryStr,
-		Input:    "",  // Update doesn't have input
 		Topics:   nil, // Update doesn't have topics
 	}, nil
 }

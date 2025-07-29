@@ -58,10 +58,6 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 		t.Errorf("Expected memory 'User's name is John Doe', got '%s'", response.Memory)
 	}
 
-	if response.Input != "My name is John Doe" {
-		t.Errorf("Expected input 'My name is John Doe', got '%s'", response.Input)
-	}
-
 	if len(response.Topics) != 2 {
 		t.Errorf("Expected 2 topics, got %d", len(response.Topics))
 	}
@@ -96,7 +92,6 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	// Test adding a memory without topics.
 	args := map[string]any{
 		"memory": "User likes coffee",
-		"input":  "I like coffee",
 	}
 
 	jsonArgs, err := json.Marshal(args)
@@ -123,10 +118,6 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 		t.Errorf("Expected memory 'User likes coffee', got '%s'", response.Memory)
 	}
 
-	if response.Input != "I like coffee" {
-		t.Errorf("Expected input 'I like coffee', got '%s'", response.Input)
-	}
-
 	if response.Topics == nil {
 		t.Error("Expected topics to be empty slice, got nil")
 	}
@@ -143,8 +134,8 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 
 	// Add some test memories first.
 	userKey := memory.UserKey{AppName: appName, UserID: userID}
-	service.AddMemory(context.Background(), userKey, "User likes coffee", "I like coffee", []string{"preferences"})
-	service.AddMemory(context.Background(), userKey, "User works as a developer", "I work as a developer", []string{"work"})
+	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
 	tool := newMemoryTool(service, appName, userID, searchMemoriesFunction, "memory_search", "Search memory")
 
@@ -188,8 +179,8 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 
 	// Add some test memories first.
 	userKey := memory.UserKey{AppName: appName, UserID: userID}
-	service.AddMemory(context.Background(), userKey, "User likes coffee", "I like coffee", []string{"preferences"})
-	service.AddMemory(context.Background(), userKey, "User works as a developer", "I work as a developer", []string{"work"})
+	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
 	tool := newMemoryTool(service, appName, userID, loadMemoriesFunction, "memory_load", "Load memory")
 

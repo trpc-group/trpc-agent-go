@@ -30,7 +30,7 @@ var (
 // Service defines the interface for memory service operations.
 type Service interface {
 	// AddMemory adds a new memory for a user.
-	AddMemory(ctx context.Context, userKey UserKey, memory string, input string, topics []string) error
+	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.
 	UpdateMemory(ctx context.Context, memoryKey Key, memory string) error
@@ -52,7 +52,6 @@ type Service interface {
 type Memory struct {
 	Memory      string     `json:"memory"`                 // Memory content.
 	Topics      []string   `json:"topics,omitempty"`       // Memory topics (array).
-	Input       string     `json:"input,omitempty"`        // Input content.
 	LastUpdated *time.Time `json:"last_updated,omitempty"` // Last update time.
 }
 

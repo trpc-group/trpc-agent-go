@@ -29,7 +29,6 @@ type AddMemoryResponse struct {
 	Success bool     `json:"success"` // Success is whether the operation was successful.
 	Message string   `json:"message"` // Message is the success or error message.
 	Memory  string   `json:"memory"`  // Memory is the memory content that was added.
-	Input   string   `json:"input"`   // Input is the original user input.
 	Topics  []string `json:"topics"`  // Topics is the topics associated with the memory.
 }
 
@@ -39,7 +38,6 @@ type UpdateMemoryResponse struct {
 	Message  string   `json:"message"`   // Message is the success or error message.
 	MemoryID string   `json:"memory_id"` // MemoryID is the ID of the updated memory.
 	Memory   string   `json:"memory"`    // Memory is the updated memory content.
-	Input    string   `json:"input"`     // Input is the original user input.
 	Topics   []string `json:"topics"`    // Topics is the topics associated with the memory.
 }
 
