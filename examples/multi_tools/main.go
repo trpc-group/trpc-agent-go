@@ -336,13 +336,13 @@ func createCalculatorTool() tool.CallableTool {
 }
 
 // calculateExpression calculates mathematical expressions
-func calculateExpression(req calculatorRequest) calculatorResponse {
+func calculateExpression(_ context.Context, req calculatorRequest) (calculatorResponse, error) {
 	if strings.TrimSpace(req.Expression) == "" {
 		return calculatorResponse{
 			Expression: req.Expression,
 			Result:     0,
 			Message:    "Error: Expression is empty",
-		}
+		}, fmt.Errorf("expression is empty")
 	}
 
 	// Simple expression calculator implementation
@@ -352,14 +352,14 @@ func calculateExpression(req calculatorRequest) calculatorResponse {
 			Expression: req.Expression,
 			Result:     0,
 			Message:    fmt.Sprintf("Calculation error: %v", err),
-		}
+		}, fmt.Errorf("calculation error")
 	}
 
 	return calculatorResponse{
 		Expression: req.Expression,
 		Result:     result,
 		Message:    fmt.Sprintf("Calculation result: %g", result),
-	}
+	}, nil
 }
 
 // evaluateExpression simple expression evaluator
@@ -584,7 +584,7 @@ func createTimeTool() tool.CallableTool {
 }
 
 // getTimeInfo gets time information
-func getTimeInfo(req timeRequest) timeResponse {
+func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
 	now := time.Now()
 
 	var result string
@@ -606,7 +606,7 @@ func getTimeInfo(req timeRequest) timeResponse {
 		Operation: req.Operation,
 		Result:    result,
 		Timestamp: now.Unix(),
-	}
+	}, nil
 }
 
 // Text tool related structures
@@ -632,7 +632,7 @@ func createTextTool() tool.CallableTool {
 }
 
 // processText processes text
-func processText(req textRequest) textResponse {
+func processText(_ context.Context, req textRequest) (textResponse, error) {
 	var result string
 	var info string
 
@@ -668,7 +668,7 @@ func processText(req textRequest) textResponse {
 		Operation:    req.Operation,
 		Result:       result,
 		Info:         info,
-	}
+	}, nil
 }
 
 // File tool related structures
@@ -696,7 +696,7 @@ func createFileTool() tool.CallableTool {
 }
 
 // handleFileOperation handles file operations
-func handleFileOperation(req fileRequest) fileResponse {
+func handleFileOperation(ctx context.Context, req fileRequest) (fileResponse, error) {
 	// Security check: prevent path traversal attacks
 	if strings.Contains(req.Path, "..") {
 		return fileResponse{
@@ -705,7 +705,7 @@ func handleFileOperation(req fileRequest) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   "Security error: Access to parent directories is not allowed",
-		}
+		}, fmt.Errorf("access to parent directories is not allowed")
 	}
 
 	switch req.Operation {
@@ -724,12 +724,12 @@ func handleFileOperation(req fileRequest) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   "Unsupported file operation",
-		}
+		}, nil
 	}
 }
 
 // readFile reads file content
-func readFile(path string) fileResponse {
+func readFile(path string) (fileResponse, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fileResponse{
@@ -738,7 +738,7 @@ func readFile(path string) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to read file: %v", err),
-		}
+		}, fmt.Errorf("failed to read file: %v", err)
 	}
 
 	// Limit the length of returned content
@@ -753,11 +753,11 @@ func readFile(path string) fileResponse {
 		Result:    contentStr,
 		Success:   true,
 		Message:   fmt.Sprintf("Successfully read file, size: %d bytes", len(content)),
-	}
+	}, nil
 }
 
 // writeFile writes file content
-func writeFile(path, content string) fileResponse {
+func writeFile(path, content string) (fileResponse, error) {
 	// Ensure directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -767,7 +767,7 @@ func writeFile(path, content string) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to create directory: %v", err),
-		}
+		}, fmt.Errorf("failed to create directory: %v", err)
 	}
 
 	err := os.WriteFile(path, []byte(content), 0644)
@@ -778,7 +778,7 @@ func writeFile(path, content string) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to write file: %v", err),
-		}
+		}, fmt.Errorf("failed to write file: %v", err)
 	}
 
 	return fileResponse{
@@ -787,11 +787,11 @@ func writeFile(path, content string) fileResponse {
 		Result:    fmt.Sprintf("Wrote %d bytes", len(content)),
 		Success:   true,
 		Message:   "File written successfully",
-	}
+	}, nil
 }
 
 // listDirectory lists directory contents
-func listDirectory(path string) fileResponse {
+func listDirectory(path string) (fileResponse, error) {
 	if path == "" {
 		path = "."
 	}
@@ -804,7 +804,7 @@ func listDirectory(path string) fileResponse {
 			Result:    "",
 			Success:   false,
 			Message:   fmt.Sprintf("Failed to list directory: %v", err),
-		}
+		}, fmt.Errorf("failed to list directory: %v", err)
 	}
 
 	var result strings.Builder
@@ -827,11 +827,11 @@ func listDirectory(path string) fileResponse {
 		Result:    result.String(),
 		Success:   true,
 		Message:   fmt.Sprintf("Found %d items", len(entries)),
-	}
+	}, nil
 }
 
 // checkFileExists checks if file exists
-func checkFileExists(path string) fileResponse {
+func checkFileExists(path string) (fileResponse, error) {
 	_, err := os.Stat(path)
 	exists := err == nil
 
@@ -848,7 +848,7 @@ func checkFileExists(path string) fileResponse {
 		Result:    fmt.Sprintf("%t", exists),
 		Success:   true,
 		Message:   message,
-	}
+	}, nil
 }
 
 // intPtr returns a pointer to the given integer

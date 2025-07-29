@@ -329,7 +329,7 @@ func (c *chainChat) isToolEvent(event *event.Event) bool {
 // Tool implementations.
 
 // webSearch simulates a web search tool.
-func (c *chainChat) webSearch(args webSearchArgs) webSearchResult {
+func (c *chainChat) webSearch(_ context.Context, args webSearchArgs) (webSearchResult, error) {
 	// Simulate web search with relevant information.
 	results := []string{
 		fmt.Sprintf("Recent information about '%s' from reliable sources", args.Query),
@@ -341,11 +341,11 @@ func (c *chainChat) webSearch(args webSearchArgs) webSearchResult {
 		Query:   args.Query,
 		Results: results,
 		Count:   len(results),
-	}
+	}, nil
 }
 
 // queryKnowledge simulates a knowledge base query.
-func (c *chainChat) queryKnowledge(args knowledgeArgs) knowledgeResult {
+func (c *chainChat) queryKnowledge(ctx context.Context, args knowledgeArgs) (knowledgeResult, error) {
 	// Simulate knowledge base query.
 	facts := []string{
 		fmt.Sprintf("Factual information about '%s'", args.Topic),
@@ -357,7 +357,7 @@ func (c *chainChat) queryKnowledge(args knowledgeArgs) knowledgeResult {
 		Topic: args.Topic,
 		Facts: facts,
 		Count: len(facts),
-	}
+	}, nil
 }
 
 // Tool argument and result types.

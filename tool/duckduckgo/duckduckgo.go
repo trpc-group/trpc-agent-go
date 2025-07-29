@@ -17,6 +17,7 @@
 package duckduckgo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -133,13 +134,13 @@ func NewTool(opts ...Option) tool.CallableTool {
 }
 
 // search performs the actual search operation.
-func (t *ddgTool) search(req searchRequest) searchResponse {
+func (t *ddgTool) search(_ context.Context, req searchRequest) (searchResponse, error) {
 	if strings.TrimSpace(req.Query) == "" {
 		return searchResponse{
 			Query:   req.Query,
 			Results: []resultItem{},
 			Summary: "Error: Empty search query provided",
-		}
+		}, fmt.Errorf("empty search query provided")
 	}
 
 	// Perform the search.
@@ -149,7 +150,7 @@ func (t *ddgTool) search(req searchRequest) searchResponse {
 			Query:   req.Query,
 			Results: []resultItem{},
 			Summary: fmt.Sprintf("Error performing search: %v", err),
-		}
+		}, fmt.Errorf("error performing search: %v", err)
 	}
 
 	// Convert the response to our format.
@@ -209,7 +210,7 @@ func (t *ddgTool) search(req searchRequest) searchResponse {
 		Query:   req.Query,
 		Results: results,
 		Summary: summary,
-	}
+	}, nil
 }
 
 // extractTitleFromTopic extracts a title from a topic text.
