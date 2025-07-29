@@ -10,6 +10,8 @@
 //
 //
 
+// Package trace provides distributed tracing functionality for the trpc-agent-go framework.
+// It integrates with OpenTelemetry to provide comprehensive tracing capabilities.
 package trace
 
 import (

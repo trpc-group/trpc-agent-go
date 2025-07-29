@@ -10,6 +10,8 @@
 //
 //
 
+// Package telemetry provides telemetry and observability functionality for the trpc-agent-go framework.
+// It includes tracing, metrics, and monitoring capabilities for agent operations.
 package telemetry
 
 import (

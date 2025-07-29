@@ -288,7 +288,7 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 					contents = append(contents, schema.Content{
 						Role: c.Role.String(),
 						Parts: []schema.Part{
-							schema.Part{
+							{
 								Text: c.Content,
 							},
 						},
