@@ -19,6 +19,7 @@ issues:
   exclude-files:
     - ".*.pb.go"
     - ".*_mock.go"
+    - ".*_test.go"
 
 linters:
   disable-all: true
