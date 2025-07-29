@@ -16,6 +16,9 @@ issues:
     - EXC0013 # package comment should be of the form
     - EXC0014 # comment on exported should be of the form
     - EXC0015 # should have a package comment
+  exclude-files:
+    - ".*.pb.go"
+    - ".*_mock.go"
 
 linters:
   disable-all: true
@@ -27,11 +30,6 @@ linters:
     - gocyclo
     - gosec
     - ineffassign
-
-issues:
-  exclude-files:
-    - ".*.pb.go"
-    - ".*_mock.go"
 
 output:
   format: colored-line-number 
