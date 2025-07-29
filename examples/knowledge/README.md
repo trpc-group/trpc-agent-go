@@ -4,10 +4,11 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 
 ## Features
 
-- Uses the built-in knowledge system with in-memory storage and vector store.
-- Integrates the OpenAI embedder for generating embeddings for knowledge documents.
-- Shows how to add documents to the knowledge base and enable knowledge search in the agent.
-- Provides a chat interface with knowledge search, calculator, and current time tools.
+- **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), or tcvector storage backends
+- **OpenAI Embedder Integration**: Uses OpenAI embeddings for high-quality document representation
+- **Rich Knowledge Sources**: Supports file, directory, URL, and auto-detection sources
+- **Interactive Chat Interface**: Features knowledge search, calculator, and current time tools
+- **Streaming Response**: Real-time streaming of LLM responses with tool execution feedback
 
 ## Knowledge Sources Loaded
 
@@ -35,38 +36,82 @@ These documents are embedded and indexed, enabling the `knowledge_search` tool t
 
 ## Usage
 
-1. **Configure the OpenAI Embedder**
+### Prerequisites
 
-   The example uses the OpenAI embedder from `core/knowledge/embedder/openai`. You must provide a valid OpenAI API key for embedding. In the code, replace:
-
-   ```go
-   embedder := openaiencoder.New()
+1. **Set OpenAI API Key** (Required)
+   ```bash
+   export OPENAI_API_KEY="your-openai-api-key"
    ```
 
-   with your actual OpenAI API key.
+2. **Configure Vector Store** (Optional - defaults to in-memory)
+   
+   For persistent storage, configure the appropriate environment variables for your chosen vector store.
 
-2. **Run the Example**
+### Running the Example
 
-   ```sh
-   cd examples/knowledge
-   go run main.go
-   ```
+```bash
+cd examples/knowledge
 
-3. **Interact with the Chat**
+# Use in-memory vector store (default)
+go run main.go
 
-   - Type your questions to interact with the knowledge-enhanced agent.
-   - Use `exit` to quit the chat.
+# Use PostgreSQL with pgvector
+go run main.go -vectorstore=pgvector
 
-## Tools Available
+# Use TcVector
+go run main.go -vectorstore=tcvector
 
-- `knowledge_search`: Search for relevant information in the knowledge base.
-- `calculator`: Perform basic mathematical calculations.
-- `current_time`: Get the current time and date for a specific timezone.
+# Specify a different model
+go run main.go -model="gpt-4o-mini" -vectorstore=pgvector
+```
 
-## Notes
+### Interactive Commands
 
-- The knowledge base is initialized with several sample documents about machine learning, Python, data science, web development, and cloud computing.
-- The OpenAI embedder is required for knowledge search to work. Make sure your API key is valid and has embedding access.
+- **Regular chat**: Type your questions naturally
+- **`/history`**: Show conversation history
+- **`/new`**: Start a new session
+- **`/exit`**: End the conversation
+
+## Available Tools
+
+| Tool | Description | Example Usage |
+|------|-------------|---------------|
+| `knowledge_search` | Search the knowledge base for relevant information | "What is a Large Language Model?" |
+| `calculator` | Perform mathematical calculations (add, subtract, multiply, divide, power) | "Calculate 15 * 23" |
+| `current_time` | Get current time and date for specific timezones | "What time is it in PST?" |
+
+## Vector Store Options
+
+### In-Memory (Default)
+- **Pros**: No external dependencies, fast for small datasets
+- **Cons**: Data doesn't persist between runs
+- **Use case**: Development, testing, small knowledge bases
+
+### PostgreSQL with pgvector 
+- **Use case**: Production deployments, persistent storage
+- **Setup**: Requires PostgreSQL with pgvector extension
+
+### TcVector
+- **Use case**: Cloud deployments, managed vector storage
+- **Setup**: Requires TcVector service credentials
+
+## Configuration
+
+### Required Environment Variables
+
+- `OPENAI_API_KEY`: Your OpenAI API key for embeddings and chat
+
+### Optional Configuration
+
+- `OPENAI_EMBEDDING_MODEL`: OpenAI embedding model (default: `text-embedding-3-small`)
+- Vector store specific variables (see vector store documentation for details)
+
+### Command Line Options
+
+```bash
+-model string     LLM model name (default: "claude-4-sonnet-20250514")
+-vectorstore string   Vector store type: inmemory, pgvector, tcvector (default: "inmemory")
+```
 
 ---
 
@@ -76,36 +121,56 @@ For more details, see the code in `main.go`.
 
 ### 1. Knowledge Base Setup
 
-The example creates a built-in knowledge base with in-memory components:
+The example creates a knowledge base with configurable vector store:
 
 ```go
-// Create in-memory storage and vector store
-storage := storageinmemory.New()
-vectorStore := vectorinmemory.New()
+// Create knowledge base with configurable vector store
+vectorStore, err := c.setupVectorDB() // Supports inmemory, pgvector, tcvector
+embedder := openaiembedder.New()
 
-// Create OpenAI embedder for demonstration
-embedder := openaiembedder.New(
-    openaiembedder.WithAPIKey("sk-your-openai-key"),
-)
-
-// Create built-in knowledge base
 kb := knowledge.New(
-    knowledge.WithStorage(storage),
     knowledge.WithVectorStore(vectorStore),
     knowledge.WithEmbedder(embedder),
+    knowledge.WithSources(sources),
 )
 ```
 
-### 2. Document Creation
+### 2. Knowledge Sources
 
-Documents are created using the document builder:
+The example demonstrates multiple source types:
 
 ```go
-doc := builder.FromText(
-    "Machine learning is a subset of artificial intelligence...",
-    builder.WithTextID("machine-learning"),
-    builder.WithTextName("Machine Learning Basics"),
-)
+sources := []source.Source{
+    // File source for local documentation
+    filesource.New(
+        []string{"./data/llm.md"},
+        filesource.WithName("Large Language Model"),
+        filesource.WithMetadataValue("type", "documentation"),
+    ),
+    
+    // Directory source for multiple files
+    dirsource.New(
+        []string{"./dir"},
+        dirsource.WithName("Data Directory"),
+    ),
+    
+    // URL source for web content
+    urlsource.New(
+        []string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},
+        urlsource.WithName("Byte-pair encoding"),
+        urlsource.WithMetadataValue("source", "wikipedia"),
+    ),
+    
+    // Auto source handles mixed content types
+    autosource.New(
+        []string{
+            "Cloud computing is the delivery...", // Direct text
+            "https://en.wikipedia.org/wiki/N-gram", // URL
+            "./README.md", // File
+        },
+        autosource.WithName("Mixed Content Source"),
+    ),
+}
 ```
 
 ### 3. LLM Agent Configuration
@@ -162,33 +227,75 @@ The `knowledge_search` tool is automatically created by `knowledgetool.NewKnowle
 
 ### Components Used
 
-- **storage/inmemory**: In-memory document storage implementation
-- **vectorstore/inmemory**: In-memory vector store with cosine similarity
-- **embedder/mock**: Mock embedder for demonstration
-- **document/builder**: Document creation utilities
+- **Vector Stores**:
+  - `vectorstore/inmemory`: In-memory vector store with cosine similarity
+  - `vectorstore/pgvector`: PostgreSQL-based persistent vector storage
+  - `vectorstore/tcvector`: TcVector cloud-native vector storage
+- **Embedder**: `embedder/openai`: OpenAI embeddings API integration
+- **Sources**: `source/{file,dir,url,auto}`: Multiple content source types
+- **Session**: `session/inmemory`: In-memory conversation state management
 
 ## Extending the Example
 
-To use your own knowledge base:
+### Adding Custom Sources
 
-1. Implement the `knowledge.Knowledge` interface or use `BuiltinKnowledge`
-2. Provide your own storage, vector store, and embedder implementations
-3. Add your documents using `AddDocument()`
-4. Pass your knowledge base to the agent using `WithKnowledge()`
+```go
+// Add your own content sources
+customSources := []source.Source{
+    filesource.New(
+        []string{"/path/to/your/docs/*.md"},
+        filesource.WithName("Custom Documentation"),
+    ),
+    urlsource.New(
+        []string{"https://your-company.com/api-docs"},
+        urlsource.WithMetadataValue("category", "api"),
+    ),
+}
 
-For production use, consider:
-- Using persistent storage (database, file system)
-- Using production vector stores (Pinecone, Weaviate, etc.)
-- Using real embedding models (OpenAI, Cohere, etc.)
+// Append to existing sources
+allSources := append(sources, customSources...)
+```
 
-## Files
+### Production Considerations
 
-- `main.go`: Complete example implementation
-- `README.md`: This documentation file
+- Use persistent vector store (`pgvector` or `tcvector`) for production
+- Secure API key management
+- Monitor vector store performance
+- Implement proper error handling and logging
 
-## Dependencies
+## Example Files
 
-- `trpc-agent-go/core/agent/llmagent`: LLM agent implementation
-- `trpc-agent-go/core/knowledge`: Knowledge management interfaces
-- `trpc-agent-go/core/knowledge/tool`: Knowledge search tool
-- `trpc-agent-go/orchestration/runner`: Multi-turn conversation runner 
+| File | Description |
+|------|-------------|
+| `main.go` | Complete knowledge integration example with multi-vector store support |
+| `data/llm.md` | Sample documentation about Large Language Models |
+| `dir/transformer.pdf` | Transformer architecture documentation |
+| `dir/moe.txt` | Mixture-of-Experts model notes |
+| `README.md` | This comprehensive documentation |
+
+## Key Dependencies
+
+- `agent/llmagent`: LLM agent with streaming and tool support
+- `knowledge/*`: Complete RAG pipeline with multiple source types
+- `knowledge/vectorstore/*`: Multiple vector storage backends
+- `knowledge/embedder/openai`: OpenAI embeddings integration
+- `runner`: Multi-turn conversation management with session state
+- `tool/function`: Custom tool creation utilities
+
+## Troubleshooting
+
+### Common Issues
+
+1. **OpenAI API Key Error**
+   - Ensure `OPENAI_API_KEY` is set correctly
+   - Verify your OpenAI account has embedding API access
+
+2. **Vector Store Connection Issues**
+   - For pgvector: Ensure PostgreSQL is running and pgvector extension is installed
+   - For tcvector: Verify service credentials and network connectivity
+   - Check environment variables are set correctly
+
+4. **Knowledge Loading Errors**
+   - Verify source files/URLs are accessible
+   - Check file permissions for local sources
+   - Ensure stable internet connection for URL sources 
