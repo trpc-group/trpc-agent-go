@@ -17,21 +17,6 @@ import (
 	"context"
 )
 
-// ToolError represents an error that occurred during tool execution.
-type ToolError struct {
-	Message string
-}
-
-// Error returns the error message.
-func (e *ToolError) Error() string {
-	return e.Message
-}
-
-// NewError creates a new ToolError.
-func NewError(message string) error {
-	return &ToolError{Message: message}
-}
-
 // BeforeToolCallback is called before a tool is executed.
 // Returns (customResult, error).
 // - customResult: if not nil, this result will be returned and tool execution will be skipped.
