@@ -8,7 +8,7 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
-var commonFiledsStr = fmt.Sprintf("%s, %s, %s, %s, %s, %s, %s",
+var commonFieldsStr = fmt.Sprintf("%s, %s, %s, %s, %s, %s, %s",
 	fieldID, fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
 
 // updateBuilder builds UPDATE SQL statements safely
@@ -62,7 +62,7 @@ func newQueryBuilder(table string, language string) *queryBuilder {
 		conditions:   []string{"1=1"},
 		args:         make([]interface{}, 0),
 		argIndex:     1,
-		selectClause: commonFiledsStr,
+		selectClause: commonFieldsStr,
 		language:     language, // Default to English text search configuration
 	}
 }
@@ -142,7 +142,7 @@ func (qb *queryBuilder) addVectorArg(vector pgvector.Vector) {
 
 // addSelectClause is a helper method to add the select clause with score calculation
 func (qb *queryBuilder) addSelectClause(scoreExpression string) {
-	qb.selectClause = fmt.Sprintf("%s, %s", commonFiledsStr, scoreExpression)
+	qb.selectClause = fmt.Sprintf("%s, %s", commonFieldsStr, scoreExpression)
 }
 
 func (qb *queryBuilder) addIDFilter(ids []string) {

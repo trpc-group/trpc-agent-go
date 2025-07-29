@@ -1,3 +1,4 @@
+// Package registry provides agent registration and tool generation functionality.
 package registry
 
 import (

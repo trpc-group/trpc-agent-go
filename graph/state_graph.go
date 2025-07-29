@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -208,33 +209,13 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
 		defer span.End()
 
-		// Extract messages from state or create new ones
-		var messages []model.Message
-		if msgData, exists := state[StateKeyMessages]; exists {
-			if msgs, ok := msgData.([]model.Message); ok {
-				messages = msgs
-			}
-		}
-		// Add system prompt if provided and not already present.
-		if instruction != "" && (len(messages) == 0 || messages[0].Role != model.RoleSystem) {
-			messages = append([]model.Message{model.NewSystemMessage(instruction)}, messages...)
-		}
-		// Add user input if available.
-		if userInput, exists := state[StateKeyUserInput]; exists {
-			if input, ok := userInput.(string); ok && input != "" {
-				messages = append(messages, model.NewUserMessage(input))
-			}
-		}
+		// Build messages from state.
+		messages := buildMessagesFromState(state, instruction)
+
+		// Extract execution context.
+		invocationID, eventChan := extractExecutionContext(state)
 		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.ModelCallbacks)
-		var invocationID string
-		var eventChan chan<- *event.Event
-		if execCtx, exists := state[StateKeyExecContext]; exists {
-			execContext, ok := execCtx.(*ExecutionContext)
-			if ok {
-				eventChan = execContext.EventChan
-				invocationID = execContext.InvocationID
-			}
-		}
+
 		// Create request.
 		request := &model.Request{
 			Messages: messages,
@@ -243,51 +224,32 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 				Stream: true,
 			},
 		}
+
 		responseChan, err := runModel(ctx, modelCallbacks, llmModel, request)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
+
 		// Process response.
 		var finalResponse *model.Response
 		var toolCalls []model.ToolCall
 		for response := range responseChan {
-			if modelCallbacks != nil {
-				customResponse, err := modelCallbacks.RunAfterModel(ctx, response, nil)
-				if err != nil {
-					span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-					return nil, fmt.Errorf("callback after model error: %w", err)
-				}
-				if customResponse != nil {
-					response = customResponse
-				}
+			if err := processModelResponse(ctx, response, modelCallbacks, eventChan, invocationID, llmModel, request, span); err != nil {
+				return nil, err
 			}
-			if eventChan != nil && !response.Done {
-				llmEvent := event.NewResponseEvent(invocationID, llmModel.Info().Name, response)
-				// Trace the LLM call using the telemetry package.
-				itelemetry.TraceCallLLM(span, &agent.Invocation{
-					InvocationID: invocationID,
-					Model:        llmModel,
-				}, request, response, llmEvent.ID)
-				select {
-				case eventChan <- llmEvent:
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
-			}
-			if response.Error != nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", response.Error.Message))
-				return nil, fmt.Errorf("model API error: %s", response.Error.Message)
-			}
+
 			if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 				toolCalls = append(toolCalls, response.Choices[0].Message.ToolCalls...)
 			}
 			finalResponse = response
 		}
+
 		if finalResponse == nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
 			return nil, errors.New("no response received from model")
 		}
+
 		newMessage := model.Message{
 			Role:      model.RoleAssistant,
 			Content:   finalResponse.Choices[0].Message.Content,
@@ -298,6 +260,82 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
 		}, nil
 	}
+}
+
+// buildMessagesFromState extracts and builds messages from the state.
+func buildMessagesFromState(state State, instruction string) []model.Message {
+	var messages []model.Message
+	if msgData, exists := state[StateKeyMessages]; exists {
+		if msgs, ok := msgData.([]model.Message); ok {
+			messages = msgs
+		}
+	}
+	// Add system prompt if provided and not already present.
+	if instruction != "" && (len(messages) == 0 || messages[0].Role != model.RoleSystem) {
+		messages = append([]model.Message{model.NewSystemMessage(instruction)}, messages...)
+	}
+	// Add user input if available.
+	if userInput, exists := state[StateKeyUserInput]; exists {
+		if input, ok := userInput.(string); ok && input != "" {
+			messages = append(messages, model.NewUserMessage(input))
+		}
+	}
+	return messages
+}
+
+// extractExecutionContext extracts execution context from state.
+func extractExecutionContext(state State) (string, chan<- *event.Event) {
+	var invocationID string
+	var eventChan chan<- *event.Event
+	if execCtx, exists := state[StateKeyExecContext]; exists {
+		execContext, ok := execCtx.(*ExecutionContext)
+		if ok {
+			eventChan = execContext.EventChan
+			invocationID = execContext.InvocationID
+		}
+	}
+	return invocationID, eventChan
+}
+
+// processModelResponse processes a single model response.
+func processModelResponse(
+	ctx context.Context,
+	response *model.Response,
+	modelCallbacks *model.ModelCallbacks,
+	eventChan chan<- *event.Event,
+	invocationID string,
+	llmModel model.Model,
+	request *model.Request,
+	span oteltrace.Span,
+) error {
+	if modelCallbacks != nil {
+		customResponse, err := modelCallbacks.RunAfterModel(ctx, response, nil)
+		if err != nil {
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			return fmt.Errorf("callback after model error: %w", err)
+		}
+		if customResponse != nil {
+			response = customResponse
+		}
+	}
+	if eventChan != nil && !response.Done {
+		llmEvent := event.NewResponseEvent(invocationID, llmModel.Info().Name, response)
+		// Trace the LLM call using the telemetry package.
+		itelemetry.TraceCallLLM(span, &agent.Invocation{
+			InvocationID: invocationID,
+			Model:        llmModel,
+		}, request, response, llmEvent.ID)
+		select {
+		case eventChan <- llmEvent:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if response.Error != nil {
+		span.SetAttributes(attribute.String("trpc.go.agent.error", response.Error.Message))
+		return fmt.Errorf("model API error: %s", response.Error.Message)
+	}
+	return nil
 }
 
 func runModel(

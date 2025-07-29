@@ -247,7 +247,6 @@ func (c *chainChat) processStreamingResponse(eventChan <-chan *event.Event) erro
 			case "writing-agent":
 				fmt.Printf("✍️  Writing Agent: ")
 			default:
-				fmt.Printf("🤖 %s: ", currentAgent)
 			}
 		}
 

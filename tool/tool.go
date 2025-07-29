@@ -17,6 +17,8 @@ import (
 	"context"
 )
 
+// Tool defines the interface for tools that can be used by agents.
+// It provides a common contract for all tool implementations.
 type Tool interface {
 	// Declaration returns the metadata describing the tool.
 	Declaration() *Declaration
