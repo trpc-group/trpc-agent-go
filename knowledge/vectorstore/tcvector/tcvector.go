@@ -42,9 +42,15 @@ func New(opts ...Option) (*VectorStore, error) {
 		opt(&option)
 	}
 
-	// check options
+	// check opts
 	if option.instanceName == "" && (option.url == "" || option.username == "" || option.password == "") {
 		return nil, errors.New("tcvectordb instance name or (url, username, password) is required")
+	}
+	if option.database == "" {
+		return nil, errors.New("tcvectordb database is required")
+	}
+	if option.collection == "" {
+		return nil, errors.New("tcvectordb collection is required")
 	}
 
 	builderOpts := make([]storage.ClientBuilderOpt, 0)

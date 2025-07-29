@@ -14,7 +14,7 @@
 package tcvector
 
 import (
-	"fmt"
+	"errors"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 )
@@ -60,13 +60,13 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, err
 
 	// Validate required parameters
 	if opts.HTTPURL == "" {
-		return nil, fmt.Errorf("HTTPURL is required")
+		return nil, errors.New("HTTPURL is required")
 	}
 	if opts.UserName == "" {
-		return nil, fmt.Errorf("UserName is required")
+		return nil, errors.New("UserName is required")
 	}
 	if opts.Key == "" {
-		return nil, fmt.Errorf("Key is required")
+		return nil, errors.New("Key is required")
 	}
 
 	return tcvectordb.NewClient(opts.HTTPURL, opts.UserName, opts.Key, nil)
