@@ -1,6 +1,6 @@
-# 🧠 Memory Chat with Runner + Memory Tools
+# 🧠 Multi Turn Chat with Memory
 
-This example demonstrates intelligent memory management using the `Runner` orchestration component with streaming output, session management, and memory tool calling functionality.
+This example demonstrates intelligent memory management using the `Runner` orchestration component with streaming output, session management, and comprehensive memory tool calling functionality.
 
 ## What is Memory Chat?
 
@@ -107,21 +107,42 @@ Usage of ./memory_chat:
 
 ## Implemented Memory Tools
 
-The example includes three working memory tools:
+The example includes six comprehensive memory tools:
 
 ### 🧠 Memory Add Tool
 
 - **Function**: `memory_add`
 - **Purpose**: Store important information about the user
 - **Usage**: "Remember that I like coffee" or "My name is John"
-- **Arguments**: memory (string), topic (optional string)
+- **Arguments**: memory (string), input (string), topics (optional array)
+
+### 🔄 Memory Update Tool
+
+- **Function**: `memory_update`
+- **Purpose**: Update existing memories with new information
+- **Usage**: "Update my coffee preference to decaf" or "I now work at Google"
+- **Arguments**: memory_id (string), memory (string), input (string), topics (optional array)
+
+### 🗑️ Memory Delete Tool
+
+- **Function**: `memory_delete`
+- **Purpose**: Remove specific memories
+- **Usage**: "Forget about my old job" or "Delete my coffee preference"
+- **Arguments**: memory_id (string)
+
+### 🧹 Memory Clear Tool
+
+- **Function**: `memory_clear`
+- **Purpose**: Clear all memories for the user
+- **Usage**: "Forget everything about me" or "Clear all my memories"
+- **Arguments**: None
 
 ### 🔍 Memory Search Tool
 
 - **Function**: `memory_search`
 - **Purpose**: Find relevant memories based on a query
 - **Usage**: "What do you remember about my preferences?" or "Search for coffee"
-- **Arguments**: query (string), limit (optional integer)
+- **Arguments**: query (string)
 
 ### 📋 Memory Load Tool
 
@@ -137,10 +158,10 @@ When you share information or ask about memories, you'll see:
 ```
 🔧 Memory tool calls initiated:
    • memory_add (ID: call_abc123)
-     Args: {"memory":"User's name is John and they like coffee","topic":"preferences"}
+     Args: {"memory":"User's name is John and they like coffee","input":"Hello! My name is John and I like coffee.","topics":["name","preferences"]}
 
 🔄 Executing memory tools...
-✅ Memory tool response (ID: call_abc123): {"success":true,"message":"Memory added successfully","memory":"User's name is John and they like coffee","topic":"preferences"}
+✅ Memory tool response (ID: call_abc123): {"success":true,"message":"Memory added successfully","memory":"User's name is John and they like coffee","input":"Hello! My name is John and I like coffee.","topics":["name","preferences"]}
 
 🤖 Assistant: I'll remember that your name is John and you like coffee!
 ```
@@ -150,11 +171,10 @@ When you share information or ask about memories, you'll see:
 The interface is simple and intuitive:
 
 ```
-🧠 Memory Chat with trpc-agent-go
+🧠 Multi Turn Chat with Memory
 Model: gpt-4o-mini
 Streaming: true
-Type 'exit' to end the conversation
-Available tools: memory_add, memory_search, memory_load
+Available tools: memory_add, memory_update, memory_delete, memory_clear, memory_search, memory_load
 ==================================================
 ✅ Memory chat ready! Session: memory-session-1703123456
 
@@ -223,14 +243,16 @@ All memory operations are clearly displayed, showing:
 
 ### Memory Tools Registration
 
-When using MemoryService, you need to register the three memory tools manually:
+When using MemoryService, you need to register the memory tools manually:
 
 ```go
 // Create memory service.
 memoryService := memoryinmemory.NewMemoryService()
 
-// Create memory tools.
-memoryTools := toolmemory.NewMemoryTools(memoryService, userID)
+// Create memory tools with the new interface.
+appName := "memory-chat"
+userID := "user"
+memoryTools := toolmemory.NewMemoryTools(memoryService, appName, userID)
 
 // Create agent with memory tools.
 agent := llmagent.New(
@@ -238,35 +260,47 @@ agent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithDescription("A helpful AI assistant with memory capabilities."),
     llmagent.WithInstruction("Use memory tools to provide personalized assistance."),
-    llmagent.WithTools(memoryTools), // Register the three memory tools.
+    llmagent.WithTools(memoryTools), // Register the memory tools.
 )
 
 // Create runner with memory service.
 runner := runner.NewRunner(
-    "memory-chat",
+    appName,
     agent,
     runner.WithMemoryService(memoryService),
 )
 ```
 
-**Required Memory Tools:**
+**Available Memory Tools:**
 
 - **memory_add**: Allows LLM to actively add user-related memories
+- **memory_update**: Allows LLM to update existing memories
+- **memory_delete**: Allows LLM to delete specific memories
+- **memory_clear**: Allows LLM to clear all memories
 - **memory_search**: Allows LLM to search for relevant memories
 - **memory_load**: Allows LLM to load user memory overview
 
 **Note:** Currently, memory tools need to be manually registered with the agent. The MemoryService in the runner is used for storage and management, but the tools must be explicitly added to the agent's tool list.
 
-### Memory Tools
+### Custom Memory Tools
 
-- **MemoryAddTool**: Allows LLM to actively add user-related memories
-- **MemorySearchTool**: Allows LLM to search for relevant memories
-- **MemoryLoadTool**: Allows LLM to load user memory overview
+You can also create custom memory tools using the Options pattern:
+
+```go
+// Create custom memory add tool with enhanced logging.
+customAddTool := NewExampleCustomAddTool(memoryService, appName, userID, true)
+
+// Use custom tools with the Options pattern.
+memoryTools := toolmemory.NewMemoryTools(
+    memoryService, appName, userID,
+    toolmemory.WithAddTool(customAddTool),
+)
+```
 
 ### Tool Calling Flow
 
 1. LLM decides when to use memory tools based on user input
-2. Calls appropriate memory tools (add/search/load)
+2. Calls appropriate memory tools (add/update/delete/clear/search/load)
 3. Tools execute and return results
 4. LLM generates personalized responses based on memory data
 
@@ -289,6 +323,7 @@ This example demonstrates how to:
 2. Add memory capabilities to agents
 3. Handle memory tool calls and responses
 4. Manage user memory storage and retrieval
+5. Create custom memory tools with enhanced functionality
 
 Future enhancements could include:
 
@@ -297,3 +332,4 @@ Future enhancements could include:
 - Memory priority and relevance scoring
 - Automatic memory summarization and compression
 - Vector-based semantic memory search
+- Custom memory tool implementations with specialized functionality
