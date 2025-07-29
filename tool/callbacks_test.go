@@ -21,6 +21,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// ToolError represents an error that occurred during tool execution.
+type ToolError struct {
+	Message string
+}
+
+// Error returns the error message.
+func (e *ToolError) Error() string {
+	return e.Message
+}
+
+// NewError creates a new ToolError.
+func NewError(message string) error {
+	return &ToolError{Message: message}
+}
+
 func TestNewToolCallbacks(t *testing.T) {
 	callbacks := tool.NewToolCallbacks()
 	require.NotNil(t, callbacks)
@@ -154,7 +169,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 		toolDeclaration *tool.Declaration,
 		jsonArgs []byte,
 	) (any, error) {
-		return nil, tool.NewError(expectedErr)
+		return nil, NewError(expectedErr)
 	}
 
 	callbacks.RegisterBeforeTool(callback)
@@ -286,7 +301,7 @@ func TestRunAfterTool_WithError(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 	originalResult := map[string]string{"original": "result"}
-	runErr := tool.NewError("tool execution error")
+	runErr := NewError("tool execution error")
 
 	customResult, err := callbacks.RunAfterTool(context.Background(), "test-tool", declaration, args, originalResult, runErr)
 
@@ -304,7 +319,7 @@ func TestRunAfterTool_Error(t *testing.T) {
 	expectedErr := "callback error"
 
 	callback := func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		return nil, tool.NewError(expectedErr)
+		return nil, NewError(expectedErr)
 	}
 
 	callbacks.RegisterAfterTool(callback)
@@ -432,7 +447,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 	// Test error handling.
 	declaration = &tool.Declaration{Name: "error-tool", Description: "A tool with error"}
 	args = []byte(`{"test": "value"}`)
-	runErr := tool.NewError("execution error")
+	runErr := NewError("execution error")
 
 	customResult, err = callbacks.RunAfterTool(context.Background(), "error-tool", declaration, args, nil, runErr)
 	require.NoError(t, err)
