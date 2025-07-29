@@ -33,7 +33,7 @@ func TestReadDocuments(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		filePath := filepath.Join(tmpDir, "file"+strconv.Itoa(i)+".txt")
 		content := strings.Repeat("0123456789", 5) // 50 chars
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
 			t.Fatalf("failed to write temp file: %v", err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestGetFilePaths(t *testing.T) {
 	//     nested.txt
 
 	mustWrite := func(path, content string) {
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 			t.Fatalf("failed to write file %s: %v", path, err)
 		}
 	}
@@ -133,7 +133,7 @@ func TestReadDocuments_Basic(t *testing.T) {
 	ctx := context.Background()
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "sample.txt")
-	if err := os.WriteFile(filePath, []byte("sample content"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("sample content"), 0600); err != nil {
 		t.Fatalf("failed to write sample file: %v", err)
 	}
 

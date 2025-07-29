@@ -1,4 +1,4 @@
-// package a2a provides utilities for creating a2a servers.
+// Package a2a provides utilities for creating a2a servers.
 package a2a
 
 import (

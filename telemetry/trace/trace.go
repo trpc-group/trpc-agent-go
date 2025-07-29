@@ -30,6 +30,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
+// Tracer is the global tracer instance for telemetry.
 var Tracer trace.Tracer = noopt.Tracer{}
 
 // Start collects telemetry with optional configuration.

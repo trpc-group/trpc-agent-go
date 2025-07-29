@@ -10,7 +10,7 @@
 //
 //
 
-// Package tool provides tool implementations for the agent system.
+// Package function provides function-based tool implementations for the agent system.
 package function
 
 import (
