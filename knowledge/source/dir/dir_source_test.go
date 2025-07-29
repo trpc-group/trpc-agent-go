@@ -173,8 +173,8 @@ func TestSource_FileExtensionFilter(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	// create files .txt and .json
-	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(root, "b.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o600)
+	os.WriteFile(filepath.Join(root, "b.json"), []byte("{}"), 0o600)
 
 	src := New([]string{root}, WithFileExtensions([]string{".txt"}))
 	docs, err := src.ReadDocuments(ctx)
@@ -191,7 +191,7 @@ func TestSource_Recursive(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "sub")
 	os.Mkdir(sub, 0o755)
-	os.WriteFile(filepath.Join(sub, "c.txt"), []byte("y"), 0o644)
+	os.WriteFile(filepath.Join(sub, "c.txt"), []byte("y"), 0o600)
 
 	src := New([]string{root}, WithRecursive(true))
 	docs, err := src.ReadDocuments(ctx)

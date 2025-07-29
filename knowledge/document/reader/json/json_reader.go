@@ -122,12 +122,16 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 // ReadFromURL reads JSON content from a URL and returns a list of documents.
 func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	// Validate URL before making HTTP request.
-	if _, err := url.Parse(urlStr); err != nil {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
 	}
 
 	// Download JSON from URL.
-	resp, err := http.Get(urlStr)
+	resp, err := http.Get(parsedURL.String())
 	if err != nil {
 		return nil, err
 	}
