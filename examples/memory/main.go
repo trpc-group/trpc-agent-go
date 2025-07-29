@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 )
 
@@ -94,9 +95,16 @@ func (c *memoryChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
 
-	// Create memory tools using simplified approach.
+	// Create memory tools using ToolSet interface.
 	appName := "memory-chat"
-	memoryTools := toolmemory.NewMemoryTools(memoryService, appName, c.userID)
+	memoryToolSet := toolmemory.NewMemoryToolSet(memoryService, appName, c.userID)
+	callableTools := memoryToolSet.Tools(context.Background())
+
+	// Convert CallableTool to Tool for llmagent.WithTools
+	memoryTools := make([]tool.Tool, len(callableTools))
+	for i, callableTool := range callableTools {
+		memoryTools[i] = callableTool
+	}
 
 	// Create LLM agent with memory tools.
 	genConfig := model.GenerationConfig{
