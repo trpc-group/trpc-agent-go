@@ -78,7 +78,7 @@ func buildCodeCheckAgent(modelName string) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      false,
+		Stream:      true,
 	}
 
 	readSpecTool := function.NewFunctionTool(
