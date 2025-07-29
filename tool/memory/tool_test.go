@@ -241,3 +241,156 @@ func TestMemoryTool_Declaration(t *testing.T) {
 		t.Errorf("Expected schema type 'object', got '%s'", decl.InputSchema.Type)
 	}
 }
+
+func TestMemoryTool_UpdateMemory(t *testing.T) {
+	service := inmemory.NewMemoryService()
+	appName := "test-app"
+	userID := "test-user"
+
+	// Add a memory first.
+	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	if err != nil {
+		t.Fatalf("Failed to add memory: %v", err)
+	}
+
+	// Get the memory ID.
+	memories, err := service.ReadMemories(context.Background(), userKey, 1)
+	if err != nil {
+		t.Fatalf("Failed to read memories: %v", err)
+	}
+	if len(memories) == 0 {
+		t.Fatal("No memories found")
+	}
+	memoryID := memories[0].ID
+
+	tool := newMemoryTool(service, appName, userID, updateMemoryFunction, "memory_update", "Update memory")
+
+	// Test updating memory with new content and topics.
+	args := map[string]any{
+		"memory_id": memoryID,
+		"memory":    "User loves coffee and tea",
+		"topics":    []string{"preferences", "beverages"},
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("Failed to marshal args: %v", err)
+	}
+
+	result, err := tool.Call(context.Background(), jsonArgs)
+	if err != nil {
+		t.Fatalf("Failed to call tool: %v", err)
+	}
+
+	response, ok := result.(UpdateMemoryResponse)
+	if !ok {
+		t.Fatalf("Expected UpdateMemoryResponse, got %T", result)
+	}
+
+	if !response.Success {
+		t.Errorf("Expected success, got failure: %s", response.Message)
+	}
+
+	// Verify response fields are correctly populated.
+	if response.MemoryID != memoryID {
+		t.Errorf("Expected memory ID %s, got %s", memoryID, response.MemoryID)
+	}
+
+	if response.Memory != "User loves coffee and tea" {
+		t.Errorf("Expected memory 'User loves coffee and tea', got '%s'", response.Memory)
+	}
+
+	if len(response.Topics) != 2 {
+		t.Errorf("Expected 2 topics, got %d", len(response.Topics))
+	}
+
+	if response.Topics[0] != "preferences" || response.Topics[1] != "beverages" {
+		t.Errorf("Expected topics ['preferences', 'beverages'], got %v", response.Topics)
+	}
+
+	// Verify memory was actually updated.
+	updatedMemories, err := service.ReadMemories(context.Background(), userKey, 1)
+	if err != nil {
+		t.Fatalf("Failed to read updated memories: %v", err)
+	}
+
+	if len(updatedMemories) == 0 {
+		t.Fatal("No updated memories found")
+	}
+
+	if updatedMemories[0].Memory.Memory != "User loves coffee and tea" {
+		t.Errorf("Expected updated memory 'User loves coffee and tea', got '%s'", updatedMemories[0].Memory.Memory)
+	}
+
+	if len(updatedMemories[0].Memory.Topics) != 2 {
+		t.Errorf("Expected 2 updated topics, got %d", len(updatedMemories[0].Memory.Topics))
+	}
+}
+
+func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
+	service := inmemory.NewMemoryService()
+	appName := "test-app"
+	userID := "test-user"
+
+	// Add a memory first.
+	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	if err != nil {
+		t.Fatalf("Failed to add memory: %v", err)
+	}
+
+	// Get the memory ID.
+	memories, err := service.ReadMemories(context.Background(), userKey, 1)
+	if err != nil {
+		t.Fatalf("Failed to read memories: %v", err)
+	}
+	if len(memories) == 0 {
+		t.Fatal("No memories found")
+	}
+	memoryID := memories[0].ID
+
+	tool := newMemoryTool(service, appName, userID, updateMemoryFunction, "memory_update", "Update memory")
+
+	// Test updating memory without topics.
+	args := map[string]any{
+		"memory_id": memoryID,
+		"memory":    "User loves coffee and tea",
+	}
+
+	jsonArgs, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("Failed to marshal args: %v", err)
+	}
+
+	result, err := tool.Call(context.Background(), jsonArgs)
+	if err != nil {
+		t.Fatalf("Failed to call tool: %v", err)
+	}
+
+	response, ok := result.(UpdateMemoryResponse)
+	if !ok {
+		t.Fatalf("Expected UpdateMemoryResponse, got %T", result)
+	}
+
+	if !response.Success {
+		t.Errorf("Expected success, got failure: %s", response.Message)
+	}
+
+	// Verify response fields are correctly populated.
+	if response.MemoryID != memoryID {
+		t.Errorf("Expected memory ID %s, got %s", memoryID, response.MemoryID)
+	}
+
+	if response.Memory != "User loves coffee and tea" {
+		t.Errorf("Expected memory 'User loves coffee and tea', got '%s'", response.Memory)
+	}
+
+	if response.Topics == nil {
+		t.Error("Expected topics to be empty slice, got nil")
+	}
+
+	if len(response.Topics) != 0 {
+		t.Errorf("Expected 0 topics, got %d", len(response.Topics))
+	}
+}

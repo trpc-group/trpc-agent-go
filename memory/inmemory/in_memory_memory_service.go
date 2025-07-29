@@ -166,7 +166,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string) error {
+func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	// Update memory data.
 	now := time.Now()
 	memoryEntry.Memory.Memory = memoryStr
-	// Note: Input is not updated here, only memory content.
+	memoryEntry.Memory.Topics = topics
 	memoryEntry.Memory.LastUpdated = &now
 	memoryEntry.UpdatedAt = now
 

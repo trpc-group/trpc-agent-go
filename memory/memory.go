@@ -33,7 +33,7 @@ type Service interface {
 	AddMemory(ctx context.Context, userKey UserKey, memory string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.
-	UpdateMemory(ctx context.Context, memoryKey Key, memory string) error
+	UpdateMemory(ctx context.Context, memoryKey Key, memory string, topics []string) error
 
 	// DeleteMemory deletes a memory for a user.
 	DeleteMemory(ctx context.Context, memoryKey Key) error
@@ -57,19 +57,19 @@ type Memory struct {
 
 // Entry represents a memory entry stored in the system.
 type Entry struct {
-	ID        string    `json:"id"`         // ID of the memory.
-	AppName   string    `json:"app_name"`   // App name.
-	Memory    *Memory   `json:"memory"`     // Direct Memory object reference.
-	UserID    string    `json:"user_id"`    // User ID.
-	CreatedAt time.Time `json:"created_at"` // Creation time.
-	UpdatedAt time.Time `json:"updated_at"` // Last update time.
+	ID        string    `json:"id"`         // ID is the unique identifier of the memory.
+	AppName   string    `json:"app_name"`   // App name is the name of the application.
+	Memory    *Memory   `json:"memory"`     // Memory is the memory content.
+	UserID    string    `json:"user_id"`    // User ID is the unique identifier of the user.
+	CreatedAt time.Time `json:"created_at"` // CreatedAt is the creation time.
+	UpdatedAt time.Time `json:"updated_at"` // UpdatedAt is the last update time.
 }
 
 // Key is the key for a memory.
 type Key struct {
-	AppName  string // app name
-	UserID   string // user id
-	MemoryID string // memory id
+	AppName  string // AppName is the name of the application.
+	UserID   string // UserID is the unique identifier of the user.
+	MemoryID string // MemoryID is the unique identifier of the memory.
 }
 
 // CheckMemoryKey checks if a memory key is valid.
@@ -84,8 +84,8 @@ func (m *Key) CheckUserKey() error {
 
 // UserKey is the key for a user.
 type UserKey struct {
-	AppName string // app name
-	UserID  string // user id
+	AppName string // AppName is the name of the application.
+	UserID  string // UserID is the unique identifier of the user.
 }
 
 // CheckUserKey checks if a user key is valid.

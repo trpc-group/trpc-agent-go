@@ -122,6 +122,11 @@ func (m *memoryTool) getInputSchema() *tool.Schema {
 					Type:        "string",
 					Description: "The updated memory content.",
 				},
+				"topics": {
+					Type:        "array",
+					Items:       &tool.Schema{Type: "string"},
+					Description: "Optional topics for categorizing the memory.",
+				},
 			},
 			Required: []string{"memory_id", "memory"},
 		}
@@ -227,8 +232,23 @@ func updateMemoryFunction(ctx context.Context, service memory.Service, appName s
 		return nil, errors.New("memory content is required")
 	}
 
+	var topics []string
+	if topicsInterface, ok := argsMap["topics"]; ok {
+		if topicsSlice, ok := topicsInterface.([]any); ok {
+			for _, topic := range topicsSlice {
+				if topicStr, ok := topic.(string); ok {
+					topics = append(topics, topicStr)
+				}
+			}
+		}
+	}
+	// Ensure topics is never nil
+	if topics == nil {
+		topics = []string{}
+	}
+
 	memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: memoryID}
-	err := service.UpdateMemory(ctx, memoryKey, memoryStr)
+	err := service.UpdateMemory(ctx, memoryKey, memoryStr, topics)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update memory: %v", err)
 	}
@@ -238,7 +258,7 @@ func updateMemoryFunction(ctx context.Context, service memory.Service, appName s
 		Message:  "Memory updated successfully",
 		MemoryID: memoryID,
 		Memory:   memoryStr,
-		Topics:   nil, // Update doesn't have topics
+		Topics:   topics,
 	}, nil
 }
 
