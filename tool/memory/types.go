@@ -12,10 +12,12 @@
 // Package memory provides memory-related tools for the agent system.
 package memory
 
-import "time"
+import (
+	"time"
+)
 
-// MemoryResult represents a single memory result.
-type MemoryResult struct {
+// Result represents a single memory result.
+type Result struct {
 	ID      string    `json:"id"`      // ID is the memory ID.
 	Memory  string    `json:"memory"`  // Memory is the memory content.
 	Topics  []string  `json:"topics"`  // Topics is the memory topics.
@@ -56,16 +58,16 @@ type ClearMemoryResponse struct {
 
 // SearchMemoryResponse represents the response from memory_search tool.
 type SearchMemoryResponse struct {
-	Success bool           `json:"success"` // Success is whether the operation was successful.
-	Query   string         `json:"query"`   // Query is the search query that was used.
-	Results []MemoryResult `json:"results"` // Results is the search results.
-	Count   int            `json:"count"`   // Count is the number of results found.
+	Success bool     `json:"success"` // Success is whether the operation was successful.
+	Query   string   `json:"query"`   // Query is the search query that was used.
+	Results []Result `json:"results"` // Results is the search results.
+	Count   int      `json:"count"`   // Count is the number of results found.
 }
 
 // LoadMemoryResponse represents the response from memory_load tool.
 type LoadMemoryResponse struct {
-	Success bool           `json:"success"` // Success is whether the operation was successful.
-	Limit   int            `json:"limit"`   // Limit is the limit that was used.
-	Results []MemoryResult `json:"results"` // Results is the loaded memories.
-	Count   int            `json:"count"`   // Count is the number of memories loaded.
+	Success bool     `json:"success"` // Success is whether the operation was successful.
+	Limit   int      `json:"limit"`   // Limit is the limit that was used.
+	Results []Result `json:"results"` // Results is the loaded memories.
+	Count   int      `json:"count"`   // Count is the number of memories loaded.
 }

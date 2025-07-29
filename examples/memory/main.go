@@ -94,7 +94,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
 
-	// Create memory tools.
+	// Create memory tools using simplified approach.
 	appName := "memory-chat"
 	memoryTools := toolmemory.NewMemoryTools(memoryService, appName, c.userID)
 

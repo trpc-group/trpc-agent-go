@@ -33,19 +33,19 @@ type Service interface {
 	AddMemory(ctx context.Context, userKey UserKey, memory string, input string, topics []string) error
 
 	// UpdateMemory updates an existing memory for a user.
-	UpdateMemory(ctx context.Context, memoryKey MemoryKey, memory string) error
+	UpdateMemory(ctx context.Context, memoryKey Key, memory string) error
 
 	// DeleteMemory deletes a memory for a user.
-	DeleteMemory(ctx context.Context, memoryKey MemoryKey) error
+	DeleteMemory(ctx context.Context, memoryKey Key) error
 
 	// ClearMemories clears all memories for a user.
 	ClearMemories(ctx context.Context, userKey UserKey) error
 
 	// ReadMemories reads memories for a user.
-	ReadMemories(ctx context.Context, userKey UserKey, limit int) ([]*MemoryEntry, error)
+	ReadMemories(ctx context.Context, userKey UserKey, limit int) ([]*Entry, error)
 
 	// SearchMemories searches memories for a user.
-	SearchMemories(ctx context.Context, userKey UserKey, query string) ([]*MemoryEntry, error)
+	SearchMemories(ctx context.Context, userKey UserKey, query string) ([]*Entry, error)
 }
 
 // Memory represents a memory entry with content and metadata.
@@ -56,8 +56,8 @@ type Memory struct {
 	LastUpdated *time.Time `json:"last_updated,omitempty"` // Last update time.
 }
 
-// MemoryEntry represents a memory entry stored in the system.
-type MemoryEntry struct {
+// Entry represents a memory entry stored in the system.
+type Entry struct {
 	ID        string    `json:"id"`         // ID of the memory.
 	AppName   string    `json:"app_name"`   // App name.
 	Memory    *Memory   `json:"memory"`     // Direct Memory object reference.
@@ -66,20 +66,20 @@ type MemoryEntry struct {
 	UpdatedAt time.Time `json:"updated_at"` // Last update time.
 }
 
-// MemoryKey is the key for a memory.
-type MemoryKey struct {
+// Key is the key for a memory.
+type Key struct {
 	AppName  string // app name
 	UserID   string // user id
 	MemoryID string // memory id
 }
 
 // CheckMemoryKey checks if a memory key is valid.
-func (m *MemoryKey) CheckMemoryKey() error {
+func (m *Key) CheckMemoryKey() error {
 	return checkMemoryKey(m.AppName, m.UserID, m.MemoryID)
 }
 
 // CheckUserKey checks if a user key is valid.
-func (m *MemoryKey) CheckUserKey() error {
+func (m *Key) CheckUserKey() error {
 	return checkUserKey(m.AppName, m.UserID)
 }
 

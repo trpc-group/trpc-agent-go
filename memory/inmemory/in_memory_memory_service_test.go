@@ -89,7 +89,7 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
 
-	memoryKey := memory.MemoryKey{
+	memoryKey := memory.Key{
 		AppName:  userKey.AppName,
 		UserID:   userKey.UserID,
 		MemoryID: memories[0].ID,
@@ -132,7 +132,7 @@ func TestMemoryService_DeleteMemory(t *testing.T) {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
 
-	memoryKey := memory.MemoryKey{
+	memoryKey := memory.Key{
 		AppName:  userKey.AppName,
 		UserID:   userKey.UserID,
 		MemoryID: memories[0].ID,

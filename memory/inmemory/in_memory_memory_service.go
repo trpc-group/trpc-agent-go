@@ -35,13 +35,13 @@ const (
 // appMemories represents memories for a specific app.
 type appMemories struct {
 	mu       sync.RWMutex
-	memories map[string]map[string]*memory.MemoryEntry // userID -> memoryID -> MemoryEntry
+	memories map[string]map[string]*memory.Entry // userID -> memoryID -> MemoryEntry
 }
 
 // newAppMemories creates a new app memories instance.
 func newAppMemories() *appMemories {
 	return &appMemories{
-		memories: make(map[string]map[string]*memory.MemoryEntry),
+		memories: make(map[string]map[string]*memory.Entry),
 	}
 }
 
@@ -117,7 +117,7 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryStr string, input string, topics []string) *memory.MemoryEntry {
+func createMemoryEntry(userID string, memoryStr string, input string, topics []string) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
@@ -128,7 +128,7 @@ func createMemoryEntry(userID string, memoryStr string, input string, topics []s
 		LastUpdated: &now,
 	}
 
-	return &memory.MemoryEntry{
+	return &memory.Entry{
 		Memory:    memoryObj,
 		UserID:    userID,
 		CreatedAt: now,
@@ -159,7 +159,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 
 	// Initialize user map if not exists.
 	if app.memories[userKey.UserID] == nil {
-		app.memories[userKey.UserID] = make(map[string]*memory.MemoryEntry)
+		app.memories[userKey.UserID] = make(map[string]*memory.Entry)
 	}
 
 	app.memories[userKey.UserID][memoryEntry.ID] = memoryEntry
@@ -167,7 +167,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.MemoryKey, memoryStr string) error {
+func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Memor
 }
 
 // DeleteMemory deletes a memory for a user.
-func (s *MemoryService) DeleteMemory(ctx context.Context, memoryKey memory.MemoryKey) error {
+func (s *MemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (s *MemoryService) ClearMemories(ctx context.Context, userKey memory.UserKe
 }
 
 // ReadMemories reads memories for a user.
-func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.MemoryEntry, error) {
+func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	var memories []*memory.MemoryEntry
+	var memories []*memory.Entry
 	userMemories := app.memories[userKey.UserID]
 	if userMemories == nil {
 		return memories, nil
@@ -273,7 +273,7 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 }
 
 // SearchMemories searches memories for a user.
-func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.MemoryEntry, error) {
+func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	var results []*memory.MemoryEntry
+	var results []*memory.Entry
 	queryLower := strings.ToLower(query)
 
 	userMemories := app.memories[userKey.UserID]
