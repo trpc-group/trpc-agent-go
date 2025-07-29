@@ -230,7 +230,7 @@ When using MemoryService, you need to register the three memory tools manually:
 memoryService := memoryinmemory.NewMemoryService()
 
 // Create memory tools.
-memoryTools := toolmemory.GetMemoryTools(memoryService, userID)
+memoryTools := toolmemory.NewMemoryTools(memoryService, userID)
 
 // Create agent with memory tools.
 agent := llmagent.New(

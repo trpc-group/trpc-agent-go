@@ -96,7 +96,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 
 	// Create memory tools.
 	appName := "memory-chat"
-	memoryTools := toolmemory.GetMemoryTools(memoryService, appName, c.userID)
+	memoryTools := toolmemory.NewMemoryTools(memoryService, appName, c.userID)
 
 	// Create LLM agent with memory tools.
 	genConfig := model.GenerationConfig{

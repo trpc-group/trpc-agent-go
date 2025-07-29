@@ -157,12 +157,12 @@ func TestMemoryLoadTool(t *testing.T) {
 	}
 }
 
-func TestGetMemoryTools(t *testing.T) {
+func TestNewMemoryTools(t *testing.T) {
 	service := inmemory.NewMemoryService()
 	appName := "test-app"
 	userID := "test-user"
 
-	tools := GetMemoryTools(service, appName, userID)
+	tools := NewMemoryTools(service, appName, userID)
 
 	if len(tools) != 6 {
 		t.Fatalf("Expected 6 tools, got %d", len(tools))
