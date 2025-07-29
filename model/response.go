@@ -129,6 +129,38 @@ type Response struct {
 	IsPartial bool `json:"is_partial"`
 }
 
+// Clone creates a deep copy of the response.
+func (r *Response) Clone() *Response {
+	if r == nil {
+		return nil
+	}
+	clone := *r
+	clone.Choices = make([]Choice, len(r.Choices))
+	copy(clone.Choices, r.Choices)
+	if r.Usage != nil {
+		clone.Usage = &Usage{
+			PromptTokens:     r.Usage.PromptTokens,
+			CompletionTokens: r.Usage.CompletionTokens,
+			TotalTokens:      r.Usage.TotalTokens,
+		}
+	}
+	// Deep copy Error if present.
+	if r.Error != nil {
+		clone.Error = &ResponseError{
+			Message: r.Error.Message,
+			Type:    r.Error.Type,
+			Param:   r.Error.Param,
+			Code:    r.Error.Code,
+		}
+	}
+	// Deep copy SystemFingerprint if present.
+	if r.SystemFingerprint != nil {
+		fp := *r.SystemFingerprint
+		clone.SystemFingerprint = &fp
+	}
+	return &clone
+}
+
 // ResponseError represents an error response from the API.
 type ResponseError struct {
 	// Message is the error message.

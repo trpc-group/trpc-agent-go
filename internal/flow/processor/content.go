@@ -199,13 +199,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 		return *evt
 	}
 	// Create a new event with user context.
-	convertedEvent := *evt
-	// Construct a new response and make explicit copy to avoid
-	// modifying the original response.
-	convertedEvent.Response = &model.Response{}
-	if evt.Response != nil {
-		*convertedEvent.Response = *evt.Response
-	}
+	convertedEvent := evt.Clone()
 	convertedEvent.Author = "user"
 
 	// Build content parts for context.
@@ -241,8 +235,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 			},
 		}
 	}
-
-	return convertedEvent
+	return *convertedEvent
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
