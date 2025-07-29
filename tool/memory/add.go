@@ -27,12 +27,14 @@ import (
 type MemoryAddTool struct {
 	memoryService memory.Service
 	userID        string
+	appName       string
 }
 
 // NewMemoryAddTool creates a new MemoryAddTool.
-func NewMemoryAddTool(memoryService memory.Service, userID string) *MemoryAddTool {
+func NewMemoryAddTool(memoryService memory.Service, appName string, userID string) *MemoryAddTool {
 	return &MemoryAddTool{
 		memoryService: memoryService,
+		appName:       appName,
 		userID:        userID,
 	}
 }
@@ -88,8 +90,14 @@ func (m *MemoryAddTool) Call(ctx context.Context, jsonArgs []byte) (any, error) 
 		return nil, errors.New("input content cannot be empty")
 	}
 
+	// Create user key.
+	userKey := memory.UserKey{
+		AppName: m.appName,
+		UserID:  m.userID,
+	}
+
 	// Add memory to the service.
-	err := m.memoryService.AddMemory(ctx, m.userID, args.Memory, args.Input, args.Topics)
+	err := m.memoryService.AddMemory(ctx, userKey, args.Memory, args.Input, args.Topics)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add memory: %v", err)
 	}

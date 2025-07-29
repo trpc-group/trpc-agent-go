@@ -23,16 +23,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemoryLoadTool provides a tool for LLM to load recent memories.
+// MemoryLoadTool is a tool for loading recent memories.
 type MemoryLoadTool struct {
 	memoryService memory.Service
+	appName       string
 	userID        string
 }
 
 // NewMemoryLoadTool creates a new MemoryLoadTool.
-func NewMemoryLoadTool(memoryService memory.Service, userID string) *MemoryLoadTool {
+func NewMemoryLoadTool(memoryService memory.Service, appName string, userID string) *MemoryLoadTool {
 	return &MemoryLoadTool{
 		memoryService: memoryService,
+		appName:       appName,
 		userID:        userID,
 	}
 }
@@ -41,13 +43,13 @@ func NewMemoryLoadTool(memoryService memory.Service, userID string) *MemoryLoadT
 func (m *MemoryLoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:        "memory_load",
-		Description: "Load recent memories for the user. Use this to get an overview of what you know about the user.",
+		Description: "Load recent memories for the user. Use this when you want to recall recent information about the user.",
 		InputSchema: &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
 				"limit": {
 					Type:        "integer",
-					Description: "Maximum number of memories to return (default: 10).",
+					Description: "Maximum number of memories to load (default: 10).",
 				},
 			},
 		},
@@ -65,7 +67,7 @@ func (m *MemoryLoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error)
 	}
 
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
-		return nil, errors.New("failed to parse arguments")
+		return nil, fmt.Errorf("failed to parse arguments: %v", err)
 	}
 
 	// Set default limit.
@@ -73,8 +75,14 @@ func (m *MemoryLoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error)
 		args.Limit = 10
 	}
 
+	// Create user key.
+	userKey := memory.UserKey{
+		AppName: m.appName,
+		UserID:  m.userID,
+	}
+
 	// Load memories.
-	memories, err := m.memoryService.ReadMemories(ctx, m.userID, args.Limit)
+	memories, err := m.memoryService.ReadMemories(ctx, userKey, args.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load memories: %v", err)
 	}
@@ -91,8 +99,9 @@ func (m *MemoryLoadTool) Call(ctx context.Context, jsonArgs []byte) (any, error)
 	}
 
 	return map[string]any{
-		"success":  true,
-		"count":    len(results),
-		"memories": results,
+		"success": true,
+		"limit":   args.Limit,
+		"results": results,
+		"count":   len(results),
 	}, nil
 }

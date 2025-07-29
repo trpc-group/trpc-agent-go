@@ -23,16 +23,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// MemorySearchTool provides a tool for LLM to search memories.
+// MemorySearchTool is a tool for searching memories.
 type MemorySearchTool struct {
 	memoryService memory.Service
+	appName       string
 	userID        string
 }
 
 // NewMemorySearchTool creates a new MemorySearchTool.
-func NewMemorySearchTool(memoryService memory.Service, userID string) *MemorySearchTool {
+func NewMemorySearchTool(memoryService memory.Service, appName string, userID string) *MemorySearchTool {
 	return &MemorySearchTool{
 		memoryService: memoryService,
+		appName:       appName,
 		userID:        userID,
 	}
 }
@@ -41,17 +43,13 @@ func NewMemorySearchTool(memoryService memory.Service, userID string) *MemorySea
 func (m *MemorySearchTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:        "memory_search",
-		Description: "Search for memories related to a query. Use this when you need to recall information about the user.",
+		Description: "Search for memories related to a query. Use this when you want to find relevant information from the user's memory.",
 		InputSchema: &tool.Schema{
 			Type: "object",
 			Properties: map[string]*tool.Schema{
 				"query": {
 					Type:        "string",
 					Description: "The search query to find relevant memories.",
-				},
-				"limit": {
-					Type:        "integer",
-					Description: "Maximum number of memories to return (default: 10).",
 				},
 			},
 			Required: []string{"query"},
@@ -67,7 +65,6 @@ func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, erro
 
 	var args struct {
 		Query string `json:"query"`
-		Limit int    `json:"limit,omitempty"`
 	}
 
 	if err := json.Unmarshal(jsonArgs, &args); err != nil {
@@ -75,16 +72,17 @@ func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, erro
 	}
 
 	if args.Query == "" {
-		return nil, fmt.Errorf("search query cannot be empty")
+		return nil, errors.New("search query cannot be empty")
 	}
 
-	// Set default limit.
-	if args.Limit <= 0 {
-		args.Limit = 10
+	// Create user key.
+	userKey := memory.UserKey{
+		AppName: m.appName,
+		UserID:  m.userID,
 	}
 
 	// Search memories.
-	memories, err := m.memoryService.SearchMemories(ctx, m.userID, args.Query)
+	memories, err := m.memoryService.SearchMemories(ctx, userKey, args.Query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search memories: %v", err)
 	}
@@ -101,9 +99,9 @@ func (m *MemorySearchTool) Call(ctx context.Context, jsonArgs []byte) (any, erro
 	}
 
 	return map[string]any{
-		"success":  true,
-		"query":    args.Query,
-		"count":    len(results),
-		"memories": results,
+		"success": true,
+		"query":   args.Query,
+		"results": results,
+		"count":   len(results),
 	}, nil
 }

@@ -28,22 +28,20 @@ import (
 var _ memory.Service = (*MemoryService)(nil)
 
 const (
-	// defaultAppName is the default app name for the memory service.
-	defaultAppName = "default"
 	// defaultMemoryLimit is the default limit of memories per user.
 	defaultMemoryLimit = 1000
 )
 
-// appMemories stores memories for one app.
+// appMemories represents memories for a specific app.
 type appMemories struct {
 	mu       sync.RWMutex
-	memories map[string]*memory.MemoryEntry // userID -> memoryID -> MemoryEntry
+	memories map[string]map[string]*memory.MemoryEntry // userID -> memoryID -> MemoryEntry
 }
 
 // newAppMemories creates a new app memories instance.
 func newAppMemories() *appMemories {
 	return &appMemories{
-		memories: make(map[string]*memory.MemoryEntry),
+		memories: make(map[string]map[string]*memory.MemoryEntry),
 	}
 }
 
@@ -130,109 +128,134 @@ func createMemoryEntry(userID string, memoryStr string, input string, topics []s
 		LastUpdated: &now,
 	}
 
-	// Generate ID.
-	id := generateMemoryID(memoryObj)
-	memoryObj.MemoryID = id
-
 	return &memory.MemoryEntry{
 		Memory:    memoryObj,
 		UserID:    userID,
 		CreatedAt: now,
 		UpdatedAt: now,
-		ID:        id,
+		ID:        generateMemoryID(memoryObj), // Generate ID.
 	}
 }
 
 // AddMemory adds a new memory for a user.
-func (s *MemoryService) AddMemory(ctx context.Context, userID string, memoryStr string, input string, topics []string) error {
-	appName := defaultAppName // Default app name for now.
-	app := s.getAppMemories(appName)
+func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, input string, topics []string) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	app := s.getAppMemories(userKey.AppName)
 
 	// Create memory entry with provided input and topics.
-	memoryEntry := createMemoryEntry(userID, memoryStr, input, topics)
+	memoryEntry := createMemoryEntry(userKey.UserID, memoryStr, input, topics)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
 	// Check memory limit.
-	if len(app.memories) >= s.opts.memoryLimit {
-		return fmt.Errorf("memory limit exceeded for user %s", userID)
+	if len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
+		return fmt.Errorf("memory limit exceeded for user %s", userKey.UserID)
 	}
 
-	app.memories[memoryEntry.ID] = memoryEntry
+	// Initialize user map if not exists.
+	if app.memories[userKey.UserID] == nil {
+		app.memories[userKey.UserID] = make(map[string]*memory.MemoryEntry)
+	}
+
+	app.memories[userKey.UserID][memoryEntry.ID] = memoryEntry
 	return nil
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *MemoryService) UpdateMemory(ctx context.Context, userID string, id string, memoryStr string) error {
-	appName := defaultAppName
-	app := s.getAppMemories(appName)
+func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.MemoryKey, memoryStr string) error {
+	if err := memoryKey.CheckMemoryKey(); err != nil {
+		return err
+	}
+
+	app := s.getAppMemories(memoryKey.AppName)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	memoryEntry, exists := app.memories[id]
+	// Check if user exists.
+	if app.memories[memoryKey.UserID] == nil {
+		return fmt.Errorf("user %s not found", memoryKey.UserID)
+	}
+
+	memoryEntry, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]
 	if !exists {
-		return fmt.Errorf("memory with id %s not found", id)
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
 	// Update memory data.
 	now := time.Now()
 	memoryEntry.Memory.Memory = memoryStr
-	memoryEntry.Memory.Input = memoryStr
+	// Note: Input is not updated here, only memory content.
 	memoryEntry.Memory.LastUpdated = &now
 	memoryEntry.UpdatedAt = now
 
-	app.memories[id] = memoryEntry
+	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
 	return nil
 }
 
 // DeleteMemory deletes a memory for a user.
-func (s *MemoryService) DeleteMemory(ctx context.Context, userID string, id string) error {
-	appName := defaultAppName
-	app := s.getAppMemories(appName)
+func (s *MemoryService) DeleteMemory(ctx context.Context, memoryKey memory.MemoryKey) error {
+	if err := memoryKey.CheckMemoryKey(); err != nil {
+		return err
+	}
+
+	app := s.getAppMemories(memoryKey.AppName)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	if _, exists := app.memories[id]; !exists {
-		return fmt.Errorf("memory with id %s not found", id)
+	// Check if user exists.
+	if app.memories[memoryKey.UserID] == nil {
+		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
 
-	delete(app.memories, id)
+	if _, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]; !exists {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
+
+	delete(app.memories[memoryKey.UserID], memoryKey.MemoryID)
 	return nil
 }
 
 // ClearMemories clears all memories for a user.
-func (s *MemoryService) ClearMemories(ctx context.Context, userID string) error {
-	appName := defaultAppName
-	app := s.getAppMemories(appName)
+func (s *MemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	if err := userKey.CheckUserKey(); err != nil {
+		return err
+	}
+
+	app := s.getAppMemories(userKey.AppName)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Remove memories for the specific user.
-	for id, memoryEntry := range app.memories {
-		if memoryEntry.UserID == userID {
-			delete(app.memories, id)
-		}
-	}
+	// Remove all memories for the specific user.
+	delete(app.memories, userKey.UserID)
 	return nil
 }
 
 // ReadMemories reads memories for a user.
-func (s *MemoryService) ReadMemories(ctx context.Context, userID string, limit int) ([]*memory.MemoryEntry, error) {
-	appName := defaultAppName
-	app := s.getAppMemories(appName)
+func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.MemoryEntry, error) {
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+
+	app := s.getAppMemories(userKey.AppName)
 
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
 	var memories []*memory.MemoryEntry
-	for _, memoryEntry := range app.memories {
-		if memoryEntry.UserID == userID {
-			memories = append(memories, memoryEntry)
-		}
+	userMemories := app.memories[userKey.UserID]
+	if userMemories == nil {
+		return memories, nil
+	}
+
+	for _, memoryEntry := range userMemories {
+		memories = append(memories, memoryEntry)
 	}
 
 	// Sort by creation time (newest first).
@@ -240,7 +263,7 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userID string, limit i
 		return memories[i].CreatedAt.After(memories[j].CreatedAt)
 	})
 
-	// Apply limit.
+	// Apply limit if specified.
 	if limit > 0 && len(memories) > limit {
 		memories = memories[:limit]
 	}
@@ -249,21 +272,25 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userID string, limit i
 }
 
 // SearchMemories searches memories for a user.
-func (s *MemoryService) SearchMemories(ctx context.Context, userID string, query string) ([]*memory.MemoryEntry, error) {
-	appName := defaultAppName
-	app := s.getAppMemories(appName)
+func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.MemoryEntry, error) {
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+
+	app := s.getAppMemories(userKey.AppName)
 
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	queryLower := strings.ToLower(query)
 	var results []*memory.MemoryEntry
+	queryLower := strings.ToLower(query)
 
-	for _, memoryEntry := range app.memories {
-		if memoryEntry.UserID != userID {
-			continue
-		}
+	userMemories := app.memories[userKey.UserID]
+	if userMemories == nil {
+		return results, nil
+	}
 
+	for _, memoryEntry := range userMemories {
 		// Simple string search in memory content.
 		if strings.Contains(strings.ToLower(memoryEntry.Memory.Memory), queryLower) {
 			results = append(results, memoryEntry)
@@ -278,6 +305,5 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userID string, query
 			}
 		}
 	}
-
 	return results, nil
 }

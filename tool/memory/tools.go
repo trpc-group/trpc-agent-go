@@ -18,11 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// GetMemoryTools returns all memory tools for a user.
-func GetMemoryTools(memoryService memory.Service, userID string) []tool.Tool {
+// GetMemoryTools returns all memory tools.
+func GetMemoryTools(memoryService memory.Service, appName string, userID string) []tool.Tool {
 	return []tool.Tool{
-		NewMemoryAddTool(memoryService, userID),
-		NewMemorySearchTool(memoryService, userID),
-		NewMemoryLoadTool(memoryService, userID),
+		NewMemoryAddTool(memoryService, appName, userID),
+		NewMemorySearchTool(memoryService, appName, userID),
+		NewMemoryLoadTool(memoryService, appName, userID),
 	}
 }

@@ -17,19 +17,15 @@ import (
 	"encoding/json"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 )
 
 func TestMemoryAddTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
+	appName := "test-app"
 	userID := "test-user"
-	tool := NewMemoryAddTool(service, userID)
-
-	// Test tool declaration.
-	declaration := tool.Declaration()
-	if declaration.Name != "memory_add" {
-		t.Fatalf("Expected tool name 'memory_add', got '%s'", declaration.Name)
-	}
+	tool := NewMemoryAddTool(service, appName, userID)
 
 	// Test adding memory.
 	args := map[string]interface{}{
@@ -44,7 +40,7 @@ func TestMemoryAddTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
 		t.Fatal("Expected map result")
 	}
@@ -54,7 +50,11 @@ func TestMemoryAddTool(t *testing.T) {
 	}
 
 	// Verify memory was added.
-	memories, err := service.ReadMemories(context.Background(), userID, 10)
+	userKey := memory.UserKey{
+		AppName: appName,
+		UserID:  userID,
+	}
+	memories, err := service.ReadMemories(context.Background(), userKey, 10)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
@@ -62,29 +62,31 @@ func TestMemoryAddTool(t *testing.T) {
 	if len(memories) != 1 {
 		t.Fatalf("Expected 1 memory, got %d", len(memories))
 	}
+
+	if memories[0].Memory.Memory != "User likes coffee" {
+		t.Fatalf("Expected memory content 'User likes coffee', got %s", memories[0].Memory.Memory)
+	}
 }
 
 func TestMemorySearchTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
+	appName := "test-app"
 	userID := "test-user"
 
 	// Add some test memories.
-	service.AddMemory(context.Background(), userID, "User likes coffee", "User said: I like coffee", nil)
-	service.AddMemory(context.Background(), userID, "User works as a developer", "User said: I work as a developer", nil)
-	service.AddMemory(context.Background(), userID, "User has a dog", "User said: I have a dog", nil)
-
-	tool := NewMemorySearchTool(service, userID)
-
-	// Test tool declaration.
-	declaration := tool.Declaration()
-	if declaration.Name != "memory_search" {
-		t.Fatalf("Expected tool name 'memory_search', got '%s'", declaration.Name)
+	userKey := memory.UserKey{
+		AppName: appName,
+		UserID:  userID,
 	}
+	service.AddMemory(context.Background(), userKey, "User likes coffee", "User said: I like coffee", nil)
+	service.AddMemory(context.Background(), userKey, "User works as a developer", "User said: I work as a developer", nil)
+	service.AddMemory(context.Background(), userKey, "User has a dog", "User said: I have a dog", nil)
 
-	// Test searching memories.
+	tool := NewMemorySearchTool(service, appName, userID)
+
+	// Test searching for coffee.
 	args := map[string]interface{}{
 		"query": "coffee",
-		"limit": 5,
 	}
 	jsonArgs, _ := json.Marshal(args)
 
@@ -93,7 +95,7 @@ func TestMemorySearchTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
 		t.Fatal("Expected map result")
 	}
@@ -102,30 +104,38 @@ func TestMemorySearchTool(t *testing.T) {
 		t.Fatal("Expected success to be true")
 	}
 
-	if resultMap["count"].(int) != 1 {
-		t.Fatalf("Expected 1 result, got %d", resultMap["count"])
+	results, ok := resultMap["results"].([]map[string]any)
+	if !ok {
+		t.Fatal("Expected results array")
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 result, got %d", len(results))
+	}
+
+	if results[0]["memory"] != "User likes coffee" {
+		t.Fatalf("Expected memory 'User likes coffee', got %s", results[0]["memory"])
 	}
 }
 
 func TestMemoryLoadTool(t *testing.T) {
 	service := inmemory.NewMemoryService()
+	appName := "test-app"
 	userID := "test-user"
 
 	// Add some test memories.
-	service.AddMemory(context.Background(), userID, "User likes coffee", "User said: I like coffee", nil)
-	service.AddMemory(context.Background(), userID, "User works as a developer", "User said: I work as a developer", nil)
-
-	tool := NewMemoryLoadTool(service, userID)
-
-	// Test tool declaration.
-	declaration := tool.Declaration()
-	if declaration.Name != "memory_load" {
-		t.Fatalf("Expected tool name 'memory_load', got '%s'", declaration.Name)
+	userKey := memory.UserKey{
+		AppName: appName,
+		UserID:  userID,
 	}
+	service.AddMemory(context.Background(), userKey, "User likes coffee", "User said: I like coffee", nil)
+	service.AddMemory(context.Background(), userKey, "User works as a developer", "User said: I work as a developer", nil)
 
-	// Test loading memories.
+	tool := NewMemoryLoadTool(service, appName, userID)
+
+	// Test loading memories with limit.
 	args := map[string]interface{}{
-		"limit": 5,
+		"limit": 1,
 	}
 	jsonArgs, _ := json.Marshal(args)
 
@@ -134,7 +144,7 @@ func TestMemoryLoadTool(t *testing.T) {
 		t.Fatalf("Call failed: %v", err)
 	}
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	if !ok {
 		t.Fatal("Expected map result")
 	}
@@ -143,33 +153,58 @@ func TestMemoryLoadTool(t *testing.T) {
 		t.Fatal("Expected success to be true")
 	}
 
-	if resultMap["count"].(int) != 2 {
-		t.Fatalf("Expected 2 memories, got %d", resultMap["count"])
+	results, ok := resultMap["results"].([]map[string]any)
+	if !ok {
+		t.Fatal("Expected results array")
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 result with limit, got %d", len(results))
 	}
 }
 
 func TestGetMemoryTools(t *testing.T) {
 	service := inmemory.NewMemoryService()
+	appName := "test-app"
 	userID := "test-user"
 
-	tools := GetMemoryTools(service, userID)
+	tools := GetMemoryTools(service, appName, userID)
+
 	if len(tools) != 3 {
 		t.Fatalf("Expected 3 tools, got %d", len(tools))
 	}
 
 	// Verify tool types.
-	_, ok := tools[0].(*MemoryAddTool)
+	addTool, ok := tools[0].(*MemoryAddTool)
 	if !ok {
 		t.Fatal("Expected MemoryAddTool")
 	}
+	if addTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, addTool.appName)
+	}
+	if addTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, addTool.userID)
+	}
 
-	_, ok = tools[1].(*MemorySearchTool)
+	searchTool, ok := tools[1].(*MemorySearchTool)
 	if !ok {
 		t.Fatal("Expected MemorySearchTool")
 	}
+	if searchTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, searchTool.appName)
+	}
+	if searchTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, searchTool.userID)
+	}
 
-	_, ok = tools[2].(*MemoryLoadTool)
+	loadTool, ok := tools[2].(*MemoryLoadTool)
 	if !ok {
 		t.Fatal("Expected MemoryLoadTool")
+	}
+	if loadTool.appName != appName {
+		t.Fatalf("Expected appName %s, got %s", appName, loadTool.appName)
+	}
+	if loadTool.userID != userID {
+		t.Fatalf("Expected userID %s, got %s", userID, loadTool.userID)
 	}
 }

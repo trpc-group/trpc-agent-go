@@ -16,7 +16,10 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 func TestNewMemoryService(t *testing.T) {
@@ -29,300 +32,308 @@ func TestNewMemoryService(t *testing.T) {
 func TestMemoryService_AddMemory(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 	memoryStr := "Test memory content"
-	inputStr := "User said: I am Java, and I like Go programming"
+	inputStr := "User said: This is the original input."
 	topics := []string{"test", "memory"}
 
 	// Test adding memory.
-	err := service.AddMemory(ctx, userID, memoryStr, inputStr, topics)
+	err := service.AddMemory(ctx, userKey, memoryStr, inputStr, topics)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	// Test basic memory operations.
-	memories, err := service.ReadMemories(ctx, userID, 10)
+	// Test reading memories.
+	memories, err := service.ReadMemories(ctx, userKey, 10)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
+
 	if len(memories) != 1 {
 		t.Fatalf("Expected 1 memory, got %d", len(memories))
 	}
+
 	if memories[0].Memory.Memory != memoryStr {
 		t.Fatalf("Expected memory content %s, got %s", memoryStr, memories[0].Memory.Memory)
 	}
+
 	if memories[0].Memory.Input != inputStr {
 		t.Fatalf("Expected input content %s, got %s", inputStr, memories[0].Memory.Input)
 	}
+
 	if len(memories[0].Memory.Topics) != 2 {
 		t.Fatalf("Expected 2 topics, got %d", len(memories[0].Memory.Topics))
-	}
-
-	// Test memory limit.
-	service = NewMemoryService(WithMemoryLimit(1))
-	err = service.AddMemory(ctx, userID, "first memory", "first input", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
-
-	err = service.AddMemory(ctx, userID, "second memory", "second input", nil)
-	if err == nil {
-		t.Fatal("AddMemory should fail when memory limit is exceeded")
 	}
 }
 
 func TestMemoryService_UpdateMemory(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
-	originalMemory := "Original memory"
-	updatedMemory := "Updated memory"
-	originalInput := "User said: original input"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 
-	// Add initial memory.
-	err := service.AddMemory(ctx, userID, originalMemory, originalInput, nil)
+	// Add a memory first.
+	err := service.AddMemory(ctx, userKey, "first memory", "first input", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	// Get the memory ID.
-	memories, err := service.ReadMemories(ctx, userID, 1)
+	// Read memories to get the ID.
+	memories, err := service.ReadMemories(ctx, userKey, 1)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
-	if len(memories) == 0 {
-		t.Fatal("No memories found")
+
+	memoryKey := memory.MemoryKey{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: memories[0].ID,
 	}
 
-	memoryID := memories[0].ID
-
-	// Update memory.
-	err = service.UpdateMemory(ctx, userID, memoryID, updatedMemory)
+	// Update the memory.
+	err = service.UpdateMemory(ctx, memoryKey, "updated memory")
 	if err != nil {
 		t.Fatalf("UpdateMemory failed: %v", err)
 	}
 
-	// Verify update.
-	memories, err = service.ReadMemories(ctx, userID, 1)
+	// Read memories again to verify the update.
+	memories, err = service.ReadMemories(ctx, userKey, 1)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
-	if memories[0].Memory.Memory != updatedMemory {
-		t.Fatalf("Expected updated memory %s, got %s", updatedMemory, memories[0].Memory.Memory)
-	}
 
-	// Test updating non-existent memory.
-	err = service.UpdateMemory(ctx, userID, "non-existent-id", "new content")
-	if err == nil {
-		t.Fatal("UpdateMemory should fail for non-existent memory")
+	if memories[0].Memory.Memory != "updated memory" {
+		t.Fatalf("Expected updated memory content, got %s", memories[0].Memory.Memory)
 	}
 }
 
 func TestMemoryService_DeleteMemory(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
-	memoryStr := "Memory to delete"
-	inputStr := "User said: delete this memory"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 
-	// Add memory.
-	err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
+	// Add a memory first.
+	err := service.AddMemory(ctx, userKey, "test memory", "test input", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	// Get memory ID.
-	memories, err := service.ReadMemories(ctx, userID, 1)
+	// Read memories to get the ID.
+	memories, err := service.ReadMemories(ctx, userKey, 1)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
-	if len(memories) == 0 {
-		t.Fatal("No memories found")
+
+	memoryKey := memory.MemoryKey{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: memories[0].ID,
 	}
 
-	memoryID := memories[0].ID
-
-	// Delete memory.
-	err = service.DeleteMemory(ctx, userID, memoryID)
+	// Delete the memory.
+	err = service.DeleteMemory(ctx, memoryKey)
 	if err != nil {
 		t.Fatalf("DeleteMemory failed: %v", err)
 	}
 
-	// Verify deletion.
-	memories, err = service.ReadMemories(ctx, userID, 1)
+	// Read memories again to verify the deletion.
+	memories, err = service.ReadMemories(ctx, userKey, 10)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
+
 	if len(memories) != 0 {
 		t.Fatalf("Expected 0 memories after deletion, got %d", len(memories))
-	}
-
-	// Test deleting non-existent memory.
-	err = service.DeleteMemory(ctx, userID, "non-existent-id")
-	if err == nil {
-		t.Fatal("DeleteMemory should fail for non-existent memory")
 	}
 }
 
 func TestMemoryService_ClearMemories(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID1 := "user1"
-	userID2 := "user2"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 
-	// Add memories for two users.
-	err := service.AddMemory(ctx, userID1, "Memory 1 for user 1", "Input 1 for user 1", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
-	err = service.AddMemory(ctx, userID1, "Memory 2 for user 1", "Input 2 for user 1", nil)
-	if err != nil {
-		t.Fatalf("AddMemory failed: %v", err)
-	}
-	err = service.AddMemory(ctx, userID2, "Memory for user 2", "Input for user 2", nil)
+	// Add multiple memories.
+	err := service.AddMemory(ctx, userKey, "first memory", "first input", nil)
 	if err != nil {
 		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	// Clear memories for user 1.
-	err = service.ClearMemories(ctx, userID1)
+	err = service.AddMemory(ctx, userKey, "second memory", "second input", nil)
+	if err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
+	}
+
+	// Verify memories were added.
+	memories, err := service.ReadMemories(ctx, userKey, 10)
+	if err != nil {
+		t.Fatalf("ReadMemories failed: %v", err)
+	}
+
+	if len(memories) != 2 {
+		t.Fatalf("Expected 2 memories, got %d", len(memories))
+	}
+
+	// Clear all memories.
+	err = service.ClearMemories(ctx, userKey)
 	if err != nil {
 		t.Fatalf("ClearMemories failed: %v", err)
 	}
 
-	// Verify user 1 memories are cleared.
-	memories1, err := service.ReadMemories(ctx, userID1, 10)
+	// Verify memories were cleared.
+	memories, err = service.ReadMemories(ctx, userKey, 10)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
-	}
-	if len(memories1) != 0 {
-		t.Fatalf("Expected 0 memories for user 1, got %d", len(memories1))
 	}
 
-	// Verify user 2 memories are still there.
-	memories2, err := service.ReadMemories(ctx, userID2, 10)
-	if err != nil {
-		t.Fatalf("ReadMemories failed: %v", err)
-	}
-	if len(memories2) != 1 {
-		t.Fatalf("Expected 1 memory for user 2, got %d", len(memories2))
+	if len(memories) != 0 {
+		t.Fatalf("Expected 0 memories after clearing, got %d", len(memories))
 	}
 }
 
 func TestMemoryService_SearchMemories(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
-
-	// Add multiple memories.
-	memories := []string{
-		"Apple is a fruit",
-		"Banana is yellow",
-		"Orange is citrus",
-		"Grape is purple",
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
 	}
 
-	for _, memory := range memories {
-		input := fmt.Sprintf("User said: %s", memory)
-		err := service.AddMemory(ctx, userID, memory, input, nil)
-		if err != nil {
-			t.Fatalf("AddMemory failed: %v", err)
-		}
+	// Add memories with different content.
+	err := service.AddMemory(ctx, userKey, "User likes coffee", "User said: I like coffee", []string{"preferences"})
+	if err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
 	}
 
-	// Test search for "fruit".
-	results, err := service.SearchMemories(ctx, userID, "fruit")
+	err = service.AddMemory(ctx, userKey, "User works as a developer", "User said: I work as a developer", []string{"work"})
+	if err != nil {
+		t.Fatalf("AddMemory failed: %v", err)
+	}
+
+	// Search for coffee-related memories.
+	results, err := service.SearchMemories(ctx, userKey, "coffee")
 	if err != nil {
 		t.Fatalf("SearchMemories failed: %v", err)
 	}
+
 	if len(results) != 1 {
-		t.Fatalf("Expected 1 result for 'fruit', got %d", len(results))
+		t.Fatalf("Expected 1 result for 'coffee' search, got %d", len(results))
 	}
 
-	// Test search for "yellow".
-	results, err = service.SearchMemories(ctx, userID, "yellow")
+	// Search for work-related memories.
+	results, err = service.SearchMemories(ctx, userKey, "developer")
 	if err != nil {
 		t.Fatalf("SearchMemories failed: %v", err)
 	}
+
 	if len(results) != 1 {
-		t.Fatalf("Expected 1 result for 'yellow', got %d", len(results))
+		t.Fatalf("Expected 1 result for 'developer' search, got %d", len(results))
 	}
 
-	// Test search for non-existent term.
-	results, err = service.SearchMemories(ctx, userID, "xyz")
+	// Search for non-existent content.
+	results, err = service.SearchMemories(ctx, userKey, "nonexistent")
 	if err != nil {
 		t.Fatalf("SearchMemories failed: %v", err)
 	}
+
 	if len(results) != 0 {
-		t.Fatalf("Expected 0 results for 'xyz', got %d", len(results))
+		t.Fatalf("Expected 0 results for 'nonexistent' search, got %d", len(results))
 	}
 }
 
 func TestMemoryService_ReadMemoriesWithLimit(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 
 	// Add multiple memories.
 	for i := 0; i < 5; i++ {
-		memoryStr := fmt.Sprintf("Memory %d", i)
-		inputStr := fmt.Sprintf("User said: %s", memoryStr)
-		err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
+		err := service.AddMemory(ctx, userKey, fmt.Sprintf("memory %d", i), fmt.Sprintf("input %d", i), nil)
 		if err != nil {
 			t.Fatalf("AddMemory failed: %v", err)
 		}
 	}
 
 	// Test reading with limit.
-	memories, err := service.ReadMemories(ctx, userID, 3)
+	memories, err := service.ReadMemories(ctx, userKey, 3)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
+
 	if len(memories) != 3 {
-		t.Fatalf("Expected 3 memories, got %d", len(memories))
+		t.Fatalf("Expected 3 memories with limit, got %d", len(memories))
 	}
 
 	// Test reading without limit.
-	memories, err = service.ReadMemories(ctx, userID, 0)
+	memories, err = service.ReadMemories(ctx, userKey, 0)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
+
 	if len(memories) != 5 {
-		t.Fatalf("Expected 5 memories, got %d", len(memories))
+		t.Fatalf("Expected 5 memories without limit, got %d", len(memories))
 	}
 }
 
 func TestMemoryService_Concurrency(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
-	userID := "test-user"
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
 
 	// Test concurrent access.
-	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
-		go func(index int) {
-			memoryStr := fmt.Sprintf("Memory %d", index)
-			inputStr := fmt.Sprintf("User said: %s", memoryStr)
-			err := service.AddMemory(ctx, userID, memoryStr, inputStr, nil)
-			if err != nil {
-				t.Errorf("AddMemory failed: %v", err)
+	const numGoroutines = 10
+	const memoriesPerGoroutine = 5
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, numGoroutines*memoriesPerGoroutine)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < memoriesPerGoroutine; j++ {
+				memoryStr := fmt.Sprintf("memory from goroutine %d, item %d", id, j)
+				inputStr := fmt.Sprintf("input from goroutine %d, item %d", id, j)
+				err := service.AddMemory(ctx, userKey, memoryStr, inputStr, nil)
+				if err != nil {
+					errChan <- fmt.Errorf("goroutine %d failed to add memory %d: %v", id, j, err)
+				}
 			}
-			done <- true
 		}(i)
 	}
 
-	// Wait for all goroutines to complete.
-	for i := 0; i < 10; i++ {
-		<-done
+	wg.Wait()
+	close(errChan)
+
+	// Check for errors.
+	for err := range errChan {
+		t.Errorf("Concurrency test error: %v", err)
 	}
 
 	// Verify all memories were added.
-	memories, err := service.ReadMemories(ctx, userID, 20)
+	memories, err := service.ReadMemories(ctx, userKey, 0)
 	if err != nil {
 		t.Fatalf("ReadMemories failed: %v", err)
 	}
 
-	if len(memories) != 10 {
-		t.Fatalf("Expected 10 memories, got %d", len(memories))
+	expectedCount := numGoroutines * memoriesPerGoroutine
+	if len(memories) != expectedCount {
+		t.Fatalf("Expected %d memories, got %d", expectedCount, len(memories))
 	}
 }

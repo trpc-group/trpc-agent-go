@@ -90,8 +90,13 @@ func (c *memoryChat) setup(_ context.Context) error {
 	// Create memory service.
 	memoryService := memoryinmemory.NewMemoryService()
 
+	// Setup identifiers first.
+	c.userID = "user"
+	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
+
 	// Create memory tools.
-	memoryTools := toolmemory.GetMemoryTools(memoryService, c.userID)
+	appName := "memory-chat"
+	memoryTools := toolmemory.GetMemoryTools(memoryService, appName, c.userID)
 
 	// Create LLM agent with memory tools.
 	genConfig := model.GenerationConfig{
@@ -117,17 +122,12 @@ func (c *memoryChat) setup(_ context.Context) error {
 	)
 
 	// Create runner with memory service.
-	appName := "memory-chat"
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessioninmemory.NewSessionService()),
 		runner.WithMemoryService(memoryService),
 	)
-
-	// Setup identifiers.
-	c.userID = "user"
-	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Memory chat ready! Session: %s\n\n", c.sessionID)
 
