@@ -231,7 +231,7 @@ func TestModelCBs_AfterOverride(t *testing.T) {
 
 	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterAfterModel(
-		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+		func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 			return &model.Response{Object: "after-override"}, nil
 		},
 	)
@@ -268,7 +268,7 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 
 	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterAfterModel(
-		func(ctx context.Context, rsp *model.Response, modelErr error) (*model.Response, error) {
+		func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 			return nil, errors.New("after error")
 		},
 	)
