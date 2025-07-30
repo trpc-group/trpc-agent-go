@@ -41,7 +41,7 @@ func (r Role) String() string {
 // IsValid checks if the role is one of the defined constants.
 func (r Role) IsValid() bool {
 	switch r {
-	case RoleSystem, RoleUser, RoleAssistant:
+	case RoleSystem, RoleUser, RoleAssistant, RoleTool:
 		return true
 	default:
 		return false
