@@ -50,11 +50,75 @@ func (r Role) IsValid() bool {
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role      Role       `json:"role"`                 // The role of the message author
-	Content   string     `json:"content"`              // The message content
-	ToolID    string     `json:"tool_id,omitempty"`    // Used by tool response
-	ToolName  string     `json:"tool_name,omitempty"`  // Used by tool response
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Optional tool calls for the message
+	// Role is the role of the message author.
+	Role Role `json:"role"`
+	// Content is the message content.
+	// Only one of Content or ContentParts should be provided.
+	// If both are provided, ContentParts will be used.
+	Content string `json:"content,omitempty"`
+	// ContentParts is the content parts for multimodal messages.
+	// Only one of Content or ContentParts should be provided.
+	// If both are provided, ContentParts will be used.
+	ContentParts []ContentPart `json:"content_parts,omitempty"`
+	// ToolID is the ID of the tool used by tool response.
+	ToolID string `json:"tool_id,omitempty"`
+	// ToolName is the name of the tool used by tool response.
+	ToolName string `json:"tool_name,omitempty"`
+	// ToolCalls is the optional tool calls for the message.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// ContentType represents the type of content.
+type ContentType string
+
+// ContentType constants for content types.
+const (
+	ContentTypeText  ContentType = "text"
+	ContentTypeImage ContentType = "image"
+	ContentTypeAudio ContentType = "audio"
+	ContentTypeFile  ContentType = "file"
+)
+
+// ContentPart represents a single content part in a multimodal message.
+type ContentPart struct {
+	// Type is the type of content: "text", "image", "audio", "file"
+	Type ContentType `json:"type"`
+	// Text is the text content.
+	Text *string `json:"text,omitempty"`
+	// Image is the image data.
+	Image *Image `json:"image,omitempty"`
+	// Audio is the audio data.
+	Audio *Audio `json:"audio,omitempty"`
+	// File is the file data.
+	File *File `json:"file,omitempty"`
+}
+
+// Image represents an image data for vision models.
+type Image struct {
+	// URL is the URL of the image.
+	URL string `json:"url"`
+	// Detail is the detail level: "low", "high", "auto".
+	Detail string `json:"detail,omitempty"`
+}
+
+// Audio represents audio input for audio models.
+type Audio struct {
+	// Data is the base64 encoded audio data.
+	Data string `json:"data"`
+	// Format is the format of the encoded audio data. Currently supports "wav" and "mp3".
+	Format string `json:"format"`
+}
+
+// File represents file content for file input models.
+type File struct {
+	// Filename is the name of the file, used when passing the file to the model as a string.
+	Filename string `json:"filename"`
+	// FileData is the base64 encoded file data, used when passing the file to the model as a string.
+	// Pick one from FileData or FileID.
+	FileData string `json:"file_data"`
+	// FileID is the ID of an uploaded file to use as input.
+	// Pick one from FileData or FileID.
+	FileID string `json:"file_id"`
 }
 
 // NewSystemMessage creates a new system message.
@@ -88,6 +152,81 @@ func NewAssistantMessage(content string) Message {
 	return Message{
 		Role:    RoleAssistant,
 		Content: content,
+	}
+}
+
+// NewUserMessageWithContentParts creates a new user message with content parts.
+func NewUserMessageWithContentParts(contentParts []ContentPart) Message {
+	return Message{
+		Role:         RoleUser,
+		ContentParts: contentParts,
+	}
+}
+
+// NewSystemMessageWithContentParts creates a new system message with content parts.
+func NewSystemMessageWithContentParts(contentParts []ContentPart) Message {
+	return Message{
+		Role:         RoleSystem,
+		ContentParts: contentParts,
+	}
+}
+
+// NewAssistantMessageWithContentParts creates a new assistant message with content parts.
+func NewAssistantMessageWithContentParts(contentParts []ContentPart) Message {
+	return Message{
+		Role:         RoleAssistant,
+		ContentParts: contentParts,
+	}
+}
+
+// NewTextContentPart creates a new text content part.
+func NewTextContentPart(text string) ContentPart {
+	return ContentPart{
+		Type: ContentTypeText,
+		Text: &text,
+	}
+}
+
+// NewImageContentPart creates a new image content part.
+func NewImageContentPart(url string, detail string) ContentPart {
+	return ContentPart{
+		Type: ContentTypeImage,
+		Image: &Image{
+			URL:    url,
+			Detail: detail,
+		},
+	}
+}
+
+// NewAudioContentPart creates a new audio content part.
+func NewAudioContentPart(data string, format string) ContentPart {
+	return ContentPart{
+		Type: ContentTypeAudio,
+		Audio: &Audio{
+			Data:   data,
+			Format: format,
+		},
+	}
+}
+
+// NewFileContentPart creates a new file content part using file ID.
+func NewFileContentPart(fileID string) ContentPart {
+	return ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			FileID: fileID,
+		},
+	}
+}
+
+// NewFileContentPartWithData creates a new file content part using file data.
+func NewFileContentPartWithData(filename, data string) ContentPart {
+	return ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			FileData: data,
+			Filename: filename,
+		},
 	}
 }
 
