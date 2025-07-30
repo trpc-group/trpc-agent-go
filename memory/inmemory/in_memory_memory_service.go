@@ -117,7 +117,7 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID string, memoryStr string, topics []string) *memory.Entry {
+func createMemoryEntry(userID, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
