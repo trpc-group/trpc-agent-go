@@ -145,7 +145,7 @@ func createMockContext(appName, userID string) context.Context {
 
 func TestMemoryTool_AddMemory(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddMemoryTool(service)
+	tool := NewAddTool(service)
 
 	ctx := createMockContext("test-app", "test-user")
 
@@ -180,7 +180,7 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 
 func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddMemoryTool(service)
+	tool := NewAddTool(service)
 
 	ctx := createMockContext("test-app", "test-user")
 
@@ -206,7 +206,7 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 
 func TestMemoryTool_Declaration(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddMemoryTool(service)
+	tool := NewAddTool(service)
 
 	decl := tool.Declaration()
 	require.NotNil(t, decl, "Expected non-nil declaration")
@@ -231,7 +231,7 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	require.NoError(t, err, "Failed to read memories")
 	assert.Len(t, memories, 2, "Expected 2 memories, got %d", len(memories))
 
-	tool := NewSearchMemoryTool(service)
+	tool := NewSearchTool(service)
 
 	ctx := createMockContext("test-app", "test-user")
 
@@ -264,7 +264,7 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
-	tool := NewLoadMemoryTool(service)
+	tool := NewLoadTool(service)
 
 	ctx := createMockContext("test-app", "test-user")
 

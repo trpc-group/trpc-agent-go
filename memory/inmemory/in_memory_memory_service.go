@@ -34,10 +34,10 @@ type memoryToolCreator func(memory.Service) tool.Tool
 
 // defaultEnabledTools are the creators of default memory tools to enable.
 var defaultEnabledTools = map[string]memoryToolCreator{
-	memory.AddToolName:    func(service memory.Service) tool.Tool { return toolmemory.NewAddMemoryTool(service) },
-	memory.UpdateToolName: func(service memory.Service) tool.Tool { return toolmemory.NewUpdateMemoryTool(service) },
-	memory.SearchToolName: func(service memory.Service) tool.Tool { return toolmemory.NewSearchMemoryTool(service) },
-	memory.LoadToolName:   func(service memory.Service) tool.Tool { return toolmemory.NewLoadMemoryTool(service) },
+	memory.AddToolName:    func(service memory.Service) tool.Tool { return toolmemory.NewAddTool(service) },
+	memory.UpdateToolName: func(service memory.Service) tool.Tool { return toolmemory.NewUpdateTool(service) },
+	memory.SearchToolName: func(service memory.Service) tool.Tool { return toolmemory.NewSearchTool(service) },
+	memory.LoadToolName:   func(service memory.Service) tool.Tool { return toolmemory.NewLoadTool(service) },
 }
 
 const (

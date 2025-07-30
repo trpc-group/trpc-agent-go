@@ -49,8 +49,8 @@ func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 
 // Memory function implementations using function.NewFunctionTool.
 
-// NewAddMemoryTool creates a function tool for adding memories.
-func NewAddMemoryTool(service memory.Service) tool.CallableTool {
+// NewAddTool creates a function tool for adding memories.
+func NewAddTool(service memory.Service) tool.CallableTool {
 	addFunc := func(ctx context.Context, req AddMemoryRequest) (AddMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -94,12 +94,13 @@ func NewAddMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		addFunc,
 		function.WithName(memory.AddToolName),
-		function.WithDescription("Add a new memory about the user. Use this tool to store important information about the user's preferences, background, or past interactions."),
+		function.WithDescription("Add a new memory about the user. Use this tool to store "+
+			"important information about the user's preferences, background, or past interactions."),
 	)
 }
 
-// NewUpdateMemoryTool creates a function tool for updating memories.
-func NewUpdateMemoryTool(service memory.Service) tool.CallableTool {
+// NewUpdateTool creates a function tool for updating memories.
+func NewUpdateTool(service memory.Service) tool.CallableTool {
 	updateFunc := func(ctx context.Context, req UpdateMemoryRequest) (UpdateMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -151,12 +152,13 @@ func NewUpdateMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		updateFunc,
 		function.WithName(memory.UpdateToolName),
-		function.WithDescription("Update an existing memory. Use this tool to modify stored information about the user."),
+		function.WithDescription("Update an existing memory. Use this tool to modify stored "+
+			"information about the user."),
 	)
 }
 
-// NewDeleteMemoryTool creates a function tool for deleting memories.
-func NewDeleteMemoryTool(service memory.Service) tool.CallableTool {
+// NewDeleteTool creates a function tool for deleting memories.
+func NewDeleteTool(service memory.Service) tool.CallableTool {
 	deleteFunc := func(ctx context.Context, req DeleteMemoryRequest) (DeleteMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -194,12 +196,13 @@ func NewDeleteMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		deleteFunc,
 		function.WithName(memory.DeleteToolName),
-		function.WithDescription("Delete a specific memory. Use this tool to remove outdated or incorrect information about the user."),
+		function.WithDescription("Delete a specific memory. Use this tool to remove outdated "+
+			"or incorrect information about the user."),
 	)
 }
 
-// NewClearMemoryTool creates a function tool for clearing all memories.
-func NewClearMemoryTool(service memory.Service) tool.CallableTool {
+// NewClearTool creates a function tool for clearing all memories.
+func NewClearTool(service memory.Service) tool.CallableTool {
 	clearFunc := func(ctx context.Context, _ struct{}) (ClearMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -228,12 +231,13 @@ func NewClearMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		clearFunc,
 		function.WithName(memory.ClearToolName),
-		function.WithDescription("Clear all memories for the user. Use this tool to reset the user's memory completely."),
+		function.WithDescription("Clear all memories for the user. Use this tool to reset the "+
+			"user's memory completely."),
 	)
 }
 
-// NewSearchMemoryTool creates a function tool for searching memories.
-func NewSearchMemoryTool(service memory.Service) tool.CallableTool {
+// NewSearchTool creates a function tool for searching memories.
+func NewSearchTool(service memory.Service) tool.CallableTool {
 	searchFunc := func(ctx context.Context, req SearchMemoryRequest) (SearchMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -289,12 +293,13 @@ func NewSearchMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName(memory.SearchToolName),
-		function.WithDescription("Search for relevant memories about the user. Use this tool to find stored information that matches the query."),
+		function.WithDescription("Search for relevant memories about the user. Use this tool to "+
+			"find stored information that matches the query."),
 	)
 }
 
-// NewLoadMemoryTool creates a function tool for loading memories.
-func NewLoadMemoryTool(service memory.Service) tool.CallableTool {
+// NewLoadTool creates a function tool for loading memories.
+func NewLoadTool(service memory.Service) tool.CallableTool {
 	loadFunc := func(ctx context.Context, req LoadMemoryRequest) (LoadMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
@@ -346,6 +351,7 @@ func NewLoadMemoryTool(service memory.Service) tool.CallableTool {
 	return function.NewFunctionTool(
 		loadFunc,
 		function.WithName(memory.LoadToolName),
-		function.WithDescription("Load recent memories about the user. Use this tool to retrieve stored information to provide context for the conversation."),
+		function.WithDescription("Load recent memories about the user. Use this tool to retrieve "+
+			"stored information to provide context for the conversation."),
 	)
 }

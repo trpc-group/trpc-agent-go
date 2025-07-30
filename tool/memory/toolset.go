@@ -59,12 +59,12 @@ func (ts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
 
 	// Create memory tools using the new function-based approach.
 	ts.tools = []tool.CallableTool{
-		NewAddMemoryTool(ts.service),
-		NewUpdateMemoryTool(ts.service),
-		NewDeleteMemoryTool(ts.service),
-		NewClearMemoryTool(ts.service),
-		NewSearchMemoryTool(ts.service),
-		NewLoadMemoryTool(ts.service),
+		NewAddTool(ts.service),
+		NewUpdateTool(ts.service),
+		NewDeleteTool(ts.service),
+		NewClearTool(ts.service),
+		NewSearchTool(ts.service),
+		NewLoadTool(ts.service),
 	}
 
 	ts.initialized = true
