@@ -162,7 +162,7 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
-		response, err = runAfterModelCallbacks(ctx, invocation, response)
+		customResp, err := runAfterModelCallbacks(ctx, invocation, response)
 		if err != nil {
 			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
 			lastEvent := event.NewErrorEvent(
@@ -173,6 +173,9 @@ func (f *Flow) runOneStep(
 			)
 			eventChan <- lastEvent
 			return lastEvent, nil
+		}
+		if customResp != nil {
+			response = customResp
 		}
 		// Create event from response using the clean constructor.
 		llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response), event.WithBranch(invocation.Branch))
