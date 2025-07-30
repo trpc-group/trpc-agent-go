@@ -162,7 +162,7 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
-		customResp, err := runAfterModelCallbacks(ctx, invocation, response)
+		customResp, err := runAfterModelCallbacks(ctx, invocation, llmRequest, response)
 		if err != nil {
 			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
 			lastEvent := event.NewErrorEvent(
@@ -230,11 +230,16 @@ func (f *Flow) runOneStep(
 	return lastEvent, nil
 }
 
-func runAfterModelCallbacks(ctx context.Context, invocation *agent.Invocation, response *model.Response) (*model.Response, error) {
+func runAfterModelCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	response *model.Response,
+) (*model.Response, error) {
 	if cb := invocation.ModelCallbacks; cb == nil {
 		return response, nil
 	}
-	return invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
+	return invocation.ModelCallbacks.RunAfterModel(ctx, req, response, nil)
 }
 
 // handleFunctionCallsAndSendEvent handles function calls and sends the resulting event to the channel.

@@ -521,7 +521,6 @@ func (m *Model) handleStreamingResponse(
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
-	var hasToolCall bool
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
@@ -540,29 +539,7 @@ func (m *Model) handleStreamingResponse(
 			IsPartial: true,
 		}
 
-		if t, ok := acc.JustFinishedToolCall(); ok {
-			hasToolCall = true
-			response.IsPartial = false
-			if response.Choices == nil {
-				response.Choices = make([]model.Choice, 1)
-			}
-			response.Choices[0].Message = model.Message{
-				Role: model.RoleAssistant,
-				ToolCalls: []model.ToolCall{
-					{
-						Index: &t.Index,
-						ID:    t.ID,
-						Type:  functionToolType, // openapi only supports a function type for now
-						Function: model.FunctionDefinitionParam{
-							Name:      t.Name,
-							Arguments: []byte(t.Arguments),
-						},
-					},
-				},
-			}
-		}
-
-		// Convert choices.
+		// Convert choices for partial responses (content streaming).
 		if len(chunk.Choices) > 0 {
 			if response.Choices == nil {
 				response.Choices = make([]model.Choice, 1)
@@ -588,6 +565,27 @@ func (m *Model) handleStreamingResponse(
 
 	// Send final response with usage information if available.
 	if stream.Err() == nil {
+		// Check accumulated tool calls (batch processing after streaming is complete).
+		var hasToolCall bool
+		var accumulatedToolCalls []model.ToolCall
+
+		if len(acc.Choices) > 0 && len(acc.Choices[0].Message.ToolCalls) > 0 {
+			hasToolCall = true
+			accumulatedToolCalls = make([]model.ToolCall, len(acc.Choices[0].Message.ToolCalls))
+
+			for i, toolCall := range acc.Choices[0].Message.ToolCalls {
+				accumulatedToolCalls[i] = model.ToolCall{
+					Index: func() *int { idx := i; return &idx }(),
+					ID:    toolCall.ID,
+					Type:  functionToolType, // openapi only supports a function type for now.
+					Function: model.FunctionDefinitionParam{
+						Name:      toolCall.Function.Name,
+						Arguments: []byte(toolCall.Function.Arguments),
+					},
+				}
+			}
+		}
+
 		finalResponse := &model.Response{
 			ID:      acc.ID,
 			Created: acc.Created,
@@ -609,6 +607,11 @@ func (m *Model) handleStreamingResponse(
 					Role:    model.RoleAssistant,
 					Content: choice.Message.Content,
 				},
+			}
+
+			// If there are tool calls, add them to the final response.
+			if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
+				finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
 			}
 		}
 
