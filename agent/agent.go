@@ -29,7 +29,7 @@ type Info struct {
 }
 
 // StopError represents an error that signals the agent execution should be stopped.
-// When this error type is returned, the agent will stop processing and exit gracefully.
+// When this error type is returned, it indicates the agent should stop processing.
 type StopError struct {
 	// Message contains the stop reason
 	Message string
