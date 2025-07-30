@@ -77,6 +77,7 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
+// WithCodeExecutor sets the code executor to use for executing code blocks.
 func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	return func(opts *Options) {
 		opts.codeExecutor = ce
@@ -287,7 +288,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		systemPrompt:   options.GlobalInstruction,
 		genConfig:      options.GenerationConfig,
 		flow:           llmFlow,
-		codeExecutor:   options.codeExecutor, // TODO: should pass codeExecutor to NewCodeExecutionResponseProcessor?
+		codeExecutor:   options.codeExecutor,
 		tools:          tools,
 		planner:        options.Planner,
 		subAgents:      options.SubAgents,
@@ -479,6 +480,9 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// CodeExecutor returns the code executor used by this agent.
+// implements the agent.CodeExecutor interface.
+// This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
 }
