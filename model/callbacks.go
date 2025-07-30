@@ -71,7 +71,9 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response
 // RunAfterModel runs all after model callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *Callbacks) RunAfterModel(ctx context.Context, req *Request, rsp *Response, modelErr error) (*Response, error) {
+func (c *Callbacks) RunAfterModel(
+	ctx context.Context, req *Request, rsp *Response, modelErr error,
+) (*Response, error) {
 	for _, cb := range c.AfterModel {
 		customResponse, err := cb(ctx, req, rsp, modelErr)
 		if err != nil {
