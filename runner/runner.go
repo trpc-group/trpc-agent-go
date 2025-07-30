@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -78,9 +78,8 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 	}
 
 	if options.sessionService == nil {
-		options.sessionService = sessioninmemory.NewSessionService()
+		options.sessionService = inmemory.NewSessionService()
 	}
-
 	return &runner{
 		appName:        appName,
 		agent:          agent,
