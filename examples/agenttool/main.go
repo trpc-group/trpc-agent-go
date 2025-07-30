@@ -287,7 +287,7 @@ func (c *agentToolChat) startNewSession() {
 }
 
 // calculate performs basic mathematical calculations.
-func (c *agentToolChat) calculate(args calculatorArgs) calculatorResult {
+func (c *agentToolChat) calculate(_ context.Context, args calculatorArgs) (calculatorResult, error) {
 	var result float64
 	switch args.Operation {
 	case "add":
@@ -304,7 +304,7 @@ func (c *agentToolChat) calculate(args calculatorArgs) calculatorResult {
 				B:         args.B,
 				Result:    0,
 				Error:     "Division by zero",
-			}
+			}, fmt.Errorf("division by zero")
 		}
 		result = args.A / args.B
 	default:
@@ -314,7 +314,7 @@ func (c *agentToolChat) calculate(args calculatorArgs) calculatorResult {
 			B:         args.B,
 			Result:    0,
 			Error:     "Unknown operation",
-		}
+		}, fmt.Errorf("unknown operation")
 	}
 
 	return calculatorResult{
@@ -322,11 +322,11 @@ func (c *agentToolChat) calculate(args calculatorArgs) calculatorResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // getCurrentTime returns the current time for a specific timezone.
-func (c *agentToolChat) getCurrentTime(args timeArgs) timeResult {
+func (c *agentToolChat) getCurrentTime(ctx context.Context, args timeArgs) (timeResult, error) {
 	loc := time.Local
 	if args.Timezone != "" {
 		switch strings.ToUpper(args.Timezone) {
@@ -347,7 +347,7 @@ func (c *agentToolChat) getCurrentTime(args timeArgs) timeResult {
 		Time:     now.Format("15:04:05"),
 		Date:     now.Format("2006-01-02"),
 		Weekday:  now.Format("Monday"),
-	}
+	}, nil
 }
 
 // calculatorArgs defines the input arguments for the calculator tool.

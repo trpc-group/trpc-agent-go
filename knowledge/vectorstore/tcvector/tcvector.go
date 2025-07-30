@@ -300,6 +300,7 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		}
 	}
 
+	// default is hybrid search
 	switch query.SearchMode {
 	case vectorstore.SearchModeVector:
 		return vs.searchByVector(ctx, query)
@@ -351,7 +352,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("tcvectordb vector search: %w", err)
 	}
 
-	return vs.convertSearchResult(searchResult)
+	return vs.convertSearchResult(vectorstore.SearchModeVector, searchResult)
 }
 
 // keywordSearch performs pure keyword search using BM25 sparse vectors
@@ -388,7 +389,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		return nil, fmt.Errorf("tcvectordb keyword search: %w", err)
 	}
 
-	return vs.convertSearchResult(searchResult)
+	return vs.convertSearchResult(vectorstore.SearchModeKeyword, searchResult)
 }
 
 // hybridSearch performs hybrid search combining dense vector similarity and BM25 keyword matching
@@ -396,9 +397,14 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	if len(query.Vector) == 0 {
 		return nil, fmt.Errorf("tcvectordb vector is required for hybrid search")
 	}
+
+	vectorWeight := vs.option.vectorWeight
+	textWeight := vs.option.textWeight
 	if query.Query == "" {
-		return nil, fmt.Errorf("tcvectordb keyword is required for hybrid search")
+		vectorWeight = 1.0
+		textWeight = 0.0
 	}
+
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
@@ -427,12 +433,11 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 				Data:      querySparseVector,
 			},
 		},
-		// Use RRF (Reciprocal Rank Fusion) for combining scores
+		// Use weighted rerank
 		Rerank: &tcvectordb.RerankOption{
-			Method:    tcvectordb.RerankRrf, // Use RRF method
+			Method:    tcvectordb.RerankWeighted,
 			FieldList: []string{fieldVector, fieldSparseVector},
-			Weight:    []float32{float32(vs.option.vectorWeight), float32(vs.option.textWeight)},
-			RrfK:      60, // Default RRF K value
+			Weight:    []float32{float32(vectorWeight), float32(textWeight)},
 		},
 	}
 	searchResult, err := vs.client.HybridSearch(
@@ -445,7 +450,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("tcvectordb hybrid search: %w", err)
 	}
 
-	return vs.convertSearchResult(searchResult)
+	return vs.convertSearchResult(vectorstore.SearchModeHybrid, searchResult)
 }
 
 // filterSearch performs filter-only search when no vector or keyword is provided
@@ -481,7 +486,10 @@ func (vs *VectorStore) Close() error {
 }
 
 // convertSearchResult converts tcvectordb search result to vectorstore result
-func (vs *VectorStore) convertSearchResult(searchResult *tcvectordb.SearchDocumentResult) (*vectorstore.SearchResult, error) {
+func (vs *VectorStore) convertSearchResult(
+	searchMode vectorstore.SearchMode,
+	searchResult *tcvectordb.SearchDocumentResult,
+) (*vectorstore.SearchResult, error) {
 	if len(searchResult.Documents) == 0 {
 		return &vectorstore.SearchResult{
 			Results: make([]*vectorstore.ScoredDocument, 0),
@@ -500,6 +508,7 @@ func (vs *VectorStore) convertSearchResult(searchResult *tcvectordb.SearchDocume
 	}
 
 	for _, tcDoc := range searchResult.Documents[0] {
+		log.Debugf("tcvectordb search result: score %v id %v searchMode %v", tcDoc.Score, tcDoc.Id, searchMode)
 		doc, err := covertToDocument(tcDoc)
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)

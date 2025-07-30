@@ -340,7 +340,7 @@ func (c *multiTurnChat) startNewSession() {
 // CallableTool implementations.
 
 // calculate performs basic mathematical operations.
-func (c *multiTurnChat) calculate(args calculatorArgs) calculatorResult {
+func (c *multiTurnChat) calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
 	var result float64
 
 	switch strings.ToLower(args.Operation) {
@@ -365,11 +365,11 @@ func (c *multiTurnChat) calculate(args calculatorArgs) calculatorResult {
 		A:         args.A,
 		B:         args.B,
 		Result:    result,
-	}
+	}, nil
 }
 
 // getCurrentTime returns current time information.
-func (c *multiTurnChat) getCurrentTime(args timeArgs) timeResult {
+func (c *multiTurnChat) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
 	now := time.Now()
 	var t time.Time
 	timezone := args.Timezone
@@ -397,7 +397,7 @@ func (c *multiTurnChat) getCurrentTime(args timeArgs) timeResult {
 		Time:     t.Format("15:04:05"),
 		Date:     t.Format("2006-01-02"),
 		Weekday:  t.Weekday().String(),
-	}
+	}, nil
 }
 
 // calculatorArgs represents arguments for the calculator tool.

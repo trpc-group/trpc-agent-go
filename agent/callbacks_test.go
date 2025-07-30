@@ -25,7 +25,7 @@ import (
 // =========================
 
 func TestAgentCallbacks_Before_NoCb(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
 		AgentName:    "test-agent",
@@ -37,7 +37,7 @@ func TestAgentCallbacks_Before_NoCb(t *testing.T) {
 }
 
 func TestAgentCallbacks_Before_Custom(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	customResponse := &model.Response{ID: "custom-agent-response"}
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
 		return customResponse, nil
@@ -53,7 +53,7 @@ func TestAgentCallbacks_Before_Custom(t *testing.T) {
 }
 
 func TestAgentCallbacks_Before_Err(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
 		return nil, context.DeadlineExceeded
 	})
@@ -68,7 +68,7 @@ func TestAgentCallbacks_Before_Err(t *testing.T) {
 }
 
 func TestAgentCallbacks_Before_Multi(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	callbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
 		return nil, nil
 	})
@@ -92,7 +92,7 @@ func TestAgentCallbacks_Before_Multi(t *testing.T) {
 // =========================
 
 func TestAgentCallbacks_After_NoCb(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	invocation := &Invocation{
 		InvocationID: "test-invocation",
 		AgentName:    "test-agent",
@@ -105,7 +105,7 @@ func TestAgentCallbacks_After_NoCb(t *testing.T) {
 }
 
 func TestAgentCallbacks_After_CustomResp(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	customResponse := &model.Response{ID: "custom-after-response"}
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
 		return customResponse, nil
@@ -118,7 +118,7 @@ func TestAgentCallbacks_After_CustomResp(t *testing.T) {
 }
 
 func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
 		return nil, context.DeadlineExceeded
 	})
@@ -134,7 +134,7 @@ func TestAgentCallbacks_AfterAgent_Error(t *testing.T) {
 }
 
 func TestAgentCallbacks_After_RunErr(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	runError := context.DeadlineExceeded
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
 		require.Equal(t, runError, runErr)
@@ -152,7 +152,7 @@ func TestAgentCallbacks_After_RunErr(t *testing.T) {
 }
 
 func TestAgentCallbacks_After_Multi(t *testing.T) {
-	callbacks := NewAgentCallbacks()
+	callbacks := NewCallbacks()
 	callbacks.RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
 		return nil, nil
 	})

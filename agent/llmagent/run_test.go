@@ -37,7 +37,7 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 }
 
 func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
 	})
@@ -53,7 +53,7 @@ func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
 }
 
 func TestLLMAgent_Run_BeforeCallbackErr(t *testing.T) {
-	cb := agent.NewAgentCallbacks()
+	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return nil, context.Canceled
 	})
@@ -66,7 +66,7 @@ func TestLLMAgent_Run_BeforeCallbackErr(t *testing.T) {
 }
 
 func TestLLMAgent_Run_FlowAndAfterCb(t *testing.T) {
-	after := agent.NewAgentCallbacks()
+	after := agent.NewCallbacks()
 	after.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
