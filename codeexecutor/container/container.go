@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	archive "github.com/moby/go-archive"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
@@ -255,12 +255,9 @@ func (c *CodeExecutor) ensureImageExists(ctx context.Context) error {
 	}
 
 	if imageExists {
-		log.Printf("Image %s already exists locally", c.containerConfig.Image)
 		return nil
 	}
 
-	// Image doesn't exist, try to pull it
-	log.Printf("Image %s not found locally, pulling...", c.containerConfig.Image)
 	reader, err := c.client.ImagePull(ctx, c.containerConfig.Image, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", c.containerConfig.Image, err)
@@ -273,14 +270,11 @@ func (c *CodeExecutor) ensureImageExists(ctx context.Context) error {
 		return fmt.Errorf("failed to read image pull output: %w", err)
 	}
 
-	log.Printf("Successfully pulled image %s", c.containerConfig.Image)
 	return nil
 }
 
 // buildDockerImage builds the Docker image from Dockerfile
 func (c *CodeExecutor) buildDockerImage(ctx context.Context) error {
-	log.Println("Building Docker image...")
-
 	// Create build context
 	buildContext, err := createBuildContext(c.dockerFilePath)
 	if err != nil {
@@ -301,10 +295,8 @@ func (c *CodeExecutor) buildDockerImage(ctx context.Context) error {
 	// Read build output (optional, for logging)
 	_, err = io.Copy(io.Discard, buildResponse.Body)
 	if err != nil {
-		log.Printf("Error reading build output: %v", err)
+		log.Warnf("Error reading build output: %v", err)
 	}
-
-	log.Printf("Docker image: %s built successfully", c.containerConfig.Image)
 	return nil
 }
 
@@ -355,8 +347,6 @@ func (c *CodeExecutor) initContainer() error {
 		}
 	}
 
-	log.Println("Starting container for CodeExecutor...")
-
 	// Ensure image exists locally, pull if not
 	if err := c.ensureImageExists(ctx); err != nil {
 		return err
@@ -375,7 +365,6 @@ func (c *CodeExecutor) initContainer() error {
 
 	waitForContainerReadyErr := c.waitForContainerReady(ctx, 60*time.Second, resp.ID)
 	if waitForContainerReadyErr != nil {
-		log.Printf("Container %s did not become ready in time: %v", resp.ID, waitForContainerReadyErr)
 		return fmt.Errorf("container %s did not become ready in time: %w", resp.ID, waitForContainerReadyErr)
 	}
 
@@ -387,7 +376,6 @@ func (c *CodeExecutor) initContainer() error {
 
 	// Check if container is running
 	if containerJSON.State.Status != "running" {
-		log.Printf("Container state: %+v", containerJSON.State)
 		return fmt.Errorf("container is not running, status: %s, exit code: %d",
 			containerJSON.State.Status, containerJSON.State.ExitCode)
 	}
@@ -399,7 +387,7 @@ func (c *CodeExecutor) initContainer() error {
 		State: containerJSON.State.Status,
 	}
 
-	log.Printf("Container %s started successfully and is running", c.container.ID)
+	log.Debugf("Container %s started successfully and is running", c.container.ID)
 
 	// Verify python3 installation
 	if err := c.verifyPythonInstallation(ctx); err != nil {
@@ -430,7 +418,6 @@ func (c *CodeExecutor) waitForContainerReady(ctx context.Context, timeout time.D
 
 			// If container is running, it's ready
 			if containerJSON.State.Running {
-				log.Printf("Container %s is running and ready", containerID)
 				return nil
 			}
 
@@ -451,19 +438,18 @@ func (c *CodeExecutor) cleanup() {
 	}
 
 	ctx := context.Background()
-	log.Printf("[Cleanup] Stopping container %s...", c.container.ID)
 
 	// Stop container
 	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {
-		log.Printf("Failed to stop container: %v", err)
+		log.Debugf("Failed to stop container: %v", err)
 	}
 
 	// Remove container
 	if err := c.client.ContainerRemove(ctx, c.container.ID, container.RemoveOptions{}); err != nil {
-		log.Printf("Failed to remove container: %v", err)
+		log.Debugf("Failed to remove container: %v", err)
 	}
 
-	log.Printf("Container %s stopped and removed", c.container.ID)
+	log.Debugf("Container %s stopped and removed", c.container.ID)
 }
 
 // Close manually cleans up resources
