@@ -562,7 +562,7 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 		return leftVal * rightVal, nil
 	case '/':
 		if rightVal == 0 {
-			return 0, agent.NewStopError("division by zero") //  fmt.Errorf("division by zero")
+			return 0, agent.NewStopError("division by zero")
 		}
 		return leftVal / rightVal, nil
 	default:
