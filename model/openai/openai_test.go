@@ -1175,9 +1175,9 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 		{
 			name: "Normal_Sandwich_Mode", // Normal "sandwich" mode: content does not exist in tool call chunks {0}.
 			chunks: []string{
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // 开始边界：空content标记
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // 纯tool_calls chunk - content字段不存在
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // 结束边界：空content标记
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // Start boundary: empty content marker
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // Pure tool_calls chunk - content field does not exist
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // End boundary: empty content marker
 			},
 			expectedTool:  "get_weather",
 			expectedArgs:  `{"location":"Beijing"}`,
@@ -1187,7 +1187,7 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			name: "Abnormal_Mixed_Mode", // other "mixed" mode: content exists in tool call chunks {3 ""}.
 			chunks: []string{
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"id":"call_456","type":"function","function":{"name":"calculate","arguments":"{\"expr\":\"2+2\"}"}}]},"finish_reason":null}]}`, // 字段冲突：同时有content和tool_calls
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"id":"call_456","type":"function","function":{"name":"calculate","arguments":"{\"expr\":\"2+2\"}"}}]},"finish_reason":null}]}`, // Field conflict: content and tool_calls simultaneously present
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
 			},
 			expectedTool:  "calculate",
@@ -1197,10 +1197,10 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 		{
 			name: "Multiple_ToolCalls_Sandwich", // multiple tool calls in normal mode.
 			chunks: []string{
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // 开始边界
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_111","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // 第一个工具
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_222","type":"function","function":{"name":"get_time","arguments":"{\"timezone\":\"UTC\"}"}}]},"finish_reason":null}]}`,        // 第二个工具
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // 结束边界
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // Start boundary
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_111","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // First tool
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_222","type":"function","function":{"name":"get_time","arguments":"{\"timezone\":\"UTC\"}"}}]},"finish_reason":null}]}`,        // Second tool
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // End boundary
 			},
 			expectedTool:  "get_weather", // First tool.
 			expectedArgs:  `{"location":"Beijing"}`,
@@ -1209,8 +1209,8 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 		{
 			name: "Incremental_Arguments_Streaming", // incremental arguments streaming.
 			chunks: []string{
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                          // 开始边界
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_streaming_123","type":"function","function":{"name":"record_score","arguments":""}}]},"finish_reason":null}]}`, // 工具调用开始，arguments为空
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                          // Start boundary
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_streaming_123","type":"function","function":{"name":"record_score","arguments":""}}]},"finish_reason":null}]}`, // Tool call starts, arguments are empty
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\""}}]},"finish_reason":null}]}`,                                                                // arguments: {"
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"feedback"}}]},"finish_reason":null}]}`,                                                           // arguments: feedback
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\""}}]},"finish_reason":null}]}`,                                                              // arguments: ":"
@@ -1221,7 +1221,7 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"score"}}]},"finish_reason":null}]}`,                                                              // arguments: score
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":85"}}]},"finish_reason":null}]}`,                                                              // arguments: ":85
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":null}]}`,                                                                  // arguments: }
-				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                     // 结束边界
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                     // End boundary
 			},
 			expectedTool:  "record_score",
 			expectedArgs:  `{"feedback":"The analysis shows good quality","score":85}`,
