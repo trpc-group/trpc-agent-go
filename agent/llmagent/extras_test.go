@@ -264,11 +264,17 @@ func TestLLMAgent_WithMemory(t *testing.T) {
 	// Check that the memory tools were automatically added.
 	tools := agt.Tools()
 	foundMemoryTools := false
+	toolMap := map[string] struct {}{
+		"memory_add": {},
+		"memory_update": {},
+		"memory_delete": {},
+		"memory_clear": {},
+		"memory_search": {},
+		"memory_load": {},
+	}
 	for _, toolItem := range tools {
 		decl := toolItem.Declaration()
-		if decl.Name == "memory_add" || decl.Name == "memory_update" ||
-			decl.Name == "memory_delete" || decl.Name == "memory_clear" ||
-			decl.Name == "memory_search" || decl.Name == "memory_load" {
+		if _, ok := toolMap[decl.Name]; ok {
 			foundMemoryTools = true
 			break
 		}
