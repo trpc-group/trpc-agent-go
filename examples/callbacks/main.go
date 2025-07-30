@@ -93,6 +93,35 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
 	// Create tools.
+	tools := c.createTools()
+
+	// Create callbacks.
+	modelCallbacks := c.createModelCallbacks()
+	toolCallbacks := c.createToolCallbacks()
+	agentCallbacks := c.createAgentCallbacks()
+
+	// Create LLM agent with tools and callbacks.
+	llmAgent := c.createLLMAgent(modelInstance, tools, modelCallbacks, toolCallbacks, agentCallbacks)
+
+	// Create session service.
+	sessionService, err := c.createSessionService()
+	if err != nil {
+		return fmt.Errorf("failed to create session service: %w", err)
+	}
+
+	// Create runner.
+	c.createRunner(llmAgent, sessionService)
+
+	// Setup identifiers.
+	c.setupIdentifiers()
+
+	fmt.Printf("✅ Chat with callbacks ready! Session: %s\n\n", c.sessionID)
+
+	return nil
+}
+
+// createTools creates the tools for the agent.
+func (c *multiTurnChatWithCallbacks) createTools() []tool.Tool {
 	calculatorTool := function.NewFunctionTool(
 		c.calculate,
 		function.WithName("calculator"),
@@ -103,111 +132,106 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 		function.WithName("current_time"),
 		function.WithDescription("Get the current time and date for a specific timezone"),
 	)
+	return []tool.Tool{calculatorTool, timeTool}
+}
 
-	// Construct ModelCallbacks example.
+// createModelCallbacks creates and configures model callbacks.
+func (c *multiTurnChatWithCallbacks) createModelCallbacks() *model.Callbacks {
 	modelCallbacks := model.NewCallbacks()
-	modelCallbacks.RegisterBeforeModel(func(
-		ctx context.Context, req *model.Request,
-	) (*model.Response, error) {
-		userMsg := ""
-		if len(req.Messages) > 0 {
-			userMsg = req.Messages[len(req.Messages)-1].Content
-		}
+	modelCallbacks.RegisterBeforeModel(c.createBeforeModelCallback())
+	modelCallbacks.RegisterAfterModel(c.createAfterModelCallback())
+	return modelCallbacks
+}
+
+// createBeforeModelCallback creates the before model callback.
+func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeModelCallback {
+	return func(ctx context.Context, req *model.Request) (*model.Response, error) {
+		userMsg := c.extractLastUserMessage(req)
 		fmt.Printf("\n🔵 BeforeModelCallback: model=%s, lastUserMsg=%q\n",
 			c.modelName,
 			userMsg,
 		)
-		if userMsg != "" && strings.Contains(userMsg, "custom model") {
+
+		if c.shouldReturnCustomResponse(userMsg) {
 			fmt.Printf("🔵 BeforeModelCallback: triggered, returning custom response for 'custom model'.\n")
-			return &model.Response{
-				Choices: []model.Choice{{
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: "[This is a custom response from before model callback]",
-					},
-				}},
-			}, nil
+			return c.createCustomResponse(), nil
 		}
 		return nil, nil
-	})
-	modelCallbacks.RegisterAfterModel(func(
-		ctx context.Context, resp *model.Response, runErr error,
-	) (*model.Response, error) {
-		if resp != nil && resp.Done {
-			fmt.Printf("\n🟣 AfterModelCallback: model=%s has finished\n", c.modelName)
-		}
-		if resp != nil && len(resp.Choices) > 0 && strings.Contains(resp.Choices[0].Message.Content, "override me") {
+	}
+}
+
+// createAfterModelCallback creates the after model callback.
+func (c *multiTurnChatWithCallbacks) createAfterModelCallback() model.AfterModelCallback {
+	return func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+		c.handleModelFinished(resp)
+		c.demonstrateOriginalRequestAccess(req, resp)
+
+		if c.shouldOverrideResponse(resp) {
 			fmt.Printf("🟣 AfterModelCallback: triggered, overriding response for 'override me'.\n")
-			return &model.Response{
-				Choices: []model.Choice{{
-					Message: model.Message{
-						Role:    model.RoleAssistant,
-						Content: "[This response was overridden by after model callback]",
-					},
-				}},
-			}, nil
+			return c.createOverrideResponse(), nil
 		}
 		return nil, nil
-	})
+	}
+}
 
-	// Construct ToolCallbacks example.
+// createToolCallbacks creates and configures tool callbacks.
+func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
 	toolCallbacks := tool.NewCallbacks()
-	toolCallbacks.RegisterBeforeTool(func(
-		ctx context.Context,
-		toolName string,
-		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
-	) (any, error) {
-		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
-		if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
-			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
-			return calculatorResult{
-				Operation: "custom",
-				A:         42,
-				B:         42,
-				Result:    4242,
-			}, nil
-		}
-		return nil, nil
-	})
-	toolCallbacks.RegisterAfterTool(func(
-		ctx context.Context,
-		toolName string,
-		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
-		result any,
-		runErr error,
-	) (any, error) {
-		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n", toolName, string(jsonArgs), result, runErr)
-		if toolName == "current_time" {
-			if timeResult, ok := result.(timeResult); ok {
-				timeResult.Formatted = fmt.Sprintf("%s %s (%s)", timeResult.Date, timeResult.Time, timeResult.Timezone)
-				fmt.Println("\n🟤 AfterToolCallback: triggered, formatted result.")
-				return timeResult, nil
-			}
-		}
-		return nil, nil
-	})
+	toolCallbacks.RegisterBeforeTool(c.createBeforeToolCallback())
+	toolCallbacks.RegisterAfterTool(c.createAfterToolCallback())
+	return toolCallbacks
+}
 
-	// AgentCallbacks example.
+// createBeforeToolCallback creates the before tool callback.
+func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallback {
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
+
+		if c.shouldReturnCustomToolResult(toolName, jsonArgs) {
+			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
+			return c.createCustomCalculatorResult(), nil
+		}
+		return nil, nil
+	}
+}
+
+// createAfterToolCallback creates the after tool callback.
+func (c *multiTurnChatWithCallbacks) createAfterToolCallback() tool.AfterToolCallback {
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n", toolName, string(jsonArgs), result, runErr)
+
+		if c.shouldFormatTimeResult(toolName, result) {
+			fmt.Println("\n🟤 AfterToolCallback: triggered, formatted result.")
+			return c.formatTimeResult(result), nil
+		}
+		return nil, nil
+	}
+}
+
+// createAgentCallbacks creates and configures agent callbacks.
+func (c *multiTurnChatWithCallbacks) createAgentCallbacks() *agent.Callbacks {
 	agentCallbacks := agent.NewCallbacks()
-	agentCallbacks.RegisterBeforeAgent(func(
-		ctx context.Context, invocation *agent.Invocation,
-	) (*model.Response, error) {
+	agentCallbacks.RegisterBeforeAgent(c.createBeforeAgentCallback())
+	agentCallbacks.RegisterAfterAgent(c.createAfterAgentCallback())
+	return agentCallbacks
+}
+
+// createBeforeAgentCallback creates the before agent callback.
+func (c *multiTurnChatWithCallbacks) createBeforeAgentCallback() agent.BeforeAgentCallback {
+	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
 		fmt.Printf("\n🟢 BeforeAgentCallback: agent=%s, invocationID=%s, userMsg=%q\n",
 			invocation.AgentName,
 			invocation.InvocationID,
 			invocation.Message.Content,
 		)
 		return nil, nil
-	})
-	agentCallbacks.RegisterAfterAgent(func(
-		ctx context.Context, invocation *agent.Invocation, runErr error,
-	) (*model.Response, error) {
-		respContent := "<nil>"
-		if invocation != nil && invocation.Message.Content != "" {
-			respContent = invocation.Message.Content
-		}
+	}
+}
+
+// createAfterAgentCallback creates the after agent callback.
+func (c *multiTurnChatWithCallbacks) createAfterAgentCallback() agent.AfterAgentCallback {
+	return func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+		respContent := c.extractResponseContent(invocation)
 		fmt.Printf("\n🟡 AfterAgentCallback: agent=%s, invocationID=%s, runErr=%v, userMsg=%q\n",
 			invocation.AgentName,
 			invocation.InvocationID,
@@ -215,9 +239,17 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 			respContent,
 		)
 		return nil, nil
-	})
+	}
+}
 
-	// Create LLM agent with tools and callbacks.
+// createLLMAgent creates the LLM agent with all configurations.
+func (c *multiTurnChatWithCallbacks) createLLMAgent(
+	modelInstance model.Model,
+	tools []tool.Tool,
+	modelCallbacks *model.Callbacks,
+	toolCallbacks *tool.Callbacks,
+	agentCallbacks *agent.Callbacks,
+) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
@@ -225,7 +257,7 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	}
 
 	agentName := "chat-assistant"
-	llmAgent := llmagent.New(
+	return llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
@@ -233,43 +265,132 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
-		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
+		llmagent.WithTools(tools),
 		llmagent.WithAgentCallbacks(agentCallbacks),
 		llmagent.WithModelCallbacks(modelCallbacks),
 		llmagent.WithToolCallbacks(toolCallbacks),
 	)
+}
 
-	var sessionService session.Service
-	var err error
+// createSessionService creates the session service based on configuration.
+func (c *multiTurnChatWithCallbacks) createSessionService() (session.Service, error) {
 	switch *sessServiceName {
 	case "inmemory":
-		sessionService = inmemory.NewSessionService()
+		return inmemory.NewSessionService(), nil
 	case "redis":
 		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
-		sessionService, err = redis.NewService(redis.WithRedisClientURL(redisURL))
+		return redis.NewService(redis.WithRedisClientURL(redisURL))
 	default:
-		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
+		return nil, fmt.Errorf("invalid session service name: %s", *sessServiceName)
 	}
+}
 
-	if err != nil {
-		return fmt.Errorf("failed to create session service: %w", err)
-	}
-
-	// Create runner.
+// createRunner creates the runner with the agent and session service.
+func (c *multiTurnChatWithCallbacks) createRunner(llmAgent agent.Agent, sessionService session.Service) {
 	appName := "multi-turn-chat-callbacks"
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),
 	)
+}
 
-	// Setup identifiers.
+// setupIdentifiers sets up user and session identifiers.
+func (c *multiTurnChatWithCallbacks) setupIdentifiers() {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
+}
 
-	fmt.Printf("✅ Chat with callbacks ready! Session: %s\n\n", c.sessionID)
+// Helper functions for callback logic.
 
-	return nil
+func (c *multiTurnChatWithCallbacks) extractLastUserMessage(req *model.Request) string {
+	if len(req.Messages) > 0 {
+		return req.Messages[len(req.Messages)-1].Content
+	}
+	return ""
+}
+
+func (c *multiTurnChatWithCallbacks) shouldReturnCustomResponse(userMsg string) bool {
+	return userMsg != "" && strings.Contains(userMsg, "custom model")
+}
+
+func (c *multiTurnChatWithCallbacks) createCustomResponse() *model.Response {
+	return &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "[This is a custom response from before model callback]",
+			},
+		}},
+	}
+}
+
+func (c *multiTurnChatWithCallbacks) handleModelFinished(resp *model.Response) {
+	if resp != nil && resp.Done {
+		fmt.Printf("\n🟣 AfterModelCallback: model=%s has finished\n", c.modelName)
+	}
+}
+
+func (c *multiTurnChatWithCallbacks) demonstrateOriginalRequestAccess(req *model.Request, resp *model.Response) {
+	// Only demonstrate when the response is complete (Done=true) to avoid multiple triggers during streaming.
+	if resp == nil || !resp.Done {
+		return
+	}
+
+	if req != nil && len(req.Messages) > 0 {
+		lastUserMsg := req.Messages[len(req.Messages)-1].Content
+		if strings.Contains(lastUserMsg, "original request") {
+			fmt.Printf("🟣 AfterModelCallback: detected 'original request' in user message: %q\n", lastUserMsg)
+			fmt.Printf("🟣 AfterModelCallback: this demonstrates access to the original request in after callback.\n")
+		}
+	}
+}
+
+func (c *multiTurnChatWithCallbacks) shouldOverrideResponse(resp *model.Response) bool {
+	return resp != nil && len(resp.Choices) > 0 && strings.Contains(resp.Choices[0].Message.Content, "override me")
+}
+
+func (c *multiTurnChatWithCallbacks) createOverrideResponse() *model.Response {
+	return &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "[This response was overridden by after model callback]",
+			},
+		}},
+	}
+}
+
+func (c *multiTurnChatWithCallbacks) shouldReturnCustomToolResult(toolName string, jsonArgs []byte) bool {
+	return toolName == "calculator" && strings.Contains(string(jsonArgs), "42")
+}
+
+func (c *multiTurnChatWithCallbacks) createCustomCalculatorResult() calculatorResult {
+	return calculatorResult{
+		Operation: "custom",
+		A:         42,
+		B:         42,
+		Result:    4242,
+	}
+}
+
+func (c *multiTurnChatWithCallbacks) shouldFormatTimeResult(toolName string, result any) bool {
+	return toolName == "current_time"
+}
+
+func (c *multiTurnChatWithCallbacks) formatTimeResult(result any) any {
+	if timeResult, ok := result.(timeResult); ok {
+		timeResult.Formatted = fmt.Sprintf("%s %s (%s)", timeResult.Date, timeResult.Time, timeResult.Timezone)
+		return timeResult
+	}
+	return result
+}
+
+func (c *multiTurnChatWithCallbacks) extractResponseContent(invocation *agent.Invocation) string {
+	if invocation != nil && invocation.Message.Content != "" {
+		return invocation.Message.Content
+	}
+	return "<nil>"
 }
 
 // startChat runs the interactive conversation loop.

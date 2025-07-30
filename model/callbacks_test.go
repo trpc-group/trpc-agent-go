@@ -101,7 +101,9 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 		},
 	}
 
-	callbacks.RegisterAfterModel(func(ctx context.Context, resp *Response, modelErr error) (*Response, error) {
+	callbacks.RegisterAfterModel(func(
+		ctx context.Context, req *Request, resp *Response, modelErr error,
+	) (*Response, error) {
 		return customResponse, nil
 	})
 
@@ -121,7 +123,16 @@ func TestModelCallbacks_AfterModel(t *testing.T) {
 		},
 	}
 
-	resp, err := callbacks.RunAfterModel(context.Background(), originalResponse, nil)
+	req := &Request{
+		Messages: []Message{
+			{
+				Role:    RoleUser,
+				Content: "Hello",
+			},
+		},
+	}
+
+	resp, err := callbacks.RunAfterModel(context.Background(), req, originalResponse, nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, resp)

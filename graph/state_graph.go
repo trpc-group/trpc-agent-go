@@ -316,7 +316,7 @@ func processModelResponse(
 	span oteltrace.Span,
 ) error {
 	if modelCallbacks != nil {
-		customResponse, err := modelCallbacks.RunAfterModel(ctx, response, nil)
+		customResponse, err := modelCallbacks.RunAfterModel(ctx, request, response, nil)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return fmt.Errorf("callback after model error: %w", err)
