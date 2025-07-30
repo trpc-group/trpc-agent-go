@@ -30,7 +30,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -333,11 +332,7 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 
 	// Add memory tool if memory service is provided.
 	if memory != nil {
-		memoryToolSet := toolmemory.NewMemoryToolSet(memory)
-		tools := memoryToolSet.Tools(context.Background())
-		for _, t := range tools {
-			allTools = append(allTools, t)
-		}
+		allTools = append(allTools, memory.Tools()...)
 	}
 
 	return allTools

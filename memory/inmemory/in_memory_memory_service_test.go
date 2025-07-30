@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNewMemoryService(t *testing.T) {
@@ -331,3 +332,112 @@ func TestMemoryService_Concurrency(t *testing.T) {
 		t.Fatalf("Expected %d memories, got %d", expectedCount, len(memories))
 	}
 }
+
+func TestMemoryService_Tools(t *testing.T) {
+	// New design has default tools enabled by default.
+	service := NewMemoryService()
+	tools := service.Tools()
+	// Should have 4 default enabled tools: add, update, search, load.
+	if len(tools) != 4 {
+		t.Errorf("expected 4 default tools, got %d", len(tools))
+	}
+
+	// Register some tools.
+	service = NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.AddToolName}
+		}),
+		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.SearchToolName}
+		}),
+	)
+	tools = service.Tools()
+	toolNames := map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	if !toolNames[memory.AddToolName] || !toolNames[memory.SearchToolName] {
+		t.Errorf("expected enabled tools to be present")
+	}
+	// Should have 4 tools total (2 custom + 2 default enabled).
+	if len(tools) != 4 {
+		t.Errorf("expected 4 tools (2 custom + 2 default enabled), got %d", len(tools))
+	}
+
+	// Custom tool should be returned when provided.
+	custom := &mockTool{name: memory.AddToolName}
+	service = NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return custom
+		}),
+	)
+	tools = service.Tools()
+	found := false
+	for _, tool := range tools {
+		if tool.Declaration().Name == memory.AddToolName {
+			if tool == custom {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected custom tool to be returned for %s", memory.AddToolName)
+	}
+
+	// Test tool enable/disable functionality.
+	service = NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.AddToolName}
+		}),
+		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.SearchToolName}
+		}),
+		WithToolEnabled(memory.AddToolName, false),
+	)
+	tools = service.Tools()
+	toolNames = map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	if toolNames[memory.AddToolName] {
+		t.Errorf("expected %s to be disabled", memory.AddToolName)
+	}
+	if !toolNames[memory.SearchToolName] {
+		t.Errorf("expected %s to be enabled", memory.SearchToolName)
+	}
+
+	// Test tool builder functionality.
+	service = NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.AddToolName + "_built"}
+		}),
+	)
+	tools = service.Tools()
+	found = false
+	for _, tool := range tools {
+		if tool.Declaration().Name == memory.AddToolName+"_built" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected tool built by builder to be present")
+	}
+
+	// Test disabling all tools.
+	service = NewMemoryService(
+		WithToolEnabled(memory.AddToolName, false),
+		WithToolEnabled(memory.UpdateToolName, false),
+		WithToolEnabled(memory.SearchToolName, false),
+		WithToolEnabled(memory.LoadToolName, false),
+	)
+	tools = service.Tools()
+	if len(tools) != 0 {
+		t.Errorf("expected no tools when all disabled, got %d", len(tools))
+	}
+}
+
+// mockTool implements tool.Tool for testing.
+type mockTool struct{ name string }
+
+func (m *mockTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: m.name} }

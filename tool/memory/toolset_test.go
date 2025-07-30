@@ -17,11 +17,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	memorypkg "trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 func TestNewMemoryToolSet(t *testing.T) {
-	service := inmemory.NewMemoryService()
+	service := newMockMemoryService()
 	toolSet := NewMemoryToolSet(service)
 
 	require.NotNil(t, toolSet, "Expected non-nil tool set")
@@ -35,12 +35,12 @@ func TestNewMemoryToolSet(t *testing.T) {
 
 	// Verify tool names.
 	expectedNames := []string{
-		AddToolName,
-		UpdateToolName,
-		DeleteToolName,
-		ClearToolName,
-		SearchToolName,
-		LoadToolName,
+		memorypkg.AddToolName,
+		memorypkg.UpdateToolName,
+		memorypkg.DeleteToolName,
+		memorypkg.ClearToolName,
+		memorypkg.SearchToolName,
+		memorypkg.LoadToolName,
 	}
 
 	for _, expectedName := range expectedNames {
@@ -56,7 +56,7 @@ func TestNewMemoryToolSet(t *testing.T) {
 }
 
 func TestMemoryToolSet_LazyInitialization(t *testing.T) {
-	service := inmemory.NewMemoryService()
+	service := newMockMemoryService()
 	toolSet := NewMemoryToolSet(service)
 
 	// First call should initialize tools.
@@ -72,7 +72,7 @@ func TestMemoryToolSet_LazyInitialization(t *testing.T) {
 }
 
 func TestMemoryToolSet_Close(t *testing.T) {
-	service := inmemory.NewMemoryService()
+	service := newMockMemoryService()
 	toolSet := NewMemoryToolSet(service)
 
 	// Initialize tools.

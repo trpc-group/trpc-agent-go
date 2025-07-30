@@ -264,13 +264,13 @@ func TestLLMAgent_WithMemory(t *testing.T) {
 	// Check that the memory tools were automatically added.
 	tools := agt.Tools()
 	foundMemoryTools := false
-	toolMap := map[string] struct {}{
-		"memory_add": {},
+	toolMap := map[string]struct{}{
+		"memory_add":    {},
 		"memory_update": {},
 		"memory_delete": {},
-		"memory_clear": {},
+		"memory_clear":  {},
 		"memory_search": {},
-		"memory_load": {},
+		"memory_load":   {},
 	}
 	for _, toolItem := range tools {
 		decl := toolItem.Declaration()
@@ -326,23 +326,21 @@ type mockMemoryService struct{}
 func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error {
 	return nil
 }
-
 func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
 	return nil
 }
-
-func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
-	return nil
-}
-
+func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error { return nil }
 func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	return nil
 }
-
 func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
 	return []*memory.Entry{}, nil
 }
-
 func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
 	return []*memory.Entry{}, nil
+}
+func (m *mockMemoryService) Tools() []tool.Tool { return []tool.Tool{&mockTool{name: "memory_add"}} }
+
+func (m *mockMemoryService) EnabledTools() []string {
+	return nil
 }

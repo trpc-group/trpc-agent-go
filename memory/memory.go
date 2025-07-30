@@ -16,6 +16,18 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+// Tool names for memory tools.
+const (
+	AddToolName    = "memory_add"
+	UpdateToolName = "memory_update"
+	DeleteToolName = "memory_delete"
+	ClearToolName  = "memory_clear"
+	SearchToolName = "memory_search"
+	LoadToolName   = "memory_load"
 )
 
 var (
@@ -46,6 +58,9 @@ type Service interface {
 
 	// SearchMemories searches memories for a user.
 	SearchMemories(ctx context.Context, userKey UserKey, query string) ([]*Entry, error)
+
+	// Tools returns the list of available memory tools.
+	Tools() []tool.Tool
 }
 
 // Memory represents a memory entry with content and metadata.

@@ -23,9 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// getAppAndUserFromContext extracts appName and userID from the context.
+// GetAppAndUserFromContext extracts appName and userID from the context.
 // This function looks for these values in the agent invocation context.
-func getAppAndUserFromContext(ctx context.Context) (string, string, error) {
+func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 	// Try to get from agent invocation context.
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
@@ -53,7 +53,7 @@ func getAppAndUserFromContext(ctx context.Context) (string, string, error) {
 func NewAddMemoryTool(service memory.Service) tool.CallableTool {
 	addFunc := func(ctx context.Context, req AddMemoryRequest) (AddMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return AddMemoryResponse{
 				Success: false,
@@ -93,7 +93,7 @@ func NewAddMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		addFunc,
-		function.WithName(AddToolName),
+		function.WithName(memory.AddToolName),
 		function.WithDescription("Add a new memory about the user. Use this tool to store important information about the user's preferences, background, or past interactions."),
 	)
 }
@@ -102,7 +102,7 @@ func NewAddMemoryTool(service memory.Service) tool.CallableTool {
 func NewUpdateMemoryTool(service memory.Service) tool.CallableTool {
 	updateFunc := func(ctx context.Context, req UpdateMemoryRequest) (UpdateMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return UpdateMemoryResponse{
 				Success: false,
@@ -150,7 +150,7 @@ func NewUpdateMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		updateFunc,
-		function.WithName(UpdateToolName),
+		function.WithName(memory.UpdateToolName),
 		function.WithDescription("Update an existing memory. Use this tool to modify stored information about the user."),
 	)
 }
@@ -159,7 +159,7 @@ func NewUpdateMemoryTool(service memory.Service) tool.CallableTool {
 func NewDeleteMemoryTool(service memory.Service) tool.CallableTool {
 	deleteFunc := func(ctx context.Context, req DeleteMemoryRequest) (DeleteMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return DeleteMemoryResponse{
 				Success: false,
@@ -193,7 +193,7 @@ func NewDeleteMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		deleteFunc,
-		function.WithName(DeleteToolName),
+		function.WithName(memory.DeleteToolName),
 		function.WithDescription("Delete a specific memory. Use this tool to remove outdated or incorrect information about the user."),
 	)
 }
@@ -202,7 +202,7 @@ func NewDeleteMemoryTool(service memory.Service) tool.CallableTool {
 func NewClearMemoryTool(service memory.Service) tool.CallableTool {
 	clearFunc := func(ctx context.Context, _ struct{}) (ClearMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return ClearMemoryResponse{
 				Success: false,
@@ -227,7 +227,7 @@ func NewClearMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		clearFunc,
-		function.WithName(ClearToolName),
+		function.WithName(memory.ClearToolName),
 		function.WithDescription("Clear all memories for the user. Use this tool to reset the user's memory completely."),
 	)
 }
@@ -236,7 +236,7 @@ func NewClearMemoryTool(service memory.Service) tool.CallableTool {
 func NewSearchMemoryTool(service memory.Service) tool.CallableTool {
 	searchFunc := func(ctx context.Context, req SearchMemoryRequest) (SearchMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return SearchMemoryResponse{
 				Success: false,
@@ -288,7 +288,7 @@ func NewSearchMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName(SearchToolName),
+		function.WithName(memory.SearchToolName),
 		function.WithDescription("Search for relevant memories about the user. Use this tool to find stored information that matches the query."),
 	)
 }
@@ -297,7 +297,7 @@ func NewSearchMemoryTool(service memory.Service) tool.CallableTool {
 func NewLoadMemoryTool(service memory.Service) tool.CallableTool {
 	loadFunc := func(ctx context.Context, req LoadMemoryRequest) (LoadMemoryResponse, error) {
 		// Get appName and userID from context.
-		appName, userID, err := getAppAndUserFromContext(ctx)
+		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return LoadMemoryResponse{
 				Success: false,
@@ -345,7 +345,7 @@ func NewLoadMemoryTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		loadFunc,
-		function.WithName(LoadToolName),
+		function.WithName(memory.LoadToolName),
 		function.WithDescription("Load recent memories about the user. Use this tool to retrieve stored information to provide context for the conversation."),
 	)
 }

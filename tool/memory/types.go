@@ -16,16 +16,6 @@ import (
 	"time"
 )
 
-// Tool names for memory tools.
-const (
-	AddToolName    = "memory_add"
-	UpdateToolName = "memory_update"
-	DeleteToolName = "memory_delete"
-	ClearToolName  = "memory_clear"
-	SearchToolName = "memory_search"
-	LoadToolName   = "memory_load"
-)
-
 // Result represents a single memory result.
 type Result struct {
 	ID      string    `json:"id"`      // ID is the memory ID.

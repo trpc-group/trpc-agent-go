@@ -23,9 +23,22 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 )
 
 var _ memory.Service = (*MemoryService)(nil)
+
+// memoryToolCreator is a function that creates a tool given a memory service.
+type memoryToolCreator func(memory.Service) tool.Tool
+
+// defaultEnabledTools are the creators of default memory tools to enable.
+var defaultEnabledTools = map[string]memoryToolCreator{
+	memory.AddToolName:    func(service memory.Service) tool.Tool { return toolmemory.NewAddMemoryTool(service) },
+	memory.UpdateToolName: func(service memory.Service) tool.Tool { return toolmemory.NewUpdateMemoryTool(service) },
+	memory.SearchToolName: func(service memory.Service) tool.Tool { return toolmemory.NewSearchMemoryTool(service) },
+	memory.LoadToolName:   func(service memory.Service) tool.Tool { return toolmemory.NewLoadMemoryTool(service) },
+}
 
 const (
 	// defaultMemoryLimit is the default limit of memories per user.
@@ -49,13 +62,48 @@ func newAppMemories() *appMemories {
 type serviceOpts struct {
 	// memoryLimit is the limit of memories per user.
 	memoryLimit int
+	// toolCreators are functions to build tools after service creation.
+	toolCreators map[string]memoryToolCreator
+	// enabledTools are the names of tools to enable.
+	enabledTools map[string]bool
 }
 
-// MemoryService provides an in-memory implementation of MemoryService.
+// MemoryService is an in-memory implementation of memory.Service.
 type MemoryService struct {
-	mu   sync.RWMutex
-	apps map[string]*appMemories // appName -> appMemories
+	// mu is the mutex for the service.
+	mu sync.RWMutex
+	// apps are the app memories.
+	apps map[string]*appMemories
+	// opts are the service options.
 	opts serviceOpts
+	// cachedTools caches created tools to avoid recreating them.
+	cachedTools map[string]tool.Tool
+}
+
+// NewMemoryService creates a new in-memory memory service.
+func NewMemoryService(options ...ServiceOpt) *MemoryService {
+	opts := serviceOpts{
+		memoryLimit:  defaultMemoryLimit,
+		toolCreators: make(map[string]memoryToolCreator),
+		enabledTools: make(map[string]bool),
+	}
+
+	// Enable default tools first.
+	for toolName, creator := range defaultEnabledTools {
+		opts.enabledTools[toolName] = true
+		opts.toolCreators[toolName] = creator
+	}
+
+	// Apply user options.
+	for _, option := range options {
+		option(&opts)
+	}
+
+	return &MemoryService{
+		apps:        make(map[string]*appMemories),
+		opts:        opts,
+		cachedTools: make(map[string]tool.Tool),
+	}
 }
 
 // ServiceOpt is the option for the in-memory memory service.
@@ -68,17 +116,19 @@ func WithMemoryLimit(limit int) ServiceOpt {
 	}
 }
 
-// NewMemoryService creates a new in-memory memory service.
-func NewMemoryService(options ...ServiceOpt) *MemoryService {
-	opts := serviceOpts{
-		memoryLimit: defaultMemoryLimit,
+// WithCustomTool sets a custom memory tool implementation.
+// The tool will be enabled by default.
+func WithCustomTool(toolName string, creator memoryToolCreator) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.toolCreators[toolName] = creator
+		opts.enabledTools[toolName] = true
 	}
-	for _, option := range options {
-		option(&opts)
-	}
-	return &MemoryService{
-		apps: make(map[string]*appMemories),
-		opts: opts,
+}
+
+// WithToolEnabled sets which tool is enabled.
+func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.enabledTools[toolName] = enabled
 	}
 }
 
@@ -306,4 +356,23 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 		}
 	}
 	return results, nil
+}
+
+// Tools returns the list of available memory tools.
+func (s *MemoryService) Tools() []tool.Tool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var tools []tool.Tool
+	for toolName, creator := range s.opts.toolCreators {
+		if s.opts.enabledTools[toolName] {
+			// Create the tool if not cached.
+			if _, exists := s.cachedTools[toolName]; !exists {
+				s.cachedTools[toolName] = creator(s)
+			}
+			tools = append(tools, s.cachedTools[toolName])
+		}
+	}
+
+	return tools
 }
