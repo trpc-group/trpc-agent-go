@@ -6,7 +6,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -24,7 +23,6 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 // and emits events for the code execution result.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, rsp *model.Response, ch chan<- *event.Event) {
-	log.Infof("CodeExecutionResponseProcessor: invocation-id: %s", invocation.InvocationID)
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
 	if !ok || ce == nil {
 		return
