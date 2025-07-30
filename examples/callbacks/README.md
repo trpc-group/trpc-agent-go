@@ -8,9 +8,10 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 - **Multi-turn Conversation**: Maintains context across multiple user turns
 - **Streaming Output**: Real-time streaming of model responses
-- **Session Management**: Supports persistent chat sessions
+- **Session Management**: Supports persistent chat sessions (inmemory/redis)
 - **Tool Integration**: Built-in calculator and time tools
 - **Callback Mechanism**: Pluggable model, tool, and agent callbacks for extensibility and debugging
+- **Command Line Interface**: Configurable via command-line flags
 
 ---
 
@@ -19,14 +20,22 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 ### 1. ModelCallbacks
 
 - **BeforeModelCallback**: Triggered before each model inference. Use for input interception, logging, or mocking responses.
-- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging.
+- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging. **Now includes access to the original request for scenarios like SRT subtitle processing.**
 
 **Example output:**
 
 ```
 🔵 BeforeModelCallback: model=deepseek-chat, lastUserMsg="Hello"
 🟣 AfterModelCallback: model=deepseek-chat has finished
+🟣 AfterModelCallback: detected 'original request' in user message: "show me original request"
+🟣 AfterModelCallback: this demonstrates access to the original request in after callback.
 ```
+
+**Key Feature**: The `AfterModelCallback` now receives the original request as a parameter, enabling scenarios like:
+
+- **SRT Subtitle Processing**: Access original subtitle text with timestamps in the after callback
+- **Content Restoration**: Restore original formatting after model processing
+- **Request/Response Correlation**: Compare original input with processed output
 
 ### 2. ToolCallbacks
 
@@ -48,8 +57,8 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 **Example output:**
 
 ```
-🟢 BeforeAgentCallback: invocationID=..., userMsg="..."
-🟡 AfterAgentCallback: invocationID=..., runErr=<nil>, userMsg="..."
+🟢 BeforeAgentCallback: agent=chat-assistant, invocationID=..., userMsg="..."
+🟡 AfterAgentCallback: agent=chat-assistant, invocationID=..., runErr=<nil>, userMsg="..."
 ```
 
 ---
@@ -61,13 +70,13 @@ To use callbacks, you need to declare them and register your handler functions. 
 ### ModelCallbacks
 
 ```go
-modelCallbacks := model.NewModelCallbacks()
+modelCallbacks := model.NewCallbacks()
 modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
     // Your logic here
     return nil, nil
 })
-modelCallbacks.RegisterAfterModel(func(ctx context.Context, resp *model.Response, runErr error) (*model.Response, error) {
-    // Your logic here
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+    // Your logic here - now with access to original request
     return nil, nil
 })
 ```
@@ -75,7 +84,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, resp *model.Response
 ### ToolCallbacks
 
 ```go
-toolCallbacks := tool.NewToolCallbacks()
+toolCallbacks := tool.NewCallbacks()
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
     // Your logic here
     return nil, nil
@@ -89,7 +98,7 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolD
 ### AgentCallbacks
 
 ```go
-agentCallbacks := agent.NewAgentCallbacks()
+agentCallbacks := agent.NewCallbacks()
 agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
     // Your logic here
     return nil, nil
@@ -119,13 +128,35 @@ You can short-circuit (skip) the default execution of a model, tool, or agent by
 - **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly.
 - **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `*model.Response`, the agent execution will be skipped and this response will be used.
 
+**Example: Using original request in AfterModelCallback**
+
+```go
+modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+    // Access the original request to restore timestamps or formatting
+    if req != nil && len(req.Messages) > 0 {
+        originalText := req.Messages[len(req.Messages)-1].Content
+        // Process response with original context
+        if strings.Contains(originalText, "SRT") {
+            // Restore timestamps from original SRT format
+            return restoreTimestamps(resp, originalText), nil
+        }
+    }
+    return nil, nil
+})
+```
+
 **Example: Mocking a tool result in BeforeToolCallback**
 
 ```go
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
     if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
         // Return a mock result and skip actual tool execution.
-        return map[string]any{"result": 4242, "note": "mocked result"}, nil
+        return calculatorResult{
+            Operation: "custom",
+            A:         42,
+            B:         42,
+            Result:    4242,
+        }, nil
     }
     return nil, nil
 })
@@ -163,13 +194,42 @@ cd examples/callbacks
 export OPENAI_API_KEY="your-api-key"
 ```
 
-2. Start the demo:
+2. Start the demo with options:
 
 ```bash
+# Basic usage
 go run main.go
+
+# With custom model
+go run main.go -model gpt-4
+
+# With Redis session storage
+go run main.go -session redis -redis-addr localhost:6379
+
+# Disable streaming
+go run main.go -streaming=false
 ```
 
 3. Follow the prompts to interact with the chat, trigger tool calls, and observe callback logs.
+
+**Try these test phrases:**
+
+- `"show me original request"` - Demonstrates access to original request in after callback
+- `"override me"` - Triggers response override in after callback
+- `"custom model"` - Triggers custom response in before callback
+- `"calculator 42 + 42"` - Triggers custom tool result in before tool callback
+- `"/history"` - Show conversation history
+- `"/new"` - Start a new session
+- `"/exit"` - End the conversation
+
+---
+
+## Command Line Options
+
+- `-model`: Model name to use (default: "deepseek-chat")
+- `-redis-addr`: Redis address for session storage (default: "localhost:6379")
+- `-session`: Session service type, "inmemory" or "redis" (default: "inmemory")
+- `-streaming`: Enable streaming mode for responses (default: true)
 
 ---
 
@@ -182,6 +242,7 @@ go run main.go
   - Input/output interception and modification
   - Content safety and moderation
   - Tool mocking or fallback
+  - **Original request access for content restoration**
 
 ---
 
@@ -191,6 +252,7 @@ go run main.go
 - **A/B Testing**: Dynamically switch models or tool implementations
 - **Safety & Compliance**: Moderate model outputs and tool results
 - **Business Extensions**: Insert custom business logic as needed
+- **Content Processing**: Access original input for post-processing (e.g., SRT subtitle restoration)
 
 ---
 
