@@ -15,6 +15,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 )
 
@@ -22,22 +24,16 @@ func TestNewMemoryToolSet(t *testing.T) {
 	service := inmemory.NewMemoryService()
 	toolSet := NewMemoryToolSet(service)
 
-	if toolSet == nil {
-		t.Fatal("Expected non-nil tool set")
-	}
+	require.NotNil(t, toolSet, "Expected non-nil tool set")
 
-	// Test that tools are lazily initialized
-	if toolSet.tools != nil {
-		t.Error("Expected tools to be nil before initialization")
-	}
+	// Test that tools are lazily initialized.
+	assert.Nil(t, toolSet.tools, "Expected tools to be nil before initialization")
 
-	// Test that tools are created when requested
+	// Test that tools are created when requested.
 	tools := toolSet.Tools(context.Background())
-	if len(tools) != 6 {
-		t.Errorf("Expected 6 tools, got %d", len(tools))
-	}
+	assert.Len(t, tools, 6, "Expected 6 tools, got %d", len(tools))
 
-	// Verify tool names
+	// Verify tool names.
 	expectedNames := []string{
 		AddToolName,
 		UpdateToolName,
@@ -55,57 +51,39 @@ func TestNewMemoryToolSet(t *testing.T) {
 				break
 			}
 		}
-		if !found {
-			t.Errorf("Expected tool %s not found", expectedName)
-		}
+		assert.True(t, found, "Expected tool %s not found", expectedName)
 	}
 }
 
 func TestMemoryToolSet_LazyInitialization(t *testing.T) {
 	service := inmemory.NewMemoryService()
-
 	toolSet := NewMemoryToolSet(service)
 
 	// First call should initialize tools.
 	tools1 := toolSet.Tools(context.Background())
-	if len(tools1) != 6 {
-		t.Errorf("Expected 6 tools, got %d", len(tools1))
-	}
+	assert.Len(t, tools1, 6, "Expected 6 tools, got %d", len(tools1))
 
 	// Second call should return the same tools (no re-initialization).
 	tools2 := toolSet.Tools(context.Background())
-	if len(tools2) != 6 {
-		t.Errorf("Expected 6 tools, got %d", len(tools2))
-	}
+	assert.Len(t, tools2, 6, "Expected 6 tools, got %d", len(tools2))
 
 	// Verify that the same tool instances are returned.
-	if &tools1[0] != &tools2[0] {
-		t.Error("Expected same tool instances to be returned")
-	}
+	assert.Equal(t, &tools1[0], &tools2[0], "Expected same tool instances to be returned")
 }
 
 func TestMemoryToolSet_Close(t *testing.T) {
 	service := inmemory.NewMemoryService()
-
 	toolSet := NewMemoryToolSet(service)
 
 	// Initialize tools.
 	tools := toolSet.Tools(context.Background())
-	if len(tools) != 6 {
-		t.Errorf("Expected 6 tools, got %d", len(tools))
-	}
+	assert.Len(t, tools, 6, "Expected 6 tools, got %d", len(tools))
 
 	// Close the tool set.
-	if err := toolSet.Close(); err != nil {
-		t.Errorf("Failed to close tool set: %v", err)
-	}
+	err := toolSet.Close()
+	require.NoError(t, err, "Failed to close tool set")
 
 	// Verify that tools are cleared.
-	if toolSet.tools != nil {
-		t.Error("Expected tools to be nil after close")
-	}
-
-	if toolSet.initialized {
-		t.Error("Expected initialized flag to be false after close")
-	}
+	assert.Nil(t, toolSet.tools, "Expected tools to be nil after close")
+	assert.False(t, toolSet.initialized, "Expected initialized flag to be false after close")
 }

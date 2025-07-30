@@ -9,6 +9,7 @@
 // A copy of the Apache 2.0 License is included in this file.
 //
 
+// Package memory provides memory-related tools for the agent system.
 package memory
 
 import (
@@ -19,16 +20,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// ToolSet implements the ToolSet interface for memory tools.
+// ToolSet implements tool.ToolSet for memory tools.
+// It provides lazy initialization of memory tools.
 type ToolSet struct {
-	mu          sync.RWMutex        // mu is the mutex for the tool set.
-	service     memory.Service      // service is the memory service.
-	tools       []tool.CallableTool // tools is the list of memory tools.
-	initialized bool                // initialized is a flag to indicate if the tool set is initialized.
+	mu          sync.RWMutex
+	service     memory.Service
+	tools       []tool.CallableTool
+	initialized bool
 }
 
 // NewMemoryToolSet creates a new memory tool set.
-// The tools will get appName and userID from the agent invocation context at runtime.
 func NewMemoryToolSet(service memory.Service) *ToolSet {
 	return &ToolSet{
 		service:     service,
@@ -37,44 +38,45 @@ func NewMemoryToolSet(service memory.Service) *ToolSet {
 	}
 }
 
-// Tools implements the ToolSet interface.
-func (mts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
-	mts.mu.Lock()
-	defer mts.mu.Unlock()
+// Tools returns the memory tools.
+// This method implements lazy initialization.
+func (ts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
+	ts.mu.RLock()
+	if ts.initialized {
+		tools := ts.tools
+		ts.mu.RUnlock()
+		return tools
+	}
+	ts.mu.RUnlock()
 
-	if !mts.initialized {
-		mts.initializeTools()
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	// Double-check after acquiring write lock.
+	if ts.initialized {
+		return ts.tools
 	}
 
-	return mts.tools
+	// Create memory tools using the new function-based approach.
+	ts.tools = []tool.CallableTool{
+		NewAddMemoryTool(ts.service),
+		NewUpdateMemoryTool(ts.service),
+		NewDeleteMemoryTool(ts.service),
+		NewClearMemoryTool(ts.service),
+		NewSearchMemoryTool(ts.service),
+		NewLoadMemoryTool(ts.service),
+	}
+
+	ts.initialized = true
+	return ts.tools
 }
 
-// Close implements the ToolSet interface.
-func (mts *ToolSet) Close() error {
-	mts.mu.Lock()
-	defer mts.mu.Unlock()
+// Close cleans up resources used by the tool set.
+func (ts *ToolSet) Close() error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
 
-	mts.tools = nil
-	mts.initialized = false
+	ts.tools = nil
+	ts.initialized = false
 	return nil
-}
-
-// initializeTools creates the memory tools.
-func (mts *ToolSet) initializeTools() {
-	mts.tools = []tool.CallableTool{
-		newMemoryTool(mts.service, addMemoryFunction, AddToolName,
-			"Add a new memory for the user. Use this when you want to remember important information "+
-				"about the user that could personalize future interactions."),
-		newMemoryTool(mts.service, updateMemoryFunction, UpdateToolName,
-			"Update an existing memory for the user."),
-		newMemoryTool(mts.service, deleteMemoryFunction, DeleteToolName,
-			"Delete a specific memory for the user."),
-		newMemoryTool(mts.service, clearMemoriesFunction, ClearToolName,
-			"Clear all memories for the user."),
-		newMemoryTool(mts.service, searchMemoriesFunction, SearchToolName,
-			"Search for memories related to a specific query."),
-		newMemoryTool(mts.service, loadMemoriesFunction, LoadToolName,
-			"Load recent memories for the user."),
-	}
-	mts.initialized = true
 }

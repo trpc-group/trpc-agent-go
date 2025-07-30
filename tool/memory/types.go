@@ -16,12 +16,28 @@ import (
 	"time"
 )
 
+// Tool names for memory tools.
+const (
+	AddToolName    = "memory_add"
+	UpdateToolName = "memory_update"
+	DeleteToolName = "memory_delete"
+	ClearToolName  = "memory_clear"
+	SearchToolName = "memory_search"
+	LoadToolName   = "memory_load"
+)
+
 // Result represents a single memory result.
 type Result struct {
 	ID      string    `json:"id"`      // ID is the memory ID.
 	Memory  string    `json:"memory"`  // Memory is the memory content.
 	Topics  []string  `json:"topics"`  // Topics is the memory topics.
 	Created time.Time `json:"created"` // Created is the creation time.
+}
+
+// AddMemoryRequest represents the input for the add memory tool.
+type AddMemoryRequest struct {
+	Memory string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief, third-person statement that captures key information about the user"`
+	Topics []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
 }
 
 // AddMemoryResponse represents the response from memory_add tool.
@@ -32,6 +48,13 @@ type AddMemoryResponse struct {
 	Topics  []string `json:"topics"`  // Topics is the topics associated with the memory.
 }
 
+// UpdateMemoryRequest represents the input for the update memory tool.
+type UpdateMemoryRequest struct {
+	MemoryID string   `json:"memory_id" jsonschema:"description=The ID of the memory to update"`
+	Memory   string   `json:"memory" jsonschema:"description=The updated memory content"`
+	Topics   []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
+}
+
 // UpdateMemoryResponse represents the response from memory_update tool.
 type UpdateMemoryResponse struct {
 	Success  bool     `json:"success"`   // Success is whether the operation was successful.
@@ -39,6 +62,11 @@ type UpdateMemoryResponse struct {
 	MemoryID string   `json:"memory_id"` // MemoryID is the ID of the updated memory.
 	Memory   string   `json:"memory"`    // Memory is the updated memory content.
 	Topics   []string `json:"topics"`    // Topics is the topics associated with the memory.
+}
+
+// DeleteMemoryRequest represents the input for the delete memory tool.
+type DeleteMemoryRequest struct {
+	MemoryID string `json:"memory_id" jsonschema:"description=The ID of the memory to delete"`
 }
 
 // DeleteMemoryResponse represents the response from memory_delete tool.
@@ -54,12 +82,22 @@ type ClearMemoryResponse struct {
 	Message string `json:"message"` // Message is the success or error message.
 }
 
+// SearchMemoryRequest represents the input for the search memory tool.
+type SearchMemoryRequest struct {
+	Query string `json:"query" jsonschema:"description=The search query to find relevant memories"`
+}
+
 // SearchMemoryResponse represents the response from memory_search tool.
 type SearchMemoryResponse struct {
 	Success bool     `json:"success"` // Success is whether the operation was successful.
 	Query   string   `json:"query"`   // Query is the search query that was used.
 	Results []Result `json:"results"` // Results is the search results.
 	Count   int      `json:"count"`   // Count is the number of results found.
+}
+
+// LoadMemoryRequest represents the input for the load memory tool.
+type LoadMemoryRequest struct {
+	Limit int `json:"limit,omitempty" jsonschema:"description=Maximum number of memories to load (default: 10)"`
 }
 
 // LoadMemoryResponse represents the response from memory_load tool.
