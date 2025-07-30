@@ -27,7 +27,7 @@ type BeforeModelCallback func(ctx context.Context, req *Request) (*Response, err
 // Returns (customResponse, error).
 // - customResponse: if not nil, this response will be used instead of the actual model response.
 // - error: if not nil, this error will be returned.
-type AfterModelCallback func(ctx context.Context, rsp *Response, modelErr error) (*Response, error)
+type AfterModelCallback func(ctx context.Context, req *Request, rsp *Response, modelErr error) (*Response, error)
 
 // Callbacks holds callbacks for model operations.
 type Callbacks struct {
@@ -71,9 +71,11 @@ func (c *Callbacks) RunBeforeModel(ctx context.Context, req *Request) (*Response
 // RunAfterModel runs all after model callbacks in order.
 // Returns (customResponse, error).
 // If any callback returns a custom response, stop and return.
-func (c *Callbacks) RunAfterModel(ctx context.Context, rsp *Response, modelErr error) (*Response, error) {
+func (c *Callbacks) RunAfterModel(
+	ctx context.Context, req *Request, rsp *Response, modelErr error,
+) (*Response, error) {
 	for _, cb := range c.AfterModel {
-		customResponse, err := cb(ctx, rsp, modelErr)
+		customResponse, err := cb(ctx, req, rsp, modelErr)
 		if err != nil {
 			return nil, err
 		}
