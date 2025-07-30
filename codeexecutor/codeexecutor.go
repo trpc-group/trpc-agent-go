@@ -1,3 +1,4 @@
+// Package codeexecutor provides an interface and utilities for executing code blocks in different environments.
 package codeexecutor
 
 import (

@@ -2,7 +2,10 @@ package container
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	tcontainer "github.com/docker/docker/api/types/container"
@@ -11,30 +14,40 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-func isDockerDaemonRunning() (bool, string) {
+func dockerHost() (string, error) {
 	// Check if docker command exists
 	cmd := exec.Command("docker", "--version")
 	if err := cmd.Run(); err != nil {
-		return false, "Docker command not found. Please install Docker."
+		return "", fmt.Errorf("Docker command not found. Please install Docker.")
 	}
 
 	// Check if Docker daemon is running by using docker info
 	// This will work regardless of the socket path as docker will use the correct one
 	cmd = exec.Command("docker", "info")
 	if err := cmd.Run(); err != nil {
-		return false, "Docker daemon is not running or not accessible. Please start Docker daemon."
+		return "", fmt.Errorf("Docker daemon is not running or not accessible. Please start Docker daemon.")
 	}
 
-	return true, ""
+	if host := os.Getenv("DOCKER_HOST"); host != "" {
+		return host, nil
+	}
+	cmd = exec.Command("docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get docker context: %v", err)
+	}
+
+	host := strings.TrimSpace(string(output))
+	if host == "" {
+		return "unix:///var/run/docker.sock", nil
+	}
+	return host, nil
 }
 
-// "unix:///Users/amdahliu/.colima/default/docker.sock"
-const testHost = "unix:///Users/amdahliu/.colima/default/docker.sock" // "unix:///var/run/docker.sock"
-
 func TestContainerCodeExecutor_Basic(t *testing.T) {
-	available, reason := isDockerDaemonRunning()
-	if !available {
-		t.Skipf("Skipping container tests: %s", reason)
+	host, err := dockerHost()
+	if err != nil {
+		t.Skipf("Skipping container tests: %s", err)
 	}
 
 	// Test with python:3.9-slim image (commonly available)
@@ -44,7 +57,7 @@ func TestContainerCodeExecutor_Basic(t *testing.T) {
 			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
 
 		}),
-		WithHost(testHost),
+		WithHost(host),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -101,9 +114,9 @@ func TestContainerCodeExecutor_WithOptions(t *testing.T) {
 }
 
 func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
-	available, reason := isDockerDaemonRunning()
-	if !available {
-		t.Skipf("Skipping container tests: %s", reason)
+	host, err := dockerHost()
+	if err != nil {
+		t.Skipf("Skipping container tests: %s", err)
 	}
 
 	tests := []struct {
@@ -201,7 +214,7 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
 
 		}),
-		WithHost(testHost),
+		WithHost(host),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -237,8 +250,9 @@ func TestContainerCodeExecutor_ExecuteCode(t *testing.T) {
 }
 
 func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
-	if available, reason := isDockerDaemonRunning(); !available {
-		t.Skipf("Skipping container tests: %s", reason)
+	host, err := dockerHost()
+	if err != nil {
+		t.Skipf("Skipping container tests: %s", err)
 
 	}
 	executor, err := New(
@@ -247,7 +261,7 @@ func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
 
 		}),
-		WithHost(testHost),
+		WithHost(host),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -260,9 +274,9 @@ func TestContainerCodeExecutor_CodeBlockDelimiter(t *testing.T) {
 }
 
 func TestContainerCodeExecutor_IntegrationTest(t *testing.T) {
-	available, reason := isDockerDaemonRunning()
-	if !available {
-		t.Skipf("Skipping container integration tests: %s", reason)
+	host, err := dockerHost()
+	if err != nil {
+		t.Skipf("Skipping container integration tests: %s", err)
 	}
 
 	input := `Let's test container execution with multiple languages:
@@ -286,7 +300,7 @@ echo "Bash in container"
 			Image: "python:3.9-slim",
 			Cmd:   []string{"tail", "-f", "/dev/null"}, // Keep container running
 		}),
-		WithHost(testHost),
+		WithHost(host),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {

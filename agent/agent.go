@@ -52,5 +52,7 @@ type Agent interface {
 // CodeExecutor may move to Agent interface, will cause large scale change, consider later.
 // or move to codeexecutor package
 type CodeExecutor interface {
+	// CodeExecutor returns the code executor used by this agent.
+	// This allows the agent to execute code blocks in different environments.
 	CodeExecutor() codeexecutor.CodeExecutor
 }

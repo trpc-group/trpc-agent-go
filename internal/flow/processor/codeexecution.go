@@ -10,13 +10,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+// CodeExecutionResponseProcessor processes code execution responses from the model.
 type CodeExecutionResponseProcessor struct {
 }
 
+// NewCodeExecutionResponseProcessor creates a new instance of CodeExecutionResponseProcessor.
+// This processor is responsible for handling code execution responses from the model.
 func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 	return &CodeExecutionResponseProcessor{}
 }
 
+// ProcessResponse processes the model response, extracts code blocks, executes them,
+// and emits events for the code execution result.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, rsp *model.Response, ch chan<- *event.Event) {
 	log.Infof("CodeExecutionResponseProcessor: invocation-id: %s", invocation.InvocationID)

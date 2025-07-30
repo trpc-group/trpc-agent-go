@@ -1,3 +1,5 @@
+// Package container provides a CodeExecutor that executes code blocks in a Docker container.
+// It supports Python and Bash scripts, executing them in a controlled Docker environment.
 package container
 
 import (
@@ -114,18 +116,21 @@ func WithDockerFilePath(path string) Option {
 	}
 }
 
+// WithHostConfig sets the configuration for the Docker container.
 func WithHostConfig(hostConfig container.HostConfig) Option {
 	return func(c *CodeExecutor) {
 		c.hostConfig = hostConfig
 	}
 }
 
+// WithContainerName sets the name for the Docker container.
 func WithContainerName(name string) Option {
 	return func(c *CodeExecutor) {
 		c.containerName = name
 	}
 }
 
+// WithContainerConfig sets the configuration for the Docker container.
 func WithContainerConfig(containerConfig container.Config) Option {
 	return func(c *CodeExecutor) {
 		c.containerConfig = containerConfig
