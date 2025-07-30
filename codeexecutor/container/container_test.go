@@ -39,7 +39,7 @@ func dockerHost() (string, error) {
 
 	host := strings.TrimSpace(string(output))
 	if host == "" {
-		return "unix:///var/run/docker.sock", nil // 默认值
+		return "unix:///var/run/docker.sock", nil
 	}
 	return host, nil
 }
