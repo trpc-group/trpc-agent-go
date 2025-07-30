@@ -350,6 +350,7 @@ func (c *memoryChat) startNewSession() {
 
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 	clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
+		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
 		// Get appName and userID from context.
 		appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -370,14 +371,14 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 
 		return toolmemory.ClearMemoryResponse{
 			Success: true,
-			Message: "All memories cleared successfully",
+			Message: "🎉 All memories cleared successfully with custom magic! ✨",
 		}, nil
 	}
 
 	return function.NewFunctionTool(
 		clearFunc,
 		function.WithName(memory.ClearToolName),
-		function.WithDescription("Clear all memories for the user. Use this tool to reset the user's memory completely."),
+		function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
 	)
 }
 
