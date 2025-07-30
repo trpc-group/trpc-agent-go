@@ -13,6 +13,8 @@ This implementation showcases the essential features for building AI application
 - **🔧 Memory Tool Integration**: Working memory tools with proper execution
 - **🚀 Simple Interface**: Clean, focused chat experience with memory capabilities
 - **⚡ Automatic Integration**: Memory tools are automatically registered via `WithMemory()`
+- **🎨 Custom Tool Support**: Ability to override default tool implementations with custom ones
+- **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
 
 ### Key Features
 
@@ -24,16 +26,23 @@ This implementation showcases the essential features for building AI application
 - **Memory Visualization**: Clear indication of memory operations, arguments, and responses
 - **Error Handling**: Graceful error recovery and reporting
 - **Automatic Tool Registration**: Memory tools are automatically added to the agent via `WithMemory()`
+- **Custom Tool Override**: Replace default tool implementations with custom ones
+- **Tool Enablement Control**: Enable or disable specific memory tools
 
 ## Architecture
 
 ### Memory Integration
 
-The memory functionality is integrated using the `WithMemory()` option, similar to how knowledge is integrated with `WithKnowledge()`:
+The memory functionality is integrated using the `WithMemory()` option, which automatically registers all enabled memory tools:
 
 ```go
-// Create memory service
-memoryService := memoryinmemory.NewMemoryService()
+// Create memory service with default tools enabled
+memoryService := memoryinmemory.NewMemoryService(
+    // Disable specific tools if needed
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
+    // Use custom tool implementations
+    memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
 
 // Create LLM agent with automatic memory tool registration
 llmAgent := llmagent.New(
@@ -49,6 +58,19 @@ runner := runner.NewRunner(
     runner.WithSessionService(sessionService),
 )
 ```
+
+### Default Tool Configuration
+
+By default, the following memory tools are enabled:
+
+| Tool Name       | Default Status | Description                   |
+| --------------- | -------------- | ----------------------------- |
+| `memory_add`    | ✅ Enabled     | Add a new memory entry        |
+| `memory_update` | ✅ Enabled     | Update an existing memory     |
+| `memory_search` | ✅ Enabled     | Search memories by query      |
+| `memory_load`   | ✅ Enabled     | Load recent memories          |
+| `memory_delete` | ❌ Disabled    | Delete a memory entry         |
+| `memory_clear`  | ❌ Disabled    | Clear all memories for a user |
 
 ### Runtime Context Resolution
 
@@ -69,14 +91,14 @@ This design provides:
 
 The following memory tools are automatically registered when using `WithMemory()`:
 
-| Tool Name       | Description                   | Parameters                                                           |
-| --------------- | ----------------------------- | -------------------------------------------------------------------- |
-| `memory_add`    | Add a new memory entry        | `memory` (string), `topics` (array of strings)                       |
-| `memory_update` | Update an existing memory     | `memory_id` (string), `memory` (string), `topics` (array of strings) |
-| `memory_delete` | Delete a memory entry         | `memory_id` (string)                                                 |
-| `memory_clear`  | Clear all memories for a user | None                                                                 |
-| `memory_search` | Search memories by query      | `query` (string)                                                     |
-| `memory_load`   | Load recent memories          | `limit` (number, optional)                                           |
+| Tool Name       | Description                   | Parameters                                                                                         |
+| --------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `memory_add`    | Add a new memory entry        | `memory` (string, required), `topics` (array of strings, optional)                                 |
+| `memory_update` | Update an existing memory     | `memory_id` (string, required), `memory` (string, required), `topics` (array of strings, optional) |
+| `memory_delete` | Delete a memory entry         | `memory_id` (string, required)                                                                     |
+| `memory_clear`  | Clear all memories for a user | None                                                                                               |
+| `memory_search` | Search memories by query      | `query` (string, required)                                                                         |
+| `memory_load`   | Load recent memories          | `limit` (number, optional, default: 10)                                                            |
 
 ## Prerequisites
 
@@ -160,65 +182,133 @@ Usage of ./memory_chat:
         Enable streaming mode for responses (default true)
 ```
 
-## Implemented Memory Tools
+## Memory Tool Configuration
 
-The example includes six comprehensive memory tools:
+### Default Tool Enablement
 
-### 🧠 Memory Add Tool
+The memory service comes with sensible defaults:
 
-- **Function**: `memory_add`
-- **Purpose**: Store important information about the user
-- **Usage**: "Remember that I like coffee" or "My name is John"
-- **Arguments**: memory (string), input (string), topics (optional array)
+```go
+// Default enabled tools: add, update, search, load
+// Default disabled tools: delete, clear
+memoryService := memoryinmemory.NewMemoryService()
 
-### 🔄 Memory Update Tool
+// You can enable disabled tools if needed:
+// memoryService := memoryinmemory.NewMemoryService(
+//     memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
+//     memoryinmemory.WithToolEnabled(memory.ClearToolName, true),
+// )
+```
 
-- **Function**: `memory_update`
-- **Purpose**: Update existing memories with new information
-- **Usage**: "Update my coffee preference to decaf" or "I now work at Google"
-- **Arguments**: memory_id (string), memory (string), input (string), topics (optional array)
+### Customizing Tool Enablement
 
-### 🗑️ Memory Delete Tool
+You can enable or disable specific tools:
 
-- **Function**: `memory_delete`
-- **Purpose**: Remove specific memories
-- **Usage**: "Forget about my old job" or "Delete my coffee preference"
-- **Arguments**: memory_id (string)
+```go
+memoryService := memoryinmemory.NewMemoryService(
+    // Enable disabled tools
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
+    memoryinmemory.WithToolEnabled(memory.ClearToolName, true),
+    // Or disable enabled tools
+    memoryinmemory.WithToolEnabled(memory.AddToolName, false),
+)
+```
 
-### 🧹 Memory Clear Tool
+### Custom Tool Implementation
 
-- **Function**: `memory_clear`
-- **Purpose**: Clear all memories for the user
-- **Usage**: "Forget everything about me" or "Clear all my memories"
-- **Arguments**: None
+You can override default tool implementations with custom ones:
 
-### 🔍 Memory Search Tool
+```go
+// Custom clear tool with enhanced logging
+func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+    clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
+        fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
+        // ... implementation ...
+        return toolmemory.ClearMemoryResponse{
+            Success: true,
+            Message: "🎉 All memories cleared successfully with custom magic! ✨",
+        }, nil
+    }
 
-- **Function**: `memory_search`
-- **Purpose**: Find relevant memories based on a query
-- **Usage**: "What do you remember about my preferences?" or "Search for coffee"
-- **Arguments**: query (string)
+    return function.NewFunctionTool(
+        clearFunc,
+        function.WithName(memory.ClearToolName),
+        function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
+    )
+}
 
-### 📋 Memory Load Tool
+// Use custom tool
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+```
 
-- **Function**: `memory_load`
-- **Purpose**: Get an overview of all stored memories
-- **Usage**: "Show me what you remember about me" or "Load my memories"
-- **Arguments**: limit (optional integer)
+### Tool Creator Pattern
+
+Custom tools use the `ToolCreator` pattern to avoid circular dependencies:
+
+```go
+type ToolCreator func(memory.Service) tool.Tool
+
+// Example custom tool
+func myCustomAddTool(memoryService memory.Service) tool.Tool {
+    // Implementation that uses memoryService
+    return function.NewFunctionTool(/* ... */)
+}
+
+// Register custom tool
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithCustomTool(memory.AddToolName, myCustomAddTool),
+)
+```
 
 ## Memory Tool Calling Process
 
-When you share information or ask about memories, you'll see:
+When you share information or ask about memories in a new session, you'll see:
 
 ```
 🔧 Memory tool calls initiated:
    • memory_add (ID: call_abc123)
-     Args: {"memory":"User's name is John and they like coffee","input":"Hello! My name is John and I like coffee.","topics":["name","preferences"]}
+     Args: {"memory":"User's name is John and they like coffee","topics":["name","preferences"]}
 
 🔄 Executing memory tools...
-✅ Memory tool response (ID: call_abc123): {"success":true,"message":"Memory added successfully","memory":"User's name is John and they like coffee","input":"Hello! My name is John and I like coffee.","topics":["name","preferences"]}
+✅ Memory tool response (ID: call_abc123): {"success":true,"message":"Memory added successfully","memory":"User's name is John and they like coffee","topics":["name","preferences"]}
 
 🤖 Assistant: I'll remember that your name is John and you like coffee!
+```
+
+### Custom Tool Execution
+
+When using custom tools in a new session, you'll see enhanced output:
+
+```
+🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨
+🔧 Memory tool calls initiated:
+   • memory_clear (ID: call_def456)
+     Args: {}
+
+🔄 Executing memory tools...
+✅ Memory tool response (ID: call_def456): {"success":true,"message":"🎉 All memories cleared successfully with custom magic! ✨"}
+
+🤖 Assistant: All your memories have been cleared with extra sparkle! ✨
+
+👤 You: /new
+🆕 Started new memory session!
+   Previous: memory-session-1703123457
+   Current:  memory-session-1703123458
+   (Memory and conversation history have been reset)
+
+👤 You: What do you remember about me?
+🤖 Assistant: Let me check what I remember about you.
+
+🔧 Memory tool calls initiated:
+   • memory_search (ID: call_ghi789)
+     Args: {"query":"John"}
+
+🔄 Executing memory tools...
+✅ Memory tool response (ID: call_ghi789): {"success":true,"query":"John","count":0,"results":[]}
+
+I don't have any memories about you yet. Could you tell me something about yourself so I can remember it for future conversations?
 ```
 
 ## Chat Interface
@@ -229,7 +319,7 @@ The interface is simple and intuitive:
 🧠 Multi Turn Chat with Memory
 Model: gpt-4o-mini
 Streaming: true
-Available tools: memory_add, memory_update, memory_delete, memory_clear, memory_search, memory_load
+Available tools: memory_add, memory_update, memory_search, memory_load (memory_delete, memory_clear disabled by default)
 ==================================================
 ✅ Memory chat ready! Session: memory-session-1703123456
 
@@ -241,15 +331,21 @@ Available tools: memory_add, memory_update, memory_delete, memory_clear, memory_
 👤 You: Hello! My name is John and I like coffee.
 🤖 Assistant: Hello John! Nice to meet you. I'll remember that you like coffee.
 
+👤 You: /new
+🆕 Started new memory session!
+   Previous: memory-session-1703123456
+   Current:  memory-session-1703123457
+   (Memory and conversation history have been reset)
+
 👤 You: What do you remember about me?
 🤖 Assistant: Let me check what I remember about you.
 
 🔧 Memory tool calls initiated:
-   • memory_load (ID: call_def456)
-     Args: {"limit":10}
+   • memory_search (ID: call_def456)
+     Args: {"query":"John"}
 
 🔄 Executing memory tools...
-✅ Memory tool response (ID: call_def456): {"success":true,"count":1,"memories":[{"id":"abc123","memory":"User's name is John and they like coffee","created":"2025-01-28 20:30:00"}]}
+✅ Memory tool response (ID: call_def456): {"success":true,"query":"John","count":1,"results":[{"id":"abc123","memory":"User's name is John and they like coffee","topics":["name","preferences"],"created":"2025-01-28 20:30:00"}]}
 
 Based on my memory, I know:
 - Your name is John
@@ -264,6 +360,8 @@ Based on my memory, I know:
 - `/memory` - Ask the agent to show stored memories
 - `/new` - Start a new session (resets conversation context and memory)
 - `/exit` - End the conversation
+
+**Note**: Use `/new` to reset the session when you want to test memory persistence. In the same session, the LLM maintains conversation context, so memory tools may not be called if the information is already in the conversation history.
 
 ## Memory Management Features
 
@@ -288,6 +386,15 @@ All memory operations are clearly displayed, showing:
 - Tool responses with results
 - Memory content and metadata
 
+### Custom Tool Enhancements
+
+Custom tools can provide enhanced functionality:
+
+- **Enhanced Logging**: Custom tools can provide more detailed execution logs
+- **Special Effects**: Custom tools can add visual indicators (emojis, colors)
+- **Extended Functionality**: Custom tools can perform additional operations
+- **Better Error Handling**: Custom tools can provide more specific error messages
+
 ## Technical Implementation
 
 ### Memory Service Integration
@@ -295,61 +402,88 @@ All memory operations are clearly displayed, showing:
 - Uses `inmemory.NewMemoryService()` for in-memory storage
 - Memory tools directly access the memory service
 - No complex integration required - tools handle memory operations
+- Automatic tool registration via `WithMemory()`
 
 ### Memory Tools Registration
 
-When using MemoryService, you need to register the memory tools manually:
+The memory tools are automatically registered when using `WithMemory()`:
 
 ```go
-// Create memory service.
-memoryService := memoryinmemory.NewMemoryService()
-
-// Create memory tools with the new interface.
-appName := "memory-chat"
-userID := "user"
-memoryTools := toolmemory.NewMemoryTools(memoryService, appName, userID)
-
-// Create agent with memory tools.
-agent := llmagent.New(
-    "memory-assistant",
-    llmagent.WithModel(modelInstance),
-    llmagent.WithDescription("A helpful AI assistant with memory capabilities."),
-    llmagent.WithInstruction("Use memory tools to provide personalized assistance."),
-    llmagent.WithTools(memoryTools), // Register the memory tools.
+// Create memory service with custom configuration
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
+    memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
 
-// Create runner with memory service.
-runner := runner.NewRunner(
-    appName,
-    agent,
-    runner.WithMemoryService(memoryService),
+// Create LLM agent with automatic memory tool registration
+llmAgent := llmagent.New(
+    agentName,
+    llmagent.WithModel(modelInstance),
+    llmagent.WithMemory(memoryService), // Automatic registration
 )
 ```
 
-**Available Memory Tools:**
+### Lazy Loading
+
+Memory tools are created lazily when first requested:
+
+- **Performance**: Tools are only created when needed
+- **Memory Efficiency**: Reduces initial memory footprint
+- **Caching**: Created tools are cached for subsequent use
+- **Thread Safety**: Uses `sync.RWMutex` for concurrent access
+
+### Tool Creator Pattern
+
+Custom tools use a factory pattern to avoid circular dependencies:
+
+```go
+// ToolCreator type for creating tools
+type ToolCreator func(memory.Service) tool.Tool
+
+// Default tool creators
+var defaultEnabledTools = map[string]ToolCreator{
+    memory.AddToolName:    toolmemory.NewAddMemoryTool,
+    memory.UpdateToolName: toolmemory.NewUpdateMemoryTool,
+    // ... other tools
+}
+
+// Custom tool registration
+memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool)
+```
+
+### Available Memory Tools
+
+**Default Tools:**
 
 - **memory_add**: Allows LLM to actively add user-related memories
 - **memory_update**: Allows LLM to update existing memories
-- **memory_delete**: Allows LLM to delete specific memories
+- **memory_delete**: Allows LLM to delete specific memories (disabled by default)
 - **memory_clear**: Allows LLM to clear all memories
 - **memory_search**: Allows LLM to search for relevant memories
 - **memory_load**: Allows LLM to load user memory overview
 
-**Note:** Currently, memory tools need to be manually registered with the agent. The MemoryService in the runner is used for storage and management, but the tools must be explicitly added to the agent's tool list.
+**Custom Tools:**
 
-### Custom Memory Tools
-
-You can also create custom memory tools using the Options pattern:
+You can override any default tool with a custom implementation:
 
 ```go
-// Create custom memory add tool with enhanced logging.
-customAddTool := NewExampleCustomAddTool(memoryService, appName, userID, true)
+// Custom add tool with enhanced logging
+func customAddMemoryTool(memoryService memory.Service) tool.Tool {
+    addFunc := func(ctx context.Context, req toolmemory.AddMemoryRequest) (toolmemory.AddMemoryResponse, error) {
+        fmt.Println("📝 [Custom Add Tool] Adding memory with special care... 💖")
+        // ... implementation ...
+        return toolmemory.AddMemoryResponse{
+            Success: true,
+            Message: "💖 Memory added with extra love! 💖",
+        }, nil
+    }
 
-// Use custom tools with the Options pattern.
-memoryTools := toolmemory.NewMemoryTools(
-    memoryService, appName, userID,
-    toolmemory.WithAddTool(customAddTool),
-)
+    return function.NewFunctionTool(
+        addFunc,
+        function.WithName(memory.AddToolName),
+        function.WithDescription("📝 Custom add tool: Add memories with extra care and love! 💖"),
+    )
+}
 ```
 
 ### Tool Calling Flow
@@ -367,7 +501,7 @@ User Input → Runner → Agent → Memory Tools → Memory Service → Response
 
 - **Runner**: Orchestrates the conversation flow
 - **Agent**: Understands user intent and decides which memory tools to use
-- **Memory Tools**: LLM-callable memory interface
+- **Memory Tools**: LLM-callable memory interface (default or custom)
 - **Memory Service**: Actual memory storage and management
 
 ## Extensibility
@@ -379,6 +513,8 @@ This example demonstrates how to:
 3. Handle memory tool calls and responses
 4. Manage user memory storage and retrieval
 5. Create custom memory tools with enhanced functionality
+6. Configure tool enablement and custom implementations
+7. Use lazy loading for better performance
 
 Future enhancements could include:
 
@@ -388,3 +524,5 @@ Future enhancements could include:
 - Automatic memory summarization and compression
 - Vector-based semantic memory search
 - Custom memory tool implementations with specialized functionality
+- Tool enablement configuration via configuration files
+- Dynamic tool registration and unregistration
