@@ -116,14 +116,14 @@ func WithDockerFilePath(path string) Option {
 	}
 }
 
-// WithContainerName sets the name for the Docker container.
+// WithHostConfig sets the configuration for the Docker container.
 func WithHostConfig(hostConfig container.HostConfig) Option {
 	return func(c *CodeExecutor) {
 		c.hostConfig = hostConfig
 	}
 }
 
-// WithContainerConfig sets the configuration for the Docker container.
+// WithContainerName sets the name for the Docker container.
 func WithContainerName(name string) Option {
 	return func(c *CodeExecutor) {
 		c.containerName = name
