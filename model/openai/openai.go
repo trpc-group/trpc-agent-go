@@ -406,8 +406,21 @@ func (m *Model) handleStreamingResponse(
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
+	// Track ID -> Index mapping.
+	idToIndexMap := make(map[string]int)
+
 	for stream.Next() {
 		chunk := stream.Current()
+
+		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
+		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			toolCall := chunk.Choices[0].Delta.ToolCalls[0]
+			index := int(toolCall.Index)
+			if toolCall.ID != "" {
+				idToIndexMap[toolCall.ID] = index
+			}
+		}
+
 		acc.AddChunk(chunk)
 
 		if m.chatChunkCallback != nil {
@@ -459,8 +472,16 @@ func (m *Model) handleStreamingResponse(
 			accumulatedToolCalls = make([]model.ToolCall, len(acc.Choices[0].Message.ToolCalls))
 
 			for i, toolCall := range acc.Choices[0].Message.ToolCalls {
+				// Use the original index from ID->Index mapping if available, otherwise use loop index.
+				originalIndex := i
+				if toolCall.ID != "" {
+					if mappedIndex, exists := idToIndexMap[toolCall.ID]; exists {
+						originalIndex = mappedIndex
+					}
+				}
+
 				accumulatedToolCalls[i] = model.ToolCall{
-					Index: func() *int { idx := i; return &idx }(),
+					Index: func() *int { idx := originalIndex; return &idx }(),
 					ID:    toolCall.ID,
 					Type:  functionToolType, // openapi only supports a function type for now.
 					Function: model.FunctionDefinitionParam{
