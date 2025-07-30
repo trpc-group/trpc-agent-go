@@ -79,7 +79,7 @@ func (c *transferChat) run() error {
 }
 
 // setup creates the runner with main agent and sub-agents.
-func (c *transferChat) setup(ctx context.Context) error {
+func (c *transferChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
@@ -289,79 +289,158 @@ func (c *transferChat) processStreamingResponse(eventChan <-chan *event.Event) e
 	)
 
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
-		// Handle agent transfers.
-		if event.Object == model.ObjectTypeTransfer {
-			fmt.Printf("\n🔄 Transfer Event: %s\n", event.Response.Choices[0].Message.Content)
-			currentAgent = c.getAgentFromTransfer(event)
-			assistantStarted = false
-			continue
-		}
-
-		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			toolCallsDetected = true
-			if assistantStarted {
-				fmt.Printf("\n")
-			}
-			if c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
-				fmt.Printf("🔄 Initiating transfer...\n")
-			} else {
-				fmt.Printf("🔧 %s executing tools:\n", c.getAgentIcon(event.Author))
-				for _, toolCall := range event.Choices[0].Message.ToolCalls {
-					fmt.Printf("   • %s", toolCall.Function.Name)
-					if len(toolCall.Function.Arguments) > 0 {
-						fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
-					}
-					fmt.Printf("\n")
-				}
-			}
-			continue
-		}
-
-		// Process text content - use delta content only for streaming.
-		if len(event.Choices) > 0 {
-			var content string
-			// Only use delta content to avoid duplication in streaming responses
-			if event.Choices[0].Delta.Content != "" {
-				content = event.Choices[0].Delta.Content
-			}
-
-			if content != "" {
-				if !assistantStarted && !toolCallsDetected {
-					if event.Author != currentAgent {
-						fmt.Printf("\n%s %s: ", c.getAgentIcon(event.Author), c.getAgentDisplayName(event.Author))
-						currentAgent = event.Author
-					}
-					assistantStarted = true
-				} else if toolCallsDetected && !assistantStarted {
-					if !c.isTransferResponse(event) {
-						fmt.Printf("%s %s: ", c.getAgentIcon(event.Author), c.getAgentDisplayName(event.Author))
-						assistantStarted = true
-					}
-				}
-
-				if !c.isTransferResponse(event) {
-					fmt.Print(content)
-					fullContent += content
-				}
-			}
-		}
-
-		// Handle tool responses.
-		if c.isToolEvent(event) && len(event.Choices[0].Message.ToolCalls) > 0 &&
-			!c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
-			fmt.Printf("   ✅ Tool completed\n")
+		if err := c.handleTransferEvent(event, &fullContent, &toolCallsDetected, &assistantStarted, &currentAgent); err != nil {
+			return err
 		}
 	}
 
 	fmt.Println() // Final newline
 	return nil
+}
+
+// handleTransferEvent processes a single event from the transfer system.
+func (c *transferChat) handleTransferEvent(
+	event *event.Event,
+	fullContent *string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	currentAgent *string,
+) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
+	}
+
+	// Handle agent transfers.
+	if c.handleTransfer(event, currentAgent, assistantStarted) {
+		return nil
+	}
+
+	// Handle tool calls.
+	if c.handleToolCalls(event, toolCallsDetected, assistantStarted) {
+		return nil
+	}
+
+	// Handle content.
+	c.handleContent(event, fullContent, toolCallsDetected, assistantStarted, currentAgent)
+
+	// Handle tool responses.
+	c.handleToolResponses(event)
+
+	return nil
+}
+
+// handleTransfer processes agent transfer events.
+func (c *transferChat) handleTransfer(event *event.Event, currentAgent *string, assistantStarted *bool) bool {
+	if event.Object == model.ObjectTypeTransfer {
+		fmt.Printf("\n🔄 Transfer Event: %s\n", event.Response.Choices[0].Message.Content)
+		*currentAgent = c.getAgentFromTransfer(event)
+		*assistantStarted = false
+		return true
+	}
+	return false
+}
+
+// handleToolCalls detects and displays tool calls.
+func (c *transferChat) handleToolCalls(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+) bool {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		*toolCallsDetected = true
+		if *assistantStarted {
+			fmt.Printf("\n")
+		}
+
+		if c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+			fmt.Printf("🔄 Initiating transfer...\n")
+		} else {
+			c.displayToolCalls(event)
+		}
+		return true
+	}
+	return false
+}
+
+// displayToolCalls shows tool call information.
+func (c *transferChat) displayToolCalls(event *event.Event) {
+	fmt.Printf("🔧 %s executing tools:\n", c.getAgentIcon(event.Author))
+	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		fmt.Printf("   • %s", toolCall.Function.Name)
+		if len(toolCall.Function.Arguments) > 0 {
+			fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
+		}
+		fmt.Printf("\n")
+	}
+}
+
+// handleContent processes streaming content.
+func (c *transferChat) handleContent(
+	event *event.Event,
+	fullContent *string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	currentAgent *string,
+) {
+	if len(event.Choices) > 0 {
+		content := c.extractContent(event.Choices[0])
+
+		if content != "" {
+			c.displayContent(event, content, fullContent, toolCallsDetected, assistantStarted, currentAgent)
+		}
+	}
+}
+
+// extractContent extracts content from the choice.
+func (c *transferChat) extractContent(choice model.Choice) string {
+	// Only use delta content to avoid duplication in streaming responses
+	if choice.Delta.Content != "" {
+		return choice.Delta.Content
+	}
+	return ""
+}
+
+// displayContent handles content display logic.
+func (c *transferChat) displayContent(
+	event *event.Event,
+	content string,
+	fullContent *string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	currentAgent *string,
+) {
+	if !*assistantStarted && !*toolCallsDetected {
+		c.displayAgentHeader(event, currentAgent)
+		*assistantStarted = true
+	} else if *toolCallsDetected && !*assistantStarted {
+		if !c.isTransferResponse(event) {
+			fmt.Printf("%s %s: ", c.getAgentIcon(event.Author), c.getAgentDisplayName(event.Author))
+			*assistantStarted = true
+		}
+	}
+
+	if !c.isTransferResponse(event) {
+		fmt.Print(content)
+		*fullContent += content
+	}
+}
+
+// displayAgentHeader shows the agent header when starting content.
+func (c *transferChat) displayAgentHeader(event *event.Event, currentAgent *string) {
+	if event.Author != *currentAgent {
+		fmt.Printf("\n%s %s: ", c.getAgentIcon(event.Author), c.getAgentDisplayName(event.Author))
+		*currentAgent = event.Author
+	}
+}
+
+// handleToolResponses processes tool response completion.
+func (c *transferChat) handleToolResponses(event *event.Event) {
+	if c.isToolEvent(event) && len(event.Choices[0].Message.ToolCalls) > 0 &&
+		!c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+		fmt.Printf("   ✅ Tool completed\n")
+	}
 }
 
 // Helper functions for display formatting.
