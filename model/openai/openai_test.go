@@ -14,9 +14,16 @@ package openai
 
 import (
 	"context"
+<<<<<<< HEAD
 	"net/http"
+=======
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+>>>>>>> be7f8fd (model/openai: robust tool call compatibility for openai streaming)
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,6 +354,7 @@ func TestModel_convertTools(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 // TestModel_Callbacks tests that callback functions are properly called with
 // the correct parameters including the request parameter.
 func TestModel_Callbacks(t *testing.T) {
@@ -940,11 +948,78 @@ func TestWithOpenAIOptions(t *testing.T) {
 				),
 			},
 			expectError: false,
+=======
+// TestModel_GenerateContent_StreamingBatchProcessing tests our handleStreamingResponse batch processing logic
+func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
+	// Test cases covering different streaming scenarios.
+	tests := []struct {
+		name          string
+		chunks        []string
+		expectedTool  string
+		expectedArgs  string
+		expectedCount int
+	}{
+		{
+			name: "Normal_Sandwich_Mode", // Normal "sandwich" mode: content does not exist in tool call chunks {0}.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // 开始边界：空content标记
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // 纯tool_calls chunk - content字段不存在
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // 结束边界：空content标记
+			},
+			expectedTool:  "get_weather",
+			expectedArgs:  `{"location":"Beijing"}`,
+			expectedCount: 1,
+		},
+		{
+			name: "Abnormal_Mixed_Mode", // other "mixed" mode: content exists in tool call chunks {3 ""}.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"id":"call_456","type":"function","function":{"name":"calculate","arguments":"{\"expr\":\"2+2\"}"}}]},"finish_reason":null}]}`, // 字段冲突：同时有content和tool_calls
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedTool:  "calculate",
+			expectedArgs:  `{"expr":"2+2"}`,
+			expectedCount: 1,
+		},
+		{
+			name: "Multiple_ToolCalls_Sandwich", // multiple tool calls in normal mode.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                                         // 开始边界
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_111","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}}]},"finish_reason":null}]}`, // 第一个工具
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_222","type":"function","function":{"name":"get_time","arguments":"{\"timezone\":\"UTC\"}"}}]},"finish_reason":null}]}`,        // 第二个工具
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                                    // 结束边界
+			},
+			expectedTool:  "get_weather", // First tool.
+			expectedArgs:  `{"location":"Beijing"}`,
+			expectedCount: 2,
+		},
+		{
+			name: "Incremental_Arguments_Streaming", // incremental arguments streaming.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                          // 开始边界
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_streaming_123","type":"function","function":{"name":"record_score","arguments":""}}]},"finish_reason":null}]}`, // 工具调用开始，arguments为空
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\""}}]},"finish_reason":null}]}`,                                                                // arguments: {"
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"feedback"}}]},"finish_reason":null}]}`,                                                           // arguments: feedback
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":\""}}]},"finish_reason":null}]}`,                                                              // arguments: ":"
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"The analysis"}}]},"finish_reason":null}]}`,                                                       // arguments: The analysis
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":" shows"}}]},"finish_reason":null}]}`,                                                             // arguments:  shows
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":" good quality"}}]},"finish_reason":null}]}`,                                                      // arguments:  good quality
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\",\""}}]},"finish_reason":null}]}`,                                                              // arguments: ","
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"score"}}]},"finish_reason":null}]}`,                                                              // arguments: score
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\":85"}}]},"finish_reason":null}]}`,                                                              // arguments: ":85
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":null}]}`,                                                                  // arguments: }
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                     // 结束边界
+			},
+			expectedTool:  "record_score",
+			expectedArgs:  `{"feedback":"The analysis shows good quality","score":85}`,
+			expectedCount: 1,
+>>>>>>> be7f8fd (model/openai: robust tool call compatibility for openai streaming)
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+<<<<<<< HEAD
 			m := New(tt.modelName, tt.opts...)
 			if m == nil {
 				t.Fatal("expected model to be created, got nil")
@@ -958,10 +1033,89 @@ func TestWithOpenAIOptions(t *testing.T) {
 			// Verify that the model was created successfully.
 			if m.name != tt.modelName {
 				t.Errorf("expected model name %s, got %s", tt.modelName, m.name)
+=======
+			// Create mock server.
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+
+				for _, chunk := range tt.chunks {
+					fmt.Fprintf(w, "%s\n\n", chunk)
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}))
+			defer server.Close()
+
+			// Create model with mock server.
+			m := New("gpt-3.5-turbo", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+			// Make streaming request.
+			req := &model.Request{
+				Messages:         []model.Message{{Role: model.RoleUser, Content: "Test"}},
+				GenerationConfig: model.GenerationConfig{Stream: true},
+			}
+
+			ctx := context.Background()
+			responseChan, err := m.GenerateContent(ctx, req)
+			if err != nil {
+				t.Fatalf("GenerateContent failed: %v", err)
+			}
+
+			// Collect all responses.
+			var responses []*model.Response
+			for response := range responseChan {
+				responses = append(responses, response)
+				if response.Error != nil {
+					t.Fatalf("Response error: %v", response.Error)
+				}
+			}
+
+			// Find response with tool calls.
+			var toolCallResponse *model.Response
+			for _, response := range responses {
+				if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+					toolCallResponse = response
+					break
+				}
+			}
+
+			// Verify our batch processing worked.
+			if toolCallResponse == nil {
+				t.Fatalf("No tool calls found - batch processing failed")
+			}
+
+			toolCalls := toolCallResponse.Choices[0].Message.ToolCalls
+			if len(toolCalls) != tt.expectedCount {
+				t.Errorf("Expected %d tool calls, got %d", tt.expectedCount, len(toolCalls))
+			}
+
+			// Verify first tool call details.
+			if len(toolCalls) > 0 {
+				tc := toolCalls[0]
+				if tc.Function.Name != tt.expectedTool {
+					t.Errorf("Expected tool '%s', got '%s'", tt.expectedTool, tc.Function.Name)
+				}
+				if string(tc.Function.Arguments) != tt.expectedArgs {
+					t.Errorf("Expected args '%s', got '%s'", tt.expectedArgs, string(tc.Function.Arguments))
+				}
+				// Verify Done=false for tool call responses.
+				if toolCallResponse.Done {
+					t.Error("Tool call response should have Done=false")
+				}
+>>>>>>> be7f8fd (model/openai: robust tool call compatibility for openai streaming)
 			}
 		})
 	}
 }
+<<<<<<< HEAD
 
 // TestWithOpenAIOptions_OptionsStruct tests that the options struct correctly
 // stores and applies OpenAI options.
@@ -1158,3 +1312,5 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 		t.Error("expected chat chunk callback to be set")
 	}
 }
+=======
+>>>>>>> be7f8fd (model/openai: robust tool call compatibility for openai streaming)
