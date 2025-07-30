@@ -28,7 +28,6 @@ import (
 )
 
 func main() {
-
 	// Read configuration from command line flags.
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
@@ -124,9 +123,9 @@ You should NEVER install any package on your own like pip install ....
 
 		fmt.Printf("Done: %t\n", event.Done)
 
-		// if event.Done { // TODO: fix Done is true before code executor
-		// 	break
-		// }
+		if event.Done {
+			break
+		}
 	}
 
 	fmt.Printf("\n=== Execution Complete ===\n")
@@ -140,7 +139,6 @@ You should NEVER install any package on your own like pip install ....
 	}
 
 	fmt.Println("=== Demo Complete ===")
-
 }
 
 // intPtr returns a pointer to the given int value.
