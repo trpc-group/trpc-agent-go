@@ -21,10 +21,12 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -213,7 +215,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 		messages := buildMessagesFromState(state, instruction)
 
 		// Extract execution context.
-		invocationID, eventChan := extractExecutionContext(state)
+		invocationID, sessionID, eventChan := extractExecutionContext(state)
 		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 
 		// Create request.
@@ -235,7 +237,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 		var finalResponse *model.Response
 		var toolCalls []model.ToolCall
 		for response := range responseChan {
-			if err := processModelResponse(ctx, response, modelCallbacks, eventChan, invocationID, llmModel, request, span); err != nil {
+			if err := processModelResponse(ctx, response, modelCallbacks, eventChan, invocationID, sessionID, llmModel, request, span); err != nil {
 				return nil, err
 			}
 
@@ -284,9 +286,7 @@ func buildMessagesFromState(state State, instruction string) []model.Message {
 }
 
 // extractExecutionContext extracts execution context from state.
-func extractExecutionContext(state State) (string, chan<- *event.Event) {
-	var invocationID string
-	var eventChan chan<- *event.Event
+func extractExecutionContext(state State) (invocationID string, sessionID string, eventChan chan<- *event.Event) {
 	if execCtx, exists := state[StateKeyExecContext]; exists {
 		execContext, ok := execCtx.(*ExecutionContext)
 		if ok {
@@ -294,7 +294,13 @@ func extractExecutionContext(state State) (string, chan<- *event.Event) {
 			invocationID = execContext.InvocationID
 		}
 	}
-	return invocationID, eventChan
+	if sess, ok := state[StateKeySession]; ok {
+		if s, ok := sess.(*session.Session); ok && s != nil {
+			sessionID = s.ID
+		}
+
+	}
+	return invocationID, sessionID, eventChan
 }
 
 // processModelResponse processes a single model response.
@@ -304,6 +310,7 @@ func processModelResponse(
 	modelCallbacks *model.Callbacks,
 	eventChan chan<- *event.Event,
 	invocationID string,
+	sessionID string,
 	llmModel model.Model,
 	request *model.Request,
 	span oteltrace.Span,
@@ -324,6 +331,7 @@ func processModelResponse(
 		itelemetry.TraceCallLLM(span, &agent.Invocation{
 			InvocationID: invocationID,
 			Model:        llmModel,
+			Session:      &session.Session{ID: sessionID},
 		}, request, response, llmEvent.ID)
 		select {
 		case eventChan <- llmEvent:
