@@ -23,7 +23,6 @@ import (
 
 	"github.com/google/uuid"
 
-	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -163,19 +162,41 @@ func (f *Flow) runOneStep(
 
 	// 3. Process streaming responses.
 	for response := range responseChan {
-		llmEvent, err := f.processLLMResponseEvent(ctx, invocation, llmRequest, response, eventChan, span)
+		response, err = runAfterModelCallbacks(ctx, invocation, response)
 		if err != nil {
-			return lastEvent, err
+			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+			lastEvent := event.NewErrorEvent(
+				invocation.InvocationID,
+				invocation.AgentName,
+				model.ErrorTypeFlowError,
+				err.Error(),
+			)
+			eventChan <- lastEvent
+			return lastEvent, nil
 		}
-		lastEvent = llmEvent
+		// Create event from response using the clean constructor.
+		llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response), event.WithBranch(invocation.Branch))
+		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+			llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
+		}
 
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
-		// 4. Handle function calls if present in the response.
+		// 4. Postprocess each response.
+		f.postprocess(ctx, invocation, response, eventChan)
+		if err := f.checkContextCancelled(ctx); err != nil {
+			return lastEvent, err
+		}
+
+		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
+		// Send the LLM response event.
+		eventChan <- llmResponseEvent
+
+		// 5. Handle function calls if present in the response.
 		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmEvent, llmRequest.Tools, eventChan)
+			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmResponseEvent, llmRequest.Tools, eventChan)
 			if err != nil {
 				return lastEvent, err
 			}
@@ -202,65 +223,15 @@ func (f *Flow) runOneStep(
 			}
 		}
 
-		// 5. Postprocess each response.
-		f.postprocess(ctx, invocation, response, eventChan)
-		if err := f.checkContextCancelled(ctx); err != nil {
-			return lastEvent, err
-		}
 	}
 	return lastEvent, nil
 }
 
-// processLLMResponseEvent handles a single LLM response event, including after model callback and sending event.
-func (f *Flow) processLLMResponseEvent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	llmRequest *model.Request,
-	response *model.Response,
-	eventChan chan<- *event.Event,
-	span oteltrace.Span,
-) (*event.Event, error) {
-	// Create event from response using the clean constructor.
-	llmEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, response)
-	// Set branch for hierarchical event filtering.
-	llmEvent.Branch = invocation.Branch
-	log.Debugf("Received LLM response chunk for agent %s, done=%t", invocation.AgentName, response.Done)
-	itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmEvent.ID)
-	// Run after model callbacks if they exist.
-	if invocation.ModelCallbacks != nil {
-		customResponse, err := invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
-		if err != nil {
-			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-			errorEvent := event.NewErrorEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				model.ErrorTypeFlowError,
-				err.Error(),
-			)
-			select {
-			case eventChan <- errorEvent:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			return nil, err
-		}
-		if customResponse != nil {
-			response = customResponse
-			llmEvent.Response = response
-		}
+func runAfterModelCallbacks(ctx context.Context, invocation *agent.Invocation, response *model.Response) (*model.Response, error) {
+	if cb := invocation.ModelCallbacks; cb == nil {
+		return response, nil
 	}
-
-	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-		llmEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
-	}
-
-	// Send the LLM response event.
-	select {
-	case eventChan <- llmEvent:
-	case <-ctx.Done():
-		return llmEvent, ctx.Err()
-	}
-	return llmEvent, nil
+	return invocation.ModelCallbacks.RunAfterModel(ctx, response, nil)
 }
 
 // handleFunctionCallsAndSendEvent handles function calls and sends the resulting event to the channel.
@@ -358,7 +329,6 @@ func (f *Flow) callLLM(
 			return responseChan, nil
 		}
 	}
-
 	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {
