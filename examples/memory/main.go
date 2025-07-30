@@ -126,6 +126,8 @@ func (c *memoryChat) setup(_ context.Context) error {
 			"- User shares experiences: 'I had beef tonight' → use memory_add to remember 'User had beef for dinner and enjoyed it' "+
 			"When users ask about themselves or their preferences, use memory_search to find relevant information. "+
 			"When users ask 'tell me about myself' or similar, use memory_load to get an overview. "+
+			"When users want to update existing information, use memory_update with the memory_id. "+
+			"Available memory tools: memory_add, memory_update, memory_search, memory_load. "+
 			"Be helpful, conversational, and proactive about remembering user information."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
