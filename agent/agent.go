@@ -16,6 +16,7 @@ package agent
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -46,4 +47,12 @@ type Agent interface {
 	// FindSubAgent finds a sub-agent by name.
 	// Returns nil if no sub-agent with the given name is found.
 	FindSubAgent(name string) Agent
+}
+
+// CodeExecutor may move to Agent interface, will cause large scale change, consider later.
+// or move to codeexecutor package
+type CodeExecutor interface {
+	// CodeExecutor returns the code executor used by this agent.
+	// This allows the agent to execute code blocks in different environments.
+	CodeExecutor() codeexecutor.CodeExecutor
 }
