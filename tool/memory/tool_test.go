@@ -161,10 +161,9 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 	result, err := tool.Call(ctx, jsonArgs)
 	require.NoError(t, err, "Failed to call tool")
 
-	response, ok := result.(AddMemoryResponse)
-	require.True(t, ok, "Expected AddMemoryResponse, got %T", result)
+	response, ok := result.(*AddMemoryResponse)
+	require.True(t, ok, "Expected *AddMemoryResponse, got %T", result)
 
-	assert.True(t, response.Success, "Expected success, got failure: %s", response.Message)
 	assert.Equal(t, "User's name is John Doe", response.Memory, "Expected memory 'User's name is John Doe', got '%s'", response.Memory)
 	assert.Len(t, response.Topics, 1, "Expected 1 topic, got %d", len(response.Topics))
 	assert.Equal(t, "personal", response.Topics[0], "Expected topic 'personal', got '%s'", response.Topics[0])
@@ -195,10 +194,9 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	result, err := tool.Call(ctx, jsonArgs)
 	require.NoError(t, err, "Failed to call tool")
 
-	response, ok := result.(AddMemoryResponse)
-	require.True(t, ok, "Expected AddMemoryResponse, got %T", result)
+	response, ok := result.(*AddMemoryResponse)
+	require.True(t, ok, "Expected *AddMemoryResponse, got %T", result)
 
-	assert.True(t, response.Success, "Expected success, got failure: %s", response.Message)
 	assert.Equal(t, "User likes coffee", response.Memory, "Expected memory 'User likes coffee', got '%s'", response.Memory)
 	assert.NotNil(t, response.Topics, "Expected topics to be empty slice, got nil")
 	assert.Len(t, response.Topics, 0, "Expected 0 topics, got %d", len(response.Topics))
@@ -246,10 +244,9 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	result, err := tool.Call(ctx, jsonArgs)
 	require.NoError(t, err, "Failed to call tool")
 
-	response, ok := result.(SearchMemoryResponse)
-	require.True(t, ok, "Expected SearchMemoryResponse, got %T", result)
+	response, ok := result.(*SearchMemoryResponse)
+	require.True(t, ok, "Expected *SearchMemoryResponse, got %T", result)
 
-	assert.True(t, response.Success, "Expected success, got failure")
 	assert.Equal(t, "coffee", response.Query, "Expected query 'coffee', got '%s'", response.Query)
 	assert.Equal(t, 1, response.Count, "Expected 1 result, got %d", response.Count)
 	assert.Len(t, response.Results, 1, "Expected 1 result, got %d", len(response.Results))
@@ -279,10 +276,9 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 	result, err := tool.Call(ctx, jsonArgs)
 	require.NoError(t, err, "Failed to call tool")
 
-	response, ok := result.(LoadMemoryResponse)
-	require.True(t, ok, "Expected LoadMemoryResponse, got %T", result)
+	response, ok := result.(*LoadMemoryResponse)
+	require.True(t, ok, "Expected *LoadMemoryResponse, got %T", result)
 
-	assert.True(t, response.Success, "Expected success, got failure")
 	assert.Equal(t, 1, response.Limit, "Expected limit 1, got %d", response.Limit)
 	assert.Equal(t, 1, response.Count, "Expected 1 result, got %d", response.Count)
 	assert.Len(t, response.Results, 1, "Expected 1 result, got %d", len(response.Results))

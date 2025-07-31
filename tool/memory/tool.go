@@ -51,22 +51,16 @@ func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 
 // NewAddTool creates a function tool for adding memories.
 func NewAddTool(service memory.Service) tool.CallableTool {
-	addFunc := func(ctx context.Context, req AddMemoryRequest) (AddMemoryResponse, error) {
+	addFunc := func(ctx context.Context, req AddMemoryRequest) (*AddMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return AddMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to get app and user from context: %v", err),
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		// Validate input.
 		if req.Memory == "" {
-			return AddMemoryResponse{
-				Success: false,
-				Message: "Memory content is required",
-			}, errors.New("memory content is required")
+			return nil, errors.New("memory content is required")
 		}
 
 		// Ensure topics is never nil.
@@ -77,14 +71,10 @@ func NewAddTool(service memory.Service) tool.CallableTool {
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		err = service.AddMemory(ctx, userKey, req.Memory, req.Topics)
 		if err != nil {
-			return AddMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to add memory: %v", err),
-			}, fmt.Errorf("failed to add memory: %v", err)
+			return nil, fmt.Errorf("failed to add memory: %v", err)
 		}
 
-		return AddMemoryResponse{
-			Success: true,
+		return &AddMemoryResponse{
 			Message: "Memory added successfully",
 			Memory:  req.Memory,
 			Topics:  req.Topics,
@@ -101,29 +91,20 @@ func NewAddTool(service memory.Service) tool.CallableTool {
 
 // NewUpdateTool creates a function tool for updating memories.
 func NewUpdateTool(service memory.Service) tool.CallableTool {
-	updateFunc := func(ctx context.Context, req UpdateMemoryRequest) (UpdateMemoryResponse, error) {
+	updateFunc := func(ctx context.Context, req UpdateMemoryRequest) (*UpdateMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return UpdateMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to get app and user from context: %v", err),
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		// Validate input.
 		if req.MemoryID == "" {
-			return UpdateMemoryResponse{
-				Success: false,
-				Message: "Memory ID is required",
-			}, errors.New("memory ID is required")
+			return nil, errors.New("memory ID is required")
 		}
 
 		if req.Memory == "" {
-			return UpdateMemoryResponse{
-				Success: false,
-				Message: "Memory content is required",
-			}, errors.New("memory content is required")
+			return nil, errors.New("memory content is required")
 		}
 
 		// Ensure topics is never nil.
@@ -134,14 +115,10 @@ func NewUpdateTool(service memory.Service) tool.CallableTool {
 		memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: req.MemoryID}
 		err = service.UpdateMemory(ctx, memoryKey, req.Memory, req.Topics)
 		if err != nil {
-			return UpdateMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to update memory: %v", err),
-			}, fmt.Errorf("failed to update memory: %v", err)
+			return nil, fmt.Errorf("failed to update memory: %v", err)
 		}
 
-		return UpdateMemoryResponse{
-			Success:  true,
+		return &UpdateMemoryResponse{
 			Message:  "Memory updated successfully",
 			MemoryID: req.MemoryID,
 			Memory:   req.Memory,
@@ -159,35 +136,25 @@ func NewUpdateTool(service memory.Service) tool.CallableTool {
 
 // NewDeleteTool creates a function tool for deleting memories.
 func NewDeleteTool(service memory.Service) tool.CallableTool {
-	deleteFunc := func(ctx context.Context, req DeleteMemoryRequest) (DeleteMemoryResponse, error) {
+	deleteFunc := func(ctx context.Context, req DeleteMemoryRequest) (*DeleteMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return DeleteMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to get app and user from context: %v", err),
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		// Validate input.
 		if req.MemoryID == "" {
-			return DeleteMemoryResponse{
-				Success: false,
-				Message: "Memory ID is required",
-			}, errors.New("memory ID is required")
+			return nil, errors.New("memory ID is required")
 		}
 
 		memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: req.MemoryID}
 		err = service.DeleteMemory(ctx, memoryKey)
 		if err != nil {
-			return DeleteMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to delete memory: %v", err),
-			}, fmt.Errorf("failed to delete memory: %v", err)
+			return nil, fmt.Errorf("failed to delete memory: %v", err)
 		}
 
-		return DeleteMemoryResponse{
-			Success:  true,
+		return &DeleteMemoryResponse{
 			Message:  "Memory deleted successfully",
 			MemoryID: req.MemoryID,
 		}, nil
@@ -203,27 +170,20 @@ func NewDeleteTool(service memory.Service) tool.CallableTool {
 
 // NewClearTool creates a function tool for clearing all memories.
 func NewClearTool(service memory.Service) tool.CallableTool {
-	clearFunc := func(ctx context.Context, _ struct{}) (ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ struct{}) (*ClearMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return ClearMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to get app and user from context: %v", err),
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		err = service.ClearMemories(ctx, userKey)
 		if err != nil {
-			return ClearMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to clear memories: %v", err),
-			}, fmt.Errorf("failed to clear memories: %v", err)
+			return nil, fmt.Errorf("failed to clear memories: %v", err)
 		}
 
-		return ClearMemoryResponse{
-			Success: true,
+		return &ClearMemoryResponse{
 			Message: "All memories cleared successfully",
 		}, nil
 	}
@@ -238,37 +198,22 @@ func NewClearTool(service memory.Service) tool.CallableTool {
 
 // NewSearchTool creates a function tool for searching memories.
 func NewSearchTool(service memory.Service) tool.CallableTool {
-	searchFunc := func(ctx context.Context, req SearchMemoryRequest) (SearchMemoryResponse, error) {
+	searchFunc := func(ctx context.Context, req SearchMemoryRequest) (*SearchMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return SearchMemoryResponse{
-				Success: false,
-				Query:   "",
-				Results: []Result{},
-				Count:   0,
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		// Validate input.
 		if req.Query == "" {
-			return SearchMemoryResponse{
-				Success: false,
-				Query:   "",
-				Results: []Result{},
-				Count:   0,
-			}, errors.New("query is required")
+			return nil, errors.New("query is required")
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		memories, err := service.SearchMemories(ctx, userKey, req.Query)
 		if err != nil {
-			return SearchMemoryResponse{
-				Success: false,
-				Query:   req.Query,
-				Results: []Result{},
-				Count:   0,
-			}, fmt.Errorf("failed to search memories: %v", err)
+			return nil, fmt.Errorf("failed to search memories: %v", err)
 		}
 
 		// Convert MemoryEntry to MemoryResult.
@@ -282,8 +227,7 @@ func NewSearchTool(service memory.Service) tool.CallableTool {
 			}
 		}
 
-		return SearchMemoryResponse{
-			Success: true,
+		return &SearchMemoryResponse{
 			Query:   req.Query,
 			Results: results,
 			Count:   len(results),
@@ -300,16 +244,11 @@ func NewSearchTool(service memory.Service) tool.CallableTool {
 
 // NewLoadTool creates a function tool for loading memories.
 func NewLoadTool(service memory.Service) tool.CallableTool {
-	loadFunc := func(ctx context.Context, req LoadMemoryRequest) (LoadMemoryResponse, error) {
+	loadFunc := func(ctx context.Context, req LoadMemoryRequest) (*LoadMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return LoadMemoryResponse{
-				Success: false,
-				Limit:   0,
-				Results: []Result{},
-				Count:   0,
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		// Set default limit.
@@ -321,12 +260,7 @@ func NewLoadTool(service memory.Service) tool.CallableTool {
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		memories, err := service.ReadMemories(ctx, userKey, limit)
 		if err != nil {
-			return LoadMemoryResponse{
-				Success: false,
-				Limit:   limit,
-				Results: []Result{},
-				Count:   0,
-			}, fmt.Errorf("failed to load memories: %v", err)
+			return nil, fmt.Errorf("failed to load memories: %v", err)
 		}
 
 		// Convert MemoryEntry to MemoryResult.
@@ -340,8 +274,7 @@ func NewLoadTool(service memory.Service) tool.CallableTool {
 			}
 		}
 
-		return LoadMemoryResponse{
-			Success: true,
+		return &LoadMemoryResponse{
 			Limit:   limit,
 			Results: results,
 			Count:   len(results),

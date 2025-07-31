@@ -32,8 +32,7 @@ type AddMemoryRequest struct {
 
 // AddMemoryResponse represents the response from memory_add tool.
 type AddMemoryResponse struct {
-	Success bool     `json:"success"` // Success is whether the operation was successful.
-	Message string   `json:"message"` // Message is the success or error message.
+	Message string   `json:"message"` // Message is the success message.
 	Memory  string   `json:"memory"`  // Memory is the memory content that was added.
 	Topics  []string `json:"topics"`  // Topics is the topics associated with the memory.
 }
@@ -47,8 +46,7 @@ type UpdateMemoryRequest struct {
 
 // UpdateMemoryResponse represents the response from memory_update tool.
 type UpdateMemoryResponse struct {
-	Success  bool     `json:"success"`   // Success is whether the operation was successful.
-	Message  string   `json:"message"`   // Message is the success or error message.
+	Message  string   `json:"message"`   // Message is the success message.
 	MemoryID string   `json:"memory_id"` // MemoryID is the ID of the updated memory.
 	Memory   string   `json:"memory"`    // Memory is the updated memory content.
 	Topics   []string `json:"topics"`    // Topics is the topics associated with the memory.
@@ -61,15 +59,13 @@ type DeleteMemoryRequest struct {
 
 // DeleteMemoryResponse represents the response from memory_delete tool.
 type DeleteMemoryResponse struct {
-	Success  bool   `json:"success"`   // Success is whether the operation was successful.
-	Message  string `json:"message"`   // Message is the success or error message.
+	Message  string `json:"message"`   // Message is the success message.
 	MemoryID string `json:"memory_id"` // MemoryID is the ID of the deleted memory.
 }
 
 // ClearMemoryResponse represents the response from memory_clear tool.
 type ClearMemoryResponse struct {
-	Success bool   `json:"success"` // Success is whether the operation was successful.
-	Message string `json:"message"` // Message is the success or error message.
+	Message string `json:"message"` // Message is the success message.
 }
 
 // SearchMemoryRequest represents the input for the search memory tool.
@@ -79,7 +75,6 @@ type SearchMemoryRequest struct {
 
 // SearchMemoryResponse represents the response from memory_search tool.
 type SearchMemoryResponse struct {
-	Success bool     `json:"success"` // Success is whether the operation was successful.
 	Query   string   `json:"query"`   // Query is the search query that was used.
 	Results []Result `json:"results"` // Results is the search results.
 	Count   int      `json:"count"`   // Count is the number of results found.
@@ -92,7 +87,6 @@ type LoadMemoryRequest struct {
 
 // LoadMemoryResponse represents the response from memory_load tool.
 type LoadMemoryResponse struct {
-	Success bool     `json:"success"` // Success is whether the operation was successful.
 	Limit   int      `json:"limit"`   // Limit is the limit that was used.
 	Results []Result `json:"results"` // Results is the loaded memories.
 	Count   int      `json:"count"`   // Count is the number of memories loaded.

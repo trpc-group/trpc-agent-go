@@ -352,28 +352,21 @@ func (c *memoryChat) startNewSession() {
 }
 
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-	clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ struct{}) (*toolmemory.ClearMemoryResponse, error) {
 		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
 		// Get appName and userID from context.
 		appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
 		if err != nil {
-			return toolmemory.ClearMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to get app and user from context: %v", err),
-			}, fmt.Errorf("failed to get app and user from context: %v", err)
+			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
 		err = memoryService.ClearMemories(ctx, userKey)
 		if err != nil {
-			return toolmemory.ClearMemoryResponse{
-				Success: false,
-				Message: fmt.Sprintf("Failed to clear memories: %v", err),
-			}, fmt.Errorf("failed to clear memories: %v", err)
+			return nil, fmt.Errorf("failed to clear memories: %v", err)
 		}
 
-		return toolmemory.ClearMemoryResponse{
-			Success: true,
+		return &toolmemory.ClearMemoryResponse{
 			Message: "🎉 All memories cleared successfully with custom magic! ✨",
 		}, nil
 	}
