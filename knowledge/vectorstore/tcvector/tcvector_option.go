@@ -1,63 +1,5 @@
 package tcvector
 
-import (
-	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
-)
-
-// ClientInterface is the interface for the tcvectordb client.
-type ClientInterface interface {
-	tcvectordb.DatabaseInterface
-	tcvectordb.FlatInterface
-}
-
-// clientBuilder is the function to build the global tcvectordb client.
-var clientBuilder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error) = DefaultClientBuilder
-
-// SetClientBuilder sets the client builder for tcvectordb.
-func SetClientBuilder(builder func(builderOpts ...ClientBuilderOpt) (ClientInterface, error)) {
-	clientBuilder = builder
-}
-
-// DefaultClientBuilder is the default client builder for tcvectordb.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (ClientInterface, error) {
-	opts := &ClientBuilderOpts{}
-	for _, opt := range builderOpts {
-		opt(opts)
-	}
-	return tcvectordb.NewClient(opts.HTTPURL, opts.UserName, opts.Key, nil)
-}
-
-// ClientBuilderOpt is the option for the tcvectordb client.
-type ClientBuilderOpt func(*ClientBuilderOpts)
-
-// ClientBuilderOpts is the options for the tcvectordb client.
-type ClientBuilderOpts struct {
-	HTTPURL  string
-	UserName string
-	Key      string
-}
-
-// WithClientBuilderHTTPURL sets the http url for the tcvectordb client.
-func WithClientBuilderHTTPURL(httpURL string) ClientBuilderOpt {
-	return func(o *ClientBuilderOpts) {
-		o.HTTPURL = httpURL
-	}
-}
-
-// WithClientBuilderUserName sets the username for the tcvectordb client.
-func WithClientBuilderUserName(userName string) ClientBuilderOpt {
-	return func(o *ClientBuilderOpts) {
-		o.UserName = userName
-	}
-}
-
-// WithClientBuilderKey sets the key for the tcvectordb client.
-func WithClientBuilderKey(key string) ClientBuilderOpt {
-	return func(o *ClientBuilderOpts) {
-		o.Key = key
-	}
-}
-
 // options contains the options for tcvectordb.
 type options struct {
 	username       string
@@ -69,6 +11,7 @@ type options struct {
 	replicas       uint32
 	sharding       uint32
 	enableTSVector bool
+	instanceName   string
 
 	// Hybrid search scoring weights
 	vectorWeight float64 // Default: Vector similarity weight 70%
@@ -178,5 +121,14 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 func WithLanguage(language string) Option {
 	return func(o *options) {
 		o.language = language
+	}
+}
+
+// WithTCVectorInstance uses a tcvectordb instance from storage.
+// Note: WithURL, WithUserName, WithPassword has higher priority than WithTCVectorInstance.
+// If both are specified, WithURL, WithUserName, WithPassword will be used.
+func WithTCVectorInstance(name string) Option {
+	return func(o *options) {
+		o.instanceName = name
 	}
 }
