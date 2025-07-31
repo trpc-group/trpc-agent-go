@@ -1227,6 +1227,22 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			expectedArgs:  `{"feedback":"The analysis shows good quality","score":85}`,
 			expectedCount: 1,
 		},
+		{
+			name: "ID_Index_Mapping_Verification", // Test ID -> Index mapping with multiple tool calls.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                       // Start boundary
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_weather_abc","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}`, // First tool call starts (ID + index 0)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"location\":"}}]},"finish_reason":null}]}`,                                                  // First tool args part 1 (no ID)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Tokyo\"}"}}]},"finish_reason":null}]}`,                                                      // First tool args part 2 (no ID)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_time_xyz","type":"function","function":{"name":"get_time","arguments":""}}]},"finish_reason":null}]}`,       // Second tool call starts (ID + index 1)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"timezone\":"}}]},"finish_reason":null}]}`,                                                  // Second tool args part 1 (no ID)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"UTC\"}"}}]},"finish_reason":null}]}`,                                                        // Second tool args part 2 (no ID)
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,                                                                                                  // End boundary
+			},
+			expectedTool:  "get_weather",
+			expectedArgs:  `{"location":"Tokyo"}`,
+			expectedCount: 2,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1306,6 +1322,41 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 				// Verify Done=false for tool call responses.
 				if toolCallResponse.Done {
 					t.Error("Tool call response should have Done=false")
+				}
+			}
+
+			// Special verification for ID_Index_Mapping_Verification test case.
+			if tt.name == "ID_Index_Mapping_Verification" && len(toolCalls) >= 2 {
+				// Verify that Index values are correctly preserved from the original streaming chunks.
+				if toolCalls[0].Index == nil || *toolCalls[0].Index != 0 {
+					t.Errorf("Expected first tool call index to be 0, got %v", toolCalls[0].Index)
+				}
+				if toolCalls[1].Index == nil || *toolCalls[1].Index != 1 {
+					t.Errorf("Expected second tool call index to be 1, got %v", toolCalls[1].Index)
+				}
+
+				// Verify both tool calls have correct IDs and functions.
+				if toolCalls[0].ID != "call_weather_abc" {
+					t.Errorf("Expected first tool call ID 'call_weather_abc', got '%s'", toolCalls[0].ID)
+				}
+				if toolCalls[1].ID != "call_time_xyz" {
+					t.Errorf("Expected second tool call ID 'call_time_xyz', got '%s'", toolCalls[1].ID)
+				}
+				if toolCalls[0].Function.Name != "get_weather" {
+					t.Errorf("Expected first tool call function 'get_weather', got '%s'", toolCalls[0].Function.Name)
+				}
+				if toolCalls[1].Function.Name != "get_time" {
+					t.Errorf("Expected second tool call function 'get_time', got '%s'", toolCalls[1].Function.Name)
+				}
+
+				// Verify arguments were correctly assembled despite missing IDs in data chunks.
+				expectedWeatherArgs := `{"location":"Tokyo"}`
+				expectedTimeArgs := `{"timezone":"UTC"}`
+				if string(toolCalls[0].Function.Arguments) != expectedWeatherArgs {
+					t.Errorf("Expected first tool args '%s', got '%s'", expectedWeatherArgs, string(toolCalls[0].Function.Arguments))
+				}
+				if string(toolCalls[1].Function.Arguments) != expectedTimeArgs {
+					t.Errorf("Expected second tool args '%s', got '%s'", expectedTimeArgs, string(toolCalls[1].Function.Arguments))
 				}
 			}
 		})
