@@ -1,6 +1,6 @@
 # File Input Example
 
-This example demonstrates how to process various types of file inputs (text, images, audio, and files) using the Runner pattern from trpc-agent-go.
+This example demonstrates how to process various types of file inputs (text, images, audio, and files) using the OpenAI model directly from trpc-agent-go.
 
 ## Features
 
@@ -9,11 +9,14 @@ This example demonstrates how to process various types of file inputs (text, ima
 - **Audio Input**: Process audio files (WAV format)
 - **File Upload**: Upload and analyze any file type
 - **Streaming Support**: Real-time streaming responses
-- **Session Management**: Built-in session handling via Runner
+- **Direct Model Access**: Direct interaction with OpenAI models
 
 ## Usage
 
 ```bash
+# Set your OpenAI API key
+export OPENAI_API_KEY="your-api-key-here"
+
 # Text input only
 go run main.go -text "Hello, how are you?"
 
@@ -31,6 +34,9 @@ go run main.go -text "Analyze this image" -image path/to/image.png
 
 # Custom model and streaming options
 go run main.go -model gpt-4 -text "Hello" -streaming=false
+
+# Specify API key via command line
+go run main.go -api-key "your-key" -text "Hello"
 ```
 
 ## Command Line Flags
@@ -41,32 +47,33 @@ go run main.go -model gpt-4 -text "Hello" -streaming=false
 - `-audio`: Path to audio file (supports: wav)
 - `-file`: Path to any file for upload and analysis
 - `-streaming`: Enable/disable streaming mode (default: true)
+- `-api-key`: OpenAI API key (or set OPENAI_API_KEY environment variable)
 
 ## Architecture
 
-This example uses the **Runner pattern** which provides:
+This example uses **direct model interaction** which provides:
 
-1. **Session Management**: Automatic session creation and management
-2. **Event Handling**: Structured event processing for responses
-3. **Error Handling**: Comprehensive error handling and reporting
-4. **Streaming Support**: Real-time streaming of responses
-5. **Clean Interface**: Simplified agent execution
+1. **Direct API Access**: Direct communication with OpenAI models
+2. **File Handling**: Built-in support for various file types
+3. **Streaming Support**: Real-time streaming of responses
+4. **Error Handling**: Comprehensive error handling and reporting
+5. **Simple Interface**: Straightforward model interaction
 
 ### Key Components
 
 - `fileProcessor`: Main struct managing the file processing workflow
-- `runner.Runner`: Handles agent execution and session management
-- `llmagent`: LLM-based agent with file processing capabilities
-- `session.Service`: Session management for conversation history
+- `openai.Model`: Direct OpenAI model interface
+- `model.Message`: Message structure with file attachment support
+- `model.Request`: Request structure for model communication
 
 ## Example Output
 
 ```
-🚀 File Input Processing with Runner
+🚀 File Input Processing with OpenAI Model
 Model: gpt-4o
 Streaming: true
 ==================================================
-✅ File processor ready! Session: file-session-1753850114
+✅ File processor ready!
 
 📝 Text input: Hello, this is a test message
 🤖 Assistant: Hello! I'm here to help you with any questions or tasks you might have. How can I assist you today?
@@ -86,6 +93,17 @@ Streaming: true
 ### Files
 - Any file type (uploaded as base64)
 
+## File Processing Methods
+
+The example uses the following methods for file processing:
+
+- `AddImageFilePath()`: Add images from file paths
+- `AddAudioFilePath()`: Add audio files from paths
+- `AddFilePath()`: Add any file type from paths
+- `AddImageData()`: Add raw image data
+- `AddAudioData()`: Add raw audio data
+- `AddFileData()`: Add raw file data
+
 ## Error Handling
 
 The example includes comprehensive error handling for:
@@ -94,10 +112,36 @@ The example includes comprehensive error handling for:
 - File reading errors
 - API communication errors
 - Model configuration issues
+- Missing API keys
 
 ## Dependencies
 
 - `trpc-agent-go`: Core framework
 - `openai`: Model provider
-- `session/inmemory`: Session management
-- `runner`: Agent execution framework 
+- Standard library: `context`, `flag`, `fmt`, `log`, `os`, `strings`
+
+## API Key Configuration
+
+You can provide your OpenAI API key in two ways:
+
+1. **Environment Variable** (recommended):
+   ```bash
+   export OPENAI_API_KEY="your-api-key-here"
+   ```
+
+2. **Command Line Flag**:
+   ```bash
+   go run main.go -api-key "your-api-key-here" -text "Hello"
+   ```
+
+## Streaming vs Non-Streaming
+
+The example supports both streaming and non-streaming modes:
+
+- **Streaming** (default): Real-time response streaming
+- **Non-streaming**: Complete response at once
+
+Toggle with the `-streaming` flag:
+```bash
+go run main.go -streaming=false -text "Hello"
+``` 

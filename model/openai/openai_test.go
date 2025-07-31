@@ -1162,7 +1162,7 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 	}
 }
 
-func TestConvertMessageContent(t *testing.T) {
+func TestConvertSystemMessageContent(t *testing.T) {
 	// Test converting message with text content parts
 	textPart := model.ContentPart{
 		Type: "text",
@@ -1175,7 +1175,7 @@ func TestConvertMessageContent(t *testing.T) {
 	}
 
 	m := &Model{}
-	content := m.convertMessageContent(message)
+	content := m.convertSystemMessageContent(message)
 
 	// System messages should convert text content parts to array of content parts
 	if len(content.OfArrayOfContentParts) != 1 {
@@ -1254,7 +1254,7 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	audioPart := model.ContentPart{
 		Type: "audio",
 		Audio: &model.Audio{
-			Data:   "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT",
+			Data:   []byte("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT"),
 			Format: "wav",
 		},
 	}

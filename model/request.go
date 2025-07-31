@@ -12,7 +12,14 @@
 
 package model
 
-import "trpc.group/trpc-go/trpc-agent-go/tool"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
 
 // Role represents the role of a message author.
 type Role string
@@ -53,12 +60,8 @@ type Message struct {
 	// Role is the role of the message author.
 	Role Role `json:"role"`
 	// Content is the message content.
-	// Only one of Content or ContentParts should be provided.
-	// If both are provided, ContentParts will be used.
 	Content string `json:"content,omitempty"`
 	// ContentParts is the content parts for multimodal messages.
-	// Only one of Content or ContentParts should be provided.
-	// If both are provided, ContentParts will be used.
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
 	// ToolID is the ID of the tool used by tool response.
 	ToolID string `json:"tool_id,omitempty"`
@@ -66,6 +69,142 @@ type Message struct {
 	ToolName string `json:"tool_name,omitempty"`
 	// ToolCalls is the optional tool calls for the message.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// AddFilePath adds a file path to the message.
+func (m *Message) AddFilePath(filepath string) error {
+	mimeType, err := inferMimeType(filepath)
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		return err
+	}
+	m.AddFileData(filepath, content, mimeType)
+	return nil
+}
+
+// AddFileData adds a file data to the message.
+// The argument of data is the raw file data without base64 encoding.
+func (m *Message) AddFileData(name string, data []byte, mimetype string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			Name:     name,
+			Data:     data,
+			MimeType: mimetype,
+		},
+	})
+}
+
+// AddFileID adds a file ID to the message.
+// The file id can be obtained from the response of the upload file API.
+func (m *Message) AddFileID(fileID string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeFile,
+		File: &File{
+			FileID: fileID,
+		},
+	})
+}
+
+// AddImageURL adds an image URL to the message.
+// The argument of detail is the detail level: "low", "high", "auto".
+// If detail is empty, it will be set to "auto".
+func (m *Message) AddImageURL(url, detail string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeImage,
+		Image: &Image{
+			URL:    url,
+			Detail: detail,
+		},
+	})
+}
+
+// AddImageFilePath adds an image file path to the message.
+// The argument detail specifies the detail level: "low", "high", or "auto".
+// If detail is empty, it will be set to "auto".
+// Supported formats:
+//
+//   - PNG (.png)
+//   - JPEG (.jpeg, .jpg)
+//   - WEBP (.webp)
+//   - Non-animated GIF (.gif)
+//
+// Reference: https://platform.openai.com/docs/guides/images-vision.
+func (m *Message) AddImageFilePath(path string, detail string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	// Infer format from the file extension.
+	ext := filepath.Ext(path)
+	var format string
+	switch ext {
+	case ".png":
+		format = "png"
+	case ".jpg":
+		format = "jpg"
+	case ".jpeg":
+		format = "jpeg"
+	case ".webp":
+		format = "webp"
+	case ".gif":
+		format = "gif"
+	default:
+		return fmt.Errorf("unsupported image format: %s", ext)
+	}
+	m.AddImageData(content, detail, format)
+	return nil
+}
+
+// AddImageData adds an image data to the message.
+// The argument of data is the raw image data without base64 encoding.
+// The argument of detail is the detail level: "low", "high", "auto".
+// If detail is empty, it will be set to "auto".
+func (m *Message) AddImageData(data []byte, detail, format string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeImage,
+		Image: &Image{
+			Data:   data,
+			Detail: detail,
+			Format: format,
+		},
+	})
+}
+
+// AddAudioFilePath adds an audio file path to the message.
+func (m *Message) AddAudioFilePath(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	// Infer format from the file extension.
+	format := filepath.Ext(path)
+	if format == ".wav" {
+		format = "wav"
+	} else if format == ".mp3" {
+		format = "mp3"
+	} else {
+		return fmt.Errorf("unsupported audio format: %s", format)
+	}
+	m.AddAudioData(content, format)
+	return nil
+}
+
+// AddAudioData adds an audio data to the message.
+// The argument of data is the raw audio data without base64 encoding.
+// The argument of format is the format of the audio data.
+// Currently supports "wav" and "mp3".
+func (m *Message) AddAudioData(data []byte, format string) {
+	m.ContentParts = append(m.ContentParts, ContentPart{
+		Type: ContentTypeAudio,
+		Audio: &Audio{
+			Data:   data,
+			Format: format,
+		},
+	})
 }
 
 // ContentType represents the type of content.
@@ -93,32 +232,36 @@ type ContentPart struct {
 	File *File `json:"file,omitempty"`
 }
 
+// File represents file content for file input models.
+type File struct {
+	// Name is the name of the file, used when passing the file to the model as a string.
+	Name string `json:"filename"`
+	// Data is the raw file data, used when passing the file to the model as a string.
+	Data []byte `json:"data"`
+	// FileID is the ID of an uploaded file to use as input.
+	FileID string `json:"file_id"`
+	// MimeType is the format of the file data.
+	MimeType string `json:"format,omitempty"`
+}
+
 // Image represents an image data for vision models.
 type Image struct {
 	// URL is the URL of the image.
 	URL string `json:"url"`
+	// Data is the raw image data.
+	Data []byte `json:"data"`
 	// Detail is the detail level: "low", "high", "auto".
 	Detail string `json:"detail,omitempty"`
+	// Format is the format of the image data.
+	Format string `json:"format,omitempty"`
 }
 
 // Audio represents audio input for audio models.
 type Audio struct {
-	// Data is the base64 encoded audio data.
-	Data string `json:"data"`
+	// Data is the raw audio data.
+	Data []byte `json:"data"`
 	// Format is the format of the encoded audio data. Currently supports "wav" and "mp3".
 	Format string `json:"format"`
-}
-
-// File represents file content for file input models.
-type File struct {
-	// Filename is the name of the file, used when passing the file to the model as a string.
-	Filename string `json:"filename"`
-	// FileData is the base64 encoded file data, used when passing the file to the model as a string.
-	// Pick one from FileData or FileID.
-	FileData string `json:"file_data"`
-	// FileID is the ID of an uploaded file to use as input.
-	// Pick one from FileData or FileID.
-	FileID string `json:"file_id"`
 }
 
 // NewSystemMessage creates a new system message.
@@ -155,18 +298,18 @@ func NewAssistantMessage(content string) Message {
 	}
 }
 
-// NewUserMessageWithContentParts creates a new user message with content parts.
-func NewUserMessageWithContentParts(contentParts []ContentPart) Message {
-	return Message{
-		Role:         RoleUser,
-		ContentParts: contentParts,
-	}
-}
-
 // NewSystemMessageWithContentParts creates a new system message with content parts.
 func NewSystemMessageWithContentParts(contentParts []ContentPart) Message {
 	return Message{
 		Role:         RoleSystem,
+		ContentParts: contentParts,
+	}
+}
+
+// NewUserMessageWithContentParts creates a new user message with content parts.
+func NewUserMessageWithContentParts(contentParts []ContentPart) Message {
+	return Message{
+		Role:         RoleUser,
 		ContentParts: contentParts,
 	}
 }
@@ -187,45 +330,32 @@ func NewTextContentPart(text string) ContentPart {
 	}
 }
 
-// NewImageContentPart creates a new image content part.
-func NewImageContentPart(url string, detail string) ContentPart {
+// NewImageContentPart creates a new image content part from a file path.
+func NewImageContentPart(path string) ContentPart {
 	return ContentPart{
 		Type: ContentTypeImage,
 		Image: &Image{
-			URL:    url,
-			Detail: detail,
+			URL: path, // For now, just use the path as URL
 		},
 	}
 }
 
-// NewAudioContentPart creates a new audio content part.
-func NewAudioContentPart(data string, format string) ContentPart {
+// NewAudioContentPart creates a new audio content part from a file path.
+func NewAudioContentPart(path string) ContentPart {
 	return ContentPart{
 		Type: ContentTypeAudio,
 		Audio: &Audio{
-			Data:   data,
-			Format: format,
+			Format: "wav", // Default format
 		},
 	}
 }
 
-// NewFileContentPart creates a new file content part using file ID.
-func NewFileContentPart(fileID string) ContentPart {
+// NewFileContentPart creates a new file content part from a file path.
+func NewFileContentPart(path string) ContentPart {
 	return ContentPart{
 		Type: ContentTypeFile,
 		File: &File{
-			FileID: fileID,
-		},
-	}
-}
-
-// NewFileContentPartWithData creates a new file content part using file data.
-func NewFileContentPartWithData(filename, data string) ContentPart {
-	return ContentPart{
-		Type: ContentTypeFile,
-		File: &File{
-			FileData: data,
-			Filename: filename,
+			Name: path, // For now, just use the path as name
 		},
 	}
 }
@@ -306,4 +436,54 @@ type FunctionDefinitionParam struct {
 
 	// Optional arguments to pass to the function, json-encoded.
 	Arguments []byte `json:"arguments,omitempty"`
+}
+
+// inferMimeType infers the MIME type from the file extension of the given path.
+// Returns the MIME type string, or an error if the extension is unknown.
+func inferMimeType(path string) (string, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".txt":
+		return "text/plain", nil
+	case ".md":
+		return "text/markdown", nil
+	case ".html":
+		return "text/html", nil
+	case ".json":
+		return "application/json", nil
+	case ".doc":
+		return "application/msword", nil
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document", nil
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", nil
+	case ".pdf":
+		return "application/pdf", nil
+	case ".c":
+		return "text/x-c", nil
+	case ".cpp":
+		return "text/x-c++", nil
+	case ".cs":
+		return "text/x-csharp", nil
+	case ".java":
+		return "text/x-java", nil
+	case ".js":
+		return "text/javascript", nil
+	case ".ts":
+		return "application/typescript", nil
+	case ".py":
+		return "text/x-python", nil
+	case ".rb":
+		return "text/x-ruby", nil
+	case ".css":
+		return "text/css", nil
+	case ".sh":
+		return "application/x-sh", nil
+	case ".php":
+		return "text/x-php", nil
+	case ".tex":
+		return "text/x-tex", nil
+	default:
+		return "", fmt.Errorf("unknown file extension: %s", ext)
+	}
 }
