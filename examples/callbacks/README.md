@@ -20,7 +20,7 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 ### 1. ModelCallbacks
 
 - **BeforeModelCallback**: Triggered before each model inference. Use for input interception, logging, or mocking responses.
-- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging. **Now includes access to the original request for scenarios like SRT subtitle processing.**
+- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging. The callback receives the original request for scenarios like content restoration and processing.
 
 **Example output:**
 
@@ -31,9 +31,9 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 🟣 AfterModelCallback: this demonstrates access to the original request in after callback.
 ```
 
-**Key Feature**: The `AfterModelCallback` now receives the original request as a parameter, enabling scenarios like:
+**Key Feature**: The `AfterModelCallback` receives the original request as a parameter, enabling scenarios like:
 
-- **SRT Subtitle Processing**: Access original subtitle text with timestamps in the after callback
+- **Content Processing**: Access original input for post-processing workflows
 - **Content Restoration**: Restore original formatting after model processing
 - **Request/Response Correlation**: Compare original input with processed output
 
@@ -132,13 +132,13 @@ You can short-circuit (skip) the default execution of a model, tool, or agent by
 
 ```go
 modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    // Access the original request to restore timestamps or formatting
+    // Access the original request for content restoration
     if req != nil && len(req.Messages) > 0 {
         originalText := req.Messages[len(req.Messages)-1].Content
         // Process response with original context
-        if strings.Contains(originalText, "SRT") {
-            // Restore timestamps from original SRT format
-            return restoreTimestamps(resp, originalText), nil
+        if strings.Contains(originalText, "restore") {
+            // Restore original formatting or structure
+            return restoreFormatting(resp, originalText), nil
         }
     }
     return nil, nil
@@ -252,7 +252,7 @@ go run main.go -streaming=false
 - **A/B Testing**: Dynamically switch models or tool implementations
 - **Safety & Compliance**: Moderate model outputs and tool results
 - **Business Extensions**: Insert custom business logic as needed
-- **Content Processing**: Access original input for post-processing (e.g., SRT subtitle restoration)
+- **Content Processing**: Access original input for post-processing workflows
 
 ---
 

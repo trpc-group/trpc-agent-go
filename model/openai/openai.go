@@ -83,25 +83,52 @@ type Model struct {
 	baseURL              string
 	apiKey               string
 	channelBufferSize    int
-	chatRequestCallback  chatRequestCallbackFunc
-	chatResponseCallback chatResponseCallbackFunc
-	chatChunkCallback    chatChunkCallbackFunc
+	chatRequestCallback  ChatRequestCallbackFunc
+	chatResponseCallback ChatResponseCallbackFunc
+	chatChunkCallback    ChatChunkCallbackFunc
+	extraFields          map[string]interface{}
 }
 
-type chatRequestCallbackFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
-type chatResponseCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatResponse *openai.ChatCompletion)
-type chatChunkCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatChunk *openai.ChatCompletionChunk)
+// ChatRequestCallbackFunc is the function type for the chat request callback.
+type ChatRequestCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+)
+
+// ChatResponseCallbackFunc is the function type for the chat response callback.
+type ChatResponseCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatResponse *openai.ChatCompletion,
+)
+
+// ChatChunkCallbackFunc is the function type for the chat chunk callback.
+type ChatChunkCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatChunk *openai.ChatCompletionChunk,
+)
 
 // options contains configuration options for creating a Model.
 type options struct {
-	APIKey               string
-	BaseURL              string // Optional: for OpenAI-compatible APIs
-	ChannelBufferSize    int    // Buffer size for response channels (default: 256)
-	HTTPClientOptions    []HTTPClientOption
-	ChatRequestCallback  chatRequestCallbackFunc
-	ChatResponseCallback chatResponseCallbackFunc
-	ChatChunkCallback    chatChunkCallbackFunc
-	OpenAIOptions        []openaiopt.RequestOption
+	// API key for the OpenAI client.
+	APIKey string
+	// Base URL for the OpenAI client. It is optional for OpenAI-compatible APIs.
+	BaseURL string
+	// Buffer size for response channels (default: 256)
+	ChannelBufferSize int
+	// Options for the HTTP client.
+	HTTPClientOptions []HTTPClientOption
+	// Callback for the chat request.
+	ChatRequestCallback ChatRequestCallbackFunc
+	// Callback for the chat response.
+	ChatResponseCallback ChatResponseCallbackFunc
+	// Callback for the chat chunk.
+	ChatChunkCallback ChatChunkCallbackFunc
+	// Options for the OpenAI client.
+	OpenAIOptions []openaiopt.RequestOption
+	// Extra fields to be added to the HTTP request body.
+	ExtraFields map[string]interface{}
 }
 
 // Option is a function that configures an OpenAI model.
@@ -129,7 +156,7 @@ func WithChannelBufferSize(size int) Option {
 }
 
 // WithChatRequestCallback sets the function to be called before sending a chat request.
-func WithChatRequestCallback(fn chatRequestCallbackFunc) Option {
+func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
 	}
@@ -137,7 +164,7 @@ func WithChatRequestCallback(fn chatRequestCallbackFunc) Option {
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
 // Used for non-streaming responses.
-func WithChatResponseCallback(fn chatResponseCallbackFunc) Option {
+func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatResponseCallback = fn
 	}
@@ -145,7 +172,7 @@ func WithChatResponseCallback(fn chatResponseCallbackFunc) Option {
 
 // WithChatChunkCallback sets the function to be called after receiving a chat chunk.
 // Used for streaming responses.
-func WithChatChunkCallback(fn chatChunkCallbackFunc) Option {
+func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatChunkCallback = fn
 	}
@@ -175,6 +202,28 @@ func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 	return func(opts *options) {
 		opts.OpenAIOptions = append(opts.OpenAIOptions, openaiOpts...)
+	}
+}
+
+// WithExtraFields sets extra fields to be added to the HTTP request body.
+// These fields will be included in every chat completion request.
+// E.g.:
+//
+//	WithExtraFields(map[string]interface{}{
+//		"custom_metadata": map[string]string{
+//			"session_id": "abc",
+//		},
+//	})
+//
+// and "session_id" : "abc" will be added to the HTTP request json body.
+func WithExtraFields(extraFields map[string]interface{}) Option {
+	return func(opts *options) {
+		if opts.ExtraFields == nil {
+			opts.ExtraFields = make(map[string]interface{})
+		}
+		for k, v := range extraFields {
+			opts.ExtraFields[k] = v
+		}
 	}
 }
 
@@ -214,6 +263,7 @@ func New(name string, opts ...Option) *Model {
 		chatRequestCallback:  o.ChatRequestCallback,
 		chatResponseCallback: o.ChatResponseCallback,
 		chatChunkCallback:    o.ChatChunkCallback,
+		extraFields:          o.ExtraFields,
 	}
 }
 
@@ -273,6 +323,11 @@ func (m *Model) GenerateContent(
 	}
 	if request.ThinkingTokens != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
+	}
+
+	// Add extra fields to the request
+	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 
 	// Add streaming options if needed.
@@ -406,8 +461,21 @@ func (m *Model) handleStreamingResponse(
 	defer stream.Close()
 
 	acc := openai.ChatCompletionAccumulator{}
+	// Track ID -> Index mapping.
+	idToIndexMap := make(map[string]int)
+
 	for stream.Next() {
 		chunk := stream.Current()
+
+		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
+		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+			toolCall := chunk.Choices[0].Delta.ToolCalls[0]
+			index := int(toolCall.Index)
+			if toolCall.ID != "" {
+				idToIndexMap[toolCall.ID] = index
+			}
+		}
+
 		acc.AddChunk(chunk)
 
 		if m.chatChunkCallback != nil {
@@ -459,8 +527,16 @@ func (m *Model) handleStreamingResponse(
 			accumulatedToolCalls = make([]model.ToolCall, len(acc.Choices[0].Message.ToolCalls))
 
 			for i, toolCall := range acc.Choices[0].Message.ToolCalls {
+				// Use the original index from ID->Index mapping if available, otherwise use loop index.
+				originalIndex := i
+				if toolCall.ID != "" {
+					if mappedIndex, exists := idToIndexMap[toolCall.ID]; exists {
+						originalIndex = mappedIndex
+					}
+				}
+
 				accumulatedToolCalls[i] = model.ToolCall{
-					Index: func() *int { idx := i; return &idx }(),
+					Index: func() *int { idx := originalIndex; return &idx }(),
 					ID:    toolCall.ID,
 					Type:  functionToolType, // openapi only supports a function type for now.
 					Function: model.FunctionDefinitionParam{
