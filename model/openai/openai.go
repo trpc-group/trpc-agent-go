@@ -83,25 +83,49 @@ type Model struct {
 	baseURL              string
 	apiKey               string
 	channelBufferSize    int
-	chatRequestCallback  chatRequestCallbackFunc
-	chatResponseCallback chatResponseCallbackFunc
-	chatChunkCallback    chatChunkCallbackFunc
+	chatRequestCallback  ChatRequestCallbackFunc
+	chatResponseCallback ChatResponseCallbackFunc
+	chatChunkCallback    ChatChunkCallbackFunc
 }
 
-type chatRequestCallbackFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
-type chatResponseCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatResponse *openai.ChatCompletion)
-type chatChunkCallbackFunc func(ctx context.Context, req *openai.ChatCompletionNewParams, chatChunk *openai.ChatCompletionChunk)
+// ChatRequestCallbackFunc is the function type for the chat request callback.
+type ChatRequestCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+)
+
+// ChatResponseCallbackFunc is the function type for the chat response callback.
+type ChatResponseCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatResponse *openai.ChatCompletion,
+)
+
+// ChatChunkCallbackFunc is the function type for the chat chunk callback.
+type ChatChunkCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatChunk *openai.ChatCompletionChunk,
+)
 
 // options contains configuration options for creating a Model.
 type options struct {
-	APIKey               string
-	BaseURL              string // Optional: for OpenAI-compatible APIs
-	ChannelBufferSize    int    // Buffer size for response channels (default: 256)
-	HTTPClientOptions    []HTTPClientOption
-	ChatRequestCallback  chatRequestCallbackFunc
-	ChatResponseCallback chatResponseCallbackFunc
-	ChatChunkCallback    chatChunkCallbackFunc
-	OpenAIOptions        []openaiopt.RequestOption
+	// API key for the OpenAI client.
+	APIKey string
+	// Base URL for the OpenAI client. It is optional for OpenAI-compatible APIs.
+	BaseURL string
+	// Buffer size for response channels (default: 256)
+	ChannelBufferSize int
+	// Options for the HTTP client.
+	HTTPClientOptions []HTTPClientOption
+	// Callback for the chat request.
+	ChatRequestCallback ChatRequestCallbackFunc
+	// Callback for the chat response.
+	ChatResponseCallback ChatResponseCallbackFunc
+	// Callback for the chat chunk.
+	ChatChunkCallback ChatChunkCallbackFunc
+	// Options for the OpenAI client.
+	OpenAIOptions []openaiopt.RequestOption
 }
 
 // Option is a function that configures an OpenAI model.
@@ -129,7 +153,7 @@ func WithChannelBufferSize(size int) Option {
 }
 
 // WithChatRequestCallback sets the function to be called before sending a chat request.
-func WithChatRequestCallback(fn chatRequestCallbackFunc) Option {
+func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
 	}
@@ -137,7 +161,7 @@ func WithChatRequestCallback(fn chatRequestCallbackFunc) Option {
 
 // WithChatResponseCallback sets the function to be called after receiving a chat response.
 // Used for non-streaming responses.
-func WithChatResponseCallback(fn chatResponseCallbackFunc) Option {
+func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatResponseCallback = fn
 	}
@@ -145,7 +169,7 @@ func WithChatResponseCallback(fn chatResponseCallbackFunc) Option {
 
 // WithChatChunkCallback sets the function to be called after receiving a chat chunk.
 // Used for streaming responses.
-func WithChatChunkCallback(fn chatChunkCallbackFunc) Option {
+func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatChunkCallback = fn
 	}
