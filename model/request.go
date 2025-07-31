@@ -298,68 +298,6 @@ func NewAssistantMessage(content string) Message {
 	}
 }
 
-// NewSystemMessageWithContentParts creates a new system message with content parts.
-func NewSystemMessageWithContentParts(contentParts []ContentPart) Message {
-	return Message{
-		Role:         RoleSystem,
-		ContentParts: contentParts,
-	}
-}
-
-// NewUserMessageWithContentParts creates a new user message with content parts.
-func NewUserMessageWithContentParts(contentParts []ContentPart) Message {
-	return Message{
-		Role:         RoleUser,
-		ContentParts: contentParts,
-	}
-}
-
-// NewAssistantMessageWithContentParts creates a new assistant message with content parts.
-func NewAssistantMessageWithContentParts(contentParts []ContentPart) Message {
-	return Message{
-		Role:         RoleAssistant,
-		ContentParts: contentParts,
-	}
-}
-
-// NewTextContentPart creates a new text content part.
-func NewTextContentPart(text string) ContentPart {
-	return ContentPart{
-		Type: ContentTypeText,
-		Text: &text,
-	}
-}
-
-// NewImageContentPart creates a new image content part from a file path.
-func NewImageContentPart(path string) ContentPart {
-	return ContentPart{
-		Type: ContentTypeImage,
-		Image: &Image{
-			URL: path, // For now, just use the path as URL
-		},
-	}
-}
-
-// NewAudioContentPart creates a new audio content part from a file path.
-func NewAudioContentPart(path string) ContentPart {
-	return ContentPart{
-		Type: ContentTypeAudio,
-		Audio: &Audio{
-			Format: "wav", // Default format
-		},
-	}
-}
-
-// NewFileContentPart creates a new file content part from a file path.
-func NewFileContentPart(path string) ContentPart {
-	return ContentPart{
-		Type: ContentTypeFile,
-		File: &File{
-			Name: path, // For now, just use the path as name
-		},
-	}
-}
-
 // GenerationConfig contains configuration for text generation.
 type GenerationConfig struct {
 	// MaxTokens is the maximum number of tokens to generate.
