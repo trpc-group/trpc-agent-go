@@ -105,7 +105,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 					errorEvent = event.NewErrorEvent(
 						invocation.InvocationID,
 						invocation.AgentName,
-						model.ErrorTypeStopAgentError,
+						agent.ErrorTypeStopAgentError,
 						err.Error(),
 					)
 					log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)

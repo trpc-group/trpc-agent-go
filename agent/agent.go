@@ -28,6 +28,9 @@ type Info struct {
 	Description string
 }
 
+// ErrorTypeStopAgentError is the error type used to indicate that an agent should stop execution.
+const ErrorTypeStopAgentError = "stop_agent_error"
+
 // StopError represents an error that signals the agent execution should be stopped.
 // When this error type is returned, it indicates the agent should stop processing.
 type StopError struct {

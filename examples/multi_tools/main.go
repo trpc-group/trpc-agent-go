@@ -111,9 +111,9 @@ func (c *multiToolChat) setup(_ context.Context) error {
 		// 2. time_tool: Get current time, date, timezone information, etc.
 		// 3. text_tool: Process text, including case conversion, length statistics, string operations, etc.
 		// 4. file_tool: Basic file operations such as reading, writing, listing directories, etc.
-		//5. duckduckgo_search: Search web information, suitable for finding factual, encyclopedia-type information
+		// 5. duckduckgo_search: Search web information, suitable for finding factual, encyclopedia-type information
 
-		//Please select the appropriate tool based on user needs and provide helpful assistance.`),
+		// Please select the appropriate tool based on user needs and provide helpful assistance.`),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(tools),
@@ -212,7 +212,7 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	for event := range eventChan {
 		// Handle errors
 		if event.Error != nil {
-			if event.Error.Type == model.ErrorTypeStopAgentError {
+			if event.Error.Type == agent.ErrorTypeStopAgentError {
 				// Handle stop agent error
 				fmt.Printf("\n🛑 Agent stopped: %s\n", event.Error.Message)
 				log.Fatal("Agent execution stopped due to error: ", event.Error.Message)
