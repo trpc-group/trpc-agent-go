@@ -11,6 +11,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/tcvector"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
@@ -29,7 +30,7 @@ var (
 
 // VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
-	client        ClientInterface
+	client        storage.ClientInterface
 	option        options
 	sparseEncoder encoder.SparseEncoder
 }
@@ -40,8 +41,10 @@ func New(opts ...Option) (*VectorStore, error) {
 	for _, opt := range opts {
 		opt(&option)
 	}
-	if option.url == "" {
-		return nil, errors.New("tcvectordb url is required")
+
+	// check opts
+	if option.instanceName == "" && (option.url == "" || option.username == "" || option.password == "") {
+		return nil, errors.New("tcvectordb instance name or (url, username, password) is required")
 	}
 	if option.database == "" {
 		return nil, errors.New("tcvectordb database is required")
@@ -50,11 +53,24 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, errors.New("tcvectordb collection is required")
 	}
 
-	c, err := clientBuilder(
-		WithClientBuilderHTTPURL(option.url),
-		WithClientBuilderUserName(option.username),
-		WithClientBuilderKey(option.password),
-	)
+	builderOpts := make([]storage.ClientBuilderOpt, 0)
+
+	if option.url != "" && option.username != "" && option.password != "" {
+		// url and username and password are provided, use it
+		builderOpts = append(builderOpts,
+			storage.WithClientBuilderHTTPURL(option.url),
+			storage.WithClientBuilderUserName(option.username),
+			storage.WithClientBuilderKey(option.password))
+	} else if option.instanceName != "" {
+		// instance name is provided, use it
+		instanceOpts, ok := storage.GetTcVectorInstance(option.instanceName)
+		if !ok {
+			return nil, errors.New("tcvectordb instance name not found")
+		}
+		builderOpts = append(builderOpts, instanceOpts...)
+	}
+
+	c, err := storage.GetClientBuilder()(builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
 	}
@@ -73,7 +89,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	return &VectorStore{client: c, option: option, sparseEncoder: sparseEncoder}, nil
 }
 
-func initVectorDB(client ClientInterface, options options) error {
+func initVectorDB(client storage.ClientInterface, options options) error {
 	_, err := client.CreateDatabaseIfNotExists(context.Background(), options.database)
 	if err != nil {
 		return fmt.Errorf("tcvectordb create database: %w", err)
