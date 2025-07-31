@@ -44,7 +44,6 @@ func main() {
 
 	fmt.Printf("🚀 Agent Tool Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: current_time, agent_tool\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -80,7 +79,7 @@ func (c *agentToolChat) run() error {
 }
 
 // setup creates the runner with LLM agent and tools including agent tools.
-func (c *agentToolChat) setup(ctx context.Context) error {
+func (c *agentToolChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
@@ -164,7 +163,7 @@ func (c *agentToolChat) startChat(ctx context.Context) error {
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /history  - Show conversation history")
 	fmt.Println("   /new      - Start a new session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
 
 	for {

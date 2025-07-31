@@ -90,7 +90,7 @@ func (c *cycleChat) run() error {
 }
 
 // setup creates the runner with cycle agent and sub-agents.
-func (c *cycleChat) setup(ctx context.Context) error {
+func (c *cycleChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
@@ -259,98 +259,8 @@ func (c *cycleChat) processStreamingResponse(eventChan <-chan *event.Event) erro
 	fmt.Printf("🤖 Cycle Response:\n")
 
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
-		// Track which agent is currently active and detect new iterations.
-		if event.Author != currentAgent {
-			if agentStarted {
-				fmt.Printf("\n")
-			}
-
-			// Update lastAgent BEFORE checking for new iterations.
-			lastAgent = currentAgent
-
-			// Check if we're starting a new iteration (cycle back to generate-agent).
-			if event.Author == "generate-agent" && lastAgent == "critic-agent" {
-				currentIteration++
-				fmt.Printf("\n🔄 **Iteration %d**\n", currentIteration+1)
-			}
-
-			currentAgent = event.Author
-			agentStarted = true
-			toolCallsActive = false
-
-			// Display agent transition.
-			if currentAgent != "" {
-				emoji := c.getAgentEmoji(currentAgent)
-				agentTitle := strings.Title(strings.Replace(currentAgent, "-", " ", -1))
-				fmt.Printf("\n%s %s: ", emoji, agentTitle)
-			}
-		}
-
-		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			if !toolCallsActive {
-				toolCallsActive = true
-				fmt.Printf("\n🔧 Using tools:\n")
-				for _, toolCall := range event.Choices[0].Message.ToolCalls {
-					fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-				}
-				fmt.Printf("🔄 Executing...\n")
-			}
-		}
-
-		// Detect tool responses.
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			for _, choice := range event.Response.Choices {
-				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					// Skip if we've already processed this tool response.
-					if processedToolIDs[choice.Message.ToolID] {
-						continue
-					}
-					processedToolIDs[choice.Message.ToolID] = true
-
-					content := strings.TrimSpace(choice.Message.Content)
-					// Extract key info from JSON tool results.
-					if strings.Contains(content, "\"score\":") {
-						// Parse score from JSON.
-						if scoreIdx := strings.Index(content, "\"score\":"); scoreIdx != -1 {
-							scoreSection := content[scoreIdx+8:]
-							if commaIdx := strings.Index(scoreSection, ","); commaIdx != -1 {
-								score := scoreSection[:commaIdx]
-								fmt.Printf("✅ Quality Score: %s/100\n", score)
-							}
-						}
-						if strings.Contains(content, "\"needs_improvement\":true") {
-							fmt.Printf("⚠️  Needs improvement - continuing iteration\n")
-						} else if strings.Contains(content, "\"needs_improvement\":false") {
-							fmt.Printf("🎉 Quality threshold met - cycle complete\n")
-						}
-					} else {
-						// Show short summary for other tools.
-						if len(content) > 100 {
-							content = content[:97] + "..."
-						}
-						fmt.Printf("✅ Tool result: %s\n", content)
-					}
-				}
-			}
-		}
-
-		// Process streaming content.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-			if choice.Delta.Content != "" {
-				if toolCallsActive {
-					toolCallsActive = false
-					fmt.Printf("\n%s (continued): ", c.getAgentEmoji(currentAgent))
-				}
-				fmt.Print(choice.Delta.Content)
-			}
+		if err := c.handleCycleEvent(event, &currentIteration, &currentAgent, &agentStarted, &toolCallsActive, &lastAgent, processedToolIDs); err != nil {
+			return err
 		}
 
 		// Check if this is the final runner completion event.
@@ -362,6 +272,158 @@ func (c *cycleChat) processStreamingResponse(eventChan <-chan *event.Event) erro
 
 	fmt.Printf("\n🏁 Cycle completed after %d iteration(s)\n", currentIteration+1)
 	return nil
+}
+
+// handleCycleEvent processes a single event from the cycle agent.
+func (c *cycleChat) handleCycleEvent(
+	event *event.Event,
+	currentIteration *int,
+	currentAgent *string,
+	agentStarted *bool,
+	toolCallsActive *bool,
+	lastAgent *string,
+	processedToolIDs map[string]bool,
+) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
+	}
+
+	// Handle agent transitions.
+	c.handleAgentTransition(event, currentIteration, currentAgent, agentStarted, toolCallsActive, lastAgent)
+
+	// Handle tool calls.
+	c.handleToolCalls(event, toolCallsActive)
+
+	// Handle tool responses.
+	c.handleToolResponses(event, processedToolIDs)
+
+	// Handle streaming content.
+	c.handleStreamingContent(event, currentAgent, toolCallsActive)
+
+	return nil
+}
+
+// handleAgentTransition manages agent switching and iteration detection.
+func (c *cycleChat) handleAgentTransition(
+	event *event.Event,
+	currentIteration *int,
+	currentAgent *string,
+	agentStarted *bool,
+	toolCallsActive *bool,
+	lastAgent *string,
+) {
+	if event.Author != *currentAgent {
+		if *agentStarted {
+			fmt.Printf("\n")
+		}
+
+		// Update lastAgent BEFORE checking for new iterations.
+		*lastAgent = *currentAgent
+
+		// Check if we're starting a new iteration (cycle back to generate-agent).
+		if event.Author == "generate-agent" && *lastAgent == "critic-agent" {
+			*currentIteration++
+			fmt.Printf("\n🔄 **Iteration %d**\n", *currentIteration+1)
+		}
+
+		*currentAgent = event.Author
+		*agentStarted = true
+		*toolCallsActive = false
+
+		// Display agent transition.
+		if *currentAgent != "" {
+			emoji := c.getAgentEmoji(*currentAgent)
+			agentTitle := strings.Title(strings.Replace(*currentAgent, "-", " ", -1))
+			fmt.Printf("\n%s %s: ", emoji, agentTitle)
+		}
+	}
+}
+
+// handleToolCalls detects and displays tool calls.
+func (c *cycleChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if !*toolCallsActive {
+			*toolCallsActive = true
+			fmt.Printf("\n🔧 Using tools:\n")
+			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+			}
+			fmt.Printf("🔄 Executing...\n")
+		}
+	}
+}
+
+// handleToolResponses processes tool responses and extracts quality metrics.
+func (c *cycleChat) handleToolResponses(event *event.Event, processedToolIDs map[string]bool) {
+	if event.Response != nil && len(event.Response.Choices) > 0 {
+		for _, choice := range event.Response.Choices {
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+				c.processToolResponse(choice, processedToolIDs)
+			}
+		}
+	}
+}
+
+// processToolResponse handles individual tool response processing.
+func (c *cycleChat) processToolResponse(choice model.Choice, processedToolIDs map[string]bool) {
+	// Skip if we've already processed this tool response.
+	if processedToolIDs[choice.Message.ToolID] {
+		return
+	}
+	processedToolIDs[choice.Message.ToolID] = true
+
+	content := strings.TrimSpace(choice.Message.Content)
+
+	// Extract key info from JSON tool results.
+	if strings.Contains(content, "\"score\":") {
+		c.processQualityScore(content)
+	} else {
+		// Show short summary for other tools.
+		c.displayToolSummary(content)
+	}
+}
+
+// processQualityScore extracts and displays quality score information.
+func (c *cycleChat) processQualityScore(content string) {
+	// Parse score from JSON.
+	if scoreIdx := strings.Index(content, "\"score\":"); scoreIdx != -1 {
+		scoreSection := content[scoreIdx+8:]
+		if commaIdx := strings.Index(scoreSection, ","); commaIdx != -1 {
+			score := scoreSection[:commaIdx]
+			fmt.Printf("✅ Quality Score: %s/100\n", score)
+		}
+	}
+
+	if strings.Contains(content, "\"needs_improvement\":true") {
+		fmt.Printf("⚠️  Needs improvement - continuing iteration\n")
+	} else if strings.Contains(content, "\"needs_improvement\":false") {
+		fmt.Printf("🎉 Quality threshold met - cycle complete\n")
+	}
+}
+
+// displayToolSummary shows a summary of tool results.
+func (c *cycleChat) displayToolSummary(content string) {
+	// Show short summary for other tools.
+	if len(content) > 100 {
+		content = content[:97] + "..."
+	}
+	fmt.Printf("✅ Tool result: %s\n", content)
+}
+
+// handleStreamingContent processes streaming content from agents.
+func (c *cycleChat) handleStreamingContent(event *event.Event, currentAgent *string, toolCallsActive *bool) {
+	if len(event.Choices) > 0 {
+		choice := event.Choices[0]
+		if choice.Delta.Content != "" {
+			if *toolCallsActive {
+				*toolCallsActive = false
+				fmt.Printf("\n%s (continued): ", c.getAgentEmoji(*currentAgent))
+			}
+			fmt.Print(choice.Delta.Content)
+		}
+	}
 }
 
 // getAgentEmoji returns an emoji for the agent based on its role.

@@ -50,7 +50,6 @@ func main() {
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
-	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -88,7 +87,7 @@ func (c *multiTurnChat) run() error {
 }
 
 // setup creates the runner with LLM agent and tools.
-func (c *multiTurnChat) setup(ctx context.Context) error {
+func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
@@ -162,7 +161,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /history  - Show conversation history")
 	fmt.Println("   /new      - Start a new session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
 
 	for {
@@ -228,69 +227,8 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 	)
 
 	for event := range eventChan {
-
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
-		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			toolCallsDetected = true
-			if assistantStarted {
-				fmt.Printf("\n")
-			}
-			fmt.Printf("🔧 CallableTool calls initiated:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
-				}
-			}
-			fmt.Printf("\n🔄 Executing tools...\n")
-		}
-
-		// Detect tool responses.
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			hasToolResponse := false
-			for _, choice := range event.Response.Choices {
-				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
-						choice.Message.ToolID,
-						strings.TrimSpace(choice.Message.Content))
-					hasToolResponse = true
-				}
-			}
-			if hasToolResponse {
-				continue
-			}
-		}
-
-		// Process content (streaming or non-streaming).
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-
-			// Handle content based on streaming mode.
-			var content string
-			if c.streaming {
-				// Streaming mode: use delta content.
-				content = choice.Delta.Content
-			} else {
-				// Non-streaming mode: use full message content.
-				content = choice.Message.Content
-			}
-
-			if content != "" {
-				if !assistantStarted {
-					if toolCallsDetected {
-						fmt.Printf("\n🤖 Assistant: ")
-					}
-					assistantStarted = true
-				}
-				fmt.Print(content)
-				fullContent += content
-			}
+		if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
+			return err
 		}
 
 		// Check if this is the final event.
@@ -302,6 +240,122 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 	}
 
 	return nil
+}
+
+// handleEvent processes a single event from the event channel.
+func (c *multiTurnChat) handleEvent(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
+	}
+
+	// Handle tool calls.
+	if c.handleToolCalls(event, toolCallsDetected, assistantStarted) {
+		return nil
+	}
+
+	// Handle tool responses.
+	if c.handleToolResponses(event) {
+		return nil
+	}
+
+	// Handle content.
+	c.handleContent(event, toolCallsDetected, assistantStarted, fullContent)
+
+	return nil
+}
+
+// handleToolCalls detects and displays tool calls.
+func (c *multiTurnChat) handleToolCalls(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+) bool {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		*toolCallsDetected = true
+		if *assistantStarted {
+			fmt.Printf("\n")
+		}
+		fmt.Printf("🔧 CallableTool calls initiated:\n")
+		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+			if len(toolCall.Function.Arguments) > 0 {
+				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+			}
+		}
+		fmt.Printf("\n🔄 Executing tools...\n")
+		return true
+	}
+	return false
+}
+
+// handleToolResponses detects and displays tool responses.
+func (c *multiTurnChat) handleToolResponses(event *event.Event) bool {
+	if event.Response != nil && len(event.Response.Choices) > 0 {
+		hasToolResponse := false
+		for _, choice := range event.Response.Choices {
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+					choice.Message.ToolID,
+					strings.TrimSpace(choice.Message.Content))
+				hasToolResponse = true
+			}
+		}
+		if hasToolResponse {
+			return true
+		}
+	}
+	return false
+}
+
+// handleContent processes and displays content.
+func (c *multiTurnChat) handleContent(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) {
+	if len(event.Choices) > 0 {
+		choice := event.Choices[0]
+		content := c.extractContent(choice)
+
+		if content != "" {
+			c.displayContent(content, toolCallsDetected, assistantStarted, fullContent)
+		}
+	}
+}
+
+// extractContent extracts content based on streaming mode.
+func (c *multiTurnChat) extractContent(choice model.Choice) string {
+	if c.streaming {
+		// Streaming mode: use delta content.
+		return choice.Delta.Content
+	}
+	// Non-streaming mode: use full message content.
+	return choice.Message.Content
+}
+
+// displayContent prints content to console.
+func (c *multiTurnChat) displayContent(
+	content string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) {
+	if !*assistantStarted {
+		if *toolCallsDetected {
+			fmt.Printf("\n🤖 Assistant: ")
+		}
+		*assistantStarted = true
+	}
+	fmt.Print(content)
+	*fullContent += content
 }
 
 // isToolEvent checks if an event is a tool response (not a final response).

@@ -28,19 +28,19 @@ This implementation showcases the essential features for building conversational
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
+| Variable          | Description                              | Default Value               |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
-| `-model` | Name of the model to use | `deepseek-chat` |
-| `-session` | Session service: `inmemory` or `redis` | `inmemory` |
+| Argument      | Description                                     | Default Value    |
+| ------------- | ----------------------------------------------- | ---------------- |
+| `-model`      | Name of the model to use                        | `deepseek-chat`  |
+| `-session`    | Session service: `inmemory` or `redis`          | `inmemory`       |
 | `-redis-addr` | Redis server address (when using redis session) | `localhost:6379` |
-| `-streaming` | Enable streaming mode for responses | `true` |
+| `-streaming`  | Enable streaming mode for responses             | `true`           |
 
 ## Usage
 
@@ -90,6 +90,7 @@ go run main.go -model gpt-4o -streaming=false -session redis
 ```
 
 **When to use each mode:**
+
 - **Streaming mode** (`-streaming=true`, default): Best for interactive chat where you want to see responses appear in real-time, providing immediate feedback and better user experience.
 - **Non-streaming mode** (`-streaming=false`): Better for automated scripts, batch processing, or when you need the complete response before processing it further.
 
@@ -102,6 +103,7 @@ go run main.go --help
 ```
 
 Output:
+
 ```
 Usage of ./runner:
   -model string
@@ -119,12 +121,14 @@ Usage of ./runner:
 The example includes two working tools:
 
 ### 🧮 Calculator Tool
+
 - **Function**: `calculator`
 - **Operations**: add, subtract, multiply, divide
-- **Usage**: "Calculate 15 * 25" or "What's 100 divided by 7?"
+- **Usage**: "Calculate 15 \* 25" or "What's 100 divided by 7?"
 - **Arguments**: operation (string), a (number), b (number)
 
-### 🕐 Time Tool  
+### 🕐 Time Tool
+
 - **Function**: `current_time`
 - **Timezones**: UTC, EST, PST, CST, or local time
 - **Usage**: "What time is it in EST?" or "Current time please"

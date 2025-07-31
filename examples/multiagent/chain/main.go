@@ -85,7 +85,7 @@ func (c *chainChat) run() error {
 }
 
 // setup creates the runner with chain agent and sub-agents.
-func (c *chainChat) setup(ctx context.Context) error {
+func (c *chainChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
@@ -223,69 +223,8 @@ func (c *chainChat) processStreamingResponse(eventChan <-chan *event.Event) erro
 	)
 
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
-		// Track which agent is currently active.
-		if event.Author != currentAgent {
-			if agentStarted {
-				fmt.Printf("\n")
-			}
-			currentAgent = event.Author
-			agentStarted = true
-			toolCallsActive = false
-
-			// Display agent transition.
-			switch currentAgent {
-			case "planning-agent":
-				fmt.Printf("📋 Planning Agent: ")
-			case "research-agent":
-				fmt.Printf("🔍 Research Agent: ")
-			case "writing-agent":
-				fmt.Printf("✍️  Writing Agent: ")
-			default:
-			}
-		}
-
-		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			if !toolCallsActive {
-				toolCallsActive = true
-				fmt.Printf("\n🔧 Using tools:\n")
-				for _, toolCall := range event.Choices[0].Message.ToolCalls {
-					fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-					if len(toolCall.Function.Arguments) > 0 {
-						fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
-					}
-				}
-				fmt.Printf("🔄 Executing...\n")
-			}
-		}
-
-		// Detect tool responses.
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			for _, choice := range event.Response.Choices {
-				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ Tool result (ID: %s): %s\n",
-						choice.Message.ToolID,
-						strings.TrimSpace(choice.Message.Content))
-				}
-			}
-		}
-
-		// Process streaming content.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-			if choice.Delta.Content != "" {
-				if toolCallsActive {
-					toolCallsActive = false
-					fmt.Printf("\n%s (continued): ", c.getAgentEmoji(currentAgent))
-				}
-				fmt.Print(choice.Delta.Content)
-			}
+		if err := c.handleChainEvent(event, &currentAgent, &agentStarted, &toolCallsActive); err != nil {
+			return err
 		}
 
 		// Check if this is the final runner completion event.
@@ -296,6 +235,117 @@ func (c *chainChat) processStreamingResponse(eventChan <-chan *event.Event) erro
 	}
 
 	return nil
+}
+
+// handleChainEvent processes a single event from the agent chain.
+func (c *chainChat) handleChainEvent(
+	event *event.Event,
+	currentAgent *string,
+	agentStarted *bool,
+	toolCallsActive *bool,
+) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
+	}
+
+	// Handle agent transitions.
+	c.handleAgentTransition(event, currentAgent, agentStarted, toolCallsActive)
+
+	// Handle tool calls.
+	c.handleToolCalls(event, toolCallsActive)
+
+	// Handle tool responses.
+	c.handleToolResponses(event)
+
+	// Handle streaming content.
+	c.handleStreamingContent(event, currentAgent, toolCallsActive)
+
+	return nil
+}
+
+// handleAgentTransition manages agent switching and display.
+func (c *chainChat) handleAgentTransition(
+	event *event.Event,
+	currentAgent *string,
+	agentStarted *bool,
+	toolCallsActive *bool,
+) {
+	if event.Author != *currentAgent {
+		if *agentStarted {
+			fmt.Printf("\n")
+		}
+		*currentAgent = event.Author
+		*agentStarted = true
+		*toolCallsActive = false
+
+		// Display agent transition.
+		c.displayAgentTransition(*currentAgent)
+	}
+}
+
+// displayAgentTransition shows the current agent with appropriate emoji.
+func (c *chainChat) displayAgentTransition(currentAgent string) {
+	switch currentAgent {
+	case "planning-agent":
+		fmt.Printf("📋 Planning Agent: ")
+	case "research-agent":
+		fmt.Printf("🔍 Research Agent: ")
+	case "writing-agent":
+		fmt.Printf("✍️  Writing Agent: ")
+	default:
+		// No display for unknown agents.
+	}
+}
+
+// handleToolCalls detects and displays tool calls.
+func (c *chainChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if !*toolCallsActive {
+			*toolCallsActive = true
+			fmt.Printf("\n🔧 Using tools:\n")
+			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+				if len(toolCall.Function.Arguments) > 0 {
+					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+				}
+			}
+			fmt.Printf("🔄 Executing...\n")
+		}
+	}
+}
+
+// handleToolResponses processes tool responses.
+func (c *chainChat) handleToolResponses(event *event.Event) {
+	if event.Response != nil && len(event.Response.Choices) > 0 {
+		for _, choice := range event.Response.Choices {
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+				c.displayToolResponse(choice)
+			}
+		}
+	}
+}
+
+// displayToolResponse shows tool response information.
+func (c *chainChat) displayToolResponse(choice model.Choice) {
+	fmt.Printf("✅ Tool result (ID: %s): %s\n",
+		choice.Message.ToolID,
+		strings.TrimSpace(choice.Message.Content))
+}
+
+// handleStreamingContent processes streaming content from agents.
+func (c *chainChat) handleStreamingContent(event *event.Event, currentAgent *string, toolCallsActive *bool) {
+	if len(event.Choices) > 0 {
+		choice := event.Choices[0]
+		if choice.Delta.Content != "" {
+			if *toolCallsActive {
+				*toolCallsActive = false
+				fmt.Printf("\n%s (continued): ", c.getAgentEmoji(*currentAgent))
+			}
+			fmt.Print(choice.Delta.Content)
+		}
+	}
 }
 
 // getAgentEmoji returns the appropriate emoji for the agent.

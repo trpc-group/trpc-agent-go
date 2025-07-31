@@ -80,7 +80,7 @@ func (c *multiToolChat) run() error {
 }
 
 // setup creates a runner containing multiple tools
-func (c *multiToolChat) setup(ctx context.Context) error {
+func (c *multiToolChat) setup(_ context.Context) error {
 	// Create OpenAI model
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 
