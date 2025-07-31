@@ -438,52 +438,36 @@ type FunctionDefinitionParam struct {
 	Arguments []byte `json:"arguments,omitempty"`
 }
 
+// toMIME maps file extensions to their corresponding MIME types.
+var toMIME = map[string]string{
+	".txt":  "text/plain",
+	".md":   "text/markdown",
+	".html": "text/html",
+	".json": "application/json",
+	".doc":  "application/msword",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	".pdf":  "application/pdf",
+	".c":    "text/x-c",
+	".cpp":  "text/x-c++",
+	".cs":   "text/x-csharp",
+	".java": "text/x-java",
+	".js":   "text/javascript",
+	".ts":   "application/typescript",
+	".py":   "text/x-python",
+	".rb":   "text/x-ruby",
+	".css":  "text/css",
+	".sh":   "application/x-sh",
+	".php":  "text/x-php",
+	".tex":  "text/x-tex",
+}
+
 // inferMimeType infers the MIME type from the file extension of the given path.
 // Returns the MIME type string, or an error if the extension is unknown.
 func inferMimeType(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".txt":
-		return "text/plain", nil
-	case ".md":
-		return "text/markdown", nil
-	case ".html":
-		return "text/html", nil
-	case ".json":
-		return "application/json", nil
-	case ".doc":
-		return "application/msword", nil
-	case ".docx":
-		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document", nil
-	case ".pptx":
-		return "application/vnd.openxmlformats-officedocument.presentationml.presentation", nil
-	case ".pdf":
-		return "application/pdf", nil
-	case ".c":
-		return "text/x-c", nil
-	case ".cpp":
-		return "text/x-c++", nil
-	case ".cs":
-		return "text/x-csharp", nil
-	case ".java":
-		return "text/x-java", nil
-	case ".js":
-		return "text/javascript", nil
-	case ".ts":
-		return "application/typescript", nil
-	case ".py":
-		return "text/x-python", nil
-	case ".rb":
-		return "text/x-ruby", nil
-	case ".css":
-		return "text/css", nil
-	case ".sh":
-		return "application/x-sh", nil
-	case ".php":
-		return "text/x-php", nil
-	case ".tex":
-		return "text/x-tex", nil
-	default:
-		return "", fmt.Errorf("unknown file extension: %s", ext)
+	if mime, ok := toMIME[ext]; ok {
+		return mime, nil
 	}
+	return "", fmt.Errorf("unknown file extension: %s", ext)
 }
