@@ -80,7 +80,6 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: knowledge_search, calculator, current_time\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -296,7 +295,7 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /history  - Show conversation history")
 	fmt.Println("   /new      - Start a new session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
 	fmt.Println("   - What is a Large Language Model?")

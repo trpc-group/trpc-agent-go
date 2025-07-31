@@ -42,22 +42,22 @@ func main() {
 	ctx := context.Background()
 
 	fmt.Println("=== Non-streaming Example ===")
-	if err := nonStreamingExample(ctx, llm, *modelName); err != nil {
+	if err := nonStreamingExample(ctx, llm); err != nil {
 		log.Printf("Non-streaming example failed: %v", err)
 	}
 
 	fmt.Println("\n=== Streaming Example ===")
-	if err := streamingExample(ctx, llm, *modelName); err != nil {
+	if err := streamingExample(ctx, llm); err != nil {
 		log.Printf("Streaming example failed: %v", err)
 	}
 
 	fmt.Println("\n=== Advanced Example with Parameters ===")
-	if err := advancedExample(ctx, llm, *modelName); err != nil {
+	if err := advancedExample(ctx, llm); err != nil {
 		log.Printf("Advanced example failed: %v", err)
 	}
 
 	fmt.Println("\n=== Parameter Testing Example ===")
-	if err := parameterTestingExample(ctx, llm, *modelName); err != nil {
+	if err := parameterTestingExample(ctx, llm); err != nil {
 		log.Printf("Parameter testing example failed: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func main() {
 }
 
 // nonStreamingExample demonstrates non-streaming usage.
-func nonStreamingExample(ctx context.Context, llm *openai.Model, modelName string) error {
+func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.7
 	maxTokens := 1000
 
@@ -116,7 +116,7 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model, modelName strin
 }
 
 // streamingExample demonstrates streaming usage.
-func streamingExample(ctx context.Context, llm *openai.Model, modelName string) error {
+func streamingExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.8
 	maxTokens := 500
 
@@ -167,7 +167,7 @@ func streamingExample(ctx context.Context, llm *openai.Model, modelName string) 
 }
 
 // advancedExample demonstrates advanced parameters and conversation.
-func advancedExample(ctx context.Context, llm *openai.Model, modelName string) error {
+func advancedExample(ctx context.Context, llm *openai.Model) error {
 	temperature := 0.3
 	maxTokens := 1000
 	topP := 0.9
@@ -231,7 +231,7 @@ func advancedExample(ctx context.Context, llm *openai.Model, modelName string) e
 }
 
 // parameterTestingExample demonstrates various parameter combinations.
-func parameterTestingExample(ctx context.Context, llm *openai.Model, modelName string) error {
+func parameterTestingExample(ctx context.Context, llm *openai.Model) error {
 	fmt.Println("Testing different parameter combinations...")
 
 	tests := []struct {
