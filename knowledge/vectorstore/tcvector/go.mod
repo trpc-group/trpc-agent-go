@@ -6,10 +6,13 @@ toolchain go1.24.4
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
+replace trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../../../storage/tcvector
+
 require (
 	github.com/stretchr/testify v1.10.0
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.0-00010101000000-000000000000
 )
 
 require (
