@@ -86,6 +86,7 @@ type Model struct {
 	chatRequestCallback  chatRequestCallbackFunc
 	chatResponseCallback chatResponseCallbackFunc
 	chatChunkCallback    chatChunkCallbackFunc
+	extraFields          map[string]interface{}
 }
 
 type chatRequestCallbackFunc func(ctx context.Context, chatRequest *openai.ChatCompletionNewParams)
@@ -102,6 +103,7 @@ type options struct {
 	ChatResponseCallback chatResponseCallbackFunc
 	ChatChunkCallback    chatChunkCallbackFunc
 	OpenAIOptions        []openaiopt.RequestOption
+	ExtraFields          map[string]interface{} // Extra fields to be added to HTTP body
 }
 
 // Option is a function that configures an OpenAI model.
@@ -178,6 +180,28 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 	}
 }
 
+// WithExtraFields sets extra fields to be added to the HTTP request body.
+// These fields will be included in every chat completion request.
+// E.g.:
+//
+//	WithExtraFields(map[string]interface{}{
+//		"custom_metadata": map[string]string{
+//			"session_id": "abc",
+//		},
+//	})
+//
+// and "session_id" : "abc" will be added to the HTTP request json body.
+func WithExtraFields(extraFields map[string]interface{}) Option {
+	return func(opts *options) {
+		if opts.ExtraFields == nil {
+			opts.ExtraFields = make(map[string]interface{})
+		}
+		for k, v := range extraFields {
+			opts.ExtraFields[k] = v
+		}
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{}
@@ -214,6 +238,7 @@ func New(name string, opts ...Option) *Model {
 		chatRequestCallback:  o.ChatRequestCallback,
 		chatResponseCallback: o.ChatResponseCallback,
 		chatChunkCallback:    o.ChatChunkCallback,
+		extraFields:          o.ExtraFields,
 	}
 }
 
@@ -273,6 +298,11 @@ func (m *Model) GenerateContent(
 	}
 	if request.ThinkingTokens != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingTokensKey, *request.ThinkingTokens))
+	}
+
+	// Add extra fields to the request
+	for key, value := range m.extraFields {
+		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
 
 	// Add streaming options if needed.
