@@ -847,9 +847,9 @@ func TestModel_CallbackAssignment(t *testing.T) {
 func TestModel_CallbackSignature(t *testing.T) {
 	t.Run("callback signature verification", func(t *testing.T) {
 		// Test that we can create callback functions with the correct signatures.
-		var requestCallback chatRequestCallbackFunc
-		var responseCallback chatResponseCallbackFunc
-		var chunkCallback chatChunkCallbackFunc
+		var requestCallback ChatRequestCallbackFunc
+		var responseCallback ChatResponseCallbackFunc
+		var chunkCallback ChatChunkCallbackFunc
 
 		// These assignments should compile without errors.
 		requestCallback = func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
