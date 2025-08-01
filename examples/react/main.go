@@ -79,7 +79,7 @@ func (c *reactPlanningChat) run() error {
 }
 
 // setup creates the runner with LLM agent and React planner.
-func (c *reactPlanningChat) setup(ctx context.Context) error {
+func (c *reactPlanningChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
 

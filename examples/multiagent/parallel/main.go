@@ -82,7 +82,7 @@ func (c *parallelChat) displayWelcomeMessage() {
 }
 
 // setup creates the runner with parallel agent and sub-agents.
-func (c *parallelChat) setup(ctx context.Context) error {
+func (c *parallelChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
 
