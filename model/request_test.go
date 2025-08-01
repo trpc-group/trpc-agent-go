@@ -211,79 +211,6 @@ func TestRequest_Validation(t *testing.T) {
 	}
 }
 
-func TestNewUserMessageWithContentParts(t *testing.T) {
-	// Test creating a user message with text content parts
-	textPart := ContentPart{
-		Type: "text",
-		Text: stringPtr("Hello, world!"),
-	}
-
-	contentParts := []ContentPart{textPart}
-	message := NewUserMessageWithContentParts(contentParts)
-
-	if message.Role != RoleUser {
-		t.Errorf("Expected role to be User, got %s", message.Role)
-	}
-
-	if len(message.ContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(message.ContentParts))
-	}
-
-	if message.ContentParts[0].Type != "text" {
-		t.Errorf("Expected content part type to be 'text', got %s", message.ContentParts[0].Type)
-	}
-
-	if *message.ContentParts[0].Text != "Hello, world!" {
-		t.Errorf("Expected text content to be 'Hello, world!', got %s", *message.ContentParts[0].Text)
-	}
-}
-
-func TestNewSystemMessageWithContentParts(t *testing.T) {
-	// Test creating a system message with text content parts
-	textPart := ContentPart{
-		Type: "text",
-		Text: stringPtr("You are a helpful assistant."),
-	}
-
-	contentParts := []ContentPart{textPart}
-	message := NewSystemMessageWithContentParts(contentParts)
-
-	if message.Role != RoleSystem {
-		t.Errorf("Expected role to be System, got %s", message.Role)
-	}
-
-	if len(message.ContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(message.ContentParts))
-	}
-
-	if message.ContentParts[0].Type != "text" {
-		t.Errorf("Expected content part type to be 'text', got %s", message.ContentParts[0].Type)
-	}
-}
-
-func TestNewAssistantMessageWithContentParts(t *testing.T) {
-	// Test creating an assistant message with text content parts
-	textPart := ContentPart{
-		Type: "text",
-		Text: stringPtr("I can help you with that."),
-	}
-
-	contentParts := []ContentPart{textPart}
-	message := NewAssistantMessageWithContentParts(contentParts)
-
-	if message.Role != RoleAssistant {
-		t.Errorf("Expected role to be Assistant, got %s", message.Role)
-	}
-
-	if len(message.ContentParts) != 1 {
-		t.Errorf("Expected 1 content part, got %d", len(message.ContentParts))
-	}
-
-	if message.ContentParts[0].Type != "text" {
-		t.Errorf("Expected content part type to be 'text', got %s", message.ContentParts[0].Type)
-	}
-}
-
 func TestContentPartWithImage(t *testing.T) {
 	// Test creating a content part with image
 	imagePart := ContentPart{
@@ -348,37 +275,6 @@ func TestContentPartWithFile(t *testing.T) {
 	}
 }
 
-func TestMessageWithMixedContentParts(t *testing.T) {
-	// Test creating a message with mixed content parts
-	textPart := ContentPart{
-		Type: "text",
-		Text: stringPtr("Please analyze this image:"),
-	}
-
-	imagePart := ContentPart{
-		Type: "image",
-		Image: &Image{
-			URL:    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-			Detail: "high",
-		},
-	}
-
-	contentParts := []ContentPart{textPart, imagePart}
-	message := NewUserMessageWithContentParts(contentParts)
-
-	if len(message.ContentParts) != 2 {
-		t.Errorf("Expected 2 content parts, got %d", len(message.ContentParts))
-	}
-
-	if message.ContentParts[0].Type != "text" {
-		t.Errorf("Expected first content part type to be 'text', got %s", message.ContentParts[0].Type)
-	}
-
-	if message.ContentParts[1].Type != "image" {
-		t.Errorf("Expected second content part type to be 'image', got %s", message.ContentParts[1].Type)
-	}
-}
-
 // Helper functions for test data
 func intPtr(i int) *int {
 	return &i
@@ -386,9 +282,4 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
-}
-
-// Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
 }
