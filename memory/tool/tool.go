@@ -59,7 +59,7 @@ func NewAddTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		addFunc,
-		function.WithName(string(memory.AddToolName)),
+		function.WithName(memory.AddToolName),
 		function.WithDescription("Add a new memory about the user. Use this tool to store "+
 			"important information about the user's preferences, background, or past interactions."),
 	)
@@ -104,7 +104,7 @@ func NewUpdateTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		updateFunc,
-		function.WithName(string(memory.UpdateToolName)),
+		function.WithName(memory.UpdateToolName),
 		function.WithDescription("Update an existing memory. Use this tool to modify stored "+
 			"information about the user."),
 	)
@@ -138,7 +138,7 @@ func NewDeleteTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		deleteFunc,
-		function.WithName(string(memory.DeleteToolName)),
+		function.WithName(memory.DeleteToolName),
 		function.WithDescription("Delete a specific memory. Use this tool to remove outdated "+
 			"or incorrect information about the user."),
 	)
@@ -166,7 +166,7 @@ func NewClearTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		clearFunc,
-		function.WithName(string(memory.ClearToolName)),
+		function.WithName(memory.ClearToolName),
 		function.WithDescription("Clear all memories for the user. Use this tool to reset the "+
 			"user's memory completely."),
 	)
@@ -212,7 +212,7 @@ func NewSearchTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName(string(memory.SearchToolName)),
+		function.WithName(memory.SearchToolName),
 		function.WithDescription("Search for relevant memories about the user. Use this tool to "+
 			"find stored information that matches the query."),
 	)
@@ -259,7 +259,7 @@ func NewLoadTool(service memory.Service) tool.CallableTool {
 
 	return function.NewFunctionTool(
 		loadFunc,
-		function.WithName(string(memory.LoadToolName)),
+		function.WithName(memory.LoadToolName),
 		function.WithDescription("Load recent memories about the user. Use this tool to retrieve "+
 			"stored information to provide context for the conversation."),
 	)

@@ -29,14 +29,11 @@ import (
 
 var _ memory.Service = (*MemoryService)(nil)
 
-// toolName is the type alias for memory tool names.
-type toolName = memory.ToolName
-
 // memoryToolCreator is a function that creates a tool given a memory service.
 type memoryToolCreator func(memory.Service) tool.Tool
 
 // defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = map[toolName]memoryToolCreator{
+var defaultEnabledTools = map[string]memoryToolCreator{
 	memory.AddToolName:    func(service memory.Service) tool.Tool { return memorytool.NewAddTool(service) },
 	memory.UpdateToolName: func(service memory.Service) tool.Tool { return memorytool.NewUpdateTool(service) },
 	memory.SearchToolName: func(service memory.Service) tool.Tool { return memorytool.NewSearchTool(service) },
@@ -66,9 +63,9 @@ type serviceOpts struct {
 	// memoryLimit is the limit of memories per user.
 	memoryLimit int
 	// toolCreators are functions to build tools after service creation.
-	toolCreators map[toolName]memoryToolCreator
+	toolCreators map[string]memoryToolCreator
 	// enabledTools are the names of tools to enable.
-	enabledTools map[toolName]bool
+	enabledTools map[string]bool
 }
 
 // MemoryService is an in-memory implementation of memory.Service.
@@ -80,15 +77,15 @@ type MemoryService struct {
 	// opts are the service options.
 	opts serviceOpts
 	// cachedTools caches created tools to avoid recreating them.
-	cachedTools map[toolName]tool.Tool
+	cachedTools map[string]tool.Tool
 }
 
 // NewMemoryService creates a new in-memory memory service.
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := serviceOpts{
 		memoryLimit:  defaultMemoryLimit,
-		toolCreators: make(map[toolName]memoryToolCreator),
-		enabledTools: make(map[toolName]bool),
+		toolCreators: make(map[string]memoryToolCreator),
+		enabledTools: make(map[string]bool),
 	}
 
 	// Enable default tools first.
@@ -105,7 +102,7 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	return &MemoryService{
 		apps:        make(map[string]*appMemories),
 		opts:        opts,
-		cachedTools: make(map[toolName]tool.Tool),
+		cachedTools: make(map[string]tool.Tool),
 	}
 }
 
@@ -121,7 +118,7 @@ func WithMemoryLimit(limit int) ServiceOpt {
 
 // WithCustomTool sets a custom memory tool implementation.
 // The tool will be enabled by default.
-func WithCustomTool(toolName memory.ToolName, creator memoryToolCreator) ServiceOpt {
+func WithCustomTool(toolName string, creator memoryToolCreator) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.toolCreators[toolName] = creator
 		opts.enabledTools[toolName] = true
@@ -129,7 +126,7 @@ func WithCustomTool(toolName memory.ToolName, creator memoryToolCreator) Service
 }
 
 // WithToolEnabled sets which tool is enabled.
-func WithToolEnabled(toolName memory.ToolName, enabled bool) ServiceOpt {
+func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.enabledTools[toolName] = enabled
 	}

@@ -360,7 +360,7 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 
 	return function.NewFunctionTool(
 		clearFunc,
-		function.WithName(string(memory.ClearToolName)),
+		function.WithName(memory.ClearToolName),
 		function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
 	)
 }

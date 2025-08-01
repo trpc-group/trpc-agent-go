@@ -345,10 +345,10 @@ func TestMemoryService_Tools(t *testing.T) {
 	// Register some tools.
 	service = NewMemoryService(
 		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
-			return &mockTool{name: string(memory.AddToolName)}
+			return &mockTool{name: memory.AddToolName}
 		}),
 		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
-			return &mockTool{name: string(memory.SearchToolName)}
+			return &mockTool{name: memory.SearchToolName}
 		}),
 	)
 	tools = service.Tools()
@@ -356,7 +356,7 @@ func TestMemoryService_Tools(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if !toolNames[string(memory.AddToolName)] || !toolNames[string(memory.SearchToolName)] {
+	if !toolNames[memory.AddToolName] || !toolNames[memory.SearchToolName] {
 		t.Errorf("expected enabled tools to be present")
 	}
 	// Should have 4 tools total (2 custom + 2 default enabled).
@@ -365,7 +365,7 @@ func TestMemoryService_Tools(t *testing.T) {
 	}
 
 	// Custom tool should be returned when provided.
-	custom := &mockTool{name: string(memory.AddToolName)}
+	custom := &mockTool{name: memory.AddToolName}
 	service = NewMemoryService(
 		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
 			return custom
@@ -374,7 +374,7 @@ func TestMemoryService_Tools(t *testing.T) {
 	tools = service.Tools()
 	found := false
 	for _, tool := range tools {
-		if tool.Declaration().Name == string(memory.AddToolName) {
+		if tool.Declaration().Name == memory.AddToolName {
 			if tool == custom {
 				found = true
 			}
@@ -387,10 +387,10 @@ func TestMemoryService_Tools(t *testing.T) {
 	// Test tool enable/disable functionality.
 	service = NewMemoryService(
 		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
-			return &mockTool{name: string(memory.AddToolName)}
+			return &mockTool{name: memory.AddToolName}
 		}),
 		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
-			return &mockTool{name: string(memory.SearchToolName)}
+			return &mockTool{name: memory.SearchToolName}
 		}),
 		WithToolEnabled(memory.AddToolName, false),
 	)
@@ -399,23 +399,23 @@ func TestMemoryService_Tools(t *testing.T) {
 	for _, tool := range tools {
 		toolNames[tool.Declaration().Name] = true
 	}
-	if toolNames[string(memory.AddToolName)] {
+	if toolNames[memory.AddToolName] {
 		t.Errorf("expected %s to be disabled", memory.AddToolName)
 	}
-	if !toolNames[string(memory.SearchToolName)] {
+	if !toolNames[memory.SearchToolName] {
 		t.Errorf("expected %s to be enabled", memory.SearchToolName)
 	}
 
 	// Test tool builder functionality.
 	service = NewMemoryService(
 		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
-			return &mockTool{name: string(memory.AddToolName) + "_built"}
+			return &mockTool{name: memory.AddToolName + "_built"}
 		}),
 	)
 	tools = service.Tools()
 	found = false
 	for _, tool := range tools {
-		if tool.Declaration().Name == string(memory.AddToolName)+"_built" {
+		if tool.Declaration().Name == memory.AddToolName+"_built" {
 			found = true
 			break
 		}
