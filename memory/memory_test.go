@@ -65,12 +65,12 @@ func TestGenerateInstruction_Dynamic(t *testing.T) {
 		{
 			name: "all tools enabled",
 			tools: []tool.Tool{
-				&mockTool{name: AddToolName},
-				&mockTool{name: SearchToolName},
-				&mockTool{name: LoadToolName},
-				&mockTool{name: UpdateToolName},
-				&mockTool{name: DeleteToolName},
-				&mockTool{name: ClearToolName},
+				&mockTool{name: string(AddToolName)},
+				&mockTool{name: string(SearchToolName)},
+				&mockTool{name: string(LoadToolName)},
+				&mockTool{name: string(UpdateToolName)},
+				&mockTool{name: string(DeleteToolName)},
+				&mockTool{name: string(ClearToolName)},
 			},
 			expected: []string{
 				"memory_add",
@@ -84,8 +84,8 @@ func TestGenerateInstruction_Dynamic(t *testing.T) {
 		{
 			name: "only add and search",
 			tools: []tool.Tool{
-				&mockTool{name: AddToolName},
-				&mockTool{name: SearchToolName},
+				&mockTool{name: string(AddToolName)},
+				&mockTool{name: string(SearchToolName)},
 			},
 			expected: []string{
 				"memory_add",
@@ -120,7 +120,7 @@ func TestGenerateInstruction_Dynamic(t *testing.T) {
 
 				// Check for specific tool guidance.
 				for _, tool := range tt.tools {
-					switch tool.Declaration().Name {
+					switch ToolName(tool.Declaration().Name) {
 					case SearchToolName:
 						if !strings.Contains(instruction, "memory_search") {
 							t.Error("Instruction should contain search guidance")

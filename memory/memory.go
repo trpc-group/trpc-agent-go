@@ -21,14 +21,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// ToolName represents a memory tool name.
+type ToolName string
+
 // Tool names for memory tools.
 const (
-	AddToolName    = "memory_add"
-	UpdateToolName = "memory_update"
-	DeleteToolName = "memory_delete"
-	ClearToolName  = "memory_clear"
-	SearchToolName = "memory_search"
-	LoadToolName   = "memory_load"
+	AddToolName    ToolName = "memory_add"
+	UpdateToolName ToolName = "memory_update"
+	DeleteToolName ToolName = "memory_delete"
+	ClearToolName  ToolName = "memory_clear"
+	SearchToolName ToolName = "memory_search"
+	LoadToolName   ToolName = "memory_load"
 )
 
 var (
@@ -172,7 +175,7 @@ Examples of when to use memory_add:
 
 	// Add tool-specific instructions based on enabled tools.
 	for _, toolName := range enabledTools {
-		switch toolName {
+		switch ToolName(toolName) {
 		case AddToolName:
 			// Already covered in the main instruction.
 		case SearchToolName:
