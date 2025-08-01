@@ -113,7 +113,6 @@ agent := llmagent.New(
     llmagent.WithDescription("An advanced AI assistant"),
     llmagent.WithInstruction("Your agent instruction"),
     llmagent.WithSystemPrompt("Your system prompt"),
-    llmagent.WithChannelBufferSize(50),
     llmagent.WithTools(tools),
     llmagent.WithPlanner(planner),
 )

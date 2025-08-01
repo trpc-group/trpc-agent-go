@@ -81,7 +81,7 @@ func (c *transferChat) run() error {
 // setup creates the runner with main agent and sub-agents.
 func (c *transferChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create sub-agents.
 	mathAgent := c.createMathAgent(modelInstance)
@@ -132,7 +132,6 @@ func (c *transferChat) createMathAgent(modelInstance model.Model) agent.Agent {
 		llmagent.WithDescription("A specialized mathematical computation agent"),
 		llmagent.WithInstruction("You are a math expert. Solve mathematical problems step by step with clear explanations."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{calculateTool}),
 	)
 }
@@ -158,7 +157,6 @@ func (c *transferChat) createWeatherAgent(modelInstance model.Model) agent.Agent
 		llmagent.WithDescription("A specialized weather information agent"),
 		llmagent.WithInstruction("You are a weather expert. Provide detailed weather information and recommendations."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{weatherTool}),
 	)
 }
@@ -185,7 +183,6 @@ func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agen
 		llmagent.WithInstruction("You are a research expert. "+
 			"Gather comprehensive information and provide well-structured answers."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool}),
 	)
 }
@@ -215,7 +212,6 @@ When a user asks a question:
 
 Always explain why you're transferring to a specific agent.`),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(200),
 		llmagent.WithSubAgents(subAgents),
 	)
 }

@@ -81,7 +81,7 @@ func (c *agentToolChat) run() error {
 // setup creates the runner with LLM agent and tools including agent tools.
 func (c *agentToolChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create tools.
 	calculatorTool := function.NewFunctionTool(
@@ -103,7 +103,6 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			Temperature: floatPtr(0.3),
 			Stream:      true,
 		}),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
 	)
 
@@ -136,7 +135,6 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			"complex mathematical operations. For complex math problems, use the math-specialist agent tool. "+
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{timeTool, agentTool}),
 	)
 

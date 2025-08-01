@@ -87,7 +87,7 @@ func (c *chainChat) run() error {
 // setup creates the runner with chain agent and sub-agents.
 func (c *chainChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
+	modelInstance := openai.New(c.modelName)
 
 	// Create shared tools for research agent.
 	webSearchTool := function.NewFunctionTool(
@@ -115,7 +115,6 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Analyzes user requests and creates structured plans"),
 		llmagent.WithInstruction("You are a planning specialist. Analyze the user's request and create a brief, structured plan (2-3 steps max). Be concise and specific about what needs to be done. Keep your response under 100 words."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 	)
 
 	// Create Research Agent with tools.
@@ -125,7 +124,6 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Gathers information using available tools and resources"),
 		llmagent.WithInstruction("You are a research specialist. Use the available tools to gather key information. Be concise and fact-based. Keep your response under 150 words."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
 	)
 
@@ -136,7 +134,6 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Composes final responses based on planning and research"),
 		llmagent.WithInstruction("You are a writing specialist. Create a brief, well-structured response based on the plan and research from previous agents. Be clear and concise. Keep your response under 200 words."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 	)
 
 	// Create Chain Agent with sub-agents.
@@ -144,7 +141,6 @@ func (c *chainChat) setup(_ context.Context) error {
 		"multi-agent-chain",
 		chainagent.WithSubAgents([]agent.Agent{planningAgent, researchAgent, writingAgent}),
 		chainagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
-		chainagent.WithChannelBufferSize(defaultChannelBufferSize),
 	)
 
 	// Create runner with the chain agent.

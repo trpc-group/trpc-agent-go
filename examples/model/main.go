@@ -37,7 +37,7 @@ func main() {
 
 	// Create a new OpenAI-like model instance.
 	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	llm := openai.New(*modelName, openai.WithChannelBufferSize(512))
+	llm := openai.New(*modelName)
 
 	ctx := context.Background()
 

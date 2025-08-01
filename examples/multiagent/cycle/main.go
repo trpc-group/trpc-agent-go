@@ -92,7 +92,7 @@ func (c *cycleChat) run() error {
 // setup creates the runner with cycle agent and sub-agents.
 func (c *cycleChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
+	modelInstance := openai.New(c.modelName)
 
 	// Create shared tools for the cycle.
 	scoreTool := function.NewFunctionTool(
@@ -120,7 +120,6 @@ func (c *cycleChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Generates content based on user prompts and improvement feedback"),
 		llmagent.WithInstruction("You are a creative content generator. Create high-quality content based on the user's request. If this is a refinement iteration, incorporate the critic's feedback to improve your previous output. Be creative, specific, and engaging. Keep responses concise but complete."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{solutionTool}), // Can store iterations
 	)
 
@@ -131,7 +130,6 @@ func (c *cycleChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Critically evaluates generated content and provides improvement feedback"),
 		llmagent.WithInstruction("You are a critical evaluator. Carefully assess the generated content for quality, creativity, completeness, and engagement. Give a score from 0-100 and decide if it needs improvement (scores below 82 need improvement). Always use the record_score tool to formally record your decision. Provide specific, actionable feedback for improvements when needed."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{scoreTool}),
 	)
 
@@ -174,7 +172,6 @@ func (c *cycleChat) setup(_ context.Context) error {
 		cycleagent.WithSubAgents([]agent.Agent{generateAgent, criticAgent}),
 		cycleagent.WithTools([]tool.Tool{scoreTool, solutionTool}),
 		cycleagent.WithMaxIterations(*maxIterPtr),
-		cycleagent.WithChannelBufferSize(defaultChannelBufferSize),
 		cycleagent.WithEscalationFunc(qualityEscalationFunc),
 	)
 

@@ -72,7 +72,7 @@ func main() {
 
 func buildCodeCheckAgent(modelName string) agent.Agent {
 	// Create OpenAI model.
-	modelInstance := openai.New(modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(modelName)
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -93,7 +93,6 @@ func buildCodeCheckAgent(modelName string) agent.Agent {
 		llmagent.WithDescription("A agent that can analyze code and check code quality by Go Language Standard"),
 		llmagent.WithInstruction("Analyze the code and check code quality by Go Language Standard"),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{readSpecTool}),
 	)
 

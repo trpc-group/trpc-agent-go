@@ -120,7 +120,7 @@ func (c *knowledgeChat) run() error {
 // setup creates the runner with LLM agent, knowledge base, and tools.
 func (c *knowledgeChat) setup(ctx context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openaimodel.New(c.modelName, openaimodel.WithChannelBufferSize(512))
+	modelInstance := openaimodel.New(c.modelName)
 
 	// Create knowledge base with sample documents.
 	if err := c.setupKnowledgeBase(ctx); err != nil {
@@ -153,7 +153,6 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithDescription("A helpful AI assistant with knowledge base access and calculator tools"),
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Use calculator and current_time tools when appropriate. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
 	)

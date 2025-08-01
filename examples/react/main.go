@@ -81,7 +81,7 @@ func (c *reactPlanningChat) run() error {
 // setup creates the runner with LLM agent and React planner.
 func (c *reactPlanningChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create tools for demonstration.
 	searchTool := function.NewFunctionTool(
@@ -118,7 +118,6 @@ func (c *reactPlanningChat) setup(_ context.Context) error {
 		llmagent.WithInstruction("You are a helpful research assistant. "+
 			"Use the React planning approach to break down complex questions into manageable steps."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(200),
 		llmagent.WithTools([]tool.Tool{searchTool, calculatorTool, weatherTool}),
 		llmagent.WithPlanner(reactPlanner),
 	)

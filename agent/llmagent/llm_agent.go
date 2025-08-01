@@ -32,6 +32,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
+var defaultChannelBufferSize = 256
+
 // Option is a function that configures an LLMAgent.
 type Option func(*Options)
 
@@ -207,7 +209,7 @@ type LLMAgent struct {
 
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
-	var options Options
+	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
 
 	// Apply function options.
 	for _, opt := range opts {

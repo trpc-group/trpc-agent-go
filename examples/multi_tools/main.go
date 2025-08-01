@@ -83,7 +83,7 @@ func (c *multiToolChat) run() error {
 // setup creates a runner containing multiple tools
 func (c *multiToolChat) setup(_ context.Context) error {
 	// Create OpenAI model
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create various tools
 	tools := []tool.Tool{
@@ -115,7 +115,6 @@ func (c *multiToolChat) setup(_ context.Context) error {
 
 		// Please select the appropriate tool based on user needs and provide helpful assistance.`),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(tools),
 	)
 

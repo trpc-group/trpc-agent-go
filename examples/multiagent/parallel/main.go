@@ -84,7 +84,7 @@ func (c *parallelChat) displayWelcomeMessage() {
 // setup creates the runner with parallel agent and sub-agents.
 func (c *parallelChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
+	modelInstance := openai.New(c.modelName)
 
 	// Create generation config.
 	// Note: Streaming disabled for parallel agents to avoid character-level interleaving
@@ -101,7 +101,6 @@ func (c *parallelChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Analyzes market trends, size, competition, and dynamics"),
 		llmagent.WithInstruction("You are a Market Analysis specialist. Analyze the market perspective of the given topic. Focus on: market size and growth, competitive landscape, industry trends, customer demand, market positioning, and economic factors. Provide concrete data points where possible. Be analytical but concise. End with 'Market analysis complete.'"),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{}),
 	)
 
@@ -112,7 +111,6 @@ func (c *parallelChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Evaluates technical feasibility, requirements, and implementation"),
 		llmagent.WithInstruction("You are a Technical Assessment specialist. Evaluate the technical aspects of the given topic. Focus on: technical feasibility, implementation requirements, technology stack, infrastructure needs, scalability considerations, integration challenges, and technical best practices. Be specific about technical details. End with 'Technical assessment complete.'"),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{}),
 	)
 
@@ -123,7 +121,6 @@ func (c *parallelChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Identifies risks, challenges, and mitigation strategies"),
 		llmagent.WithInstruction("You are a Risk Evaluation specialist. Identify and assess risks related to the given topic. Focus on: potential risks and challenges, regulatory compliance, security concerns, operational risks, financial risks, timeline risks, and mitigation strategies. Prioritize risks by severity and likelihood. End with 'Risk evaluation complete.'"),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{}),
 	)
 
@@ -134,7 +131,6 @@ func (c *parallelChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Analyzes opportunities, benefits, and potential returns"),
 		llmagent.WithInstruction("You are an Opportunity Analysis specialist. Identify opportunities and benefits related to the given topic. Focus on: strategic advantages, cost savings, revenue opportunities, efficiency gains, competitive advantages, innovation potential, and ROI projections. Quantify benefits where possible. End with 'Opportunity analysis complete.'"),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(50),
 		llmagent.WithTools([]tool.Tool{}),
 	)
 
@@ -142,7 +138,6 @@ func (c *parallelChat) setup(_ context.Context) error {
 	parallelAgent := parallelagent.New(
 		"parallel-demo",
 		parallelagent.WithSubAgents([]agent.Agent{marketAgent, technicalAgent, riskAgent, opportunityAgent}),
-		parallelagent.WithChannelBufferSize(defaultChannelBufferSize),
 	)
 
 	// Create runner with the parallel agent.
