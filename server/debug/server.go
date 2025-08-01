@@ -282,7 +282,7 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 		attr := iter.Attribute()
 		if attr.Key == keyLLMRequest {
 			var req model.Request
-			if err := json.Unmarshal([]byte(attr.Value.AsString()), &req); err != nil {
+			if err := json.Unmarshal([]byte(attr.Value.AsString()), &req); err == nil {
 				var contents []schema.Content
 				for _, c := range req.Messages {
 					contents = append(contents, schema.Content{
@@ -297,9 +297,9 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 				result[string(attr.Key)] = schema.TraceLLMRequest{
 					Contents: contents,
 				}
-			} else {
-				result[string(attr.Key)] = attr.Value.AsString()
 			}
+		} else {
+			result[string(attr.Key)] = attr.Value.AsString()
 		}
 	}
 	return result
