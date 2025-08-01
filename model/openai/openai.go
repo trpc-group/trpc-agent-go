@@ -524,9 +524,15 @@ func (m *Model) handleStreamingResponse(
 
 		if len(acc.Choices) > 0 && len(acc.Choices[0].Message.ToolCalls) > 0 {
 			hasToolCall = true
-			accumulatedToolCalls = make([]model.ToolCall, len(acc.Choices[0].Message.ToolCalls))
+			accumulatedToolCalls = make([]model.ToolCall, 0, len(acc.Choices[0].Message.ToolCalls))
 
 			for i, toolCall := range acc.Choices[0].Message.ToolCalls {
+				// if openai return function tool call start with index 1 or more
+				// ChatCompletionAccumulator will return empty tool call for index like 0, skip it.
+				if toolCall.Function.Name == "" && toolCall.ID == "" {
+					continue
+				}
+
 				// Use the original index from ID->Index mapping if available, otherwise use loop index.
 				originalIndex := i
 				if toolCall.ID != "" {
@@ -535,7 +541,7 @@ func (m *Model) handleStreamingResponse(
 					}
 				}
 
-				accumulatedToolCalls[i] = model.ToolCall{
+				accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
 					Index: func() *int { idx := originalIndex; return &idx }(),
 					ID:    toolCall.ID,
 					Type:  functionToolType, // openapi only supports a function type for now.
@@ -543,7 +549,7 @@ func (m *Model) handleStreamingResponse(
 						Name:      toolCall.Function.Name,
 						Arguments: []byte(toolCall.Function.Arguments),
 					},
-				}
+				})
 			}
 		}
 
