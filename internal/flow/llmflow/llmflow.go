@@ -100,14 +100,25 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
-				// Send error event through channel instead of just logging.
-				errorEvent := event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					model.ErrorTypeFlowError,
-					err.Error(),
-				)
-				log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
+				var errorEvent *event.Event
+				if _, ok := agent.AsStopError(err); ok {
+					errorEvent = event.NewErrorEvent(
+						invocation.InvocationID,
+						invocation.AgentName,
+						agent.ErrorTypeStopAgentError,
+						err.Error(),
+					)
+					log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)
+				} else {
+					// Send error event through channel instead of just logging.
+					errorEvent = event.NewErrorEvent(
+						invocation.InvocationID,
+						invocation.AgentName,
+						model.ErrorTypeFlowError,
+						err.Error(),
+					)
+					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
+				}
 
 				select {
 				case eventChan <- errorEvent:
@@ -164,6 +175,10 @@ func (f *Flow) runOneStep(
 	for response := range responseChan {
 		customResp, err := runAfterModelCallbacks(ctx, invocation, llmRequest, response)
 		if err != nil {
+			if _, ok := agent.AsStopError(err); ok {
+				return nil, err
+			}
+
 			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
 			lastEvent := event.NewErrorEvent(
 				invocation.InvocationID,
@@ -362,13 +377,16 @@ func (f *Flow) handleFunctionCalls(
 	// Execute each tool call.
 	toolCalls := functionCallEvent.Response.Choices[0].Message.ToolCalls
 	for i, toolCall := range toolCalls {
-		func(index int, toolCall model.ToolCall) {
+		if err := func(index int, toolCall model.ToolCall) error {
 			ctxWithInvocation, span := trace.Tracer.Start(ctx,
 				fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name))
 			defer span.End()
-			choice := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
+			choice, err := f.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
+			if err != nil {
+				return err
+			}
 			if choice == nil {
-				return
+				return nil
 			}
 			choice.Message.ToolName = toolCall.Function.Name
 			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*choice})
@@ -384,7 +402,10 @@ func (f *Flow) handleFunctionCalls(
 				declaration = tl.Declaration()
 			}
 			itelemetry.TraceToolCall(span, declaration, toolCall.Function.Arguments, toolCallResponseEvent)
-		}(i, toolCall)
+			return nil
+		}(i, toolCall); err != nil {
+			return nil, err
+		}
 	}
 
 	var mergedEvent *event.Event
@@ -431,12 +452,12 @@ func (f *Flow) executeToolCall(
 	toolCall model.ToolCall,
 	tools map[string]tool.Tool,
 	index int,
-) *model.Choice {
+) (*model.Choice, error) {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
 		log.Errorf("CallableTool %s not found", toolCall.Function.Name)
-		return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound)
+		return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), nil
 	}
 
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
@@ -444,12 +465,15 @@ func (f *Flow) executeToolCall(
 	// Execute the tool with callbacks.
 	result, err := f.executeToolWithCallbacks(ctx, invocation, toolCall, tl)
 	if err != nil {
-		return f.createErrorChoice(index, toolCall.ID, err.Error())
+		if _, ok := agent.AsStopError(err); ok {
+			return nil, err
+		}
+		return f.createErrorChoice(index, toolCall.ID, err.Error()), nil
 	}
 	//  allow to return nil not provide function response.
 	if r, ok := tl.(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
-			return nil
+			return nil, nil
 		}
 	}
 
@@ -457,7 +481,7 @@ func (f *Flow) executeToolCall(
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return f.createErrorChoice(index, toolCall.ID, ErrorMarshalResult)
+		return f.createErrorChoice(index, toolCall.ID, ErrorMarshalResult), nil
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
@@ -469,7 +493,7 @@ func (f *Flow) executeToolCall(
 			Content: string(resultBytes),
 			ToolID:  toolCall.ID,
 		},
-	}
+	}, nil
 }
 
 // executeToolWithCallbacks executes a tool with before/after callbacks.
