@@ -28,7 +28,7 @@ cd adk-web
 npm install
 
 # Point the UI to our Go backend
-npm run serve --backend=http://localhost:8080
+npm run serve --backend=http://localhost:8080 -- --port=4200 --host=localhost
 ```
 
 Open <http://localhost:4200> in your browser.  In the left sidebar choose the
