@@ -10,6 +10,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
 
 require (
@@ -101,4 +102,5 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.0-00010101000000-000000000000 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.0-00010101000000-000000000000 // indirect
 )
