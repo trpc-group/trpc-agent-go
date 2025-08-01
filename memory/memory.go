@@ -208,3 +208,19 @@ making future interactions more personalized and contextually relevant.`
 
 	return instruction
 }
+
+// validToolNames contains all valid memory tool names.
+var validToolNames = map[string]struct{}{
+	AddToolName:    {},
+	UpdateToolName: {},
+	DeleteToolName: {},
+	ClearToolName:  {},
+	SearchToolName: {},
+	LoadToolName:   {},
+}
+
+// IsValidToolName checks if the given tool name is valid.
+func IsValidToolName(toolName string) bool {
+	_, ok := validToolNames[toolName]
+	return ok
+}

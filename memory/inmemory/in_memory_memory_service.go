@@ -118,16 +118,26 @@ func WithMemoryLimit(limit int) ServiceOpt {
 
 // WithCustomTool sets a custom memory tool implementation.
 // The tool will be enabled by default.
+// If the tool name is invalid, this option will do nothing.
 func WithCustomTool(toolName string, creator memoryToolCreator) ServiceOpt {
 	return func(opts *serviceOpts) {
+		// If the tool name is invalid, do nothing.
+		if !memory.IsValidToolName(toolName) {
+			return
+		}
 		opts.toolCreators[toolName] = creator
 		opts.enabledTools[toolName] = true
 	}
 }
 
 // WithToolEnabled sets which tool is enabled.
+// If the tool name is invalid, this option will do nothing.
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
+		// If the tool name is invalid, do nothing.
+		if !memory.IsValidToolName(toolName) {
+			return
+		}
 		opts.enabledTools[toolName] = enabled
 	}
 }

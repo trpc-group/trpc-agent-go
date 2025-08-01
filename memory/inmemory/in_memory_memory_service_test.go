@@ -441,3 +441,63 @@ func TestMemoryService_Tools(t *testing.T) {
 type mockTool struct{ name string }
 
 func (m *mockTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: m.name} }
+
+func TestMemoryService_ToolNameValidation(t *testing.T) {
+	// Test that valid tool names work correctly.
+	service := NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.AddToolName}
+		}),
+		WithToolEnabled(memory.SearchToolName, true),
+	)
+	tools := service.Tools()
+	toolNames := map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	if !toolNames[memory.AddToolName] {
+		t.Errorf("expected valid tool name %s to be registered", memory.AddToolName)
+	}
+
+	// Test that invalid tool names are ignored.
+	service = NewMemoryService(
+		WithCustomTool("invalid_tool_name", func(s memory.Service) tool.Tool {
+			return &mockTool{name: "invalid_tool_name"}
+		}),
+		WithToolEnabled("another_invalid_name", true),
+	)
+	tools = service.Tools()
+	toolNames = map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	if toolNames["invalid_tool_name"] {
+		t.Errorf("expected invalid tool name to be ignored")
+	}
+
+	// Test that mixed valid and invalid tool names work correctly.
+	service = NewMemoryService(
+		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+			return &mockTool{name: memory.AddToolName}
+		}),
+		WithCustomTool("invalid_tool", func(s memory.Service) tool.Tool {
+			return &mockTool{name: "invalid_tool"}
+		}),
+		WithToolEnabled(memory.SearchToolName, true),
+		WithToolEnabled("invalid_enable", true),
+	)
+	tools = service.Tools()
+	toolNames = map[string]bool{}
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	if !toolNames[memory.AddToolName] {
+		t.Errorf("expected valid tool name %s to be registered", memory.AddToolName)
+	}
+	if toolNames["invalid_tool"] {
+		t.Errorf("expected invalid tool name to be ignored")
+	}
+	if toolNames["invalid_enable"] {
+		t.Errorf("expected invalid tool name in WithToolEnabled to be ignored")
+	}
+}
