@@ -34,9 +34,6 @@ go run main.go -text "Analyze this image" -image path/to/image.png
 
 # Custom model and streaming options
 go run main.go -model gpt-4 -text "Hello" -streaming=false
-
-# Specify API key via command line
-go run main.go -api-key "your-key" -text "Hello"
 ```
 
 ## Command Line Flags
@@ -47,7 +44,6 @@ go run main.go -api-key "your-key" -text "Hello"
 - `-audio`: Path to audio file (supports: wav)
 - `-file`: Path to any file for upload and analysis
 - `-streaming`: Enable/disable streaming mode (default: true)
-- `-api-key`: OpenAI API key (or set OPENAI_API_KEY environment variable)
 
 ## Architecture
 
@@ -122,17 +118,13 @@ The example includes comprehensive error handling for:
 
 ## API Key Configuration
 
-You can provide your OpenAI API key in two ways:
+You can provide your OpenAI API key in the following ways:
 
-1. **Environment Variable** (recommended):
+**Environment Variable**:
    ```bash
    export OPENAI_API_KEY="your-api-key-here"
    ```
 
-2. **Command Line Flag**:
-   ```bash
-   go run main.go -api-key "your-api-key-here" -text "Hello"
-   ```
 
 ## Streaming vs Non-Streaming
 
