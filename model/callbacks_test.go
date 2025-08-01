@@ -166,3 +166,22 @@ func TestModelCallbacks_Multi(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, "first", resp.ID)
 }
+
+func TestCallbacksChainRegistration(t *testing.T) {
+	// Test chain registration.
+	callbacks := NewCallbacks().
+		RegisterBeforeModel(func(ctx context.Context, req *Request) (*Response, error) {
+			return nil, nil
+		}).
+		RegisterAfterModel(func(ctx context.Context, req *Request, rsp *Response, modelErr error) (*Response, error) {
+			return nil, nil
+		})
+
+	// Verify that both callbacks were registered.
+	if len(callbacks.BeforeModel) != 1 {
+		t.Errorf("Expected 1 before model callback, got %d", len(callbacks.BeforeModel))
+	}
+	if len(callbacks.AfterModel) != 1 {
+		t.Errorf("Expected 1 after model callback, got %d", len(callbacks.AfterModel))
+	}
+}
