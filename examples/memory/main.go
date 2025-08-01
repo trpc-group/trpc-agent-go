@@ -28,13 +28,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
-	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 )
 
 var (
@@ -352,10 +352,10 @@ func (c *memoryChat) startNewSession() {
 }
 
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-	clearFunc := func(ctx context.Context, _ struct{}) (*toolmemory.ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ struct{}) (*memorytool.ClearMemoryResponse, error) {
 		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
 		// Get appName and userID from context.
-		appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+		appName, userID, err := memorytool.GetAppAndUserFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
 		}
@@ -366,7 +366,7 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 			return nil, fmt.Errorf("failed to clear memories: %v", err)
 		}
 
-		return &toolmemory.ClearMemoryResponse{
+		return &memorytool.ClearMemoryResponse{
 			Message: "🎉 All memories cleared successfully with custom magic! ✨",
 		}, nil
 	}

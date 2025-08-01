@@ -9,8 +9,8 @@
 // A copy of the Apache 2.0 License is included in this file.
 //
 
-// Package memory provides memory-related tools for the agent system.
-package memory
+// Package tool provides memory-related tools for the agent system.
+package tool
 
 import (
 	"context"
@@ -22,30 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
-
-// GetAppAndUserFromContext extracts appName and userID from the context.
-// This function looks for these values in the agent invocation context.
-func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
-	// Try to get from agent invocation context.
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if !ok || invocation == nil {
-		return "", "", errors.New("no invocation context found")
-	}
-
-	// Try to get from session.
-	if invocation.Session == nil {
-		return "", "", errors.New("invocation exists but no session available")
-	}
-
-	// Session has AppName and UserID fields.
-	if invocation.Session.AppName != "" && invocation.Session.UserID != "" {
-		return invocation.Session.AppName, invocation.Session.UserID, nil
-	}
-
-	// Return error if session exists but missing required fields.
-	return "", "", fmt.Errorf("session exists but missing appName or userID: appName=%s, userID=%s",
-		invocation.Session.AppName, invocation.Session.UserID)
-}
 
 // Memory function implementations using function.NewFunctionTool.
 
@@ -287,4 +263,28 @@ func NewLoadTool(service memory.Service) tool.CallableTool {
 		function.WithDescription("Load recent memories about the user. Use this tool to retrieve "+
 			"stored information to provide context for the conversation."),
 	)
+}
+
+// GetAppAndUserFromContext extracts appName and userID from the context.
+// This function looks for these values in the agent invocation context.
+func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
+	// Try to get from agent invocation context.
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return "", "", errors.New("no invocation context found")
+	}
+
+	// Try to get from session.
+	if invocation.Session == nil {
+		return "", "", errors.New("invocation exists but no session available")
+	}
+
+	// Session has AppName and UserID fields.
+	if invocation.Session.AppName != "" && invocation.Session.UserID != "" {
+		return invocation.Session.AppName, invocation.Session.UserID, nil
+	}
+
+	// Return error if session exists but missing required fields.
+	return "", "", fmt.Errorf("session exists but missing appName or userID: appName=%s, userID=%s",
+		invocation.Session.AppName, invocation.Session.UserID)
 }

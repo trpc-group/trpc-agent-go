@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	toolmemory "trpc.group/trpc-go/trpc-agent-go/tool/memory"
 )
 
 var _ memory.Service = (*MemoryService)(nil)
@@ -34,10 +34,10 @@ type memoryToolCreator func(memory.Service) tool.Tool
 
 // defaultEnabledTools are the creators of default memory tools to enable.
 var defaultEnabledTools = map[string]memoryToolCreator{
-	memory.AddToolName:    func(service memory.Service) tool.Tool { return toolmemory.NewAddTool(service) },
-	memory.UpdateToolName: func(service memory.Service) tool.Tool { return toolmemory.NewUpdateTool(service) },
-	memory.SearchToolName: func(service memory.Service) tool.Tool { return toolmemory.NewSearchTool(service) },
-	memory.LoadToolName:   func(service memory.Service) tool.Tool { return toolmemory.NewLoadTool(service) },
+	memory.AddToolName:    func(service memory.Service) tool.Tool { return memorytool.NewAddTool(service) },
+	memory.UpdateToolName: func(service memory.Service) tool.Tool { return memorytool.NewUpdateTool(service) },
+	memory.SearchToolName: func(service memory.Service) tool.Tool { return memorytool.NewSearchTool(service) },
+	memory.LoadToolName:   func(service memory.Service) tool.Tool { return memorytool.NewLoadTool(service) },
 }
 
 const (

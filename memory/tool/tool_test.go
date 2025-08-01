@@ -9,8 +9,8 @@
 // A copy of the Apache 2.0 License is included in this file.
 //
 
-// Package memory provides memory-related tools for the agent system.
-package memory
+// Package tool provides memory-related tools for the agent system.
+package tool
 
 import (
 	"context"
