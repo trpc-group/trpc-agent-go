@@ -196,6 +196,7 @@ func (e *CodeExecutor) executeCommand(ctx context.Context, workDir string, cmdAr
 	defer cancel()
 
 	// Create command with timeout context
+	// #nosec G204 -- Command arguments are constructed internally and not from user input.
 	cmd := exec.CommandContext(timeoutCtx, cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = workDir
 
