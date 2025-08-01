@@ -63,7 +63,7 @@ require (
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
-	github.com/openai/openai-go v1.5.0 // indirect
+	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
@@ -74,7 +74,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.66 // indirect
-	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect

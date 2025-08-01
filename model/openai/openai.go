@@ -15,6 +15,7 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -363,25 +364,19 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 		case model.RoleSystem:
 			result[i] = openai.ChatCompletionMessageParamUnion{
 				OfSystem: &openai.ChatCompletionSystemMessageParam{
-					Content: openai.ChatCompletionSystemMessageParamContentUnion{
-						OfString: openai.String(msg.Content),
-					},
+					Content: m.convertSystemMessageContent(msg),
 				},
 			}
 		case model.RoleUser:
 			result[i] = openai.ChatCompletionMessageParamUnion{
 				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: openai.ChatCompletionUserMessageParamContentUnion{
-						OfString: openai.String(msg.Content),
-					},
+					Content: m.convertUserMessageContent(msg),
 				},
 			}
 		case model.RoleAssistant:
 			result[i] = openai.ChatCompletionMessageParamUnion{
 				OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-						OfString: openai.String(msg.Content),
-					},
+					Content:   m.convertAssistantMessageContent(msg),
 					ToolCalls: m.convertToolCalls(msg.ToolCalls),
 				},
 			}
@@ -398,15 +393,168 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 			// Default to user message if role is unknown.
 			result[i] = openai.ChatCompletionMessageParamUnion{
 				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: openai.ChatCompletionUserMessageParamContentUnion{
-						OfString: openai.String(msg.Content),
-					},
+					Content: m.convertUserMessageContent(msg),
 				},
 			}
 		}
 	}
 
 	return result
+}
+
+// convertSystemMessageContent converts message content to system message content union.
+func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatCompletionSystemMessageParamContentUnion {
+	if len(msg.ContentParts) == 0 && msg.Content != "" {
+		return openai.ChatCompletionSystemMessageParamContentUnion{
+			OfString: openai.String(msg.Content),
+		}
+	}
+	// Convert content parts to OpenAI content parts.
+	var contentParts []openai.ChatCompletionContentPartTextParam
+	if msg.Content != "" {
+		contentParts = append(contentParts, openai.ChatCompletionContentPartTextParam{
+			Text: msg.Content,
+		})
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeText && part.Text != nil {
+			contentParts = append(contentParts, openai.ChatCompletionContentPartTextParam{
+				Text: *part.Text,
+			})
+		}
+	}
+	return openai.ChatCompletionSystemMessageParamContentUnion{
+		OfArrayOfContentParts: contentParts,
+	}
+}
+
+// convertUserMessageContent converts message content to user message content union.
+func (m *Model) convertUserMessageContent(msg model.Message) openai.ChatCompletionUserMessageParamContentUnion {
+	if len(msg.ContentParts) == 0 && msg.Content != "" {
+		return openai.ChatCompletionUserMessageParamContentUnion{
+			OfString: openai.String(msg.Content),
+		}
+	}
+	// Convert content parts to OpenAI content parts.
+	var contentParts []openai.ChatCompletionContentPartUnionParam
+	if msg.Content != "" {
+		contentParts = append(contentParts, openai.ChatCompletionContentPartUnionParam{
+			OfText: &openai.ChatCompletionContentPartTextParam{
+				Text: msg.Content,
+			},
+		})
+	}
+	for _, part := range msg.ContentParts {
+		contentPart := m.convertContentPart(part)
+		if contentPart != nil {
+			contentParts = append(contentParts, *contentPart)
+		}
+	}
+	return openai.ChatCompletionUserMessageParamContentUnion{
+		OfArrayOfContentParts: contentParts,
+	}
+}
+
+// convertAssistantMessageContent converts message content to assistant message content union.
+func (m *Model) convertAssistantMessageContent(
+	msg model.Message,
+) openai.ChatCompletionAssistantMessageParamContentUnion {
+	if len(msg.ContentParts) == 0 && msg.Content != "" {
+		return openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: openai.String(msg.Content),
+		}
+	}
+	// Convert content parts to OpenAI content parts.
+	var contentParts []openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion
+	if msg.Content != "" {
+		contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+			OfText: &openai.ChatCompletionContentPartTextParam{
+				Text: msg.Content,
+			},
+		})
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeText && part.Text != nil {
+			contentParts = append(contentParts,
+				openai.ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion{
+					OfText: &openai.ChatCompletionContentPartTextParam{
+						Text: *part.Text,
+					},
+				})
+		}
+	}
+	return openai.ChatCompletionAssistantMessageParamContentUnion{
+		OfArrayOfContentParts: contentParts,
+	}
+}
+
+// convertContentPart converts a single content part to OpenAI format.
+func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletionContentPartUnionParam {
+	switch part.Type {
+	case model.ContentTypeText:
+		if part.Text != nil {
+			return &openai.ChatCompletionContentPartUnionParam{
+				OfText: &openai.ChatCompletionContentPartTextParam{
+					Text: *part.Text,
+				},
+			}
+		}
+	case model.ContentTypeImage:
+		if part.Image != nil {
+			return &openai.ChatCompletionContentPartUnionParam{
+				OfImageURL: &openai.ChatCompletionContentPartImageParam{
+					ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+						// The URL from openai-go can be used either as a URL or as a base64-encoded string.
+						URL:    imageToURLOrBase64(part.Image),
+						Detail: part.Image.Detail,
+					},
+				},
+			}
+		}
+	case model.ContentTypeAudio:
+		if part.Audio != nil {
+			return &openai.ChatCompletionContentPartUnionParam{
+				OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+					InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+						Data:   audioToBase64(part.Audio),
+						Format: part.Audio.Format,
+					},
+				},
+			}
+		}
+	case model.ContentTypeFile:
+		if part.File != nil {
+			return &openai.ChatCompletionContentPartUnionParam{
+				OfFile: &openai.ChatCompletionContentPartFileParam{
+					File: fileToParams(part.File),
+				},
+			}
+		}
+	}
+	return nil
+}
+
+func imageToURLOrBase64(image *model.Image) string {
+	if image.URL != "" {
+		return image.URL
+	}
+	return "data:image/" + image.Format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+}
+
+func fileToParams(file *model.File) openai.ChatCompletionContentPartFileFileParam {
+	if file.FileID != "" {
+		return openai.ChatCompletionContentPartFileFileParam{
+			FileID: openai.String(file.FileID),
+		}
+	}
+	return openai.ChatCompletionContentPartFileFileParam{
+		FileData: openai.String("data:" + file.MimeType + ";base64," + base64.StdEncoding.EncodeToString(file.Data)),
+		Filename: openai.String(file.Name),
+	}
+}
+
+func audioToBase64(audio *model.Audio) string {
+	return "data:" + audio.Format + ";base64," + base64.StdEncoding.EncodeToString(audio.Data)
 }
 
 func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatCompletionMessageToolCallParam {
