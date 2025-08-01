@@ -42,6 +42,50 @@ var (
 	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
+
+	// Global callback configurations using chain registration.
+	// This demonstrates how to create reusable callback configurations.
+	_ = model.NewCallbacks().
+		RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+			fmt.Printf("🌐 Global BeforeModel: processing %d messages\n", len(req.Messages))
+			return nil, nil
+		}).
+		RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
+			if modelErr != nil {
+				fmt.Printf("🌐 Global AfterModel: error occurred\n")
+			} else {
+				fmt.Printf("🌐 Global AfterModel: processed successfully\n")
+			}
+			return nil, nil
+		})
+
+	_ = tool.NewCallbacks().
+		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+			fmt.Printf("🌐 Global BeforeTool: executing %s\n", toolName)
+			return nil, nil
+		}).
+		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+			if runErr != nil {
+				fmt.Printf("🌐 Global AfterTool: %s failed\n", toolName)
+			} else {
+				fmt.Printf("🌐 Global AfterTool: %s completed\n", toolName)
+			}
+			return nil, nil
+		})
+
+	_ = agent.NewCallbacks().
+		RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+			fmt.Printf("🌐 Global BeforeAgent: starting %s\n", invocation.AgentName)
+			return nil, nil
+		}).
+		RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+			if runErr != nil {
+				fmt.Printf("🌐 Global AfterAgent: execution failed\n")
+			} else {
+				fmt.Printf("🌐 Global AfterAgent: execution completed\n")
+			}
+			return nil, nil
+		})
 )
 
 func main() {
@@ -137,6 +181,7 @@ func (c *multiTurnChatWithCallbacks) createTools() []tool.Tool {
 
 // createModelCallbacks creates and configures model callbacks.
 func (c *multiTurnChatWithCallbacks) createModelCallbacks() *model.Callbacks {
+	// Using traditional registration.
 	modelCallbacks := model.NewCallbacks()
 	modelCallbacks.RegisterBeforeModel(c.createBeforeModelCallback())
 	modelCallbacks.RegisterAfterModel(c.createAfterModelCallback())
@@ -176,6 +221,7 @@ func (c *multiTurnChatWithCallbacks) createAfterModelCallback() model.AfterModel
 
 // createToolCallbacks creates and configures tool callbacks.
 func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
+	// Using traditional registration.
 	toolCallbacks := tool.NewCallbacks()
 	toolCallbacks.RegisterBeforeTool(c.createBeforeToolCallback())
 	toolCallbacks.RegisterAfterTool(c.createAfterToolCallback())
@@ -210,6 +256,7 @@ func (c *multiTurnChatWithCallbacks) createAfterToolCallback() tool.AfterToolCal
 
 // createAgentCallbacks creates and configures agent callbacks.
 func (c *multiTurnChatWithCallbacks) createAgentCallbacks() *agent.Callbacks {
+	// Using traditional registration.
 	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterBeforeAgent(c.createBeforeAgentCallback())
 	agentCallbacks.RegisterAfterAgent(c.createAfterAgentCallback())

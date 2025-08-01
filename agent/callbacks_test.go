@@ -170,3 +170,22 @@ func TestAgentCallbacks_After_Multi(t *testing.T) {
 	require.NotNil(t, resp)
 	require.Equal(t, "second", resp.ID)
 }
+
+func TestCallbacksChainRegistration(t *testing.T) {
+	// Test chain registration.
+	callbacks := NewCallbacks().
+		RegisterBeforeAgent(func(ctx context.Context, invocation *Invocation) (*model.Response, error) {
+			return nil, nil
+		}).
+		RegisterAfterAgent(func(ctx context.Context, invocation *Invocation, runErr error) (*model.Response, error) {
+			return nil, nil
+		})
+
+	// Verify that both callbacks were registered.
+	if len(callbacks.BeforeAgent) != 1 {
+		t.Errorf("Expected 1 before agent callback, got %d", len(callbacks.BeforeAgent))
+	}
+	if len(callbacks.AfterAgent) != 1 {
+		t.Errorf("Expected 1 after agent callback, got %d", len(callbacks.AfterAgent))
+	}
+}

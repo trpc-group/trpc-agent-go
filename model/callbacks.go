@@ -43,13 +43,15 @@ func NewCallbacks() *Callbacks {
 }
 
 // RegisterBeforeModel registers a before model callback.
-func (c *Callbacks) RegisterBeforeModel(cb BeforeModelCallback) {
+func (c *Callbacks) RegisterBeforeModel(cb BeforeModelCallback) *Callbacks {
 	c.BeforeModel = append(c.BeforeModel, cb)
+	return c
 }
 
 // RegisterAfterModel registers an after model callback.
-func (c *Callbacks) RegisterAfterModel(cb AfterModelCallback) {
+func (c *Callbacks) RegisterAfterModel(cb AfterModelCallback) *Callbacks {
 	c.AfterModel = append(c.AfterModel, cb)
+	return c
 }
 
 // RunBeforeModel runs all before model callbacks in order.

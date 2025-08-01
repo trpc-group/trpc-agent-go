@@ -489,3 +489,22 @@ func TestToolCallbacks_EdgeCases(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, customResult)
 }
+
+func TestCallbacksChainRegistration(t *testing.T) {
+	// Test chain registration.
+	callbacks := tool.NewCallbacks().
+		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+			return nil, nil
+		}).
+		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+			return nil, nil
+		})
+
+	// Verify that both callbacks were registered.
+	if len(callbacks.BeforeTool) != 1 {
+		t.Errorf("Expected 1 before tool callback, got %d", len(callbacks.BeforeTool))
+	}
+	if len(callbacks.AfterTool) != 1 {
+		t.Errorf("Expected 1 after tool callback, got %d", len(callbacks.AfterTool))
+	}
+}

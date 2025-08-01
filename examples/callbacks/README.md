@@ -65,11 +65,21 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 ## Declaring and Registering Callbacks
 
-To use callbacks, you need to declare them and register your handler functions. Below are examples for each callback type:
+To use callbacks, you need to declare them and register your handler functions. The framework supports both traditional and chain registration patterns. Chain registration is recommended for cleaner, more readable code.
+
+### Chain Registration Benefits
+
+- **Cleaner Code**: Single chain for multiple registrations
+- **Global Configuration**: Easy to create reusable callback configurations
+- **Better Readability**: More fluent and intuitive syntax
+- **Reduced Boilerplate**: No need for multiple statements
+
+Below are examples for each callback type:
 
 ### ModelCallbacks
 
 ```go
+// Traditional registration
 modelCallbacks := model.NewCallbacks()
 modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
     // Your logic here
@@ -79,11 +89,38 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
     // Your logic here - now with access to original request
     return nil, nil
 })
+
+// Chain registration (recommended)
+modelCallbacks := model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+        // Your logic here
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+        // Your logic here - now with access to original request
+        return nil, nil
+    })
+
+// Global callback configuration
+var globalModelCallbacks = model.NewCallbacks().
+    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+        fmt.Printf("Processing %d messages\n", len(req.Messages))
+        return nil, nil
+    }).
+    RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
+        if runErr != nil {
+            fmt.Printf("Model error occurred\n")
+        } else {
+            fmt.Printf("Model processed successfully\n")
+        }
+        return nil, nil
+    })
 ```
 
 ### ToolCallbacks
 
 ```go
+// Traditional registration
 toolCallbacks := tool.NewCallbacks()
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
     // Your logic here
@@ -93,11 +130,38 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolD
     // Your logic here
     return nil, nil
 })
+
+// Chain registration (recommended)
+toolCallbacks := tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+        // Your logic here
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+        // Your logic here
+        return nil, nil
+    })
+
+// Global callback configuration
+var globalToolCallbacks = tool.NewCallbacks().
+    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+        fmt.Printf("Executing tool: %s\n", toolName)
+        return nil, nil
+    }).
+    RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+        if runErr != nil {
+            fmt.Printf("Tool %s failed\n", toolName)
+        } else {
+            fmt.Printf("Tool %s completed\n", toolName)
+        }
+        return nil, nil
+    })
 ```
 
 ### AgentCallbacks
 
 ```go
+// Traditional registration
 agentCallbacks := agent.NewCallbacks()
 agentCallbacks.RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
     // Your logic here
@@ -107,6 +171,32 @@ agentCallbacks.RegisterAfterAgent(func(ctx context.Context, invocation *agent.In
     // Your logic here
     return nil, nil
 })
+
+// Chain registration (recommended)
+agentCallbacks := agent.NewCallbacks().
+    RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+        // Your logic here
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+        // Your logic here
+        return nil, nil
+    })
+
+// Global callback configuration
+var globalAgentCallbacks = agent.NewCallbacks().
+    RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+        fmt.Printf("Starting agent: %s\n", invocation.AgentName)
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
+        if runErr != nil {
+            fmt.Printf("Agent execution failed\n")
+        } else {
+            fmt.Printf("Agent execution completed\n")
+        }
+        return nil, nil
+    })
 ```
 
 After declaring and registering your callbacks, pass them to the agent or runner during construction:

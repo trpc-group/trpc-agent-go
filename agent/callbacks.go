@@ -48,13 +48,15 @@ func NewCallbacks() *Callbacks {
 }
 
 // RegisterBeforeAgent registers a before agent callback.
-func (c *Callbacks) RegisterBeforeAgent(cb BeforeAgentCallback) {
+func (c *Callbacks) RegisterBeforeAgent(cb BeforeAgentCallback) *Callbacks {
 	c.BeforeAgent = append(c.BeforeAgent, cb)
+	return c
 }
 
 // RegisterAfterAgent registers an after agent callback.
-func (c *Callbacks) RegisterAfterAgent(cb AfterAgentCallback) {
+func (c *Callbacks) RegisterAfterAgent(cb AfterAgentCallback) *Callbacks {
 	c.AfterAgent = append(c.AfterAgent, cb)
+	return c
 }
 
 // RunBeforeAgent runs all before agent callbacks in order.
