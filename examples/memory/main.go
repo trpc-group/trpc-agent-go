@@ -117,21 +117,8 @@ func (c *memoryChat) setup(_ context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with memory capabilities. "+
 			"I can remember important information about you and recall it when needed."),
-		llmagent.WithInstruction("You have access to memory tools to provide personalized assistance. "+
-			"IMPORTANT: When users share personal information about themselves (name, preferences, experiences, etc.), "+
-			"ALWAYS use memory_add to remember this information. "+
-			"Examples of when to use memory_add: "+
-			"- User tells you their name: 'I am Jack' → use memory_add to remember 'User is named Jack' "+
-			"- User shares preferences: 'I like coffee' → use memory_add to remember 'User likes coffee' "+
-			"- User shares experiences: 'I had beef tonight' → use memory_add to remember 'User had beef for dinner and enjoyed it' "+
-			"When users ask about themselves or their preferences, use memory_search to find relevant information. "+
-			"When users ask 'tell me about myself' or similar, use memory_load to get an overview. "+
-			"When users want to update existing information, use memory_update with the memory_id. "+
-			"Available memory tools: memory_add, memory_update, memory_search, memory_load. "+
-			"Be helpful, conversational, and proactive about remembering user information."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
-		llmagent.WithMemory(memoryService), // This will automatically add memory tools.
+		llmagent.WithMemory(memoryService), // This will automatically add memory tools and memory instruction.
 	)
 
 	// Create runner.

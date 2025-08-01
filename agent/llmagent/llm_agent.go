@@ -147,9 +147,17 @@ func WithKnowledge(kb knowledge.Knowledge) Option {
 // WithMemory sets the memory service for the agent.
 // If provided, the memory tools will be automatically added to the agent's tools.
 // The memory tools will get appName and userID from the agent invocation context at runtime.
+// Memory instruction will be automatically appended to the existing instruction.
+// Note: Please make sure this option is passed AFTER `WithInstruction`.
 func WithMemory(memoryService memory.Service) Option {
 	return func(opts *Options) {
 		opts.Memory = memoryService
+		// Generate memory instruction based on the memory service.
+		if opts.Instruction == "" {
+			opts.Instruction = memory.GenerateInstruction(memoryService)
+		} else {
+			opts.Instruction = opts.Instruction + "\n\n" + memory.GenerateInstruction(memoryService)
+		}
 	}
 }
 
