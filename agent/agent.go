@@ -15,6 +15,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -25,6 +26,33 @@ import (
 type Info struct {
 	Name        string
 	Description string
+}
+
+// ErrorTypeStopAgentError is the error type used to indicate that an agent should stop execution.
+const ErrorTypeStopAgentError = "stop_agent_error"
+
+// StopError represents an error that signals the agent execution should be stopped.
+// When this error type is returned, it indicates the agent should stop processing.
+type StopError struct {
+	// Message contains the stop reason
+	Message string
+}
+
+// Error implements the error interface.
+func (e *StopError) Error() string {
+	return e.Message
+}
+
+// AsStopError checks if an error is a StopError using errors.As.
+func AsStopError(err error) (*StopError, bool) {
+	var stopErr *StopError
+	ok := errors.As(err, &stopErr)
+	return stopErr, ok
+}
+
+// NewStopError creates a new StopError with the given message.
+func NewStopError(message string) *StopError {
+	return &StopError{Message: message}
 }
 
 // Agent is the interface that all agents must implement.
