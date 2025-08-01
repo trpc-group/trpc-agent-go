@@ -90,7 +90,7 @@ func (c *multiTurnChatWithCallbacks) run() error {
 // setup creates the runner with LLM agent and tools.
 func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create tools.
 	tools := c.createTools()
@@ -264,7 +264,6 @@ func (c *multiTurnChatWithCallbacks) createLLMAgent(
 		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(tools),
 		llmagent.WithAgentCallbacks(agentCallbacks),
 		llmagent.WithModelCallbacks(modelCallbacks),

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -46,7 +47,7 @@ type askForApprovalOutput struct {
 func newLLMAgent() *llmagent.LLMAgent {
 	return llmagent.New(
 		"reimbursement_agent",
-		llmagent.WithModel(openai.New("deepseek-chat", openai.WithChannelBufferSize(512))),
+		llmagent.WithModel(openai.New("deepseek-chat")),
 		llmagent.WithDescription("A helpful AI agent for reimbursement"),
 		llmagent.WithInstruction(`
 You are an agent whose job is to handle the reimbursement process for the employees. 
@@ -60,7 +61,6 @@ If the manager rejects, you will inform the employee of the rejection.
 			Temperature: floatPtr(0.7),
 			Stream:      true, // Enable streaming
 		}),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{
 			function.NewFunctionTool(
 				reimburse,
