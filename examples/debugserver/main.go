@@ -107,7 +107,6 @@ func main() {
 				"Be helpful and conversational.",
 		),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(
 			[]tool.Tool{calculatorTool, timeTool},
 		),

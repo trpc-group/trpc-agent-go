@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -82,7 +83,7 @@ func (c *multiToolChat) run() error {
 // setup creates a runner containing multiple tools
 func (c *multiToolChat) setup(_ context.Context) error {
 	// Create OpenAI model
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create various tools
 	tools := []tool.Tool{
@@ -110,11 +111,10 @@ func (c *multiToolChat) setup(_ context.Context) error {
 		// 2. time_tool: Get current time, date, timezone information, etc.
 		// 3. text_tool: Process text, including case conversion, length statistics, string operations, etc.
 		// 4. file_tool: Basic file operations such as reading, writing, listing directories, etc.
-		//5. duckduckgo_search: Search web information, suitable for finding factual, encyclopedia-type information
+		// 5. duckduckgo_search: Search web information, suitable for finding factual, encyclopedia-type information
 
-		//Please select the appropriate tool based on user needs and provide helpful assistance.`),
+		// Please select the appropriate tool based on user needs and provide helpful assistance.`),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(tools),
 	)
 
@@ -211,6 +211,12 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	for event := range eventChan {
 		// Handle errors
 		if event.Error != nil {
+			if event.Error.Type == agent.ErrorTypeStopAgentError {
+				// Handle stop agent error
+				fmt.Printf("\n🛑 Agent stopped: %s\n", event.Error.Message)
+				log.Fatal("Agent execution stopped due to error: ", event.Error.Message)
+				return agent.NewStopError(event.Error.Message)
+			}
 			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
 			continue
 		}
@@ -352,7 +358,7 @@ func calculateExpression(_ context.Context, req calculatorRequest) (calculatorRe
 			Expression: req.Expression,
 			Result:     0,
 			Message:    fmt.Sprintf("Calculation error: %v", err),
-		}, fmt.Errorf("calculation error")
+		}, fmt.Errorf("calculation error: %w", err)
 	}
 
 	return calculatorResponse{
@@ -555,7 +561,7 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 		return leftVal * rightVal, nil
 	case '/':
 		if rightVal == 0 {
-			return 0, fmt.Errorf("division by zero")
+			return 0, agent.NewStopError("division by zero")
 		}
 		return leftVal / rightVal, nil
 	default:

@@ -24,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
+var defaultChannelBufferSize = 256
+
 const (
 	// AuthorGraphExecutor is the author of the graph executor.
 	AuthorGraphExecutor = "graph-executor"
@@ -67,8 +69,8 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
 	var options ExecutorOptions
-	options.ChannelBufferSize = 256 // Default buffer size.
-	options.MaxSteps = 100          // Default max steps.
+	options.ChannelBufferSize = defaultChannelBufferSize // Default buffer size.
+	options.MaxSteps = 100                               // Default max steps.
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)

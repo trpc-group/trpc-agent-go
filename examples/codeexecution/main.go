@@ -39,7 +39,7 @@ func main() {
 
 	// Create a model instance.
 	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	modelInstance := openai.New(*modelName, openai.WithChannelBufferSize(50)) // Larger buffer for agent use.
+	modelInstance := openai.New(*modelName) // Larger buffer for agent use.
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
@@ -67,7 +67,6 @@ You should NEVER install any package on your own like pip install ....
 	`,
 		),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(20),
 		// codeexecutor.NewContainerCodeExecutor() is also available.
 		// can use llmagent.WithCodeExecutor(codeexecutor.NewContainerCodeExecutor()),
 		llmagent.WithCodeExecutor(local.New()),

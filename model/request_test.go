@@ -211,6 +211,70 @@ func TestRequest_Validation(t *testing.T) {
 	}
 }
 
+func TestContentPartWithImage(t *testing.T) {
+	// Test creating a content part with image
+	imagePart := ContentPart{
+		Type: "image",
+		Image: &Image{
+			URL:    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+			Detail: "high",
+		},
+	}
+
+	if imagePart.Type != "image" {
+		t.Errorf("Expected type to be 'image', got %s", imagePart.Type)
+	}
+
+	if imagePart.Image == nil {
+		t.Error("Expected Image to be set")
+	}
+
+	if imagePart.Image.Detail != "high" {
+		t.Errorf("Expected detail to be 'high', got %s", imagePart.Image.Detail)
+	}
+}
+
+func TestContentPartWithAudio(t *testing.T) {
+	// Test creating a content part with audio
+	audioPart := ContentPart{
+		Type: "audio",
+		Audio: &Audio{
+			Data:   []byte("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT"),
+			Format: "wav",
+		},
+	}
+
+	if audioPart.Type != "audio" {
+		t.Errorf("Expected type to be 'audio', got %s", audioPart.Type)
+	}
+
+	if audioPart.Audio == nil {
+		t.Error("Expected Audio to be set")
+	}
+}
+
+func TestContentPartWithFile(t *testing.T) {
+	// Test creating a content part with file
+	filePart := ContentPart{
+		Type: "file",
+		File: &File{
+			FileID: "file-abc123",
+		},
+	}
+
+	if filePart.Type != "file" {
+		t.Errorf("Expected type to be 'file', got %s", filePart.Type)
+	}
+
+	if filePart.File == nil {
+		t.Error("Expected File to be set")
+	}
+
+	if filePart.File.FileID != "file-abc123" {
+		t.Errorf("Expected FileID to be 'file-abc123', got %s", filePart.File.FileID)
+	}
+}
+
 // Helper functions for test data
 func intPtr(i int) *int {
 	return &i

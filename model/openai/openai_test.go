@@ -1162,6 +1162,262 @@ func TestWithOpenAIOptions_CombinedOptions(t *testing.T) {
 	}
 }
 
+func TestConvertSystemMessageContent(t *testing.T) {
+	// Test converting message with text content parts
+	textPart := model.ContentPart{
+		Type: "text",
+		Text: stringPtr("System instruction"),
+	}
+
+	message := model.Message{
+		Role:         model.RoleSystem,
+		ContentParts: []model.ContentPart{textPart},
+	}
+
+	m := &Model{}
+	content := m.convertSystemMessageContent(message)
+
+	// System messages should convert text content parts to array of content parts
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	if content.OfArrayOfContentParts[0].Text != "System instruction" {
+		t.Errorf("Expected text content to be 'System instruction', got %s", content.OfArrayOfContentParts[0].Text)
+	}
+}
+
+func TestConvertUserMessageContent(t *testing.T) {
+	// Test converting user message with text content parts
+	textPart := model.ContentPart{
+		Type: "text",
+		Text: stringPtr("Hello, world!"),
+	}
+
+	message := model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{textPart},
+	}
+
+	model := &Model{}
+	content := model.convertUserMessageContent(message)
+
+	// Check that content parts are converted
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	contentPart := content.OfArrayOfContentParts[0]
+	if contentPart.OfText == nil {
+		t.Error("Expected text content part to be set")
+	}
+
+	if contentPart.OfText.Text != "Hello, world!" {
+		t.Errorf("Expected text to be 'Hello, world!', got %s", contentPart.OfText.Text)
+	}
+}
+
+func TestConvertUserMessageContentWithImage(t *testing.T) {
+	// Test converting user message with image content parts
+	imagePart := model.ContentPart{
+		Type: "image",
+		Image: &model.Image{
+			URL:    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+			Detail: "high",
+		},
+	}
+
+	message := model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{imagePart},
+	}
+
+	model := &Model{}
+	content := model.convertUserMessageContent(message)
+
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	contentPart := content.OfArrayOfContentParts[0]
+	if contentPart.OfImageURL == nil {
+		t.Error("Expected image content part to be set")
+	}
+
+	if contentPart.OfImageURL.ImageURL.URL != "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" {
+		t.Error("Expected image URL to match")
+	}
+}
+
+func TestConvertUserMessageContentWithAudio(t *testing.T) {
+	// Test converting user message with audio content parts
+	audioPart := model.ContentPart{
+		Type: "audio",
+		Audio: &model.Audio{
+			Data:   []byte("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT"),
+			Format: "wav",
+		},
+	}
+
+	message := model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{audioPart},
+	}
+
+	model := &Model{}
+	content := model.convertUserMessageContent(message)
+
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	contentPart := content.OfArrayOfContentParts[0]
+	if contentPart.OfInputAudio == nil {
+		t.Error("Expected audio content part to be set")
+	}
+}
+
+func TestConvertUserMessageContentWithFile(t *testing.T) {
+	// Test converting user message with file content parts
+	filePart := model.ContentPart{
+		Type: "file",
+		File: &model.File{
+			FileID: "file-abc123",
+		},
+	}
+
+	message := model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{filePart},
+	}
+
+	model := &Model{}
+	content := model.convertUserMessageContent(message)
+
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	contentPart := content.OfArrayOfContentParts[0]
+	if contentPart.OfFile == nil {
+		t.Error("Expected file content part to be set")
+	}
+
+	if contentPart.OfFile.File.FileID.Value != "file-abc123" {
+		t.Errorf("Expected file ID to be 'file-abc123', got %s", contentPart.OfFile.File.FileID.Value)
+	}
+}
+
+func TestConvertAssistantMessageContent(t *testing.T) {
+	// Test converting assistant message with text content parts
+	textPart := model.ContentPart{
+		Type: "text",
+		Text: stringPtr("I can help you with that."),
+	}
+
+	message := model.Message{
+		Role:         model.RoleAssistant,
+		ContentParts: []model.ContentPart{textPart},
+	}
+
+	model := &Model{}
+	content := model.convertAssistantMessageContent(message)
+
+	// Assistant messages should only support text content
+	if len(content.OfArrayOfContentParts) != 1 {
+		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
+	}
+
+	contentPart := content.OfArrayOfContentParts[0]
+	if contentPart.OfText == nil {
+		t.Error("Expected text content part to be set")
+	}
+
+	if contentPart.OfText.Text != "I can help you with that." {
+		t.Errorf("Expected text to be 'I can help you with that.', got %s", contentPart.OfText.Text)
+	}
+}
+
+func TestConvertAssistantMessageContentWithNonText(t *testing.T) {
+	// Test converting assistant message with non-text content parts (should be ignored)
+	imagePart := model.ContentPart{
+		Type: "image",
+		Image: &model.Image{
+			URL:    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+			Detail: "high",
+		},
+	}
+
+	message := model.Message{
+		Role:         model.RoleAssistant,
+		ContentParts: []model.ContentPart{imagePart},
+	}
+
+	model := &Model{}
+	content := model.convertAssistantMessageContent(message)
+
+	// Assistant messages should ignore non-text content parts
+	if len(content.OfArrayOfContentParts) != 0 {
+		t.Errorf("Expected 0 content parts for non-text content, got %d", len(content.OfArrayOfContentParts))
+	}
+}
+
+func TestConvertContentPart(t *testing.T) {
+	m := &Model{}
+
+	// Test text content part
+	textPart := model.ContentPart{
+		Type: "text",
+		Text: stringPtr("Test text"),
+	}
+
+	contentPart := m.convertContentPart(textPart)
+	if contentPart == nil {
+		t.Error("Expected content part to be converted")
+	}
+
+	if contentPart.OfText == nil {
+		t.Error("Expected text content part to be set")
+	}
+
+	if contentPart.OfText.Text != "Test text" {
+		t.Errorf("Expected text to be 'Test text', got %s", contentPart.OfText.Text)
+	}
+
+	// Test image content part
+	imagePart := model.ContentPart{
+		Type: "image",
+		Image: &model.Image{
+			URL:    "data:image/png;base64,test",
+			Detail: "high",
+		},
+	}
+
+	contentPart = m.convertContentPart(imagePart)
+	if contentPart == nil {
+		t.Error("Expected image content part to be converted")
+	}
+
+	if contentPart.OfImageURL == nil {
+		t.Error("Expected image content part to be set")
+	}
+
+	// Test unknown content part type
+	unknownPart := model.ContentPart{
+		Type: "unknown",
+	}
+
+	contentPart = m.convertContentPart(unknownPart)
+	if contentPart != nil {
+		t.Error("Expected unknown content part to return nil")
+	}
+}
+
+// Helper function to create string pointers
+func stringPtr(s string) *string {
+	return &s
+}
+
 // TestModel_GenerateContent_StreamingBatchProcessing tests our handleStreamingResponse batch processing logic
 func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 	// Test cases covering different streaming scenarios.

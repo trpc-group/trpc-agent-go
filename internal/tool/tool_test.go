@@ -97,8 +97,8 @@ func TestGenerateJSONSchema_ComplexTypes(t *testing.T) {
 		var input *string
 		result := itool.GenerateJSONSchema(reflect.TypeOf(input))
 
-		if result.Type != "string,null" {
-			t.Errorf("expected string,null type, got %s", result.Type)
+		if result.Type != "string" {
+			t.Errorf("expected string type, got %s", result.Type)
 		}
 	})
 }
@@ -131,8 +131,8 @@ func TestGenerateJSONSchema_StructTypes(t *testing.T) {
 			t.Errorf("expected age property of type integer")
 		}
 
-		if result.Properties["optional"] == nil || result.Properties["optional"].Type != "string,null" {
-			t.Errorf("expected optional property of type string,null")
+		if result.Properties["optional"] == nil || result.Properties["optional"].Type != "string" {
+			t.Errorf("expected optional property of type string")
 		}
 
 		// Check required fields
@@ -192,5 +192,37 @@ func TestGenerateJSONSchema_Nested(t *testing.T) {
 
 	if result.Properties["tags"].Items == nil || result.Properties["tags"].Items.Type != "string" {
 		t.Errorf("expected tags items to be of type string")
+	}
+}
+
+func TestGenerateJSONSchema_PointerTypeFix(t *testing.T) {
+	// Test that pointer types now generate standard schema format
+	// instead of the problematic "object,null" format
+
+	type TestRequest struct {
+		Name string `json:"name"`
+		Age  int    `json:"age"`
+	}
+
+	var input *TestRequest
+	result := itool.GenerateJSONSchema(reflect.TypeOf(input))
+
+	// Should generate "object" instead of "object,null"
+	if result.Type != "object" {
+		t.Errorf("expected object type for pointer to struct, got %s", result.Type)
+	}
+
+	// Should have properties
+	if result.Properties == nil {
+		t.Errorf("expected properties for struct schema")
+	}
+
+	// Check that properties are correctly generated
+	if result.Properties["name"] == nil || result.Properties["name"].Type != "string" {
+		t.Errorf("expected name property of type string")
+	}
+
+	if result.Properties["age"] == nil || result.Properties["age"].Type != "integer" {
+		t.Errorf("expected age property of type integer")
 	}
 }
