@@ -73,9 +73,9 @@ func GenerateJSONSchema(t reflect.Type) *tool.Schema {
 		}
 
 	case reflect.Ptr:
-		elemSchema := GenerateFieldSchema(t.Elem())
-		elemSchema.Type = elemSchema.Type + ",null"
-		return elemSchema
+		// For function tool parameters, we typically use value types
+		// So we can just return the element type schema.
+		return GenerateFieldSchema(t.Elem())
 
 	default:
 		return GenerateFieldSchema(t)
@@ -108,10 +108,9 @@ func GenerateFieldSchema(t reflect.Type) *tool.Schema {
 			AdditionalProperties: GenerateFieldSchema(t.Elem()),
 		}
 	case reflect.Ptr:
-		elemSchema := GenerateFieldSchema(t.Elem())
-		// Pointers are nullable
-		elemSchema.Type = elemSchema.Type + ",null"
-		return elemSchema
+		// For function tool parameters, we typically use value types
+		// So we can just return the element type schema
+		return GenerateFieldSchema(t.Elem())
 	case reflect.Struct:
 		nestedSchema := &tool.Schema{
 			Type:       "object",
