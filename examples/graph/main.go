@@ -93,7 +93,6 @@ func (w *documentWorkflow) setup() error {
 	// Create GraphAgent from the compiled graph.
 	graphAgent, err := graphagent.New("document-processor", workflowGraph,
 		graphagent.WithDescription("Comprehensive document processing workflow"),
-		graphagent.WithChannelBufferSize(defaultChannelBufferSize),
 		graphagent.WithInitialState(graph.State{}),
 	)
 	if err != nil {
@@ -138,7 +137,7 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
 	schema := graph.MessagesStateSchema()
 
 	// Create model instance.
-	modelInstance := openai.New(*modelName, openai.WithChannelBufferSize(defaultChannelBufferSize))
+	modelInstance := openai.New(*modelName)
 
 	// Create analysis tools.
 	complexityTool := function.NewFunctionTool(

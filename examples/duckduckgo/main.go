@@ -78,7 +78,7 @@ func (c *searchChat) run() error {
 // setup creates the runner with LLM agent and DuckDuckGo search tool.
 func (c *searchChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create DuckDuckGo search tool.
 	// For basic usage:
@@ -98,7 +98,6 @@ func (c *searchChat) setup(_ context.Context) error {
 		llmagent.WithDescription("A helpful AI assistant with access to DuckDuckGo web search"),
 		llmagent.WithInstruction("Use the DuckDuckGo search tool for factual, encyclopedic information such as entity details (people, companies, places), definitions, mathematical calculations, and historical facts. Do NOT use it for real-time data like current weather, latest news, or live stock prices as the API is designed for static information."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools([]tool.Tool{searchTool}),
 	)
 

@@ -24,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+var defaultChannelBufferSize = 256
+
 // Option is a function that configures a GraphAgent.
 type Option func(*Options)
 
@@ -110,16 +112,12 @@ type GraphAgent struct {
 
 // New creates a new GraphAgent with the given graph and options.
 func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
-	var options Options
+	// set default channel buffer size.
+	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
 
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
-	}
-
-	// Set default channel buffer size if not specified.
-	if options.ChannelBufferSize == 0 {
-		options.ChannelBufferSize = 256
 	}
 
 	executor, err := graph.NewExecutor(g,

@@ -83,7 +83,7 @@ func main() {
 
 func buildEntranceAgent(modelName string, agentList []tool.Tool) agent.Agent {
 	// Create OpenAI model.
-	modelInstance := openai.New(modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(modelName)
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -103,7 +103,6 @@ func buildEntranceAgent(modelName string, agentList []tool.Tool) agent.Agent {
 		llmagent.WithDescription(desc),
 		llmagent.WithInstruction(desc),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithChannelBufferSize(100),
 		llmagent.WithTools(agentList),
 	)
 
