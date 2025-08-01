@@ -27,7 +27,7 @@ import (
 
 // NewAddTool creates a function tool for adding memories.
 func NewAddTool(service memory.Service) tool.CallableTool {
-	addFunc := func(ctx context.Context, req AddMemoryRequest) (*AddMemoryResponse, error) {
+	addFunc := func(ctx context.Context, req *AddMemoryRequest) (*AddMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -67,7 +67,7 @@ func NewAddTool(service memory.Service) tool.CallableTool {
 
 // NewUpdateTool creates a function tool for updating memories.
 func NewUpdateTool(service memory.Service) tool.CallableTool {
-	updateFunc := func(ctx context.Context, req UpdateMemoryRequest) (*UpdateMemoryResponse, error) {
+	updateFunc := func(ctx context.Context, req *UpdateMemoryRequest) (*UpdateMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -112,7 +112,7 @@ func NewUpdateTool(service memory.Service) tool.CallableTool {
 
 // NewDeleteTool creates a function tool for deleting memories.
 func NewDeleteTool(service memory.Service) tool.CallableTool {
-	deleteFunc := func(ctx context.Context, req DeleteMemoryRequest) (*DeleteMemoryResponse, error) {
+	deleteFunc := func(ctx context.Context, req *DeleteMemoryRequest) (*DeleteMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -146,7 +146,7 @@ func NewDeleteTool(service memory.Service) tool.CallableTool {
 
 // NewClearTool creates a function tool for clearing all memories.
 func NewClearTool(service memory.Service) tool.CallableTool {
-	clearFunc := func(ctx context.Context, _ struct{}) (*ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ *struct{}) (*ClearMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -174,7 +174,7 @@ func NewClearTool(service memory.Service) tool.CallableTool {
 
 // NewSearchTool creates a function tool for searching memories.
 func NewSearchTool(service memory.Service) tool.CallableTool {
-	searchFunc := func(ctx context.Context, req SearchMemoryRequest) (*SearchMemoryResponse, error) {
+	searchFunc := func(ctx context.Context, req *SearchMemoryRequest) (*SearchMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
@@ -220,7 +220,7 @@ func NewSearchTool(service memory.Service) tool.CallableTool {
 
 // NewLoadTool creates a function tool for loading memories.
 func NewLoadTool(service memory.Service) tool.CallableTool {
-	loadFunc := func(ctx context.Context, req LoadMemoryRequest) (*LoadMemoryResponse, error) {
+	loadFunc := func(ctx context.Context, req *LoadMemoryRequest) (*LoadMemoryResponse, error) {
 		// Get appName and userID from context.
 		appName, userID, err := GetAppAndUserFromContext(ctx)
 		if err != nil {
