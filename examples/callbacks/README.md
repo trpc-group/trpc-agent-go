@@ -12,6 +12,7 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 - **Tool Integration**: Built-in calculator and time tools
 - **Callback Mechanism**: Pluggable model, tool, and agent callbacks for extensibility and debugging
 - **Command Line Interface**: Configurable via command-line flags
+- **Performance Monitoring**: See [Timer Example](./timer/README.md) for comprehensive timing measurements with OpenTelemetry integration
 
 ---
 
@@ -350,6 +351,7 @@ go run main.go -streaming=false
 
 - [runner/README.md](../runner/README.md) (basic multi-turn chat and tool calling)
 - This directory's `main.go` (full callback registration and usage)
+- [Timer Example](./timer/README.md) (comprehensive timing measurements with OpenTelemetry integration for agent, model, and tool execution)
 
 ---
 
