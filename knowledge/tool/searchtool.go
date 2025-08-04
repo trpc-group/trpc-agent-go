@@ -15,6 +15,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -29,7 +30,6 @@ type KnowledgeSearchRequest struct {
 
 // KnowledgeSearchResponse represents the response from the knowledge search tool.
 type KnowledgeSearchResponse struct {
-	Success bool    `json:"success"`
 	Text    string  `json:"text,omitempty"`
 	Score   float64 `json:"score,omitempty"`
 	Message string  `json:"message,omitempty"`
@@ -39,14 +39,11 @@ type KnowledgeSearchResponse struct {
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
-	searchFunc := func(ctx context.Context, req KnowledgeSearchRequest) (KnowledgeSearchResponse, error) {
+	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequest) (*KnowledgeSearchResponse, error) {
 
 		// Validate input.
 		if req.Query == "" {
-			return KnowledgeSearchResponse{
-				Success: false,
-				Message: "Query cannot be empty",
-			}, fmt.Errorf("query cannot be empty")
+			return nil, errors.New("query cannot be empty")
 		}
 
 		// Create search request - for tools, we don't have conversation history yet.
@@ -59,23 +56,16 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 		// Search using the knowledge interface.
 		result, err := kb.Search(ctx, searchReq)
 		if err != nil {
-			return KnowledgeSearchResponse{
-				Success: false,
-				Message: fmt.Sprintf("Search failed: %v", err),
-			}, fmt.Errorf("search failed")
+			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
 		// Handle no results.
 		if result == nil {
-			return KnowledgeSearchResponse{
-				Success: true,
-				Message: "No relevant information found",
-			}, fmt.Errorf("no relevant information found")
+			return nil, errors.New("no relevant information found")
 		}
 
 		// Return successful result.
-		return KnowledgeSearchResponse{
-			Success: true,
+		return &KnowledgeSearchResponse{
 			Text:    result.Text,
 			Score:   result.Score,
 			Message: fmt.Sprintf("Found relevant content (score: %.2f)", result.Score),
@@ -85,6 +75,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge) tool.Tool {
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName("knowledge_search"),
-		function.WithDescription("Search for relevant information in the knowledge base. Use this tool to find context and facts to help answer user questions."),
+		function.WithDescription("Search for relevant information in the knowledge base. "+
+			"Use this tool to find context and facts to help answer user questions."),
 	)
 }
