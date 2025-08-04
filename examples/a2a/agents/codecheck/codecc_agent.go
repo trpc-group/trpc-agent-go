@@ -1,3 +1,4 @@
+// Package main provides a code check agent for A2A (Agent-to-Agent) communication.
 package main
 
 import (
