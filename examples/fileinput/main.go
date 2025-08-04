@@ -92,7 +92,6 @@ func (p *fileProcessor) setup() error {
 	// Create OpenAI model.
 	p.model = openai.New(p.modelName,
 		openai.WithAPIKey(p.apiKey),
-		openai.WithChannelBufferSize(512),
 	)
 
 	fmt.Printf("✅ File processor ready!\n\n")
