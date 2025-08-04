@@ -10,6 +10,7 @@
 //
 //
 
+// Package main provides a simple STDIO MCP server example.
 package main
 
 import (

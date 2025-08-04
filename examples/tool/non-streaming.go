@@ -65,6 +65,9 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 			if len(choice.Message.ToolCalls) == 0 {
 				fmt.Println("No tool calls made.")
 			} else {
+				// First, add the assistant message with tool calls.
+				request.Messages = append(request.Messages, choice.Message)
+
 				fmt.Println("CallableTool calls:")
 				for _, toolCall := range choice.Message.ToolCalls {
 					if toolCall.Function.Name == "get_weather" {
@@ -81,9 +84,9 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 						// Print the weather data
 						fmt.Printf("CallTool at local: Weather in %s: %s\n", location, bts)
 						request.Messages = append(request.Messages, model.Message{
-							Role:      model.RoleTool,
-							Content:   string(bts),
-							ToolCalls: []model.ToolCall{toolCall},
+							Role:    model.RoleTool,
+							Content: string(bts),
+							ToolID:  toolCall.ID,
 						})
 					}
 				}

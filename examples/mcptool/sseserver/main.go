@@ -10,6 +10,7 @@
 //
 //
 
+// Package main provides an SSE (Server-Sent Events) MCP server example.
 package main
 
 import (

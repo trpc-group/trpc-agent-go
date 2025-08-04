@@ -1,3 +1,4 @@
+// Package main provides an entrance agent for A2A (Agent-to-Agent) communication.
 package main
 
 import (

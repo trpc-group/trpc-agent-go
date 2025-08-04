@@ -1,3 +1,4 @@
+// Package main provides an A2A (Agent-to-Agent) client example.
 package main
 
 import (

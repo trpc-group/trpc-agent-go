@@ -10,6 +10,7 @@
 //
 //
 
+// Package main demonstrates telemetry (tracing and metrics) usage with OpenTelemetry.
 package main
 
 import (

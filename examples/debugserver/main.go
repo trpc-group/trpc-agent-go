@@ -127,6 +127,9 @@ func main() {
 		addr,
 		agents,
 	)
+	// Start the HTTP server and handle requests.
+	// This is a test server, so we don't need to use a more secure server.
+	//nolint:gosec
 	if err := http.ListenAndServe(addr, server.Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
@@ -161,8 +164,7 @@ type calculatorResult struct {
 
 // timeArgs holds the input for the time tool.
 type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone " +
-		"(UTC, EST, PST, CST) or leave empty for local"`
+	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
 }
 
 // timeResult holds the output for the time tool.

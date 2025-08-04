@@ -222,54 +222,17 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Detect and display tool calls
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			toolCallsDetected = true
-			if assistantStarted {
-				fmt.Printf("\n")
-			}
-			fmt.Printf("🔧 Tool calls:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				toolIcon := getToolIcon(toolCall.Function.Name)
-				fmt.Printf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
-				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Arguments: %s\n", string(toolCall.Function.Arguments))
-				}
-			}
-			fmt.Printf("\n⚡ Executing...\n")
+		if c.handleToolCalls(event, &toolCallsDetected, &assistantStarted) {
+			continue
 		}
 
 		// Detect tool responses
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			hasToolResponse := false
-			for _, choice := range event.Response.Choices {
-				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ Tool result (ID: %s): %s\n",
-						choice.Message.ToolID,
-						formatToolResult(choice.Message.Content))
-					hasToolResponse = true
-				}
-			}
-			if hasToolResponse {
-				continue
-			}
+		if c.handleToolResponses(event) {
+			continue
 		}
 
 		// Process streaming content
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-
-			// Process streaming delta content
-			if choice.Delta.Content != "" {
-				if !assistantStarted {
-					if toolCallsDetected {
-						fmt.Printf("\n🤖 Assistant: ")
-					}
-					assistantStarted = true
-				}
-				fmt.Print(choice.Delta.Content)
-				fullContent += choice.Delta.Content
-			}
-		}
+		c.processStreamingContent(event, &toolCallsDetected, &assistantStarted, &fullContent)
 
 		// Check if this is the final event
 		if event.Done && !c.isToolEvent(event) {
@@ -279,6 +242,67 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	}
 
 	return nil
+}
+
+// handleToolCalls processes tool call events and returns true if handled
+func (c *multiToolChat) handleToolCalls(event *event.Event, toolCallsDetected *bool, assistantStarted *bool) bool {
+	if len(event.Choices) == 0 || len(event.Choices[0].Message.ToolCalls) == 0 {
+		return false
+	}
+
+	*toolCallsDetected = true
+	if *assistantStarted {
+		fmt.Printf("\n")
+	}
+	fmt.Printf("🔧 Tool calls:\n")
+	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		toolIcon := getToolIcon(toolCall.Function.Name)
+		fmt.Printf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
+		if len(toolCall.Function.Arguments) > 0 {
+			fmt.Printf("     Arguments: %s\n", string(toolCall.Function.Arguments))
+		}
+	}
+	fmt.Printf("\n⚡ Executing...\n")
+	return true
+}
+
+// handleToolResponses processes tool response events and returns true if handled
+func (c *multiToolChat) handleToolResponses(event *event.Event) bool {
+	if event.Response == nil || len(event.Response.Choices) == 0 {
+		return false
+	}
+
+	hasToolResponse := false
+	for _, choice := range event.Response.Choices {
+		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+			fmt.Printf("✅ Tool result (ID: %s): %s\n",
+				choice.Message.ToolID,
+				formatToolResult(choice.Message.Content))
+			hasToolResponse = true
+		}
+	}
+	return hasToolResponse
+}
+
+// processStreamingContent processes streaming content events
+func (c *multiToolChat) processStreamingContent(event *event.Event, toolCallsDetected *bool, assistantStarted *bool, fullContent *string) {
+	if len(event.Choices) == 0 {
+		return
+	}
+
+	choice := event.Choices[0]
+
+	// Process streaming delta content
+	if choice.Delta.Content != "" {
+		if !*assistantStarted {
+			if *toolCallsDetected {
+				fmt.Printf("\n🤖 Assistant: ")
+			}
+			*assistantStarted = true
+		}
+		fmt.Print(choice.Delta.Content)
+		*fullContent += choice.Delta.Content
+	}
 }
 
 // isToolEvent checks if the event is a tool response (not a final response)
@@ -776,7 +800,7 @@ func writeFile(path, content string) (fileResponse, error) {
 		}, fmt.Errorf("failed to create directory: %v", err)
 	}
 
-	err := os.WriteFile(path, []byte(content), 0644)
+	err := os.WriteFile(path, []byte(content), 0600)
 	if err != nil {
 		return fileResponse{
 			Path:      path,
