@@ -1,3 +1,4 @@
+// Package main provides agent implementations for human-in-the-loop scenarios.
 package main
 
 import (

@@ -100,12 +100,3 @@ func getEnv(key, defaultValue string) string {
 	}
 	return value
 }
-
-// maskAPIKey masks the API key for logging purposes.
-// It returns the first 3 characters followed by asterisks for security.
-func maskAPIKey(apiKey string) string {
-	if len(apiKey) <= 6 {
-		return "***"
-	}
-	return apiKey[:3]
-}

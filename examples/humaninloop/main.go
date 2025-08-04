@@ -79,65 +79,18 @@ func processStreamingResponse(ctx context.Context, r runner.Runner, message mode
 		}
 
 		// Detect and display tool calls.
-		if len(e.Choices) > 0 && len(e.Choices[0].Message.ToolCalls) > 0 {
-			toolCallsDetected = true
-			if assistantStarted {
-				fmt.Printf("\n")
-			}
-			fmt.Printf("🔧 CallableTool calls initiated:\n")
-			for _, toolCall := range e.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
-				}
-				if _, ok := e.LongRunningToolIDs[toolCall.ID]; ok {
-					longRunningFunctionCall = &toolCall
-					fmt.Printf("(Captured as long_running_function_call for %s)\n", toolCall.Function.Name)
-				}
-			}
-			fmt.Printf("\n🔄 Executing tools...\n")
+		if longRunningFunctionCall, toolCallsDetected, assistantStarted = handleToolCalls(e,
+			longRunningFunctionCall, toolCallsDetected, assistantStarted); longRunningFunctionCall != nil {
+			continue
 		}
 
 		// Detect tool responses.
-		if e.Response != nil && len(e.Response.Choices) > 0 {
-			hasToolResponse := false
-			for _, choice := range e.Response.Choices {
-				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
-						choice.Message.ToolID,
-						strings.TrimSpace(choice.Message.Content))
-					hasToolResponse = true
-					if longRunningFunctionCall != nil && longRunningFunctionCall.ID == choice.Message.ToolID {
-						fmt.Printf("Captured as initial_tool_response for %s, content: %s", longRunningFunctionCall.Function.Name, choice.Message.Content)
-						initialToolResponse = &askForApprovalOutput{}
-						err := json.Unmarshal([]byte(choice.Message.Content), initialToolResponse)
-						if err != nil {
-							log.Fatalf("failed to unmarshal ask for approval output: %v", err)
-						}
-					}
-				}
-			}
-			if hasToolResponse {
-				continue
-			}
+		if initialToolResponse = handleToolResponses(e, longRunningFunctionCall); initialToolResponse != nil {
+			continue
 		}
 
 		// Process streaming content.
-		if len(e.Choices) > 0 {
-			choice := e.Choices[0]
-
-			// Handle streaming delta content.
-			if choice.Delta.Content != "" {
-				if !assistantStarted {
-					if toolCallsDetected {
-						fmt.Printf("\n🤖 Assistant: ")
-					}
-					assistantStarted = true
-				}
-				fmt.Print(choice.Delta.Content)
-				fullContent += choice.Delta.Content
-			}
-		}
+		fullContent, assistantStarted = processStreamingContent(e, toolCallsDetected, assistantStarted, fullContent)
 
 		// Check if this is the final e.
 		// Don't break on tool response events (Done=true but not final assistant response).
@@ -147,6 +100,78 @@ func processStreamingResponse(ctx context.Context, r runner.Runner, message mode
 		}
 	}
 	return longRunningFunctionCall, initialToolResponse
+}
+
+// handleToolCalls processes tool call events and returns updated state
+func handleToolCalls(e *event.Event, longRunningFunctionCall *model.ToolCall, toolCallsDetected bool, assistantStarted bool) (*model.ToolCall, bool, bool) {
+	if len(e.Choices) == 0 || len(e.Choices[0].Message.ToolCalls) == 0 {
+		return longRunningFunctionCall, toolCallsDetected, assistantStarted
+	}
+
+	toolCallsDetected = true
+	if assistantStarted {
+		fmt.Printf("\n")
+	}
+	fmt.Printf("🔧 CallableTool calls initiated:\n")
+	for _, toolCall := range e.Choices[0].Message.ToolCalls {
+		fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+		if len(toolCall.Function.Arguments) > 0 {
+			fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+		}
+		if _, ok := e.LongRunningToolIDs[toolCall.ID]; ok {
+			longRunningFunctionCall = &toolCall
+			fmt.Printf("(Captured as long_running_function_call for %s)\n", toolCall.Function.Name)
+		}
+	}
+	fmt.Printf("\n🔄 Executing tools...\n")
+	return longRunningFunctionCall, toolCallsDetected, assistantStarted
+}
+
+// handleToolResponses processes tool response events
+func handleToolResponses(e *event.Event, longRunningFunctionCall *model.ToolCall) *askForApprovalOutput {
+	if e.Response == nil || len(e.Response.Choices) == 0 {
+		return nil
+	}
+
+	var initialToolResponse *askForApprovalOutput
+	for _, choice := range e.Response.Choices {
+		if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+			fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+				choice.Message.ToolID,
+				strings.TrimSpace(choice.Message.Content))
+			if longRunningFunctionCall != nil && longRunningFunctionCall.ID == choice.Message.ToolID {
+				fmt.Printf("Captured as initial_tool_response for %s, content: %s", longRunningFunctionCall.Function.Name, choice.Message.Content)
+				initialToolResponse = &askForApprovalOutput{}
+				err := json.Unmarshal([]byte(choice.Message.Content), initialToolResponse)
+				if err != nil {
+					log.Fatalf("failed to unmarshal ask for approval output: %v", err)
+				}
+			}
+		}
+	}
+	return initialToolResponse
+}
+
+// processStreamingContent processes streaming content events
+func processStreamingContent(e *event.Event, toolCallsDetected bool, assistantStarted bool, fullContent string) (string, bool) {
+	if len(e.Choices) == 0 {
+		return fullContent, assistantStarted
+	}
+
+	choice := e.Choices[0]
+
+	// Handle streaming delta content.
+	if choice.Delta.Content != "" {
+		if !assistantStarted {
+			if toolCallsDetected {
+				fmt.Printf("\n🤖 Assistant: ")
+			}
+			assistantStarted = true
+		}
+		fmt.Print(choice.Delta.Content)
+		fullContent += choice.Delta.Content
+	}
+	return fullContent, assistantStarted
 }
 
 func isToolEvent(event *event.Event) bool {
