@@ -10,7 +10,7 @@
 //
 //
 
-// Package main demonstrates tool execution timing using ToolCallbacks.
+// Package main demonstrates tool execution timing using ToolCallbacks with OpenTelemetry integration.
 package main
 
 import (
@@ -30,14 +30,25 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
-	fmt.Println("🚀 Tool Timer Example")
-	fmt.Println("This example demonstrates how to use ToolCallbacks to measure tool execution time.")
-	fmt.Println(strings.Repeat("=", 50))
+	fmt.Println("🚀 Tool Timer with Telemetry Example")
+	fmt.Println("This example demonstrates how to use ToolCallbacks to measure tool execution time and report to OpenTelemetry.")
+	fmt.Println(strings.Repeat("=", 70))
+
+	// Initialize OpenTelemetry.
+	if err := initTelemetry(); err != nil {
+		log.Fatalf("Failed to initialize telemetry: %v", err)
+	}
 
 	// Create the example.
 	example := &toolTimerExample{}
@@ -48,7 +59,43 @@ func main() {
 	}
 }
 
-// toolTimerExample demonstrates tool execution timing.
+// initTelemetry initializes OpenTelemetry trace and metric exporters.
+func initTelemetry() error {
+	// Start trace telemetry.
+	cleanTrace, err := atrace.Start(
+		context.Background(),
+		atrace.WithEndpoint("localhost:4317"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start trace telemetry: %w", err)
+	}
+
+	// Start metric telemetry.
+	cleanMetric, err := ametric.Start(
+		context.Background(),
+		ametric.WithEndpoint("localhost:4317"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start metric telemetry: %w", err)
+	}
+
+	// Register cleanup functions.
+	// Note: In a real application, you would want to handle cleanup more gracefully.
+	go func() {
+		// Wait for the application to finish, then cleanup.
+		time.Sleep(5 * time.Minute)
+		if err := cleanTrace(); err != nil {
+			log.Printf("Failed to clean up trace telemetry: %v", err)
+		}
+		if err := cleanMetric(); err != nil {
+			log.Printf("Failed to clean up metric telemetry: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+// toolTimerExample demonstrates tool execution timing with telemetry integration.
 type toolTimerExample struct {
 	runner    runner.Runner
 	userID    string
@@ -59,11 +106,27 @@ type toolTimerExample struct {
 	modelStartTimes map[string]time.Time
 	// Add a field to store the current model key for timing.
 	currentModelKey string
+	// Add telemetry metrics.
+	agentDurationHistogram metric.Float64Histogram
+	toolDurationHistogram  metric.Float64Histogram
+	modelDurationHistogram metric.Float64Histogram
+	agentCounter           metric.Int64Counter
+	toolCounter            metric.Int64Counter
+	modelCounter           metric.Int64Counter
+	// Add fields to store spans for later use.
+	agentSpans map[string]trace.Span
+	modelSpans map[string]trace.Span
+	toolSpans  map[string]trace.Span
 }
 
 // run executes the tool timer example.
 func (e *toolTimerExample) run() error {
 	ctx := context.Background()
+
+	// Initialize telemetry metrics.
+	if err := e.initMetrics(); err != nil {
+		return fmt.Errorf("failed to initialize metrics: %w", err)
+	}
 
 	// Setup the runner.
 	if err := e.setup(ctx); err != nil {
@@ -72,6 +135,66 @@ func (e *toolTimerExample) run() error {
 
 	// Run the example.
 	return e.runExample(ctx)
+}
+
+// initMetrics initializes OpenTelemetry metrics.
+func (e *toolTimerExample) initMetrics() error {
+	var err error
+
+	// Initialize histograms for duration measurements.
+	e.agentDurationHistogram, err = ametric.Meter.Float64Histogram(
+		"agent_duration_seconds",
+		metric.WithDescription("Duration of agent execution in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create agent duration histogram: %w", err)
+	}
+
+	e.toolDurationHistogram, err = ametric.Meter.Float64Histogram(
+		"tool_duration_seconds",
+		metric.WithDescription("Duration of tool execution in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create tool duration histogram: %w", err)
+	}
+
+	e.modelDurationHistogram, err = ametric.Meter.Float64Histogram(
+		"model_duration_seconds",
+		metric.WithDescription("Duration of model inference in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create model duration histogram: %w", err)
+	}
+
+	// Initialize counters for execution counts.
+	e.agentCounter, err = ametric.Meter.Int64Counter(
+		"agent_executions_total",
+		metric.WithDescription("Total number of agent executions"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create agent counter: %w", err)
+	}
+
+	e.toolCounter, err = ametric.Meter.Int64Counter(
+		"tool_executions_total",
+		metric.WithDescription("Total number of tool executions"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create tool counter: %w", err)
+	}
+
+	e.modelCounter, err = ametric.Meter.Int64Counter(
+		"model_inferences_total",
+		metric.WithDescription("Total number of model inferences"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create model counter: %w", err)
+	}
+
+	return nil
 }
 
 // setup creates the runner with LLM agent and tools.
@@ -143,44 +266,6 @@ func (e *toolTimerExample) createModelCallbacks() *model.Callbacks {
 	return modelCallbacks
 }
 
-// createBeforeToolCallback creates the before tool callback for timing.
-func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-		// Record start time and store it in the instance variable.
-		startTime := time.Now()
-		if e.toolStartTimes == nil {
-			e.toolStartTimes = make(map[string]time.Time)
-		}
-		e.toolStartTimes[toolName] = startTime
-
-		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
-		fmt.Printf("   Args: %s\n", string(jsonArgs))
-
-		return nil, nil
-	}
-}
-
-// createAfterToolCallback creates the after tool callback for timing.
-func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		// Get start time from the instance variable.
-		if startTime, exists := e.toolStartTimes[toolName]; exists {
-			duration := time.Since(startTime)
-			fmt.Printf("⏱️  AfterToolCallback: %s completed in %v\n", toolName, duration)
-			fmt.Printf("   Result: %v\n", result)
-			if runErr != nil {
-				fmt.Printf("   Error: %v\n", runErr)
-			}
-			// Clean up the start time after use.
-			delete(e.toolStartTimes, toolName)
-		} else {
-			fmt.Printf("⏱️  AfterToolCallback: %s completed (no timing info available)\n", toolName)
-		}
-
-		return nil, nil // Return nil to use the original result.
-	}
-}
-
 // createBeforeAgentCallback creates the before agent callback for timing.
 func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback {
 	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
@@ -190,6 +275,22 @@ func (e *toolTimerExample) createBeforeAgentCallback() agent.BeforeAgentCallback
 			e.agentStartTimes = make(map[string]time.Time)
 		}
 		e.agentStartTimes[invocation.InvocationID] = startTime
+
+		// Create trace span for agent execution.
+		_, span := atrace.Tracer.Start(
+			ctx,
+			"agent_execution",
+			trace.WithAttributes(
+				attribute.String("agent.name", invocation.AgentName),
+				attribute.String("invocation.id", invocation.InvocationID),
+				attribute.String("user.message", invocation.Message.Content),
+			),
+		)
+		// Store span in instance variable for later use.
+		if e.agentSpans == nil {
+			e.agentSpans = make(map[string]trace.Span)
+		}
+		e.agentSpans[invocation.InvocationID] = span
 
 		fmt.Printf("⏱️  BeforeAgentCallback: %s started at %s\n", invocation.AgentName, startTime.Format("15:04:05.000"))
 		fmt.Printf("   InvocationID: %s\n", invocation.InvocationID)
@@ -205,6 +306,39 @@ func (e *toolTimerExample) createAfterAgentCallback() agent.AfterAgentCallback {
 		// Get start time from the instance variable.
 		if startTime, exists := e.agentStartTimes[invocation.InvocationID]; exists {
 			duration := time.Since(startTime)
+			durationSeconds := duration.Seconds()
+
+			// Record metrics.
+			e.agentDurationHistogram.Record(ctx, durationSeconds,
+				metric.WithAttributes(
+					attribute.String("agent.name", invocation.AgentName),
+					attribute.String("invocation.id", invocation.InvocationID),
+				),
+			)
+			e.agentCounter.Add(ctx, 1,
+				metric.WithAttributes(
+					attribute.String("agent.name", invocation.AgentName),
+				),
+			)
+
+			// End trace span from instance variable.
+			if span, exists := e.agentSpans[invocation.InvocationID]; exists {
+				if runErr != nil {
+					span.RecordError(runErr)
+				}
+				status := "success"
+				if runErr != nil {
+					status = "error"
+				}
+				span.SetAttributes(
+					attribute.Float64("duration.seconds", durationSeconds),
+					attribute.String("status", status),
+				)
+				span.End()
+				// Clean up the span after use.
+				delete(e.agentSpans, invocation.InvocationID)
+			}
+
 			fmt.Printf("⏱️  AfterAgentCallback: %s completed in %v\n", invocation.AgentName, duration)
 			if runErr != nil {
 				fmt.Printf("   Error: %v\n", runErr)
@@ -232,6 +366,21 @@ func (e *toolTimerExample) createBeforeModelCallback() model.BeforeModelCallback
 		e.modelStartTimes[modelKey] = startTime
 		e.currentModelKey = modelKey // Store the current model key.
 
+		// Create trace span for model inference.
+		_, span := atrace.Tracer.Start(
+			ctx,
+			"model_inference",
+			trace.WithAttributes(
+				attribute.Int("messages.count", len(req.Messages)),
+				attribute.String("model.key", modelKey),
+			),
+		)
+		// Store span in instance variable for later use.
+		if e.modelSpans == nil {
+			e.modelSpans = make(map[string]trace.Span)
+		}
+		e.modelSpans[modelKey] = span
+
 		fmt.Printf("⏱️  BeforeModelCallback: model started at %s\n", startTime.Format("15:04:05.000"))
 		fmt.Printf("   ModelKey: %s\n", modelKey)
 		fmt.Printf("   Messages: %d\n", len(req.Messages))
@@ -249,6 +398,35 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 		// Get start time from the instance variable.
 		if startTime, exists := e.modelStartTimes[modelKey]; exists {
 			duration := time.Since(startTime)
+			durationSeconds := duration.Seconds()
+
+			// Record metrics.
+			e.modelDurationHistogram.Record(ctx, durationSeconds,
+				metric.WithAttributes(
+					attribute.String("model.key", modelKey),
+					attribute.Int("messages.count", len(req.Messages)),
+				),
+			)
+			e.modelCounter.Add(ctx, 1)
+
+			// End trace span from instance variable.
+			if span, exists := e.modelSpans[modelKey]; exists {
+				if modelErr != nil {
+					span.RecordError(modelErr)
+				}
+				status := "success"
+				if modelErr != nil {
+					status = "error"
+				}
+				span.SetAttributes(
+					attribute.Float64("duration.seconds", durationSeconds),
+					attribute.String("status", status),
+				)
+				span.End()
+				// Clean up the span after use.
+				delete(e.modelSpans, modelKey)
+			}
+
 			fmt.Printf("⏱️  AfterModelCallback: model completed in %v\n", duration)
 			if modelErr != nil {
 				fmt.Printf("   Error: %v\n", modelErr)
@@ -258,6 +436,91 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 			e.currentModelKey = "" // Clear the current model key.
 		} else {
 			fmt.Printf("⏱️  AfterModelCallback: model completed (no timing info available)\n")
+		}
+
+		return nil, nil // Return nil to use the original result.
+	}
+}
+
+// createBeforeToolCallback creates the before tool callback for timing.
+func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+		// Record start time and store it in the instance variable.
+		startTime := time.Now()
+		if e.toolStartTimes == nil {
+			e.toolStartTimes = make(map[string]time.Time)
+		}
+		e.toolStartTimes[toolName] = startTime
+
+		// Create trace span for tool execution.
+		_, span := atrace.Tracer.Start(
+			ctx,
+			"tool_execution",
+			trace.WithAttributes(
+				attribute.String("tool.name", toolName),
+				attribute.String("tool.args", string(jsonArgs)),
+			),
+		)
+		// Store span in instance variable for later use.
+		if e.toolSpans == nil {
+			e.toolSpans = make(map[string]trace.Span)
+		}
+		e.toolSpans[toolName] = span
+
+		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
+		fmt.Printf("   Args: %s\n", string(jsonArgs))
+
+		return nil, nil
+	}
+}
+
+// createAfterToolCallback creates the after tool callback for timing.
+func (e *toolTimerExample) createAfterToolCallback() tool.AfterToolCallback {
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
+		// Get start time from the instance variable.
+		if startTime, exists := e.toolStartTimes[toolName]; exists {
+			duration := time.Since(startTime)
+			durationSeconds := duration.Seconds()
+
+			// Record metrics.
+			e.toolDurationHistogram.Record(ctx, durationSeconds,
+				metric.WithAttributes(
+					attribute.String("tool.name", toolName),
+				),
+			)
+			e.toolCounter.Add(ctx, 1,
+				metric.WithAttributes(
+					attribute.String("tool.name", toolName),
+				),
+			)
+
+			// End trace span from instance variable.
+			if span, exists := e.toolSpans[toolName]; exists {
+				if runErr != nil {
+					span.RecordError(runErr)
+				}
+				status := "success"
+				if runErr != nil {
+					status = "error"
+				}
+				span.SetAttributes(
+					attribute.Float64("duration.seconds", durationSeconds),
+					attribute.String("status", status),
+				)
+				span.End()
+				// Clean up the span after use.
+				delete(e.toolSpans, toolName)
+			}
+
+			fmt.Printf("⏱️  AfterToolCallback: %s completed in %v\n", toolName, duration)
+			fmt.Printf("   Result: %v\n", result)
+			if runErr != nil {
+				fmt.Printf("   Error: %v\n", runErr)
+			}
+			// Clean up the start time after use.
+			delete(e.toolStartTimes, toolName)
+		} else {
+			fmt.Printf("⏱️  AfterToolCallback: %s completed (no timing info available)\n", toolName)
 		}
 
 		return nil, nil // Return nil to use the original result.
