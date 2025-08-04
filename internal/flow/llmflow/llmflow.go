@@ -198,16 +198,16 @@ func (f *Flow) processStreamingResponses(
 			response = customResp
 		}
 
-		// Create and send LLM response using the clean constructor.
+		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		eventChan <- llmResponseEvent
 
-		// Check context cancellation.
+		// 5. Check context cancellation.
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
-		// Postprocess response.
+		// 6. Postprocess response.
 		f.postprocess(ctx, invocation, response, eventChan)
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
@@ -215,7 +215,7 @@ func (f *Flow) processStreamingResponses(
 
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
 
-		// Handle function calls if present.
+		// 7. Handle function calls if present in the response.
 		if f.hasToolCalls(response) {
 			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmResponseEvent, llmRequest.Tools, eventChan)
 			if err != nil {
