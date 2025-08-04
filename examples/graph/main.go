@@ -40,8 +40,6 @@ import (
 const (
 	// Default model name for deepseek-chat.
 	defaultModelName = "deepseek-chat"
-	// Default channel buffer size.
-	defaultChannelBufferSize = 512
 )
 
 var (

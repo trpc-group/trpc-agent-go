@@ -36,9 +36,8 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
-	maxTokens                = 350 // Increased slightly for more detailed analysis
-	temperature              = 0.7
+	maxTokens   = 350 // Increased slightly for more detailed analysis
+	temperature = 0.7
 )
 
 // parallelChat manages the parallel multi-agent conversation.

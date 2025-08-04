@@ -36,9 +36,8 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
-	maxTokens                = 500 // Reduced for faster, more concise responses
-	temperature              = 0.7
+	maxTokens   = 500 // Reduced for faster, more concise responses
+	temperature = 0.7
 )
 
 func main() {

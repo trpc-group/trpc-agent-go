@@ -89,7 +89,7 @@ func (c *memoryChat) run() error {
 // setup creates the runner with LLM agent and memory tools.
 func (c *memoryChat) setup(_ context.Context) error {
 	// Create OpenAI model.
-	modelInstance := openai.New(c.modelName, openai.WithChannelBufferSize(512))
+	modelInstance := openai.New(c.modelName)
 
 	// Create custom memory service.
 	memoryService := memoryinmemory.NewMemoryService(

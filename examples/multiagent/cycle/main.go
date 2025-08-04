@@ -36,10 +36,9 @@ import (
 )
 
 const (
-	defaultChannelBufferSize = 256
-	maxTokens                = 300 // Reduced for faster, more concise responses
-	temperature              = 0.7
-	defaultMaxIterations     = 3 // Default max iterations for cycle
+	maxTokens            = 300 // Reduced for faster, more concise responses
+	temperature          = 0.7
+	defaultMaxIterations = 3 // Default max iterations for cycle
 )
 
 func main() {
