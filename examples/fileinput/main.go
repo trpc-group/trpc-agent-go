@@ -90,9 +90,7 @@ func (p *fileProcessor) run() error {
 // setup creates the OpenAI model.
 func (p *fileProcessor) setup() error {
 	// Create OpenAI model.
-	p.model = openai.New(p.modelName,
-		openai.WithAPIKey(p.apiKey),
-	)
+	p.model = openai.New(p.modelName, openai.WithAPIKey(p.apiKey))
 
 	fmt.Printf("✅ File processor ready!\n\n")
 	return nil
