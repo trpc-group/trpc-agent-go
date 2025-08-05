@@ -23,6 +23,7 @@ import (
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -616,13 +617,7 @@ func (m *Model) handleStreamingResponse(
 		chunk := stream.Current()
 
 		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
-		if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-			toolCall := chunk.Choices[0].Delta.ToolCalls[0]
-			index := int(toolCall.Index)
-			if toolCall.ID != "" {
-				idToIndexMap[toolCall.ID] = index
-			}
-		}
+		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
 		acc.AddChunk(chunk)
 
@@ -630,32 +625,7 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
-		response := &model.Response{
-			ID:        chunk.ID,
-			Object:    string(chunk.Object), // Convert constant to string
-			Created:   chunk.Created,
-			Model:     chunk.Model,
-			Timestamp: time.Now(),
-			Done:      false,
-			IsPartial: true,
-		}
-
-		// Convert choices for partial responses (content streaming).
-		if len(chunk.Choices) > 0 {
-			if response.Choices == nil {
-				response.Choices = make([]model.Choice, 1)
-			}
-			response.Choices[0].Delta = model.Message{
-				Role:    model.RoleAssistant,
-				Content: chunk.Choices[0].Delta.Content,
-			}
-
-			// Handle finish reason - FinishReason is a plain string.
-			if chunk.Choices[0].FinishReason != "" {
-				finishReason := chunk.Choices[0].FinishReason
-				response.Choices[0].FinishReason = &finishReason
-			}
-		}
+		response := m.createPartialResponse(chunk)
 
 		select {
 		case responseChan <- response:
@@ -665,6 +635,60 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
+	m.sendFinalResponse(stream, acc, idToIndexMap, responseChan, ctx)
+}
+
+// updateToolCallIndexMapping updates the tool call index mapping.
+func (m *Model) updateToolCallIndexMapping(chunk openai.ChatCompletionChunk, idToIndexMap map[string]int) {
+	if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+		toolCall := chunk.Choices[0].Delta.ToolCalls[0]
+		index := int(toolCall.Index)
+		if toolCall.ID != "" {
+			idToIndexMap[toolCall.ID] = index
+		}
+	}
+}
+
+// createPartialResponse creates a partial response from a chunk.
+func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
+	response := &model.Response{
+		ID:        chunk.ID,
+		Object:    string(chunk.Object), // Convert constant to string
+		Created:   chunk.Created,
+		Model:     chunk.Model,
+		Timestamp: time.Now(),
+		Done:      false,
+		IsPartial: true,
+	}
+
+	// Convert choices for partial responses (content streaming).
+	if len(chunk.Choices) > 0 {
+		if response.Choices == nil {
+			response.Choices = make([]model.Choice, 1)
+		}
+		response.Choices[0].Delta = model.Message{
+			Role:    model.RoleAssistant,
+			Content: chunk.Choices[0].Delta.Content,
+		}
+
+		// Handle finish reason - FinishReason is a plain string.
+		if chunk.Choices[0].FinishReason != "" {
+			finishReason := chunk.Choices[0].FinishReason
+			response.Choices[0].FinishReason = &finishReason
+		}
+	}
+
+	return response
+}
+
+// sendFinalResponse sends the final response with accumulated data.
+func (m *Model) sendFinalResponse(
+	stream *ssestream.Stream[openai.ChatCompletionChunk],
+	acc openai.ChatCompletionAccumulator,
+	idToIndexMap map[string]int,
+	responseChan chan<- *model.Response,
+	ctx context.Context,
+) {
 	if stream.Err() == nil {
 		// Check accumulated tool calls (batch processing after streaming is complete).
 		var hasToolCall bool
@@ -672,63 +696,10 @@ func (m *Model) handleStreamingResponse(
 
 		if len(acc.Choices) > 0 && len(acc.Choices[0].Message.ToolCalls) > 0 {
 			hasToolCall = true
-			accumulatedToolCalls = make([]model.ToolCall, 0, len(acc.Choices[0].Message.ToolCalls))
-
-			for i, toolCall := range acc.Choices[0].Message.ToolCalls {
-				// if openai return function tool call start with index 1 or more
-				// ChatCompletionAccumulator will return empty tool call for index like 0, skip it.
-				if toolCall.Function.Name == "" && toolCall.ID == "" {
-					continue
-				}
-
-				// Use the original index from ID->Index mapping if available, otherwise use loop index.
-				originalIndex := i
-				if toolCall.ID != "" {
-					if mappedIndex, exists := idToIndexMap[toolCall.ID]; exists {
-						originalIndex = mappedIndex
-					}
-				}
-
-				accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
-					Index: func() *int { idx := originalIndex; return &idx }(),
-					ID:    toolCall.ID,
-					Type:  functionToolType, // openapi only supports a function type for now.
-					Function: model.FunctionDefinitionParam{
-						Name:      toolCall.Function.Name,
-						Arguments: []byte(toolCall.Function.Arguments),
-					},
-				})
-			}
+			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
 		}
 
-		finalResponse := &model.Response{
-			ID:      acc.ID,
-			Created: acc.Created,
-			Model:   acc.Model,
-			Choices: make([]model.Choice, len(acc.Choices)),
-			Usage: &model.Usage{
-				PromptTokens:     int(acc.Usage.PromptTokens),
-				CompletionTokens: int(acc.Usage.CompletionTokens),
-				TotalTokens:      int(acc.Usage.TotalTokens),
-			},
-			Timestamp: time.Now(),
-			Done:      !hasToolCall,
-			IsPartial: false,
-		}
-		for i, choice := range acc.Choices {
-			finalResponse.Choices[i] = model.Choice{
-				Index: int(choice.Index),
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: choice.Message.Content,
-				},
-			}
-
-			// If there are tool calls, add them to the final response.
-			if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
-				finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
-			}
-		}
+		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls)
 
 		select {
 		case responseChan <- finalResponse:
@@ -750,6 +721,81 @@ func (m *Model) handleStreamingResponse(
 		case <-ctx.Done():
 		}
 	}
+}
+
+// processAccumulatedToolCalls processes accumulated tool calls.
+func (m *Model) processAccumulatedToolCalls(
+	acc openai.ChatCompletionAccumulator,
+	idToIndexMap map[string]int,
+) []model.ToolCall {
+	accumulatedToolCalls := make([]model.ToolCall, 0, len(acc.Choices[0].Message.ToolCalls))
+
+	for i, toolCall := range acc.Choices[0].Message.ToolCalls {
+		// if openai return function tool call start with index 1 or more
+		// ChatCompletionAccumulator will return empty tool call for index like 0, skip it.
+		if toolCall.Function.Name == "" && toolCall.ID == "" {
+			continue
+		}
+
+		// Use the original index from ID->Index mapping if available, otherwise use loop index.
+		originalIndex := i
+		if toolCall.ID != "" {
+			if mappedIndex, exists := idToIndexMap[toolCall.ID]; exists {
+				originalIndex = mappedIndex
+			}
+		}
+
+		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
+			Index: func() *int { idx := originalIndex; return &idx }(),
+			ID:    toolCall.ID,
+			Type:  functionToolType, // openapi only supports a function type for now.
+			Function: model.FunctionDefinitionParam{
+				Name:      toolCall.Function.Name,
+				Arguments: []byte(toolCall.Function.Arguments),
+			},
+		})
+	}
+
+	return accumulatedToolCalls
+}
+
+// createFinalResponse creates the final response with accumulated data.
+func (m *Model) createFinalResponse(
+	acc openai.ChatCompletionAccumulator,
+	hasToolCall bool,
+	accumulatedToolCalls []model.ToolCall,
+) *model.Response {
+	finalResponse := &model.Response{
+		ID:      acc.ID,
+		Created: acc.Created,
+		Model:   acc.Model,
+		Choices: make([]model.Choice, len(acc.Choices)),
+		Usage: &model.Usage{
+			PromptTokens:     int(acc.Usage.PromptTokens),
+			CompletionTokens: int(acc.Usage.CompletionTokens),
+			TotalTokens:      int(acc.Usage.TotalTokens),
+		},
+		Timestamp: time.Now(),
+		Done:      !hasToolCall,
+		IsPartial: false,
+	}
+
+	for i, choice := range acc.Choices {
+		finalResponse.Choices[i] = model.Choice{
+			Index: int(choice.Index),
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: choice.Message.Content,
+			},
+		}
+
+		// If there are tool calls, add them to the final response.
+		if hasToolCall && i == 0 { // Usually only the first choice contains tool calls.
+			finalResponse.Choices[i].Message.ToolCalls = accumulatedToolCalls
+		}
+	}
+
+	return finalResponse
 }
 
 // handleNonStreamingResponse handles non-streaming chat completion responses.
