@@ -1,3 +1,4 @@
+// Package artifact provides the definition and service for content artifacts.
 package artifact
 
 // Artifact represents a content artifact such as an image, video, or document.
