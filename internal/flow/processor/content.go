@@ -404,30 +404,18 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	// Start with the first event as base.
 	mergedEvent := functionResponseEvents[0]
 
-	// For simplicity, we'll combine the content from all responses.
-	// In a more sophisticated implementation, we'd handle function_response
-	// ID mapping more precisely.
-	var combinedContent strings.Builder
-	for i, evt := range functionResponseEvents {
-		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content != "" {
-			if i > 0 {
-				combinedContent.WriteString(" ")
+	// Collect all tool response messages, preserving each individual ToolID.
+	var allChoices []model.Choice
+	for _, evt := range functionResponseEvents {
+		for _, choice := range evt.Choices {
+			if choice.Message.Content != "" && choice.Message.ToolID != "" {
+				allChoices = append(allChoices, choice)
 			}
-			combinedContent.WriteString(evt.Choices[0].Message.Content)
 		}
 	}
 
-	if combinedContent.Len() > 0 {
-		mergedEvent.Choices = []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: combinedContent.String(),
-					ToolID:  functionResponseEvents[0].Choices[0].Message.ToolID,
-				},
-			},
-		}
+	if len(allChoices) > 0 {
+		mergedEvent.Choices = allChoices
 	}
 
 	return mergedEvent

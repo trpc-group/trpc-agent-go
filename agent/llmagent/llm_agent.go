@@ -168,6 +168,14 @@ func WithAddNameToInstruction(addNameToInstruction bool) Option {
 	}
 }
 
+// WithEnableParallelTools enables parallel tool execution if set to true.
+// By default, tools execute serially for safety and compatibility.
+func WithEnableParallelTools(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableParallelTools = enable
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -208,6 +216,9 @@ type Options struct {
 	Memory memory.Service
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
+	// EnableParallelTools enables parallel tool execution if true.
+	// If false (default), tools will execute serially for safety.
+	EnableParallelTools bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -292,7 +303,8 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: options.ChannelBufferSize,
+		ChannelBufferSize:   options.ChannelBufferSize,
+		EnableParallelTools: options.EnableParallelTools,
 	}
 
 	llmFlow := llmflow.New(

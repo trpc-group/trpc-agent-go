@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,14 +54,22 @@ const (
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize int // Buffer size for event channels (default: 256)
+	ChannelBufferSize   int  // Buffer size for event channels (default: 256)
+	EnableParallelTools bool // If true, enable parallel tool execution (default: false, serial execution for safety)
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors  []flow.RequestProcessor
-	responseProcessors []flow.ResponseProcessor
-	channelBufferSize  int
+	requestProcessors   []flow.RequestProcessor
+	responseProcessors  []flow.ResponseProcessor
+	channelBufferSize   int
+	enableParallelTools bool
+}
+
+// toolResult holds the result of a single tool execution.
+type toolResult struct {
+	index int
+	event *event.Event
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -77,9 +86,10 @@ func New(
 	}
 
 	return &Flow{
-		requestProcessors:  requestProcessors,
-		responseProcessors: responseProcessors,
-		channelBufferSize:  channelBufferSize,
+		requestProcessors:   requestProcessors,
+		responseProcessors:  responseProcessors,
+		channelBufferSize:   channelBufferSize,
+		enableParallelTools: opts.EnableParallelTools,
 	}
 }
 
@@ -427,8 +437,14 @@ func (f *Flow) handleFunctionCalls(
 	}
 
 	var toolCallResponsesEvents []*event.Event
-	// Execute each tool call.
 	toolCalls := functionCallEvent.Response.Choices[0].Message.ToolCalls
+
+	// If parallel tools are enabled AND multiple tool calls, execute concurrently
+	if f.enableParallelTools && len(toolCalls) > 1 {
+		return f.executeToolCallsInParallel(ctx, invocation, functionCallEvent, toolCalls, tools)
+	}
+
+	// Execute each tool call.
 	for i, toolCall := range toolCalls {
 		if err := func(index int, toolCall model.ToolCall) error {
 			ctxWithInvocation, span := trace.Tracer.Start(ctx,
@@ -478,6 +494,170 @@ func (f *Flow) handleFunctionCalls(
 	}
 
 	return mergedEvent, nil
+}
+
+// executeToolCallsInParallel executes multiple tool calls concurrently using goroutines.
+func (f *Flow) executeToolCallsInParallel(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	functionCallEvent *event.Event,
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+) (*event.Event, error) {
+	resultChan := make(chan toolResult, len(toolCalls))
+	var wg sync.WaitGroup
+
+	// Start goroutines for concurrent execution.
+	for i, toolCall := range toolCalls {
+		wg.Add(1)
+		go func(index int, tc model.ToolCall) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("Tool execution panic for %s (index: %d, ID: %s, agent: %s): %v",
+						tc.Function.Name, index, tc.ID, invocation.AgentName, r)
+					// Send error result to channel.
+					errorChoice := f.createErrorChoice(index, tc.ID, fmt.Sprintf("tool execution panic: %v", r))
+					errorChoice.Message.ToolName = tc.Function.Name
+					errorEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*errorChoice})
+					select {
+					case resultChan <- toolResult{index: index, event: errorEvent}:
+					case <-ctx.Done():
+						// Context cancelled, don't block.
+					}
+				}
+			}()
+
+			ctxWithInvocation, span := trace.Tracer.Start(ctx,
+				fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, tc.Function.Name))
+			defer span.End()
+
+			choice, err := f.executeToolCall(ctxWithInvocation, invocation, tc, tools, index)
+			if err != nil {
+				log.Errorf("Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
+					tc.Function.Name, index, tc.ID, invocation.AgentName, err)
+				// Send error result to channel.
+				errorChoice := f.createErrorChoice(index, tc.ID, fmt.Sprintf("tool execution error: %v", err))
+				errorChoice.Message.ToolName = tc.Function.Name
+				errorEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*errorChoice})
+				select {
+				case resultChan <- toolResult{index: index, event: errorEvent}:
+				case <-ctx.Done():
+					// Context cancelled, don't block.
+				}
+				return
+			}
+			if choice == nil {
+				// For LongRunning tools that return nil, we still need to send a placeholder.
+				select {
+				case resultChan <- toolResult{index: index, event: nil}:
+				case <-ctx.Done():
+					// Context cancelled, don't block.
+				}
+				return
+			}
+
+			choice.Message.ToolName = tc.Function.Name
+			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallEvent, []model.Choice{*choice})
+
+			tl, ok := tools[tc.Function.Name]
+			var declaration *tool.Declaration
+			if !ok {
+				declaration = &tool.Declaration{
+					Name:        "<not found>",
+					Description: "<not found>",
+				}
+			} else {
+				declaration = tl.Declaration()
+			}
+			itelemetry.TraceToolCall(span, declaration, tc.Function.Arguments, toolCallResponseEvent)
+
+			// Send result to channel with context cancellation support.
+			select {
+			case resultChan <- toolResult{
+				index: index,
+				event: toolCallResponseEvent,
+			}:
+			case <-ctx.Done():
+				// Context cancelled, don't block on channel send.
+			}
+		}(i, toolCall)
+	}
+
+	// Wait for all goroutines to complete with context cancellation support.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(done)
+	}()
+
+	// Collect results and maintain original order.
+	toolCallResponsesEvents := f.collectParallelToolResults(ctx, resultChan, done, len(toolCalls))
+
+	var mergedEvent *event.Event
+	if len(toolCallResponsesEvents) == 0 {
+		mergedEvent = newToolCallResponseEvent(invocation, functionCallEvent, nil)
+	} else {
+		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
+	}
+
+	// Signal that this event needs to be completed before proceeding.
+	mergedEvent.RequiresCompletion = true
+	mergedEvent.CompletionID = uuid.New().String()
+	if len(toolCallResponsesEvents) > 1 {
+		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
+		itelemetry.TraceMergedToolCalls(span, mergedEvent)
+		span.End()
+	}
+
+	return mergedEvent, nil
+}
+
+// collectParallelToolResults collects results from the result channel and filters out nil events.
+func (f *Flow) collectParallelToolResults(
+	ctx context.Context,
+	resultChan <-chan toolResult,
+	done <-chan struct{},
+	toolCallsCount int,
+) []*event.Event {
+	results := make([]*event.Event, toolCallsCount)
+
+	for {
+		select {
+		case result, ok := <-resultChan:
+			if !ok {
+				// Channel closed, all results received.
+				return f.filterNilEvents(results)
+			}
+			// Add bounds checking to prevent index out of range
+			if result.index >= 0 && result.index < len(results) {
+				results[result.index] = result.event
+			} else {
+				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
+			}
+		case <-ctx.Done():
+			// Context cancelled, stop waiting for more results.
+			log.Warnf("Context cancelled while waiting for tool results")
+			return f.filterNilEvents(results)
+		case <-done:
+			// All goroutines completed.
+			return f.filterNilEvents(results)
+		}
+	}
+}
+
+// filterNilEvents filters out nil events from a slice of events while preserving order.
+// Pre-allocates capacity to avoid multiple memory allocations.
+func (f *Flow) filterNilEvents(results []*event.Event) []*event.Event {
+	// Pre-allocate with capacity to reduce allocations
+	filtered := make([]*event.Event, 0, len(results))
+	for _, event := range results {
+		if event != nil {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool.Tool) map[string]struct{} {
@@ -706,18 +886,59 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 		return es[0]
 	}
 
-	mergedChoices := make([]model.Choice, len(es))
+	// Pre-calculate capacity to avoid multiple slice reallocations
+	totalChoices := 0
 	for _, e := range es {
-		mergedChoices = append(mergedChoices, e.Response.Choices...)
+		if e != nil && e.Response != nil {
+			totalChoices += len(e.Response.Choices)
+		}
+	}
+
+	mergedChoices := make([]model.Choice, 0, totalChoices)
+	for _, e := range es {
+		// Add nil checks to prevent panic
+		if e != nil && e.Response != nil {
+			mergedChoices = append(mergedChoices, e.Response.Choices...)
+		}
 	}
 	eventID := uuid.New().String()
-	baseEvent := es[0]
+
+	// Find a valid base event for metadata.
+	var baseEvent *event.Event
+	for _, e := range es {
+		if e != nil {
+			baseEvent = e
+			break
+		}
+	}
+
+	// Fallback if all events are nil (should not happen in normal flow).
+	if baseEvent == nil {
+		return &event.Event{
+			Response: &model.Response{
+				ID:        eventID,
+				Object:    model.ObjectTypeToolResponse,
+				Created:   time.Now().Unix(),
+				Model:     "unknown",
+				Choices:   mergedChoices,
+				Timestamp: time.Now(),
+			},
+			ID:        eventID,
+			Timestamp: time.Now(),
+		}
+	}
+
 	return &event.Event{
 		Response: &model.Response{
-			ID:        eventID,
-			Object:    model.ObjectTypeToolResponse,
-			Created:   time.Now().Unix(),
-			Model:     baseEvent.Response.Model,
+			ID:      eventID,
+			Object:  model.ObjectTypeToolResponse,
+			Created: time.Now().Unix(),
+			Model: func() string {
+				if baseEvent.Response != nil {
+					return baseEvent.Response.Model
+				}
+				return "unknown"
+			}(),
 			Choices:   mergedChoices,
 			Timestamp: time.Now(),
 		},

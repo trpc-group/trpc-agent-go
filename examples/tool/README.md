@@ -74,6 +74,89 @@ Returns population information for a given city.
 }
 ```
 
+## Parallel Tool Execution
+
+The framework supports **parallel tool execution** for improved performance when the LLM makes multiple independent tool calls simultaneously.
+
+### Default Behavior (Parallel Execution)
+
+When the LLM generates multiple tool calls that can be executed independently, the framework automatically executes them in parallel:
+
+```go
+// Multiple tool calls from LLM
+toolCalls := []ToolCall{
+    {Function: {Name: "get_weather", Arguments: `{"location": "New York"}`}},
+    {Function: {Name: "get_population", Arguments: `{"city": "London"}`}},
+    {Function: {Name: "get_current_time", Arguments: `{"timezone": "PST"}`}},
+}
+
+// All tools execute concurrently using goroutines
+// Execution time: ~max(individual_tool_time) instead of sum(all_tool_times)
+```
+
+### Performance Benefits
+
+- **🚀 Performance Improvement**: Parallel execution can be faster than serial execution
+- **⚡ Reduced Latency**: Multiple tools execute simultaneously instead of sequentially  
+- **🔄 Independent Operations**: Each tool call runs in its own goroutine
+- **🛡️ Error Isolation**: Failure in one tool doesn't block others
+
+### Example: Parallel vs Serial Execution
+
+```bash
+# Parallel execution (default)
+Tool 1: get_weather     [====] 50ms
+Tool 2: get_population  [====] 50ms  
+Tool 3: get_time       [====] 50ms
+Total time: ~50ms (all execute simultaneously)
+
+# Serial execution (if enabled)
+Tool 1: get_weather     [====] 50ms
+Tool 2: get_population       [====] 50ms
+Tool 3: get_time                  [====] 50ms  
+Total time: ~150ms (sequential execution)
+```
+
+### Configuration Options
+
+You can control parallel execution behavior using the following options:
+
+#### 1. Enable Parallel Tools (Opt-in for Performance)
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+
+// Default: Serial execution (safe and compatible)
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(model),
+    llmagent.WithTools(tools),
+    // Serial execution by default - no configuration needed
+)
+
+// Opt-in to parallel execution for performance
+agentWithParallel := llmagent.New(
+    "my-agent-parallel",
+    llmagent.WithModel(model),
+    llmagent.WithTools(tools),
+    llmagent.WithEnableParallelTools(true), // Enable parallel execution
+)
+```
+
+### When to Use Serial vs Parallel
+
+**Use Serial (Default)** when:
+- 🛡️ **Safe and compatible** default behavior
+- 🔄 Tools have dependencies (output of Tool A needed for Tool B)
+- 🐛 Debugging tool execution issues
+- 📊 Precise ordering is required
+
+**Use Parallel (Opt-in)** when:
+- ✅ Tool calls are independent
+- ✅ No dependencies between tools
+- ⚡ **performance improvement** is desired
+- ✅ Tools have similar execution times
+
 ## Running the Examples
 
 ### Using custom environment variables:
