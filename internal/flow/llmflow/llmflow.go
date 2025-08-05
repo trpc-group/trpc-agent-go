@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -165,6 +166,7 @@ func (f *Flow) runOneStep(
 
 	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
 	defer span.End()
+
 	// 2. Call LLM (get response channel).
 	responseChan, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
@@ -172,77 +174,128 @@ func (f *Flow) runOneStep(
 	}
 
 	// 3. Process streaming responses.
-	for response := range responseChan {
-		customResp, err := runAfterModelCallbacks(ctx, invocation, llmRequest, response)
-		if err != nil {
-			if _, ok := agent.AsStopError(err); ok {
-				return nil, err
-			}
+	return f.processStreamingResponses(ctx, invocation, llmRequest, responseChan, eventChan, span)
+}
 
-			log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-			lastEvent := event.NewErrorEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				model.ErrorTypeFlowError,
-				err.Error(),
-			)
-			eventChan <- lastEvent
-			return lastEvent, nil
+// processStreamingResponses handles the streaming response processing logic.
+func (f *Flow) processStreamingResponses(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	responseChan <-chan *model.Response,
+	eventChan chan<- *event.Event,
+	span oteltrace.Span,
+) (*event.Event, error) {
+	var lastEvent *event.Event
+
+	for response := range responseChan {
+		// Handle after model callbacks.
+		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
+		if err != nil {
+			return lastEvent, err
 		}
 		if customResp != nil {
 			response = customResp
 		}
-		// Create event from response using the clean constructor.
-		llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response), event.WithBranch(invocation.Branch))
-		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-			llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
-		}
 
+		// 4. Create and send LLM response using the clean constructor.
+		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
+		eventChan <- llmResponseEvent
+
+		// 5. Check context cancellation.
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
-		// 4. Postprocess each response.
+		// 6. Postprocess response.
 		f.postprocess(ctx, invocation, response, eventChan)
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
-		// Send the LLM response event.
-		eventChan <- llmResponseEvent
 
-		// 5. Handle function calls if present in the response.
-		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+		// 7. Handle function calls if present in the response.
+		if f.hasToolCalls(response) {
 			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmResponseEvent, llmRequest.Tools, eventChan)
 			if err != nil {
 				return lastEvent, err
 			}
 			if functionResponseEvent != nil {
-				// Check if wrappedChan is closed, prevent infinite writing.
 				lastEvent = functionResponseEvent
 				if err := f.checkContextCancelled(ctx); err != nil {
 					return lastEvent, err
 				}
 
-				// Wait for completion of events that require it.
-				if lastEvent.RequiresCompletion {
-					select {
-					case completedID := <-invocation.EventCompletionCh:
-						if completedID == lastEvent.CompletionID {
-							log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
-						}
-					case <-time.After(eventCompletionTimeout):
-						log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
-					case <-ctx.Done():
-						return lastEvent, ctx.Err()
-					}
+				// Wait for completion if required.
+				if err := f.waitForCompletion(ctx, invocation, lastEvent); err != nil {
+					return lastEvent, err
 				}
 			}
 		}
-
 	}
+
 	return lastEvent, nil
+}
+
+// handleAfterModelCallbacks processes after model callbacks.
+func (f *Flow) handleAfterModelCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	response *model.Response,
+	eventChan chan<- *event.Event,
+) (*model.Response, error) {
+	customResp, err := runAfterModelCallbacks(ctx, invocation, llmRequest, response)
+	if err != nil {
+		if _, ok := agent.AsStopError(err); ok {
+			return nil, err
+		}
+
+		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+		lastEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		)
+		eventChan <- lastEvent
+		return nil, err
+	}
+	return customResp, nil
+}
+
+// createLLMResponseEvent creates a new LLM response event.
+func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *model.Response, llmRequest *model.Request) *event.Event {
+	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response), event.WithBranch(invocation.Branch))
+	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
+	}
+	return llmResponseEvent
+}
+
+// hasToolCalls checks if the response contains tool calls.
+func (f *Flow) hasToolCalls(response *model.Response) bool {
+	return len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0
+}
+
+// waitForCompletion waits for event completion if required.
+func (f *Flow) waitForCompletion(ctx context.Context, invocation *agent.Invocation, lastEvent *event.Event) error {
+	if !lastEvent.RequiresCompletion {
+		return nil
+	}
+
+	select {
+	case completedID := <-invocation.EventCompletionCh:
+		if completedID == lastEvent.CompletionID {
+			log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
+		}
+	case <-time.After(eventCompletionTimeout):
+		log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 func runAfterModelCallbacks(
