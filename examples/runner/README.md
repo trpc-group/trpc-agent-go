@@ -41,6 +41,7 @@ This implementation showcases the essential features for building conversational
 | `-session`    | Session service: `inmemory` or `redis`          | `inmemory`       |
 | `-redis-addr` | Redis server address (when using redis session) | `localhost:6379` |
 | `-streaming`  | Enable streaming mode for responses             | `true`           |
+| `-enable-parallel` | Enable parallel tool execution (faster performance) | `false` |
 
 ## Usage
 
@@ -94,6 +95,29 @@ go run main.go -model gpt-4o -streaming=false -session redis
 - **Streaming mode** (`-streaming=true`, default): Best for interactive chat where you want to see responses appear in real-time, providing immediate feedback and better user experience.
 - **Non-streaming mode** (`-streaming=false`): Better for automated scripts, batch processing, or when you need the complete response before processing it further.
 
+### Tool Execution Modes
+
+Control how multiple tools are executed when the AI makes multiple tool calls:
+
+```bash
+# Default serial tool execution (safe and compatible)
+go run main.go
+
+# Parallel tool execution (faster performance)
+go run main.go -enable-parallel=true
+```
+
+**When to use each mode:**
+- **Serial execution** (default, no flag needed):
+  - 🔄 Tools execute one by one in sequence  
+  - 🛡️ **Safe and compatible** default behavior
+  - 🐛 Better for debugging tool execution issues
+- **Parallel execution** (`-enable-parallel=true`): 
+  - ⚡ **faster performance** when multiple tools are called
+  - ✅ Best for independent tools (calculator + time, weather + population)
+  - ✅ Tools execute simultaneously using goroutines
+
+
 ### Help and Available Options
 
 To see all available command line options:
@@ -106,6 +130,8 @@ Output:
 
 ```
 Usage of ./runner:
+  -enable-parallel
+        Enable parallel tool execution (faster performance) (default false)
   -model string
         Name of the model to use (default "deepseek-chat")
   -redis-addr string

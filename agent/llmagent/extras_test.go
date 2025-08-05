@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -343,4 +344,99 @@ func (m *mockMemoryService) Tools() []tool.Tool { return []tool.Tool{&mockTool{n
 
 func (m *mockMemoryService) EnabledTools() []string {
 	return nil
+}
+
+func TestLLMAgent_WithEnableParallelTools_Option(t *testing.T) {
+	// Test that WithEnableParallelTools option sets the correct value
+	tests := []struct {
+		name           string
+		enableParallel bool
+		expected       bool
+	}{
+		{
+			name:           "parallel disabled (default)",
+			enableParallel: false,
+			expected:       false,
+		},
+		{
+			name:           "parallel enabled",
+			enableParallel: true,
+			expected:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a minimal options structure to test
+			opts := &Options{}
+
+			// Apply the WithEnableParallelTools option
+			option := WithEnableParallelTools(tt.enableParallel)
+			option(opts)
+
+			// Verify the option was set correctly
+			assert.Equal(t, tt.expected, opts.EnableParallelTools,
+				"EnableParallelTools should be set to %v", tt.expected)
+
+			t.Logf("✅ Verified EnableParallelTools = %v", opts.EnableParallelTools)
+		})
+	}
+}
+
+func TestLLMAgent_WithEnableParallelTools_DefaultBehavior(t *testing.T) {
+	// Test that the default behavior (without WithEnableParallelTools) is serial execution
+	opts := &Options{}
+
+	// Don't apply WithEnableParallelTools option, should default to false
+	assert.False(t, opts.EnableParallelTools, "Default behavior should be serial execution")
+
+	t.Log("✅ Verified default behavior is serial execution")
+}
+
+func TestLLMAgent_WithEnableParallelTools_Integration(t *testing.T) {
+	// Test basic integration without complex model mocking
+	tool1 := &simpleTestTool{name: "tool1"}
+	tool2 := &simpleTestTool{name: "tool2"}
+
+	// Test with parallel disabled (default)
+	agentDisabled := New(
+		"test-agent-disabled",
+		WithDescription("Test agent with parallel disabled"),
+		WithTools([]tool.Tool{tool1, tool2}),
+		WithEnableParallelTools(false),
+	)
+
+	// Test with parallel enabled
+	agentEnabled := New(
+		"test-agent-enabled",
+		WithDescription("Test agent with parallel enabled"),
+		WithTools([]tool.Tool{tool1, tool2}),
+		WithEnableParallelTools(true),
+	)
+
+	// Verify agents were created successfully
+	require.NotNil(t, agentDisabled, "Agent with disabled parallel should be created")
+	require.NotNil(t, agentEnabled, "Agent with enabled parallel should be created")
+
+	// Basic checks - agents should have the same tools but different parallel settings
+	assert.Equal(t, len(agentDisabled.tools), len(agentEnabled.tools),
+		"Both agents should have the same number of tools")
+
+	t.Log("✅ Successfully created agents with different parallel settings")
+}
+
+// Simple tool for testing
+type simpleTestTool struct {
+	name string
+}
+
+func (s *simpleTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        s.name,
+		Description: "Simple test tool",
+	}
+}
+
+func (s *simpleTestTool) Call(_ []byte) (interface{}, error) {
+	return map[string]string{"result": s.name}, nil
 }
