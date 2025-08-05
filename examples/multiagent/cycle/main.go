@@ -340,14 +340,12 @@ func (c *cycleChat) handleAgentTransition(
 // handleToolCalls detects and displays tool calls.
 func (c *cycleChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
 	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		if !*toolCallsActive {
-			*toolCallsActive = true
-			fmt.Printf("\n🔧 Using tools:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-			}
-			fmt.Printf("🔄 Executing...\n")
+		*toolCallsActive = true
+		fmt.Printf("\n🔧 Using tools:\n")
+		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		}
+		fmt.Printf("🔄 Executing...\n")
 	}
 }
 

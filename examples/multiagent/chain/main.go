@@ -297,17 +297,15 @@ func (c *chainChat) displayAgentTransition(currentAgent string) {
 // handleToolCalls detects and displays tool calls.
 func (c *chainChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
 	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		if !*toolCallsActive {
-			*toolCallsActive = true
-			fmt.Printf("\n🔧 Using tools:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
-				}
+		*toolCallsActive = true
+		fmt.Printf("\n🔧 Using tools:\n")
+		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+			if len(toolCall.Function.Arguments) > 0 {
+				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
 			}
-			fmt.Printf("🔄 Executing...\n")
 		}
+		fmt.Printf("🔄 Executing...\n")
 	}
 }
 
@@ -355,20 +353,6 @@ func (c *chainChat) getAgentEmoji(agentName string) string {
 	default:
 		return "🤖 " + agentName
 	}
-}
-
-// isToolEvent checks if an event is a tool response.
-func (c *chainChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }
 
 // Tool implementations.
