@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -44,6 +45,13 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
+// WithArtifactService sets the artifact service to use.
+func WithArtifactService(service artifact.Service) Option {
+	return func(opts *Options) {
+		opts.artifactService = service
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -58,14 +66,16 @@ type Runner interface {
 
 // runner runs agents.
 type runner struct {
-	appName        string
-	agent          agent.Agent
-	sessionService session.Service
+	appName         string
+	agent           agent.Agent
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService session.Service
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // NewRunner creates a new Runner.
@@ -157,6 +167,7 @@ func (r *runner) Run(
 		Message:           message,
 		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
+		ArtifactService:   r.artifactService,
 	}
 
 	// Run the agent and get the event channel.

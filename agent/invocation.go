@@ -14,7 +14,10 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -44,6 +47,8 @@ type Invocation struct {
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.
 	Session *session.Session
+	// ArtifactService is the service for managing artifacts.
+	ArtifactService artifact.Service
 	// Model is the model that is being used for the invocation.
 	Model model.Model
 	// Message is the message that is being sent to the agent.
@@ -77,3 +82,131 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 
 // RunOptions is the options for the Run method.
 type RunOptions struct{}
+
+// LoadArtifact loads an artifact attached to the current session.
+//
+// Args:
+//
+//	ctx: The context containing the artifact service and session information
+//	filename: The filename of the artifact
+//	version: The version of the artifact. If nil, the latest version will be returned.
+//
+// Returns:
+//
+//	The artifact, or nil if not found.
+func LoadArtifact(ctx context.Context, filename string, version *int) (*artifact.Artifact, error) {
+	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return service.LoadArtifact(ctx, appName, userID, sessionID, filename, version)
+}
+
+// SaveArtifact saves an artifact and records it for the current session.
+//
+// Args:
+//
+//	ctx: The context containing the artifact service and session information
+//	filename: The filename of the artifact
+//	artifact: The artifact to save
+//
+// Returns:
+//
+//	The version of the artifact.
+func SaveArtifact(ctx context.Context, filename string, artifact *artifact.Artifact) (int, error) {
+	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return service.SaveArtifact(ctx, appName, userID, sessionID, filename, artifact)
+}
+
+// ListArtifacts lists the filenames of the artifacts attached to the current session.
+//
+// Args:
+//
+//	ctx: The context containing the artifact service and session information
+//
+// Returns:
+//
+//	A list of artifact filenames.
+func ListArtifacts(ctx context.Context) ([]string, error) {
+	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return service.ListArtifactKeys(ctx, appName, userID, sessionID)
+}
+
+// DeleteArtifact deletes an artifact from the current session.
+//
+// Args:
+//
+//	ctx: The context containing the artifact service and session information
+//	appName: The name of the application
+//	filename: The filename of the artifact to delete
+//
+// Returns:
+//
+//	An error if the operation fails.
+func DeleteArtifact(ctx context.Context, filename string) error {
+	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	if err != nil {
+		return err
+	}
+	return service.DeleteArtifact(ctx, appName, userID, sessionID, filename)
+}
+
+// ListArtifactVersions lists all versions of an artifact.
+//
+// Args:
+//
+//	ctx: The context containing the artifact service and session information
+//	filename: The filename of the artifact
+//
+// Returns:
+//
+//	A list of all available versions of the artifact.
+func ListArtifactVersions(ctx context.Context, filename string) ([]int, error) {
+	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return service.ListVersions(ctx, appName, userID, sessionID, filename)
+}
+
+// artifactServiceAndSessionInfo extracts common logic for getting artifact service and session information.
+func artifactServiceAndSessionInfo(ctx context.Context) (s artifact.Service, appName, userID, sessionID string, err error) {
+	invocation, ok := InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return nil, "", "", "", errors.New("invocation is nil or not found in context")
+	}
+
+	service := invocation.ArtifactService
+	if service == nil {
+		return nil, "", "", "", errors.New("artifact service is nil in invocation")
+	}
+
+	appName, userID, sessionID, err = appUserSession(invocation)
+	if err != nil {
+		return nil, "", "", "", err
+	}
+
+	return service, appName, userID, sessionID, nil
+}
+
+func appUserSession(invocation *Invocation) (appName, userID, sessionID string, err error) {
+	// Try to get from session.
+	if invocation.Session == nil {
+		return "", "", "", errors.New("invocation exists but no session available")
+	}
+
+	// Session has AppName and UserID fields.
+	if invocation.Session.AppName != "" && invocation.Session.UserID != "" && invocation.Session.ID != "" {
+		return invocation.Session.AppName, invocation.Session.UserID, invocation.Session.ID, nil
+	}
+
+	// Return error if session exists but missing required fields.
+	return "", "", "", fmt.Errorf("session exists but missing appName or userID or sessionID: appName=%s, userID=%s, sessionID=%s",
+		invocation.Session.AppName, invocation.Session.UserID, invocation.Session.ID)
+}
