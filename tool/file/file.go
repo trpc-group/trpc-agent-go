@@ -109,7 +109,7 @@ func (f *fileToolSet) Close() error {
 	return nil
 }
 
-// NewTool creates a new file operation tool with the provided options.
+// NewToolSet creates a new file operation tool set with the provided options.
 func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	// Apply default configuration.
 	fileToolSet := &fileToolSet{
