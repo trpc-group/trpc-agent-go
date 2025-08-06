@@ -11,8 +11,7 @@
 //
 
 // Package main demonstrates file input processing using the OpenAI model with
-// support for text, image, audio, and file uploads using both file data (base64)
-// and file_ids approaches.
+// support for text, image, audio, and file uploads.
 package main
 
 import (
@@ -49,40 +48,29 @@ func main() {
 		log.Fatal("At least one input is required: -text, -image, -audio, or -file")
 	}
 
-	fmt.Printf("🚀 File Input Processing with OpenAI Model\n")
+	fmt.Printf("🚀 File Input Processing\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Variant: %s\n", *variant)
 	fmt.Printf("Streaming: %t\n", *streaming)
-	fmt.Printf("File Mode: %s\n", func() string {
-		if *useFileIDs {
-			return "file_ids (recommended for Hunyuan/Gemini)"
-		}
-		return "file data (base64)"
-	}())
+	fmt.Printf("File Mode: %s\n", getFileModeDescription(*useFileIDs))
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the file processor.
-	processor := &fileProcessor{
-		modelName:  *modelName,
-		variant:    *variant,
-		streaming:  *streaming,
-		textInput:  *textInput,
-		imagePath:  *imagePath,
-		audioPath:  *audioPath,
-		filePath:   *filePath,
-		useFileIDs: *useFileIDs,
-	}
+	processor := newFileProcessor(
+		*modelName, *variant, *streaming, *textInput,
+		*imagePath, *audioPath, *filePath, *useFileIDs,
+	)
 
 	if err := processor.run(); err != nil {
 		log.Fatalf("File processing failed: %v", err)
 	}
 }
 
-// fileProcessor manages the file input processing using runner pattern.
+// fileProcessor manages the file input processing workflow.
 type fileProcessor struct {
 	modelName      string
 	modelInstance  *openaimodel.Model
-	variant        string
+	variant        openaimodel.Variant
 	streaming      bool
 	textInput      string
 	imagePath      string
@@ -95,11 +83,49 @@ type fileProcessor struct {
 	sessionID      string
 }
 
+// newFileProcessor creates a new file processor with the given configuration.
+func newFileProcessor(
+	modelName, variantStr string, streaming bool,
+	textInput, imagePath, audioPath, filePath string,
+	useFileIDs bool,
+) *fileProcessor {
+	return &fileProcessor{
+		modelName:  modelName,
+		variant:    parseVariant(variantStr),
+		streaming:  streaming,
+		textInput:  textInput,
+		imagePath:  imagePath,
+		audioPath:  audioPath,
+		filePath:   filePath,
+		useFileIDs: useFileIDs,
+		userID:     "user",
+		sessionID:  "file-session",
+	}
+}
+
+// parseVariant converts a variant string to the corresponding Variant type.
+func parseVariant(variantStr string) openaimodel.Variant {
+	switch variantStr {
+	case "hunyuan":
+		return openaimodel.VariantHunyuan
+	default:
+		return openaimodel.VariantOpenAI
+	}
+}
+
+// getFileModeDescription returns a human-readable description of the file mode.
+func getFileModeDescription(useFileIDs bool) string {
+	if useFileIDs {
+		return "file_ids (recommended for Hunyuan/Gemini)"
+	}
+	return "file data (base64)"
+}
+
 // run starts the file processing session.
 func (p *fileProcessor) run() error {
 	ctx := context.Background()
 
-	// Setup the model.
+	// Setup the model and runner.
 	if err := p.setup(); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
@@ -115,19 +141,8 @@ func (p *fileProcessor) run() error {
 
 // setup creates the runner with LLM agent for file processing.
 func (p *fileProcessor) setup() error {
-	// Convert variant string to Variant type.
-	var variant openaimodel.Variant
-	switch p.variant {
-	case "hunyuan":
-		variant = openaimodel.VariantHunyuan
-	default:
-		variant = openaimodel.VariantOpenAI
-	}
-
-	// Create OpenAI model.
-	p.modelInstance = openaimodel.New(p.modelName,
-		openaimodel.WithVariant(variant),
-	)
+	// Create OpenAI model with the specified variant.
+	p.modelInstance = openaimodel.New(p.modelName, openaimodel.WithVariant(p.variant))
 
 	// Create LLM agent for file processing.
 	genConfig := model.GenerationConfig{
@@ -146,20 +161,14 @@ func (p *fileProcessor) setup() error {
 		llmagent.WithGenerationConfig(genConfig),
 	)
 
-	// Create session service.
+	// Create session service and runner.
 	sessionService := inmemory.NewSessionService()
-
-	// Create runner.
 	appName := "file-input-processor"
 	p.runner = runner.NewRunner(
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),
 	)
-
-	// Setup identifiers.
-	p.userID = "user"
-	p.sessionID = "file-session"
 
 	fmt.Printf("✅ File processor ready!\n\n")
 	return nil
@@ -194,43 +203,27 @@ func (p *fileProcessor) processInputs(ctx context.Context) error {
 
 	// Add file content if provided.
 	if p.filePath != "" {
-		if p.useFileIDs {
-			if err := p.addFileWithID(ctx, &userMessage, p.filePath); err != nil {
-				return fmt.Errorf("failed to add file with ID: %w", err)
-			}
-		} else {
-			if err := userMessage.AddFilePath(p.filePath); err != nil {
-				return fmt.Errorf("failed to add file: %w", err)
-			}
+		if err := p.addFileContent(ctx, &userMessage); err != nil {
+			return fmt.Errorf("failed to add file: %w", err)
 		}
-		fmt.Printf("📄 File input: %s (mode: %s)\n", p.filePath, func() string {
-			if p.useFileIDs {
-				return "file_ids"
-			}
-			return "file data"
-		}())
 	}
 
 	// Process the message through the model.
 	return p.processMessage(ctx, userMessage)
 }
 
-// addFileWithID uploads a file to OpenAI and adds it using file_id.
-func (p *fileProcessor) addFileWithID(ctx context.Context, userMessage *model.Message, filePath string) error {
-	// Convert variant string to Variant type.
-	var variant openaimodel.Variant
-	switch p.variant {
-	case "hunyuan":
-		variant = openaimodel.VariantHunyuan
-	default:
-		variant = openaimodel.VariantOpenAI
+// addFileContent adds file content to the message using the appropriate method.
+func (p *fileProcessor) addFileContent(ctx context.Context, userMessage *model.Message) error {
+	if p.useFileIDs {
+		return p.addFileWithID(ctx, userMessage)
 	}
+	return p.addFileWithData(userMessage)
+}
 
-	// Create a temporary model instance for file upload.
-	modelInstance := openaimodel.New(p.modelName, openaimodel.WithVariant(variant))
-
-	// Upload file to OpenAI with variant-specific defaults.
-	fileID, err := modelInstance.UploadFile(ctx, filePath)
+// addFileWithID uploads a file to OpenAI and adds it using file_id.
+func (p *fileProcessor) addFileWithID(ctx context.Context, userMessage *model.Message) error {
+	// Upload file to OpenAI.
+	fileID, err := p.modelInstance.UploadFile(ctx, p.filePath)
 	if err != nil {
 		return fmt.Errorf("failed to upload file to OpenAI: %w", err)
 	}
@@ -241,7 +234,18 @@ func (p *fileProcessor) addFileWithID(ctx context.Context, userMessage *model.Me
 	// Add file ID to message.
 	userMessage.AddFileID(fileID)
 
-	fmt.Printf("📤 File uploaded with ID: %s (variant: %s)\n", fileID, p.variant)
+	fmt.Printf("📄 File input: %s (mode: file_ids)\n", p.filePath)
+	fmt.Printf("📤 File uploaded with ID: %s\n", fileID)
+	return nil
+}
+
+// addFileWithData adds file content directly as base64 data.
+func (p *fileProcessor) addFileWithData(userMessage *model.Message) error {
+	if err := userMessage.AddFilePath(p.filePath); err != nil {
+		return fmt.Errorf("failed to add file: %w", err)
+	}
+
+	fmt.Printf("📄 File input: %s (mode: file data)\n", p.filePath)
 	return nil
 }
 
@@ -250,6 +254,7 @@ func (p *fileProcessor) cleanup(ctx context.Context) error {
 	if p.uploadedFileID == "" {
 		return nil // No file was uploaded.
 	}
+
 	fmt.Printf("🧹 Cleaning up uploaded file: %s\n", p.uploadedFileID)
 	if err := p.modelInstance.DeleteFile(ctx, p.uploadedFileID); err != nil {
 		return fmt.Errorf("failed to delete uploaded file: %w", err)
