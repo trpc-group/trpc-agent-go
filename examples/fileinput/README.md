@@ -1,6 +1,6 @@
 # File Input Example
 
-This example demonstrates how to process various types of file inputs (text, images, audio, and files) using the OpenAI model directly from trpc-agent-go.
+This example demonstrates how to process various types of file inputs (text, images, audio, and files) using OpenAI-compatible models.
 
 ## Features
 
@@ -9,70 +9,101 @@ This example demonstrates how to process various types of file inputs (text, ima
 - **Audio Input**: Process audio files (WAV format)
 - **File Upload**: Upload and analyze any file type
 - **Streaming Support**: Real-time streaming responses
-- **Direct Model Access**: Direct interaction with OpenAI models
+- **Model Variants**: Support for OpenAI and Hunyuan models
 
-## Usage
+## Quick Start
 
 ```bash
-# Set your OpenAI API key
+# Set your API key
 export OPENAI_API_KEY="your-api-key-here"
 
-# Text input only
+# Basic text processing
 go run main.go -text "Hello, how are you?"
 
 # Image analysis
 go run main.go -image path/to/image.jpg
 
-# Audio processing
-go run main.go -audio path/to/audio.wav
-
-# File upload and analysis
-go run main.go -file path/to/document.pdf
+# File analysis
+go run main.go -file path/to/document.pdf -text "Analyze this file"
 
 # Multiple inputs
-go run main.go -text "Analyze this image" -image path/to/image.png
-
-# Custom model and streaming options
-go run main.go -model gpt-4 -text "Hello" -streaming=false
+go run main.go -text "What's in this image?" -image path/to/image.png
 ```
 
-## Command Line Flags
+## Command Line Options
 
-- `-model`: Model to use (default: "gpt-4o")
-- `-text`: Text input to process
-- `-image`: Path to image file (supports: jpg, jpeg, png, gif, webp)
-- `-audio`: Path to audio file (supports: wav)
-- `-file`: Path to any file for upload and analysis
-- `-streaming`: Enable/disable streaming mode (default: true)
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-model` | Model to use | `gpt-4o` |
+| `-variant` | Model variant (`openai`, `hunyuan`) | `openai` |
+| `-text` | Text input to process | - |
+| `-image` | Path to image file | - |
+| `-audio` | Path to audio file | - |
+| `-file` | Path to file for analysis | - |
+| `-streaming` | Enable streaming mode | `true` |
+| `-file-ids` | Use file IDs instead of base64 | `true` |
 
-## Architecture
+## File Handling
 
-This example uses **direct model interaction** which provides:
+The example supports two file handling modes:
 
-1. **Direct API Access**: Direct communication with OpenAI models
-2. **File Handling**: Built-in support for various file types
-3. **Streaming Support**: Real-time streaming of responses
-4. **Error Handling**: Comprehensive error handling and reporting
-5. **Simple Interface**: Straightforward model interaction
+### File IDs Mode (Default)
+Files are uploaded to the model provider and referenced by ID. This is the recommended approach for most use cases.
 
-### Key Components
-
-- `fileProcessor`: Main struct managing the file processing workflow
-- `openai.Model`: Direct OpenAI model interface
-- `model.Message`: Message structure with file attachment support
-- `model.Request`: Request structure for model communication
-
-## Example Output
-
+```bash
+# Use file IDs (default)
+go run main.go -file document.pdf -text "Analyze this PDF"
 ```
-🚀 File Input Processing with OpenAI Model
-Model: gpt-4o
-Streaming: true
-==================================================
-✅ File processor ready!
 
-📝 Text input: Hello, this is a test message
-🤖 Assistant: Hello! I'm here to help you with any questions or tasks you might have. How can I assist you today?
+### File Data Mode
+File content is embedded directly in the message as base64 data.
+
+```bash
+# Use file data
+go run main.go -file document.pdf -file-ids=false -text "Analyze this PDF"
+```
+
+## Model Variants
+
+### OpenAI Variant
+Standard OpenAI-compatible behavior with full file support.
+
+```bash
+go run main.go -variant openai -file data.json -text "Analyze this JSON"
+```
+
+### Hunyuan Variant
+Optimized for Hunyuan models with specific file handling.
+
+```bash
+go run main.go -variant hunyuan -file data.json -text "Analyze this JSON"
+```
+
+## Examples
+
+### Text Analysis
+```bash
+go run main.go -text "Explain quantum computing in simple terms"
+```
+
+### Image Analysis
+```bash
+go run main.go -image photo.jpg -text "What objects do you see in this image?"
+```
+
+### Audio Processing
+```bash
+go run main.go -audio recording.wav -text "Transcribe this audio"
+```
+
+### Document Analysis
+```bash
+go run main.go -file report.pdf -text "Summarize the key points in this document"
+```
+
+### Custom Model
+```bash
+go run main.go -model gpt-4 -file code.py -text "Review this Python code"
 ```
 
 ## Supported File Types
@@ -86,54 +117,53 @@ Streaming: true
 ### Audio
 - WAV (.wav)
 
-### Files
-- Any file type (uploaded as base64)
+### Documents
+- Any file type (PDF, DOC, TXT, JSON, etc.)
 
-## File Processing Methods
+## Output Example
 
-The example uses the following methods for file processing:
+```
+🚀 File Input Processing
+Model: gpt-4o
+Variant: openai
+Streaming: true
+File Mode: file_ids (recommended for Hunyuan/Gemini)
+==================================================
+✅ File processor ready!
 
-- `AddImageFilePath()`: Add images from file paths
-- `AddAudioFilePath()`: Add audio files from paths
-- `AddFilePath()`: Add any file type from paths
-- `AddImageData()`: Add raw image data
-- `AddAudioData()`: Add raw audio data
-- `AddFileData()`: Add raw file data
+📄 File input: document.pdf (mode: file_ids)
+📤 File uploaded with ID: file-abc123def456
+🤖 Assistant: I can see the contents of document.pdf. Here's what I found...
+```
+
+## Configuration
+
+### API Key
+Set your API key as an environment variable:
+```bash
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+### Streaming
+Toggle streaming mode for real-time responses:
+```bash
+# Enable streaming (default)
+go run main.go -streaming=true -text "Hello"
+
+# Disable streaming
+go run main.go -streaming=false -text "Hello"
+```
 
 ## Error Handling
 
 The example includes comprehensive error handling for:
 - Invalid file paths
 - Unsupported file formats
-- File reading errors
 - API communication errors
-- Model configuration issues
 - Missing API keys
 
 ## Dependencies
 
 - `trpc-agent-go`: Core framework
 - `openai`: Model provider
-- Standard library: `context`, `flag`, `fmt`, `log`, `os`, `strings`
-
-## API Key Configuration
-
-You can provide your OpenAI API key in the following ways:
-
-**Environment Variable**:
-   ```bash
-   export OPENAI_API_KEY="your-api-key-here"
-   ```
-
-
-## Streaming vs Non-Streaming
-
-The example supports both streaming and non-streaming modes:
-
-- **Streaming** (default): Real-time response streaming
-- **Non-streaming**: Complete response at once
-
-Toggle with the `-streaming` flag:
-```bash
-go run main.go -streaming=false -text "Hello"
-``` 
+- Standard library: `context`, `flag`, `fmt`, `log`, `strings`
