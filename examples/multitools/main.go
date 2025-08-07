@@ -605,18 +605,17 @@ type timeResponse struct {
 }
 
 // createTimeTool creates a time tool
-func createTimeTool() tool.CallableTool {
-	return function.NewFunctionTool(
+func createTimeTool() tool.StreamableTool {
+	return function.NewStreamableFunctionTool[timeRequest, timeResponse](
 		getTimeInfo,
 		function.WithName("time_tool"),
 		function.WithDescription("Get time and date information. Supported operations: 'current'(current time), 'date'(current date), 'weekday'(day of week), 'timestamp'(Unix timestamp)"),
 	)
 }
 
-// getTimeInfo gets time information
-func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
+func getTimeInfo(ctx context.Context, req timeRequest) (*tool.StreamReader, error) {
+	stream := tool.NewStream(10)
 	now := time.Now()
-
 	var result string
 	switch req.Operation {
 	case "current":
@@ -631,12 +630,34 @@ func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
 	default:
 		result = fmt.Sprintf("Current time: %s", now.Format("2006-01-02 15:04:05"))
 	}
+	output := tool.StreamChunk{
+		Content: timeResponse{
+			Operation: req.Operation,
+			Timestamp: now.Unix(),
+		},
+		Metadata: tool.Metadata{CreatedAt: time.Now()},
+	}
+	if closed := stream.Writer.Send(output, nil); closed {
+		return stream.Reader, fmt.Errorf("stream writer closed")
+	}
 
-	return timeResponse{
-		Operation: req.Operation,
-		Result:    result,
-		Timestamp: now.Unix(),
-	}, nil
+	go func(result string) {
+		for i := 0; i < len(result); i++ {
+			output := tool.StreamChunk{
+				Content: timeResponse{
+					Result: result[i : i+1],
+				},
+				Metadata: tool.Metadata{CreatedAt: time.Now()},
+			}
+			if closed := stream.Writer.Send(output, nil); closed {
+				break
+			}
+			time.Sleep(10 * time.Millisecond) // Simulate delay
+		}
+		stream.Writer.Close()
+	}(result)
+
+	return stream.Reader, nil
 }
 
 // Text tool related structures

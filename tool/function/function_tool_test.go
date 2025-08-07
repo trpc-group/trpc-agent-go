@@ -75,7 +75,7 @@ type streamTestOutput struct {
 }
 
 // Helper function to create a simple streaming function
-func streamableFunc(input streamTestInput) *tool.StreamReader {
+func streamableFunc(ctx context.Context, input streamTestInput) (*tool.StreamReader, error) {
 	stream := tool.NewStream(10)
 
 	go func() {
@@ -162,7 +162,7 @@ func streamableFunc(input streamTestInput) *tool.StreamReader {
 
 	}()
 
-	return stream.Reader
+	return stream.Reader, nil
 }
 
 func Test_StreamableFunctionTool(t *testing.T) {

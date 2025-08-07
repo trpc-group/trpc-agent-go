@@ -152,7 +152,7 @@ type StreamableFunctionTool[I, O any] struct {
 	description  string
 	inputSchema  *tool.Schema
 	outputSchema *tool.Schema
-	fn           func(I) *tool.StreamReader
+	fn           func(context.Context, I) (*tool.StreamReader, error)
 	longRunning  bool
 	unmarshaler  unmarshaler
 }
@@ -166,7 +166,7 @@ type StreamableFunctionTool[I, O any] struct {
 //
 // Returns:
 //   - A pointer to the newly created StreamableFunctionTool.
-func NewStreamableFunctionTool[I, O any](fn func(I) *tool.StreamReader, opts ...Option) *StreamableFunctionTool[I, O] {
+func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.StreamReader, error), opts ...Option) *StreamableFunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
 		unmarshaler: &jsonUnmarshaler{},
@@ -214,7 +214,7 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 	if t.fn == nil {
 		return nil, fmt.Errorf("FunctionTool: %s does not support streaming calls", t.name)
 	}
-	return t.fn(input), nil
+	return t.fn(ctx, input)
 }
 
 // Declaration returns the tool's declaration information.
