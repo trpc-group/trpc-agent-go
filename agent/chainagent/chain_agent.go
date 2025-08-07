@@ -34,40 +34,52 @@ type ChainAgent struct {
 	agentCallbacks    *agent.Callbacks
 }
 
-// option configures internal settings for ChainAgent.
-type option func(*options)
+// Option configures ChainAgent settings using the functional options pattern.
+// This type is exported to allow external packages to create custom options.
+type Option func(*Options)
 
-type options struct {
+// Options contains all configuration options for ChainAgent.
+// This struct is exported to allow external packages to inspect or modify options.
+type Options struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
 
-// WithSubAgents sets the sub-agents executed in sequence.
-func WithSubAgents(subAgents []agent.Agent) option {
-	return func(o *options) { o.subAgents = subAgents }
+// WithSubAgents sets the sub-agents that will be executed in sequence.
+// The agents will run one after another, with each agent's output potentially
+// influencing the next agent's execution.
+func WithSubAgents(subAgents []agent.Agent) Option {
+	return func(o *Options) { o.subAgents = subAgents }
 }
 
-// WithTools sets tools available to the chain agent.
-func WithTools(tools []tool.Tool) option {
-	return func(o *options) { o.tools = tools }
+// WithTools sets the tools available to the chain agent.
+// These tools can be used by any sub-agent in the chain during execution.
+func WithTools(tools []tool.Tool) Option {
+	return func(o *Options) { o.tools = tools }
 }
 
-// WithChannelBufferSize overrides the default event channel buffer size.
-func WithChannelBufferSize(size int) option {
-	return func(o *options) { o.channelBufferSize = size }
+// WithChannelBufferSize sets the buffer size for the event channel.
+// This controls how many events can be buffered before blocking.
+// Default is 256 if not specified.
+func WithChannelBufferSize(size int) Option {
+	return func(o *Options) { o.channelBufferSize = size }
 }
 
-// WithAgentCallbacks attaches agent lifecycle callbacks.
-func WithAgentCallbacks(cb *agent.Callbacks) option {
-	return func(o *options) { o.agentCallbacks = cb }
+// WithAgentCallbacks attaches lifecycle callbacks to the chain agent.
+// These callbacks allow custom logic to be executed before and after
+// the chain agent runs.
+func WithAgentCallbacks(cb *agent.Callbacks) Option {
+	return func(o *Options) { o.agentCallbacks = cb }
 }
 
-// New instantiates a ChainAgent using functional options.
-func New(name string, opts ...option) *ChainAgent {
+// New creates a new ChainAgent with the given name and options.
+// ChainAgent executes its sub-agents sequentially, passing events through
+// as they are generated. Each sub-agent can see the events from previous agents.
+func New(name string, opts ...Option) *ChainAgent {
 	// Apply options
-	cfg := options{
+	cfg := Options{
 		channelBufferSize: defaultChannelBufferSize,
 	}
 	for _, opt := range opts {
