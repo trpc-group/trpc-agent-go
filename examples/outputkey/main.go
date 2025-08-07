@@ -46,7 +46,7 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
-	fmt.Printf("🔑 Research & Writing Assistant Demo\n")
+	fmt.Printf("🔑 Output Key Chain Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Println("Chain: Research Agent → Content Writer Agent")
@@ -54,11 +54,11 @@ func main() {
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println()
 	fmt.Println("💡 Example queries to try:")
-	fmt.Println("   • What are the benefits of renewable energy?")
-	fmt.Println("   • Tell me about the history of artificial intelligence")
-	fmt.Println("   • What are the health benefits of meditation?")
-	fmt.Println("   • Explain the impact of climate change on oceans")
-	fmt.Println("   • What are the latest developments in space exploration?")
+	fmt.Println("   • What are the latest developments in quantum computing?")
+	fmt.Println("   • Explain the impact of AI on healthcare in 2024")
+	fmt.Println("   • What are the environmental benefits of electric vehicles?")
+	fmt.Println("   • How does blockchain technology work and what are its applications?")
+	fmt.Println("   • What are the emerging trends in renewable energy?")
 	fmt.Println()
 	fmt.Println("🔄 How it works:")
 	fmt.Println("   1. Research Agent finds comprehensive information on your topic")
@@ -124,9 +124,6 @@ func (c *outputKeyChainChat) setup(_ context.Context) error {
 			"creating informative content. Be thorough but concise in your findings."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithOutputKey("research_findings"),
-		llmagent.WithOutputSchema(map[string]interface{}{
-			"research_findings": "string",
-		}),
 	)
 
 	// Create Content Writer Agent that creates summaries based on research.

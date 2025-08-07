@@ -1,6 +1,6 @@
-# Research & Writing Assistant Demo
+# Output Key Chain Example
 
-This example demonstrates a real-world use case of `output_key` functionality using a ChainAgent with two sub-agents: a research agent and a content writer agent.
+This example demonstrates how to use ChainAgent with output keys and placeholder variables to create a research and content creation pipeline.
 
 ## Features
 
@@ -15,7 +15,10 @@ This example demonstrates a real-world use case of `output_key` functionality us
 ## Architecture
 
 ```
-User Query → Chain Agent → Research Agent (output_key) → Writer Agent (placeholders) → Engaging Content
+User Query → Research Agent → Session State → Writer Agent → Final Content
+                ↓                    ↓              ↓
+         Stores findings      Placeholder access   Creates content
+         with output_key      {research_findings}   based on research
 ```
 
 ### Agents
@@ -121,11 +124,11 @@ This implementation demonstrates a practical research and content creation workf
 
 The demo includes example queries that showcase the research and writing capabilities:
 
-- "What are the benefits of renewable energy?"
-- "Tell me about the history of artificial intelligence"
-- "What are the health benefits of meditation?"
-- "Explain the impact of climate change on oceans"
-- "What are the latest developments in space exploration?"
+- "What are the latest developments in quantum computing?"
+- "Explain the impact of AI on healthcare in 2024"
+- "What are the environmental benefits of electric vehicles?"
+- "How does blockchain technology work and what are its applications?"
+- "What are the emerging trends in renewable energy?"
 
 ## Session State Access
 
