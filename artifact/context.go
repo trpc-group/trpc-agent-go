@@ -23,22 +23,20 @@ type artifactServiceKey struct{}
 // Args:
 //
 //	ctx: The context containing the artifact service and session information
-//	appName: The name of the application
-//	userID: The user ID
-//	sessionID: The session ID
+//	sessionInfo: The session information (app name, user ID, session ID)
 //	filename: The filename of the artifact
 //	version: The version of the artifact. If nil, the latest version will be returned.
 //
 // Returns:
 //
 //	The artifact, or nil if not found.
-func LoadArtifact(ctx context.Context, appName, userID, sessionID, filename string, version *int) (*Artifact, error) {
+func LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error) {
 	service, ok := ServiceFromContext(ctx)
 	if !ok {
 		return nil, errors.New("artifact service is not initialized")
 	}
 
-	return service.LoadArtifact(ctx, appName, userID, sessionID, filename, version)
+	return service.LoadArtifact(ctx, sessionInfo, filename, version)
 }
 
 // SaveArtifact saves an artifact and records it for the current session.
@@ -46,22 +44,20 @@ func LoadArtifact(ctx context.Context, appName, userID, sessionID, filename stri
 // Args:
 //
 //	ctx: The context containing the artifact service and session information
-//	appName: The name of the application
-//	userID: The user ID
-//	sessionID: The session ID
+//	sessionInfo: The session information (app name, user ID, session ID)
 //	filename: The filename of the artifact
 //	artifact: The artifact to save
 //
 // Returns:
 //
 //	The version of the artifact.
-func SaveArtifact(ctx context.Context, appName, userID, sessionID, filename string, artifact *Artifact) (int, error) {
+func SaveArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, artifact *Artifact) (int, error) {
 	service, ok := ServiceFromContext(ctx)
 	if !ok {
 		return 0, errors.New("artifact service is not initialized")
 	}
 
-	return service.SaveArtifact(ctx, appName, userID, sessionID, filename, artifact)
+	return service.SaveArtifact(ctx, sessionInfo, filename, artifact)
 }
 
 // ListArtifacts lists the filenames of the artifacts attached to the current session.
@@ -69,20 +65,18 @@ func SaveArtifact(ctx context.Context, appName, userID, sessionID, filename stri
 // Args:
 //
 //	ctx: The context containing the artifact service and session information
-//	appName: The name of the application
-//	userID: The user ID
-//	sessionID: The session ID
+//	sessionInfo: The session information (app name, user ID, session ID)
 //
 // Returns:
 //
 //	A list of artifact filenames.
-func ListArtifacts(ctx context.Context, appName, userID, sessionID string) ([]string, error) {
+func ListArtifacts(ctx context.Context, sessionInfo SessionInfo) ([]string, error) {
 	service, ok := ServiceFromContext(ctx)
 	if !ok {
 		return nil, errors.New("artifact service is not initialized")
 	}
 
-	return service.ListArtifactKeys(ctx, appName, userID, sessionID)
+	return service.ListArtifactKeys(ctx, sessionInfo)
 }
 
 // DeleteArtifact deletes an artifact from the current session.
@@ -90,21 +84,19 @@ func ListArtifacts(ctx context.Context, appName, userID, sessionID string) ([]st
 // Args:
 //
 //	ctx: The context containing the artifact service and session information
-//	appName: The name of the application
-//	userID: The user ID
-//	sessionID: The session ID
+//	sessionInfo: The session information (app name, user ID, session ID)
 //	filename: The filename of the artifact to delete
 //
 // Returns:
 //
 //	An error if the operation fails.
-func DeleteArtifact(ctx context.Context, appName, userID, sessionID, filename string) error {
+func DeleteArtifact(ctx context.Context, sessionInfo SessionInfo, filename string) error {
 	service, ok := ServiceFromContext(ctx)
 	if !ok {
 		return errors.New("artifact service is not initialized")
 	}
 
-	return service.DeleteArtifact(ctx, appName, userID, sessionID, filename)
+	return service.DeleteArtifact(ctx, sessionInfo, filename)
 }
 
 // ListArtifactVersions lists all versions of an artifact.
@@ -112,19 +104,17 @@ func DeleteArtifact(ctx context.Context, appName, userID, sessionID, filename st
 // Args:
 //
 //	ctx: The context containing the artifact service and session information
-//	appName: The name of the application
-//	userID: The user ID
-//	sessionID: The session ID
+//	sessionInfo: The session information (app name, user ID, session ID)
 //	filename: The filename of the artifact
 //
 // Returns:
 //
 //	A list of all available versions of the artifact.
-func ListArtifactVersions(ctx context.Context, appName, userID, sessionID, filename string) ([]int, error) {
+func ListArtifactVersions(ctx context.Context, sessionInfo SessionInfo, filename string) ([]int, error) {
 	service, ok := ServiceFromContext(ctx)
 	if !ok {
 		return nil, errors.New("artifact service is not initialized")
 	}
 
-	return service.ListVersions(ctx, appName, userID, sessionID, filename)
+	return service.ListVersions(ctx, sessionInfo, filename)
 }

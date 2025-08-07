@@ -28,11 +28,11 @@ func NewService() *Service {
 }
 
 // SaveArtifact saves an artifact to the in-memory storage.
-func (s *Service) SaveArtifact(ctx context.Context, appName, userID, sessionID, filename string, art *artifact.Artifact) (int, error) {
+func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, art *artifact.Artifact) (int, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := s.artifactPath(appName, userID, sessionID, filename)
+	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
 	if s.artifacts[path] == nil {
 		s.artifacts[path] = make([]*artifact.Artifact, 0)
 	}
@@ -44,11 +44,11 @@ func (s *Service) SaveArtifact(ctx context.Context, appName, userID, sessionID, 
 }
 
 // LoadArtifact gets an artifact from the in-memory storage.
-func (s *Service) LoadArtifact(ctx context.Context, appName, userID, sessionID, filename string, version *int) (*artifact.Artifact, error) {
+func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string, version *int) (*artifact.Artifact, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := s.artifactPath(appName, userID, sessionID, filename)
+	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
 		return nil, nil
@@ -69,12 +69,12 @@ func (s *Service) LoadArtifact(ctx context.Context, appName, userID, sessionID, 
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session.
-func (s *Service) ListArtifactKeys(ctx context.Context, appName, userID, sessionID string) ([]string, error) {
+func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.SessionInfo) ([]string, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	sessionPrefix := fmt.Sprintf("%s/%s/%s/", appName, userID, sessionID)
-	usernamespacePrefix := fmt.Sprintf("%s/%s/user/", appName, userID)
+	sessionPrefix := fmt.Sprintf("%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID)
+	usernamespacePrefix := fmt.Sprintf("%s/%s/user/", sessionInfo.AppName, sessionInfo.UserID)
 
 	var filenames []string
 	for path := range s.artifacts {
@@ -92,11 +92,11 @@ func (s *Service) ListArtifactKeys(ctx context.Context, appName, userID, session
 }
 
 // DeleteArtifact deletes an artifact.
-func (s *Service) DeleteArtifact(ctx context.Context, appName, userID, sessionID, filename string) error {
+func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := s.artifactPath(appName, userID, sessionID, filename)
+	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
 	if _, exists := s.artifacts[path]; !exists {
 		// Artifact doesn't exist, but this is not an error in the Python implementation
 		return nil
@@ -107,11 +107,11 @@ func (s *Service) DeleteArtifact(ctx context.Context, appName, userID, sessionID
 }
 
 // ListVersions lists all versions of an artifact.
-func (s *Service) ListVersions(ctx context.Context, appName, userID, sessionID, filename string) ([]int, error) {
+func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := s.artifactPath(appName, userID, sessionID, filename)
+	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
 		return []int{}, nil

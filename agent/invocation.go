@@ -95,11 +95,11 @@ type RunOptions struct{}
 //
 //	The artifact, or nil if not found.
 func LoadArtifact(ctx context.Context, filename string, version *int) (*artifact.Artifact, error) {
-	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	service, sessionInfo, err := getArtifactServiceAndSessionInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return service.LoadArtifact(ctx, appName, userID, sessionID, filename, version)
+	return service.LoadArtifact(ctx, sessionInfo, filename, version)
 }
 
 // SaveArtifact saves an artifact and records it for the current session.
@@ -114,11 +114,11 @@ func LoadArtifact(ctx context.Context, filename string, version *int) (*artifact
 //
 //	The version of the artifact.
 func SaveArtifact(ctx context.Context, filename string, artifact *artifact.Artifact) (int, error) {
-	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	service, sessionInfo, err := getArtifactServiceAndSessionInfo(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return service.SaveArtifact(ctx, appName, userID, sessionID, filename, artifact)
+	return service.SaveArtifact(ctx, sessionInfo, filename, artifact)
 }
 
 // ListArtifacts lists the filenames of the artifacts attached to the current session.
@@ -131,11 +131,11 @@ func SaveArtifact(ctx context.Context, filename string, artifact *artifact.Artif
 //
 //	A list of artifact filenames.
 func ListArtifacts(ctx context.Context) ([]string, error) {
-	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	service, sessionInfo, err := getArtifactServiceAndSessionInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return service.ListArtifactKeys(ctx, appName, userID, sessionID)
+	return service.ListArtifactKeys(ctx, sessionInfo)
 }
 
 // DeleteArtifact deletes an artifact from the current session.
@@ -150,11 +150,11 @@ func ListArtifacts(ctx context.Context) ([]string, error) {
 //
 //	An error if the operation fails.
 func DeleteArtifact(ctx context.Context, filename string) error {
-	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	service, sessionInfo, err := getArtifactServiceAndSessionInfo(ctx)
 	if err != nil {
 		return err
 	}
-	return service.DeleteArtifact(ctx, appName, userID, sessionID, filename)
+	return service.DeleteArtifact(ctx, sessionInfo, filename)
 }
 
 // ListArtifactVersions lists all versions of an artifact.
@@ -168,31 +168,37 @@ func DeleteArtifact(ctx context.Context, filename string) error {
 //
 //	A list of all available versions of the artifact.
 func ListArtifactVersions(ctx context.Context, filename string) ([]int, error) {
-	service, appName, userID, sessionID, err := artifactServiceAndSessionInfo(ctx)
+	service, sessionInfo, err := getArtifactServiceAndSessionInfo(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return service.ListVersions(ctx, appName, userID, sessionID, filename)
+	return service.ListVersions(ctx, sessionInfo, filename)
 }
 
-// artifactServiceAndSessionInfo extracts common logic for getting artifact service and session information.
-func artifactServiceAndSessionInfo(ctx context.Context) (s artifact.Service, appName, userID, sessionID string, err error) {
+// getArtifactServiceAndSessionInfo extracts common logic for getting artifact service and session information.
+func getArtifactServiceAndSessionInfo(ctx context.Context) (s artifact.Service, sessionInfo artifact.SessionInfo, err error) {
 	invocation, ok := InvocationFromContext(ctx)
 	if !ok || invocation == nil {
-		return nil, "", "", "", errors.New("invocation is nil or not found in context")
+		return nil, artifact.SessionInfo{}, errors.New("invocation is nil or not found in context")
 	}
 
 	service := invocation.ArtifactService
 	if service == nil {
-		return nil, "", "", "", errors.New("artifact service is nil in invocation")
+		return nil, artifact.SessionInfo{}, errors.New("artifact service is nil in invocation")
 	}
 
-	appName, userID, sessionID, err = appUserSession(invocation)
+	appName, userID, sessionID, err := appUserSession(invocation)
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, artifact.SessionInfo{}, err
 	}
 
-	return service, appName, userID, sessionID, nil
+	sessionInfo = artifact.SessionInfo{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+
+	return service, sessionInfo, nil
 }
 
 func appUserSession(invocation *Invocation) (appName, userID, sessionID string, err error) {

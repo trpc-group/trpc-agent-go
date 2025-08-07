@@ -5,7 +5,6 @@ package artifact
 type Artifact struct {
 	// Data contains the raw bytes (required).
 	Data []byte `json:"data,omitempty"`
-
 	// MimeType is the IANA standard MIME type of the source data (required).
 	MimeType string `json:"mime_type,omitempty"`
 	// Name is an optional display name of the artifact.
