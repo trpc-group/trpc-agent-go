@@ -1,7 +1,9 @@
 // Package artifact provides the definition and service for content artifacts.
 package artifact
 
-// Artifact represents a content artifact such as an image, video, or document.
+// Artifact defines a content artifact, such as an image, video, or document.
+// Artifacts serve as a key mechanism for handling named, versioned binary data,
+// which may be linked to a particular user session or persistently associated with a user across sessions.
 type Artifact struct {
 	// Data contains the raw bytes (required).
 	Data []byte `json:"data,omitempty"`
@@ -11,4 +13,14 @@ type Artifact struct {
 	// Used to provide a label or filename to distinguish artifacts.
 	// This field is not currently used in the GenerateContent calls.
 	Name string `json:"name,omitempty"`
+}
+
+// SessionInfo contains the session information for artifact operations.
+type SessionInfo struct {
+	// AppName is the name of the application
+	AppName string
+	// UserID is the ID of the user
+	UserID string
+	// SessionID is the ID of the session
+	SessionID string
 }
