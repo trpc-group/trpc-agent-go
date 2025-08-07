@@ -4,16 +4,6 @@ import (
 	"context"
 )
 
-// SessionInfo contains the session information for artifact operations.
-type SessionInfo struct {
-	// AppName is the name of the application
-	AppName string
-	// UserID is the ID of the user
-	UserID string
-	// SessionID is the ID of the session
-	SessionID string
-}
-
 // Service defines the interface for artifact storage and retrieval operations.
 type Service interface {
 	// SaveArtifact saves an artifact to the artifact service storage.
