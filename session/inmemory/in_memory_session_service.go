@@ -469,6 +469,16 @@ func (s *SessionService) updateSessionState(sess *session.Session, event *event.
 		sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
 	}
 	sess.UpdatedAt = time.Now()
+
+	// Apply state delta if present.
+	if len(event.StateDelta) > 0 {
+		if sess.State == nil {
+			sess.State = make(session.StateMap)
+		}
+		for key, value := range event.StateDelta {
+			sess.State[key] = value
+		}
+	}
 }
 
 // copySession creates a  copy of a session.
