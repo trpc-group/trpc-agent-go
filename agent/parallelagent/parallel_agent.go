@@ -39,39 +39,51 @@ type ParallelAgent struct {
 	agentCallbacks    *agent.Callbacks
 }
 
-// option configures ParallelAgent.
-type option func(*options)
+// Option configures ParallelAgent settings using the functional options pattern.
+// This type is exported to allow external packages to create custom options.
+type Option func(*Options)
 
-type options struct {
+// Options contains all configuration options for ParallelAgent.
+// This struct is exported to allow external packages to inspect or modify options.
+type Options struct {
 	subAgents         []agent.Agent
 	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
 
-// WithSubAgents sets the parallel sub-agents.
-func WithSubAgents(sub []agent.Agent) option {
-	return func(o *options) { o.subAgents = sub }
+// WithSubAgents sets the sub-agents that will be executed in parallel.
+// All agents will start simultaneously and their events will be merged
+// into a single output stream.
+func WithSubAgents(sub []agent.Agent) Option {
+	return func(o *Options) { o.subAgents = sub }
 }
 
-// WithTools registers tools.
-func WithTools(tools []tool.Tool) option {
-	return func(o *options) { o.tools = tools }
+// WithTools registers tools available to the parallel agent.
+// These tools can be used by any sub-agent during parallel execution.
+func WithTools(tools []tool.Tool) Option {
+	return func(o *Options) { o.tools = tools }
 }
 
-// WithChannelBufferSize sets buffer size.
-func WithChannelBufferSize(size int) option {
-	return func(o *options) { o.channelBufferSize = size }
+// WithChannelBufferSize sets the buffer size for the event channel.
+// This controls how many events can be buffered before blocking.
+// Default is 256 if not specified.
+func WithChannelBufferSize(size int) Option {
+	return func(o *Options) { o.channelBufferSize = size }
 }
 
-// WithAgentCallbacks attaches callbacks.
-func WithAgentCallbacks(cb *agent.Callbacks) option {
-	return func(o *options) { o.agentCallbacks = cb }
+// WithAgentCallbacks attaches lifecycle callbacks to the parallel agent.
+// These callbacks allow custom logic to be executed before and after
+// the parallel agent runs.
+func WithAgentCallbacks(cb *agent.Callbacks) Option {
+	return func(o *Options) { o.agentCallbacks = cb }
 }
 
-// New instantiates a ParallelAgent using functional options.
-func New(name string, opts ...option) *ParallelAgent {
-	cfg := options{channelBufferSize: defaultChannelBufferSize}
+// New creates a new ParallelAgent with the given name and options.
+// ParallelAgent executes all its sub-agents simultaneously and merges
+// their event streams into a single output channel.
+func New(name string, opts ...Option) *ParallelAgent {
+	cfg := Options{channelBufferSize: defaultChannelBufferSize}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)

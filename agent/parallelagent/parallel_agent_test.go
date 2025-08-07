@@ -103,7 +103,7 @@ type legacyOptions struct {
 }
 
 func newFromLegacy(o legacyOptions) *ParallelAgent {
-	opts := []option{}
+	opts := []Option{}
 	if len(o.SubAgents) > 0 {
 		opts = append(opts, WithSubAgents(o.SubAgents))
 	}

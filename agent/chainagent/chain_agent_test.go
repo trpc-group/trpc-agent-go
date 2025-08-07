@@ -541,7 +541,7 @@ type legacyOptions struct {
 
 // newFromLegacy adapts legacyOptions to the new functional-option constructor.
 func newFromLegacy(o legacyOptions) *ChainAgent {
-	opts := []option{WithSubAgents(o.SubAgents)}
+	opts := []Option{WithSubAgents(o.SubAgents)}
 	if len(o.Tools) > 0 {
 		opts = append(opts, WithTools(o.Tools))
 	}
