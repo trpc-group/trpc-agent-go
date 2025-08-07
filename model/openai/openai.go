@@ -754,7 +754,25 @@ func (m *Model) handleStreamingResponse(
 		chunk := stream.Current()
 
 		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
+
+		// if platform return invalid toolcall event, skip it.
+		needSkip := false
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
+		if len(chunk.Choices) > 0 {
+			delta := chunk.Choices[0].Delta
+			switch {
+			case delta.JSON.Content.Valid():
+			case delta.JSON.Refusal.Valid():
+			case delta.JSON.ToolCalls.Valid():
+				if len(delta.ToolCalls) <= 0 {
+					needSkip = true
+				}
+			default:
+			}
+		}
+		if needSkip {
+			continue
+		}
 
 		acc.AddChunk(chunk)
 
