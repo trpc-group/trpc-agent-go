@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.2] - 2025-08-07
 
 ### Features
-- **tool/stream**: add context and error for streaming tool call. (#160)
+- **tool/stream**: Add context and error for streaming tool call. (#160)
 
 ### Bug Fixes
 - **model**: Fix issue of tool call on different platform. (#159)
