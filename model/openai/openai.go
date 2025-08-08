@@ -753,24 +753,11 @@ func (m *Model) handleStreamingResponse(
 	for stream.Next() {
 		chunk := stream.Current()
 
-		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
-
-		// if platform return invalid toolcall event, skip it.
-		needSkip := false
+		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
-		if len(chunk.Choices) > 0 {
-			delta := chunk.Choices[0].Delta
-			switch {
-			case delta.JSON.Content.Valid():
-			case delta.JSON.Refusal.Valid():
-			case delta.JSON.ToolCalls.Valid():
-				if len(delta.ToolCalls) <= 0 {
-					needSkip = true
-				}
-			default:
-			}
-		}
-		if needSkip {
+
+		// Suppress chunks that carry no meaningful delta to avoid blank events.
+		if m.shouldSuppressChunk(chunk) {
 			continue
 		}
 
@@ -790,7 +777,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(stream, acc, idToIndexMap, responseChan, ctx)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.
@@ -804,11 +791,47 @@ func (m *Model) updateToolCallIndexMapping(chunk openai.ChatCompletionChunk, idT
 	}
 }
 
+// shouldSuppressChunk returns true when the chunk contains no meaningful delta
+// (no content, no refusal, no non-empty tool calls, and no finish reason).
+// This filters out completely empty streaming events that cause noisy logs.
+func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
+	if len(chunk.Choices) == 0 {
+		return true
+	}
+	choice := chunk.Choices[0]
+	delta := choice.Delta
+
+	// Any meaningful payload disables suppression.
+	if delta.JSON.Content.Valid() || delta.Content != "" {
+		return false
+	}
+	if delta.JSON.Refusal.Valid() {
+		return false
+	}
+	if delta.JSON.ToolCalls.Valid() {
+		// Suppress only when toolcalls are declared but empty.
+		if len(delta.ToolCalls) > 0 {
+			return false
+		}
+		return true
+	}
+	if choice.FinishReason != "" {
+		return false
+	}
+	return true
+}
+
 // createPartialResponse creates a partial response from a chunk.
 func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
 	response := &model.Response{
-		ID:        chunk.ID,
-		Object:    string(chunk.Object), // Convert constant to string
+		ID: chunk.ID,
+		// Normalize object for chunks; upstream may emit empty object for toolcall deltas.
+		Object: func() string {
+			if chunk.Object != "" {
+				return string(chunk.Object)
+			}
+			return model.ObjectTypeChatCompletionChunk
+		}(),
 		Created:   chunk.Created,
 		Model:     chunk.Model,
 		Timestamp: time.Now(),
@@ -838,11 +861,11 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 
 // sendFinalResponse sends the final response with accumulated data.
 func (m *Model) sendFinalResponse(
+	ctx context.Context,
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
 	responseChan chan<- *model.Response,
-	ctx context.Context,
 ) {
 	if stream.Err() == nil {
 		// Check accumulated tool calls (batch processing after streaming is complete).
@@ -921,6 +944,7 @@ func (m *Model) createFinalResponse(
 	accumulatedToolCalls []model.ToolCall,
 ) *model.Response {
 	finalResponse := &model.Response{
+		Object:  model.ObjectTypeChatCompletion,
 		ID:      acc.ID,
 		Created: acc.Created,
 		Model:   acc.Model,
