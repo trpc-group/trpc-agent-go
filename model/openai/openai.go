@@ -756,12 +756,15 @@ func (m *Model) handleStreamingResponse(
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-		// Suppress chunks that carry no meaningful delta to avoid blank events.
+		// Always accumulate for correctness (tool call deltas are assembled later),
+		// but we may suppress emitting a partial event for noise reduction.
+		acc.AddChunk(chunk)
+
+		// Suppress chunks that carry no meaningful visible delta (including
+		// tool_call deltas, which we'll surface only in the final response).
 		if m.shouldSuppressChunk(chunk) {
 			continue
 		}
-
-		acc.AddChunk(chunk)
 
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
@@ -802,17 +805,12 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	delta := choice.Delta
 
 	// Any meaningful payload disables suppression.
-	if delta.JSON.Content.Valid() || delta.Content != "" {
+	if delta.Content != "" {
 		return false
 	}
-	if delta.JSON.Refusal.Valid() {
-		return false
-	}
+	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
+	// tool calls in the final aggregated response to avoid noisy blank chunks.
 	if delta.JSON.ToolCalls.Valid() {
-		// Suppress only when toolcalls are declared but empty.
-		if len(delta.ToolCalls) > 0 {
-			return false
-		}
 		return true
 	}
 	if choice.FinishReason != "" {
