@@ -805,10 +805,7 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	delta := choice.Delta
 
 	// Any meaningful payload disables suppression.
-	if delta.JSON.Content.Valid() || delta.Content != "" {
-		return false
-	}
-	if delta.JSON.Refusal.Valid() {
+	if delta.Content != "" {
 		return false
 	}
 	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
