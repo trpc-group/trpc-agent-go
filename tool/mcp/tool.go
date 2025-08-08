@@ -58,6 +58,36 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		rawArguments = make(map[string]any)
 	}
 
+	// Apply default values from schema
+	if t.inputSchema != nil && t.inputSchema.Properties != nil {
+		for name, prop := range t.inputSchema.Properties {
+			if prop.Default != nil {
+				if _, exists := rawArguments[name]; !exists {
+					rawArguments[name] = prop.Default
+				}
+			}
+		}
+	}
+
+	// Validate enum values
+	if t.inputSchema != nil && t.inputSchema.Properties != nil {
+		for name, prop := range t.inputSchema.Properties {
+			if value, exists := rawArguments[name]; exists && len(prop.Enum) > 0 {
+				valid := false
+				for _, enumVal := range prop.Enum {
+					if value == enumVal {
+						valid = true
+						break
+					}
+				}
+				if !valid {
+					return nil, fmt.Errorf("invalid value for parameter '%s': %v, allowed values: %v",
+						name, value, prop.Enum)
+				}
+			}
+		}
+	}
+
 	return t.callOnce(ctx, rawArguments)
 }
 
