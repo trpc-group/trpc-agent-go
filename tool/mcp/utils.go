@@ -73,6 +73,14 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			if descVal, ok := propMap["description"].(string); ok {
 				propSchema.Description = descVal
 			}
+			if defaultVal, exists := propMap["default"]; exists {
+				propSchema.Default = defaultVal
+			}
+			if enumVal, exists := propMap["enum"]; exists {
+				if enumArr, ok := enumVal.([]any); ok {
+					propSchema.Enum = enumArr
+				}
+			}
 			result[name] = propSchema
 		}
 	}
