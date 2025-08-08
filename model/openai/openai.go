@@ -750,34 +750,34 @@ func (m *Model) handleStreamingResponse(
 	// Track ID -> Index mapping.
 	idToIndexMap := make(map[string]int)
 
-    for stream.Next() {
-        chunk := stream.Current()
+	for stream.Next() {
+		chunk := stream.Current()
 
-        // Track ID -> Index mapping when ID is present (first chunk of each tool call).
-        m.updateToolCallIndexMapping(chunk, idToIndexMap)
+		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
+		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
-        // Always accumulate for correctness (tool call deltas are assembled later),
-        // but we may suppress emitting a partial event for noise reduction.
-        acc.AddChunk(chunk)
+		// Always accumulate for correctness (tool call deltas are assembled later),
+		// but we may suppress emitting a partial event for noise reduction.
+		acc.AddChunk(chunk)
 
-        // Suppress chunks that carry no meaningful visible delta (including
-        // tool_call deltas, which we'll surface only in the final response).
-        if m.shouldSuppressChunk(chunk) {
-            continue
-        }
+		// Suppress chunks that carry no meaningful visible delta (including
+		// tool_call deltas, which we'll surface only in the final response).
+		if m.shouldSuppressChunk(chunk) {
+			continue
+		}
 
-        if m.chatChunkCallback != nil {
-            m.chatChunkCallback(ctx, &chatRequest, &chunk)
-        }
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, &chatRequest, &chunk)
+		}
 
-        response := m.createPartialResponse(chunk)
+		response := m.createPartialResponse(chunk)
 
-        select {
-        case responseChan <- response:
-        case <-ctx.Done():
-            return
-        }
-    }
+		select {
+		case responseChan <- response:
+		case <-ctx.Done():
+			return
+		}
+	}
 
 	// Send final response with usage information if available.
 	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
@@ -811,11 +811,11 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	if delta.JSON.Refusal.Valid() {
 		return false
 	}
-    // If this chunk is a tool_calls delta, suppress emission. We'll only expose
-    // tool calls in the final aggregated response to avoid noisy blank chunks.
-    if delta.JSON.ToolCalls.Valid() {
-        return true
-    }
+	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
+	// tool calls in the final aggregated response to avoid noisy blank chunks.
+	if delta.JSON.ToolCalls.Valid() {
+		return true
+	}
 	if choice.FinishReason != "" {
 		return false
 	}
