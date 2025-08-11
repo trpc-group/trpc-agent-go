@@ -161,6 +161,22 @@ func WithMemory(memoryService memory.Service) Option {
 	}
 }
 
+// WithOutputKey sets the key in session state to store the output of the agent.
+func WithOutputKey(outputKey string) Option {
+	return func(opts *Options) {
+		opts.OutputKey = outputKey
+	}
+}
+
+// WithOutputSchema sets the JSON schema for validating agent output.
+// When this is set, the agent can ONLY reply and CANNOT use any tools,
+// such as function tools, RAGs, agent transfer, etc.
+func WithOutputSchema(schema map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.OutputSchema = schema
+	}
+}
+
 // WithAddNameToInstruction adds the agent name to the instruction if true.
 func WithAddNameToInstruction(addNameToInstruction bool) Option {
 	return func(opts *Options) {
@@ -219,6 +235,11 @@ type Options struct {
 	// EnableParallelTools enables parallel tool execution if true.
 	// If false (default), tools will execute serially for safety.
 	EnableParallelTools bool
+	// OutputKey is the key in session state to store the output of the agent.
+	OutputKey string
+	// OutputSchema is the JSON schema for validating agent output.
+	// When this is set, the agent can ONLY reply and CANNOT use any tools.
+	OutputSchema map[string]interface{}
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -237,6 +258,8 @@ type LLMAgent struct {
 	agentCallbacks *agent.Callbacks
 	modelCallbacks *model.Callbacks
 	toolCallbacks  *tool.Callbacks
+	outputKey      string                 // Key to store output in session state
+	outputSchema   map[string]interface{} // JSON schema for output validation
 }
 
 // New creates a new LLMAgent with the given options.
@@ -266,7 +289,11 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// 3. Instruction processor - adds instruction content and system prompt.
 	if options.Instruction != "" || options.GlobalInstruction != "" {
-		instructionProcessor := processor.NewInstructionRequestProcessor(options.Instruction, options.GlobalInstruction)
+		instructionProcessor := processor.NewInstructionRequestProcessor(
+			options.Instruction,
+			options.GlobalInstruction,
+			processor.WithOutputSchema(options.OutputSchema),
+		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
@@ -295,6 +322,12 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
 
+	// Add output response processor if output_key or output_schema is configured.
+	if options.OutputKey != "" || options.OutputSchema != nil {
+		responseProcessors = append(responseProcessors,
+			processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema))
+	}
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()
@@ -311,6 +344,16 @@ func New(name string, opts ...Option) *LLMAgent {
 		requestProcessors, responseProcessors,
 		flowOpts,
 	)
+
+	// Validate output_schema configuration before registering tools
+	if options.OutputSchema != nil {
+		if len(options.Tools) > 0 || len(options.ToolSets) > 0 || options.Knowledge != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tools, toolSets, and knowledge must be empty")
+		}
+		if len(options.SubAgents) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
+		}
+	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
@@ -330,6 +373,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		agentCallbacks: options.AgentCallbacks,
 		modelCallbacks: options.ModelCallbacks,
 		toolCallbacks:  options.ToolCallbacks,
+		outputKey:      options.OutputKey,
+		outputSchema:   options.OutputSchema,
 	}
 }
 
