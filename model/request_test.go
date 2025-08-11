@@ -275,6 +275,26 @@ func TestContentPartWithFile(t *testing.T) {
 	}
 }
 
+func TestMessage_WithReasoningContent(t *testing.T) {
+	// Test message with ReasoningContent field
+	msg := Message{
+		Role:             RoleAssistant,
+		Content:          "This is the main content",
+		ReasoningContent: "This is the reasoning content",
+	}
+
+	// Verify field values
+	if msg.Role != RoleAssistant {
+		t.Errorf("Message.Role = %v, want %v", msg.Role, RoleAssistant)
+	}
+	if msg.Content != "This is the main content" {
+		t.Errorf("Message.Content = %v, want %v", msg.Content, "This is the main content")
+	}
+	if msg.ReasoningContent != "This is the reasoning content" {
+		t.Errorf("Message.ReasoningContent = %v, want %v", msg.ReasoningContent, "This is the reasoning content")
+	}
+}
+
 // Helper functions for test data
 func intPtr(i int) *int {
 	return &i

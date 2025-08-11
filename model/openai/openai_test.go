@@ -1619,3 +1619,82 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 		})
 	}
 }
+
+func TestModel_GenerateContent_WithReasoningContent(t *testing.T) {
+	// Create a mock server that returns streaming responses with reasoning_content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send response chunks with reasoning_content
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"First part of reasoning"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"reasoning_content":" second part of reasoning"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"reasoning_content":" final part of reasoning"},"finish_reason":"stop"}]}`,
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	// Create model instance
+	m := New("deepseek-chat", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	// Create request
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test with reasoning content"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	// Send request
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	// Collect responses
+	var responses []*model.Response
+	for response := range responseChan {
+		responses = append(responses, response)
+		if response.Error != nil {
+			t.Fatalf("Response error: %v", response.Error)
+		}
+	}
+
+	// Verify responses contain reasoning_content
+	if len(responses) < 3 {
+		t.Fatalf("Expected at least 3 responses, got %d", len(responses))
+	}
+
+	// Check the first response chunk
+	if len(responses) > 0 && len(responses[0].Choices) > 0 {
+		if responses[0].Choices[0].Delta.ReasoningContent != "First part of reasoning" {
+			t.Errorf("Expected reasoning_content 'First part of reasoning', got '%s'", responses[0].Choices[0].Delta.ReasoningContent)
+		}
+	}
+
+	// Check if any responses contain reasoning_content
+	foundReasoningContent := false
+	for _, response := range responses {
+		if len(response.Choices) > 0 && response.Choices[0].Delta.ReasoningContent != "" {
+			foundReasoningContent = true
+			break
+		}
+	}
+
+	if !foundReasoningContent {
+		t.Error("Expected to find responses with reasoning_content, but none were found")
+	}
+}

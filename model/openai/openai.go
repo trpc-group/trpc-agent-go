@@ -24,6 +24,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -808,6 +809,12 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	if delta.Content != "" {
 		return false
 	}
+
+	// think model reasoning content
+	if _, ok := delta.JSON.ExtraFields["reasoning_content"]; ok {
+		return false
+	}
+
 	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
 	// tool calls in the final aggregated response to avoid noisy blank chunks.
 	if delta.JSON.ToolCalls.Valid() {
@@ -842,9 +849,16 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 		if response.Choices == nil {
 			response.Choices = make([]model.Choice, 1)
 		}
+
+		reasoningContent, err := strconv.Unquote(chunk.Choices[0].Delta.JSON.ExtraFields["reasoning_content"].Raw())
+		if err != nil {
+			reasoningContent = ""
+		}
+
 		response.Choices[0].Delta = model.Message{
-			Role:    model.RoleAssistant,
-			Content: chunk.Choices[0].Delta.Content,
+			Role:             model.RoleAssistant,
+			Content:          chunk.Choices[0].Delta.Content,
+			ReasoningContent: reasoningContent,
 		}
 
 		// Handle finish reason - FinishReason is a plain string.

@@ -69,6 +69,9 @@ type Message struct {
 	ToolName string `json:"tool_name,omitempty"`
 	// ToolCalls is the optional tool calls for the message.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ReasoningContent is hunyuan or deepseek think content
+	// - https://api-docs.deepseek.com/api/create-chat-completion#responses
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.
