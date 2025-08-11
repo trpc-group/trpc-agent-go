@@ -75,4 +75,8 @@ type Schema struct {
 	Items *Schema `json:"items,omitempty"`
 	// AdditionalProperties: Controls whether properties not defined in Properties are allowed
 	AdditionalProperties any `json:"additionalProperties,omitempty"`
+	// Default value for the parameter
+	Default any `json:"default,omitempty"`
+	// Enum contains the list of allowed values for the parameter
+	Enum []any `json:"enum,omitempty"`
 }
