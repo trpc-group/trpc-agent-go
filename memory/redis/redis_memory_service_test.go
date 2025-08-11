@@ -12,9 +12,13 @@
 package redis
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -241,4 +245,186 @@ func TestServiceOpts_EdgeCases(t *testing.T) {
 	// Test with negative memory limit.
 	WithMemoryLimit(-100)(&opts)
 	assert.Equal(t, -100, opts.memoryLimit, "Negative memory limit should be allowed")
+}
+
+// --- End-to-end tests with miniredis ---
+
+func setupTestRedis(t testing.TB) (string, func()) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	cleanup := func() { mr.Close() }
+	return "redis://" + mr.Addr(), cleanup
+}
+
+func newTestService(t *testing.T) (*Service, func()) {
+	url, cleanup := setupTestRedis(t)
+	svc, err := NewService(WithRedisClientURL(url))
+	require.NoError(t, err)
+	return svc, func() {
+		// No Close method for memory Service; just cleanup redis.
+		cleanup()
+	}
+}
+
+func TestService_AddAndReadMemories(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	err := svc.AddMemory(ctx, userKey, "alpha", []string{"a"})
+	require.NoError(t, err)
+	// Sleep a tiny bit to ensure CreatedAt ordering differences.
+	time.Sleep(1 * time.Millisecond)
+	err = svc.AddMemory(ctx, userKey, "beta", []string{"b"})
+	require.NoError(t, err)
+
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	// Should be sorted by CreatedAt descending: latest first (beta then alpha).
+	assert.Equal(t, "beta", entries[0].Memory.Memory)
+	assert.Equal(t, "alpha", entries[1].Memory.Memory)
+	// Basic fields.
+	for _, e := range entries {
+		assert.Equal(t, userKey.AppName, e.AppName)
+		assert.Equal(t, userKey.UserID, e.UserID)
+		assert.NotEmpty(t, e.ID)
+		assert.False(t, e.CreatedAt.IsZero())
+		assert.False(t, e.UpdatedAt.IsZero())
+	}
+}
+
+func TestService_UpdateMemory(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	// Add then read to get ID.
+	require.NoError(t, svc.AddMemory(ctx, userKey, "old", []string{"x"}))
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	id := entries[0].ID
+
+	// Update.
+	memKey := memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: id}
+	require.NoError(t, svc.UpdateMemory(ctx, memKey, "new", []string{"y"}))
+
+	entries, err = svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "new", entries[0].Memory.Memory)
+	assert.Equal(t, []string{"y"}, entries[0].Memory.Topics)
+}
+
+func TestService_DeleteMemory(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "to-delete", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	memKey := memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: entries[0].ID}
+	require.NoError(t, svc.DeleteMemory(ctx, memKey))
+
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+}
+
+func TestService_ClearMemories(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "m1", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "m2", nil))
+
+	require.NoError(t, svc.ClearMemories(ctx, userKey))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 0)
+}
+
+func TestService_SearchMemories(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "Alice likes coffee", []string{"profile"}))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "Bob plays tennis", []string{"sports"}))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "Coffee brewing tips", []string{"hobby"}))
+
+	// Search by content.
+	results, err := svc.SearchMemories(ctx, userKey, "coffee")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// Search by topic.
+	results, err = svc.SearchMemories(ctx, userKey, "sports")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "Bob plays tennis", results[0].Memory.Memory)
+}
+
+func TestService_MemoryLimit(t *testing.T) {
+	url, cleanup := setupTestRedis(t)
+	defer cleanup()
+	svc, err := NewService(WithRedisClientURL(url), WithMemoryLimit(1))
+	require.NoError(t, err)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "first", nil))
+	err = svc.AddMemory(ctx, userKey, "second", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "memory limit exceeded")
+}
+
+func TestService_Tools_DefaultEnabled(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	tools := svc.Tools()
+	require.NotEmpty(t, tools)
+
+	// Collect tool names and verify defaults include add/update/search/load.
+	names := make(map[string]bool)
+	for _, tl := range tools {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+	assert.True(t, names[memory.AddToolName])
+	assert.True(t, names[memory.UpdateToolName])
+	assert.True(t, names[memory.SearchToolName])
+	assert.True(t, names[memory.LoadToolName])
+	assert.False(t, names[memory.DeleteToolName])
+	assert.False(t, names[memory.ClearToolName])
+}
+
+func TestService_InvalidKeys(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// AddMemory with empty app should fail.
+	err := svc.AddMemory(ctx, memory.UserKey{AppName: "", UserID: "u"}, "m", nil)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrAppNameRequired, err)
+
+	// UpdateMemory with empty memoryID should fail.
+	err = svc.UpdateMemory(ctx, memory.Key{AppName: "a", UserID: "u", MemoryID: ""}, "m", nil)
+	require.Error(t, err)
+	assert.Equal(t, memory.ErrMemoryIDRequired, err)
 }
