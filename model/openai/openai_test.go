@@ -476,8 +476,9 @@ func TestModel_Callbacks(t *testing.T) {
 			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
 		}
 		// Only check response model if we got a successful response.
-		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo" {
-			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo", capturedResponse.Model)
+		// Note: OpenAI now returns gpt-3.5-turbo-1106 when requesting gpt-3.5-turbo.
+		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo-1106" {
+			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo-1106", capturedResponse.Model)
 		}
 	})
 

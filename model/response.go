@@ -46,6 +46,8 @@ const (
 	ObjectTypeTransfer = "agent.transfer"
 	// ObjectTypeRunnerCompletion is the object type for runner completion events.
 	ObjectTypeRunnerCompletion = "runner.completion"
+	// ObjectTypeStateUpdate is the object type for state update events.
+	ObjectTypeStateUpdate = "state.update"
 
 	// ObjectTypeChatCompletionChunk is the object type for chat completion chunk events.
 	ObjectTypeChatCompletionChunk = "chat.completion.chunk"

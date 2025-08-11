@@ -50,6 +50,9 @@ type Event struct {
 	// Agent client will know from this field about which function call is long running.
 	// only valid for function call event
 	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
+
+	// StateDelta contains state changes to be applied to the session.
+	StateDelta map[string][]byte `json:"stateDelta,omitempty"`
 }
 
 // Clone creates a deep copy of the event.
@@ -62,6 +65,13 @@ func (e *Event) Clone() *Event {
 	clone.LongRunningToolIDs = make(map[string]struct{})
 	for k := range e.LongRunningToolIDs {
 		clone.LongRunningToolIDs[k] = struct{}{}
+	}
+	if e.StateDelta != nil {
+		clone.StateDelta = make(map[string][]byte)
+		for k, v := range e.StateDelta {
+			clone.StateDelta[k] = make([]byte, len(v))
+			copy(clone.StateDelta[k], v)
+		}
 	}
 	return &clone
 }
@@ -87,6 +97,13 @@ func WithResponse(response *model.Response) Option {
 func WithObject(o string) Option {
 	return func(e *Event) {
 		e.Object = o
+	}
+}
+
+// WithStateDelta sets state delta for the event.
+func WithStateDelta(stateDelta map[string][]byte) Option {
+	return func(e *Event) {
+		e.StateDelta = stateDelta
 	}
 }
 

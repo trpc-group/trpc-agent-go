@@ -15,7 +15,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -95,7 +94,7 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOptions,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invocation"))
+	ctx, span := trace.Tracer.Start(ctx, "invocation")
 	defer span.End()
 
 	sessionKey := session.Key{
@@ -174,7 +173,8 @@ func (r *runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil {
+			if agentEvent.StateDelta != nil ||
+				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
