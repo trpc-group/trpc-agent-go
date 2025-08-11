@@ -14,6 +14,7 @@ package chunking
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 )
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
@@ -67,7 +68,7 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 	}
 
 	content := cleanText(doc.Content)
-	contentLength := len(content)
+	contentLength := encoding.RuneCount(content)
 
 	// If content is smaller than chunk size, return as single chunk.
 	if contentLength <= f.chunkSize {
@@ -75,64 +76,51 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return []*document.Document{chunk}, nil
 	}
 
+	// Use UTF-8 safe splitting to ensure proper character boundaries.
+	textChunks := encoding.SafeSplitBySize(content, f.chunkSize)
+
 	var chunks []*document.Document
-	chunkNumber := 1
-	start := 0
-
-	for start+f.overlap < contentLength {
-		end := min(start+f.chunkSize, contentLength)
-
-		// Try to find a good break point (whitespace) to avoid splitting words.
-		if end < contentLength {
-			breakPoint := f.findBreakPoint(content, start, end)
-			// Ensure the break point actually advances beyond the current
-			// overlap window; otherwise, keep the original end to guarantee
-			// forward progress and avoid an infinite loop.
-			if breakPoint != -1 && breakPoint-start > f.overlap {
-				end = breakPoint
-			}
-		}
-
-		// Guard against pathological cases where the chosen end does not
-		// advance the cursor sufficiently. This can happen when the first
-		// whitespace is too close to the start (<= overlap), causing
-		// start to remain unchanged and leading to an infinite loop.
-		if end-start <= f.overlap {
-			end = min(start+f.chunkSize, contentLength)
-		}
-
-		// If we still couldn't find a good break point, use the original end.
-		if end == start {
-			end = start + f.chunkSize
-		}
-
-		chunkContent := content[start:end]
-		chunk := createChunk(doc, chunkContent, chunkNumber)
+	for i, chunkText := range textChunks {
+		chunk := createChunk(doc, chunkText, i+1)
 		chunks = append(chunks, chunk)
+	}
 
-		chunkNumber++
-		// If we've reached the end of the content, break to avoid an extra
-		// iteration that would violate the loop condition.
-		if end == contentLength {
-			break
-		}
-		start = end - f.overlap
+	// Apply overlap if specified.
+	if f.overlap > 0 {
+		chunks = f.applyOverlap(chunks)
 	}
 	return chunks, nil
 }
 
-// findBreakPoint looks for a suitable break point near the target position.
-func (f *FixedSizeChunking) findBreakPoint(content string, start, targetEnd int) int {
-	// Search backwards from target end to find whitespace.
-	for i := targetEnd - 1; i > start; i-- {
-		if isWhitespace(rune(content[i])) {
-			return i + 1 // Return position after the whitespace.
-		}
+// applyOverlap applies overlap between consecutive chunks while maintaining UTF-8 safety.
+func (f *FixedSizeChunking) applyOverlap(chunks []*document.Document) []*document.Document {
+	if len(chunks) <= 1 {
+		return chunks
 	}
-	return -1 // No suitable break point found.
-}
 
-// isWhitespace checks if a character is considered whitespace.
-func isWhitespace(char rune) bool {
-	return char == ' ' || char == '\n' || char == '\r' || char == '\t'
+	overlappedChunks := []*document.Document{chunks[0]}
+	for i := 1; i < len(chunks); i++ {
+		prevText := chunks[i-1].Content
+
+		// Get overlap text safely.
+		overlapText := encoding.SafeOverlap(prevText, f.overlap)
+
+		// Create new metadata for overlapped chunk.
+		metadata := make(map[string]interface{})
+		for k, v := range chunks[i].Metadata {
+			metadata[k] = v
+		}
+
+		overlappedContent := overlapText + chunks[i].Content
+		overlappedChunk := &document.Document{
+			ID:        chunks[i].ID,
+			Name:      chunks[i].Name,
+			Content:   overlappedContent,
+			Metadata:  metadata,
+			CreatedAt: chunks[i].CreatedAt,
+			UpdatedAt: chunks[i].UpdatedAt,
+		}
+		overlappedChunks = append(overlappedChunks, overlappedChunk)
+	}
+	return overlappedChunks
 }
