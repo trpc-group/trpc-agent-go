@@ -318,12 +318,6 @@ func (c *cycleChat) handleAgentTransition(
 		// Update lastAgent BEFORE checking for new iterations.
 		*lastAgent = *currentAgent
 
-		// Check if we're starting a new iteration (cycle back to generate-agent).
-		if event.Author == "generate-agent" && *lastAgent == "critic-agent" {
-			*currentIteration++
-			fmt.Printf("\n🔄 **Iteration %d**\n", *currentIteration+1)
-		}
-
 		*currentAgent = event.Author
 		*agentStarted = true
 		*toolCallsActive = false
