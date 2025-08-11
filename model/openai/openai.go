@@ -811,7 +811,7 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	}
 
 	// think model reasoning content
-	if !delta.JSON.ExtraFields["reasoning_content"].Valid() {
+	if _, ok := delta.JSON.ExtraFields["reasoning_content"]; ok {
 		return false
 	}
 
