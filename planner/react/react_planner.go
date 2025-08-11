@@ -167,79 +167,86 @@ func (p *Planner) splitByLastPattern(text, separator string) (string, string) {
 // for the React planner.
 func (p *Planner) buildPlannerInstruction() string {
 	highLevelPreamble := strings.Join([]string{
-		"You are a meticulous, thoughtful, and logical Reasoning Agent who solves complex problems through clear, " +
-			"structured, step-by-step analysis.",
+		"When answering the question, try to leverage the available tools " +
+			"to gather the information instead of your memorized knowledge.",
 		"",
-		"IMPORTANT: You MUST follow this exact format for ALL responses:",
-		"1. Use " + PlanningTag + " tag - Write your step-by-step plan",
-		"2. Use " + ActionTag + " tag - Execute tools and show results",
-		"3. Use " + ReasoningTag + " tag - Explain your thinking and reasoning",
-		"4. Use " + ReplanningTag + " tag - Create a new plan if your initial plan fails or needs adjustment",
-		"5. End with " + FinalAnswerTag + " tag - Provide your final answer",
+		"Follow this process when answering the question: (1) first come up " +
+			"with a plan in natural language text format; (2) Then use tools to " +
+			"execute the plan and provide reasoning between tool code snippets " +
+			"to make a summary of current state and next step. Tool code " +
+			"snippets and reasoning should be interleaved with each other. (3) " +
+			"In the end, return one final answer.",
+		"",
+		"Follow this format when answering the question: (1) The planning " +
+			"part should be under " + PlanningTag + ". (2) The tool code " +
+			"snippets should be under " + ActionTag + ", and the reasoning " +
+			"parts should be under " + ReasoningTag + ". (3) The final answer " +
+			"part should be under " + FinalAnswerTag + ".",
 	}, "\n")
 
 	planningPreamble := strings.Join([]string{
-		"Below are the requirements for the " + PlanningTag + " tag:",
-		"When answering the question, follow this structured approach:",
-		"1. Problem Analysis:",
-		"- Restate the user's task clearly in your own words to ensure full comprehension.",
-		"- Identify explicitly what information is required and what tools or resources might be necessary.",
-		"2. Decompose and Strategize:",
-		"- Break down the problem into clearly defined subtasks.",
-		"- Develop at least two distinct strategies or approaches to solving the problem to ensure thoroughness.",
-		"3. Intent Clarification and Planning:",
-		"- Clearly articulate the user's intent behind their request.",
-		"- Select the most suitable strategy from Step 2, clearly justifying your choice based on alignment with " +
-			"the user's intent and task constraints.",
-		"- Formulate a detailed step-by-step action plan outlining the sequence of actions needed to solve " +
-			"the problem.",
+		"Below are the requirements for the planning:",
+		"The plan is made to answer the user query if following the plan. The plan " +
+			"is coherent and covers all aspects of information from user query, and " +
+			"only involves the tools that are accessible by the agent.",
+		"The plan contains the decomposed steps as a numbered list where each step " +
+			"should use one or multiple available tools.",
+		"By reading the plan, you can intuitively know which tools to trigger or " +
+			"what actions to take.",
+		"If the initial plan cannot be successfully executed, you should learn from " +
+			"previous execution results and revise your plan. The revised plan should " +
+			"be under " + ReplanningTag + ". Then use tools to follow the new plan.",
 	}, "\n")
 
 	actionPreamble := strings.Join([]string{
-		"Below are the requirements for the " + ActionTag + " tag:",
-		"For each planned step, document:",
-		"1. Title: Concise title summarizing the step.",
-		"2. Action: Explicitly state your next action in the first person ('I will...').",
-		"3. Result: Execute your action using necessary tools and provide a concise summary of the outcome.",
+		"Below are the requirements for the action:",
+		"Explicitly state your next action in the first person ('I will...').",
+		"Execute your action using necessary tools and provide a concise summary of the outcome.",
 	}, "\n")
 
 	reasoningPreamble := strings.Join([]string{
-		"Below are the requirements for the " + ReasoningTag + " tag:",
-		"For each planned step, write a brief reasoning AFTER the corresponding " + ActionTag +
-			". Your reasoning must include:",
-		"1. Observation: Summarize the key outputs or errors from the last action. Quote only what is necessary.",
-		"2. Interpretation: Explain what the observation means for the goal; clarify what is known and unknown now.",
-		"3. Decision: Choose one of [continue | final_answer | reset] and justify your choice in one sentence.",
-		"4. Plan update: If the plan changes, state the minimal change and why. Larger changes must go under " +
-			ReplanningTag + ".",
-		"5. Confidence: Provide a numeric confidence score (0.0–1.0) for your chosen decision.",
-	}, "\n")
-
-	replanningPreamble := strings.Join([]string{
-		"Below are the requirements for the " + ReplanningTag + " tag:" +
-			"If the initial plan fails, revise your approach:" +
-			"- Use " + ReplanningTag + " tag to create a new plan." +
-			"- Explain what went wrong with the original plan." +
-			"- Continue with the new plan using " + ReasoningTag + " and " + ActionTag + " tags.",
+		"Below are the requirements for the reasoning:",
+		"The reasoning makes a summary of the current trajectory based on the user " +
+			"query and tool outputs.",
+		"Based on the tool outputs and plan, the reasoning also comes up with " +
+			"instructions to the next steps, making the trajectory closer to the " +
+			"final answer.",
 	}, "\n")
 
 	finalAnswerPreamble := strings.Join([]string{
-		"Below are the requirements for the " + FinalAnswerTag + " tag:" +
-			"Provide the Final Answer:" +
-			"- Once thoroughly validated and confident, deliver your solution clearly and succinctly." +
-			"- Restate briefly how your answer addresses the user's original intent and resolves the stated task.",
+		"Below are the requirements for the final answer:",
+		"The final answer should be precise and follow query formatting " +
+			"requirements.",
+		"Some queries may not be answerable with the available tools and " +
+			"information. In those cases, inform the user why you cannot process " +
+			"their query and ask for more information.",
 	}, "\n")
 
-	generalPreamble := strings.Join([]string{
-		"General Operational Guidelines:" +
-			"Ensure your analysis remains:" +
-			"- Complete: Address all elements of the task." +
-			"- Comprehensive: Explore diverse perspectives and anticipate potential outcomes." +
-			"- Logical: Maintain coherence between all steps." +
-			"- Actionable: Present clearly implementable steps and actions." +
-			"- Insightful: Offer innovative and unique perspectives where applicable." +
-			"Always explicitly handle errors and mistakes by resetting or revising steps immediately." +
-			"Execute necessary tools proactively and without hesitation, clearly documenting tool usage.",
+	toolCodePreamble := strings.Join([]string{
+		"Below are the requirements for the tool code:",
+		"",
+		"**Custom Tools:** The available tools are described in the context and " +
+			"can be directly used.",
+		"- Code must be valid self-contained snippets with no imports and no " +
+			"references to tools or libraries that are not in the context.",
+		"- You cannot use any parameters or fields that are not explicitly defined " +
+			"in the APIs in the context.",
+		"- The code snippets should be readable, efficient, and directly relevant to " +
+			"the user query and reasoning steps.",
+		"- When using the tools, you should use the tool name together with the " +
+			"function name.",
+		"- If libraries are not provided in the context, NEVER write your own code " +
+			"other than the function calls using the provided tools.",
+	}, "\n")
+
+	userInputPreamble := strings.Join([]string{
+		"VERY IMPORTANT instruction that you MUST follow in addition to the above " +
+			"instructions:",
+		"",
+		"You should ask for clarification if you need more information to answer " +
+			"the question.",
+		"You should prefer using the information available in the context instead " +
+			"of repeated tool use.",
 	}, "\n")
 
 	return strings.Join([]string{
@@ -247,8 +254,8 @@ func (p *Planner) buildPlannerInstruction() string {
 		planningPreamble,
 		actionPreamble,
 		reasoningPreamble,
-		replanningPreamble,
 		finalAnswerPreamble,
-		generalPreamble,
+		toolCodePreamble,
+		userInputPreamble,
 	}, "\n\n")
 }
