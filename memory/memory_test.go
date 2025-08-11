@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -26,17 +28,10 @@ func TestMemory_JSONTags(t *testing.T) {
 		LastUpdated: &now,
 	}
 
-	// Test that the struct can be marshaled to JSON.
-	// This is a basic test to ensure the JSON tags are correct.
-	if memory.Memory == "" {
-		t.Error("Memory field should not be empty")
-	}
-	if len(memory.Topics) != 2 {
-		t.Error("Topics should have 2 elements")
-	}
-	if memory.LastUpdated == nil {
-		t.Error("LastUpdated should not be nil")
-	}
+	// Basic checks to ensure the JSON tags are correct.
+	assert.NotEmpty(t, memory.Memory, "Memory field should not be empty.")
+	assert.Len(t, memory.Topics, 2, "Topics should have 2 elements.")
+	assert.NotNil(t, memory.LastUpdated, "LastUpdated should not be nil.")
 }
 
 func TestEntry_JSONTags(t *testing.T) {
@@ -50,26 +45,13 @@ func TestEntry_JSONTags(t *testing.T) {
 		UpdatedAt: now,
 	}
 
-	// Test that the struct can be marshaled to JSON.
-	// This is a basic test to ensure the JSON tags are correct.
-	if entry.ID == "" {
-		t.Error("ID field should not be empty")
-	}
-	if entry.AppName == "" {
-		t.Error("AppName field should not be empty")
-	}
-	if entry.Memory == nil {
-		t.Error("Memory field should not be nil")
-	}
-	if entry.UserID == "" {
-		t.Error("UserID field should not be empty")
-	}
-	if entry.CreatedAt.IsZero() {
-		t.Error("CreatedAt should not be zero")
-	}
-	if entry.UpdatedAt.IsZero() {
-		t.Error("UpdatedAt should not be zero")
-	}
+	// Basic checks to ensure the JSON tags are correct.
+	assert.NotEmpty(t, entry.ID, "ID field should not be empty.")
+	assert.NotEmpty(t, entry.AppName, "AppName field should not be empty.")
+	assert.NotNil(t, entry.Memory, "Memory field should not be nil.")
+	assert.NotEmpty(t, entry.UserID, "UserID field should not be empty.")
+	assert.False(t, entry.CreatedAt.IsZero(), "CreatedAt should not be zero.")
+	assert.False(t, entry.UpdatedAt.IsZero(), "UpdatedAt should not be zero.")
 }
 
 func TestKey_CheckMemoryKey(t *testing.T) {
@@ -128,11 +110,10 @@ func TestKey_CheckMemoryKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.key.CheckMemoryKey()
-			if tt.expectErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectErr && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
+			if tt.expectErr {
+				require.Error(t, err, "Expected error but got none.")
+			} else {
+				require.NoError(t, err, "Expected no error but got one.")
 			}
 
 			// Check specific error types for invalid cases.
@@ -140,17 +121,14 @@ func TestKey_CheckMemoryKey(t *testing.T) {
 				// When multiple fields are empty, the function returns the first error it encounters.
 				// The order is: AppName -> UserID -> MemoryID
 				if tt.key.AppName == "" {
-					if err != ErrAppNameRequired {
-						t.Errorf("Expected ErrAppNameRequired for empty app name, got: %v", err)
-					}
+					assert.Equal(t, ErrAppNameRequired, err,
+						"Expected ErrAppNameRequired for empty app name.")
 				} else if tt.key.UserID == "" {
-					if err != ErrUserIDRequired {
-						t.Errorf("Expected ErrUserIDRequired for empty user id, got: %v", err)
-					}
+					assert.Equal(t, ErrUserIDRequired, err,
+						"Expected ErrUserIDRequired for empty user id.")
 				} else if tt.key.MemoryID == "" {
-					if err != ErrMemoryIDRequired {
-						t.Errorf("Expected ErrMemoryIDRequired for empty memory id, got: %v", err)
-					}
+					assert.Equal(t, ErrMemoryIDRequired, err,
+						"Expected ErrMemoryIDRequired for empty memory id.")
 				}
 			}
 		})
@@ -204,11 +182,10 @@ func TestKey_CheckUserKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.key.CheckUserKey()
-			if tt.expectErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectErr && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
+			if tt.expectErr {
+				require.Error(t, err, "Expected error but got none.")
+			} else {
+				require.NoError(t, err, "Expected no error but got one.")
 			}
 
 			// Check specific error types for invalid cases.
@@ -216,13 +193,11 @@ func TestKey_CheckUserKey(t *testing.T) {
 				// When multiple fields are empty, the function returns the first error it encounters.
 				// The order is: AppName -> UserID
 				if tt.key.AppName == "" {
-					if err != ErrAppNameRequired {
-						t.Errorf("Expected ErrAppNameRequired for empty app name, got: %v", err)
-					}
+					assert.Equal(t, ErrAppNameRequired, err,
+						"Expected ErrAppNameRequired for empty app name.")
 				} else if tt.key.UserID == "" {
-					if err != ErrUserIDRequired {
-						t.Errorf("Expected ErrUserIDRequired for empty user id, got: %v", err)
-					}
+					assert.Equal(t, ErrUserIDRequired, err,
+						"Expected ErrUserIDRequired for empty user id.")
 				}
 			}
 		})
@@ -272,11 +247,10 @@ func TestUserKey_CheckUserKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.userKey.CheckUserKey()
-			if tt.expectErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tt.expectErr && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
+			if tt.expectErr {
+				require.Error(t, err, "Expected error but got none.")
+			} else {
+				require.NoError(t, err, "Expected no error but got one.")
 			}
 
 			// Check specific error types for invalid cases.
@@ -284,13 +258,11 @@ func TestUserKey_CheckUserKey(t *testing.T) {
 				// When multiple fields are empty, the function returns the first error it encounters.
 				// The order is: AppName -> UserID
 				if tt.userKey.AppName == "" {
-					if err != ErrAppNameRequired {
-						t.Errorf("Expected ErrAppNameRequired for empty app name, got: %v", err)
-					}
+					assert.Equal(t, ErrAppNameRequired, err,
+						"Expected ErrAppNameRequired for empty app name.")
 				} else if tt.userKey.UserID == "" {
-					if err != ErrUserIDRequired {
-						t.Errorf("Expected ErrUserIDRequired for empty user id, got: %v", err)
-					}
+					assert.Equal(t, ErrUserIDRequired, err,
+						"Expected ErrUserIDRequired for empty user id.")
 				}
 			}
 		})
@@ -309,58 +281,36 @@ func TestToolNames(t *testing.T) {
 	}
 
 	for _, name := range toolNames {
-		if name == "" {
-			t.Errorf("Tool name should not be empty")
-		}
+		assert.NotEmpty(t, name, "Tool name should not be empty.")
 	}
 
 	// Test that tool names are unique.
 	seen := make(map[string]bool)
 	for _, name := range toolNames {
-		if seen[name] {
-			t.Errorf("Duplicate tool name: %s", name)
-		}
+		assert.False(t, seen[name], "Duplicate tool name: %s.", name)
 		seen[name] = true
 	}
 }
 
 func TestErrorConstants(t *testing.T) {
-	// Test that error constants are not nil.
-	if ErrAppNameRequired == nil {
-		t.Error("ErrAppNameRequired should not be nil")
-	}
-	if ErrUserIDRequired == nil {
-		t.Error("ErrUserIDRequired should not be nil")
-	}
-	if ErrMemoryIDRequired == nil {
-		t.Error("ErrMemoryIDRequired should not be nil")
-	}
+	// Test that error constants are not nil and have messages.
+	assert.NotNil(t, ErrAppNameRequired, "ErrAppNameRequired should not be nil.")
+	assert.NotNil(t, ErrUserIDRequired, "ErrUserIDRequired should not be nil.")
+	assert.NotNil(t, ErrMemoryIDRequired, "ErrMemoryIDRequired should not be nil.")
 
-	// Test that error messages are not empty.
-	if ErrAppNameRequired.Error() == "" {
-		t.Error("ErrAppNameRequired error message should not be empty")
-	}
-	if ErrUserIDRequired.Error() == "" {
-		t.Error("ErrUserIDRequired error message should not be empty")
-	}
-	if ErrMemoryIDRequired.Error() == "" {
-		t.Error("ErrMemoryIDRequired error message should not be empty")
-	}
+	assert.NotEmpty(t, ErrAppNameRequired.Error(), "ErrAppNameRequired message should not be empty.")
+	assert.NotEmpty(t, ErrUserIDRequired.Error(), "ErrUserIDRequired message should not be empty.")
+	assert.NotEmpty(t, ErrMemoryIDRequired.Error(), "ErrMemoryIDRequired message should not be empty.")
 }
 
 func TestToolCreator(t *testing.T) {
 	// Test that ToolCreator is a function type.
 	var creator ToolCreator
-	if creator == nil {
-		// This is expected for a zero value of a function type.
-		// We just want to ensure the type is defined correctly.
-	}
+	assert.Nil(t, creator, "Zero value for ToolCreator should be nil.")
 
 	// Test that we can assign a function to ToolCreator.
 	creator = func(service Service) tool.Tool {
 		return nil
 	}
-	if creator == nil {
-		t.Error("ToolCreator should accept function assignment")
-	}
+	assert.NotNil(t, creator, "ToolCreator should accept function assignment.")
 }
