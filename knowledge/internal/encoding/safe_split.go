@@ -9,7 +9,6 @@
 // A copy of the Apache 2.0 License is included in this file.
 //
 
-// package encoding provides UTF-8 safe text processing utilities for knowledge management.
 package encoding
 
 import (

@@ -44,8 +44,8 @@ const (
 	EncodingUnknown  Encoding = "Unknown"
 )
 
-// EncodingInfo contains information about detected text encoding.
-type EncodingInfo struct {
+// Info contains information about detected text encoding.
+type Info struct {
 	Encoding    Encoding
 	Confidence  float64
 	IsValid     bool
@@ -54,9 +54,9 @@ type EncodingInfo struct {
 
 // DetectEncoding automatically detects the encoding of the given text.
 // Returns encoding information with confidence level.
-func DetectEncoding(text string) EncodingInfo {
+func DetectEncoding(text string) Info {
 	if text == "" {
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingUTF8,
 			Confidence:  1.0,
 			IsValid:     true,
@@ -68,7 +68,7 @@ func DetectEncoding(text string) EncodingInfo {
 	if utf8.ValidString(text) {
 		// Additional UTF-8 validation: check for common UTF-8 patterns.
 		confidence := calculateUTF8Confidence(text)
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingUTF8,
 			Confidence:  confidence,
 			IsValid:     true,
@@ -85,7 +85,7 @@ func DetectEncoding(text string) EncodingInfo {
 // If UTF-8 is detected, it applies UTF-8 safe processing.
 // If other encoding is detected, it converts to UTF-8.
 // Returns the processed text and encoding information.
-func SmartProcessText(text string) (string, EncodingInfo) {
+func SmartProcessText(text string) (string, Info) {
 	info := DetectEncoding(text)
 
 	switch info.Encoding {
@@ -171,13 +171,13 @@ func calculateUTF8Confidence(text string) float64 {
 }
 
 // detectNonUTF8Encoding attempts to detect non-UTF-8 encodings.
-func detectNonUTF8Encoding(text string) EncodingInfo {
+func detectNonUTF8Encoding(text string) Info {
 	// Try common encodings based on byte patterns.
 	bytes := []byte(text)
 
 	// Check for GBK/GB18030 patterns (common in Chinese text).
 	if isLikelyGBK(bytes) {
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingGBK,
 			Confidence:  0.7,
 			IsValid:     false,
@@ -187,7 +187,7 @@ func detectNonUTF8Encoding(text string) EncodingInfo {
 
 	// Check for Big5 patterns (Traditional Chinese).
 	if isLikelyBig5(bytes) {
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingBig5,
 			Confidence:  0.7,
 			IsValid:     false,
@@ -197,7 +197,7 @@ func detectNonUTF8Encoding(text string) EncodingInfo {
 
 	// Check for Shift_JIS patterns (Japanese).
 	if isLikelyShiftJIS(bytes) {
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingShiftJIS,
 			Confidence:  0.7,
 			IsValid:     false,
@@ -207,7 +207,7 @@ func detectNonUTF8Encoding(text string) EncodingInfo {
 
 	// Check for EUC-KR patterns (Korean).
 	if isLikelyEUCKR(bytes) {
-		return EncodingInfo{
+		return Info{
 			Encoding:    EncodingEUCKR,
 			Confidence:  0.7,
 			IsValid:     false,
@@ -216,7 +216,7 @@ func detectNonUTF8Encoding(text string) EncodingInfo {
 	}
 
 	// Default to unknown encoding.
-	return EncodingInfo{
+	return Info{
 		Encoding:    EncodingUnknown,
 		Confidence:  0.3,
 		IsValid:     false,
