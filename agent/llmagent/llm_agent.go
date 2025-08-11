@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -154,9 +155,9 @@ func WithMemory(memoryService memory.Service) Option {
 		opts.Memory = memoryService
 		// Generate memory instruction based on the memory service.
 		if opts.Instruction == "" {
-			opts.Instruction = memory.GenerateInstruction(memoryService)
+			opts.Instruction = imemory.GenerateInstruction(memoryService)
 		} else {
-			opts.Instruction = opts.Instruction + "\n\n" + memory.GenerateInstruction(memoryService)
+			opts.Instruction = opts.Instruction + "\n\n" + imemory.GenerateInstruction(memoryService)
 		}
 	}
 }
