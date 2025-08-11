@@ -14,9 +14,8 @@
 package chunking
 
 import (
-	"strings"
-
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 )
 
 // RecursiveChunking implements a recursive chunking strategy that uses a hierarchy of separators.
@@ -92,7 +91,7 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 func (r *RecursiveChunking) recursiveSplit(
 	text string, separators []string, originalDoc *document.Document, startChunkNumber int,
 ) []*document.Document {
-	if len(text) <= r.chunkSize {
+	if encoding.RuneCount(text) <= r.chunkSize {
 		chunk := createChunk(originalDoc, text, startChunkNumber)
 		return []*document.Document{chunk}
 	}
@@ -108,10 +107,10 @@ func (r *RecursiveChunking) recursiveSplit(
 	var splits []string
 
 	if separator == "" {
-		// Empty separator means split by character.
-		splits = strings.Split(text, "")
+		// Empty separator means split by character (runes).
+		splits = encoding.SafeSplitBySeparator(text, "")
 	} else {
-		splits = strings.Split(text, separator)
+		splits = encoding.SafeSplitBySeparator(text, separator)
 	}
 
 	var chunks []*document.Document
@@ -122,7 +121,7 @@ func (r *RecursiveChunking) recursiveSplit(
 			continue
 		}
 
-		if len(split) <= r.chunkSize {
+		if encoding.RuneCount(split) <= r.chunkSize {
 			// Split is small enough, create chunk.
 			chunk := createChunk(originalDoc, split, chunkNumber)
 			chunks = append(chunks, chunk)
@@ -134,10 +133,10 @@ func (r *RecursiveChunking) recursiveSplit(
 				chunks = append(chunks, subChunks...)
 				chunkNumber += len(subChunks)
 			} else {
-				// No more separators, force split at chunk size.
-				for i := 0; i < len(split); i += r.chunkSize {
-					end := min(i+r.chunkSize, len(split))
-					chunk := createChunk(originalDoc, split[i:end], chunkNumber)
+				// No more separators, force split at chunk size with UTF-8 safety.
+				forceChunks := encoding.SafeSplitBySize(split, r.chunkSize)
+				for _, chunkText := range forceChunks {
+					chunk := createChunk(originalDoc, chunkText, chunkNumber)
 					chunks = append(chunks, chunk)
 					chunkNumber++
 				}
@@ -155,8 +154,8 @@ func (r *RecursiveChunking) applyOverlap(chunks []*document.Document) []*documen
 	overlappedChunks := []*document.Document{chunks[0]}
 	for i := 1; i < len(chunks); i++ {
 		prevText := chunks[i-1].Content
-		if len(prevText) > r.overlap {
-			prevText = prevText[len(prevText)-r.overlap:]
+		if encoding.RuneCount(prevText) > r.overlap {
+			prevText = encoding.SafeOverlap(prevText, r.overlap)
 		}
 
 		// Create new metadata for overlapped chunk.
