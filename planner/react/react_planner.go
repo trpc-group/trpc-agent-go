@@ -198,6 +198,12 @@ func (p *Planner) buildPlannerInstruction() string {
 			"be under " + ReplanningTag + ". Then use tools to follow the new plan.",
 	}, "\n")
 
+	actionPreamble := strings.Join([]string{
+		"Below are the requirements for the action:",
+		"Explicitly state your next action in the first person ('I will...').",
+		"Execute your action using necessary tools and provide a concise summary of the outcome.",
+	}, "\n")
+
 	reasoningPreamble := strings.Join([]string{
 		"Below are the requirements for the reasoning:",
 		"The reasoning makes a summary of the current trajectory based on the user " +
@@ -246,6 +252,7 @@ func (p *Planner) buildPlannerInstruction() string {
 	return strings.Join([]string{
 		highLevelPreamble,
 		planningPreamble,
+		actionPreamble,
 		reasoningPreamble,
 		finalAnswerPreamble,
 		toolCodePreamble,
