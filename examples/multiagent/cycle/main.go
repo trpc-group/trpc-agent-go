@@ -169,7 +169,6 @@ func (c *cycleChat) setup(_ context.Context) error {
 	cycleAgent := cycleagent.New(
 		"cycle-demo",
 		cycleagent.WithSubAgents([]agent.Agent{generateAgent, criticAgent}),
-		cycleagent.WithTools([]tool.Tool{scoreTool, solutionTool}),
 		cycleagent.WithMaxIterations(*maxIterPtr),
 		cycleagent.WithEscalationFunc(qualityEscalationFunc),
 	)
