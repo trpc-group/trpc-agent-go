@@ -186,55 +186,6 @@ go run main.go -memory redis -redis-addr localhost:6379
 | `inmemory`     | `inmemory`      | ✅ Ready | Default configuration            |
 | `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session |
 
-### Redis Memory Service Demo
-
-Here's a demonstration of Redis memory service in action:
-
-```bash
-# Start with Redis memory service
-go run main.go -memory redis -redis-addr localhost:6380
-
-🧠 Multi Turn Chat with Memory
-Model: deepseek-chat
-Memory Service: redis
-Redis Address: localhost:6380
-Streaming: true
-==================================================
-✅ Memory chat ready! Session: memory-session-1754916588
-   Memory Service: redis
-   Redis: localhost:6380
-
-👤 You: Hello, my name is Xukun Cai, and I like singing, dancing, rapping and playing basketball.
-🤖 Assistant: 🔧 Memory tool calls initiated:
-   • memory_add (ID: call_0_849f40f3-8215-483f-aedf-bf28ca4ea67b)
-     Args: {"memory":"User is named Xukun Cai and enjoys singing, dancing, rapping, and playing basketball.","topics":["name","hobbies"]}
-
-🔄 Executing memory tools...
-✅ Memory tool response: Memory added successfully
-
-👤 You: /new
-🆕 Started new memory session!
-   Previous: memory-session-1754916588
-   Current:  memory-session-1754916645
-
-👤 You: Could you tell something about me?
-🤖 Assistant: 🔧 Memory tool calls initiated:
-   • memory_load (ID: call_0_c2419a3e-303c-4946-93bc-fad360881b5e)
-     Args: {"limit":5}
-
-🔄 Executing memory tools...
-✅ Memory tool response: Here's what I know about you:
-- **Name**: You're named Xukun Cai.
-- **Hobbies**: You enjoy singing, dancing, rapping, and playing basketball.
-```
-
-**Key benefits demonstrated:**
-
-- **Persistent Storage**: Memories survive session restarts
-- **Redis Integration**: Seamless Redis backend usage
-- **Tool Execution**: Full memory tool functionality
-- **Session Management**: Clean session handling
-
 ### Help and Available Options
 
 To see all available command line options:
@@ -584,7 +535,7 @@ User Input → Runner → Agent → Memory Tools → Memory Service → Response
 
 ## Redis Memory Service
 
-### Redis Support (Ready to Use)
+### Redis Support
 
 The example now supports Redis-based memory service for persistent storage:
 
@@ -632,15 +583,6 @@ go run main.go -memory redis -redis-addr localhost:6380
 # Connect to Redis with authentication
 go run main.go -memory redis -redis-addr redis://username:password@localhost:6379
 ```
-
-### Planned Features
-
-- **Database Integration**: PostgreSQL, MySQL support
-- **Memory Expiration**: TTL-based memory cleanup
-- **Memory Compression**: Automatic summarization and compression
-- **Vector Search**: Semantic memory search using embeddings
-- **Memory Analytics**: Usage statistics and insights
-- **Multi-tenant Support**: Enhanced isolation and security
 
 ## Extensibility
 
