@@ -742,6 +742,8 @@ func (m *Model) handleStreamingResponse(
 	responseChan chan<- *model.Response,
 	opts ...openaiopt.RequestOption,
 ) {
+	bs, _ := json.MarshalIndent(chatRequest, "", "  ")
+	log.Infof("chatRequest: %s", string(bs))
 	stream := m.client.Chat.Completions.NewStreaming(
 		ctx, chatRequest, opts...)
 	defer stream.Close()
