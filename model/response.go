@@ -48,6 +48,11 @@ const (
 	ObjectTypeRunnerCompletion = "runner.completion"
 	// ObjectTypeStateUpdate is the object type for state update events.
 	ObjectTypeStateUpdate = "state.update"
+
+	// ObjectTypeChatCompletionChunk is the object type for chat completion chunk events.
+	ObjectTypeChatCompletionChunk = "chat.completion.chunk"
+	// ObjectTypeChatCompletion is the object type for chat completion events.
+	ObjectTypeChatCompletion = "chat.completion"
 )
 
 // Choice represents a single completion choice.

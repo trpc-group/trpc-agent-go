@@ -14,11 +14,16 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -35,6 +40,95 @@ const (
 
 	defaultChannelBufferSize = 256
 )
+
+// Variant represents different model variants with specific behaviors.
+type Variant string
+
+const (
+	// VariantOpenAI is the default OpenAI variant.
+	VariantOpenAI Variant = "openai"
+	// VariantHunyuan is the Hunyuan variant with specific file handling.
+	VariantHunyuan Variant = "hunyuan"
+)
+
+// variantConfig holds configuration for different variants.
+type variantConfig struct {
+	// Default file upload path for this variant.
+	fileUploadPath   string
+	fileDeletionPath string
+	// Default file purpose for this variant.
+	filePurpose openai.FilePurpose
+	// Default HTTP method for file deletion.
+	fileDeletionMethod         string
+	fileDeletionBodyConvertor  fileDeletionBodyConvertor
+	fileUploadRequestConvertor fileUploadRequestConvertor
+	// Whether to skip file type in content parts for this variant.
+	skipFileTypeInContent bool
+}
+
+type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
+
+type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
+
+// variantConfigs maps variant names to their configurations.
+var variantConfigs = map[Variant]variantConfig{
+	VariantOpenAI: {
+		fileUploadPath:        "/openapi/v1/files",
+		filePurpose:           openai.FilePurposeUserData,
+		fileDeletionMethod:    http.MethodDelete,
+		skipFileTypeInContent: false,
+		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
+			return body
+		},
+	},
+	VariantHunyuan: {
+		fileUploadPath:        "/openapi/v1/files/uploads",
+		fileDeletionPath:      "/openapi/v1/files",
+		filePurpose:           openai.FilePurpose("file-extract"),
+		fileDeletionMethod:    http.MethodPost,
+		skipFileTypeInContent: true,
+		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
+			if body != nil {
+				return body
+			}
+			return []byte(`{"file_id":"` + fileID + `"}`)
+		},
+		fileUploadRequestConvertor: func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error) {
+			// Create multipart form data.
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			// Add purpose field.
+			if err := writer.WriteField("purpose", string(fileOpts.Purpose)); err != nil {
+				return nil, fmt.Errorf("failed to write purpose field: %w", err)
+			}
+			// Add file field.
+			fileInfo, err := file.Stat()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get file info: %w", err)
+			}
+			part, err := writer.CreateFormFile("file", fileInfo.Name())
+			if err != nil {
+				return nil, fmt.Errorf("failed to create form file: %w", err)
+			}
+			// Reset file position and copy file content.
+			if _, err := file.Seek(0, 0); err != nil {
+				return nil, fmt.Errorf("failed to reset file position: %w", err)
+			}
+			if _, err := io.Copy(part, file); err != nil {
+				return nil, fmt.Errorf("failed to copy file content: %w", err)
+			}
+			// Close the writer to finalize the multipart data.
+			if err := writer.Close(); err != nil {
+				return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+			}
+			// Set the request body and content type.
+			r.Body = io.NopCloser(body)
+			r.Header.Set("Content-Type", writer.FormDataContentType())
+			r.ContentLength = int64(body.Len())
+			return r, nil
+		},
+	},
+}
 
 // HTTPClient is the interface for the HTTP client.
 type HTTPClient interface {
@@ -89,6 +183,8 @@ type Model struct {
 	chatResponseCallback ChatResponseCallbackFunc
 	chatChunkCallback    ChatChunkCallbackFunc
 	extraFields          map[string]interface{}
+	variant              Variant
+	variantConfig        variantConfig
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -131,6 +227,8 @@ type options struct {
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
 	ExtraFields map[string]interface{}
+	// Variant for model-specific behavior.
+	Variant Variant
 }
 
 // Option is a function that configures an OpenAI model.
@@ -229,9 +327,21 @@ func WithExtraFields(extraFields map[string]interface{}) Option {
 	}
 }
 
+// WithVariant sets the model variant for specific behavior.
+// The default variant is VariantOpenAI.
+// Optional variants are:
+// - VariantHunyuan: Hunyuan variant with specific file handling.
+func WithVariant(variant Variant) Option {
+	return func(opts *options) {
+		opts.Variant = variant
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
-	o := &options{}
+	o := &options{
+		Variant: VariantOpenAI, // The default variant is VariantOpenAI.
+	}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -255,7 +365,6 @@ func New(name string, opts ...Option) *Model {
 	if channelBufferSize <= 0 {
 		channelBufferSize = defaultChannelBufferSize
 	}
-
 	return &Model{
 		client:               client,
 		name:                 name,
@@ -266,6 +375,8 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback: o.ChatResponseCallback,
 		chatChunkCallback:    o.ChatChunkCallback,
 		extraFields:          o.ExtraFields,
+		variant:              o.Variant,
+		variantConfig:        variantConfigs[o.Variant],
 	}
 }
 
@@ -361,17 +472,23 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 	result := make([]openai.ChatCompletionMessageParamUnion, len(messages))
 
 	for i, msg := range messages {
+		toUserMessage := func() openai.ChatCompletionMessageParamUnion {
+			content, extraFields := m.convertUserMessageContent(msg)
+			userMessage := &openai.ChatCompletionUserMessageParam{
+				Content: content,
+			}
+			if m.variantConfig.skipFileTypeInContent {
+				userMessage.SetExtraFields(extraFields)
+			}
+			return openai.ChatCompletionMessageParamUnion{
+				OfUser: userMessage,
+			}
+		}
 		switch msg.Role {
 		case model.RoleSystem:
 			result[i] = openai.ChatCompletionMessageParamUnion{
 				OfSystem: &openai.ChatCompletionSystemMessageParam{
 					Content: m.convertSystemMessageContent(msg),
-				},
-			}
-		case model.RoleUser:
-			result[i] = openai.ChatCompletionMessageParamUnion{
-				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: m.convertUserMessageContent(msg),
 				},
 			}
 		case model.RoleAssistant:
@@ -390,13 +507,10 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 					ToolCallID: msg.ToolID,
 				},
 			}
-		default:
-			// Default to user message if role is unknown.
-			result[i] = openai.ChatCompletionMessageParamUnion{
-				OfUser: &openai.ChatCompletionUserMessageParam{
-					Content: m.convertUserMessageContent(msg),
-				},
-			}
+		case model.RoleUser:
+			result[i] = toUserMessage()
+		default: // Default to user message if role is unknown.
+			result[i] = toUserMessage()
 		}
 	}
 
@@ -430,30 +544,53 @@ func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatComple
 }
 
 // convertUserMessageContent converts message content to user message content union.
-func (m *Model) convertUserMessageContent(msg model.Message) openai.ChatCompletionUserMessageParamContentUnion {
+func (m *Model) convertUserMessageContent(
+	msg model.Message,
+) (openai.ChatCompletionUserMessageParamContentUnion, map[string]any) {
+	// If there are no content parts and Content is not empty, return as string.
 	if len(msg.ContentParts) == 0 && msg.Content != "" {
 		return openai.ChatCompletionUserMessageParamContentUnion{
 			OfString: openai.String(msg.Content),
-		}
+		}, nil
 	}
-	// Convert content parts to OpenAI content parts.
-	var contentParts []openai.ChatCompletionContentPartUnionParam
+	var (
+		contentParts []openai.ChatCompletionContentPartUnionParam
+		extraFields  = make(map[string]any)
+	)
+	// Add Content as a text part if present.
 	if msg.Content != "" {
-		contentParts = append(contentParts, openai.ChatCompletionContentPartUnionParam{
-			OfText: &openai.ChatCompletionContentPartTextParam{
-				Text: msg.Content,
+		contentParts = append(
+			contentParts,
+			openai.ChatCompletionContentPartUnionParam{
+				OfText: &openai.ChatCompletionContentPartTextParam{
+					Text: msg.Content,
+				},
 			},
-		})
+		)
 	}
 	for _, part := range msg.ContentParts {
 		contentPart := m.convertContentPart(part)
-		if contentPart != nil {
-			contentParts = append(contentParts, *contentPart)
+		if contentPart == nil {
+			continue
 		}
+		// Handle file content parts based on variant configuration.
+		if part.Type == model.ContentTypeFile && m.variantConfig.skipFileTypeInContent {
+			const fileIDsKey = "file_ids"
+			// Collect file IDs in extraFields under "file_ids".
+			fileIDs, ok := extraFields[fileIDsKey].([]string)
+			if !ok {
+				fileIDs = []string{}
+			}
+			fileIDs = append(fileIDs, part.File.FileID)
+			extraFields[fileIDsKey] = fileIDs
+			continue
+		}
+		// For non-file or non-skipped file types, add to contentParts.
+		contentParts = append(contentParts, *contentPart)
 	}
 	return openai.ChatCompletionUserMessageParamContentUnion{
 		OfArrayOfContentParts: contentParts,
-	}
+	}, extraFields
 }
 
 // convertAssistantMessageContent converts message content to assistant message content union.
@@ -616,10 +753,18 @@ func (m *Model) handleStreamingResponse(
 	for stream.Next() {
 		chunk := stream.Current()
 
-		// Record ID -> Index mapping when ID is present (first chunk of each tool call).
+		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
 
+		// Always accumulate for correctness (tool call deltas are assembled later),
+		// but we may suppress emitting a partial event for noise reduction.
 		acc.AddChunk(chunk)
+
+		// Suppress chunks that carry no meaningful visible delta (including
+		// tool_call deltas, which we'll surface only in the final response).
+		if m.shouldSuppressChunk(chunk) {
+			continue
+		}
 
 		if m.chatChunkCallback != nil {
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
@@ -635,7 +780,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(stream, acc, idToIndexMap, responseChan, ctx)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.
@@ -649,11 +794,42 @@ func (m *Model) updateToolCallIndexMapping(chunk openai.ChatCompletionChunk, idT
 	}
 }
 
+// shouldSuppressChunk returns true when the chunk contains no meaningful delta
+// (no content, no refusal, no non-empty tool calls, and no finish reason).
+// This filters out completely empty streaming events that cause noisy logs.
+func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
+	if len(chunk.Choices) == 0 {
+		return true
+	}
+	choice := chunk.Choices[0]
+	delta := choice.Delta
+
+	// Any meaningful payload disables suppression.
+	if delta.Content != "" {
+		return false
+	}
+	// If this chunk is a tool_calls delta, suppress emission. We'll only expose
+	// tool calls in the final aggregated response to avoid noisy blank chunks.
+	if delta.JSON.ToolCalls.Valid() {
+		return true
+	}
+	if choice.FinishReason != "" {
+		return false
+	}
+	return true
+}
+
 // createPartialResponse creates a partial response from a chunk.
 func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.Response {
 	response := &model.Response{
-		ID:        chunk.ID,
-		Object:    string(chunk.Object), // Convert constant to string
+		ID: chunk.ID,
+		// Normalize object for chunks; upstream may emit empty object for toolcall deltas.
+		Object: func() string {
+			if chunk.Object != "" {
+				return string(chunk.Object)
+			}
+			return model.ObjectTypeChatCompletionChunk
+		}(),
 		Created:   chunk.Created,
 		Model:     chunk.Model,
 		Timestamp: time.Now(),
@@ -683,11 +859,11 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 
 // sendFinalResponse sends the final response with accumulated data.
 func (m *Model) sendFinalResponse(
+	ctx context.Context,
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
 	responseChan chan<- *model.Response,
-	ctx context.Context,
 ) {
 	if stream.Err() == nil {
 		// Check accumulated tool calls (batch processing after streaming is complete).
@@ -766,6 +942,7 @@ func (m *Model) createFinalResponse(
 	accumulatedToolCalls []model.ToolCall,
 ) *model.Response {
 	finalResponse := &model.Response{
+		Object:  model.ObjectTypeChatCompletion,
 		ID:      acc.ID,
 		Created: acc.Created,
 		Model:   acc.Model,
@@ -886,4 +1063,222 @@ func (m *Model) handleNonStreamingResponse(
 	case responseChan <- response:
 	case <-ctx.Done():
 	}
+}
+
+// FileOptions is the options for file operations.
+type FileOptions struct {
+	// Path for file operations (default: /openapi/v1/files).
+	Path string
+	// Purpose for file upload (default: openai.FilePurposeUserData).
+	Purpose openai.FilePurpose
+	// Method for HTTP request (default: based on operation).
+	Method string
+	// Body for HTTP request (default: auto-generated based on operation).
+	Body []byte
+}
+
+// FileOption is the option for file operations.
+type FileOption func(*FileOptions)
+
+// WithPath is the option for setting the file operation path.
+func WithPath(path string) FileOption {
+	return func(options *FileOptions) {
+		options.Path = path
+	}
+}
+
+// WithPurpose is the option for setting the file upload purpose.
+func WithPurpose(purpose openai.FilePurpose) FileOption {
+	return func(options *FileOptions) {
+		options.Purpose = purpose
+	}
+}
+
+// WithMethod is the option for setting the HTTP method.
+func WithMethod(method string) FileOption {
+	return func(options *FileOptions) {
+		options.Method = method
+	}
+}
+
+// WithBody is the option for setting the HTTP request body.
+func WithBody(body []byte) FileOption {
+	return func(options *FileOptions) {
+		options.Body = body
+	}
+}
+
+// UploadFile uploads a file to OpenAI and returns the file ID.
+// The file can then be referenced in messages using AddFileID().
+func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOption) (string, error) {
+	fileOpts := &FileOptions{
+		Path:    m.variantConfig.fileUploadPath,
+		Purpose: m.variantConfig.filePurpose,
+	}
+	for _, opt := range opts {
+		opt(fileOpts)
+	}
+
+	// Open the file.
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	// Create middleware to construct multipart form data request.
+	middlewareOpt := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+			// Set the correct path.
+			r.URL.Path = fileOpts.Path
+
+			// Set custom HTTP method if specified.
+			if fileOpts.Method != "" {
+				r.Method = fileOpts.Method
+			}
+
+			// Use custom body if specified, otherwise create multipart form data.
+			if fileOpts.Body != nil {
+				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
+				r.ContentLength = int64(len(fileOpts.Body))
+			} else if m.variantConfig.fileUploadRequestConvertor != nil {
+				r, err = m.variantConfig.fileUploadRequestConvertor(r, file, fileOpts)
+				if err != nil {
+					return nil, fmt.Errorf("failed to convert request: %w", err)
+				}
+			}
+			// Continue with the modified request.
+			return next(r)
+		})
+
+	// Create empty file params since we're handling the file in middleware.
+	fileParams := openai.FileNewParams{
+		File:    file,
+		Purpose: fileOpts.Purpose,
+	}
+
+	// Upload the file.
+	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
+	if err != nil {
+		return "", fmt.Errorf("failed to upload file: %w", err)
+	}
+	return fileObj.ID, nil
+}
+
+// UploadFileData uploads file data to OpenAI and returns the file ID.
+// This is useful when you have file data in memory rather than a file path.
+func (m *Model) UploadFileData(
+	ctx context.Context,
+	filename string,
+	data []byte,
+	opts ...FileOption,
+) (string, error) {
+	// Apply default options based on variant.
+	fileOpts := &FileOptions{
+		Path:    m.variantConfig.fileUploadPath,
+		Purpose: m.variantConfig.filePurpose,
+	}
+	for _, opt := range opts {
+		opt(fileOpts)
+	}
+
+	// Create file upload parameters with data reader.
+	fileParams := openai.FileNewParams{
+		File:    bytes.NewReader(data),
+		Purpose: fileOpts.Purpose,
+	}
+
+	// Create middleware to handle custom options.
+	middlewareOpt := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+			// Set the correct path.
+			r.URL.Path = fileOpts.Path
+			// Set custom HTTP method if specified.
+			if fileOpts.Method != "" {
+				r.Method = fileOpts.Method
+			}
+			// Use custom body if specified.
+			if fileOpts.Body != nil {
+				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
+				r.ContentLength = int64(len(fileOpts.Body))
+			}
+			return next(r)
+		})
+
+	// Upload the file.
+	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
+	if err != nil {
+		return "", fmt.Errorf("failed to upload file data: %w", err)
+	}
+	return fileObj.ID, nil
+}
+
+// DeleteFile deletes a file from OpenAI.
+func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOption) error {
+	fileOpts := &FileOptions{
+		Path:   m.variantConfig.fileDeletionPath,
+		Method: m.variantConfig.fileDeletionMethod,
+	}
+	for _, opt := range opts {
+		opt(fileOpts)
+	}
+	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(fileOpts.Body, fileID)
+	// Create middleware to handle custom options.
+	middlewareOpt := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
+			// Set custom HTTP method if specified.
+			if fileOpts.Method != "" {
+				r.Method = fileOpts.Method
+			}
+			// Use custom body if specified.
+			if fileOpts.Body != nil {
+				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
+				r.ContentLength = int64(len(fileOpts.Body))
+			}
+			return next(r)
+		})
+
+	_, err := m.client.Files.Delete(ctx, fileID, middlewareOpt)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	return nil
+}
+
+// GetFile retrieves file information from OpenAI.
+func (m *Model) GetFile(
+	ctx context.Context,
+	fileID string,
+	opts ...FileOption,
+) (*openai.FileObject, error) {
+	fileOpts := &FileOptions{
+		Path: m.variantConfig.fileUploadPath,
+	}
+	for _, opt := range opts {
+		opt(fileOpts)
+	}
+	// Create middleware to handle custom options.
+	middlewareOpt := openaiopt.WithMiddleware(
+		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
+			// Set the correct path.
+			r.URL.Path = fileOpts.Path
+			// Set custom HTTP method if specified.
+			if fileOpts.Method != "" {
+				r.Method = fileOpts.Method
+			}
+			// Use custom body if specified.
+			if fileOpts.Body != nil {
+				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
+				r.ContentLength = int64(len(fileOpts.Body))
+			}
+			return next(r)
+		})
+	fileObj, err := m.client.Files.Get(ctx, fileID, middlewareOpt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file: %w", err)
+	}
+	return fileObj, nil
 }

@@ -10,7 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go v0.0.2
 )
 
 require (

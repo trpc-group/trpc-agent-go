@@ -1201,7 +1201,7 @@ func TestConvertUserMessageContent(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	// Check that content parts are converted
 	if len(content.OfArrayOfContentParts) != 1 {
@@ -1234,7 +1234,7 @@ func TestConvertUserMessageContentWithImage(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
@@ -1266,7 +1266,7 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
@@ -1293,7 +1293,7 @@ func TestConvertUserMessageContentWithFile(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
