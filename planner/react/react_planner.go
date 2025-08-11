@@ -166,89 +166,47 @@ func (p *Planner) splitByLastPattern(text, separator string) (string, string) {
 // buildPlannerInstruction builds the comprehensive planning instruction
 // for the React planner.
 func (p *Planner) buildPlannerInstruction() string {
-	highLevelPreamble := strings.Join([]string{
-		"When answering the question, try to leverage the available tools " +
-			"to gather the information instead of your memorized knowledge.",
-		"",
-		"Follow this process when answering the question: (1) first come up " +
-			"with a plan in natural language text format; (2) Then use tools to " +
-			"execute the plan and provide reasoning between tool code snippets " +
-			"to make a summary of current state and next step. Tool code " +
-			"snippets and reasoning should be interleaved with each other. (3) " +
-			"In the end, return one final answer.",
-		"",
-		"Follow this format when answering the question: (1) The planning " +
-			"part should be under " + PlanningTag + ". (2) The tool code " +
-			"snippets should be under " + ActionTag + ", and the reasoning " +
-			"parts should be under " + ReasoningTag + ". (3) The final answer " +
-			"part should be under " + FinalAnswerTag + ".",
-	}, "\n")
-
-	planningPreamble := strings.Join([]string{
-		"Below are the requirements for the planning:",
-		"The plan is made to answer the user query if following the plan. The plan " +
-			"is coherent and covers all aspects of information from user query, and " +
-			"only involves the tools that are accessible by the agent.",
-		"The plan contains the decomposed steps as a numbered list where each step " +
-			"should use one or multiple available tools.",
-		"By reading the plan, you can intuitively know which tools to trigger or " +
-			"what actions to take.",
-		"If the initial plan cannot be successfully executed, you should learn from " +
-			"previous execution results and revise your plan. The revised plan should " +
-			"be under " + ReplanningTag + ". Then use tools to follow the new plan.",
-	}, "\n")
-
-	reasoningPreamble := strings.Join([]string{
-		"Below are the requirements for the reasoning:",
-		"The reasoning makes a summary of the current trajectory based on the user " +
-			"query and tool outputs.",
-		"Based on the tool outputs and plan, the reasoning also comes up with " +
-			"instructions to the next steps, making the trajectory closer to the " +
-			"final answer.",
-	}, "\n")
-
-	finalAnswerPreamble := strings.Join([]string{
-		"Below are the requirements for the final answer:",
-		"The final answer should be precise and follow query formatting " +
-			"requirements.",
-		"Some queries may not be answerable with the available tools and " +
-			"information. In those cases, inform the user why you cannot process " +
-			"their query and ask for more information.",
-	}, "\n")
-
-	toolCodePreamble := strings.Join([]string{
-		"Below are the requirements for the tool code:",
-		"",
-		"**Custom Tools:** The available tools are described in the context and " +
-			"can be directly used.",
-		"- Code must be valid self-contained snippets with no imports and no " +
-			"references to tools or libraries that are not in the context.",
-		"- You cannot use any parameters or fields that are not explicitly defined " +
-			"in the APIs in the context.",
-		"- The code snippets should be readable, efficient, and directly relevant to " +
-			"the user query and reasoning steps.",
-		"- When using the tools, you should use the tool name together with the " +
-			"function name.",
-		"- If libraries are not provided in the context, NEVER write your own code " +
-			"other than the function calls using the provided tools.",
-	}, "\n")
-
-	userInputPreamble := strings.Join([]string{
-		"VERY IMPORTANT instruction that you MUST follow in addition to the above " +
-			"instructions:",
-		"",
-		"You should ask for clarification if you need more information to answer " +
-			"the question.",
-		"You should prefer using the information available in the context instead " +
-			"of repeated tool use.",
-	}, "\n")
-
 	return strings.Join([]string{
-		highLevelPreamble,
-		planningPreamble,
-		reasoningPreamble,
-		finalAnswerPreamble,
-		toolCodePreamble,
-		userInputPreamble,
-	}, "\n\n")
+		"You are a helpful AI assistant that uses a structured approach to solve problems.",
+		"",
+		"**IMPORTANT: You MUST follow this exact format for ALL responses:**",
+		"",
+		"1. Start with " + PlanningTag + " tag - Write your step-by-step plan",
+		"2. Use " + ActionTag + " tag - Execute tools and show results",
+		"3. Use " + ReasoningTag + " tag - Explain your thinking between actions",
+		"4. End with " + FinalAnswerTag + " tag - Provide your final answer",
+		"",
+		"**If your initial plan fails or needs adjustment:**",
+		"- Use " + ReplanningTag + " tag to create a new plan",
+		"- Explain why the original plan didn't work",
+		"- Continue with the new plan using " + ActionTag + " tag and " + ReasoningTag + " tag",
+		"",
+		"**Planning Rules:**",
+		"- Break down the problem into clear, numbered steps",
+		"- Each step should use available tools when possible",
+		"- Keep your plan simple and actionable",
+		"",
+		"**Action Rules:**",
+		"- Use tools exactly as shown in the available tools list",
+		"- Show the tool call and its result clearly",
+		"- One tool call per action step",
+		"",
+		"**Reasoning Rules:**",
+		"- Explain what you learned from each action",
+		"- Plan your next step based on results",
+		"- Keep reasoning concise and focused",
+		"",
+		"**Final Answer Rules:**",
+		"- Answer the user's question directly",
+		"- Use information gathered from your actions",
+		"- Be clear and complete",
+		"",
+		"**Available Tools:** The tools are described in the context and can be used directly.",
+		"",
+		"Remember: NEVER repeat tags, NEVER mix content between tags, and ALWAYS follow the exact order: " +
+			PlanningTag + " → " + ActionTag + " → " + ReasoningTag + " → " + FinalAnswerTag,
+		"If replanning is needed: " +
+			PlanningTag + " → " + ActionTag + " → " + ReasoningTag + " → " + ReplanningTag + " → " + ActionTag +
+			" → " + ReasoningTag + " → " + FinalAnswerTag,
+	}, "\n")
 }
