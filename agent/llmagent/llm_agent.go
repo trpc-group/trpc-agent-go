@@ -192,6 +192,29 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
+// WithAddCurrentTime adds the current time to the system prompt if true.
+func WithAddCurrentTime(addCurrentTime bool) Option {
+	return func(opts *Options) {
+		opts.AddCurrentTime = addCurrentTime
+	}
+}
+
+// WithTimezone specifies the timezone to use for time display.
+func WithTimezone(timezone string) Option {
+	return func(opts *Options) {
+		opts.Timezone = timezone
+	}
+}
+
+// WithTimeFormat specifies the format for time display.
+// The format should be a valid Go time format string.
+// See https://pkg.go.dev/time#Time.Format for more details.
+func WithTimeFormat(timeFormat string) Option {
+	return func(opts *Options) {
+		opts.TimeFormat = timeFormat
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -235,6 +258,12 @@ type Options struct {
 	// EnableParallelTools enables parallel tool execution if true.
 	// If false (default), tools will execute serially for safety.
 	EnableParallelTools bool
+	// AddCurrentTime adds the current time to the system prompt if true.
+	AddCurrentTime bool
+	// Timezone specifies the timezone to use for time display.
+	Timezone string
+	// TimeFormat specifies the format for time display.
+	TimeFormat string
 	// OutputKey is the key in session state to store the output of the agent.
 	OutputKey string
 	// OutputSchema is the JSON schema for validating agent output.
@@ -307,7 +336,17 @@ func New(name string, opts ...Option) *LLMAgent {
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 5. Content processor - handles messages from invocation.
+	// 5. Time processor - adds current time information if enabled.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
+
+	// 6. Content processor - handles messages from invocation.
 	contentProcessor := processor.NewContentRequestProcessor()
 	requestProcessors = append(requestProcessors, contentProcessor)
 
