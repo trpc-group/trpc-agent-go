@@ -1,15 +1,13 @@
 # Time-Aware Multi-Turn Chat Example
 
-This example demonstrates a multi-turn chat application using the tRPC Agent Go framework with enhanced time awareness capabilities. The application showcases streaming responses, session management, tool calling, and intelligent time context integration.
+This example demonstrates a multi-turn chat application using the tRPC Agent Go framework with enhanced time awareness capabilities. The application showcases streaming responses and intelligent time context integration.
 
 ## Features
 
 - **Multi-turn Conversations**: Maintains conversation context across multiple interactions
 - **Streaming Responses**: Real-time streaming of AI responses for better user experience
-- **Session Management**: In-memory session storage for conversation persistence
-- **Tool Integration**: Built-in calculator tool for mathematical operations
 - **Time Awareness**: Intelligent time context integration with customizable timezone and format options
-- **Interactive Commands**: Special commands for session management and history viewing
+- **Simple Interface**: Clean, straightforward chat interface
 
 ## Prerequisites
 
@@ -79,48 +77,39 @@ The time format follows Go's time formatting conventions:
 
 ## Interactive Commands
 
-Once the chat is running, you can use these special commands:
+Once the chat is running, you can use this command:
 
-- `/history` - Display conversation history
-- `/new` - Start a new session (resets conversation context)
-- `/exit` - End the conversation
+- `exit` - End the conversation
 
-## Tool Capabilities
+## Time Awareness Features
 
-### Calculator Tool
+The application automatically includes current time information in system prompts, allowing the AI assistant to:
 
-The built-in calculator supports basic mathematical operations:
+- Provide accurate time-based responses
+- Understand temporal context in conversations
+- Reference current date and time when relevant
+- Adapt responses based on timezone settings
 
-- **Addition**: `add`, `+`
-- **Subtraction**: `subtract`, `-`
-- **Multiplication**: `multiply`, `*`
-- **Division**: `divide`, `/`
-
-Example usage in chat:
+Example time-aware interactions:
 ```
-User: Calculate 15 * 7
-Assistant: I'll calculate that for you using the calculator tool.
-🔧 Tool calls initiated:
-   • calculator (ID: calc_123)
-     Args: {"operation": "multiply", "a": 15, "b": 7}
-🔄 Executing tools...
-✅ Tool response (ID: calc_123): The result of 15 * 7 is 105
+User: What time is it?
+Assistant: Based on the current time information available to me, it's currently [current time] in [timezone].
+
+User: What day of the week is it?
+Assistant: Today is [current day] according to the current date information.
 ```
 
 ## Architecture
 
 ### Components
 
-1. **LLM Agent**: OpenAI-compatible model integration with tool support
-2. **Runner**: Orchestrates the conversation flow and tool execution
-3. **Session Service**: In-memory session management for conversation persistence
-4. **Tool System**: Extensible tool calling framework
-5. **Event Handling**: Streaming response processing and tool call visualization
+1. **LLM Agent**: OpenAI-compatible model integration with time awareness
+2. **Runner**: Orchestrates the conversation flow
+3. **Event Handling**: Streaming response processing
 
 ### Key Structs
 
 - `multiTurnChat`: Main application controller
-- `calculatorArgs/calculatorResult`: Calculator tool data structures
 - Event-driven architecture for streaming responses
 
 ## Configuration
@@ -140,49 +129,26 @@ The application uses command-line flags for configuration. All settings can be c
 ## Example Session
 
 ```
-🚀 Multi-turn Chat with Runner + Tools
+🚀 Multi-turn Chat with Time Aware
 Model: deepseek-chat
 Streaming: true
 Add Current Time: true
 Timezone: UTC
 Time Format: 2006-01-02 15:04:05 UTC
 Type 'exit' to end the conversation
-Available tools: calculator
 ==================================================
-✅ Chat ready! Session: chat-session-1703123456
+✅ Chat ready!
 
-💡 Special commands:
-   /history  - Show conversation history
-   /new      - Start a new session
-   /exit     - End the conversation
+💡 Type 'exit' to end the conversation
 
-👤 You: What's 25 + 17?
-🤖 Assistant: I'll calculate that for you using the calculator tool.
-🔧 Tool calls initiated:
-   • calculator (ID: calc_abc123)
-     Args: {"operation": "add", "a": 25, "b": 17}
-🔄 Executing tools...
-✅ Tool response (ID: calc_abc123): The result of 25 + 17 is 42
+👤 You: What time is it?
+🤖 Assistant: Based on the current time information available to me, it's currently 2025-01-15 14:30:25 UTC.
 
-The answer is 42!
+👤 You: What day of the week is it?
+🤖 Assistant: Today is Wednesday, January 15th, 2025.
 ```
 
 ## Development
-
-### Adding New Tools
-
-To add new tools, implement the tool interface and register them in the `setup` function:
-
-```go
-newTool := function.NewFunctionTool(
-    yourFunction,
-    function.WithName("tool_name"),
-    function.WithDescription("Tool description"),
-)
-
-// Add to tools array
-llmagent.WithTools([]tool.Tool{calculatorTool, newTool}),
-```
 
 ### Customizing Time Behavior
 
