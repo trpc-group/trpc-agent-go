@@ -86,15 +86,24 @@ type ClientBuilderOpt func(*ClientBuilderOpts)
 
 // ClientBuilderOpts is the options for the redis client.
 type ClientBuilderOpts struct {
+	// URL is the redis client url for clientBuilder.
 	URL string
+
+	// ExtraOptions is the extra options for the redis client.
+	ExtraOptions []interface{}
 }
 
 // WithClientBuilderURL sets the redis client url for clientBuilder.
-// scheme: redis://<username>:<password>@<host>:<port>/<db>?<options>
-// options: refer goredis.ParseURL
 func WithClientBuilderURL(url string) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.URL = url
+	}
+}
+
+// WithExtraOptions sets the redis client extra options for clientBuilder.
+func WithExtraOptions(extraOptions ...interface{}) ClientBuilderOpt {
+	return func(opts *ClientBuilderOpts) {
+		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
 	}
 }
 

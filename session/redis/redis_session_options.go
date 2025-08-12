@@ -17,6 +17,7 @@ type ServiceOpts struct {
 	sessionEventLimit int
 	url               string
 	instanceName      string
+	extraOptions      []interface{}
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -42,5 +43,13 @@ func WithRedisClientURL(url string) ServiceOpt {
 func WithRedisInstance(instanceName string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.instanceName = instanceName
+	}
+}
+
+// WithExtraOptions sets the extra options for the redis session service.
+// this option mainly used for the customized redis client builder, it will be passed to the builder.
+func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }
