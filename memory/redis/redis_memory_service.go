@@ -41,7 +41,7 @@ const (
 // Service is the redis memory service.
 // Storage structure:
 //
-//	Memory: appName + userId -> hash [memoryID -> Entry(json)].
+//	Memory: appName + userID -> hash [memoryID -> Entry(json)].
 type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
