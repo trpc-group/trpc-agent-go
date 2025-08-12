@@ -128,9 +128,6 @@ func (c *memoryChat) setup(_ context.Context) error {
 		return fmt.Errorf("invalid memory service name: %s", c.memServiceName)
 	}
 
-	// Create session service (always use in-memory for memory testing).
-	sessionService := sessioninmemory.NewSessionService()
-
 	// Setup identifiers first.
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())
@@ -157,7 +154,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
-		runner.WithSessionService(sessionService),
+		runner.WithSessionService(sessioninmemory.NewSessionService()),
 	)
 
 	fmt.Printf("✅ Memory chat ready! Session: %s\n\n", c.sessionID)
