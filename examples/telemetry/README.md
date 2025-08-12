@@ -32,7 +32,7 @@ file. To run it, ensure you have a somewhat recent version of Go (preferably >=
 1.13) and do
 
 ```bash
-go run main.go
+go run .
 ```
 
 The example simulates an application, hard at work, computing for ten seconds
