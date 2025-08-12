@@ -101,6 +101,7 @@ func WithClientBuilderURL(url string) ClientBuilderOpt {
 }
 
 // WithExtraOptions sets the redis client extra options for clientBuilder.
+// this option mainly used for the customized redis client builder, it will be passed to the builder.
 func WithExtraOptions(extraOptions ...interface{}) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
