@@ -22,27 +22,19 @@ import (
 	"sync"
 	"time"
 
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var _ memory.Service = (*MemoryService)(nil)
 
-// memoryToolCreator is a function that creates a tool given a memory service.
-type memoryToolCreator func(memory.Service) tool.Tool
-
 // defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = map[string]memoryToolCreator{
-	memory.AddToolName:    func(service memory.Service) tool.Tool { return memorytool.NewAddTool(service) },
-	memory.UpdateToolName: func(service memory.Service) tool.Tool { return memorytool.NewUpdateTool(service) },
-	memory.SearchToolName: func(service memory.Service) tool.Tool { return memorytool.NewSearchTool(service) },
-	memory.LoadToolName:   func(service memory.Service) tool.Tool { return memorytool.NewLoadTool(service) },
-}
+var defaultEnabledTools = imemory.DefaultEnabledTools
 
 const (
 	// defaultMemoryLimit is the default limit of memories per user.
-	defaultMemoryLimit = 1000
+	defaultMemoryLimit = imemory.DefaultMemoryLimit
 )
 
 // appMemories represents memories for a specific app.
@@ -63,7 +55,7 @@ type serviceOpts struct {
 	// memoryLimit is the limit of memories per user.
 	memoryLimit int
 	// toolCreators are functions to build tools after service creation.
-	toolCreators map[string]memoryToolCreator
+	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
 }
@@ -84,7 +76,7 @@ type MemoryService struct {
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := serviceOpts{
 		memoryLimit:  defaultMemoryLimit,
-		toolCreators: make(map[string]memoryToolCreator),
+		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
 
@@ -119,10 +111,10 @@ func WithMemoryLimit(limit int) ServiceOpt {
 // WithCustomTool sets a custom memory tool implementation.
 // The tool will be enabled by default.
 // If the tool name is invalid, this option will do nothing.
-func WithCustomTool(toolName string, creator memoryToolCreator) ServiceOpt {
+func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 	return func(opts *serviceOpts) {
 		// If the tool name is invalid, do nothing.
-		if !memory.IsValidToolName(toolName) {
+		if !imemory.IsValidToolName(toolName) {
 			return
 		}
 		opts.toolCreators[toolName] = creator
@@ -135,7 +127,7 @@ func WithCustomTool(toolName string, creator memoryToolCreator) ServiceOpt {
 func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		// If the tool name is invalid, do nothing.
-		if !memory.IsValidToolName(toolName) {
+		if !imemory.IsValidToolName(toolName) {
 			return
 		}
 		opts.enabledTools[toolName] = enabled

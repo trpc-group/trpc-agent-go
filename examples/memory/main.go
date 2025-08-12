@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -38,8 +39,10 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
-	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
+	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
+	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis")
+	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
 func main() {
@@ -48,6 +51,10 @@ func main() {
 
 	fmt.Printf("🧠 Multi Turn Chat with Memory\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("   Memory Service: %s\n", *memServiceName)
+	if *memServiceName == "redis" {
+		fmt.Printf("   Redis: %s\n", *redisAddr)
+	}
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Available tools: memory_add, memory_update, memory_search, memory_load\n")
 	fmt.Printf("(memory_delete, memory_clear disabled by default)\n")
@@ -55,8 +62,10 @@ func main() {
 
 	// Create and run the chat.
 	chat := &memoryChat{
-		modelName: *modelName,
-		streaming: *streaming,
+		modelName:      *modelName,
+		memServiceName: *memServiceName,
+		redisAddr:      *redisAddr,
+		streaming:      *streaming,
 	}
 
 	if err := chat.run(); err != nil {
@@ -66,11 +75,13 @@ func main() {
 
 // memoryChat manages the conversation with memory capabilities.
 type memoryChat struct {
-	modelName string
-	streaming bool
-	runner    runner.Runner
-	userID    string
-	sessionID string
+	modelName      string
+	memServiceName string
+	redisAddr      string
+	streaming      bool
+	runner         runner.Runner
+	userID         string
+	sessionID      string
 }
 
 // run starts the interactive chat session.
@@ -91,13 +102,31 @@ func (c *memoryChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName)
 
-	// Create custom memory service.
-	memoryService := memoryinmemory.NewMemoryService(
-		// Disable delete tool. In fact, `memory_delete` is disabled by default, so we don't need to do this.
-		memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
-		// Custom clear tool. We create a custom clear tool to demonstrate how to create a custom tool.
-		memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
-	)
+	// Create memory service based on configuration.
+	var memoryService memory.Service
+	var err error
+
+	switch c.memServiceName {
+	case "inmemory":
+		memoryService = memoryinmemory.NewMemoryService(
+			// Disable delete tool. In fact, `memory_delete` is disabled by default, so we don't need to do this.
+			memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
+			// Custom clear tool. We create a custom clear tool to demonstrate how to create a custom tool.
+			memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+		)
+	case "redis":
+		redisURL := fmt.Sprintf("redis://%s", c.redisAddr)
+		memoryService, err = memoryredis.NewService(
+			memoryredis.WithRedisClientURL(redisURL),
+			memoryredis.WithToolEnabled(memory.DeleteToolName, false),
+			memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create redis memory service: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid memory service name: %s", c.memServiceName)
+	}
 
 	// Setup identifiers first.
 	c.userID = "user"
