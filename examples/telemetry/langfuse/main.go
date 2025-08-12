@@ -15,41 +15,35 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
-	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
+	"trpc.group/trpc-go/trpc-agent-go/examples/telemetry/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
 func main() {
-	// Start metric
-	clean, err := ametric.Start(
-		context.Background(),
-		ametric.WithEndpoint("localhost:4318"),
-		ametric.WithProtocol("http"),
-	)
-	if err != nil {
-		log.Fatalf("Failed to start metric telemetry: %v", err)
-	}
-	defer func() {
-		if err := clean(); err != nil {
-			log.Printf("Failed to clean up metric telemetry: %v", err)
-		}
-	}()
+	// https://langfuse.com/integrations/native/opentelemetry
+	langFuseSecretKey := "sk-lf-c3d93ca5-dbc1-41cd-8b9c-4b29781f620e"
+	langFusePublicKey := "pk-lf-a3e8b2fe-074a-4afa-a215-b9b1e11e69c5"
+	langFuseHost := "http://localhost:3000"
+	otelEndpointPath := "/api/public/otel/v1/traces"
 
-	// Strat trace
-	clean, err = atrace.Start(
+	// Start trace
+	clean, err := atrace.Start(
 		context.Background(),
-		atrace.WithEndpoint("localhost:4318"),
+		atrace.WithEndpointURL(langFuseHost+otelEndpointPath),
 		atrace.WithProtocol("http"),
+		atrace.WithHeaders(map[string]string{
+			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(langFusePublicKey, langFuseSecretKey)),
+		}),
 	)
 	if err != nil {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
@@ -65,7 +59,7 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Model name to use")
 	flag.Parse()
 	printGuideMessage(*modelName)
-	a := newMultiToolChatAgent("multi-tool-assistant", *modelName)
+	a := agent.NewMultiToolChatAgent("multi-tool-assistant", *modelName)
 	userMessage := []string{
 		"Calculate 123 + 456 * 789",
 		"What day of the week is today?",
@@ -78,8 +72,6 @@ func main() {
 		attribute.String("agentName", agentName),
 		attribute.String("modelName", *modelName),
 	}
-	userMessageCount, err := ametric.Meter.Int64Counter("run",
-		metric.WithDescription("the number of user message that the agent processed"))
 
 	ctx, span := atrace.Tracer.Start(
 		context.Background(),
@@ -92,11 +84,10 @@ func main() {
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, time.Minute)
 			defer cancel()
-			userMessageCount.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
 			ctx, span := atrace.Tracer.Start(ctx, "process-message")
 			span.SetAttributes(attribute.String("user-message", msg))
 			defer span.End()
-			err := a.processMessage(ctx, msg)
+			err := a.ProcessMessage(ctx, msg)
 			if err != nil {
 				span.SetAttributes(attribute.String("error", err.Error()))
 				log.Fatalf("Chat system failed to run: %v", err)
@@ -104,6 +95,11 @@ func main() {
 			span.SetAttributes(attribute.String("error", "<nil>"))
 		}()
 	}
+}
+
+func encodeAuth(pk, sk string) string {
+	auth := pk + ":" + sk
+	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
 func printGuideMessage(modelName string) {

@@ -71,9 +71,9 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	var shutdownTracerProvider func(context.Context) error
 	switch options.protocol {
 	case itelemetry.ProtocolHTTP:
-		shutdownTracerProvider, err = initHTTPTracerProvider(ctx, res, options.tracesEndpoint)
+		shutdownTracerProvider, err = initHTTPTracerProvider(ctx, res, options)
 	default:
-		shutdownTracerProvider, err = initGRPCTracerProvider(ctx, res, options.tracesEndpoint)
+		shutdownTracerProvider, err = initGRPCTracerProvider(ctx, res, options)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracer provider: %w", err)
@@ -93,11 +93,13 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint   string
-	serviceName      string
-	serviceVersion   string
-	serviceNamespace string
-	protocol         string // Protocol to use (grpc or http)
+	tracesEndpoint    string
+	tracesEndpointURL string
+	serviceName       string
+	serviceVersion    string
+	serviceNamespace  string
+	protocol          string            // Protocol to use (grpc or http)
+	headers           map[string]string // Headers to send with the request
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
@@ -112,11 +114,41 @@ func WithEndpoint(endpoint string) Option {
 	}
 }
 
+// WithEndpointURL sets the target endpoint URL (scheme, host, port, path) the
+// Exporter will connect to.
+//
+// If the OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+// environment variable is set, and this option is not passed, that variable
+// value will be used. If both environment variables are set,
+// OTEL_EXPORTER_OTLP_TRACES_ENDPOINT will take precedence. If an environment
+// variable is set, and this option is passed, this option will take precedence.
+//
+// If both this option and WithEndpoint are used, the last used option will
+// take precedence.
+//
+// If an invalid URL is provided, the default value will be kept.
+//
+// By default, if an environment variable is not set, and this option is not
+// passed, "localhost:4318" will be used.
+//
+// This option has no effect if WithGRPCConn is used.
+func WithEndpointURL(endpointURL string) Option {
+	return func(opts *options) {
+		opts.tracesEndpointURL = endpointURL
+	}
+}
+
 // WithProtocol sets the protocol to use for traces export.
 // Supported protocols are "grpc" (default) and "http".
 func WithProtocol(protocol string) Option {
 	return func(opts *options) {
 		opts.protocol = protocol
+	}
+}
+
+func WithHeaders(headers map[string]string) Option {
+	return func(opts *options) {
+		opts.headers = headers
 	}
 }
 
@@ -138,14 +170,24 @@ func tracesEndpoint(protocol string) string {
 }
 
 // Initializes an OTLP gRPC exporter, and configures the corresponding trace provider.
-func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
-	tracesConn, err := itelemetry.NewGRPCConn(endpoint)
+func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, opts *options) (
+	func(context.Context) error, error) {
+	tracesConn, err := itelemetry.NewGRPCConn(opts.tracesEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize traces connection: %w", err)
 	}
 
+	otelOpts := []otlptracegrpc.Option{
+		otlptracegrpc.WithGRPCConn(tracesConn),
+		otlptracegrpc.WithEndpoint(opts.tracesEndpoint),
+		otlptracegrpc.WithInsecure(),
+		otlptracegrpc.WithHeaders(opts.headers),
+	}
+	if opts.tracesEndpointURL != "" {
+		otelOpts = append(otelOpts, otlptracegrpc.WithEndpointURL(opts.tracesEndpointURL))
+	}
 	// Set up a trace exporter
-	traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(tracesConn))
+	traceExporter, err := otlptracegrpc.New(ctx, otelOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
@@ -154,11 +196,18 @@ func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, endpoin
 }
 
 // Initializes an OTLP HTTP exporter, and configures the corresponding trace provider.
-func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
+func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, opts *options) (
+	func(context.Context) error, error) {
 	// Set up a trace exporter with HTTP endpoint
-	traceExporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpoint(endpoint),
-		otlptracehttp.WithInsecure())
+	otelOpts := []otlptracehttp.Option{
+		otlptracehttp.WithEndpoint(opts.tracesEndpoint),
+		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithHeaders(opts.headers),
+	}
+	if opts.tracesEndpointURL != "" {
+		otelOpts = append(otelOpts, otlptracehttp.WithEndpointURL(opts.tracesEndpointURL))
+	}
+	traceExporter, err := otlptracehttp.New(ctx, otelOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP trace exporter: %w", err)
 	}

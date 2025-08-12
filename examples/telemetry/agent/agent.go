@@ -6,7 +6,7 @@
 // If you have downloaded a copy of the tRPC source code from Tencent,
 // please note that tRPC source code is licensed under the  Apache 2.0 License,
 // A copy of the Apache 2.0 License is included in this file.
-package main
+package agent
 
 import (
 	"context"
@@ -29,16 +29,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// multiToolChatAgent manages the multi-tool conversation system
-type multiToolChatAgent struct {
+// MultiToolChatAgent manages the multi-tool conversation system
+type MultiToolChatAgent struct {
 	modelName string
 	runner    runner.Runner
 	userID    string
 	sessionID string
 }
 
-func newMultiToolChatAgent(agentName, modelName string) *multiToolChatAgent {
-	a := &multiToolChatAgent{modelName: modelName}
+func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
+	a := &MultiToolChatAgent{modelName: modelName}
 	// Create OpenAI model
 	modelInstance := openai.New(a.modelName)
 
@@ -88,8 +88,8 @@ func newMultiToolChatAgent(agentName, modelName string) *multiToolChatAgent {
 	return a
 }
 
-// processMessage processes a single message exchange
-func (c *multiToolChatAgent) processMessage(ctx context.Context, userMessage string) error {
+// ProcessMessage processes a single message exchange
+func (c *MultiToolChatAgent) ProcessMessage(ctx context.Context, userMessage string) error {
 	fmt.Printf("👤 User message: %s\n", userMessage)
 	message := model.NewUserMessage(userMessage)
 
@@ -104,7 +104,7 @@ func (c *multiToolChatAgent) processMessage(ctx context.Context, userMessage str
 }
 
 // processStreamingResponse processes streaming response, including tool call visualization
-func (c *multiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Event) error {
+func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("🤖 Assistant: ")
 
 	var (
@@ -181,7 +181,7 @@ func (c *multiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 }
 
 // isToolEvent checks if the event is a tool response (not a final response)
-func (c *multiToolChatAgent) isToolEvent(event *event.Event) bool {
+func (c *MultiToolChatAgent) isToolEvent(event *event.Event) bool {
 	if event.Response == nil {
 		return false
 	}
