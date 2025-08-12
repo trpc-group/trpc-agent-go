@@ -15,6 +15,7 @@ This implementation showcases the essential features for building AI application
 - **⚡ Automatic Integration**: Memory tools are automatically registered via `WithMemory()`
 - **🎨 Custom Tool Support**: Ability to override default tool implementations with custom ones
 - **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
+- **🔴 Redis Support**: Support for Redis-based memory service (ready to use)
 
 ### Key Features
 
@@ -114,10 +115,12 @@ The following memory tools are automatically registered when using `WithMemory()
 
 ## Command Line Arguments
 
-| Argument     | Description                         | Default Value   |
-| ------------ | ----------------------------------- | --------------- |
-| `-model`     | Name of the model to use            | `deepseek-chat` |
-| `-streaming` | Enable streaming mode for responses | `true`          |
+| Argument      | Description                                      | Default Value    |
+| ------------- | ------------------------------------------------ | ---------------- |
+| `-model`      | Name of the model to use                         | `deepseek-chat`  |
+| `-memory`     | Memory service: `inmemory` or `redis`            | `inmemory`       |
+| `-redis-addr` | Redis server address (when using redis services) | `localhost:6379` |
+| `-streaming`  | Enable streaming mode for responses              | `true`           |
 
 ## Usage
 
@@ -164,6 +167,25 @@ go run main.go -model gpt-4o -streaming=false
 - **Streaming mode** (`-streaming=true`, default): Best for interactive chat where you want to see responses appear in real-time, providing immediate feedback and better user experience.
 - **Non-streaming mode** (`-streaming=false`): Better for automated scripts, batch processing, or when you need the complete response before processing it further.
 
+### Service Configuration
+
+Currently, the example supports both in-memory and Redis memory services, while always using in-memory session service for simplicity:
+
+```bash
+# Default in-memory memory service
+go run main.go
+
+# Redis memory service (ready to use)
+go run main.go -memory redis -redis-addr localhost:6379
+```
+
+**Available service combinations:**
+
+| Memory Service | Session Service | Status   | Description                      |
+| -------------- | --------------- | -------- | -------------------------------- |
+| `inmemory`     | `inmemory`      | ✅ Ready | Default configuration            |
+| `redis`        | `inmemory`      | ✅ Ready | Redis memory + in-memory session |
+
 ### Help and Available Options
 
 To see all available command line options:
@@ -176,8 +198,12 @@ Output:
 
 ```
 Usage of ./memory_chat:
+  -memory string
+        Name of the memory service to use, inmemory / redis (default "inmemory")
   -model string
         Name of the model to use (default "deepseek-chat")
+  -redis-addr string
+        Redis server address (when using redis services) (default "localhost:6379")
   -streaming
         Enable streaming mode for responses (default true)
 ```
@@ -318,10 +344,13 @@ The interface is simple and intuitive:
 ```
 🧠 Multi Turn Chat with Memory
 Model: gpt-4o-mini
+Memory Service: inmemory
 Streaming: true
-Available tools: memory_add, memory_update, memory_search, memory_load (memory_delete, memory_clear disabled by default)
+Available tools: memory_add, memory_update, memory_search, memory_load
+(memory_delete, memory_clear disabled by default)
 ==================================================
 ✅ Memory chat ready! Session: memory-session-1703123456
+   Memory Service: inmemory
 
 💡 Special commands:
    /memory   - Show user memories
@@ -504,6 +533,54 @@ User Input → Runner → Agent → Memory Tools → Memory Service → Response
 - **Memory Tools**: LLM-callable memory interface (default or custom)
 - **Memory Service**: Actual memory storage and management
 
+## Redis Memory Service
+
+### Redis Support
+
+The example now supports Redis-based memory service for persistent storage:
+
+```go
+// Redis memory service
+memoryService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithToolEnabled(memory.DeleteToolName, false),
+    memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+
+// Session service always uses in-memory for simplicity
+sessionService := sessioninmemory.NewSessionService()
+```
+
+**Benefits of Redis support:**
+
+- **Persistence**: Memories survive application restarts
+- **Scalability**: Support for multiple application instances
+- **Performance**: Redis optimized for high-throughput operations
+- **Clustering**: Support for Redis cluster and sentinel
+- **Monitoring**: Built-in Redis monitoring and metrics
+
+### Redis Configuration
+
+To use Redis memory service, you need a running Redis instance:
+
+```bash
+# Start Redis with Docker (recommended for testing)
+docker run -d --name redis-memory -p 6379:6379 redis:7-alpine
+```
+
+**Usage examples:**
+
+```bash
+# Connect to default Redis port (6379)
+go run main.go -memory redis
+
+# Connect to custom Redis port
+go run main.go -memory redis -redis-addr localhost:6380
+
+# Connect to Redis with authentication
+go run main.go -memory redis -redis-addr redis://username:password@localhost:6379
+```
+
 ## Extensibility
 
 This example demonstrates how to:
@@ -515,6 +592,7 @@ This example demonstrates how to:
 5. Create custom memory tools with enhanced functionality
 6. Configure tool enablement and custom implementations
 7. Use lazy loading for better performance
+8. Use Redis memory service for persistent storage
 
 Future enhancements could include:
 
@@ -526,3 +604,6 @@ Future enhancements could include:
 - Custom memory tool implementations with specialized functionality
 - Tool enablement configuration via configuration files
 - Dynamic tool registration and unregistration
+- Redis cluster and sentinel support
+- Memory replication and synchronization
+- Advanced memory analytics and insights

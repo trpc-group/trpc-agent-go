@@ -15,7 +15,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -63,6 +62,10 @@ type Service interface {
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
 }
+
+// ToolCreator creates a tool with a given memory service.
+// This type can be shared by different implementations.
+type ToolCreator func(Service) tool.Tool
 
 // Memory represents a memory entry with content and metadata.
 type Memory struct {
@@ -130,97 +133,4 @@ func checkUserKey(appName, userID string) error {
 		return ErrUserIDRequired
 	}
 	return nil
-}
-
-// getEnabledMemoryTools extracts the names of enabled memory tools from the memory service.
-func getEnabledMemoryTools(memoryService Service) []string {
-	if memoryService == nil {
-		return []string{}
-	}
-
-	tools := memoryService.Tools()
-	enabledTools := make([]string, 0, len(tools))
-
-	for _, tool := range tools {
-		decl := tool.Declaration()
-		if decl != nil {
-			enabledTools = append(enabledTools, decl.Name)
-		}
-	}
-
-	return enabledTools
-}
-
-// GenerateInstruction generates a memory-specific instruction based on the memory service.
-// This function creates an instruction that guides the LLM on how to use memory tools effectively.
-func GenerateInstruction(memoryService Service) string {
-	// Get enabled memory tools from the service.
-	enabledTools := getEnabledMemoryTools(memoryService)
-
-	// Generate dynamic instruction based on enabled tools.
-	instruction := `You have access to memory tools to provide personalized assistance. 
-
-IMPORTANT: When users share personal information about themselves (name, preferences, experiences, etc.), 
-ALWAYS use memory_add to remember this information. 
-
-Examples of when to use memory_add:
-- User tells you their name: 'I am Jack' → use memory_add to remember 'User is named Jack'
-- User shares preferences: 'I like coffee' → use memory_add to remember 'User likes coffee'
-- User shares experiences: 'I had beef tonight' → use memory_add to remember 'User had beef for dinner and enjoyed it'
-- User mentions their job: 'I work as a developer' → use memory_add to remember 'User works as a developer'
-- User shares their location: 'I live in Beijing' → use memory_add to remember 'User lives in Beijing'`
-
-	// Add tool-specific instructions based on enabled tools.
-	for _, toolName := range enabledTools {
-		switch toolName {
-		case AddToolName:
-			// Already covered in the main instruction.
-		case SearchToolName:
-			instruction += `
-
-When users ask about themselves or their preferences, use memory_search to find relevant information.`
-		case LoadToolName:
-			instruction += `
-
-When users ask 'tell me about myself' or similar, use memory_load to get an overview.`
-		case UpdateToolName:
-			instruction += `
-
-When users want to update existing information, use memory_update with the memory_id.`
-		case DeleteToolName:
-			instruction += `
-
-When users want to remove specific memories, use memory_delete with the memory_id.`
-		case ClearToolName:
-			instruction += `
-
-When users want to clear all their memories, use memory_clear to remove all stored information.`
-		}
-	}
-
-	instruction += `
-
-Available memory tools: ` + strings.Join(enabledTools, ", ") + `.
-
-Be helpful, conversational, and proactive about remembering user information. 
-Always strive to create memories that capture the essence of what the user shares, 
-making future interactions more personalized and contextually relevant.`
-
-	return instruction
-}
-
-// validToolNames contains all valid memory tool names.
-var validToolNames = map[string]struct{}{
-	AddToolName:    {},
-	UpdateToolName: {},
-	DeleteToolName: {},
-	ClearToolName:  {},
-	SearchToolName: {},
-	LoadToolName:   {},
-}
-
-// IsValidToolName checks if the given tool name is valid.
-func IsValidToolName(toolName string) bool {
-	_, ok := validToolNames[toolName]
-	return ok
 }

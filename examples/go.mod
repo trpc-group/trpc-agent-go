@@ -8,6 +8,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
@@ -21,6 +22,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go v0.0.2
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.2-0.20250807061029-66942a6b44d9
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.2-0.20250807061029-66942a6b44d9
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.2-0.20250807061029-66942a6b44d9
 	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd
 )
