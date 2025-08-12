@@ -32,6 +32,16 @@ func WithMetadata(metadata map[string]interface{}) Option {
 	}
 }
 
+// WithMetadataValue adds a single metadata key-value pair.
+func WithMetadataValue(key string, value interface{}) Option {
+	return func(s *Source) {
+		if s.metadata == nil {
+			s.metadata = make(map[string]interface{})
+		}
+		s.metadata[key] = value
+	}
+}
+
 // WithFileExtensions sets the file extensions to filter by.
 func WithFileExtensions(extensions []string) Option {
 	return func(s *Source) {

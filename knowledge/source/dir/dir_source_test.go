@@ -202,3 +202,50 @@ func TestSource_Recursive(t *testing.T) {
 		t.Fatalf("recursive read failed")
 	}
 }
+
+// TestWithMetadataValue verifies the WithMetadataValue option.
+func TestWithMetadataValue(t *testing.T) {
+	const metaKey = "test_key"
+	const metaValue = "test_value"
+
+	src := New([]string{"dummy"}, WithMetadataValue(metaKey, metaValue))
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("WithMetadataValue not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadata verifies the SetMetadata method.
+func TestSetMetadata(t *testing.T) {
+	src := New([]string{"dummy"})
+
+	const metaKey = "dynamic_key"
+	const metaValue = "dynamic_value"
+
+	src.SetMetadata(metaKey, metaValue)
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("SetMetadata not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadataMultiple verifies setting multiple metadata values.
+func TestSetMetadataMultiple(t *testing.T) {
+	src := New([]string{"dummy"})
+
+	metadata := map[string]interface{}{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": 123,
+	}
+
+	for k, v := range metadata {
+		src.SetMetadata(k, v)
+	}
+
+	for k, expectedValue := range metadata {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
+	}
+}
