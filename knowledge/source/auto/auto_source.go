@@ -195,3 +195,11 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
 	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
 }
+
+// SetMetadata sets metadata for this source.
+func (s *Source) SetMetadata(key string, value interface{}) {
+	if s.metadata == nil {
+		s.metadata = make(map[string]interface{})
+	}
+	s.metadata[key] = value
+}
