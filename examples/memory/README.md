@@ -566,9 +566,6 @@ To use Redis memory service, you need a running Redis instance:
 ```bash
 # Start Redis with Docker (recommended for testing)
 docker run -d --name redis-memory -p 6379:6379 redis:7-alpine
-
-# Or use existing Redis instance
-export REDIS_ADDR="localhost:6379"
 ```
 
 **Usage examples:**
