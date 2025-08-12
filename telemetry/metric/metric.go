@@ -63,7 +63,7 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	metricsConn, err := itelemetry.NewConn(options.metricsEndpoint)
+	metricsConn, err := itelemetry.NewGRPCConn(options.metricsEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize metrics connection: %w", err)
 	}

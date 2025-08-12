@@ -15,8 +15,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	ametric "trpc.group/trpc-go/trpc-agent-go/telemetry/metric"
@@ -28,61 +30,97 @@ import (
 )
 
 func main() {
-	cleanTrace, err := atrace.Start(
-		context.Background(),
-		atrace.WithEndpoint("localhost:4317"),
-	)
-	if err != nil {
-		log.Fatalf("Failed to start trace telemetry: %v", err)
-	}
-
-	cleanMetric, err := ametric.Start(
+	// Start metric
+	clean, err := ametric.Start(
 		context.Background(),
 		ametric.WithEndpoint("localhost:4317"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to start metric telemetry: %v", err)
 	}
-
 	defer func() {
-		if err := cleanTrace(); err != nil {
-			log.Printf("Failed to clean up trace telemetry: %v", err)
-		}
-		if err := cleanMetric(); err != nil {
+		if err := clean(); err != nil {
 			log.Printf("Failed to clean up metric telemetry: %v", err)
 		}
 	}()
 
-	// Attributes represent additional key-value descriptors that can be bound
-	// to a metric observer or recorder.
-	commonAttrs := []attribute.KeyValue{
-		attribute.String("attrA", "chocolate"),
-		attribute.String("attrB", "raspberry"),
-		attribute.String("attrC", "vanilla"),
-	}
-
-	runCount, err := ametric.Meter.Int64Counter("run", metric.WithDescription("The number of times the iteration ran"))
+	// Strat trace
+	clean, err = atrace.Start(
+		context.Background(),
+		atrace.WithEndpoint("localhost:4318"),
+		atrace.WithProtocol("http"),
+	)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
+	defer func() {
+		if err := clean(); err != nil {
+			log.Printf("Failed to clean up metric telemetry: %v", err)
+		}
+	}()
 
-	// Work begins
+	const agentName = "multi-tool-assistant"
+	// Parse command line arguments
+	modelName := flag.String("model", "deepseek-chat", "Model name to use")
+	flag.Parse()
+	printGuideMessage(*modelName)
+	a := newMultiToolChatAgent("multi-tool-assistant", *modelName)
+	userMessage := []string{
+		"Calculate 123 + 456 * 789",
+		"What day of the week is today?",
+		"'Hello World' to uppercase",
+		"Create a test file in the current directory",
+		"Find information about Tesla company",
+	}
+	// Attributes represent additional key-value descriptors that can be bound to a metric observer or recorder.
+	commonAttrs := []attribute.KeyValue{
+		attribute.String("agentName", agentName),
+		attribute.String("modelName", *modelName),
+	}
+	userMessageCount, err := ametric.Meter.Int64Counter("run",
+		metric.WithDescription("the number of user message that the agent processed"))
+
 	ctx, span := atrace.Tracer.Start(
 		context.Background(),
-		"CollectorExporter-Example",
-		trace.WithAttributes(commonAttrs...))
+		agentName,
+		trace.WithAttributes(commonAttrs...),
+	)
 	defer span.End()
-	for i := 0; i < 10; i++ {
-		_, iSpan := atrace.Tracer.Start(ctx, fmt.Sprintf("Sample-%d", i))
-		runCount.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
-		log.Printf("Doing really hard work (%d / 10)\n", i+1)
-		<-time.After(time.Second)
-		iSpan.End()
+
+	for _, msg := range userMessage {
+		func() {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			userMessageCount.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
+			ctx, span := atrace.Tracer.Start(ctx, "process-message")
+			span.SetAttributes(attribute.String("user-message", msg))
+			defer span.End()
+			err := a.processMessage(ctx, msg)
+			if err != nil {
+				span.SetAttributes(attribute.String("error", err.Error()))
+				log.Fatalf("Chat system failed to run: %v", err)
+			}
+			span.SetAttributes(attribute.String("error", "<nil>"))
+		}()
 	}
+}
 
-	// wait for the telemetry to be sent
-	log.Println("Waiting 1min for Meter to be sent...")
-	time.Sleep(1 * time.Minute)
-
-	log.Printf("Done!")
+func printGuideMessage(modelName string) {
+	fmt.Printf("🚀 Multi-Tool Intelligent Assistant Demo\n")
+	fmt.Printf("Model: %s\n", modelName)
+	fmt.Printf("Available tools: calculator, time_tool, text_tool, file_tool, duckduckgo_search\n")
+	// Print welcome message and examples
+	fmt.Println("💡 Try asking these questions:")
+	fmt.Println("   [Calculator] Calculate 123 + 456 * 789")
+	fmt.Println("   [Calculator] Calculate the square root of pi")
+	fmt.Println("   [Time] What time is it now?")
+	fmt.Println("   [Time] What day of the week is today?")
+	fmt.Println("   [Text] Convert 'Hello World' to uppercase")
+	fmt.Println("   [Text] Count characters in 'Hello World'")
+	fmt.Println("   [File] Read the README.md file")
+	fmt.Println("   [File] Create a test file in the current directory")
+	fmt.Println("   [Search] Search for information about Steve Jobs")
+	fmt.Println("   [Search] Find information about Tesla company")
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 60))
 }
