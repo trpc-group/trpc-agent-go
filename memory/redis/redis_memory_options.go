@@ -25,6 +25,7 @@ type ServiceOpts struct {
 	// Tool related settings.
 	toolCreators map[string]memory.ToolCreator
 	enabledTools map[string]bool
+	extraOptions []interface{}
 }
 
 // ServiceOpt is the option for the redis memory service.
@@ -74,5 +75,13 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			return
 		}
 		opts.enabledTools[toolName] = enabled
+	}
+}
+
+// WithExtraOptions sets the extra options for the redis session service.
+// this option mainly used for the customized redis client builder, it will be passed to the builder.
+func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }

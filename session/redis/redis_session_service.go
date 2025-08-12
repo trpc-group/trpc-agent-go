@@ -70,7 +70,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	var err error
 	builder := storage.GetClientBuilder()
 	if opts.url != "" {
-		redisClient, err = builder(storage.WithClientBuilderURL(opts.url))
+		redisClient, err = builder(
+			storage.WithClientBuilderURL(opts.url),
+			storage.WithExtraOptions(opts.extraOptions...),
+		)
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from url failed: %w", err)
 		}
