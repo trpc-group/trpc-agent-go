@@ -126,3 +126,68 @@ func TestSource_ProcessInputVariants(t *testing.T) {
 		t.Fatalf("url input failed, err=%v docs=%d", err, len(docs))
 	}
 }
+
+// TestWithMetadata verifies the WithMetadata option.
+func TestWithMetadata(t *testing.T) {
+	meta := map[string]interface{}{
+		"author":      "test-author",
+		"version":     "1.0",
+		"environment": "test",
+	}
+
+	src := New([]string{"test input"}, WithMetadata(meta))
+
+	for k, expectedValue := range meta {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
+	}
+}
+
+// TestWithMetadataValue verifies the WithMetadataValue option.
+func TestWithMetadataValue(t *testing.T) {
+	const metaKey = "test_key"
+	const metaValue = "test_value"
+
+	src := New([]string{"test input"}, WithMetadataValue(metaKey, metaValue))
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("WithMetadataValue not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadata verifies the SetMetadata method.
+func TestSetMetadata(t *testing.T) {
+	src := New([]string{"test input"})
+
+	const metaKey = "dynamic_key"
+	const metaValue = "dynamic_value"
+
+	src.SetMetadata(metaKey, metaValue)
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("SetMetadata not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadataMultiple verifies setting multiple metadata values.
+func TestSetMetadataMultiple(t *testing.T) {
+	src := New([]string{"test input"})
+
+	metadata := map[string]interface{}{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": 123,
+		"key4": true,
+	}
+
+	for k, v := range metadata {
+		src.SetMetadata(k, v)
+	}
+
+	for k, expectedValue := range metadata {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
+	}
+}
