@@ -70,11 +70,11 @@ var (
 	openaiEmbeddingModel = getEnvOrDefault("OPENAI_EMBEDDING_MODEL", defaultEmbeddingModel)
 
 	// PGVector.
-	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "localhost")
+	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
 	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "postgres")
 	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "postgres")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
