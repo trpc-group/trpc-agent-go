@@ -23,12 +23,12 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
 	noopm "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
-	"google.golang.org/grpc"
 )
 
 var (
@@ -43,13 +43,18 @@ var (
 func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
 	// Set default options
 	options := &options{
-		metricsEndpoint:  metricsEndpoint(),
 		serviceName:      itelemetry.ServiceName,
 		serviceVersion:   itelemetry.ServiceVersion,
 		serviceNamespace: itelemetry.ServiceNamespace,
+		protocol:         itelemetry.ProtocolGRPC, // Default to gRPC
 	}
 	for _, opt := range opts {
 		opt(options)
+	}
+
+	// Set endpoint based on protocol if not explicitly set
+	if options.metricsEndpoint == "" {
+		options.metricsEndpoint = metricsEndpoint(options.protocol)
 	}
 
 	res, err := resource.New(ctx,
@@ -63,12 +68,13 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	metricsConn, err := itelemetry.NewConn(options.metricsEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize metrics connection: %w", err)
+	var shutdownMeterProvider func(context.Context) error
+	switch options.protocol {
+	case itelemetry.ProtocolHTTP:
+		shutdownMeterProvider, err = initHTTPMeterProvider(ctx, res, options.metricsEndpoint)
+	default:
+		shutdownMeterProvider, err = initGRPCMeterProvider(ctx, res, options.metricsEndpoint)
 	}
-
-	shutdownMeterProvider, err := initMeterProvider(ctx, res, metricsConn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize meter provider: %w", err)
 	}
@@ -82,19 +88,49 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	}, nil
 }
 
-func metricsEndpoint() string {
+func metricsEndpoint(protocol string) string {
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
 	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
 		return endpoint
 	}
-	return "localhost:4318"
+
+	// Return different default endpoints based on protocol
+	switch protocol {
+	case itelemetry.ProtocolHTTP:
+		return "localhost:4318" // HTTP endpoint base URL (otlpmetrichttp will add /v1/metrics automatically)
+	default:
+		return "localhost:4317" // gRPC endpoint (host:port)
+	}
 }
 
-// Initializes an OTLP exporter, and configures the corresponding meter provider.
-func initMeterProvider(ctx context.Context, res *resource.Resource, conn *grpc.ClientConn) (func(context.Context) error, error) {
-	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+// Initializes an OTLP HTTP exporter, and configures the corresponding meter provider.
+func initHTTPMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
+	metricExporter, err := otlpmetrichttp.New(ctx,
+		otlpmetrichttp.WithEndpoint(endpoint),
+		otlpmetrichttp.WithInsecure())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP metrics exporter: %w", err)
+	}
+
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+		sdkmetric.WithResource(res),
+	)
+	otel.SetMeterProvider(meterProvider)
+
+	return meterProvider.Shutdown, nil
+}
+
+// Initializes an OTLP gRPC exporter, and configures the corresponding meter provider.
+func initGRPCMeterProvider(ctx context.Context, res *resource.Resource, endpoint string) (func(context.Context) error, error) {
+	metricsConn, err := itelemetry.NewGRPCConn(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize metrics connection: %w", err)
+	}
+
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(metricsConn))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metrics exporter: %w", err)
 	}
@@ -117,6 +153,7 @@ type options struct {
 	serviceName      string
 	serviceVersion   string
 	serviceNamespace string
+	protocol         string // Protocol to use (grpc or http)
 }
 
 // WithEndpoint sets the metrics endpoint(host and port) the Exporter will connect to.
@@ -128,5 +165,13 @@ type options struct {
 func WithEndpoint(endpoint string) Option {
 	return func(opts *options) {
 		opts.metricsEndpoint = endpoint
+	}
+}
+
+// WithProtocol sets the protocol to use for metrics export.
+// Supported protocols are "grpc" (default) and "http".
+func WithProtocol(protocol string) Option {
+	return func(opts *options) {
+		opts.protocol = protocol
 	}
 }

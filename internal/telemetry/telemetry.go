@@ -41,6 +41,13 @@ const (
 	SpanNamePrefixExecuteTool = "execute_tool"
 )
 
+const (
+	// ProtocolGRPC uses gRPC protocol for OTLP exporter.
+	ProtocolGRPC string = "grpc"
+	// ProtocolHTTP uses HTTP protocol for OTLP exporter.
+	ProtocolHTTP string = "http"
+)
+
 // telemetry attributes constants.
 var (
 	KeyEventID      = "trpc.go.agent.event_id"
@@ -134,8 +141,8 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 	}
 }
 
-// NewConn creates a new gRPC connection to the OpenTelemetry Collector.
-func NewConn(endpoint string) (*grpc.ClientConn, error) {
+// NewGRPCConn creates a new gRPC connection to the OpenTelemetry Collector.
+func NewGRPCConn(endpoint string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through gRPC connection.
 	// You can customize the endpoint using SetConfig() or environment variables.
 	conn, err := grpc.NewClient(endpoint,

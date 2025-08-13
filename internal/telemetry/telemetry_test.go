@@ -103,7 +103,7 @@ func TestTraceFunctions_NoPanics(t *testing.T) {
 // unparsable address.
 func TestNewConn_InvalidEndpoint(t *testing.T) {
 	// gRPC dials lazily, so even malformed targets may not error immediately.
-	conn, err := NewConn("invalid:endpoint")
+	conn, err := NewGRPCConn("invalid:endpoint")
 	if err != nil {
 		t.Fatalf("did not expect error, got %v", err)
 	}

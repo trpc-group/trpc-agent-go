@@ -3,12 +3,18 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 processors:
 extensions:
   health_check: {}
 exporters:
-  otlp:
+  otlp/grpc:
     endpoint: jaeger:4317
+    tls:
+      insecure: true
+  otlp/http:
+    endpoint: jaeger:4318
     tls:
       insecure: true
   prometheus:
@@ -22,7 +28,7 @@ service:
     traces:
       receivers: [otlp]
       processors: []
-      exporters: [otlp, debug]
+      exporters: [otlp/grpc, otlp/http, debug]
 
     metrics:
       receivers: [otlp]

@@ -19,7 +19,7 @@ import (
 )
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
-func TestMetricsEndpoint(t *testing.T) {
+func TestGRPCMetricsEndpoint(t *testing.T) {
 	const (
 		customEndpoint  = "custom-metric:4318"
 		genericEndpoint = "generic-endpoint:4318"
@@ -34,19 +34,19 @@ func TestMetricsEndpoint(t *testing.T) {
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", customEndpoint)
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := metricsEndpoint(); ep != customEndpoint {
+	if ep := metricsEndpoint("grpc"); ep != customEndpoint {
 		t.Fatalf("expected %s, got %s", customEndpoint, ep)
 	}
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := metricsEndpoint(); ep != genericEndpoint {
+	if ep := metricsEndpoint("grpc"); ep != genericEndpoint {
 		t.Fatalf("expected %s, got %s", genericEndpoint, ep)
 	}
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	if ep := metricsEndpoint(); ep == "" {
+	if ep := metricsEndpoint("grpc"); ep == "" {
 		t.Fatalf("expected non-empty default endpoint")
 	}
 }
