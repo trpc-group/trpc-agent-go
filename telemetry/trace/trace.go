@@ -146,6 +146,7 @@ func WithProtocol(protocol string) Option {
 	}
 }
 
+// WithHeaders sets the headers to include in the trace requests.
 func WithHeaders(headers map[string]string) Option {
 	return func(opts *options) {
 		opts.headers = headers
