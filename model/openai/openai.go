@@ -753,6 +753,10 @@ func (m *Model) handleStreamingResponse(
 
 	for stream.Next() {
 		chunk := stream.Current()
+		// Skip empty chunks.
+		if m.skipEmptyChunk(chunk) {
+			continue
+		}
 
 		// Track ID -> Index mapping when ID is present (first chunk of each tool call).
 		m.updateToolCallIndexMapping(chunk, idToIndexMap)
@@ -824,6 +828,25 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 		return false
 	}
 	return true
+}
+
+// skipEmptyChunk returns true when the chunk contains no meaningful delta
+func (m *Model) skipEmptyChunk(chunk openai.ChatCompletionChunk) bool {
+	if len(chunk.Choices) > 0 {
+		delta := chunk.Choices[0].Delta
+		// if Content or
+		switch {
+		case delta.JSON.Content.Valid():
+		case delta.JSON.Refusal.Valid():
+		case delta.JSON.ToolCalls.Valid():
+			/// if toolCalls is empty, it's a empty chunk too
+			if len(delta.ToolCalls) <= 0 {
+				return true
+			}
+		default:
+		}
+	}
+	return false
 }
 
 // createPartialResponse creates a partial response from a chunk.
