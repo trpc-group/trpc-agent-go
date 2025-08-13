@@ -88,3 +88,19 @@ func encodeAuth(pk, sk string) string {
 	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 ```
+
+## Running the code
+
+You can find the complete code for this example in the [main.go](./main.go)
+file. To run it, ensure you have a somewhat recent version of Go (preferably >=
+1.13) and do
+
+```bash
+go run .
+```
+
+The example simulates an intelligent agent application that processes a series of user messages, demonstrating tracing and metrics collection for multiple tool-based tasks.
+
+## Viewing Trace data
+
+![telemetry-langfuse-trace](../../../.resource/images/examples/telemetry-langfuse-trace.png)
