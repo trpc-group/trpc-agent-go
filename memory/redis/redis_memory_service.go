@@ -15,7 +15,6 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -65,24 +64,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	if opts.url == "" && opts.instanceName == "" {
-		return nil, errors.New("redis url or instance name is required")
-	}
-
 	builder := storage.GetClientBuilder()
 	var (
 		redisClient redis.UniversalClient
 		err         error
 	)
-	if opts.url != "" {
-		redisClient, err = builder(
-			storage.WithClientBuilderURL(opts.url),
-			storage.WithExtraOptions(opts.extraOptions...),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from url failed: %w", err)
-		}
-	} else {
+
+	// if instance name set, and url not set, use instance name to create redis client
+	if opts.url == "" && opts.instanceName != "" {
 		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
@@ -91,8 +80,20 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
+		return &Service{
+			opts:        opts,
+			redisClient: redisClient,
+			cachedTools: make(map[string]tool.Tool),
+		}, nil
 	}
 
+	redisClient, err = builder(
+		storage.WithClientBuilderURL(opts.url),
+		storage.WithExtraOptions(opts.extraOptions...),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create redis client from url failed: %w", err)
+	}
 	return &Service{
 		opts:        opts,
 		redisClient: redisClient,
