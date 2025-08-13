@@ -54,6 +54,7 @@ import (
 // command line flags.
 var (
 	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
 	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
 )
@@ -61,11 +62,6 @@ var (
 // Default values for optional configurations.
 const (
 	defaultEmbeddingModel = "text-embedding-3-small"
-	defaultPgvectorHost   = "127.0.0.1"
-	defaultPgvectorPort   = "5432"
-	defaultPgvectorUser   = "postgres"
-	defaultPgvectorDB     = "vectordb"
-	defaultIndexDimension = 1536
 )
 
 // Environment variables for vector stores and embedder.
@@ -74,11 +70,11 @@ var (
 	openaiEmbeddingModel = getEnvOrDefault("OPENAI_EMBEDDING_MODEL", defaultEmbeddingModel)
 
 	// PGVector.
-	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", defaultPgvectorHost)
-	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", defaultPgvectorPort)
-	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", defaultPgvectorUser)
+	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "localhost")
+	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
+	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "postgres")
 	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", defaultPgvectorDB)
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "postgres")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
@@ -145,7 +141,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      *streaming,
 	}
 
 	agentName := "knowledge-assistant"
@@ -195,7 +191,6 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorpgvector.WithUser(pgvectorUser),
 			vectorpgvector.WithPassword(pgvectorPassword),
 			vectorpgvector.WithDatabase(pgvectorDatabase),
-			vectorpgvector.WithIndexDimension(defaultIndexDimension),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create pgvector store: %w", err)
