@@ -178,6 +178,15 @@ func WithOutputSchema(schema map[string]interface{}) Option {
 	}
 }
 
+// WithInputSchema sets the JSON schema for validating agent input.
+// When this is set, the agent's input will be validated against this schema
+// when used as a tool or when receiving input from other agents.
+func WithInputSchema(schema map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.InputSchema = schema
+	}
+}
+
 // WithAddNameToInstruction adds the agent name to the instruction if true.
 func WithAddNameToInstruction(addNameToInstruction bool) Option {
 	return func(opts *Options) {
@@ -270,6 +279,10 @@ type Options struct {
 	// OutputSchema is the JSON schema for validating agent output.
 	// When this is set, the agent can ONLY reply and CANNOT use any tools.
 	OutputSchema map[string]interface{}
+	// InputSchema is the JSON schema for validating agent input.
+	// When this is set, the agent's input will be validated against this schema
+	// when used as a tool or when receiving input from other agents.
+	InputSchema map[string]interface{}
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -290,6 +303,7 @@ type LLMAgent struct {
 	toolCallbacks  *tool.Callbacks
 	outputKey      string                 // Key to store output in session state
 	outputSchema   map[string]interface{} // JSON schema for output validation
+	inputSchema    map[string]interface{} // JSON schema for input validation
 }
 
 // New creates a new LLMAgent with the given options.
@@ -415,6 +429,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		toolCallbacks:  options.ToolCallbacks,
 		outputKey:      options.OutputKey,
 		outputSchema:   options.OutputSchema,
+		inputSchema:    options.InputSchema,
 	}
 }
 
@@ -567,8 +582,10 @@ func (a *LLMAgent) wrapEventChannel(
 // It returns the basic information about this agent.
 func (a *LLMAgent) Info() agent.Info {
 	return agent.Info{
-		Name:        a.name,
-		Description: a.description,
+		Name:         a.name,
+		Description:  a.description,
+		InputSchema:  a.inputSchema,
+		OutputSchema: a.outputSchema,
 	}
 }
 

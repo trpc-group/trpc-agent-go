@@ -104,6 +104,22 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			Stream:      true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
+		// Use input schema to specify the input format of the agent.
+		llmagent.WithInputSchema(map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"operation": map[string]interface{}{
+					"type": "string",
+					"enum": []interface{}{"add", "subtract", "multiply", "divide"},
+				},
+				"a": map[string]interface{}{
+					"type": "number",
+				},
+				"b": map[string]interface{}{
+					"type": "number",
+				},
+			},
+		}),
 	)
 
 	// Create tools.

@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -60,23 +61,34 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		opt(options)
 	}
 	info := agent.Info()
-	// Generate input schema for the agent tool.
-	// For now, we'll use a simple string input schema.
-	inputSchema := &tool.Schema{
-		Type:        "object",
-		Description: "Input for the agent tool",
-		Properties: map[string]*tool.Schema{
-			"request": {
-				Type:        "string",
-				Description: "The request to send to the agent",
+
+	// Use the agent's input schema if available, otherwise fall back to default.
+	var inputSchema *tool.Schema
+	if info.InputSchema != nil {
+		// Convert the agent's input schema to tool.Schema format.
+		inputSchema = convertMapToToolSchema(info.InputSchema)
+	} else {
+		// Generate default input schema for the agent tool.
+		inputSchema = &tool.Schema{
+			Type:        "object",
+			Description: "Input for the agent tool",
+			Properties: map[string]*tool.Schema{
+				"request": {
+					Type:        "string",
+					Description: "The request to send to the agent",
+				},
 			},
-		},
-		Required: []string{"request"},
+			Required: []string{"request"},
+		}
 	}
-	// Generate output schema for the agent tool.
-	outputSchema := &tool.Schema{
-		Type:        "string",
-		Description: "The response from the agent",
+	var outputSchema *tool.Schema
+	if info.OutputSchema != nil {
+		outputSchema = convertMapToToolSchema(info.OutputSchema)
+	} else {
+		outputSchema = &tool.Schema{
+			Type:        "string",
+			Description: "The response from the agent",
+		}
 	}
 	return &Tool{
 		agent:             agent,
@@ -90,17 +102,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 
 // Call executes the agent tool with the provided JSON arguments.
 func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	// Parse the input arguments.
-	var input struct {
-		Request string `json:"request"`
-	}
-	if err := json.Unmarshal(jsonArgs, &input); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal input: %w", err)
-	}
-
-	// Create a message for the agent.
-	message := model.NewUserMessage(input.Request)
-
+	message := model.NewUserMessage(string(jsonArgs))
 	// Create a runner to execute the agent.
 	runner := runner.NewRunner(
 		at.name,
@@ -139,4 +141,23 @@ func (at *Tool) Declaration() *tool.Declaration {
 		InputSchema:  at.inputSchema,
 		OutputSchema: at.outputSchema,
 	}
+}
+
+// convertMapToToolSchema converts a map[string]interface{} schema to tool.Schema format.
+// This function handles the conversion from the agent's input schema format to the tool schema format.
+func convertMapToToolSchema(schema map[string]interface{}) *tool.Schema {
+	if schema == nil {
+		return nil
+	}
+	bs, err := json.Marshal(schema)
+	if err != nil {
+		log.Errorf("json marshal schema error: %+v", err)
+		return nil
+	}
+	result := &tool.Schema{}
+	if err := json.Unmarshal(bs, result); err != nil {
+		log.Errorf("json unmarshal schema error: %+v", err)
+		return nil
+	}
+	return result
 }
