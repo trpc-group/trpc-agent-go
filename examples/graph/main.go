@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -439,7 +440,16 @@ func (w *documentWorkflow) processDocument(ctx context.Context, content string) 
 	// Create user message.
 	message := model.NewUserMessage(content)
 	// Run the workflow through the runner.
-	eventChan, err := w.runner.Run(ctx, w.userID, w.sessionID, message)
+	eventChan, err := w.runner.Run(
+		ctx,
+		w.userID,
+		w.sessionID,
+		message,
+		// Set runtime state for each run.
+		agent.WithRuntimeState(map[string]any{
+			"user_id": w.userID,
+		}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run workflow: %w", err)
 	}

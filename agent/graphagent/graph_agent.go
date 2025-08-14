@@ -143,10 +143,22 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Prepare initial state.
-	initialState := ga.initialState
-	if initialState == nil {
+	var initialState graph.State
+
+	if ga.initialState != nil {
+		// Clone the base initial state to avoid modifying the original.
+		initialState = ga.initialState.Clone()
+	} else {
 		initialState = make(graph.State)
 	}
+
+	// Merge runtime state from RunOptions if provided.
+	if invocation.RunOptions.RuntimeState != nil {
+		for key, value := range invocation.RunOptions.RuntimeState {
+			initialState[key] = value
+		}
+	}
+
 	// Add invocation message to state.
 	if invocation.Message.Content != "" {
 		initialState[graph.StateKeyUserInput] = invocation.Message.Content

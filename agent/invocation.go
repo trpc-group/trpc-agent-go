@@ -75,5 +75,20 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 	return invocation, ok
 }
 
+// RunOption is a function that configures a RunOptions.
+type RunOption func(*RunOptions)
+
+// WithRuntimeState sets the runtime state for the RunOptions.
+func WithRuntimeState(state map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		opts.RuntimeState = state
+	}
+}
+
 // RunOptions is the options for the Run method.
-type RunOptions struct{}
+type RunOptions struct {
+	// RuntimeState contains key-value pairs that will be merged into the initial state
+	// for this specific run. This allows callers to pass dynamic parameters
+	// (e.g., room ID, user context) without modifying the agent's base initial state.
+	RuntimeState map[string]any
+}
