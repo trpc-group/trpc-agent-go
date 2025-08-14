@@ -5,21 +5,21 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 ## Features
 
 - **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), or tcvector storage backends
-- **OpenAI Embedder Integration**: Uses OpenAI embeddings for high-quality document representation
+- **Multiple Embedder Support**: OpenAI and Gemini embedder options
 - **Rich Knowledge Sources**: Supports file, directory, URL, and auto-detection sources
-- **Interactive Chat Interface**: Features knowledge search, calculator, and current time tools
+- **Interactive Chat Interface**: Features knowledge search with multi-turn conversation support
 - **Streaming Response**: Real-time streaming of LLM responses with tool execution feedback
+- **Session Management**: Maintains conversation history and supports new session creation
 
 ## Knowledge Sources Loaded
 
 The following sources are automatically loaded when you run `main.go`:
 
-| Source Type | Name / File | What It Covers |
-|-------------|-------------|----------------|
-| File        | `./data/llm.md` | Large-Language-Model (LLM) basics. |
-| Directory   | `./dir/transformer.pdf` | Concise primer on the Transformer architecture and self-attention. |
-| Directory   | `./dir/moe.txt` | Notes about Mixture-of-Experts (MoE) models. |
-| URL         | <https://en.wikipedia.org/wiki/Byte-pair_encoding> | Byte-pair encoding (BPE) algorithm. |
+| Source Type | Name / File                                                                  | What It Covers                                       |
+| ----------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
+| File        | `./data/llm.md`                                                              | Large-Language-Model (LLM) basics.                   |
+| Directory   | `./dir/`                                                                     | Various documents in the directory.                  |
+| URL         | <https://en.wikipedia.org/wiki/Byte-pair_encoding>                           | Byte-pair encoding (BPE) algorithm.                  |
 | Auto Source | Mixed content (Cloud computing blurb, N-gram Wikipedia page, project README) | Cloud computing overview and N-gram language models. |
 
 These documents are embedded and indexed, enabling the `knowledge_search` tool to answer related questions.
@@ -27,24 +27,26 @@ These documents are embedded and indexed, enabling the `knowledge_search` tool t
 ### Try Asking Questions Like
 
 ```
-• What problem does self-attention solve in Transformers?
-• Explain the benefits of Mixture-of-Experts models.
-• How is Byte-pair encoding used in tokenization?
-• Give an example of an N-gram model in NLP.
-• What are common use-cases for cloud computing?
+• What is a Large Language Model?
+• Explain the Transformer architecture.
+• What is a Mixture-of-Experts (MoE) model?
+• How does Byte-pair encoding work?
+• What is an N-gram model?
+• What is cloud computing?
 ```
 
 ## Usage
 
 ### Prerequisites
 
-1. **Set OpenAI API Key** (Required)
+1. **Set OpenAI API Key** (Required for OpenAI model and embedder)
+
    ```bash
    export OPENAI_API_KEY="your-openai-api-key"
    ```
 
 2. **Configure Vector Store** (Optional - defaults to in-memory)
-   
+
    For persistent storage, configure the appropriate environment variables for your chosen vector store.
 
 ### Running the Example
@@ -63,6 +65,12 @@ go run main.go -vectorstore=tcvector
 
 # Specify a different model
 go run main.go -model="gpt-4o-mini" -vectorstore=pgvector
+
+# Use Gemini embedder
+go run main.go -embedder=gemini
+
+# Disable streaming mode
+go run main.go -streaming=false
 ```
 
 ### Interactive Commands
@@ -74,43 +82,92 @@ go run main.go -model="gpt-4o-mini" -vectorstore=pgvector
 
 ## Available Tools
 
-| Tool | Description | Example Usage |
-|------|-------------|---------------|
+| Tool               | Description                                        | Example Usage                     |
+| ------------------ | -------------------------------------------------- | --------------------------------- |
 | `knowledge_search` | Search the knowledge base for relevant information | "What is a Large Language Model?" |
-| `calculator` | Perform mathematical calculations (add, subtract, multiply, divide, power) | "Calculate 15 * 23" |
-| `current_time` | Get current time and date for specific timezones | "What time is it in PST?" |
 
 ## Vector Store Options
 
 ### In-Memory (Default)
+
 - **Pros**: No external dependencies, fast for small datasets
 - **Cons**: Data doesn't persist between runs
 - **Use case**: Development, testing, small knowledge bases
 
-### PostgreSQL with pgvector 
+### PostgreSQL with pgvector
+
 - **Use case**: Production deployments, persistent storage
 - **Setup**: Requires PostgreSQL with pgvector extension
+- **Environment Variables**:
+  ```bash
+  export PGVECTOR_HOST="127.0.0.1"
+  export PGVECTOR_PORT="5432"
+  export PGVECTOR_USER="postgres"
+  export PGVECTOR_PASSWORD="your_password"
+  export PGVECTOR_DATABASE="vectordb"
+  ```
 
 ### TcVector
+
 - **Use case**: Cloud deployments, managed vector storage
 - **Setup**: Requires TcVector service credentials
+- **Environment Variables**:
+  ```bash
+  export TCVECTOR_URL="your_tcvector_service_url"
+  export TCVECTOR_USERNAME="your_username"
+  export TCVECTOR_PASSWORD="your_password"
+  ```
+
+## Embedder Options
+
+### OpenAI Embedder (Default)
+
+- **Model**: `text-embedding-3-small` (configurable)
+- **Environment Variable**: `OPENAI_EMBEDDING_MODEL`
+- **Use case**: High-quality embeddings with OpenAI's latest models
+
+### Gemini Embedder
+
+- **Model**: Uses Gemini's default embedding model
+- **Use case**: Alternative to OpenAI, good for Google ecosystem integration
 
 ## Configuration
 
 ### Required Environment Variables
 
-- `OPENAI_API_KEY`: Your OpenAI API key for embeddings and chat
+#### For OpenAI (Model + Embedder)
+
+```bash
+export OPENAI_API_KEY="your-openai-api-key"           # Required for OpenAI model and embedder
+export OPENAI_BASE_URL="your-openai-base-url"    # Required for OpenAI model and embedder
+export OPENAI_EMBEDDING_MODEL="text-embedding-3-small" # Required for OpenAI embedder only
+```
+
+#### For Gemini Embedder
+
+```bash
+export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini embedder
+```
 
 ### Optional Configuration
 
-- `OPENAI_EMBEDDING_MODEL`: OpenAI embedding model (default: `text-embedding-3-small`)
 - Vector store specific variables (see vector store documentation for details)
+- **Performance tuning**: The knowledge package provides intelligent defaults for concurrency. Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` based on your specific needs:
+  - **Speed up**: Increase values if processing is too slow and API limits allow
+  - **Slow down**: Decrease values if hitting API rate limits or experiencing errors
+  - **Default**: Use default values for balanced performance (recommended for most cases)
+- **Loading behavior**: Control progress logging, statistics display, and update frequency:
+  - `WithShowProgress(false)`: Disable progress logging (default: true)
+  - `WithShowStats(false)`: Disable statistics display (default: true)
+  - `WithProgressStepSize(10)`: Set progress update frequency (default: 10)
 
 ### Command Line Options
 
 ```bash
--model string     LLM model name (default: "claude-4-sonnet-20250514")
--vectorstore string   Vector store type: inmemory, pgvector, tcvector (default: "inmemory")
+-model string       LLM model name (default: "claude-4-sonnet-20250514")
+-streaming bool     Enable streaming mode for responses (default: true)
+-embedder string    Embedder type: openai, gemini (default: "openai")
+-vectorstore string Vector store type: inmemory, pgvector, tcvector (default: "inmemory")
 ```
 
 ---
@@ -121,18 +178,30 @@ For more details, see the code in `main.go`.
 
 ### 1. Knowledge Base Setup
 
-The example creates a knowledge base with configurable vector store:
+The example creates a knowledge base with configurable vector store and embedder:
 
 ```go
-// Create knowledge base with configurable vector store
+// Create knowledge base with configurable components
 vectorStore, err := c.setupVectorDB() // Supports inmemory, pgvector, tcvector
-embedder := openaiembedder.New()
+embedder, err := c.setupEmbedder(ctx) // Supports openai, gemini
 
 kb := knowledge.New(
     knowledge.WithVectorStore(vectorStore),
     knowledge.WithEmbedder(embedder),
     knowledge.WithSources(sources),
 )
+
+// Load the knowledge base with optimized settings
+if err := kb.Load(
+    ctx,
+    knowledge.WithShowProgress(false),  // Disable progress logging (default: true)
+    knowledge.WithProgressStepSize(10), // Progress update frequency (default: 10)
+    knowledge.WithShowStats(false),     // Disable statistics display (default: true)
+    knowledge.WithSourceConcurrency(4), // Process 4 sources concurrently
+    knowledge.WithDocConcurrency(64),   // Process 64 documents concurrently
+); err != nil {
+    return fmt.Errorf("failed to load knowledge base: %w", err)
+}
 ```
 
 ### 2. Knowledge Sources
@@ -147,20 +216,20 @@ sources := []source.Source{
         filesource.WithName("Large Language Model"),
         filesource.WithMetadataValue("type", "documentation"),
     ),
-    
+
     // Directory source for multiple files
     dirsource.New(
         []string{"./dir"},
         dirsource.WithName("Data Directory"),
     ),
-    
+
     // URL source for web content
     urlsource.New(
         []string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},
         urlsource.WithName("Byte-pair encoding"),
         urlsource.WithMetadataValue("source", "wikipedia"),
     ),
-    
+
     // Auto source handles mixed content types
     autosource.New(
         []string{
@@ -182,8 +251,8 @@ llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb), // This automatically adds the knowledge_search tool
-    llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
-    // ... other options
+    llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
+    llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 )
 ```
 
@@ -211,9 +280,9 @@ type Knowledge interface {
 
 The example uses `BuiltinKnowledge` which provides:
 
-- **Storage**: In-memory document storage
-- **Vector Store**: In-memory vector similarity search
-- **Embedder**: Mock embedder for demonstration
+- **Storage**: Configurable vector store (in-memory, pgvector, or tcvector)
+- **Vector Store**: Vector similarity search with multiple backends
+- **Embedder**: OpenAI or Gemini embedder for document representation
 - **Retriever**: Complete RAG pipeline with query enhancement and reranking
 
 ### Knowledge Search Tool
@@ -225,15 +294,43 @@ The `knowledge_search` tool is automatically created by `knowledgetool.NewKnowle
 - Result formatting with relevance scores
 - Error handling
 
+### Knowledge Loading Configuration
+
+The example configures several loading options to optimize the user experience:
+
+```go
+// Current configuration (overrides defaults)
+if err := c.kb.Load(
+    ctx,
+    knowledge.WithShowProgress(false),  // Disable progress logging (default: true)
+    knowledge.WithProgressStepSize(10), // Progress update frequency (default: 10)
+    knowledge.WithShowStats(false),     // Disable statistics display (default: true)
+    knowledge.WithSourceConcurrency(4), // Override default: min(4, len(sources))
+    knowledge.WithDocConcurrency(64),   // Override default: runtime.NumCPU()
+); err != nil {
+    return fmt.Errorf("failed to load knowledge base: %w", err)
+}
+```
+
+**Available Options:**
+
+- **Progress Control**: `WithShowProgress()` - Enable/disable progress logging
+- **Update Frequency**: `WithProgressStepSize()` - Control progress update intervals
+- **Statistics Display**: `WithShowStats()` - Show/hide loading statistics
+- **Concurrency Tuning**: `WithSourceConcurrency()` and `WithDocConcurrency()` - Performance optimization
+
 ### Components Used
 
 - **Vector Stores**:
   - `vectorstore/inmemory`: In-memory vector store with cosine similarity
   - `vectorstore/pgvector`: PostgreSQL-based persistent vector storage
   - `vectorstore/tcvector`: TcVector cloud-native vector storage
-- **Embedder**: `embedder/openai`: OpenAI embeddings API integration
+- **Embedders**:
+  - `embedder/openai`: OpenAI embeddings API integration
+  - `embedder/gemini`: Gemini embeddings API integration
 - **Sources**: `source/{file,dir,url,auto}`: Multiple content source types
 - **Session**: `session/inmemory`: In-memory conversation state management
+- **Runner**: Multi-turn conversation management with streaming support
 
 ## Extending the Example
 
@@ -262,40 +359,114 @@ allSources := append(sources, customSources...)
 - Secure API key management
 - Monitor vector store performance
 - Implement proper error handling and logging
+- Consider using environment-specific configuration files
+
+### Performance Optimization & API Rate Limits
+
+The example uses parallel processing to optimize knowledge base loading. The knowledge package provides intelligent defaults:
+
+```go
+// Current configuration (overrides defaults)
+knowledge.WithShowProgress(false), // Disable progress logging
+knowledge.WithSourceConcurrency(4), // Override default: min(4, len(sources))
+knowledge.WithDocConcurrency(64),   // Override default: runtime.NumCPU()
+```
+
+**⚠️ Important Notes:**
+
+- **Increased API Calls**: Parallel processing will significantly increase the frequency of API requests to your embedder service (OpenAI/Gemini)
+- **Rate Limit Considerations**: Be aware of your API provider's rate limits and quotas
+- **Cost Impact**: More concurrent requests may increase costs for paid API services
+- **Adjust as Needed**: Balance between processing speed and API rate limits
+
+**Performance vs. Rate Limits - Finding the Sweet Spot:**
+
+The concurrency settings affect both processing speed and API request frequency. You need to find the right balance:
+
+- **Too Slow?** Increase concurrency for faster processing
+- **Too Fast?** Reduce concurrency to avoid hitting API rate limits
+- **Just Right?** Default values are optimized for most scenarios
+
+**When to Adjust Concurrency:**
+
+```go
+// If processing is too slow (acceptable API usage)
+knowledge.WithSourceConcurrency(8),  // Increase from default 4
+knowledge.WithDocConcurrency(128),   // Increase from default runtime.NumCPU()
+
+// If hitting API rate limits (slower but stable)
+knowledge.WithSourceConcurrency(2),  // Reduce from default 4
+knowledge.WithDocConcurrency(16),    // Reduce from default runtime.NumCPU()
+
+// Default values (balanced approach)
+// knowledge.WithSourceConcurrency() // Default: min(4, len(sources))
+// knowledge.WithDocConcurrency()     // Default: runtime.NumCPU()
+```
 
 ## Example Files
 
-| File | Description |
-|------|-------------|
-| `main.go` | Complete knowledge integration example with multi-vector store support |
-| `data/llm.md` | Sample documentation about Large Language Models |
-| `dir/transformer.pdf` | Transformer architecture documentation |
-| `dir/moe.txt` | Mixture-of-Experts model notes |
-| `README.md` | This comprehensive documentation |
+| File                  | Description                                                            |
+| --------------------- | ---------------------------------------------------------------------- |
+| `main.go`             | Complete knowledge integration example with multi-vector store support |
+| `data/llm.md`         | Sample documentation about Large Language Models                       |
+| `dir/transformer.pdf` | Transformer architecture documentation                                 |
+| `dir/moe.txt`         | Mixture-of-Experts model notes                                         |
+| `README.md`           | This comprehensive documentation                                       |
 
 ## Key Dependencies
 
 - `agent/llmagent`: LLM agent with streaming and tool support
 - `knowledge/*`: Complete RAG pipeline with multiple source types
 - `knowledge/vectorstore/*`: Multiple vector storage backends
-- `knowledge/embedder/openai`: OpenAI embeddings integration
+- `knowledge/embedder/*`: Multiple embedder implementations
 - `runner`: Multi-turn conversation management with session state
-- `tool/function`: Custom tool creation utilities
+- `session/inmemory`: In-memory session state management
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **OpenAI API Key Error**
+
    - Ensure `OPENAI_API_KEY` is set correctly
    - Verify your OpenAI account has embedding API access
+   - **Important**: For OpenAI model and embedder, you must also set `OPENAI_BASE_URL` and `OPENAI_EMBEDDING_MODEL`
 
-2. **Vector Store Connection Issues**
+2. **Gemini API Key Error**
+
+   - Ensure `GOOGLE_API_KEY` is set correctly
+   - Verify your Google Cloud project has Gemini API access enabled
+   - **Note**: Gemini embedder only requires `GOOGLE_API_KEY`, no additional model configuration needed
+
+3. **Vector Store Connection Issues**
+
    - For pgvector: Ensure PostgreSQL is running and pgvector extension is installed
    - For tcvector: Verify service credentials and network connectivity
    - Check environment variables are set correctly
 
 4. **Knowledge Loading Errors**
+
    - Verify source files/URLs are accessible
    - Check file permissions for local sources
-   - Ensure stable internet connection for URL sources 
+   - Ensure stable internet connection for URL sources
+
+5. **Embedder Configuration Issues**
+
+   - **OpenAI**: Verify `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_EMBEDDING_MODEL` are all set
+   - **Gemini**: Verify `GOOGLE_API_KEY` is set and API is enabled
+   - Check API quotas and rate limits for both services
+
+6. **API Rate Limiting & Parallel Processing Issues**
+
+   - **Rate Limit Errors**: If you see "rate limit exceeded" errors, reduce concurrency settings to slow down API requests
+   - **High API Costs**: Parallel processing increases API call frequency - the default values are optimized for most use cases
+   - **Slow Loading**: If knowledge base loading is too slow, increase concurrency (if API limits allow) for faster processing
+   - **Memory Usage**: High concurrency may increase memory usage during loading - defaults are balanced for performance and resource usage
+   - **Performance Tuning**: Monitor loading time vs. API errors to find optimal concurrency settings for your environment
+
+7. **Knowledge Loading Behavior Issues**
+
+   - **Need More Visibility**: If you want to see loading progress, enable `WithShowProgress(true)` and `WithShowStats(true)`
+   - **Too Many Logs**: If progress logs are too verbose, increase `WithProgressStepSize()` value or disable with `WithShowProgress(false)`
+   - **Missing Statistics**: If you need document size and count information, enable `WithShowStats(true)`
+   - **Custom Progress Frequency**: Adjust `WithProgressStepSize()` to control how often progress updates are logged (default: 10)
