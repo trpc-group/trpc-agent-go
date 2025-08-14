@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -31,9 +32,9 @@ import (
 
 func main() {
 	// https://langfuse.com/integrations/native/opentelemetry
-	langFuseSecretKey := "sk-lf-c3d93ca5-dbc1-41cd-8b9c-4b29781f620e"
-	langFusePublicKey := "pk-lf-a3e8b2fe-074a-4afa-a215-b9b1e11e69c5"
-	langFuseHost := "http://localhost:3000"
+	langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "sk-lf-c3d93ca5-dbc1-41cd-8b9c-4b29781f620e")
+	langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "pk-lf-a3e8b2fe-074a-4afa-a215-b9b1e11e69c5")
+	langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
 	otelEndpointPath := "/api/public/otel/v1/traces"
 
 	// Start trace
@@ -100,6 +101,14 @@ func main() {
 func encodeAuth(pk, sk string) string {
 	auth := pk + ":" + sk
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+// getEnv returns the value of the environment variable or the default if not set.
+func getEnv(key, defaultValue string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return defaultValue
 }
 
 func printGuideMessage(modelName string) {
