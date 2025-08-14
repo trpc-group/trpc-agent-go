@@ -19,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -28,50 +27,59 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+
+	// Embedder.
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
+	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+
+	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
-
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	openaimodel "trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
-	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// command line flags
+// command line flags.
 var (
-	modelName   = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
-	vectorStore = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
+	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
 )
 
-// environment variables to configure tcvector
+// Default values for optional configurations.
+const (
+	defaultEmbeddingModel = "text-embedding-3-small"
+)
+
+// Environment variables for vector stores and embedder.
 var (
+	// OpenAI embedding model.
+	openaiEmbeddingModel = getEnvOrDefault("OPENAI_EMBEDDING_MODEL", defaultEmbeddingModel)
+
+	// PGVector.
+	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
+	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
+	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "postgres")
+	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
+
+	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
 	tcvectorUsername = getEnvOrDefault("TCVECTOR_USERNAME", "")
 	tcvectorPassword = getEnvOrDefault("TCVECTOR_PASSWORD", "")
-)
-
-// environment variables to configure pgvector
-var (
-	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
-	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
-	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
-	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "")
-)
-
-// environment variables to configure for openai embedder
-var (
-	openaiEmbeddingModel = getEnvOrDefault("OPENAI_EMBEDDING_MODEL", "")
 )
 
 func main() {
@@ -80,13 +88,14 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Available tools: knowledge_search, calculator, current_time\n")
+	fmt.Printf("Available tools: knowledge_search\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
 	chat := &knowledgeChat{
-		modelName:   *modelName,
-		vectorStore: *vectorStore,
+		modelName:    *modelName,
+		embedderType: *embedderType,
+		vectorStore:  *vectorStore,
 	}
 
 	if err := chat.run(); err != nil {
@@ -96,12 +105,13 @@ func main() {
 
 // knowledgeChat manages the conversation with knowledge integration.
 type knowledgeChat struct {
-	modelName   string
-	vectorStore string
-	runner      runner.Runner
-	userID      string
-	sessionID   string
-	kb          *knowledge.BuiltinKnowledge
+	modelName    string
+	embedderType string
+	vectorStore  string
+	runner       runner.Runner
+	userID       string
+	sessionID    string
+	kb           *knowledge.BuiltinKnowledge
 }
 
 // run starts the interactive chat session.
@@ -127,33 +137,20 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		return fmt.Errorf("failed to setup knowledge base: %w", err)
 	}
 
-	// Create additional tools.
-	calculatorTool := function.NewFunctionTool(
-		c.calculate,
-		function.WithName("calculator"),
-		function.WithDescription("Perform basic mathematical calculations (add, subtract, multiply, divide)"),
-	)
-	timeTool := function.NewFunctionTool(
-		c.getCurrentTime,
-		function.WithName("current_time"),
-		function.WithDescription("Get the current time and date for a specific timezone"),
-	)
-
-	// Create LLM agent with knowledge and tools.
+	// Create LLM agent with knowledge.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      *streaming,
 	}
 
 	agentName := "knowledge-assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with knowledge base access and calculator tools"),
-		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Use calculator and current_time tools when appropriate. Be helpful and conversational."),
+		llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
+		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
 		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
 	)
 
@@ -180,7 +177,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 
 // setupVectorDB creates the appropriate vector store based on the selected type.
 func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
-	switch c.vectorStore {
+	switch strings.ToLower(*vectorStore) {
 	case "inmemory":
 		return vectorinmemory.New(), nil
 	case "pgvector":
@@ -188,7 +185,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse pgvector port: %w", err)
 		}
-		vectorStore, err := vectorpgvector.New(
+		vs, err := vectorpgvector.New(
 			vectorpgvector.WithHost(pgvectorHost),
 			vectorpgvector.WithPort(port),
 			vectorpgvector.WithUser(pgvectorUser),
@@ -198,9 +195,9 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create pgvector store: %w", err)
 		}
-		return vectorStore, nil
+		return vs, nil
 	case "tcvector":
-		vectorStore, err := vectortcvector.New(
+		vs, err := vectortcvector.New(
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
@@ -208,24 +205,25 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
 		}
-		return vectorStore, nil
+		return vs, nil
 	default:
-		return nil, fmt.Errorf("unsupported vector store type: %s", c.vectorStore)
+		return nil, fmt.Errorf("unsupported vector store type: %s", *vectorStore)
 	}
 }
 
-// setupKnowledgeBase creates a built-in knowledge base with sample documents.
-func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
-	// Create vector store.
-	vectorStore, err := c.setupVectorDB()
-	if err != nil {
-		return err
+// setupEmbedder creates embedder based on the configured embedderType.
+func (c *knowledgeChat) setupEmbedder(ctx context.Context) (embedder.Embedder, error) {
+	switch strings.ToLower(c.embedderType) {
+	case "gemini":
+		return geminiembedder.New(ctx)
+	default: // openai
+		return openaiembedder.New(
+			openaiembedder.WithModel(openaiEmbeddingModel),
+		), nil
 	}
+}
 
-	embedder := openaiembedder.New(
-		openaiembedder.WithModel(openaiEmbeddingModel),
-	)
-
+func (c *knowledgeChat) createSources() []source.Source {
 	// Create diverse sources showcasing different types.
 	sources := []source.Source{
 		// File source for local documentation (if files exist).
@@ -266,11 +264,30 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 			autosource.WithMetadataValue("type", "mixed"),
 		),
 	}
+	return sources
+}
+
+// setupKnowledgeBase creates a built-in knowledge base with sample documents.
+func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
+	// Create vector store.
+	vectorStore, err := c.setupVectorDB()
+	if err != nil {
+		return err
+	}
+
+	// Create embedder.
+	emb, err := c.setupEmbedder(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create embedder: %w", err)
+	}
+
+	// Create sources.
+	sources := c.createSources()
 
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
 		knowledge.WithVectorStore(vectorStore),
-		knowledge.WithEmbedder(embedder),
+		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(sources),
 	)
 	// Load the knowledge base.
@@ -303,9 +320,6 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println("   - How does Byte-pair encoding work?")
 	fmt.Println("   - What is an N-gram model?")
 	fmt.Println("   - What is cloud computing?")
-	fmt.Println("   - Calculate 15 * 23")
-	fmt.Println("   - What time is it in PST?")
-	fmt.Println("   - What tools are available in this chat demo?")
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -458,89 +472,6 @@ func (c *knowledgeChat) isToolEvent(event *event.Event) bool {
 func (c *knowledgeChat) startNewSession() {
 	c.sessionID = fmt.Sprintf("knowledge-session-%d", time.Now().Unix())
 	fmt.Printf("🔄 New session started: %s\n\n", c.sessionID)
-}
-
-// Tool implementations.
-
-// calculate performs mathematical calculations.
-func (c *knowledgeChat) calculate(_ context.Context, args calculatorArgs) (calculatorResult, error) {
-	var result float64
-
-	switch strings.ToLower(args.Operation) {
-	case "add", "+":
-		result = args.A + args.B
-	case "subtract", "-":
-		result = args.A - args.B
-	case "multiply", "*":
-		result = args.A * args.B
-	case "divide", "/":
-		if args.B != 0 {
-			result = args.A / args.B
-		}
-	case "power", "^":
-		result = math.Pow(args.A, args.B)
-	}
-
-	return calculatorResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// getCurrentTime returns the current time and date.
-func (c *knowledgeChat) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
-	now := time.Now()
-	loc := now.Location()
-
-	// Handle timezone if specified.
-	if args.Timezone != "" {
-		switch strings.ToUpper(args.Timezone) {
-		case "UTC":
-			loc = time.UTC
-		case "EST":
-			loc = time.FixedZone("EST", -5*3600)
-		case "PST":
-			loc = time.FixedZone("PST", -8*3600)
-		case "CST":
-			loc = time.FixedZone("CST", -6*3600)
-		}
-		now = now.In(loc)
-	}
-
-	return timeResult{
-		Timezone: loc.String(),
-		Time:     now.Format("15:04:05"),
-		Date:     now.Format("2006-01-02"),
-		Weekday:  now.Format("Monday"),
-	}, nil
-}
-
-// Tool argument and result types.
-
-type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-type calculatorResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-}
-
-type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
-}
-
-type timeResult struct {
-	Timezone string `json:"timezone"`
-	Time     string `json:"time"`
-	Date     string `json:"date"`
-	Weekday  string `json:"weekday"`
 }
 
 // Helper functions.
