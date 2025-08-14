@@ -152,6 +152,14 @@ export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini em
 ### Optional Configuration
 
 - Vector store specific variables (see vector store documentation for details)
+- **Performance tuning**: The knowledge package provides intelligent defaults for concurrency. Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` based on your specific needs:
+  - **Speed up**: Increase values if processing is too slow and API limits allow
+  - **Slow down**: Decrease values if hitting API rate limits or experiencing errors
+  - **Default**: Use default values for balanced performance (recommended for most cases)
+- **Loading behavior**: Control progress logging, statistics display, and update frequency:
+  - `WithShowProgress(false)`: Disable progress logging (default: true)
+  - `WithShowStats(false)`: Disable statistics display (default: true)
+  - `WithProgressStepSize(10)`: Set progress update frequency (default: 10)
 
 ### Command Line Options
 
@@ -186,8 +194,9 @@ kb := knowledge.New(
 // Load the knowledge base with optimized settings
 if err := kb.Load(
     ctx,
-    knowledge.WithShowProgress(false),  // Disable progress logging
-    knowledge.WithShowStats(false),     // Disable statistics display
+    knowledge.WithShowProgress(false),  // Disable progress logging (default: true)
+    knowledge.WithProgressStepSize(10), // Progress update frequency (default: 10)
+    knowledge.WithShowStats(false),     // Disable statistics display (default: true)
     knowledge.WithSourceConcurrency(4), // Process 4 sources concurrently
     knowledge.WithDocConcurrency(64),   // Process 64 documents concurrently
 ); err != nil {
@@ -285,6 +294,31 @@ The `knowledge_search` tool is automatically created by `knowledgetool.NewKnowle
 - Result formatting with relevance scores
 - Error handling
 
+### Knowledge Loading Configuration
+
+The example configures several loading options to optimize the user experience:
+
+```go
+// Current configuration (overrides defaults)
+if err := c.kb.Load(
+    ctx,
+    knowledge.WithShowProgress(false),  // Disable progress logging (default: true)
+    knowledge.WithProgressStepSize(10), // Progress update frequency (default: 10)
+    knowledge.WithShowStats(false),     // Disable statistics display (default: true)
+    knowledge.WithSourceConcurrency(4), // Override default: min(4, len(sources))
+    knowledge.WithDocConcurrency(64),   // Override default: runtime.NumCPU()
+); err != nil {
+    return fmt.Errorf("failed to load knowledge base: %w", err)
+}
+```
+
+**Available Options:**
+
+- **Progress Control**: `WithShowProgress()` - Enable/disable progress logging
+- **Update Frequency**: `WithProgressStepSize()` - Control progress update intervals
+- **Statistics Display**: `WithShowStats()` - Show/hide loading statistics
+- **Concurrency Tuning**: `WithSourceConcurrency()` and `WithDocConcurrency()` - Performance optimization
+
 ### Components Used
 
 - **Vector Stores**:
@@ -326,6 +360,48 @@ allSources := append(sources, customSources...)
 - Monitor vector store performance
 - Implement proper error handling and logging
 - Consider using environment-specific configuration files
+
+### Performance Optimization & API Rate Limits
+
+The example uses parallel processing to optimize knowledge base loading. The knowledge package provides intelligent defaults:
+
+```go
+// Current configuration (overrides defaults)
+knowledge.WithShowProgress(false), // Disable progress logging
+knowledge.WithSourceConcurrency(4), // Override default: min(4, len(sources))
+knowledge.WithDocConcurrency(64),   // Override default: runtime.NumCPU()
+```
+
+**⚠️ Important Notes:**
+
+- **Increased API Calls**: Parallel processing will significantly increase the frequency of API requests to your embedder service (OpenAI/Gemini)
+- **Rate Limit Considerations**: Be aware of your API provider's rate limits and quotas
+- **Cost Impact**: More concurrent requests may increase costs for paid API services
+- **Adjust as Needed**: Balance between processing speed and API rate limits
+
+**Performance vs. Rate Limits - Finding the Sweet Spot:**
+
+The concurrency settings affect both processing speed and API request frequency. You need to find the right balance:
+
+- **Too Slow?** Increase concurrency for faster processing
+- **Too Fast?** Reduce concurrency to avoid hitting API rate limits
+- **Just Right?** Default values are optimized for most scenarios
+
+**When to Adjust Concurrency:**
+
+```go
+// If processing is too slow (acceptable API usage)
+knowledge.WithSourceConcurrency(8),  // Increase from default 4
+knowledge.WithDocConcurrency(128),   // Increase from default runtime.NumCPU()
+
+// If hitting API rate limits (slower but stable)
+knowledge.WithSourceConcurrency(2),  // Reduce from default 4
+knowledge.WithDocConcurrency(16),    // Reduce from default runtime.NumCPU()
+
+// Default values (balanced approach)
+// knowledge.WithSourceConcurrency() // Default: min(4, len(sources))
+// knowledge.WithDocConcurrency()     // Default: runtime.NumCPU()
+```
 
 ## Example Files
 
@@ -379,3 +455,18 @@ allSources := append(sources, customSources...)
    - **OpenAI**: Verify `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `OPENAI_EMBEDDING_MODEL` are all set
    - **Gemini**: Verify `GOOGLE_API_KEY` is set and API is enabled
    - Check API quotas and rate limits for both services
+
+6. **API Rate Limiting & Parallel Processing Issues**
+
+   - **Rate Limit Errors**: If you see "rate limit exceeded" errors, reduce concurrency settings to slow down API requests
+   - **High API Costs**: Parallel processing increases API call frequency - the default values are optimized for most use cases
+   - **Slow Loading**: If knowledge base loading is too slow, increase concurrency (if API limits allow) for faster processing
+   - **Memory Usage**: High concurrency may increase memory usage during loading - defaults are balanced for performance and resource usage
+   - **Performance Tuning**: Monitor loading time vs. API errors to find optimal concurrency settings for your environment
+
+7. **Knowledge Loading Behavior Issues**
+
+   - **Need More Visibility**: If you want to see loading progress, enable `WithShowProgress(true)` and `WithShowStats(true)`
+   - **Too Many Logs**: If progress logs are too verbose, increase `WithProgressStepSize()` value or disable with `WithShowProgress(false)`
+   - **Missing Statistics**: If you need document size and count information, enable `WithShowStats(true)`
+   - **Custom Progress Frequency**: Adjust `WithProgressStepSize()` to control how often progress updates are logged (default: 10)
