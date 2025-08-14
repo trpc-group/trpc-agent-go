@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.3] - 2025-08-13
+
+### Features
+- **telemetry**: Support HTTP protocol to integrate Langfuse. (#203)
+- **storage**: Add extra options for Redis storage. (#202)
+- **memory**: Add Redis memory service support. (#172)
+- **knowledge**: Add metadata handling and consistency tests. (#201)
+- **planner**: Add `actionPreamble` for ReAct prompt. (#169)
+- **processor**: Add time-aware processor. (#168)
+- **model**: Add support for `reasoning_content` field. (#167)
+- **agent**: Support output key and output schema. (#153)
+- **agent**: Export `Options` struct for easier reuse. (#163)
+- **model**: Suppress events during tool-call chunks. (#165)
+- **model**: Suppress empty chat chunks and add default object for completion. (#164)
+- **chunking**: Ensure safe UTF-8 chunking. (#170)
+
+### Bug Fixes
+- **model**: Fix issue on internal platform. (#204)
+- **mcp**: Fix default values and enum support. (#166)
+- **redis**: Remove over-strict validation of Redis URL to avoid false errors. (#205)
+
+### Chore
+- **gomod**: Update go.mod in submodules. (#162)
+
+### Examples
+- **examples**: Update Cycle example. (#171)
+
+
 ## [0.0.2] - 2025-08-07
 
 ### Features
