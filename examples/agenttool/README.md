@@ -15,6 +15,7 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 
 - **Agent Wrapping**: Wrap any agent as a callable tool
 - **Specialized Agents**: Create agents with specific expertise (e.g., math specialist)
+- **Input Schema**: Specify the input schema of the agent tool.
 - **Tool Composition**: Combine regular tools with agent tools
 - **Streaming Support**: Full streaming support for agent tool responses
 - **Session Management**: Proper session handling for agent tool calls
@@ -172,6 +173,22 @@ mathAgent := llmagent.New(
     llmagent.WithDescription("A specialized agent for mathematical operations"),
     llmagent.WithInstruction("You are a math specialist with access to a calculator tool..."),
     llmagent.WithTools([]tool.Tool{calculatorTool}),
+	// Use input schema to specify the input format of the agent.
+	llmagent.WithInputSchema(map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"operation": map[string]interface{}{
+				"type": "string",
+				"enum": []interface{}{"add", "subtract", "multiply", "divide"},
+			},
+			"a": map[string]interface{}{
+				"type": "number",
+			},
+			"b": map[string]interface{}{
+				"type": "number",
+			},
+		},
+	}),
 )
 
 // Wrap the agent as a tool
