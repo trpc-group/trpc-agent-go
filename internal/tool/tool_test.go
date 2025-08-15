@@ -226,3 +226,236 @@ func TestGenerateJSONSchema_PointerTypeFix(t *testing.T) {
 		t.Errorf("expected age property of type integer")
 	}
 }
+
+func TestGenerateJSONSchema_JSONSchemaTag_Description(t *testing.T) {
+	type TestStruct struct {
+		Name string `json:"name" jsonschema:"description=User's full name"`
+		Age  int    `json:"age" jsonschema:"description=User's age in years"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Check description for name field
+	if result.Properties["name"].Description != "User's full name" {
+		t.Errorf("expected description 'User's full name', got '%s'", result.Properties["name"].Description)
+	}
+
+	// Check description for age field
+	if result.Properties["age"].Description != "User's age in years" {
+		t.Errorf("expected description 'User's age in years', got '%s'", result.Properties["age"].Description)
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
+	type TestStruct struct {
+		Status string `json:"status" jsonschema:"enum=active,enum=inactive,enum=pending"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	statusSchema := result.Properties["status"]
+	if len(statusSchema.Enum) != 3 {
+		t.Errorf("expected 3 enum values, got %d", len(statusSchema.Enum))
+	}
+
+	expectedEnums := []string{"active", "inactive", "pending"}
+	for i, expected := range expectedEnums {
+		if statusSchema.Enum[i] != expected {
+			t.Errorf("expected enum[%d] to be '%s', got '%v'", i, expected, statusSchema.Enum[i])
+		}
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_IntEnum(t *testing.T) {
+	type TestStruct struct {
+		Priority int `json:"priority" jsonschema:"enum=1,enum=2,enum=3"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	prioritySchema := result.Properties["priority"]
+	if len(prioritySchema.Enum) != 3 {
+		t.Errorf("expected 3 enum values, got %d", len(prioritySchema.Enum))
+	}
+
+	expectedEnums := []int64{1, 2, 3}
+	for i, expected := range expectedEnums {
+		if prioritySchema.Enum[i] != expected {
+			t.Errorf("expected enum[%d] to be %d, got %v", i, expected, prioritySchema.Enum[i])
+		}
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_FloatEnum(t *testing.T) {
+	type TestStruct struct {
+		Rate float64 `json:"rate" jsonschema:"enum=1.5,enum=2.0,enum=3.5"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	rateSchema := result.Properties["rate"]
+	if len(rateSchema.Enum) != 3 {
+		t.Errorf("expected 3 enum values, got %d", len(rateSchema.Enum))
+	}
+
+	expectedEnums := []float64{1.5, 2.0, 3.5}
+	for i, expected := range expectedEnums {
+		if rateSchema.Enum[i] != expected {
+			t.Errorf("expected enum[%d] to be %f, got %v", i, expected, rateSchema.Enum[i])
+		}
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_BoolEnum(t *testing.T) {
+	type TestStruct struct {
+		Enabled bool `json:"enabled" jsonschema:"enum=true,enum=false"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	enabledSchema := result.Properties["enabled"]
+	if len(enabledSchema.Enum) != 2 {
+		t.Errorf("expected 2 enum values, got %d", len(enabledSchema.Enum))
+	}
+
+	expectedEnums := []bool{true, false}
+	for i, expected := range expectedEnums {
+		if enabledSchema.Enum[i] != expected {
+			t.Errorf("expected enum[%d] to be %t, got %v", i, expected, enabledSchema.Enum[i])
+		}
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_Required(t *testing.T) {
+	type TestStruct struct {
+		RequiredField    string `json:"required_field" jsonschema:"required"`
+		OptionalField    string `json:"optional_field,omitempty"`
+		NonOptionalField string `json:"non_optional_field"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Check required fields
+	expectedRequired := []string{"required_field", "non_optional_field"}
+	if len(result.Required) != len(expectedRequired) {
+		t.Errorf("expected %d required fields, got %d", len(expectedRequired), len(result.Required))
+	}
+
+	for _, expected := range expectedRequired {
+		found := false
+		for _, required := range result.Required {
+			if required == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected field '%s' to be required", expected)
+		}
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_Combined(t *testing.T) {
+	type TestStruct struct {
+		Status string `json:"status" jsonschema:"description=Current status,enum=active,enum=inactive,required"`
+		Count  int    `json:"count,omitempty" jsonschema:"description=Item count,enum=10,enum=20,enum=30"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Check status field
+	statusSchema := result.Properties["status"]
+	if statusSchema.Description != "Current status" {
+		t.Errorf("expected status description 'Current status', got '%s'", statusSchema.Description)
+	}
+	if len(statusSchema.Enum) != 2 {
+		t.Errorf("expected 2 status enum values, got %d", len(statusSchema.Enum))
+	}
+
+	// Check count field
+	countSchema := result.Properties["count"]
+	if countSchema.Description != "Item count" {
+		t.Errorf("expected count description 'Item count', got '%s'", countSchema.Description)
+	}
+	if len(countSchema.Enum) != 3 {
+		t.Errorf("expected 3 count enum values, got %d", len(countSchema.Enum))
+	}
+
+	// Check required fields (only status should be required)
+	if len(result.Required) != 1 || result.Required[0] != "status" {
+		t.Errorf("expected only 'status' to be required, got %v", result.Required)
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_InvalidEnum(t *testing.T) {
+	type TestStruct struct {
+		InvalidInt string `json:"invalid_int" jsonschema:"enum=not_a_number"`
+	}
+
+	// This should continue processing despite the invalid enum error
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Should return a struct schema with properties despite the error
+	if result.Type != "object" {
+		t.Errorf("expected object type, got %s", result.Type)
+	}
+
+	// Should have the field property even with invalid enum
+	if result.Properties["invalid_int"] == nil {
+		t.Errorf("expected invalid_int property to be present")
+	}
+
+	if result.Properties["invalid_int"].Type != "string" {
+		t.Errorf("expected invalid_int to be string type, got %s", result.Properties["invalid_int"].Type)
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_EdgeCases(t *testing.T) {
+	type TestStruct struct {
+		EmptyTag    string `json:"empty_tag" jsonschema:""`
+		OnlyCommas  string `json:"only_commas" jsonschema:",,,"`
+		SimpleTag   string `json:"simple" jsonschema:"description=Test Description,required"`
+		SingleValue string `json:"single" jsonschema:"required"`
+		NoEquals    string `json:"no_equals" jsonschema:"description"`
+	}
+
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Check that description is set correctly without trimming
+	if result.Properties["simple"].Description != "Test Description" {
+		t.Errorf("expected description 'Test Description', got '%s'", result.Properties["simple"].Description)
+	}
+
+	// Check required fields
+	expectedRequired := []string{"simple", "single", "empty_tag", "only_commas", "no_equals"}
+	if len(result.Required) != len(expectedRequired) {
+		t.Errorf("expected %d required fields, got %d", len(expectedRequired), len(result.Required))
+	}
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_UnsupportedEnumType(t *testing.T) {
+	type CustomType struct {
+		Value string
+	}
+
+	type TestStruct struct {
+		Custom CustomType `json:"custom" jsonschema:"enum=value1,enum=value2"`
+	}
+
+	// This should continue processing despite the unsupported enum type error
+	result := itool.GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	// Should return a struct schema with properties despite the error
+	if result.Type != "object" {
+		t.Errorf("expected object type, got %s", result.Type)
+	}
+
+	// Should have the field property even with unsupported enum type
+	if result.Properties["custom"] == nil {
+		t.Errorf("expected custom property to be present")
+	}
+
+	if result.Properties["custom"].Type != "object" {
+		t.Errorf("expected custom to be object type, got %s", result.Properties["custom"].Type)
+	}
+}

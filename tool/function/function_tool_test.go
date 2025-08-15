@@ -25,11 +25,11 @@ import (
 
 func TestFunctionTool_Run_Success(t *testing.T) {
 	type inputArgs struct {
-		A int `json:"A"`
-		B int `json:"B"`
+		A int `json:"A" jsonschema:"description=First integer operand,required"`
+		B int `json:"B" jsonschema:"description=Second integer operand,required"`
 	}
 	type outputArgs struct {
-		Result int `json:"result"`
+		Result int `json:"result" jsonschema:"description=Sum of A and B"`
 	}
 	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
 		return outputArgs{Result: args.A + args.B}, nil
@@ -65,13 +65,13 @@ func toArguments(t *testing.T, v any) json.RawMessage {
 
 // Test input/output types for streaming functions
 type streamTestInput struct {
-	ArticleID int `json:"articleID,omitempty"`
+	ArticleID int `json:"articleID,omitempty" jsonschema:"description=ID of the article to retrieve,enum=0,enum=1,enum=2"`
 }
 
 type streamTestOutput struct {
-	Title     string `json:"title,omitempty"`
-	Body      string `json:"body,omitempty"`
-	Reference string `json:"reference,omitempty"`
+	Title     string `json:"title,omitempty" jsonschema:"description=Title of the article"`
+	Body      string `json:"body,omitempty" jsonschema:"description=Content body of the article"`
+	Reference string `json:"reference,omitempty" jsonschema:"description=Reference URL for the article"`
 }
 
 // Helper function to create a simple streaming function
