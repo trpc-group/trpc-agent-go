@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -48,6 +49,21 @@ func (m *mockSubAgent) SubAgents() []agent.Agent {
 
 func (m *mockSubAgent) FindSubAgent(name string) agent.Agent {
 	return nil
+}
+
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockSubAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockSubAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockSubAgent) Models() []model.Model {
+	return []model.Model{}
 }
 
 func TestTransferTool_Declaration(t *testing.T) {

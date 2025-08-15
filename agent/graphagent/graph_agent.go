@@ -227,6 +227,24 @@ func (ga *GraphAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// SwitchModel implements the agent.Agent interface.
+// Graph agents don't have their own models, so this is a no-op.
+func (ga *GraphAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface.
+// Graph agents don't have their own models, so this returns nil.
+func (ga *GraphAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface.
+// Graph agents don't have their own models, so this returns an empty slice.
+func (ga *GraphAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 // wrapEventChannel wraps the event channel to apply after agent callbacks.
 func (ga *GraphAgent) wrapEventChannel(
 	ctx context.Context,

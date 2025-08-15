@@ -67,6 +67,21 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return events, nil
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestNew(t *testing.T) {
 	agents := map[string]agent.Agent{
 		"test-agent": &mockAgent{name: "test-agent", description: "test description"},

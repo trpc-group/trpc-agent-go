@@ -81,6 +81,21 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := inmemory.NewSessionService()
