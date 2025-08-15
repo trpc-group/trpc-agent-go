@@ -77,18 +77,34 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithNodeType sets the type of the node.
+func WithNodeType(nodeType NodeType) Option {
+	return func(node *Node) {
+		node.Type = nodeType
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
+// This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
 	node := &Node{
 		ID:       id,
 		Name:     id,
 		Function: function,
+		Type:     NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
 	}
 	sg.graph.addNode(node)
+
+	// Automatically set up Pregel-style configuration
+	// Create a trigger channel for this node
+	triggerChannel := fmt.Sprintf("trigger:%s", id)
+	sg.graph.addChannel(triggerChannel, ChannelTypeLastValue)
+	sg.graph.addNodeTriggerChannel(id, triggerChannel)
+
 	return sg
 }
 
@@ -101,7 +117,9 @@ func (sg *StateGraph) AddLLMNode(
 	opts ...Option,
 ) *StateGraph {
 	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools)
-	sg.AddNode(id, llmNodeFunc, opts...)
+	// Add LLM node type option
+	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
+	sg.AddNode(id, llmNodeFunc, llmOpts...)
 	return sg
 }
 
@@ -112,17 +130,36 @@ func (sg *StateGraph) AddToolsNode(
 	opts ...Option,
 ) *StateGraph {
 	toolsNodeFunc := NewToolsNodeFunc(tools)
-	sg.AddNode(id, toolsNodeFunc, opts...)
+	// Add tool node type option
+	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
+	sg.AddNode(id, toolsNodeFunc, toolOpts...)
 	return sg
 }
 
 // AddEdge adds a normal edge between two nodes.
+// This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	edge := &Edge{
 		From: from,
 		To:   to,
 	}
 	sg.graph.addEdge(edge)
+
+	// Automatically set up Pregel-style channel for the edge
+	channelName := fmt.Sprintf("branch:to:%s", to)
+	sg.graph.addChannel(channelName, ChannelTypeLastValue)
+
+	// Set up trigger relationship (node subscribes) and trigger mapping
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+
+	// Add writer to source node
+	writer := channelWriteEntry{
+		Channel: channelName,
+		Value:   channelSignal, // Non-nil sentinel to mark update
+	}
+	sg.graph.addNodeWriter(from, writer)
+
 	return sg
 }
 
@@ -426,8 +463,11 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 			}
 			newMessages = append(newMessages, model.NewToolMessage(id, name, string(content)))
 		}
+		// Append tool result messages to the existing message history instead of replacing it.
+		// This preserves the conversation context and prevents infinite loops.
+		updatedMessages := append(messages, newMessages...)
 		return State{
-			StateKeyMessages: newMessages,
+			StateKeyMessages: updatedMessages,
 		}, nil
 	}
 }

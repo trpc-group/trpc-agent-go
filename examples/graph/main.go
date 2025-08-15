@@ -18,6 +18,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -158,12 +159,17 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
 
 		// Add LLM analyzer node.
 		AddLLMNode("analyze", modelInstance,
-			`You are a document analysis expert. Analyze the provided document and:
-1. Classify the document type and complexity (simple, moderate, complex)
-2. Extract key themes and topics
-3. Assess content quality
-Use the analyze_complexity tool for detailed analysis.
-Respond with a structured analysis including only the complexity level itself: "simple" or "complex".`,
+			`You are a document analysis expert. You MUST use the analyze_complexity tool to analyze the provided document.
+
+IMPORTANT: You are REQUIRED to call the analyze_complexity tool with the document text as input. 
+Do not provide your own analysis without using the tool first.
+
+Steps:
+1. Call the analyze_complexity tool with the document text
+2. Based on the tool's analysis, provide your final complexity assessment
+3. Respond with only the complexity level: "simple", "moderate", or "complex"
+
+You MUST use the tool - this is not optional.`,
 			tools).
 		AddToolsNode("tools", tools).
 
@@ -207,8 +213,9 @@ Remember: only output the final result itself, no other text.`,
 
 	// Add conditional routing for complexity.
 	stateGraph.AddConditionalEdges("route_complexity", w.complexityCondition, map[string]string{
-		complexitySimple:  "enhance",
-		complexityComplex: "summarize",
+		complexitySimple:   "enhance",
+		complexityModerate: "enhance", // Moderate documents also go to enhance
+		complexityComplex:  "summarize",
 	})
 
 	stateGraph.AddEdge("enhance", "format_output")
@@ -254,18 +261,37 @@ func (w *documentWorkflow) complexityCondition(ctx context.Context, state graph.
 	defer func() {
 		state[stateKeyComplexityLevel] = level
 	}()
-	// Check if we have complexity analysis from the analyzer.
+	// First, try to extract complexity from the LLM's response after tool usage.
 	if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
 		responseLower := strings.ToLower(lastResponse)
 		if strings.Contains(responseLower, " complex ") {
 			return complexityComplex, nil
+		} else if strings.Contains(responseLower, " moderate ") {
+			return complexityModerate, nil
+		} else if strings.Contains(responseLower, " simple ") {
+			return complexitySimple, nil
 		}
 	}
-	// Fallback to document length heuristic.
+	// If no complexity found in LLM response, use the tool's analysis result.
+	// The tool result should be in the messages as a tool message.
+	if msgs, ok := state[graph.StateKeyMessages].([]model.Message); ok {
+		for _, msg := range msgs {
+			if msg.Role == model.RoleTool {
+				// Parse the tool result to extract complexity level.
+				var result complexityResult
+				if err := json.Unmarshal([]byte(msg.Content), &result); err == nil {
+					return result.Level, nil
+				}
+			}
+		}
+	}
+	// Final fallback to document length heuristic (should rarely be used).
 	const complexityThreshold = 200
 	if wordCount, ok := state[stateKeyWordCount].(int); ok {
 		if wordCount > complexityThreshold {
 			return complexityComplex, nil
+		} else if wordCount > 50 {
+			return complexityModerate, nil
 		}
 	}
 	return complexitySimple, nil
@@ -331,66 +357,12 @@ func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args complexit
 		level = complexityComplex
 		score = 0.9
 	}
-
 	return complexityResult{
 		Level:         level,
 		Score:         score,
 		WordCount:     wordCount,
 		SentenceCount: sentenceCount,
 	}, nil
-}
-
-// runExamples runs predefined workflow examples.
-func (w *documentWorkflow) runExamples(ctx context.Context) error {
-	examples := []struct {
-		name    string
-		content string
-	}{
-		{
-			name: "Simple Business Report",
-			content: "This quarterly report shows positive growth trends. " +
-				"Revenue increased by 15% compared to last quarter. " +
-				"Customer satisfaction remains high at 92%.",
-		},
-		{
-			name: "Complex Technical Document",
-			content: "The implementation of microservices architecture requires " +
-				"careful consideration of service boundaries, data consistency, " +
-				"and inter-service communication patterns. Key challenges include " +
-				"distributed transaction management, service discovery, and " +
-				"monitoring across multiple services. The proposed solution " +
-				"leverages container orchestration with Kubernetes, implements " +
-				"event-driven architecture using message queues, and establishes " +
-				"comprehensive observability through distributed tracing and " +
-				"centralized logging. Performance benchmarks indicate 40% " +
-				"improvement in scalability and 25% reduction in response times.",
-		},
-		{
-			name: "Research Abstract",
-			content: "This study investigates the impact of artificial intelligence " +
-				"on modern workplace productivity. Through comprehensive analysis " +
-				"of 500 organizations across various industries, we examine the " +
-				"correlation between AI adoption and employee efficiency metrics. " +
-				"Our findings suggest that organizations implementing AI tools " +
-				"experience an average productivity increase of 23%, while also " +
-				"reporting improved job satisfaction among employees who receive " +
-				"adequate training and support during the transition process.",
-		},
-	}
-
-	for _, example := range examples {
-		fmt.Printf("\n🔄 Processing: %s\n", example.name)
-		fmt.Println(strings.Repeat("-", 60))
-
-		if err := w.processDocument(ctx, example.content); err != nil {
-			fmt.Printf("❌ Error processing %s: %v\n", example.name, err)
-			continue
-		}
-
-		fmt.Printf("✅ Completed: %s\n", example.name)
-	}
-
-	return nil
 }
 
 // startInteractiveMode starts the interactive document processing mode.
@@ -458,12 +430,10 @@ func (w *documentWorkflow) processDocument(ctx context.Context, content string) 
 }
 
 // processStreamingResponse handles the streaming workflow response.
-func (w *documentWorkflow) processStreamingResponse(
-	eventChan <-chan *event.Event) error {
+func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
 	var (
 		workflowStarted bool
 		stageCount      int
-		finalResult     string
 	)
 	for event := range eventChan {
 		// Handle errors.
@@ -471,20 +441,40 @@ func (w *documentWorkflow) processStreamingResponse(
 			fmt.Printf("❌ Error: %s\n", event.Error.Message)
 			continue
 		}
-		// Process streaming content.
+		// Track node execution events.
+		if event.Author == graph.AuthorGraphNode {
+			// Try to extract node metadata from StateDelta.
+			if event.StateDelta != nil {
+				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+					var nodeMetadata graph.NodeExecutionMetadata
+					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+						switch nodeMetadata.Phase {
+						case graph.ExecutionPhaseStart:
+							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						case graph.ExecutionPhaseComplete:
+							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						case graph.ExecutionPhaseError:
+							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						}
+					}
+				}
+			}
+		}
+		// Process streaming content from LLM nodes (events with model names as authors).
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				if !workflowStarted {
-					fmt.Print("🤖 Workflow: ")
+					fmt.Print("🤖 LLM Streaming: ")
 					workflowStarted = true
 				}
 				fmt.Print(choice.Delta.Content)
 			}
-			// Store final result if this is a completion.
-			if choice.Message.Content != "" && event.Done {
-				finalResult = choice.Message.Content
+			// Add newline when LLM streaming is complete (when choice is done).
+			if choice.Delta.Content == "" && workflowStarted {
+				fmt.Println()           // Add newline after LLM streaming completes
+				workflowStarted = false // Reset for next LLM node
 			}
 		}
 		// Track workflow stages.
@@ -494,15 +484,13 @@ func (w *documentWorkflow) processStreamingResponse(
 				content := event.Response.Choices[0].Message.Content
 				if content != "" {
 					fmt.Printf("\n🔄 Stage %d completed, %s\n", stageCount, content)
+				} else {
+					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
 				}
 			}
 		}
 		// Handle completion.
 		if event.Done {
-			// Check if we have a final output in the completion message.
-			if finalResult != "" && strings.Contains(finalResult, "DOCUMENT PROCESSING RESULTS") {
-				fmt.Printf("\n\n%s\n", finalResult)
-			}
 			break
 		}
 	}
