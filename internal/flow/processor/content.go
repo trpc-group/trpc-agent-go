@@ -36,13 +36,41 @@ type ContentRequestProcessor struct {
 	// IncludeContents determines how to include content from session events.
 	// Options: "none", "all", "filtered" (default: "all").
 	IncludeContents string
+	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+	// When false, foreign agent events are passed directly without the prefix.
+	AddContextPrefix bool
+}
+
+// ContentOption is a functional option for configuring the ContentRequestProcessor.
+type ContentOption func(*ContentRequestProcessor)
+
+// WithIncludeContents sets how to include content from session events.
+func WithIncludeContents(includeContents string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.IncludeContents = includeContents
+	}
+}
+
+// WithAddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+func WithAddContextPrefix(addPrefix bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.AddContextPrefix = addPrefix
+	}
 }
 
 // NewContentRequestProcessor creates a new content request processor.
-func NewContentRequestProcessor() *ContentRequestProcessor {
-	return &ContentRequestProcessor{
-		IncludeContents: IncludeContentsAll, // Default to include all contents.
+func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
+	processor := &ContentRequestProcessor{
+		IncludeContents:  IncludeContentsAll, // Default to include all contents.
+		AddContextPrefix: true,               // Default to add context prefix.
 	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(processor)
+	}
+
+	return processor
 }
 
 // ProcessRequest implements the flow.RequestProcessor interface.
@@ -201,27 +229,46 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Build content parts for context.
 	var contentParts []string
-	contentParts = append(contentParts, "For context:")
+	if p.AddContextPrefix {
+		contentParts = append(contentParts, "For context:")
+	}
 
 	for _, choice := range evt.Choices {
 		if choice.Message.Content != "" {
-			contentParts = append(contentParts,
-				fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+			if p.AddContextPrefix {
+				contentParts = append(contentParts,
+					fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+			} else {
+				// When prefix is disabled, pass the content directly.
+				contentParts = append(contentParts, choice.Message.Content)
+			}
 		} else if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
-				contentParts = append(contentParts,
-					fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
-						evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				if p.AddContextPrefix {
+					contentParts = append(contentParts,
+						fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
+							evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				} else {
+					// When prefix is disabled, pass tool call info directly.
+					contentParts = append(contentParts,
+						fmt.Sprintf("Tool `%s` called with parameters: %s",
+							toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				}
 			}
 		} else if choice.Message.ToolID != "" {
-			contentParts = append(contentParts,
-				fmt.Sprintf("[%s] `%s` tool returned result: %s",
-					evt.Author, choice.Message.ToolID, choice.Message.Content))
+			if p.AddContextPrefix {
+				contentParts = append(contentParts,
+					fmt.Sprintf("[%s] `%s` tool returned result: %s",
+						evt.Author, choice.Message.ToolID, choice.Message.Content))
+			} else {
+				// When prefix is disabled, pass tool result directly.
+				contentParts = append(contentParts, choice.Message.Content)
+			}
 		}
 	}
 
 	// Set the converted message.
-	if len(contentParts) > 1 {
+	if len(contentParts) > 0 {
 		convertedEvent.Choices = []model.Choice{
 			{
 				Index: 0,

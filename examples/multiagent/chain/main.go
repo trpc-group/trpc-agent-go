@@ -40,6 +40,7 @@ const (
 func main() {
 	// Parse command line flags.
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	disablePrefix := flag.Bool("no-prefix", false, "Disable 'For context:' prefix when passing data between agents")
 	flag.Parse()
 
 	fmt.Printf("🔗 Multi-Agent Chain Demo\n")
@@ -47,11 +48,17 @@ func main() {
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: web_search, knowledge_base\n")
 	fmt.Println("Chain: Planning → Research → Writing")
+	if *disablePrefix {
+		fmt.Println("Note: Context prefix is DISABLED for clean data passing")
+	} else {
+		fmt.Println("Note: Context prefix is ENABLED (use -no-prefix to disable)")
+	}
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
 	chat := &chainChat{
-		modelName: *modelName,
+		modelName:     *modelName,
+		disablePrefix: *disablePrefix,
 	}
 
 	if err := chat.run(); err != nil {
@@ -61,10 +68,11 @@ func main() {
 
 // chainChat manages the multi-agent conversation.
 type chainChat struct {
-	modelName string
-	runner    runner.Runner
-	userID    string
-	sessionID string
+	modelName     string
+	disablePrefix bool
+	runner        runner.Runner
+	userID        string
+	sessionID     string
 }
 
 // run starts the interactive chat session.
@@ -111,6 +119,7 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Analyzes user requests and creates structured plans"),
 		llmagent.WithInstruction("You are a planning specialist. Analyze the user's request and create a brief, structured plan (2-3 steps max). Be concise and specific about what needs to be done. Keep your response under 100 words."),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
 	)
 
 	// Create Research Agent with tools.
@@ -121,6 +130,7 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithInstruction("You are a research specialist. Use the available tools to gather key information. Be concise and fact-based. Keep your response under 150 words."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
+		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
 	)
 
 	// Create Writing Agent.
@@ -130,6 +140,7 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithDescription("Composes final responses based on planning and research"),
 		llmagent.WithInstruction("You are a writing specialist. Create a brief, well-structured response based on the plan and research from previous agents. Be clear and concise. Keep your response under 200 words."),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
 	)
 
 	// Create Chain Agent with sub-agents.
