@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -225,6 +222,15 @@ func WithTimeFormat(timeFormat string) Option {
 	}
 }
 
+// WithAddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+// When false, foreign agent events are passed directly without the prefix.
+// This is useful for chain agents where you want to pass formatted data between agents.
+func WithAddContextPrefix(addPrefix bool) Option {
+	return func(opts *Options) {
+		opts.AddContextPrefix = addPrefix
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -283,6 +289,9 @@ type Options struct {
 	// When this is set, the agent's input will be validated against this schema
 	// when used as a tool or when receiving input from other agents.
 	InputSchema map[string]interface{}
+	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+	// When false, foreign agent events are passed directly without the prefix.
+	AddContextPrefix bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -362,7 +371,9 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// 6. Content processor - handles messages from invocation.
-	contentProcessor := processor.NewContentRequestProcessor()
+	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithAddContextPrefix(options.AddContextPrefix),
+	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	// Prepare response processors.
