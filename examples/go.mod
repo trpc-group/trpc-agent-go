@@ -19,12 +19,12 @@ require (
 	go.opentelemetry.io/otel/metric v1.37.0
 	go.opentelemetry.io/otel/trace v1.37.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.1
-	trpc.group/trpc-go/trpc-agent-go v0.0.2
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.2
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.2
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.2-0.20250807061029-66942a6b44d9
-	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd
+	trpc.group/trpc-go/trpc-agent-go v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
+	trpc.group/trpc-go/trpc-mcp-go v0.0.1
 )
 
 require (
