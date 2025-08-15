@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -238,7 +239,7 @@ func (e *Executor) initializeChannels(state State) {
 	// Create input channels for each state key.
 	for key := range state {
 		channelName := fmt.Sprintf("input:%s", key)
-		e.graph.addChannel(channelName, ChannelTypeLastValue)
+		e.graph.addChannel(channelName, channel.TypeLastValue)
 
 		channel, _ := e.graph.getChannel(channelName)
 		if channel != nil {
@@ -572,24 +573,24 @@ func (e *Executor) handleCommandRouting(
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
 
 	// Write to the channel to trigger the target node.
-	channel, _ := e.graph.getChannel(triggerChannel)
-	if channel != nil {
-		channel.Update([]any{channelSignal})
+	ch, _ := e.graph.getChannel(triggerChannel)
+	if ch != nil {
+		ch.Update([]any{channelSignal})
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(execCtx, triggerChannel, ChannelTypeLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(execCtx, triggerChannel, channel.TypeLastValue, []string{targetNode})
 }
 
 // processChannelWrites processes the channel writes for a task.
 func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []channelWriteEntry) {
 	for _, write := range writes {
-		channel, _ := e.graph.getChannel(write.Channel)
-		if channel != nil {
-			channel.Update([]any{write.Value})
+		ch, _ := e.graph.getChannel(write.Channel)
+		if ch != nil {
+			ch.Update([]any{write.Value})
 
 			// Emit channel update event.
-			e.emitChannelUpdateEvent(execCtx, write.Channel, channel.Type, e.getTriggeredNodes(write.Channel))
+			e.emitChannelUpdateEvent(execCtx, write.Channel, ch.Type, e.getTriggeredNodes(write.Channel))
 		}
 	}
 }
@@ -598,7 +599,7 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 func (e *Executor) emitChannelUpdateEvent(
 	execCtx *ExecutionContext,
 	channelName string,
-	channelType ChannelType,
+	channelType channel.Type,
 	triggeredNodes []string,
 ) {
 	if execCtx.EventChan == nil {
@@ -751,14 +752,14 @@ func (e *Executor) processConditionalResult(
 
 	// Create and trigger the target channel.
 	channelName := fmt.Sprintf("branch:to:%s", target)
-	e.graph.addChannel(channelName, ChannelTypeLastValue)
+	e.graph.addChannel(channelName, channel.TypeLastValue)
 	e.graph.addNodeTrigger(channelName, target)
 
 	// Trigger the target by writing to the channel.
-	channel, ok := e.graph.getChannel(channelName)
-	if ok && channel != nil {
-		channel.Update([]any{channelSignal})
-		e.emitChannelUpdateEvent(execCtx, channelName, ChannelTypeLastValue, []string{target})
+	ch, ok := e.graph.getChannel(channelName)
+	if ok && ch != nil {
+		ch.Update([]any{channelSignal})
+		e.emitChannelUpdateEvent(execCtx, channelName, channel.TypeLastValue, []string{target})
 	} else {
 		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
 	}

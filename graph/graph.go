@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 )
 
 // Special node identifiers for graph routing.
@@ -115,7 +116,7 @@ type Graph struct {
 	conditionalEdges map[string]*ConditionalEdge
 	entryPoint       string
 	// Pregel-style extensions
-	channelManager *ChannelManager
+	channelManager *channel.Manager
 	triggerToNodes map[string][]string // Maps channel names to nodes that are triggered
 }
 
@@ -130,7 +131,7 @@ func New(schema *StateSchema) *Graph {
 		nodes:            make(map[string]*Node),
 		edges:            make(map[string][]*Edge),
 		conditionalEdges: make(map[string]*ConditionalEdge),
-		channelManager:   NewChannelManager(),
+		channelManager:   channel.NewChannelManager(),
 		triggerToNodes:   make(map[string][]string),
 	}
 }
@@ -314,17 +315,17 @@ func (g *Graph) setEntryPoint(nodeID string) error {
 // Pregel-style methods
 
 // addChannel adds a channel to the graph.
-func (g *Graph) addChannel(name string, channelType ChannelType) {
+func (g *Graph) addChannel(name string, channelType channel.Type) {
 	g.channelManager.AddChannel(name, channelType)
 }
 
 // getChannel retrieves a channel by name.
-func (g *Graph) getChannel(name string) (*Channel, bool) {
+func (g *Graph) getChannel(name string) (*channel.Channel, bool) {
 	return g.channelManager.GetChannel(name)
 }
 
 // getAllChannels returns all channels in the graph.
-func (g *Graph) getAllChannels() map[string]*Channel {
+func (g *Graph) getAllChannels() map[string]*channel.Channel {
 	return g.channelManager.GetAllChannels()
 }
 

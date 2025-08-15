@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -102,7 +103,7 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 	// Automatically set up Pregel-style configuration
 	// Create a trigger channel for this node
 	triggerChannel := fmt.Sprintf("trigger:%s", id)
-	sg.graph.addChannel(triggerChannel, ChannelTypeLastValue)
+	sg.graph.addChannel(triggerChannel, channel.TypeLastValue)
 	sg.graph.addNodeTriggerChannel(id, triggerChannel)
 
 	return sg
@@ -147,7 +148,7 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 
 	// Automatically set up Pregel-style channel for the edge
 	channelName := fmt.Sprintf("branch:to:%s", to)
-	sg.graph.addChannel(channelName, ChannelTypeLastValue)
+	sg.graph.addChannel(channelName, channel.TypeLastValue)
 
 	// Set up trigger relationship (node subscribes) and trigger mapping
 	sg.graph.addNodeTriggerChannel(to, channelName)

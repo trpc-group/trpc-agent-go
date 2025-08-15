@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -172,7 +173,7 @@ type ChannelUpdateMetadata struct {
 	// ChannelName is the name of the channel.
 	ChannelName string `json:"channelName"`
 	// ChannelType is the type of the channel.
-	ChannelType ChannelType `json:"channelType"`
+	ChannelType channel.Type `json:"channelType"`
 	// ValueCount is the number of values in the channel.
 	ValueCount int `json:"valueCount"`
 	// Available indicates if the channel is available.
@@ -461,7 +462,7 @@ func WithPregelEventError(errMsg string) PregelEventOption {
 type ChannelEventOptions struct {
 	InvocationID   string
 	ChannelName    string
-	ChannelType    ChannelType
+	ChannelType    channel.Type
 	ValueCount     int
 	Available      bool
 	TriggeredNodes []string
@@ -485,7 +486,7 @@ func WithChannelEventChannelName(channelName string) ChannelEventOption {
 }
 
 // WithChannelEventChannelType sets the channel type for channel events.
-func WithChannelEventChannelType(channelType ChannelType) ChannelEventOption {
+func WithChannelEventChannelType(channelType channel.Type) ChannelEventOption {
 	return func(opts *ChannelEventOptions) {
 		opts.ChannelType = channelType
 	}
