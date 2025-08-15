@@ -50,14 +50,14 @@ The model switching implementation works by:
 ### Using default values:
 
 ```bash
-cd examples/modelswitching
+cd examples/model/switching
 go run main.go
 ```
 
 ### Using custom default model:
 
 ```bash
-cd examples/modelswitching
+cd examples/model/switching
 go run main.go -model gpt-4o
 ```
 
@@ -67,7 +67,7 @@ go run main.go -model gpt-4o
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
-cd examples/modelswitching
+cd examples/model/switching
 go run main.go -model gpt-4o-mini
 ```
 
