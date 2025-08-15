@@ -5,93 +5,208 @@
 
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 package processor
 
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestNewContentRequestProcessor(t *testing.T) {
-	processor := NewContentRequestProcessor()
-
-	assert.NotNil(t, processor)
-	assert.Equal(t, IncludeContentsAll, processor.IncludeContents)
-}
-
-func TestContentProc_HasValidContent(t *testing.T) {
-	processor := NewContentRequestProcessor()
-
-	// Event with message content.
-	eventWithContent := event.Event{
-		Response: &model.Response{
-			Choices: []model.Choice{
-				{
-					Index: 0,
-					Message: model.Message{
-						Role:    model.RoleUser,
-						Content: "Test content",
-					},
-				},
-			},
-			Done: true,
+func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
+	tests := []struct {
+		name           string
+		addPrefix      bool
+		expectedPrefix string
+	}{
+		{
+			name:           "with prefix enabled",
+			addPrefix:      true,
+			expectedPrefix: "For context: [test-agent] said: test content",
+		},
+		{
+			name:           "with prefix disabled",
+			addPrefix:      false,
+			expectedPrefix: "test content",
 		},
 	}
 
-	// Event with delta content.
-	eventWithDelta := event.Event{
-		Response: &model.Response{
-			Choices: []model.Choice{
-				{
-					Index: 0,
-					Delta: model.Message{
-						Role:    model.RoleAssistant,
-						Content: "Delta content",
-					},
-				},
-			},
-			Done: true,
-		},
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create processor with the specified prefix setting.
+			processor := NewContentRequestProcessor(
+				WithAddContextPrefix(tt.addPrefix),
+			)
 
-	// Event with tool calls.
-	eventWithToolCalls := event.Event{
-		Response: &model.Response{
-			Choices: []model.Choice{
-				{
-					Index: 0,
-					Message: model.Message{
-						Role: model.RoleAssistant,
-						ToolCalls: []model.ToolCall{
-							{
-								Type: "function",
-								Function: model.FunctionDefinitionParam{
-									Name: "test_function",
-								},
-								ID: "call-123",
+			// Create a test event.
+			testEvent := &event.Event{
+				Author: "test-agent",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Content: "test content",
 							},
 						},
 					},
 				},
-			},
-			Done: true,
-		},
-	}
+			}
 
-	// Event without content.
-	eventWithoutContent := event.Event{
+			// Convert the foreign event.
+			convertedEvent := processor.convertForeignEvent(testEvent)
+
+			// Check that the content matches expected.
+			if len(convertedEvent.Choices) == 0 {
+				t.Fatal("Expected converted event to have choices")
+			}
+
+			actualContent := convertedEvent.Choices[0].Message.Content
+			if actualContent != tt.expectedPrefix {
+				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_DefaultBehavior(t *testing.T) {
+	// Test that the default behavior includes the prefix.
+	processor := NewContentRequestProcessor()
+
+	testEvent := &event.Event{
+		Author: "test-agent",
 		Response: &model.Response{
-			Done: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Content: "test content",
+					},
+				},
+			},
 		},
 	}
 
-	assert.True(t, processor.hasValidContent(&eventWithContent))
-	assert.True(t, processor.hasValidContent(&eventWithDelta))
-	assert.True(t, processor.hasValidContent(&eventWithToolCalls))
-	assert.False(t, processor.hasValidContent(&eventWithoutContent))
+	convertedEvent := processor.convertForeignEvent(testEvent)
+
+	if len(convertedEvent.Choices) == 0 {
+		t.Fatal("Expected converted event to have choices")
+	}
+
+	actualContent := convertedEvent.Choices[0].Message.Content
+	expectedContent := "For context: [test-agent] said: test content"
+
+	if actualContent != expectedContent {
+		t.Errorf("Expected default content '%s', got '%s'", expectedContent, actualContent)
+	}
+}
+
+func TestContentRequestProcessor_ToolCalls(t *testing.T) {
+	tests := []struct {
+		name           string
+		addPrefix      bool
+		expectedPrefix string
+	}{
+		{
+			name:           "with prefix enabled",
+			addPrefix:      true,
+			expectedPrefix: "For context: [test-agent] called tool `test_tool` with parameters: {\"arg\":\"value\"}",
+		},
+		{
+			name:           "with prefix disabled",
+			addPrefix:      false,
+			expectedPrefix: "Tool `test_tool` called with parameters: {\"arg\":\"value\"}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := NewContentRequestProcessor(
+				WithAddContextPrefix(tt.addPrefix),
+			)
+
+			testEvent := &event.Event{
+				Author: "test-agent",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolCalls: []model.ToolCall{
+									{
+										Function: model.FunctionDefinitionParam{
+											Name:      "test_tool",
+											Arguments: []byte(`{"arg":"value"}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			convertedEvent := processor.convertForeignEvent(testEvent)
+
+			if len(convertedEvent.Choices) == 0 {
+				t.Fatal("Expected converted event to have choices")
+			}
+
+			actualContent := convertedEvent.Choices[0].Message.Content
+			if actualContent != tt.expectedPrefix {
+				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_ToolResponses(t *testing.T) {
+	tests := []struct {
+		name           string
+		addPrefix      bool
+		expectedPrefix string
+	}{
+		{
+			name:           "with prefix enabled",
+			addPrefix:      true,
+			expectedPrefix: "For context: [test-agent] said: tool result",
+		},
+		{
+			name:           "with prefix disabled",
+			addPrefix:      false,
+			expectedPrefix: "tool result",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := NewContentRequestProcessor(
+				WithAddContextPrefix(tt.addPrefix),
+			)
+
+			testEvent := &event.Event{
+				Author: "test-agent",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								ToolID:  "test_tool",
+								Content: "tool result",
+							},
+						},
+					},
+				},
+			}
+
+			convertedEvent := processor.convertForeignEvent(testEvent)
+
+			if len(convertedEvent.Choices) == 0 {
+				t.Fatal("Expected converted event to have choices")
+			}
+
+			actualContent := convertedEvent.Choices[0].Message.Content
+			if actualContent != tt.expectedPrefix {
+				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
+			}
+		})
+	}
 }

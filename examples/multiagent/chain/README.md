@@ -19,6 +19,7 @@ User Input → Planning Agent → Research Agent → Writing Agent → Response
 - 🔧 Tool integration (simulated web search and knowledge base)
 - 📊 Visual agent indicators
 - 💾 Session management
+- 🔧 Configurable context prefix (enabled by default, can be disabled with `-no-prefix`)
 
 ## Prerequisites
 
@@ -37,6 +38,7 @@ go run main.go
 
 ```bash
 go run main.go -model gpt-4o  # Use specific model
+go run main.go -no-prefix     # Disable context prefix for clean data passing
 ```
 
 ## Example Session
@@ -72,6 +74,21 @@ Chain: Planning → Research → Writing
 | `OPENAI_API_KEY` | Yes | - |
 | `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` |
 
+## Context Prefix Control
+
+By default, when AgentA's output is passed to AgentB, it includes a prefix like "For context: [agent A] said: ". This can be useful for clarity but may interfere with structured data formats.
+
+To disable this prefix for clean data passing between agents, use the `-no-prefix` flag:
+
+```bash
+go run main.go -no-prefix
+```
+
+This is particularly useful when:
+- Passing JSON or structured data between agents
+- Agents need to parse each other's output in specific formats
+- You want to minimize context noise in the conversation
+
 ## Customization
 
 Modify the chain by:
@@ -79,4 +96,5 @@ Modify the chain by:
 - Changing agent instructions and prompts
 - Adding new tools for research agent
 - Adjusting model parameters
+- Controlling context prefix behavior
  
