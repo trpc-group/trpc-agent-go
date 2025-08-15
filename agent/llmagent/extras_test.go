@@ -84,6 +84,9 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	close(ch)
 	return ch, nil
 }
+func (m *mockAgent) SwitchModel(name string) error { return nil }
+func (m *mockAgent) ActiveModel() model.Model      { return nil }
+func (m *mockAgent) Models() []model.Model         { return nil }
 
 func TestLLMAgent_ToolsAddsTransfer(t *testing.T) {
 	coreTool := &mockTool{name: "core"}

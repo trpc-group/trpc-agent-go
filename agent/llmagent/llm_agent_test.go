@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -252,4 +253,98 @@ func TestLLMAgent_WithKnowledge(t *testing.T) {
 			break
 		}
 	}
+}
+
+// mockModel implements the Model interface for testing.
+type mockModel struct {
+	name string
+}
+
+func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+	// Mock implementation for testing.
+	return nil, nil
+}
+
+func (m *mockModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func TestWithModels_Validation(t *testing.T) {
+	// Test valid models.
+	validModel := &mockModel{name: "valid"}
+	validModel2 := &mockModel{name: "valid2"}
+
+	// Should not panic with valid models.
+	agent := New("test-agent", WithModels(validModel, validModel2))
+	assert.NotNil(t, agent)
+	assert.NotNil(t, agent.ActiveModel())
+	assert.Equal(t, 2, len(agent.Models()))
+}
+
+func TestWithModels_NilDefaultModel(t *testing.T) {
+	// Test with nil default model - should handle gracefully.
+	validModel := &mockModel{name: "valid"}
+
+	// Should not panic, but may result in unexpected behavior.
+	agent := New("test-agent", WithModels(nil, validModel))
+	assert.NotNil(t, agent)
+	// When default model is nil, manager is created but activeModel is nil
+	assert.Nil(t, agent.ActiveModel())
+	assert.Equal(t, 1, len(agent.Models())) // Only additional models
+}
+
+func TestWithModels_EmptyDefaultModelName(t *testing.T) {
+	// Test with empty default model name - should handle gracefully.
+	emptyNameModel := &mockModel{name: ""}
+	validModel := &mockModel{name: "valid"}
+
+	// Should not panic, but may result in unexpected behavior.
+	agent := New("test-agent", WithModels(emptyNameModel, validModel))
+	assert.NotNil(t, agent)
+	// When default model has empty name, manager is created but activeModel is the empty name model
+	assert.Equal(t, emptyNameModel, agent.ActiveModel())
+	assert.Equal(t, 1, len(agent.Models())) // Only additional models
+}
+
+func TestWithModels_NilAdditionalModel(t *testing.T) {
+	// Test with nil additional model - should be filtered out.
+	validModel := &mockModel{name: "valid"}
+
+	// Should not panic, nil models should be filtered out.
+	agent := New("test-agent", WithModels(validModel, nil))
+	assert.NotNil(t, agent)
+	assert.Equal(t, 1, len(agent.Models())) // Only default model
+}
+
+func TestWithModels_EmptyAdditionalModelName(t *testing.T) {
+	// Test with empty additional model name - should be filtered out.
+	validModel := &mockModel{name: "valid"}
+	emptyNameModel := &mockModel{name: ""}
+
+	// Should not panic, empty name models should be filtered out.
+	agent := New("test-agent", WithModels(validModel, emptyNameModel))
+	assert.NotNil(t, agent)
+	assert.Equal(t, 1, len(agent.Models())) // Only default model
+}
+
+func TestWithModels_MultipleNilModels(t *testing.T) {
+	// Test with multiple nil models at different indices - should be filtered out.
+	validModel := &mockModel{name: "valid"}
+	validModel2 := &mockModel{name: "valid2"}
+
+	// Should not panic, nil models should be filtered out.
+	agent := New("test-agent", WithModels(validModel, validModel2, nil))
+	assert.NotNil(t, agent)
+	assert.Equal(t, 2, len(agent.Models())) // Only valid models
+}
+
+func TestWithModels_MultipleEmptyNameModels(t *testing.T) {
+	// Test with multiple empty name models at different indices - should be filtered out.
+	validModel := &mockModel{name: "valid"}
+	emptyNameModel := &mockModel{name: ""}
+
+	// Should not panic, empty name models should be filtered out.
+	agent := New("test-agent", WithModels(validModel, validModel, emptyNameModel))
+	assert.NotNil(t, agent)
+	assert.Equal(t, 1, len(agent.Models())) // Only valid models (empty name model is filtered out)
 }
