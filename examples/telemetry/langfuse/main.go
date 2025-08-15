@@ -32,8 +32,8 @@ import (
 
 func main() {
 	// https://langfuse.com/integrations/native/opentelemetry
-	langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "sk-lf-c3d93ca5-dbc1-41cd-8b9c-4b29781f620e")
-	langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "pk-lf-a3e8b2fe-074a-4afa-a215-b9b1e11e69c5")
+	langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "your-secret-key")
+	langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "your-public-key")
 	langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
 	otelEndpointPath := "/api/public/otel/v1/traces"
 
