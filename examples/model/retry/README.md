@@ -60,14 +60,14 @@ The OpenAI client automatically retries on:
 ### Using default values:
 
 ```bash
-cd examples/modelretry
+cd examples/model/retry
 go run main.go
 ```
 
 ### Using custom configuration:
 
 ```bash
-cd examples/modelretry
+cd examples/model/retry
 go run main.go -model gpt-4 -retries 5 -timeout 60s
 ```
 
@@ -77,14 +77,14 @@ go run main.go -model gpt-4 -retries 5 -timeout 60s
 export OPENAI_API_KEY="your-api-key-here"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 
-cd examples/modelretry
+cd examples/model/retry
 go run main.go -model gpt-4o-mini -retries 3 -timeout 30s
 ```
 
 ### Using environment variables inline:
 
 ```bash
-cd examples/modelretry
+cd examples/model/retry
 OPENAI_API_KEY="your-api-key" OPENAI_BASE_URL="https://api.openai.com/v1" go run main.go -model gpt-4o-mini
 ```
 
