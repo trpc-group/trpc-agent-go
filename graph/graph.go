@@ -27,9 +27,6 @@ const (
 	End = "__end__"
 )
 
-// channelSignal value for marking channel updates.
-const channelSignal = "signal"
-
 // Error types for graph execution.
 const (
 	ErrorTypeGraphExecution  = "graph_execution_error"

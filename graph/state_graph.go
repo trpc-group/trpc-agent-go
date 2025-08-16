@@ -134,6 +134,9 @@ func (sg *StateGraph) AddToolsNode(
 	return sg
 }
 
+// channelUpdateMarker value for marking channel updates.
+const channelUpdateMarker = "update"
+
 // AddEdge adds a normal edge between two nodes.
 // This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
@@ -142,22 +145,18 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 		To:   to,
 	}
 	sg.graph.addEdge(edge)
-
-	// Automatically set up Pregel-style channel for the edge
+	// Automatically set up Pregel-style channel for the edge.
 	channelName := fmt.Sprintf("branch:to:%s", to)
 	sg.graph.addChannel(channelName, channel.BehaviorLastValue)
-
-	// Set up trigger relationship (node subscribes) and trigger mapping
+	// Set up trigger relationship (node subscribes) and trigger mapping.
 	sg.graph.addNodeTriggerChannel(to, channelName)
 	sg.graph.addNodeTrigger(channelName, to)
-
-	// Add writer to source node
+	// Add writer to source node.
 	writer := channelWriteEntry{
 		Channel: channelName,
-		Value:   channelSignal, // Non-nil sentinel to mark update
+		Value:   channelUpdateMarker, // Non-nil sentinel to mark update.
 	}
 	sg.graph.addNodeWriter(from, writer)
-
 	return sg
 }
 

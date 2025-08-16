@@ -576,7 +576,7 @@ func (e *Executor) handleCommandRouting(
 	// Write to the channel to trigger the target node.
 	ch, _ := e.graph.getChannel(triggerChannel)
 	if ch != nil {
-		ch.Update([]any{channelSignal})
+		ch.Update([]any{channelUpdateMarker})
 	}
 
 	// Emit channel update event.
@@ -759,7 +759,7 @@ func (e *Executor) processConditionalResult(
 	// Trigger the target by writing to the channel.
 	ch, ok := e.graph.getChannel(channelName)
 	if ok && ch != nil {
-		ch.Update([]any{channelSignal})
+		ch.Update([]any{channelUpdateMarker})
 		e.emitChannelUpdateEvent(execCtx, channelName, channel.BehaviorLastValue, []string{target})
 	} else {
 		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
