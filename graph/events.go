@@ -65,6 +65,10 @@ const (
 	MetadataKeyState = "_state_metadata"
 	// MetadataKeyCompletion is the key for completion metadata.
 	MetadataKeyCompletion = "_completion_metadata"
+	// MetadataKeyTool is the key for tool execution metadata.
+	MetadataKeyTool = "_tool_metadata"
+	// MetadataKeyModel is the key for model execution metadata.
+	MetadataKeyModel = "_model_metadata"
 )
 
 // NodeType represents the type of a graph node.
@@ -97,6 +101,36 @@ const (
 // String returns the string representation of the execution phase.
 func (ep ExecutionPhase) String() string {
 	return string(ep)
+}
+
+// ToolExecutionPhase represents the phase of tool execution.
+type ToolExecutionPhase string
+
+// Tool execution phase constants.
+const (
+	ToolExecutionPhaseStart    ToolExecutionPhase = "start"
+	ToolExecutionPhaseComplete ToolExecutionPhase = "complete"
+	ToolExecutionPhaseError    ToolExecutionPhase = "error"
+)
+
+// String returns the string representation of the tool execution phase.
+func (tep ToolExecutionPhase) String() string {
+	return string(tep)
+}
+
+// ModelExecutionPhase represents the phase of model execution.
+type ModelExecutionPhase string
+
+// Model execution phase constants.
+const (
+	ModelExecutionPhaseStart    ModelExecutionPhase = "start"
+	ModelExecutionPhaseComplete ModelExecutionPhase = "complete"
+	ModelExecutionPhaseError    ModelExecutionPhase = "error"
+)
+
+// String returns the string representation of the model execution phase.
+func (mep ModelExecutionPhase) String() string {
+	return string(mep)
 }
 
 // PregelPhase represents the phase of Pregel execution.
@@ -140,6 +174,58 @@ type NodeExecutionMetadata struct {
 	ToolCalls []model.ToolCall `json:"toolCalls,omitempty"`
 	// ModelName contains the model name for LLM nodes.
 	ModelName string `json:"modelName,omitempty"`
+	// ModelInput contains the input sent to LLM nodes.
+	ModelInput string `json:"modelInput,omitempty"`
+	// StepNumber is the Pregel step number.
+	StepNumber int `json:"stepNumber,omitempty"`
+}
+
+// ToolExecutionMetadata contains metadata about tool execution.
+type ToolExecutionMetadata struct {
+	// ToolName is the name of the tool being executed.
+	ToolName string `json:"toolName"`
+	// ToolID is the unique identifier of the tool call.
+	ToolID string `json:"toolId"`
+	// Phase is the execution phase.
+	Phase ToolExecutionPhase `json:"phase"`
+	// StartTime is when the execution started.
+	StartTime time.Time `json:"startTime,omitempty"`
+	// EndTime is when the execution completed.
+	EndTime time.Time `json:"endTime,omitempty"`
+	// Duration is the execution duration.
+	Duration time.Duration `json:"duration,omitempty"`
+	// Input contains the tool input arguments.
+	Input string `json:"input,omitempty"`
+	// Output contains the tool output result.
+	Output string `json:"output,omitempty"`
+	// Error is the error message if execution failed.
+	Error string `json:"error,omitempty"`
+	// InvocationID is the invocation ID.
+	InvocationID string `json:"invocationId,omitempty"`
+}
+
+// ModelExecutionMetadata contains metadata about model execution.
+type ModelExecutionMetadata struct {
+	// ModelName is the name of the model being executed.
+	ModelName string `json:"modelName"`
+	// NodeID is the unique identifier of the node.
+	NodeID string `json:"nodeId"`
+	// Phase is the execution phase.
+	Phase ModelExecutionPhase `json:"phase"`
+	// StartTime is when the execution started.
+	StartTime time.Time `json:"startTime,omitempty"`
+	// EndTime is when the execution completed.
+	EndTime time.Time `json:"endTime,omitempty"`
+	// Duration is the execution duration.
+	Duration time.Duration `json:"duration,omitempty"`
+	// Input contains the model input (messages or prompt).
+	Input string `json:"input,omitempty"`
+	// Output contains the final model output result.
+	Output string `json:"output,omitempty"`
+	// Error is the error message if execution failed.
+	Error string `json:"error,omitempty"`
+	// InvocationID is the invocation ID.
+	InvocationID string `json:"invocationId,omitempty"`
 	// StepNumber is the Pregel step number.
 	StepNumber int `json:"stepNumber,omitempty"`
 }
@@ -202,6 +288,10 @@ type JSONMetadata struct {
 	State *StateUpdateMetadata `json:"state,omitempty"`
 	// Completion metadata for completion events.
 	Completion *CompletionMetadata `json:"completion,omitempty"`
+	// Tool metadata for tool execution events.
+	Tool *ToolExecutionMetadata `json:"tool,omitempty"`
+	// Model metadata for model execution events.
+	Model *ModelExecutionMetadata `json:"model,omitempty"`
 }
 
 // CompletionMetadata contains metadata about graph completion.
@@ -220,13 +310,41 @@ type EventOption func(*event.Event)
 // WithNodeMetadata adds node execution metadata to the event.
 func WithNodeMetadata(metadata NodeExecutionMetadata) EventOption {
 	return func(e *event.Event) {
-		// Store metadata in StateDelta as JSON
+		// Store metadata in StateDelta as JSON.
 		if e.StateDelta == nil {
 			e.StateDelta = make(map[string][]byte)
 		}
-		// Marshal metadata to JSON
+		// Marshal metadata to JSON.
 		if jsonData, err := json.Marshal(metadata); err == nil {
 			e.StateDelta[MetadataKeyNode] = jsonData
+		}
+	}
+}
+
+// WithToolMetadata adds tool execution metadata to the event.
+func WithToolMetadata(metadata ToolExecutionMetadata) EventOption {
+	return func(e *event.Event) {
+		// Store metadata in StateDelta as JSON.
+		if e.StateDelta == nil {
+			e.StateDelta = make(map[string][]byte)
+		}
+		// Marshal metadata to JSON.
+		if jsonData, err := json.Marshal(metadata); err == nil {
+			e.StateDelta[MetadataKeyTool] = jsonData
+		}
+	}
+}
+
+// WithModelMetadata adds model execution metadata to the event.
+func WithModelMetadata(metadata ModelExecutionMetadata) EventOption {
+	return func(e *event.Event) {
+		// Store metadata in StateDelta as JSON.
+		if e.StateDelta == nil {
+			e.StateDelta = make(map[string][]byte)
+		}
+		// Marshal metadata to JSON.
+		if jsonData, err := json.Marshal(metadata); err == nil {
+			e.StateDelta[MetadataKeyModel] = jsonData
 		}
 	}
 }
@@ -234,11 +352,11 @@ func WithNodeMetadata(metadata NodeExecutionMetadata) EventOption {
 // WithPregelMetadata adds Pregel step metadata to the event.
 func WithPregelMetadata(metadata PregelStepMetadata) EventOption {
 	return func(e *event.Event) {
-		// Store metadata in StateDelta as JSON
+		// Store metadata in StateDelta as JSON.
 		if e.StateDelta == nil {
 			e.StateDelta = make(map[string][]byte)
 		}
-		// Marshal metadata to JSON
+		// Marshal metadata to JSON.
 		if jsonData, err := json.Marshal(metadata); err == nil {
 			e.StateDelta[MetadataKeyPregel] = jsonData
 		}
@@ -248,11 +366,11 @@ func WithPregelMetadata(metadata PregelStepMetadata) EventOption {
 // WithChannelMetadata adds channel update metadata to the event.
 func WithChannelMetadata(metadata ChannelUpdateMetadata) EventOption {
 	return func(e *event.Event) {
-		// Store metadata in StateDelta as JSON
+		// Store metadata in StateDelta as JSON.
 		if e.StateDelta == nil {
 			e.StateDelta = make(map[string][]byte)
 		}
-		// Marshal metadata to JSON
+		// Marshal metadata to JSON.
 		if jsonData, err := json.Marshal(metadata); err == nil {
 			e.StateDelta[MetadataKeyChannel] = jsonData
 		}
@@ -262,11 +380,11 @@ func WithChannelMetadata(metadata ChannelUpdateMetadata) EventOption {
 // WithStateMetadata adds state update metadata to the event.
 func WithStateMetadata(metadata StateUpdateMetadata) EventOption {
 	return func(e *event.Event) {
-		// Store metadata in StateDelta as JSON
+		// Store metadata in StateDelta as JSON.
 		if e.StateDelta == nil {
 			e.StateDelta = make(map[string][]byte)
 		}
-		// Marshal metadata to JSON
+		// Marshal metadata to JSON.
 		if jsonData, err := json.Marshal(metadata); err == nil {
 			e.StateDelta[MetadataKeyState] = jsonData
 		}
@@ -294,11 +412,45 @@ type NodeEventOptions struct {
 	OutputKeys   []string
 	ToolCalls    []model.ToolCall
 	ModelName    string
+	ModelInput   string
 	Error        string
 }
 
 // NodeEventOption is a function that configures node event options.
 type NodeEventOption func(*NodeEventOptions)
+
+// ToolEventOptions contains options for creating tool events.
+type ToolEventOptions struct {
+	InvocationID string
+	ToolName     string
+	ToolID       string
+	Phase        ToolExecutionPhase
+	StartTime    time.Time
+	EndTime      time.Time
+	Input        string
+	Output       string
+	Error        error
+}
+
+// ToolEventOption is a function that configures tool event options.
+type ToolEventOption func(*ToolEventOptions)
+
+// ModelEventOptions contains options for creating model events.
+type ModelEventOptions struct {
+	InvocationID string
+	ModelName    string
+	NodeID       string
+	Phase        ModelExecutionPhase
+	StartTime    time.Time
+	EndTime      time.Time
+	Input        string
+	Output       string
+	Error        error
+	StepNumber   int
+}
+
+// ModelEventOption is a function that configures model event options.
+type ModelEventOption func(*ModelEventOptions)
 
 // WithNodeEventInvocationID sets the invocation ID for node events.
 func WithNodeEventInvocationID(invocationID string) NodeEventOption {
@@ -370,10 +522,154 @@ func WithNodeEventModelName(modelName string) NodeEventOption {
 	}
 }
 
+// WithNodeEventModelInput sets the model input for node events.
+func WithNodeEventModelInput(modelInput string) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.ModelInput = modelInput
+	}
+}
+
 // WithNodeEventError sets the error message for node events.
 func WithNodeEventError(errMsg string) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithToolEventInvocationID sets the invocation ID for tool events.
+func WithToolEventInvocationID(invocationID string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.InvocationID = invocationID
+	}
+}
+
+// WithToolEventToolName sets the tool name for tool events.
+func WithToolEventToolName(toolName string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.ToolName = toolName
+	}
+}
+
+// WithToolEventToolID sets the tool ID for tool events.
+func WithToolEventToolID(toolID string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.ToolID = toolID
+	}
+}
+
+// WithToolEventPhase sets the phase for tool events.
+func WithToolEventPhase(phase ToolExecutionPhase) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.Phase = phase
+	}
+}
+
+// WithToolEventStartTime sets the start time for tool events.
+func WithToolEventStartTime(startTime time.Time) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.StartTime = startTime
+	}
+}
+
+// WithToolEventEndTime sets the end time for tool events.
+func WithToolEventEndTime(endTime time.Time) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.EndTime = endTime
+	}
+}
+
+// WithToolEventInput sets the input for tool events.
+func WithToolEventInput(input string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.Input = input
+	}
+}
+
+// WithToolEventOutput sets the output for tool events.
+func WithToolEventOutput(output string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.Output = output
+	}
+}
+
+// WithToolEventError sets the error for tool events.
+func WithToolEventError(err error) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		if err != nil {
+			opts.Error = err
+		}
+	}
+}
+
+// WithModelEventInvocationID sets the invocation ID for model events.
+func WithModelEventInvocationID(invocationID string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.InvocationID = invocationID
+	}
+}
+
+// WithModelEventModelName sets the model name for model events.
+func WithModelEventModelName(modelName string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.ModelName = modelName
+	}
+}
+
+// WithModelEventNodeID sets the node ID for model events.
+func WithModelEventNodeID(nodeID string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.NodeID = nodeID
+	}
+}
+
+// WithModelEventPhase sets the phase for model events.
+func WithModelEventPhase(phase ModelExecutionPhase) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.Phase = phase
+	}
+}
+
+// WithModelEventStartTime sets the start time for model events.
+func WithModelEventStartTime(startTime time.Time) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.StartTime = startTime
+	}
+}
+
+// WithModelEventEndTime sets the end time for model events.
+func WithModelEventEndTime(endTime time.Time) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.EndTime = endTime
+	}
+}
+
+// WithModelEventInput sets the input for model events.
+func WithModelEventInput(input string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.Input = input
+	}
+}
+
+// WithModelEventOutput sets the output for model events.
+func WithModelEventOutput(output string) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.Output = output
+	}
+}
+
+// WithModelEventError sets the error for model events.
+func WithModelEventError(err error) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		if err != nil {
+			opts.Error = err
+		}
+	}
+}
+
+// WithModelEventStepNumber sets the step number for model events.
+func WithModelEventStepNumber(stepNumber int) ModelEventOption {
+	return func(opts *ModelEventOptions) {
+		opts.StepNumber = stepNumber
 	}
 }
 
@@ -602,6 +898,8 @@ func NewNodeStartEvent(opts ...NodeEventOption) *event.Event {
 		Phase:      ExecutionPhaseStart,
 		StartTime:  options.StartTime,
 		InputKeys:  options.InputKeys,
+		ModelName:  options.ModelName,
+		ModelInput: options.ModelInput,
 		StepNumber: options.StepNumber,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeStart,
@@ -650,6 +948,63 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
+}
+
+// NewToolExecutionEvent creates a new tool execution event.
+func NewToolExecutionEvent(opts ...ToolEventOption) *event.Event {
+	options := &ToolEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var errorMsg string
+	if options.Error != nil {
+		errorMsg = options.Error.Error()
+	}
+
+	metadata := ToolExecutionMetadata{
+		ToolName:     options.ToolName,
+		ToolID:       options.ToolID,
+		Phase:        options.Phase,
+		StartTime:    options.StartTime,
+		EndTime:      options.EndTime,
+		Duration:     options.EndTime.Sub(options.StartTime),
+		Input:        options.Input,
+		Output:       options.Output,
+		Error:        errorMsg,
+		InvocationID: options.InvocationID,
+	}
+	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeExecution,
+		WithToolMetadata(metadata))
+}
+
+// NewModelExecutionEvent creates a new model execution event.
+func NewModelExecutionEvent(opts ...ModelEventOption) *event.Event {
+	options := &ModelEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var errorMsg string
+	if options.Error != nil {
+		errorMsg = options.Error.Error()
+	}
+
+	metadata := ModelExecutionMetadata{
+		ModelName:    options.ModelName,
+		NodeID:       options.NodeID,
+		Phase:        options.Phase,
+		StartTime:    options.StartTime,
+		EndTime:      options.EndTime,
+		Duration:     options.EndTime.Sub(options.StartTime),
+		Input:        options.Input,
+		Output:       options.Output,
+		Error:        errorMsg,
+		InvocationID: options.InvocationID,
+		StepNumber:   options.StepNumber,
+	}
+	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeExecution,
+		WithModelMetadata(metadata))
 }
 
 // NewPregelStepEvent creates a new Pregel step event.

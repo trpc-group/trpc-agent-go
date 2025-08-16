@@ -143,8 +143,11 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
 		function.WithDescription("Analyzes document complexity level"),
 	)
 
-	// Create stateGraph with schema.
-	stateGraph := graph.NewStateGraph(schema)
+	// Create node callbacks for monitoring and performance tracking.
+	callbacks := w.createNodeCallbacks()
+
+	// Create stateGraph with schema and callbacks.
+	stateGraph := graph.NewStateGraph(schema).WithNodeCallbacks(callbacks)
 	tools := map[string]tool.Tool{
 		"analyze_complexity": complexityTool,
 	}
@@ -220,6 +223,178 @@ Remember: only output the final result itself, no other text.`,
 
 	// Build and return the graph.
 	return stateGraph.Compile()
+}
+
+// createNodeCallbacks creates comprehensive callbacks for monitoring and performance tracking.
+func (w *documentWorkflow) createNodeCallbacks() *graph.NodeCallbacks {
+	callbacks := graph.NewNodeCallbacks()
+
+	// Before node callback: Track performance and metadata (no duplicate logging).
+	callbacks.RegisterBeforeNode(func(ctx context.Context, callbackCtx *graph.NodeCallbackContext, state graph.State) (any, error) {
+		// Track execution start time in state for performance monitoring.
+		if state["node_timings"] == nil {
+			state["node_timings"] = make(map[string]time.Time)
+		}
+		timings := state["node_timings"].(map[string]time.Time)
+		timings[callbackCtx.NodeID] = time.Now()
+
+		// Add node metadata to state for tracking.
+		if state["node_execution_history"] == nil {
+			state["node_execution_history"] = make([]map[string]any, 0)
+		}
+		history := state["node_execution_history"].([]map[string]any)
+		history = append(history, map[string]any{
+			"node_id":       callbackCtx.NodeID,
+			"node_name":     callbackCtx.NodeName,
+			"node_type":     callbackCtx.NodeType,
+			"step_number":   callbackCtx.StepNumber,
+			"start_time":    time.Now(),
+			"invocation_id": callbackCtx.InvocationID,
+		})
+		state["node_execution_history"] = history
+
+		return nil, nil // Continue with normal execution.
+	})
+
+	// After node callback: Track completion and performance metrics (no duplicate logging).
+	callbacks.RegisterAfterNode(func(
+		ctx context.Context,
+		callbackCtx *graph.NodeCallbackContext,
+		state graph.State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		// Calculate execution time.
+		var executionTime time.Duration
+		if timings, ok := state["node_timings"].(map[string]time.Time); ok {
+			if startTime, exists := timings[callbackCtx.NodeID]; exists {
+				executionTime = time.Since(startTime)
+			}
+		}
+
+		// Update execution history with completion info.
+		if history, ok := state["node_execution_history"].([]map[string]any); ok && len(history) > 0 {
+			lastEntry := history[len(history)-1]
+			lastEntry["end_time"] = time.Now()
+			lastEntry["execution_time"] = executionTime
+			lastEntry["success"] = nodeErr == nil
+			if nodeErr != nil {
+				lastEntry["error"] = nodeErr.Error()
+			}
+		}
+
+		// Performance monitoring: Alert on slow nodes.
+		if executionTime > 25*time.Second {
+			fmt.Printf("⚠️  [CALLBACK] Performance alert: Node %s took %v to execute\n",
+				callbackCtx.NodeName, executionTime)
+		}
+
+		// Add execution metadata to result if it's a State.
+		if result != nil && nodeErr == nil {
+			if stateResult, ok := result.(graph.State); ok {
+				stateResult["last_executed_node"] = callbackCtx.NodeID
+				stateResult["last_execution_time"] = executionTime
+				stateResult["total_nodes_executed"] = len(state["node_execution_history"].([]map[string]any))
+				return stateResult, nil
+			}
+		}
+		return result, nil
+	})
+
+	// Error callback: Comprehensive error logging and recovery.
+	callbacks.RegisterOnNodeError(func(
+		ctx context.Context,
+		callbackCtx *graph.NodeCallbackContext,
+		state graph.State,
+		err error,
+	) {
+		// Log detailed error information.
+		fmt.Printf("❌ [CALLBACK] Error in node: %s (%s) at step %d\n",
+			callbackCtx.NodeName, callbackCtx.NodeType, callbackCtx.StepNumber)
+		fmt.Printf("   Error details: %v\n", err)
+
+		// Track error statistics.
+		if state["error_count"] == nil {
+			state["error_count"] = 0
+		}
+		errorCount := state["error_count"].(int)
+		state["error_count"] = errorCount + 1
+
+		// Update execution history with error info.
+		if history, ok := state["node_execution_history"].([]map[string]any); ok && len(history) > 0 {
+			lastEntry := history[len(history)-1]
+			lastEntry["end_time"] = time.Now()
+			lastEntry["success"] = false
+			lastEntry["error"] = err.Error()
+		}
+
+		// Special error handling for different node types.
+		switch callbackCtx.NodeType {
+		case graph.NodeTypeLLM:
+			fmt.Printf("   🤖 LLM node error - this might be a model API issue\n")
+		case graph.NodeTypeTool:
+			fmt.Printf("   🔧 Tool execution error - check tool implementation\n")
+		case graph.NodeTypeFunction:
+			fmt.Printf("   ⚙️  Function node error - check business logic\n")
+		}
+
+		// Add error context to state for debugging.
+		if state["error_context"] == nil {
+			state["error_context"] = make([]map[string]any, 0)
+		}
+		errorContext := state["error_context"].([]map[string]any)
+		errorContext = append(errorContext, map[string]any{
+			"node_id":     callbackCtx.NodeID,
+			"node_name":   callbackCtx.NodeName,
+			"step_number": callbackCtx.StepNumber,
+			"error":       err.Error(),
+			"timestamp":   time.Now(),
+		})
+		state["error_context"] = errorContext
+	})
+
+	return callbacks
+}
+
+// formatExecutionStats formats the execution history into a readable string.
+func (w *documentWorkflow) formatExecutionStats(history []map[string]any) string {
+	if len(history) == 0 {
+		return ""
+	}
+
+	var stats strings.Builder
+	stats.WriteString("🚀 Execution Flow:\n")
+
+	totalExecutionTime := time.Duration(0)
+	for i, entry := range history {
+		nodeName, _ := entry["node_name"].(string)
+		nodeType, _ := entry["node_type"].(string)
+		success, _ := entry["success"].(bool)
+		executionTime, _ := entry["execution_time"].(time.Duration)
+
+		status := "✅"
+		if !success {
+			status = "❌"
+		}
+
+		stats.WriteString(fmt.Sprintf("   %d. %s %s (%s) - %v\n",
+			i+1, status, nodeName, nodeType, executionTime))
+
+		if executionTime > 0 {
+			totalExecutionTime += executionTime
+		}
+	}
+
+	stats.WriteString("\n📈 Performance Summary:\n")
+	stats.WriteString(fmt.Sprintf("   • Total Nodes Executed: %d\n", len(history)))
+	stats.WriteString(fmt.Sprintf("   • Total Execution Time: %v\n", totalExecutionTime))
+
+	// Calculate average execution time
+	if len(history) > 0 {
+		avgTime := totalExecutionTime / time.Duration(len(history))
+		stats.WriteString(fmt.Sprintf("   • Average Node Time: %v\n", avgTime))
+	}
+	return stats.String()
 }
 
 // Node function implementations.
@@ -303,6 +478,17 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
 	complexityLevel, _ := state[stateKeyComplexityLevel].(string)
 	wordCount, _ := state[stateKeyWordCount].(int)
 
+	// Extract callback-generated metadata for enhanced output.
+	var executionStats string
+	if history, ok := state["node_execution_history"].([]map[string]any); ok && len(history) > 0 {
+		executionStats = w.formatExecutionStats(history)
+	}
+
+	var errorStats string
+	if errorCount, ok := state["error_count"].(int); ok && errorCount > 0 {
+		errorStats = fmt.Sprintf("   • Errors Encountered: %d\n", errorCount)
+	}
+
 	finalOutput := fmt.Sprintf(`
 ╔══════════════════════════════════════════════════════════════════╗
 ║                    DOCUMENT PROCESSING RESULTS                   ║
@@ -317,14 +503,18 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
 📊 Processing Statistics:
    • Complexity Level: %s
    • Word Count: %d
-   • Completed At: %s
+   • Completed At: %s%s
+
+%s
 
 ✅ Processing completed successfully!
 `,
 		content,
 		complexityLevel,
 		wordCount,
-		time.Now().Format("2006-01-02 15:04:05"))
+		time.Now().Format("2006-01-02 15:04:05"),
+		errorStats,
+		executionStats)
 
 	return graph.State{
 		graph.StateKeyLastResponse: finalOutput,
@@ -448,10 +638,77 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 						switch nodeMetadata.Phase {
 						case graph.ExecutionPhaseStart:
 							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+
+							// Add model information for LLM nodes.
+							if nodeMetadata.NodeType == graph.NodeTypeLLM {
+								fmt.Printf("   🤖 Using model: %s\n", w.modelName)
+
+								// Display model input if available.
+								if nodeMetadata.ModelInput != "" {
+									fmt.Printf("   📝 Model Input: %s\n", truncateString(nodeMetadata.ModelInput, 100))
+								}
+							}
+
+							// Add tool information for tool nodes.
+							if nodeMetadata.NodeType == graph.NodeTypeTool {
+								fmt.Printf("   🔧 Executing tool node\n")
+							}
 						case graph.ExecutionPhaseComplete:
 							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 						case graph.ExecutionPhaseError:
 							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						}
+					}
+				}
+
+				// Handle tool execution events for input/output display.
+				if toolData, exists := event.StateDelta[graph.MetadataKeyTool]; exists {
+					var toolMetadata graph.ToolExecutionMetadata
+					if err := json.Unmarshal(toolData, &toolMetadata); err == nil {
+						switch toolMetadata.Phase {
+						case graph.ToolExecutionPhaseStart:
+							fmt.Printf("🔧 [TOOL] Starting: %s (ID: %s)\n", toolMetadata.ToolName, toolMetadata.ToolID)
+							if toolMetadata.Input != "" {
+								fmt.Printf("   📥 Input: %s\n", formatJSON(toolMetadata.Input))
+							}
+						case graph.ToolExecutionPhaseComplete:
+							fmt.Printf("✅ [TOOL] Completed: %s (ID: %s) in %v\n",
+								toolMetadata.ToolName, toolMetadata.ToolID, toolMetadata.Duration)
+							if toolMetadata.Output != "" {
+								fmt.Printf("   📤 Output: %s\n", formatJSON(toolMetadata.Output))
+							}
+							if toolMetadata.Error != "" {
+								fmt.Printf("   ❌ Error: %s\n", toolMetadata.Error)
+							}
+						case graph.ToolExecutionPhaseError:
+							fmt.Printf("❌ [TOOL] Error: %s (ID: %s) - %s\n",
+								toolMetadata.ToolName, toolMetadata.ToolID, toolMetadata.Error)
+						}
+					}
+				}
+
+				// Handle model execution events for input/output display.
+				if modelData, exists := event.StateDelta[graph.MetadataKeyModel]; exists {
+					var modelMetadata graph.ModelExecutionMetadata
+					if err := json.Unmarshal(modelData, &modelMetadata); err == nil {
+						switch modelMetadata.Phase {
+						case graph.ModelExecutionPhaseStart:
+							fmt.Printf("🤖 [MODEL] Starting: %s (Node: %s)\n", modelMetadata.ModelName, modelMetadata.NodeID)
+							if modelMetadata.Input != "" {
+								fmt.Printf("   📝 Input: %s\n", truncateString(modelMetadata.Input, 100))
+							}
+						case graph.ModelExecutionPhaseComplete:
+							fmt.Printf("✅ [MODEL] Completed: %s (Node: %s) in %v\n",
+								modelMetadata.ModelName, modelMetadata.NodeID, modelMetadata.Duration)
+							if modelMetadata.Output != "" {
+								fmt.Printf("   📤 Output: %s\n", truncateString(modelMetadata.Output, 100))
+							}
+							if modelMetadata.Error != "" {
+								fmt.Printf("   ❌ Error: %s\n", modelMetadata.Error)
+							}
+						case graph.ModelExecutionPhaseError:
+							fmt.Printf("❌ [MODEL] Error: %s (Node: %s) - %s\n",
+								modelMetadata.ModelName, modelMetadata.NodeID, modelMetadata.Error)
 						}
 					}
 				}
@@ -509,6 +766,30 @@ func (w *documentWorkflow) showHelp() {
 	fmt.Println("   • Assess and enhance quality if needed")
 	fmt.Println("   • Format the final output")
 	fmt.Println()
+}
+
+// formatJSON formats JSON strings for better readability.
+func formatJSON(jsonStr string) string {
+	if jsonStr == "" {
+		return ""
+	}
+	// Try to pretty print the JSON.
+	var prettyJSON interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &prettyJSON); err == nil {
+		if prettyBytes, err := json.MarshalIndent(prettyJSON, "", "  "); err == nil {
+			return string(prettyBytes)
+		}
+	}
+	// Fallback to original string if not valid JSON.
+	return jsonStr
+}
+
+// truncateString truncates a string to the specified length and adds ellipsis if needed.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // Type definitions for tool functions.

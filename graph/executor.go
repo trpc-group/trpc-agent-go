@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -175,7 +176,7 @@ func (e *Executor) executeGraph(
 	// BSP execution loop.
 	for step := 0; step < e.maxSteps; step++ {
 		// Plan phase: determine which nodes to execute.
-		tasks, err := e.planStep(ctx, execCtx, step)
+		tasks, err := e.planStep(execCtx, step)
 		if err != nil {
 			return fmt.Errorf("planning failed at step %d: %w", step, err)
 		}
@@ -227,8 +228,12 @@ func (e *Executor) initializeState(initialState State) State {
 	if e.graph.Schema() != nil {
 		for key, field := range e.graph.Schema().Fields {
 			if _, exists := execState[key]; !exists {
-				// Provide zero value for the field type.
-				execState[key] = reflect.Zero(field.Type).Interface()
+				// Use default function if available, otherwise provide zero value.
+				if field.Default != nil {
+					execState[key] = field.Default()
+				} else {
+					execState[key] = reflect.Zero(field.Type).Interface()
+				}
 			}
 		}
 	}
@@ -250,7 +255,7 @@ func (e *Executor) initializeChannels(state State) {
 }
 
 // planStep determines which nodes to execute in the current step.
-func (e *Executor) planStep(ctx context.Context, execCtx *ExecutionContext, step int) ([]*Task, error) {
+func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error) {
 	var tasks []*Task
 
 	// Emit planning step event.
@@ -405,11 +410,74 @@ func (e *Executor) executeSingleTask(
 	execStartTime := time.Now()
 	e.emitNodeStartEvent(execCtx, t.NodeID, nodeType, step, execStartTime)
 
+	// Create callback context.
+	callbackCtx := &NodeCallbackContext{
+		NodeID:             t.NodeID,
+		NodeName:           e.getNodeName(t.NodeID),
+		NodeType:           nodeType,
+		StepNumber:         step,
+		ExecutionStartTime: execStartTime,
+		InvocationID:       execCtx.InvocationID,
+		SessionID:          e.getSessionID(execCtx),
+	}
+
+	// Get state copy for callbacks.
+	execCtx.stateMutex.RLock()
+	stateCopy := make(State, len(execCtx.State))
+	for k, v := range execCtx.State {
+		stateCopy[k] = v
+	}
+	// Add execution context to state so nodes can access event channel.
+	stateCopy[StateKeyExecContext] = execCtx
+	execCtx.stateMutex.RUnlock()
+
+	// Add current node ID to state so nodes can access it.
+	stateCopy[StateKeyCurrentNodeID] = t.NodeID
+
+	// Run before node callbacks.
+	nodeCallbacks, _ := stateCopy[StateKeyNodeCallbacks].(*NodeCallbacks)
+	if nodeCallbacks != nil {
+		customResult, err := nodeCallbacks.RunBeforeNode(ctx, callbackCtx, stateCopy)
+		if err != nil {
+			e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
+			return fmt.Errorf("before node callback failed for node %s: %w", t.NodeID, err)
+		}
+		if customResult != nil {
+			// Use custom result from callback.
+			if err := e.handleNodeResult(ctx, execCtx, t, customResult); err != nil {
+				return err
+			}
+			// Process conditional edges after node execution.
+			if err := e.processConditionalEdges(ctx, execCtx, t.NodeID, step); err != nil {
+				return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+			}
+			// Emit node completion event.
+			e.emitNodeCompleteEvent(execCtx, t.NodeID, nodeType, step, execStartTime)
+			return nil
+		}
+	}
+
 	// Execute the node function.
 	result, err := e.executeNodeFunction(ctx, execCtx, t.NodeID)
 	if err != nil {
+		// Run on node error callbacks.
+		if nodeCallbacks != nil {
+			nodeCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
+		}
 		e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
 		return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
+	}
+
+	// Run after node callbacks.
+	if nodeCallbacks != nil {
+		customResult, err := nodeCallbacks.RunAfterNode(ctx, callbackCtx, stateCopy, result, nil)
+		if err != nil {
+			e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
+			return fmt.Errorf("after node callback failed for node %s: %w", t.NodeID, err)
+		}
+		if customResult != nil {
+			result = customResult
+		}
 	}
 
 	// Handle result and process channel writes.
@@ -437,6 +505,30 @@ func (e *Executor) getNodeType(nodeID string) NodeType {
 	return node.Type
 }
 
+// getNodeName retrieves the node name for a given node ID.
+func (e *Executor) getNodeName(nodeID string) string {
+	node, exists := e.graph.Node(nodeID)
+	if !exists {
+		return nodeID // Default to node ID if node not found.
+	}
+	return node.Name
+}
+
+// getSessionID retrieves the session ID from the execution context.
+func (e *Executor) getSessionID(execCtx *ExecutionContext) string {
+	if execCtx == nil {
+		return ""
+	}
+	execCtx.stateMutex.RLock()
+	defer execCtx.stateMutex.RUnlock()
+	if sess, ok := execCtx.State[StateKeySession]; ok {
+		if s, ok := sess.(*session.Session); ok && s != nil {
+			return s.ID
+		}
+	}
+	return ""
+}
+
 // emitNodeStartEvent emits the node start event.
 func (e *Executor) emitNodeStartEvent(
 	execCtx *ExecutionContext,
@@ -451,6 +543,17 @@ func (e *Executor) emitNodeStartEvent(
 
 	execCtx.stateMutex.RLock()
 	inputKeys := extractStateKeys(execCtx.State)
+
+	// Extract model input for LLM nodes.
+	var modelInput string
+	if nodeType == NodeTypeLLM {
+		if userInput, exists := execCtx.State[StateKeyUserInput]; exists {
+			if input, ok := userInput.(string); ok {
+				modelInput = input
+			}
+		}
+	}
+
 	execCtx.stateMutex.RUnlock()
 
 	startEvent := NewNodeStartEvent(
@@ -460,6 +563,7 @@ func (e *Executor) emitNodeStartEvent(
 		WithNodeEventStepNumber(step),
 		WithNodeEventStartTime(startTime),
 		WithNodeEventInputKeys(inputKeys),
+		WithNodeEventModelInput(modelInput),
 	)
 	select {
 	case execCtx.EventChan <- startEvent:
@@ -475,7 +579,6 @@ func (e *Executor) executeNodeFunction(
 	if !exists {
 		return nil, fmt.Errorf("node %s not found", nodeID)
 	}
-
 	// Execute the node with read lock on state.
 	execCtx.stateMutex.RLock()
 	stateCopy := make(State, len(execCtx.State))
@@ -484,8 +587,9 @@ func (e *Executor) executeNodeFunction(
 	}
 	// Add execution context to state so nodes can access event channel.
 	stateCopy[StateKeyExecContext] = execCtx
+	// Add current node ID to state so nodes can access it.
+	stateCopy[StateKeyCurrentNodeID] = nodeID
 	execCtx.stateMutex.RUnlock()
-
 	return node.Function(ctx, stateCopy)
 }
 
