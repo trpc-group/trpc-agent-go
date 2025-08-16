@@ -25,11 +25,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
-var defaultChannelBufferSize = 256
-
 const (
 	// AuthorGraphExecutor is the author of the graph executor.
 	AuthorGraphExecutor = "graph-executor"
+)
+
+var (
+	defaultChannelBufferSize = 256
+	defaultMaxSteps          = 100
+	defaultStepTimeout       = 30 * time.Second
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
@@ -81,8 +85,8 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	}
 	var options ExecutorOptions
 	options.ChannelBufferSize = defaultChannelBufferSize // Default buffer size.
-	options.MaxSteps = 100                               // Default max steps.
-	options.StepTimeout = 30 * time.Second               // Default step timeout.
+	options.MaxSteps = defaultMaxSteps                   // Default max steps.
+	options.StepTimeout = defaultStepTimeout             // Default step timeout.
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
