@@ -100,7 +100,7 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 	// Automatically set up Pregel-style configuration
 	// Create a trigger channel for this node
 	triggerChannel := fmt.Sprintf("trigger:%s", id)
-	sg.graph.addChannel(triggerChannel, channel.TypeLastValue)
+	sg.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
 	sg.graph.addNodeTriggerChannel(id, triggerChannel)
 
 	return sg
@@ -145,7 +145,7 @@ func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 
 	// Automatically set up Pregel-style channel for the edge
 	channelName := fmt.Sprintf("branch:to:%s", to)
-	sg.graph.addChannel(channelName, channel.TypeLastValue)
+	sg.graph.addChannel(channelName, channel.BehaviorLastValue)
 
 	// Set up trigger relationship (node subscribes) and trigger mapping
 	sg.graph.addNodeTriggerChannel(to, channelName)

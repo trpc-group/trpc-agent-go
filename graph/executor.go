@@ -240,7 +240,7 @@ func (e *Executor) initializeChannels(state State) {
 	// Create input channels for each state key.
 	for key := range state {
 		channelName := fmt.Sprintf("input:%s", key)
-		e.graph.addChannel(channelName, channel.TypeLastValue)
+		e.graph.addChannel(channelName, channel.BehaviorLastValue)
 
 		channel, _ := e.graph.getChannel(channelName)
 		if channel != nil {
@@ -580,7 +580,7 @@ func (e *Executor) handleCommandRouting(
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(execCtx, triggerChannel, channel.TypeLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
 }
 
 // processChannelWrites processes the channel writes for a task.
@@ -591,7 +591,7 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 			ch.Update([]any{write.Value})
 
 			// Emit channel update event.
-			e.emitChannelUpdateEvent(execCtx, write.Channel, ch.Type, e.getTriggeredNodes(write.Channel))
+			e.emitChannelUpdateEvent(execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
 		}
 	}
 }
@@ -600,7 +600,7 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 func (e *Executor) emitChannelUpdateEvent(
 	execCtx *ExecutionContext,
 	channelName string,
-	channelType channel.Type,
+	channelType channel.Behavior,
 	triggeredNodes []string,
 ) {
 	if execCtx.EventChan == nil {
@@ -753,14 +753,14 @@ func (e *Executor) processConditionalResult(
 
 	// Create and trigger the target channel.
 	channelName := fmt.Sprintf("branch:to:%s", target)
-	e.graph.addChannel(channelName, channel.TypeLastValue)
+	e.graph.addChannel(channelName, channel.BehaviorLastValue)
 	e.graph.addNodeTrigger(channelName, target)
 
 	// Trigger the target by writing to the channel.
 	ch, ok := e.graph.getChannel(channelName)
 	if ok && ch != nil {
 		ch.Update([]any{channelSignal})
-		e.emitChannelUpdateEvent(execCtx, channelName, channel.TypeLastValue, []string{target})
+		e.emitChannelUpdateEvent(execCtx, channelName, channel.BehaviorLastValue, []string{target})
 	} else {
 		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
 	}

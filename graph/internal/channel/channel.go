@@ -14,25 +14,25 @@ import (
 	"sync"
 )
 
-// Type represents the type of channel behavior.
-type Type int
+// Behavior represents the type of channel behavior.
+type Behavior int
 
 const (
-	// TypeLastValue stores only the last value sent to the channel.
-	TypeLastValue Type = iota
-	// TypeTopic accumulates multiple values (pub/sub).
-	TypeTopic
-	// TypeEphemeral stores values temporarily for one step.
-	TypeEphemeral
-	// TypeBarrier waits for multiple inputs before proceeding.
-	TypeBarrier
+	// BehaviorLastValue stores only the last value sent to the channel.
+	BehaviorLastValue Behavior = iota
+	// BehaviorTopic accumulates multiple values (pub/sub).
+	BehaviorTopic
+	// BehaviorEphemeral stores values temporarily for one step.
+	BehaviorEphemeral
+	// BehaviorBarrier waits for multiple inputs before proceeding.
+	BehaviorBarrier
 )
 
 // Channel represents a communication channel between nodes in Pregel-style execution.
 type Channel struct {
 	mu          sync.RWMutex
 	Name        string
-	Type        Type
+	Behavior    Behavior
 	Value       any
 	Values      []any // For Topic channels
 	Subscribers []string
@@ -41,11 +41,11 @@ type Channel struct {
 	Available   bool
 }
 
-// NewChannel creates a new channel with the specified type.
-func NewChannel(name string, channelType Type) *Channel {
+// NewChannel creates a new channel with the specified behavior.
+func NewChannel(name string, channelBehavior Behavior) *Channel {
 	return &Channel{
 		Name:       name,
-		Type:       channelType,
+		Behavior:   channelBehavior,
 		Values:     make([]any, 0),
 		BarrierSet: make(map[string]bool),
 		Available:  false,
@@ -57,27 +57,27 @@ func (c *Channel) Update(values []any) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	switch c.Type {
-	case TypeLastValue:
+	switch c.Behavior {
+	case BehaviorLastValue:
 		if len(values) > 0 {
 			c.Value = values[len(values)-1]
 			c.Version++
 			c.Available = true
 			return true
 		}
-	case TypeTopic:
+	case BehaviorTopic:
 		c.Values = append(c.Values, values...)
 		c.Version++
 		c.Available = true
 		return true
-	case TypeEphemeral:
+	case BehaviorEphemeral:
 		if len(values) > 0 {
 			c.Value = values[0]
 			c.Version++
 			c.Available = true
 			return true
 		}
-	case TypeBarrier:
+	case BehaviorBarrier:
 		for _, value := range values {
 			if sender, ok := value.(string); ok {
 				c.BarrierSet[sender] = true
@@ -94,13 +94,12 @@ func (c *Channel) Update(values []any) bool {
 func (c *Channel) Get() any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	switch c.Type {
-	case TypeLastValue, TypeEphemeral:
+	switch c.Behavior {
+	case BehaviorLastValue, BehaviorEphemeral:
 		return c.Value
-	case TypeTopic:
+	case BehaviorTopic:
 		return c.Values
-	case TypeBarrier:
+	case BehaviorBarrier:
 		return c.BarrierSet
 	}
 	return nil
@@ -111,7 +110,7 @@ func (c *Channel) Consume() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.Type == TypeEphemeral {
+	if c.Behavior == BehaviorEphemeral {
 		c.Value = nil
 		c.Available = false
 		return true
@@ -156,10 +155,10 @@ func NewChannelManager() *Manager {
 }
 
 // AddChannel adds a channel to the manager.
-func (m *Manager) AddChannel(name string, channelType Type) {
+func (m *Manager) AddChannel(name string, channelBehavior Behavior) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.channels[name] = NewChannel(name, channelType)
+	m.channels[name] = NewChannel(name, channelBehavior)
 }
 
 // GetChannel retrieves a channel by name.

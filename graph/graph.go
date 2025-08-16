@@ -312,7 +312,7 @@ func (g *Graph) setEntryPoint(nodeID string) error {
 // Pregel-style methods
 
 // addChannel adds a channel to the graph.
-func (g *Graph) addChannel(name string, channelType channel.Type) {
+func (g *Graph) addChannel(name string, channelType channel.Behavior) {
 	g.channelManager.AddChannel(name, channelType)
 }
 

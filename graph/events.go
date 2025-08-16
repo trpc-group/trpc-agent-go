@@ -171,7 +171,7 @@ type ChannelUpdateMetadata struct {
 	// ChannelName is the name of the channel.
 	ChannelName string `json:"channelName"`
 	// ChannelType is the type of the channel.
-	ChannelType channel.Type `json:"channelType"`
+	ChannelType channel.Behavior `json:"channelType"`
 	// ValueCount is the number of values in the channel.
 	ValueCount int `json:"valueCount"`
 	// Available indicates if the channel is available.
@@ -460,7 +460,7 @@ func WithPregelEventError(errMsg string) PregelEventOption {
 type ChannelEventOptions struct {
 	InvocationID   string
 	ChannelName    string
-	ChannelType    channel.Type
+	ChannelType    channel.Behavior
 	ValueCount     int
 	Available      bool
 	TriggeredNodes []string
@@ -484,7 +484,7 @@ func WithChannelEventChannelName(channelName string) ChannelEventOption {
 }
 
 // WithChannelEventChannelType sets the channel type for channel events.
-func WithChannelEventChannelType(channelType channel.Type) ChannelEventOption {
+func WithChannelEventChannelType(channelType channel.Behavior) ChannelEventOption {
 	return func(opts *ChannelEventOptions) {
 		opts.ChannelType = channelType
 	}
