@@ -15,12 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -74,18 +76,34 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithNodeType sets the type of the node.
+func WithNodeType(nodeType NodeType) Option {
+	return func(node *Node) {
+		node.Type = nodeType
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
+// This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *StateGraph {
 	node := &Node{
 		ID:       id,
 		Name:     id,
 		Function: function,
+		Type:     NodeTypeFunction, // Default to function type
 	}
 	for _, opt := range opts {
 		opt(node)
 	}
 	sg.graph.addNode(node)
+
+	// Automatically set up Pregel-style configuration
+	// Create a trigger channel for this node
+	triggerChannel := fmt.Sprintf("trigger:%s", id)
+	sg.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
+	sg.graph.addNodeTriggerChannel(id, triggerChannel)
+
 	return sg
 }
 
@@ -98,7 +116,9 @@ func (sg *StateGraph) AddLLMNode(
 	opts ...Option,
 ) *StateGraph {
 	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools)
-	sg.AddNode(id, llmNodeFunc, opts...)
+	// Add LLM node type option
+	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
+	sg.AddNode(id, llmNodeFunc, llmOpts...)
 	return sg
 }
 
@@ -109,17 +129,35 @@ func (sg *StateGraph) AddToolsNode(
 	opts ...Option,
 ) *StateGraph {
 	toolsNodeFunc := NewToolsNodeFunc(tools)
-	sg.AddNode(id, toolsNodeFunc, opts...)
+	// Add tool node type option
+	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
+	sg.AddNode(id, toolsNodeFunc, toolOpts...)
 	return sg
 }
 
+// channelUpdateMarker value for marking channel updates.
+const channelUpdateMarker = "update"
+
 // AddEdge adds a normal edge between two nodes.
+// This automatically sets up Pregel-style channel configuration.
 func (sg *StateGraph) AddEdge(from, to string) *StateGraph {
 	edge := &Edge{
 		From: from,
 		To:   to,
 	}
 	sg.graph.addEdge(edge)
+	// Automatically set up Pregel-style channel for the edge.
+	channelName := fmt.Sprintf("branch:to:%s", to)
+	sg.graph.addChannel(channelName, channel.BehaviorLastValue)
+	// Set up trigger relationship (node subscribes) and trigger mapping.
+	sg.graph.addNodeTriggerChannel(to, channelName)
+	sg.graph.addNodeTrigger(channelName, to)
+	// Add writer to source node.
+	writer := channelWriteEntry{
+		Channel: channelName,
+		Value:   channelUpdateMarker, // Non-nil sentinel to mark update.
+	}
+	sg.graph.addNodeWriter(from, writer)
 	return sg
 }
 
@@ -192,6 +230,17 @@ func (sg *StateGraph) Compile() (*Graph, error) {
 	return sg.graph, nil
 }
 
+// WithNodeCallbacks adds node callbacks to the graph state schema.
+// This allows users to register callbacks that will be executed during node execution.
+func (sg *StateGraph) WithNodeCallbacks(callbacks *NodeCallbacks) *StateGraph {
+	sg.graph.schema.AddField(StateKeyNodeCallbacks, StateField{
+		Type:    reflect.TypeOf(&NodeCallbacks{}),
+		Reducer: DefaultReducer,
+		Default: func() any { return callbacks },
+	})
+	return sg
+}
+
 // MustCompile compiles the graph or panics if invalid.
 func (sg *StateGraph) MustCompile() *Graph {
 	graph, err := sg.Compile()
@@ -207,13 +256,18 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
 		defer span.End()
-
-		// Build messages from state.
-		messages := buildMessagesFromState(state, instruction)
-
-		// Extract execution context.
+		// Extract execution context and model information.
 		invocationID, sessionID, eventChan := extractExecutionContext(state)
 		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
+		// Extract current node ID from state.
+		var nodeID string
+		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+			if id, ok := nodeIDData.(string); ok {
+				nodeID = id
+			}
+		}
+		// Build messages from state.
+		messages := buildMessagesFromState(state, instruction)
 
 		// Create request.
 		request := &model.Request{
@@ -224,40 +278,41 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			},
 		}
 
-		responseChan, err := runModel(ctx, modelCallbacks, llmModel, request)
+		// Extract model input for event emission.
+		modelInput := extractModelInput(state, instruction)
+
+		// Emit model execution start event.
+		startTime := time.Now()
+		modelName := getModelName(llmModel)
+		emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
+
+		// Execute the model.
+		result, err := executeModelWithEvents(ctx, modelExecutionConfig{
+			ModelCallbacks: modelCallbacks,
+			LLMModel:       llmModel,
+			Request:        request,
+			EventChan:      eventChan,
+			InvocationID:   invocationID,
+			SessionID:      sessionID,
+			Span:           span,
+		})
+
+		// Emit model execution complete event.
+		endTime := time.Now()
+		var modelOutput string
+		if err == nil && result != nil {
+			if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
+				modelOutput = finalResponse.Choices[0].Message.Content
+			}
+		}
+		emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
+
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
 
-		// Process response.
-		var finalResponse *model.Response
-		var toolCalls []model.ToolCall
-		for response := range responseChan {
-			if err := processModelResponse(ctx, response, modelCallbacks, eventChan, invocationID, sessionID, llmModel, request, span); err != nil {
-				return nil, err
-			}
-
-			if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
-				toolCalls = append(toolCalls, response.Choices[0].Message.ToolCalls...)
-			}
-			finalResponse = response
-		}
-
-		if finalResponse == nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
-			return nil, errors.New("no response received from model")
-		}
-
-		newMessage := model.Message{
-			Role:      model.RoleAssistant,
-			Content:   finalResponse.Choices[0].Message.Content,
-			ToolCalls: toolCalls,
-		}
-		return State{
-			StateKeyMessages:     []model.Message{newMessage}, // The new message will be merged by the executor.
-			StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
-		}, nil
+		return result, nil
 	}
 }
 
@@ -300,45 +355,47 @@ func extractExecutionContext(state State) (invocationID string, sessionID string
 	return invocationID, sessionID, eventChan
 }
 
+// modelResponseConfig contains configuration for processing model responses.
+type modelResponseConfig struct {
+	Response       *model.Response
+	ModelCallbacks *model.Callbacks
+	EventChan      chan<- *event.Event
+	InvocationID   string
+	SessionID      string
+	LLMModel       model.Model
+	Request        *model.Request
+	Span           oteltrace.Span
+}
+
 // processModelResponse processes a single model response.
-func processModelResponse(
-	ctx context.Context,
-	response *model.Response,
-	modelCallbacks *model.Callbacks,
-	eventChan chan<- *event.Event,
-	invocationID string,
-	sessionID string,
-	llmModel model.Model,
-	request *model.Request,
-	span oteltrace.Span,
-) error {
-	if modelCallbacks != nil {
-		customResponse, err := modelCallbacks.RunAfterModel(ctx, request, response, nil)
+func processModelResponse(ctx context.Context, config modelResponseConfig) error {
+	if config.ModelCallbacks != nil {
+		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return fmt.Errorf("callback after model error: %w", err)
 		}
 		if customResponse != nil {
-			response = customResponse
+			config.Response = customResponse
 		}
 	}
-	if eventChan != nil && !response.Done {
-		llmEvent := event.NewResponseEvent(invocationID, llmModel.Info().Name, response)
+	if config.EventChan != nil && !config.Response.Done {
+		llmEvent := event.NewResponseEvent(config.InvocationID, config.LLMModel.Info().Name, config.Response)
 		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceCallLLM(span, &agent.Invocation{
-			InvocationID: invocationID,
-			Model:        llmModel,
-			Session:      &session.Session{ID: sessionID},
-		}, request, response, llmEvent.ID)
+		itelemetry.TraceCallLLM(config.Span, &agent.Invocation{
+			InvocationID: config.InvocationID,
+			Model:        config.LLMModel,
+			Session:      &session.Session{ID: config.SessionID},
+		}, config.Request, config.Response, llmEvent.ID)
 		select {
-		case eventChan <- llmEvent:
+		case config.EventChan <- llmEvent:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
-	if response.Error != nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.error", response.Error.Message))
-		return fmt.Errorf("model API error: %s", response.Error.Message)
+	if config.Response.Error != nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", config.Response.Error.Message))
+		return fmt.Errorf("model API error: %s", config.Response.Error.Message)
 	}
 	return nil
 }
@@ -386,45 +443,33 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		ctx, span := trace.Tracer.Start(ctx, "tools_node_execution")
 		defer span.End()
 
-		var messages []model.Message
-		if msgData, exists := state[StateKeyMessages]; exists {
-			if msgs, ok := msgData.([]model.Message); ok {
-				messages = msgs
-			}
+		// Extract and validate messages from state.
+		messages, toolCalls, err := extractToolCallsFromState(state, span)
+		if err != nil {
+			return nil, err
 		}
-		toolCallbacks, _ := state[StateKeyToolCallbacks].(*tool.Callbacks)
-		if len(messages) == 0 {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", "no messages in state"))
-			return nil, errors.New("no messages in state")
+
+		// Extract execution context for event emission.
+		invocationID, _, eventChan := extractExecutionContext(state)
+
+		// Process all tool calls and collect results.
+		newMessages, err := processToolCalls(ctx, toolCallsConfig{
+			ToolCalls:    toolCalls,
+			Tools:        tools,
+			InvocationID: invocationID,
+			EventChan:    eventChan,
+			Span:         span,
+			State:        state,
+		})
+		if err != nil {
+			return nil, err
 		}
-		lastMessage := messages[len(messages)-1]
-		if lastMessage.Role != model.RoleAssistant {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", "last message is not an assistant message"))
-			return nil, errors.New("last message is not an assistant message")
-		}
-		toolCalls := lastMessage.ToolCalls
-		newMessages := make([]model.Message, 0, len(toolCalls))
-		for _, toolCall := range toolCalls {
-			id, name := toolCall.ID, toolCall.Function.Name
-			t := tools[name]
-			if t == nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
-				return nil, fmt.Errorf("tool %s not found", name)
-			}
-			result, err := runTool(ctx, toolCall, toolCallbacks, t)
-			if err != nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-				return nil, fmt.Errorf("tool %s call failed: %w", name, err)
-			}
-			content, err := json.Marshal(result)
-			if err != nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-				return nil, fmt.Errorf("failed to marshal tool result: %w", err)
-			}
-			newMessages = append(newMessages, model.NewToolMessage(id, name, string(content)))
-		}
+
+		// Append tool result messages to the existing message history.
+		// This preserves the conversation context and prevents infinite loops.
+		updatedMessages := append(messages, newMessages...)
 		return State{
-			StateKeyMessages: newMessages,
+			StateKeyMessages: updatedMessages,
 		}, nil
 	}
 }
@@ -477,6 +522,330 @@ func runTool(
 	}
 	span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s is not callable", toolCall.Function.Name)))
 	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+}
+
+// extractModelInput extracts the model input from state and instruction.
+func extractModelInput(state State, instruction string) string {
+	var input string
+	// Get user input if available.
+	if userInput, exists := state[StateKeyUserInput]; exists {
+		if inputStr, ok := userInput.(string); ok && inputStr != "" {
+			input = inputStr
+		}
+	}
+	// Add instruction if provided.
+	if instruction != "" {
+		if input != "" {
+			input = instruction + "\n\n" + input
+		} else {
+			input = instruction
+		}
+	}
+	return input
+}
+
+// getModelName extracts the model name from the model instance.
+func getModelName(llmModel model.Model) string {
+	return llmModel.Info().Name
+}
+
+// emitModelStartEvent emits a model execution start event.
+func emitModelStartEvent(
+	eventChan chan<- *event.Event,
+	invocationID, modelName, nodeID, modelInput string,
+	startTime time.Time,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	modelStartEvent := NewModelExecutionEvent(
+		WithModelEventInvocationID(invocationID),
+		WithModelEventModelName(modelName),
+		WithModelEventNodeID(nodeID),
+		WithModelEventPhase(ModelExecutionPhaseStart),
+		WithModelEventStartTime(startTime),
+		WithModelEventInput(modelInput),
+	)
+
+	select {
+	case eventChan <- modelStartEvent:
+	default:
+	}
+}
+
+// emitModelCompleteEvent emits a model execution complete event.
+func emitModelCompleteEvent(
+	eventChan chan<- *event.Event,
+	invocationID, modelName, nodeID, modelInput, modelOutput string,
+	startTime, endTime time.Time,
+	err error,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	modelCompleteEvent := NewModelExecutionEvent(
+		WithModelEventInvocationID(invocationID),
+		WithModelEventModelName(modelName),
+		WithModelEventNodeID(nodeID),
+		WithModelEventPhase(ModelExecutionPhaseComplete),
+		WithModelEventStartTime(startTime),
+		WithModelEventEndTime(endTime),
+		WithModelEventInput(modelInput),
+		WithModelEventOutput(modelOutput),
+		WithModelEventError(err),
+	)
+
+	select {
+	case eventChan <- modelCompleteEvent:
+	default:
+	}
+}
+
+// modelExecutionConfig contains configuration for model execution with events.
+type modelExecutionConfig struct {
+	ModelCallbacks *model.Callbacks
+	LLMModel       model.Model
+	Request        *model.Request
+	EventChan      chan<- *event.Event
+	InvocationID   string
+	SessionID      string
+	Span           oteltrace.Span
+}
+
+// executeModelWithEvents executes the model with event processing.
+func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
+	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+	if err != nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		return nil, fmt.Errorf("failed to run model: %w", err)
+	}
+	// Process response.
+	var finalResponse *model.Response
+	var toolCalls []model.ToolCall
+	for response := range responseChan {
+		if err := processModelResponse(ctx, modelResponseConfig{
+			Response:       response,
+			ModelCallbacks: config.ModelCallbacks,
+			EventChan:      config.EventChan,
+			InvocationID:   config.InvocationID,
+			SessionID:      config.SessionID,
+			LLMModel:       config.LLMModel,
+			Request:        config.Request,
+			Span:           config.Span,
+		}); err != nil {
+			return nil, err
+		}
+
+		if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
+			toolCalls = append(toolCalls, response.Choices[0].Message.ToolCalls...)
+		}
+		finalResponse = response
+	}
+	if finalResponse == nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
+		return nil, errors.New("no response received from model")
+	}
+	newMessage := model.Message{
+		Role:      model.RoleAssistant,
+		Content:   finalResponse.Choices[0].Message.Content,
+		ToolCalls: toolCalls,
+	}
+	return State{
+		StateKeyMessages:     []model.Message{newMessage}, // The new message will be merged by the executor.
+		StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
+	}, nil
+}
+
+// extractToolCallsFromState extracts and validates tool calls from the state.
+func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.Message, []model.ToolCall, error) {
+	var messages []model.Message
+	if msgData, exists := state[StateKeyMessages]; exists {
+		if msgs, ok := msgData.([]model.Message); ok {
+			messages = msgs
+		}
+	}
+
+	if len(messages) == 0 {
+		span.SetAttributes(attribute.String("trpc.go.agent.error", "no messages in state"))
+		return nil, nil, errors.New("no messages in state")
+	}
+
+	lastMessage := messages[len(messages)-1]
+	if lastMessage.Role != model.RoleAssistant {
+		span.SetAttributes(attribute.String("trpc.go.agent.error", "last message is not an assistant message"))
+		return nil, nil, errors.New("last message is not an assistant message")
+	}
+
+	return messages, lastMessage.ToolCalls, nil
+}
+
+// toolCallsConfig contains configuration for processing tool calls.
+type toolCallsConfig struct {
+	ToolCalls    []model.ToolCall
+	Tools        map[string]tool.Tool
+	InvocationID string
+	EventChan    chan<- *event.Event
+	Span         oteltrace.Span
+	State        State
+}
+
+// processToolCalls executes all tool calls and returns the resulting messages.
+func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
+	toolCallbacks, _ := extractToolCallbacks(config.State)
+	newMessages := make([]model.Message, 0, len(config.ToolCalls))
+
+	for _, toolCall := range config.ToolCalls {
+		toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
+			ToolCall:      toolCall,
+			Tools:         config.Tools,
+			InvocationID:  config.InvocationID,
+			EventChan:     config.EventChan,
+			Span:          config.Span,
+			ToolCallbacks: toolCallbacks,
+		})
+		if err != nil {
+			return nil, err
+		}
+		newMessages = append(newMessages, toolMessage)
+	}
+
+	return newMessages, nil
+}
+
+// singleToolCallConfig contains configuration for executing a single tool call.
+type singleToolCallConfig struct {
+	ToolCall      model.ToolCall
+	Tools         map[string]tool.Tool
+	InvocationID  string
+	EventChan     chan<- *event.Event
+	Span          oteltrace.Span
+	ToolCallbacks *tool.Callbacks
+}
+
+// executeSingleToolCall executes a single tool call with event emission.
+func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (model.Message, error) {
+	id, name := config.ToolCall.ID, config.ToolCall.Function.Name
+	t := config.Tools[name]
+	if t == nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s not found", name)))
+		return model.Message{}, fmt.Errorf("tool %s not found", name)
+	}
+
+	startTime := time.Now()
+
+	// Emit tool execution start event.
+	emitToolStartEvent(config.EventChan, config.InvocationID, name, id, startTime, config.ToolCall.Function.Arguments)
+
+	// Execute the tool.
+	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+
+	// Emit tool execution complete event.
+	emitToolCompleteEvent(toolCompleteEventConfig{
+		EventChan:    config.EventChan,
+		InvocationID: config.InvocationID,
+		ToolName:     name,
+		ToolID:       id,
+		StartTime:    startTime,
+		Result:       result,
+		Error:        err,
+		Arguments:    config.ToolCall.Function.Arguments,
+	})
+
+	if err != nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		return model.Message{}, fmt.Errorf("tool %s call failed: %w", name, err)
+	}
+
+	// Marshal result to JSON.
+	content, err := json.Marshal(result)
+	if err != nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+		return model.Message{}, fmt.Errorf("failed to marshal tool result: %w", err)
+	}
+
+	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+// emitToolStartEvent emits a tool execution start event.
+func emitToolStartEvent(
+	eventChan chan<- *event.Event,
+	invocationID, toolName, toolID string,
+	startTime time.Time,
+	arguments []byte,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	toolStartEvent := NewToolExecutionEvent(
+		WithToolEventInvocationID(invocationID),
+		WithToolEventToolName(toolName),
+		WithToolEventToolID(toolID),
+		WithToolEventPhase(ToolExecutionPhaseStart),
+		WithToolEventStartTime(startTime),
+		WithToolEventInput(string(arguments)),
+	)
+
+	select {
+	case eventChan <- toolStartEvent:
+	default:
+	}
+}
+
+// toolCompleteEventConfig contains configuration for tool complete events.
+type toolCompleteEventConfig struct {
+	EventChan    chan<- *event.Event
+	InvocationID string
+	ToolName     string
+	ToolID       string
+	StartTime    time.Time
+	Result       any
+	Error        error
+	Arguments    []byte
+}
+
+// emitToolCompleteEvent emits a tool execution complete event.
+func emitToolCompleteEvent(config toolCompleteEventConfig) {
+	if config.EventChan == nil {
+		return
+	}
+
+	endTime := time.Now()
+	var outputStr string
+	if config.Error == nil && config.Result != nil {
+		if outputBytes, marshalErr := json.Marshal(config.Result); marshalErr == nil {
+			outputStr = string(outputBytes)
+		}
+	}
+
+	toolCompleteEvent := NewToolExecutionEvent(
+		WithToolEventInvocationID(config.InvocationID),
+		WithToolEventToolName(config.ToolName),
+		WithToolEventToolID(config.ToolID),
+		WithToolEventPhase(ToolExecutionPhaseComplete),
+		WithToolEventStartTime(config.StartTime),
+		WithToolEventEndTime(endTime),
+		WithToolEventInput(string(config.Arguments)),
+		WithToolEventOutput(outputStr),
+		WithToolEventError(config.Error),
+	)
+
+	select {
+	case config.EventChan <- toolCompleteEvent:
+	default:
+	}
+}
+
+// extractToolCallbacks extracts tool callbacks from the state.
+func extractToolCallbacks(state State) (*tool.Callbacks, bool) {
+	if toolCallbacks, exists := state[StateKeyToolCallbacks]; exists {
+		if callbacks, ok := toolCallbacks.(*tool.Callbacks); ok {
+			return callbacks, true
+		}
+	}
+	return nil, false
 }
 
 // MessagesStateSchema creates a state schema optimized for message-based workflows.
