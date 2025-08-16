@@ -98,6 +98,21 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestChainAgent_Sequential(t *testing.T) {
 	// Track execution order.
 	var executionOrder []string
@@ -347,6 +362,21 @@ func (m *mockMinimalAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 }
 func (m *mockMinimalAgent) Tools() []tool.Tool { return nil }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockMinimalAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockMinimalAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockMinimalAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestCreateSubAgentInvocation(t *testing.T) {
 	parent := New(
 		"parent",
@@ -457,6 +487,21 @@ func (m *mockNoEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<-ch
 	ch := make(chan *event.Event, 1)
 	close(ch)
 	return ch, nil
+}
+
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockNoEventAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockNoEventAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockNoEventAgent) Models() []model.Model {
+	return []model.Model{}
 }
 
 func TestChainAgent_BeforeCallbackResp(t *testing.T) {

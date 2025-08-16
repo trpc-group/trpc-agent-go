@@ -90,6 +90,21 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 // legacyOptions mirrors old Options struct for tests.
 type legacyOptions struct {
 	Name              string
@@ -288,6 +303,21 @@ func (s *silentAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 	return ch, nil
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (s *silentAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (s *silentAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (s *silentAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 type failAgent struct{ name string }
 
 func (f *failAgent) Info() agent.Info                { return agent.Info{Name: f.name} }
@@ -296,6 +326,21 @@ func (f *failAgent) FindSubAgent(string) agent.Agent { return nil }
 func (f *failAgent) Tools() []tool.Tool              { return nil }
 func (f *failAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	return nil, errors.New("boom")
+}
+
+// SwitchModel implements the agent.Agent interface for testing.
+func (f *failAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (f *failAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (f *failAgent) Models() []model.Model {
+	return []model.Model{}
 }
 
 func TestParallelAgent_BeforeErr(t *testing.T) {

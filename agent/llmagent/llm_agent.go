@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -40,6 +41,24 @@ type Option func(*Options)
 func WithModel(model model.Model) Option {
 	return func(opts *Options) {
 		opts.Model = model
+	}
+}
+
+// WithModels enables multi-model switching with the specified models.
+func WithModels(defaultModel model.Model, additionalModels ...model.Model) Option {
+	return func(o *Options) {
+		// Create manager with default model.
+		mm := model.NewManager(defaultModel)
+
+		// Register additional models if provided.
+		if len(additionalModels) > 0 {
+			mm.RegisterModels(additionalModels...)
+		}
+
+		o.Manager = mm
+
+		// Set the default model.
+		o.Model = defaultModel
 	}
 }
 
@@ -237,6 +256,8 @@ type Options struct {
 	Name string
 	// Model is the model to use for generating responses.
 	Model model.Model
+	// Manager is the model manager for handling multiple models and switching.
+	Manager model.Manager
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction for the agent.
@@ -298,6 +319,7 @@ type Options struct {
 type LLMAgent struct {
 	name           string
 	model          model.Model
+	manager        model.Manager // Model manager for handling multiple models
 	description    string
 	instruction    string
 	systemPrompt   string
@@ -426,6 +448,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	return &LLMAgent{
 		name:           name,
 		model:          options.Model,
+		manager:        options.Manager,
 		description:    options.Description,
 		instruction:    options.Instruction,
 		systemPrompt:   options.GlobalInstruction,
@@ -481,8 +504,14 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
 	// Ensure the invocation has a model set.
-	if invocation.Model == nil && a.model != nil {
-		invocation.Model = a.model
+	if invocation.Model == nil {
+		if a.manager != nil {
+			// Use the active model from the manager if available.
+			invocation.Model = a.manager.ActiveModel()
+		} else if a.model != nil {
+			// Fall back to the single model if no manager is available.
+			invocation.Model = a.model
+		}
 	}
 
 	// Ensure the agent name is set.
@@ -638,4 +667,32 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// SwitchModel switches to the specified model by name.
+func (a *LLMAgent) SwitchModel(name string) error {
+	if a.manager == nil {
+		return errors.New("model switching is not enabled")
+	}
+	return a.manager.SwitchModel(name)
+}
+
+// ActiveModel returns the currently active model.
+func (a *LLMAgent) ActiveModel() model.Model {
+	if a.manager != nil {
+		return a.manager.ActiveModel()
+	}
+	return a.model
+}
+
+// Models returns a list of all available models.
+func (a *LLMAgent) Models() []model.Model {
+	if a.manager != nil {
+		return a.manager.Models()
+	}
+	// Return single model as a slice for backward compatibility.
+	if a.model != nil {
+		return []model.Model{a.model}
+	}
+	return []model.Model{}
 }

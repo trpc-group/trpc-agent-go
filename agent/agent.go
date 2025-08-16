@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -78,6 +79,15 @@ type Agent interface {
 	// FindSubAgent finds a sub-agent by name.
 	// Returns nil if no sub-agent with the given name is found.
 	FindSubAgent(name string) Agent
+
+	// SwitchModel switches to the specified model by name.
+	SwitchModel(name string) error
+
+	// ActiveModel returns the currently active model.
+	ActiveModel() model.Model
+
+	// Models returns a list of all available models.
+	Models() []model.Model
 }
 
 // CodeExecutor may move to Agent interface, will cause large scale change, consider later.

@@ -367,3 +367,21 @@ func (a *ParallelAgent) FindSubAgent(name string) agent.Agent {
 	}
 	return nil
 }
+
+// SwitchModel implements the agent.Agent interface.
+// Parallel agents don't have their own models, so this is a no-op.
+func (a *ParallelAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface.
+// Parallel agents don't have their own models, so this returns nil.
+func (a *ParallelAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface.
+// Parallel agents don't have their own models, so this returns an empty slice.
+func (a *ParallelAgent) Models() []model.Model {
+	return []model.Model{}
+}

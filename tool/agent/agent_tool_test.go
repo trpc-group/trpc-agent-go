@@ -67,6 +67,21 @@ func (m *mockAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestNewTool(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",

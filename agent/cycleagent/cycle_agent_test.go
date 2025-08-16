@@ -93,6 +93,21 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return m.tools
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *mockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *mockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *mockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 // legacyOptions mirrors old Options struct for test compatibility.
 type legacyOptions struct {
 	Name              string
@@ -337,6 +352,21 @@ func (m *conditionalMockAgent) Tools() []tool.Tool {
 	return nil
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (m *conditionalMockAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestCycleAgent_Run_SubAgentError(t *testing.T) {
 	// Create agent that returns error.
 	subAgent1 := &mockAgent{name: "agent-1", eventCount: 1}
@@ -466,6 +496,21 @@ func (n *noopAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	return ch, nil
 }
 
+// SwitchModel implements the agent.Agent interface for testing.
+func (n *noopAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (n *noopAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (n *noopAgent) Models() []model.Model {
+	return []model.Model{}
+}
+
 func TestCycleAgent_BeforeCallbackResp(t *testing.T) {
 	cb := agent.NewCallbacks()
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
@@ -529,6 +574,21 @@ func (e *errorAgent) FindSubAgent(string) agent.Agent { return nil }
 func (e *errorAgent) Tools() []tool.Tool              { return nil }
 func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	return nil, errors.New("failed")
+}
+
+// SwitchModel implements the agent.Agent interface for testing.
+func (e *errorAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (e *errorAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (e *errorAgent) Models() []model.Model {
+	return []model.Model{}
 }
 
 func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
@@ -598,6 +658,21 @@ func (s *simpleAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *e
 		ch <- e
 	}()
 	return ch, nil
+}
+
+// SwitchModel implements the agent.Agent interface for testing.
+func (s *simpleAgent) SwitchModel(name string) error {
+	return nil
+}
+
+// ActiveModel implements the agent.Agent interface for testing.
+func (s *simpleAgent) ActiveModel() model.Model {
+	return nil
+}
+
+// Models implements the agent.Agent interface for testing.
+func (s *simpleAgent) Models() []model.Model {
+	return []model.Model{}
 }
 
 func TestCycleAgent_ShouldEscalateDef(t *testing.T) {
