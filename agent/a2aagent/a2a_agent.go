@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -36,8 +33,8 @@ const (
 	AgentCardWellKnownPath = "/.well-known/agent.json"
 	// A2AMetadataPrefix is the prefix for A2A-specific metadata
 	A2AMetadataPrefix = "a2a:"
-	// DefaultTimeout is the default HTTP timeout
-	DefaultTimeout = 120 * time.Second
+	// defaultFetchTimeout is the default timeout for fetching agent card
+	defaultFetchTimeout = 30 * time.Second
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
@@ -51,7 +48,6 @@ type A2AAgent struct {
 
 	// HTTP client configuration
 	httpClient *http.Client
-	timeout    time.Duration
 
 	// A2A client
 	a2aClient *client.A2AClient
@@ -63,9 +59,7 @@ type A2AAgent struct {
 // - A *server.AgentCard object
 // - A URL string to A2A endpoint
 func New(opts ...Option) (*A2AAgent, error) {
-	agent := &A2AAgent{
-		timeout: DefaultTimeout,
-	}
+	agent := &A2AAgent{}
 
 	for _, opt := range opts {
 		opt(agent)
@@ -83,9 +77,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 		return nil, fmt.Errorf("agent card not set")
 	}
 
-	a2aClientOpts := []client.Option{
-		client.WithTimeout(agent.timeout),
-	}
+	a2aClientOpts := []client.Option{}
 	if agent.httpClient != nil {
 		a2aClientOpts = append(a2aClientOpts, client.WithHTTPClient(agent.httpClient))
 	}
@@ -108,7 +100,7 @@ func (r *A2AAgent) resolveAgentCardFromURL() (*server.AgentCard, error) {
 	// Create HTTP client if not set
 	httpClient := r.httpClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: r.timeout}
+		httpClient = &http.Client{Timeout: defaultFetchTimeout}
 	}
 
 	// Fetch agent card from well-known path
@@ -203,10 +195,10 @@ func (r *A2AAgent) buildA2AMessage(
 }
 
 // buildRespEvent converts A2A response to tRPC event
-func (a *A2AAgent) buildRespEvent(response *protocol.Message, invocation *agent.Invocation) *event.Event {
+func (r *A2AAgent) buildRespEvent(response *protocol.Message, invocation *agent.Invocation) *event.Event {
 	if response == nil {
 		return &event.Event{
-			Author:       a.name,
+			Author:       r.name,
 			InvocationID: invocation.InvocationID,
 			Response: &model.Response{
 				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
@@ -223,7 +215,7 @@ func (a *A2AAgent) buildRespEvent(response *protocol.Message, invocation *agent.
 
 	// Create response event
 	ev := &event.Event{
-		Author:       a.name,
+		Author:       r.name,
 		InvocationID: invocation.InvocationID,
 		Response: &model.Response{
 			Choices:   []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: content}}},

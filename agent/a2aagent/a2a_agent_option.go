@@ -1,21 +1,16 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
 package a2aagent
 
 import (
-	"net/http"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 )
@@ -34,20 +29,6 @@ func WithName(name string) Option {
 func WithDescription(description string) Option {
 	return func(a *A2AAgent) {
 		a.description = description
-	}
-}
-
-// WithTimeout sets the HTTP timeout
-func WithTimeout(timeout time.Duration) Option {
-	return func(a *A2AAgent) {
-		a.timeout = timeout
-	}
-}
-
-// WithHTTPClient sets a custom HTTP client
-func WithHTTPClient(client *http.Client) Option {
-	return func(a *A2AAgent) {
-		a.httpClient = client
 	}
 }
 
