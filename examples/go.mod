@@ -15,16 +15,18 @@ replace (
 )
 
 require (
+	github.com/openai/openai-go v1.12.0
 	go.opentelemetry.io/otel v1.37.0
 	go.opentelemetry.io/otel/metric v1.37.0
 	go.opentelemetry.io/otel/trace v1.37.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.1
+	go.uber.org/zap v1.27.0
+	trpc.group/trpc-go/trpc-a2a-go v0.2.2
 	trpc.group/trpc-go/trpc-agent-go v0.0.2
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.2
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.2
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.2-0.20250807061029-66942a6b44d9
-	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd
+	trpc.group/trpc-go/trpc-mcp-go v0.0.2
 )
 
 require (
@@ -73,7 +75,6 @@ require (
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
-	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
@@ -102,7 +103,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.37.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect

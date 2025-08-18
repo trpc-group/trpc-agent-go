@@ -31,8 +31,8 @@ require (
 	golang.org/x/text v0.26.0
 	google.golang.org/genai v1.15.0
 	google.golang.org/grpc v1.73.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.1
-	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd
+	trpc.group/trpc-go/trpc-a2a-go v0.2.2
+	trpc.group/trpc-go/trpc-mcp-go v0.0.2
 )
 
 require (

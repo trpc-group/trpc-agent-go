@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.4] - 2025-08-18
+
+### Features
+- **agent**: Add A2A agent support for agent-to-agent communication. (#222)
+- **agent**: Support input schema for agent configuration. (#212)
+- **agent**: Implement multi-model switching functionality with dynamic model selection. (#224)
+- **llmagent**: Add content prefix option for enhanced prompt customization. (#219)
+- **model**: Add reasoning content to non-streaming and final response. (#226)
+- **graph**: Switch to Pregel engine with rich event output for better workflow orchestration. (#220)
+- **graphagent**: Support setting of initial state at each run for improved state management. (#210)
+- **tool**: Enhance JSON schema support with descriptions, enum and required fields for input/output structs. (#216)
+
+### Bug Fixes
+- **session**: Fix Redis session event order issue to ensure proper event sequencing. (#223)
+
+### Examples
+- **examples**: Add comprehensive model retry example with detailed usage documentation. (#218)
+- **examples**: Enhance model example with detailed README and improved output messages. (#221)
+- **examples**: Provide token tracker example for monitoring token usage. (#214)
+- **examples**: Demonstrate the usage of placeholders for dynamic content. (#213)
+- **examples**: Enhance knowledge chat example with multiple embedder support and improved configuration. (#211)
+- **examples/telemetry**: Refactor to use environment variables for LangFuse configuration. (#215)
+- **examples**: Reorganize model retry example structure for better clarity. (#225)
+- **examples**: Update placeholder example. (#228)
+
+### Documentation
+- **docs**: Update license files across the project. (#217)
+
+### Dependencies
+- **deps**: Bump A2A and MCP requirement versions. （#227）
+
+
 ## [0.0.3] - 2025-08-13
 
 ### Features
