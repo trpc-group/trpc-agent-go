@@ -1695,3 +1695,85 @@ func TestModel_GenerateContent_WithReasoningContent(t *testing.T) {
 		t.Error("Expected to find responses with reasoning_content, but none were found")
 	}
 }
+
+func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
+	// Create a mock server that returns non-streaming responses with reasoning_content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		// Send non-streaming response with reasoning_content
+		response := `{
+			"id": "test",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "deepseek-chat",
+			"choices": [
+				{
+					"index": 0,
+					"message": {
+						"role": "assistant",
+						"content": "Final answer",
+						"reasoning_content": "Complete reasoning process"
+					},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 20,
+				"total_tokens": 30
+			}
+		}`
+
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	// Create model instance
+	m := New("deepseek-chat", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	// Create request (non-streaming)
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test with reasoning content"}},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	// Send request
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	// Collect responses
+	var responses []*model.Response
+	for response := range responseChan {
+		responses = append(responses, response)
+		if response.Error != nil {
+			t.Fatalf("Response error: %v", response.Error)
+		}
+	}
+
+	// Verify response contains reasoning_content
+	if len(responses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(responses))
+	}
+
+	if len(responses[0].Choices) == 0 {
+		t.Fatal("Expected at least one choice in response")
+	}
+
+	// Check that reasoning content is present in the final message
+	if responses[0].Choices[0].Message.ReasoningContent != "Complete reasoning process" {
+		t.Errorf("Expected reasoning_content 'Complete reasoning process', got '%s'", responses[0].Choices[0].Message.ReasoningContent)
+	}
+
+	// Check that content is also present
+	if responses[0].Choices[0].Message.Content != "Final answer" {
+		t.Errorf("Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
+	}
+}
