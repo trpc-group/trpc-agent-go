@@ -306,3 +306,28 @@ func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
 		t.Fatalf("expected model-B after SetModel, got %s", seen)
 	}
 }
+
+func TestLLMAgent_GetModel_ReturnsActiveModel(t *testing.T) {
+	mA := &staticModel{name: "model-A"}
+	mB := &staticModel{name: "model-B"}
+
+	agt := New("test-agent", WithModel(mA))
+	if got := agt.GetModel(); got == nil || got.Info().Name != "model-A" {
+		t.Fatalf("expected model-A at start, got %v", func() any {
+			if got == nil {
+				return nil
+			}
+			return got.Info().Name
+		}())
+	}
+
+	agt.SetModel(mB)
+	if got := agt.GetModel(); got == nil || got.Info().Name != "model-B" {
+		t.Fatalf("expected model-B after SetModel, got %v", func() any {
+			if got == nil {
+				return nil
+			}
+			return got.Info().Name
+		}())
+	}
+}
