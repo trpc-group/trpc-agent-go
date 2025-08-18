@@ -50,6 +50,10 @@ func buildAgentCard(options *options) a2a.AgentCard {
 	desc := agent.Info().Description
 	name := agent.Info().Name
 	url := fmt.Sprintf("http://%s", options.host)
+
+	// Build skills from agent tools
+	skills := buildSkillsFromTools(agent, name, desc)
+
 	return a2a.AgentCard{
 		Name:        name,
 		Description: desc,
@@ -57,15 +61,7 @@ func buildAgentCard(options *options) a2a.AgentCard {
 		Capabilities: a2a.AgentCapabilities{
 			Streaming: boolPtr(true),
 		},
-		Skills: []a2a.AgentSkill{
-			{
-				Name:        name,
-				Description: &desc,
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-				Tags:        []string{"default"},
-			},
-		},
+		Skills:             skills,
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
 	}
@@ -425,6 +421,51 @@ func processAgentResponse(eventChan <-chan *event.Event) (string, error) {
 		}
 	}
 	return fullContent, nil
+}
+
+// buildSkillsFromTools converts agent tools to AgentSkills
+func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.AgentSkill {
+	tools := agent.Tools()
+	if len(tools) == 0 {
+		// If no tools, create a default skill
+		return []a2a.AgentSkill{
+			{
+				Name:        agentName,
+				Description: &agentDesc,
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+				Tags:        []string{"default"},
+			},
+		}
+	}
+
+	skills := make([]a2a.AgentSkill, 0, len(tools)+1)
+
+	// Add default agent skill
+	skills = append(skills, a2a.AgentSkill{
+		Name:        agentName,
+		Description: &agentDesc,
+		InputModes:  []string{"text"},
+		OutputModes: []string{"text"},
+		Tags:        []string{"default"},
+	})
+
+	// Add tool-based skills
+	for _, tool := range tools {
+		decl := tool.Declaration()
+		if decl != nil {
+			skill := a2a.AgentSkill{
+				Name:        decl.Name,
+				Description: &decl.Description,
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+				Tags:        []string{"tool"},
+			}
+			skills = append(skills, skill)
+		}
+	}
+
+	return skills
 }
 
 func boolPtr(b bool) *bool {
