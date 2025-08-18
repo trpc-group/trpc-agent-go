@@ -812,7 +812,7 @@ func (m *Model) shouldSuppressChunk(chunk openai.ChatCompletionChunk) bool {
 	}
 
 	// think model reasoning content
-	if _, ok := delta.JSON.ExtraFields["reasoning_content"]; ok {
+	if _, ok := delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
 		return false
 	}
 
@@ -870,7 +870,7 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 			response.Choices = make([]model.Choice, 1)
 		}
 
-		reasoningContent, err := strconv.Unquote(chunk.Choices[0].Delta.JSON.ExtraFields["reasoning_content"].Raw())
+		reasoningContent, err := strconv.Unquote(chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey].Raw())
 		if err != nil {
 			reasoningContent = ""
 		}
@@ -992,11 +992,22 @@ func (m *Model) createFinalResponse(
 	}
 
 	for i, choice := range acc.Choices {
+		// Extract reasoning content from the accumulated message if available.
+		var reasoningContent string
+		if choice.Message.JSON.ExtraFields != nil {
+			if reasoningField, ok := choice.Message.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+				if reasoningStr, err := strconv.Unquote(reasoningField.Raw()); err == nil {
+					reasoningContent = reasoningStr
+				}
+			}
+		}
+
 		finalResponse.Choices[i] = model.Choice{
 			Index: int(choice.Index),
 			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: choice.Message.Content,
+				Role:             model.RoleAssistant,
+				Content:          choice.Message.Content,
+				ReasoningContent: reasoningContent,
 			},
 		}
 
@@ -1051,11 +1062,22 @@ func (m *Model) handleNonStreamingResponse(
 	if len(chatCompletion.Choices) > 0 {
 		response.Choices = make([]model.Choice, len(chatCompletion.Choices))
 		for i, choice := range chatCompletion.Choices {
+			// Extract reasoning content from the message if available.
+			var reasoningContent string
+			if choice.Message.JSON.ExtraFields != nil {
+				if reasoningField, ok := choice.Message.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+					if reasoningStr, err := strconv.Unquote(reasoningField.Raw()); err == nil {
+						reasoningContent = reasoningStr
+					}
+				}
+			}
+
 			response.Choices[i] = model.Choice{
 				Index: int(choice.Index),
 				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: choice.Message.Content,
+					Role:             model.RoleAssistant,
+					Content:          choice.Message.Content,
+					ReasoningContent: reasoningContent,
 				},
 			}
 
