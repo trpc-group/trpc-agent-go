@@ -26,10 +26,9 @@ func main() {
 	modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
 	flag.Parse()
 
-	fmt.Printf("Using configuration:\n")
-	fmt.Printf("- Model Name: %s\n", *modelName)
-	fmt.Printf("- Channel Buffer Size: 512\n")
-	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
+	fmt.Printf("🚀 Using configuration:\n")
+	fmt.Printf("   📝 Model Name: %s\n", *modelName)
+	fmt.Printf("   🔑 OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
 	fmt.Println()
 
 	// Create a new OpenAI-like model instance.
@@ -38,31 +37,33 @@ func main() {
 
 	ctx := context.Background()
 
-	fmt.Println("=== Non-streaming Example ===")
+	fmt.Println("🔄 === Non-streaming Example ===")
 	if err := nonStreamingExample(ctx, llm); err != nil {
-		log.Printf("Non-streaming example failed: %v", err)
+		log.Printf("❌ Non-streaming example failed: %v", err)
 	}
 
-	fmt.Println("\n=== Streaming Example ===")
+	fmt.Println("\n🌊 === Streaming Example ===")
 	if err := streamingExample(ctx, llm); err != nil {
-		log.Printf("Streaming example failed: %v", err)
+		log.Printf("❌ Streaming example failed: %v", err)
 	}
 
-	fmt.Println("\n=== Advanced Example with Parameters ===")
+	fmt.Println("\n⚡ === Advanced Example with Parameters ===")
 	if err := advancedExample(ctx, llm); err != nil {
-		log.Printf("Advanced example failed: %v", err)
+		log.Printf("❌ Advanced example failed: %v", err)
 	}
 
-	fmt.Println("\n=== Parameter Testing Example ===")
+	fmt.Println("\n🧪 === Parameter Testing Example ===")
 	if err := parameterTestingExample(ctx, llm); err != nil {
-		log.Printf("Parameter testing example failed: %v", err)
+		log.Printf("❌ Parameter testing example failed: %v", err)
 	}
 
-	fmt.Println("=== Demo Complete ===")
+	fmt.Println("🎉 === Demo Complete ===")
 }
 
 // nonStreamingExample demonstrates non-streaming usage.
 func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
+	fmt.Println("💬 Sending non-streaming request...")
+
 	temperature := 0.7
 	maxTokens := 1000
 
@@ -90,15 +91,15 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 
 		if len(response.Choices) > 0 {
 			choice := response.Choices[0]
-			fmt.Printf("Response: %s\n", choice.Message.Content)
+			fmt.Printf("🤖 Response: %s\n", choice.Message.Content)
 
 			if choice.FinishReason != nil {
-				fmt.Printf("Finish reason: %s\n", *choice.FinishReason)
+				fmt.Printf("🏁 Finish reason: %s\n", *choice.FinishReason)
 			}
 		}
 
 		if response.Usage != nil {
-			fmt.Printf("Token usage - Prompt: %d, Completion: %d, Total: %d\n",
+			fmt.Printf("💎 Token usage - Prompt: %d, Completion: %d, Total: %d\n",
 				response.Usage.PromptTokens,
 				response.Usage.CompletionTokens,
 				response.Usage.TotalTokens)
@@ -114,6 +115,8 @@ func nonStreamingExample(ctx context.Context, llm *openai.Model) error {
 
 // streamingExample demonstrates streaming usage.
 func streamingExample(ctx context.Context, llm *openai.Model) error {
+	fmt.Println("🌊 Starting streaming request...")
+
 	temperature := 0.8
 	maxTokens := 500
 
@@ -134,7 +137,7 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 		return fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	fmt.Print("Streaming response: ")
+	fmt.Print("📝 Streaming response: ")
 	var fullContent string
 
 	for response := range responseChan {
@@ -150,12 +153,12 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 			}
 
 			if choice.FinishReason != nil {
-				fmt.Printf("\nFinish reason: %s\n", *choice.FinishReason)
+				fmt.Printf("\n🏁 Finish reason: %s\n", *choice.FinishReason)
 			}
 		}
 
 		if response.Done {
-			fmt.Printf("\n\nStreaming completed. Full content length: %d characters\n", len(fullContent))
+			fmt.Printf("\n\n✅ Streaming completed. Full content length: %d characters\n", len(fullContent))
 			break
 		}
 	}
@@ -165,6 +168,8 @@ func streamingExample(ctx context.Context, llm *openai.Model) error {
 
 // advancedExample demonstrates advanced parameters and conversation.
 func advancedExample(ctx context.Context, llm *openai.Model) error {
+	fmt.Println("🔬 Sending advanced request with custom parameters...")
+
 	temperature := 0.3
 	maxTokens := 1000
 	topP := 0.9
@@ -182,10 +187,10 @@ func advancedExample(ctx context.Context, llm *openai.Model) error {
 		},
 	}
 
-	fmt.Println("Sending advanced request with custom parameters:")
-	fmt.Printf("- Temperature: %.1f\n", temperature)
-	fmt.Printf("- Max tokens: %d\n", maxTokens)
-	fmt.Printf("- Top P: %.1f\n", topP)
+	fmt.Println("📊 Request parameters:")
+	fmt.Printf("   🌡️ Temperature: %.1f\n", temperature)
+	fmt.Printf("   📏 Max tokens: %d\n", maxTokens)
+	fmt.Printf("   🎯 Top P: %.1f\n", topP)
 	fmt.Println()
 
 	responseChan, err := llm.GenerateContent(ctx, request)
@@ -200,20 +205,20 @@ func advancedExample(ctx context.Context, llm *openai.Model) error {
 
 		if len(response.Choices) > 0 {
 			choice := response.Choices[0]
-			fmt.Printf("Advanced Response:\n%s\n", choice.Message.Content)
+			fmt.Printf("🧠 Advanced Response:\n%s\n", choice.Message.Content)
 
 			if choice.FinishReason != nil {
-				fmt.Printf("Finish reason: %s\n", *choice.FinishReason)
+				fmt.Printf("🏁 Finish reason: %s\n", *choice.FinishReason)
 			}
 		}
 
 		// Display response metadata.
-		fmt.Printf("Response ID: %s\n", response.ID)
-		fmt.Printf("Model: %s\n", response.Model)
-		fmt.Printf("Created: %s\n", time.Unix(response.Created, 0).Format(time.RFC3339))
+		fmt.Printf("🆔 Response ID: %s\n", response.ID)
+		fmt.Printf("📝 Model: %s\n", response.Model)
+		fmt.Printf("🕐 Created: %s\n", time.Unix(response.Created, 0).Format(time.RFC3339))
 
 		if response.Usage != nil {
-			fmt.Printf("Token usage - Prompt: %d, Completion: %d, Total: %d\n",
+			fmt.Printf("💎 Token usage - Prompt: %d, Completion: %d, Total: %d\n",
 				response.Usage.PromptTokens,
 				response.Usage.CompletionTokens,
 				response.Usage.TotalTokens)
@@ -229,7 +234,7 @@ func advancedExample(ctx context.Context, llm *openai.Model) error {
 
 // parameterTestingExample demonstrates various parameter combinations.
 func parameterTestingExample(ctx context.Context, llm *openai.Model) error {
-	fmt.Println("Testing different parameter combinations...")
+	fmt.Println("🧪 Testing different parameter combinations...")
 
 	tests := []struct {
 		name        string
@@ -262,7 +267,7 @@ func parameterTestingExample(ctx context.Context, llm *openai.Model) error {
 	}
 
 	for _, test := range tests {
-		fmt.Printf("\n--- %s (%s) ---\n", test.name, test.description)
+		fmt.Printf("\n🎨 --- %s (%s) ---\n", test.name, test.description)
 
 		request := &model.Request{
 			Messages: []model.Message{
@@ -278,7 +283,7 @@ func parameterTestingExample(ctx context.Context, llm *openai.Model) error {
 		}
 
 		if err := testRequest(ctx, llm, request, test.description); err != nil {
-			fmt.Printf("Test '%s' failed: %v\n", test.name, err)
+			fmt.Printf("❌ Test '%s' failed: %v\n", test.name, err)
 		}
 	}
 
@@ -299,15 +304,15 @@ func testRequest(ctx context.Context, llm *openai.Model, request *model.Request,
 
 		if len(response.Choices) > 0 {
 			choice := response.Choices[0]
-			fmt.Printf("Response: %s\n", choice.Message.Content)
+			fmt.Printf("🤖 Response: %s\n", choice.Message.Content)
 
 			if choice.FinishReason != nil {
-				fmt.Printf("Finish reason: %s\n", *choice.FinishReason)
+				fmt.Printf("🏁 Finish reason: %s\n", *choice.FinishReason)
 			}
 		}
 
 		if response.Usage != nil {
-			fmt.Printf("Tokens used: %d\n", response.Usage.TotalTokens)
+			fmt.Printf("💎 Tokens used: %d\n", response.Usage.TotalTokens)
 		}
 
 		if response.Done {
