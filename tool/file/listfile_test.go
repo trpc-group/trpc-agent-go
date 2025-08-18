@@ -110,3 +110,43 @@ func TestFileTool_listFile_WithFolders(t *testing.T) {
 	// Check that all test folders are in the response.
 	assert.ElementsMatch(t, testFolders, rsp.Folders)
 }
+
+func TestFileTool_listFile_DirTraversal(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := set.(*fileToolSet)
+	assert.True(t, ok)
+	// Test listing files in subdirectory.
+	req := &listFileRequest{Path: "../"}
+	_, err = fileToolSet.listFile(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_NotExist(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := set.(*fileToolSet)
+	assert.True(t, ok)
+	// Test listing files in subdirectory.
+	req := &listFileRequest{Path: "notexist"}
+	_, err = fileToolSet.listFile(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_listFile_IsFile(t *testing.T) {
+	tempDir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := set.(*fileToolSet)
+	assert.True(t, ok)
+	// Create a file.
+	file := filepath.Join(tempDir, "file.txt")
+	err = os.WriteFile(file, []byte("test content"), 0644)
+	assert.NoError(t, err)
+	// Test listing files in subdirectory.
+	req := &listFileRequest{Path: "file.txt"}
+	_, err = fileToolSet.listFile(context.Background(), req)
+	assert.Error(t, err)
+}

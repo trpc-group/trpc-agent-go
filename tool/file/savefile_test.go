@@ -216,3 +216,15 @@ func TestFileTool_SaveFile_CustomPermissionsForDirectory(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, customDirMode, stat.Mode().Perm())
 }
+
+func TestFileTool_SaveFile_DirTraversal(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+	// Test saving a file.
+	req := &saveFileRequest{FileName: "../"}
+	_, err = fileToolSet.saveFile(context.Background(), req)
+	assert.Error(t, err)
+}

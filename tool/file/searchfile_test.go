@@ -197,6 +197,17 @@ func TestFileTool_SearchFile(t *testing.T) {
 			pattern:     "",
 			expectError: true,
 		},
+		{
+			name:        "DirTraversal",
+			path:        "../",
+			pattern:     "*",
+			expectError: true,
+		},
+		{
+			name:        "InvalidPattern",
+			pattern:     "[",
+			expectError: true,
+		},
 	}
 	// Run test cases.
 	for _, tt := range tests {

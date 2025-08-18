@@ -281,3 +281,32 @@ func TestFileTool_ReadFile_LimitExceed(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "line1\nline2\n", rsp.Contents)
 }
+
+func TestFileTool_ReadFile_DirTraversal(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+	// Test reading with start line 1 and num lines 10.
+	req := &readFileRequest{FileName: "../"}
+	_, err = fileToolSet.readFile(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_ReadFile_ExceedMaxFileSize(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir), WithMaxFileSize(1))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+	// Create a file with 2 lines.
+	testContent := "line1\nline2"
+	testFile := filepath.Join(tempDir, "test.txt")
+	err = os.WriteFile(testFile, []byte(testContent), 0644)
+	assert.NoError(t, err)
+	// Test reading the file.
+	req := &readFileRequest{FileName: "test.txt"}
+	_, err = fileToolSet.readFile(context.Background(), req)
+	assert.Error(t, err)
+}

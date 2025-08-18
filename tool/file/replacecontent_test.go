@@ -218,3 +218,25 @@ func TestFileTool_MultiLine(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "123xxx\nxxx\nxxx456", string(data))
 }
+
+func TestFileTool_ReplaceContent_DirTraversal(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+	req := &replaceContentRequest{FileName: "../", OldString: "a"}
+	_, err = fileToolSet.replaceContent(context.Background(), req)
+	assert.Error(t, err)
+}
+
+func TestFileTool_ReplaceContent_NotExist(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+	req := &replaceContentRequest{FileName: "notexist.txt", OldString: "a"}
+	_, err = fileToolSet.replaceContent(context.Background(), req)
+	assert.Error(t, err)
+}

@@ -134,14 +134,45 @@ func TestSearchContent(t *testing.T) {
 		{
 			name: "not found",
 			req: searchContentRequest{
-				Path: "not-found",
+				Path:           "not-found",
+				FilePattern:    "*.txt",
+				ContentPattern: "foo",
 			},
 			wantErr: true,
 		},
 		{
 			name: "not a directory",
 			req: searchContentRequest{
-				Path: "a.txt",
+				Path:           "a.txt",
+				FilePattern:    "*.txt",
+				ContentPattern: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "directory traversal attack",
+			req: searchContentRequest{
+				Path:           "../",
+				FilePattern:    "**/*.txt",
+				ContentPattern: "foo",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid content pattern",
+			req: searchContentRequest{
+				Path:           "",
+				FilePattern:    "a.txt",
+				ContentPattern: "?",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid file pattern",
+			req: searchContentRequest{
+				Path:           "",
+				FilePattern:    "[",
+				ContentPattern: "foo",
 			},
 			wantErr: true,
 		},
