@@ -12,7 +12,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,49 +19,44 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	openaisdk "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
 // Constants to avoid magic strings and provide sane defaults.
 const (
 	defaultModelName = "gpt-4o-mini"
-	defaultAction    = "create" // Supported: create|get|cancel|list.
+	defaultAction    = "list" // Supported: create|get|cancel|list.
 	defaultLimit     = int64(5)
 	defaultWindow    = "24h" // Batch completion window.
-	methodPOST       = "POST"
 )
-
-// batchJSONL represents a single JSONL line for batch input file.
-type batchJSONL struct {
-	CustomID string      `json:"custom_id"`
-	Method   string      `json:"method"`
-	URL      string      `json:"url"`
-	Body     interface{} `json:"body"`
-}
 
 func main() {
 	// CLI flags for different actions.
-	action := flag.String("action", defaultAction, "Action: create|get|cancel|list")
+	action := flag.String("action", defaultAction, "Action: create|"+
+		"get|cancel|list")
 	modelName := flag.String("model", defaultModelName, "Model name to use")
 	maxRetries := flag.Int("retries", 3, "Max HTTP retries for SDK requests")
 	timeout := flag.Duration("timeout", 30*time.Second, "Request timeout")
 
-	// Flags for create.
-	endpointStr := flag.String("endpoint", string(openaisdk.BatchNewParamsEndpointV1ChatCompletions), "Endpoint for batch: /v1/chat/completions|/v1/responses|/v1/embeddings|/v1/completions")
-	prompt := flag.String("prompt", "Say hello from batch.", "Prompt used to generate JSONL body")
-	count := flag.Int("count", 3, "How many requests to include in JSONL input")
-	inputPath := flag.String("input", "", "Optional path to an existing JSONL file; if empty a temp file is generated")
+	// Create options: user-provided requests.
+	requestsInline := flag.String("requests", "", "Inline requests spec. "+
+		"Format: 'role: msg || role: msg /// role: msg || role: msg'.")
+	requestsFile := flag.String("file", "", "Path to requests spec file. "+
+		"Same format as -requests, '///' between requests, '||' between messages.")
 
 	// Flags for get/cancel.
 	batchID := flag.String("id", "", "Batch ID for get/cancel")
 
 	// Flags for list.
 	after := flag.String("after", "", "Pagination cursor for listing batches")
-	limit := flag.Int64("limit", defaultLimit, "Max number of batches to list (1-100)")
+	limit := flag.Int64("limit", defaultLimit, "Max number of batches to list "+
+		"(1-100)")
 
 	flag.Parse()
 
@@ -85,7 +79,7 @@ func main() {
 	var err error
 	switch *action {
 	case "create":
-		err = runCreate(ctx, llm, *modelName, *endpointStr, *prompt, *count, *inputPath)
+		err = runCreate(ctx, llm, *requestsInline, *requestsFile)
 	case "get":
 		err = runGet(ctx, llm, *batchID)
 	case "cancel":
@@ -103,84 +97,105 @@ func main() {
 	}
 }
 
-// runCreate uploads a JSONL file (or uses given path) and creates a batch.
+// runCreate builds requests from user spec and creates a batch.
 func runCreate(
 	ctx context.Context,
 	llm *openai.Model,
-	modelName string,
-	endpointStr string,
-	prompt string,
-	count int,
-	inputPath string,
+	inlineSpec string,
+	filePath string,
 ) error {
-	if count <= 0 {
-		return errors.New("count must be > 0")
+	if inlineSpec == "" && filePath == "" {
+		return errors.New("provide -requests or -file for create")
 	}
 
-	endpoint, err := toBatchEndpoint(endpointStr)
-	if err != nil {
-		return err
-	}
-
-	// Prepare JSONL file if not provided.
-	var filePath string
-	if inputPath != "" {
-		filePath = inputPath
-		fmt.Printf("📄 Using existing JSONL file: %s\n", filePath)
-	} else {
-		fmt.Println("🛠️  Generating temporary JSONL input file...")
-		tmp, err := os.CreateTemp("", "batch-input-*.jsonl")
+	spec := inlineSpec
+	if spec == "" {
+		b, err := os.ReadFile(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to create temp file: %w", err)
+			return fmt.Errorf("failed to read file: %w", err)
 		}
-		defer tmp.Close()
-		writer := bufio.NewWriter(tmp)
-
-		// Construct JSONL lines based on endpoint.
-		for i := 0; i < count; i++ {
-			line, err := buildJSONLLine(i, endpoint, modelName, prompt)
-			if err != nil {
-				return err
-			}
-			bytes, err := json.Marshal(line)
-			if err != nil {
-				return fmt.Errorf("failed to marshal jsonl line: %w", err)
-			}
-			if _, err := writer.Write(bytes); err != nil {
-				return fmt.Errorf("failed to write jsonl line: %w", err)
-			}
-			if err := writer.WriteByte('\n'); err != nil {
-				return fmt.Errorf("failed to write newline: %w", err)
-			}
-		}
-		if err := writer.Flush(); err != nil {
-			return fmt.Errorf("failed to flush writer: %w", err)
-		}
-		filePath = tmp.Name()
-		fmt.Printf("📦 JSONL file generated: %s\n", filePath)
+		spec = strings.TrimSpace(string(b))
 	}
 
-	// Upload file with purpose set to "batch".
-	const filePurposeBatch openaisdk.FilePurpose = openaisdk.FilePurpose("batch")
-	fileID, err := llm.UploadFile(ctx, filePath, openai.WithPurpose(filePurposeBatch))
+	requests, err := parseRequestsSpec(spec)
 	if err != nil {
-		return fmt.Errorf("failed to upload jsonl file: %w", err)
+		return fmt.Errorf("invalid requests spec: %w", err)
 	}
-	fmt.Printf("☁️  Uploaded file. File ID: %s\n", fileID)
+	if len(requests) == 0 {
+		return errors.New("no requests parsed")
+	}
 
-	// Create the batch.
-	params := openaisdk.BatchNewParams{
-		CompletionWindow: openaisdk.BatchNewParamsCompletionWindow(defaultWindow),
-		Endpoint:         endpoint,
-		InputFileID:      fileID,
-	}
-	batch, err := llm.CreateBatch(ctx, params)
+	batch, err := llm.CreateBatch(
+		ctx,
+		requests,
+		openai.WithBatchCreateCompletionWindow(defaultWindow),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create batch: %w", err)
 	}
 
 	printBatch("🆕 Batch created.", batch)
 	return nil
+}
+
+// parseRequestsSpec parses a simple textual spec into batch requests.
+// Requests are separated by '///'. Messages within a request are separated by
+// '||'. Each message line uses 'role: content'. Roles: system|user|assistant.
+func parseRequestsSpec(spec string) ([]*openai.BatchRequestInput, error) {
+	var out []*openai.BatchRequestInput
+	chunks := splitBy(spec, "///")
+	for i, chunk := range chunks {
+		if chunk == "" {
+			continue
+		}
+		lines := splitBy(chunk, "||")
+		var req openai.BatchRequest
+		for _, ln := range lines {
+			role, content, ok := splitRoleContent(ln)
+			if !ok {
+				return nil, fmt.Errorf("invalid message format: %q", ln)
+			}
+			switch role {
+			case "system":
+				req.Messages = append(req.Messages, model.NewSystemMessage(content))
+			case "user":
+				req.Messages = append(req.Messages, model.NewUserMessage(content))
+			case "assistant":
+				req.Messages = append(req.Messages, model.NewAssistantMessage(content))
+			default:
+				req.Messages = append(req.Messages, model.Message{Role: model.Role(role), Content: content})
+			}
+		}
+		if len(req.Messages) == 0 {
+			continue
+		}
+		customID := fmt.Sprintf("%03d", i+1)
+		out = append(out, &openai.BatchRequestInput{
+			CustomID: customID,
+			Method:   "POST",
+			URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+			Body:     req,
+		})
+	}
+	return out, nil
+}
+
+// splitBy splits by sep and trims spaces for each piece.
+func splitBy(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
+}
+
+// splitRoleContent splits 'role: content' into parts.
+func splitRoleContent(s string) (role, content string, ok bool) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
 }
 
 // runGet retrieves a batch by ID.
@@ -193,6 +208,29 @@ func runGet(ctx context.Context, llm *openai.Model, id string) error {
 		return fmt.Errorf("failed to retrieve batch: %w", err)
 	}
 	printBatch("🔎 Batch details.", batch)
+
+	// If output is available, download and parse it.
+	if batch.OutputFileID != "" {
+		fmt.Printf("\n📥 Downloading and parsing output file: %s\n",
+			batch.OutputFileID)
+		text, err := llm.DownloadFileContent(ctx, batch.OutputFileID)
+		if err != nil {
+			return fmt.Errorf("failed to download output file: %w", err)
+		}
+		entries, err := llm.ParseBatchOutput(text)
+		if err != nil {
+			return fmt.Errorf("failed to parse output file: %w", err)
+		}
+		for _, e := range entries {
+			fmt.Printf("[%s] status=%d\n", e.CustomID, e.Response.StatusCode)
+			if content, ok := firstChatContent(e.Response.Body); ok {
+				fmt.Printf("  content: %s\n", content)
+			}
+			if len(e.Error) > 0 {
+				fmt.Printf("  error: %s\n", string(e.Error))
+			}
+		}
+	}
 	return nil
 }
 
@@ -237,63 +275,6 @@ func runList(ctx context.Context, llm *openai.Model, after string, limit int64) 
 	return nil
 }
 
-// buildJSONLLine constructs one request line for the batch input file.
-func buildJSONLLine(
-	index int,
-	endpoint openaisdk.BatchNewParamsEndpoint,
-	modelName, prompt string,
-) (batchJSONL, error) {
-	customID := fmt.Sprintf("req-%d", index+1)
-	switch endpoint {
-	case openaisdk.BatchNewParamsEndpointV1ChatCompletions:
-		body := map[string]interface{}{
-			"model": modelName,
-			"messages": []map[string]string{
-				{"role": "user", "content": fmt.Sprintf("%s #%d", prompt, index+1)},
-			},
-		}
-		return batchJSONL{
-			CustomID: customID,
-			Method:   methodPOST,
-			URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
-			Body:     body,
-		}, nil
-	case openaisdk.BatchNewParamsEndpointV1Completions:
-		body := map[string]interface{}{
-			"model":  modelName,
-			"prompt": fmt.Sprintf("%s #%d", prompt, index+1),
-		}
-		return batchJSONL{CustomID: customID, Method: methodPOST, URL: string(openaisdk.BatchNewParamsEndpointV1Completions), Body: body}, nil
-	case openaisdk.BatchNewParamsEndpointV1Embeddings:
-		body := map[string]interface{}{
-			"model": modelName,
-			"input": []string{fmt.Sprintf("%s #%d", prompt, index+1)},
-		}
-		return batchJSONL{CustomID: customID, Method: methodPOST, URL: string(openaisdk.BatchNewParamsEndpointV1Embeddings), Body: body}, nil
-	case openaisdk.BatchNewParamsEndpointV1Responses:
-		body := map[string]interface{}{
-			"model": modelName,
-			"input": fmt.Sprintf("%s #%d", prompt, index+1),
-		}
-		return batchJSONL{CustomID: customID, Method: methodPOST, URL: string(openaisdk.BatchNewParamsEndpointV1Responses), Body: body}, nil
-	default:
-		return batchJSONL{}, fmt.Errorf("unsupported endpoint: %s", endpoint)
-	}
-}
-
-// toBatchEndpoint validates and converts a string into the typed endpoint value.
-func toBatchEndpoint(s string) (openaisdk.BatchNewParamsEndpoint, error) {
-	switch openaisdk.BatchNewParamsEndpoint(s) {
-	case openaisdk.BatchNewParamsEndpointV1ChatCompletions,
-		openaisdk.BatchNewParamsEndpointV1Completions,
-		openaisdk.BatchNewParamsEndpointV1Embeddings,
-		openaisdk.BatchNewParamsEndpointV1Responses:
-		return openaisdk.BatchNewParamsEndpoint(s), nil
-	default:
-		return "", fmt.Errorf("invalid endpoint: %s", s)
-	}
-}
-
 // printBatch prints key information of a batch.
 func printBatch(prefix string, b *openaisdk.Batch) {
 	fmt.Printf("%s\n", prefix)
@@ -321,4 +302,65 @@ func ts(sec int64) string {
 		return "-"
 	}
 	return time.Unix(sec, 0).Format(time.RFC3339)
+}
+
+// firstChatContent extracts the first message content from a chat completions
+// response body.
+func firstChatContent(body json.RawMessage) (string, bool) {
+	var tmp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &tmp); err != nil {
+		return "", false
+	}
+	if len(tmp.Choices) == 0 {
+		return "", false
+	}
+	return tmp.Choices[0].Message.Content, tmp.Choices[0].Message.Content != ""
+}
+
+// toRequest converts a simple map to BatchInputBody.
+func toRequest(m map[string]any) openai.BatchRequest {
+	var req openai.BatchRequest
+	// Messages.
+	if msgs, ok := m["messages"].([]map[string]string); ok {
+		for _, mm := range msgs {
+			role := mm["role"]
+			content := mm["content"]
+			switch role {
+			case "system":
+				req.Messages = append(req.Messages, model.NewSystemMessage(content))
+			case "user":
+				req.Messages = append(req.Messages, model.NewUserMessage(content))
+			case "assistant":
+				req.Messages = append(req.Messages, model.NewAssistantMessage(content))
+			default:
+				req.Messages = append(req.Messages, model.Message{Role: model.Role(role), Content: content})
+			}
+		}
+	}
+	// Temperature.
+	if v, ok := m["temperature"].(float64); ok {
+		t := v
+		req.Temperature = &t
+	}
+	// TopP.
+	if v, ok := m["top_p"].(float64); ok {
+		t := v
+		req.TopP = &t
+	}
+	// MaxTokens.
+	if v, ok := m["max_tokens"].(float64); ok {
+		iv := int(v)
+		req.MaxTokens = &iv
+	}
+	// Stop.
+	if v, ok := m["stop"].([]string); ok {
+		req.Stop = v
+	}
+	return req
 }

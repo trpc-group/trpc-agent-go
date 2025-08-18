@@ -40,8 +40,6 @@ const (
 	defaultChannelBufferSize = 256
 	// defaultBatchCompletionWindow is the default batch completion window.
 	defaultBatchCompletionWindow = "24h"
-	// defaultMaxBatchSize is the default max batch size.
-	defaultMaxBatchSize = 50000
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -185,11 +183,11 @@ type Model struct {
 	chatRequestCallback   ChatRequestCallbackFunc
 	chatResponseCallback  ChatResponseCallbackFunc
 	chatChunkCallback     ChatChunkCallbackFunc
-	extraFields           map[string]interface{}
+	extraFields           map[string]any
 	variant               Variant
 	variantConfig         variantConfig
 	batchCompletionWindow string
-	batchMetadata         map[string]interface{}
+	batchMetadata         map[string]any
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -231,13 +229,13 @@ type options struct {
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
-	ExtraFields map[string]interface{}
+	ExtraFields map[string]any
 	// Variant for model-specific behavior.
 	Variant Variant
 	// Batch completion window for batch processing.
 	BatchCompletionWindow string
 	// Batch metadata for batch processing.
-	BatchMetadata map[string]interface{}
+	BatchMetadata map[string]any
 }
 
 // Option is a function that configures an OpenAI model.
@@ -325,10 +323,10 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 //	})
 //
 // and "session_id" : "abc" will be added to the HTTP request json body.
-func WithExtraFields(extraFields map[string]interface{}) Option {
+func WithExtraFields(extraFields map[string]any) Option {
 	return func(opts *options) {
 		if opts.ExtraFields == nil {
-			opts.ExtraFields = make(map[string]interface{})
+			opts.ExtraFields = make(map[string]any)
 		}
 		for k, v := range extraFields {
 			opts.ExtraFields[k] = v
@@ -354,7 +352,7 @@ func WithBatchCompletionWindow(window string) Option {
 }
 
 // WithBatchMetadata sets the batch metadata.
-func WithBatchMetadata(metadata map[string]interface{}) Option {
+func WithBatchMetadata(metadata map[string]any) Option {
 	return func(opts *options) {
 		opts.BatchMetadata = metadata
 	}
@@ -1198,7 +1196,9 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
@@ -1252,7 +1252,7 @@ func (m *Model) UploadFileData(
 
 	// Create file upload parameters with data reader.
 	fileParams := openai.FileNewParams{
-		File:    bytes.NewReader(data),
+		File:    bytes.NewReader(nil),
 		Purpose: fileOpts.Purpose,
 	}
 
@@ -1260,7 +1260,9 @@ func (m *Model) UploadFileData(
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
 				r.Method = fileOpts.Method
@@ -1269,6 +1271,28 @@ func (m *Model) UploadFileData(
 			if fileOpts.Body != nil {
 				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
 				r.ContentLength = int64(len(fileOpts.Body))
+			} else {
+				// Build multipart form to ensure filename suffix is preserved.
+				buf := &bytes.Buffer{}
+				w := multipart.NewWriter(buf)
+				// purpose.
+				if err := w.WriteField("purpose", string(fileOpts.Purpose)); err != nil {
+					return nil, fmt.Errorf("failed to write purpose field: %w", err)
+				}
+				// file.
+				part, err := w.CreateFormFile("file", filename)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create form file: %w", err)
+				}
+				if _, err := part.Write(data); err != nil {
+					return nil, fmt.Errorf("failed to write file data: %w", err)
+				}
+				if err := w.Close(); err != nil {
+					return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+				}
+				r.Body = io.NopCloser(buf)
+				r.Header.Set("Content-Type", w.FormDataContentType())
+				r.ContentLength = int64(buf.Len())
 			}
 			return next(r)
 		})
@@ -1332,7 +1356,9 @@ func (m *Model) GetFile(
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
 				r.Method = fileOpts.Method
