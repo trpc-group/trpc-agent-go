@@ -434,62 +434,78 @@ func (w *parallelWorkflow) routeToParallel(ctx context.Context, state graph.Stat
 
 // aggregateResults aggregates results from parallel nodes.
 func (w *parallelWorkflow) aggregateResults(ctx context.Context, state graph.State) (any, error) {
-	// Collect results from parallel nodes.
+	// Collect results from parallel nodes using node-specific keys.
 	results := make(map[string]any)
 
-	// Get execution order to understand the flow.
-	execOrder, _ := state[stateKeyExecutionOrder].([]string)
-
-	// Check for results from each parallel node - LLM nodes store results in StateKeyLastResponse.
-	if lastResponse, exists := state[graph.StateKeyLastResponse]; exists {
-		results["latest_llm_result"] = lastResponse
+	// Check for results from each parallel node using node-specific keys.
+	if summarizeResult, exists := state["summarize_result"]; exists {
+		results["summarize_result"] = summarizeResult
+	}
+	if enhanceResult, exists := state["enhance_result"]; exists {
+		results["enhance_result"] = enhanceResult
+	}
+	if classifyResult, exists := state["classify_result"]; exists {
+		results["classify_result"] = classifyResult
 	}
 
-	// Also check for messages which might contain the results.
-	if messages, exists := state[graph.StateKeyMessages]; exists {
-		if msgList, ok := messages.([]model.Message); ok && len(msgList) > 0 {
-			lastMessage := msgList[len(msgList)-1]
-			results["latest_message"] = lastMessage.Content
+	// Check if we have all expected results.
+	expectedResults := []string{"summarize_result", "enhance_result", "classify_result"}
+	foundResults := 0
+	for _, resultKey := range expectedResults {
+		if _, exists := results[resultKey]; exists {
+			foundResults++
 		}
 	}
 
 	// Create aggregated result.
-	aggregatedResult := map[string]any{
-		"parallel_results": results,
-		"total_results":    len(results),
-		"execution_order":  execOrder,
-		"aggregation_time": time.Now(),
+	aggregatedResult := fmt.Sprintf("Parallel execution completed: %d results aggregated", foundResults)
+
+	// Only display results if we have all expected results.
+	if foundResults == len(expectedResults) {
+		// Display the results directly since streaming response processing is not working.
+		fmt.Println("📋 Parallel Execution Results:")
+		fmt.Println("============================================================")
+		fmt.Println()
+
+		for nodeID, result := range results {
+			// Extract just the node name from the result key (remove "_result" suffix)
+			displayName := strings.TrimSuffix(nodeID, "_result")
+			fmt.Printf("🔹 %s:\n", strings.Title(displayName))
+			if resultStr, ok := result.(string); ok {
+				fmt.Println(resultStr)
+			} else {
+				fmt.Printf("%v\n", result)
+			}
+			fmt.Println("----------------------------------------")
+			fmt.Println()
+		}
 	}
 
-	fmt.Printf("✅ Parallel execution completed: %d results aggregated\n", len(results))
+	// Return the aggregated result along with individual results for streaming display
+	returnState := graph.State{
+		graph.StateKeyLastResponse: aggregatedResult,
+	}
 
-	return graph.State{
-		stateKeyFinalResult:    aggregatedResult,
-		"aggregation_complete": true,
-	}, nil
+	// Also store individual results for streaming display
+	for nodeID, result := range results {
+		returnState[nodeID] = result
+	}
+
+	return returnState, nil
 }
 
 // formatOutput formats the final output for display.
 func (w *parallelWorkflow) formatOutput(ctx context.Context, state graph.State) (any, error) {
-	// Get final result from state.
-	finalResult, exists := state[stateKeyFinalResult]
-	if !exists {
-		return nil, errors.New("no final result found")
+	// Get the aggregated result from the last response.
+	if lastResponse, exists := state[graph.StateKeyLastResponse]; exists {
+		if responseStr, ok := lastResponse.(string); ok {
+			return graph.State{
+				graph.StateKeyLastResponse: responseStr,
+			}, nil
+		}
 	}
 
-	// Get execution order for debugging.
-	execOrder, _ := state[stateKeyExecutionOrder].([]string)
-
-	// Format the output.
-	output := map[string]any{
-		"final_result":    finalResult,
-		"execution_order": execOrder,
-		"completion_time": time.Now(),
-	}
-	return graph.State{
-		"formatted_output":  output,
-		"workflow_complete": true,
-	}, nil
+	return nil, errors.New("no final result found")
 }
 
 // startInteractiveMode starts the interactive command-line interface.
@@ -569,108 +585,32 @@ func (w *parallelWorkflow) processInput(ctx context.Context, input string) error
 // processStreamingResponse handles the streaming workflow response.
 func (w *parallelWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
 	var (
-		stageCount    int
 		parallelNodes = make(map[string]bool)
-		// Separate buffers for each parallel node to avoid interleaving
-		parallelBuffers = map[string]*strings.Builder{
-			"summarize": {},
-			"enhance":   {},
-			"classify":  {},
-		}
 		// Track completion status for each parallel node
 		parallelCompleted = map[string]bool{
 			"summarize": false,
 			"enhance":   false,
 			"classify":  false,
 		}
-		isAnalyzeNode bool
+		allParallelNodesComplete bool
 	)
 
 	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("❌ Error: %s\n", event.Error.Message)
-			continue
-		}
-
-		// Track node execution events with focus on parallel execution.
+		// Handle node events for parallel execution tracking.
 		if event.Author == graph.AuthorGraphNode {
 			if event.StateDelta != nil {
 				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
 					var nodeMetadata graph.NodeExecutionMetadata
 					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
-						switch nodeMetadata.Phase {
-						case graph.ExecutionPhaseStart:
-							// Track analyze node for filtering
-							isAnalyzeNode = (nodeMetadata.NodeID == "analyze")
-
-							// Special handling for parallel nodes
-							if nodeMetadata.NodeID == "summarize" || nodeMetadata.NodeID == "enhance" || nodeMetadata.NodeID == "classify" {
-								parallelNodes[nodeMetadata.NodeID] = true
-								if len(parallelNodes) == 1 {
-									fmt.Printf("\n🔄 Parallel execution started\n")
-								}
-								fmt.Printf("   🚀 %s: Starting\n", nodeMetadata.NodeID)
-							} else {
-								fmt.Printf("\n🚀 %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-							}
-						case graph.ExecutionPhaseComplete:
-							// Special handling for parallel nodes
-							if nodeMetadata.NodeID == "summarize" || nodeMetadata.NodeID == "enhance" || nodeMetadata.NodeID == "classify" {
-								fmt.Printf("   ✅ %s: Completed\n", nodeMetadata.NodeID)
-								parallelCompleted[nodeMetadata.NodeID] = true
-
-								// Check if all parallel nodes are completed
-								if parallelCompleted["summarize"] && parallelCompleted["enhance"] && parallelCompleted["classify"] {
-									fmt.Printf("🔄 All parallel nodes completed\n")
-									w.streamParallelResultsSequentially(parallelBuffers)
-								}
-							} else {
-								fmt.Printf("✅ %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-							}
-						case graph.ExecutionPhaseError:
-							fmt.Printf("❌ %s (%s): Error\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						}
-					}
-				}
-
-				// Handle tool execution events for input/output display.
-				if toolData, exists := event.StateDelta[graph.MetadataKeyTool]; exists {
-					var toolMetadata graph.ToolExecutionMetadata
-					if err := json.Unmarshal(toolData, &toolMetadata); err == nil {
-						switch toolMetadata.Phase {
-						case graph.ToolExecutionPhaseStart:
-							fmt.Printf("🔧 Tool: %s\n", toolMetadata.ToolName)
-							if toolMetadata.Input != "" {
-								fmt.Printf("   📥 Input: %s\n", formatJSON(toolMetadata.Input))
-							}
-						case graph.ToolExecutionPhaseComplete:
-							fmt.Printf("✅ Tool: %s completed in %v\n", toolMetadata.ToolName, toolMetadata.Duration)
-							if toolMetadata.Output != "" {
-								fmt.Printf("   📤 Output: %s\n", formatJSON(toolMetadata.Output))
-							}
-							if toolMetadata.Error != "" {
-								fmt.Printf("   ❌ Error: %s\n", toolMetadata.Error)
-							}
-						case graph.ToolExecutionPhaseError:
-							fmt.Printf("❌ Tool: %s error - %s\n", toolMetadata.ToolName, toolMetadata.Error)
-						}
-					}
-				}
-
-				// Handle model execution events for parallel nodes.
-				if modelData, exists := event.StateDelta[graph.MetadataKeyModel]; exists {
-					var modelMetadata graph.ModelExecutionMetadata
-					if err := json.Unmarshal(modelData, &modelMetadata); err == nil {
-						// Only show model events for parallel nodes
-						if modelMetadata.NodeID == "summarize" || modelMetadata.NodeID == "enhance" || modelMetadata.NodeID == "classify" {
-							switch modelMetadata.Phase {
-							case graph.ModelExecutionPhaseStart:
-								fmt.Printf("   🤖 %s: Model started\n", modelMetadata.NodeID)
-							case graph.ModelExecutionPhaseComplete:
-								fmt.Printf("   ✅ %s: Model completed in %v\n", modelMetadata.NodeID, modelMetadata.Duration)
-							case graph.ModelExecutionPhaseError:
-								fmt.Printf("   ❌ %s: Model error - %s\n", modelMetadata.NodeID, modelMetadata.Error)
+						nodeID := nodeMetadata.NodeID
+						if nodeID == "summarize" || nodeID == "enhance" || nodeID == "classify" {
+							switch nodeMetadata.Phase {
+							case "start":
+								fmt.Printf("   🚀 %s: Starting\n", nodeID)
+								parallelNodes[nodeID] = true
+							case "complete":
+								fmt.Printf("   ✅ %s: Completed\n", nodeID)
+								parallelCompleted[nodeID] = true
 							}
 						}
 					}
@@ -678,229 +618,25 @@ func (w *parallelWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 			}
 		}
 
-		// Process streaming content from LLM nodes.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-			if choice.Delta.Content != "" {
-				// Handle analyze node differently (skip JSON output)
-				if isAnalyzeNode {
-					// Skip JSON output from analyze node for cleaner logs
-					continue
-				}
-
-				// Try to determine which parallel node this content belongs to
-				// by checking which nodes are currently active
-				var targetNode string
-				// Use a more sophisticated approach - track which node is currently receiving content
-				// based on the order of completion and current active state
-				if parallelNodes["summarize"] && !parallelCompleted["summarize"] {
-					targetNode = "summarize"
-				} else if parallelNodes["classify"] && !parallelCompleted["classify"] {
-					targetNode = "classify"
-				} else if parallelNodes["enhance"] && !parallelCompleted["enhance"] {
-					targetNode = "enhance"
-				}
-
-				// If no target node found, try to assign based on content patterns
-				if targetNode == "" {
-					// This is a fallback - if we can't determine the target, skip this content
-					continue
-				}
-
-				// Buffer parallel node outputs separately
-				if targetNode != "" {
-					if buffer, exists := parallelBuffers[targetNode]; exists {
-						buffer.WriteString(choice.Delta.Content)
-					}
-				} else {
-					// For non-parallel nodes, stream directly
-					fmt.Print(choice.Delta.Content)
+		// Check if all parallel nodes are complete
+		if !allParallelNodesComplete {
+			allComplete := true
+			for _, completed := range parallelCompleted {
+				if !completed {
+					allComplete = false
+					break
 				}
 			}
-		}
-
-		// Track workflow stages.
-		if event.Author == graph.AuthorGraphExecutor {
-			stageCount++
-			if stageCount >= 1 && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				if content != "" {
-					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
-				}
+			if allComplete {
+				allParallelNodesComplete = true
+				fmt.Println("🔄 All parallel nodes completed")
+				fmt.Println()
+				// Don't display results here - let the aggregate function handle it
 			}
-		}
-
-		// Handle completion.
-		if event.Done {
-			break
 		}
 	}
+
 	return nil
-}
-
-// streamParallelResultsSequentially streams each parallel node's output one by one.
-func (w *parallelWorkflow) streamParallelResultsSequentially(buffers map[string]*strings.Builder) {
-	fmt.Printf("\n📋 Parallel Execution Results:\n")
-	fmt.Printf("%s\n", strings.Repeat("=", 60))
-
-	// Stream results in a consistent order
-	order := []string{"summarize", "enhance", "classify"}
-	for _, nodeName := range order {
-		if buffer, exists := buffers[nodeName]; exists {
-			content := buffer.String()
-			if content != "" {
-				fmt.Printf("\n🔹 %s:\n", strings.Title(nodeName))
-				// Stream the content chunk by chunk to simulate real streaming
-				w.streamContentChunkByChunk(content, nodeName)
-				fmt.Printf("\n%s\n", strings.Repeat("-", 40))
-			} else {
-				fmt.Printf("\n🔹 %s: No content available\n", strings.Title(nodeName))
-				fmt.Printf("%s\n", strings.Repeat("-", 40))
-			}
-		}
-	}
-}
-
-// streamContentChunkByChunk streams content in chunks to simulate real streaming.
-func (w *parallelWorkflow) streamContentChunkByChunk(content string, nodeType string) {
-	// Clean the content first
-	cleanContent := w.extractMeaningfulContent(content, nodeType)
-
-	// Split into words for chunked streaming
-	words := strings.Fields(cleanContent)
-	if len(words) == 0 {
-		fmt.Print("Content processed successfully")
-		return
-	}
-
-	// Stream words in chunks to simulate real-time streaming
-	chunkSize := 3 // Words per chunk for faster streaming
-	for i := 0; i < len(words); i += chunkSize {
-		end := i + chunkSize
-		if end > len(words) {
-			end = len(words)
-		}
-
-		chunk := strings.Join(words[i:end], " ")
-		fmt.Print(chunk)
-
-		// Add space between chunks
-		if end < len(words) {
-			fmt.Print(" ")
-		}
-
-		// Smaller delay for faster streaming
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// extractMeaningfulContent extracts clean, readable content from mixed LLM output.
-func (w *parallelWorkflow) extractMeaningfulContent(content string, nodeType string) string {
-	// For different node types, we expect different content patterns
-	switch nodeType {
-	case "summarize":
-		return w.extractSummaryContent(content)
-	case "enhance":
-		return w.extractEnhancedContent(content)
-	case "classify":
-		return w.extractClassificationContent(content)
-	default:
-		return "Content processed successfully"
-	}
-}
-
-// extractSummaryContent extracts summary from mixed content.
-func (w *parallelWorkflow) extractSummaryContent(content string) string {
-	// For demonstration purposes, just show a simple message
-	return "Summary: Content has been successfully summarized and analyzed for key insights and main points."
-}
-
-// extractEnhancedContent extracts enhanced content from mixed output.
-func (w *parallelWorkflow) extractEnhancedContent(content string) string {
-	// For demonstration purposes, just show a simple message
-	return "Enhanced: Content has been improved and refined for better clarity, readability, and professional presentation."
-}
-
-// extractClassificationContent extracts classification from mixed output.
-func (w *parallelWorkflow) extractClassificationContent(content string) string {
-	// For demonstration purposes, just show a simple message
-	return "Classification: Content has been categorized and analyzed for type, complexity, and target audience."
-}
-
-// displayFormattedOutput displays the formatted output.
-func (w *parallelWorkflow) displayFormattedOutput(output any) {
-	fmt.Printf("\n╔══════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                    PARALLEL PROCESSING RESULTS                   ║\n")
-	fmt.Printf("╚══════════════════════════════════════════════════════════════════╝\n\n")
-
-	if outputMap, ok := output.(map[string]any); ok {
-		// Display execution order.
-		if execOrder, exists := outputMap["execution_order"]; exists {
-			if order, ok := execOrder.([]string); ok {
-				fmt.Printf("📈 Execution Order: %v\n\n", order)
-			}
-		}
-
-		// Display final result.
-		if finalResult, exists := outputMap["final_result"]; exists {
-			if resultMap, ok := finalResult.(map[string]any); ok {
-				// Display parallel results.
-				if parallelResults, exists := resultMap["parallel_results"]; exists {
-					if results, ok := parallelResults.(map[string]any); ok {
-						fmt.Printf("🔄 Parallel Processing Results:\n")
-						fmt.Printf("   Total Results: %d\n\n", len(results))
-
-						for nodeName, result := range results {
-							fmt.Printf("📋 %s:\n", strings.Title(nodeName))
-							if resultStr, ok := result.(string); ok {
-								fmt.Printf("   %s\n", truncateString(resultStr, 80))
-							} else {
-								fmt.Printf("   %+v\n", result)
-							}
-							fmt.Println()
-						}
-					}
-				}
-			}
-		}
-	}
-
-	fmt.Printf("╔══════════════════════════════════════════════════════════════════╗\n")
-	fmt.Printf("║                         PROCESSING DETAILS                       ║\n")
-	fmt.Printf("╚══════════════════════════════════════════════════════════════════╝\n\n")
-
-	if outputMap, ok := output.(map[string]any); ok {
-		if finalResult, exists := outputMap["final_result"]; exists {
-			if resultMap, ok := finalResult.(map[string]any); ok {
-				fmt.Printf("📊 Processing Statistics:\n")
-				fmt.Printf("   • Total Results: %v\n", resultMap["total_results"])
-				if execOrder, exists := resultMap["execution_order"]; exists {
-					if order, ok := execOrder.([]string); ok {
-						fmt.Printf("   • Execution Order: %v\n", order)
-					}
-				}
-				if aggTime, exists := resultMap["aggregation_time"]; exists {
-					fmt.Printf("   • Aggregated At: %v\n", aggTime)
-				}
-			}
-		}
-	}
-}
-
-// formatJSON formats JSON strings for better readability.
-func formatJSON(jsonStr string) string {
-	if jsonStr == "" {
-		return ""
-	}
-	// Try to pretty print the JSON.
-	var prettyJSON interface{}
-	if err := json.Unmarshal([]byte(jsonStr), &prettyJSON); err == nil {
-		if prettyBytes, err := json.MarshalIndent(prettyJSON, "", "  "); err == nil {
-			return string(prettyBytes)
-		}
-	}
-	// Fallback to original string if not valid JSON.
-	return jsonStr
 }
 
 // truncateString truncates a string to the specified length.
