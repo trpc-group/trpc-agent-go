@@ -43,7 +43,7 @@ func main() {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Base Directory: %s\n", *baseDir)
 	fmt.Printf("Type 'exit' to end the conversation\n")
-	fmt.Printf("Available tools: save_file, read_file, list_files, search_files\n")
+	fmt.Printf("Available tools: save_file, read_file, list_file, search_file, search_content, replace_content\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -103,14 +103,17 @@ func (c *fileChat) setup(ctx context.Context) error {
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with access to file operations for debugging and code maintenance"),
+		llmagent.WithDescription("A helpful AI assistant for debugging and code maintenance"),
 		llmagent.WithInstruction("You are a debugging assistant with file operation capabilities. "+
 			"Your primary goal is to help users debug and fix code issues. "+
 			""+
 			"DEBUGGING APPROACH: "+
-			"1. If the user doesn't explicitly specify a bug or issue, proactively read project files to understand the project structure and identify potential problems. "+
-			"2. When debugging, first read the relevant files to understand the code structure and identify potential issues. "+
-			"3. Look for common issues such as concurrency problems, logic errors, file I/O issues, or syntax problems. "+
+			"1. If the user doesn't explicitly specify a bug or issue, proactively read project files to understand "+
+			"the project structure and identify potential problems. "+
+			"2. When debugging, first read the relevant files to understand the code structure and identify potential "+
+			"issues. "+
+			"3. Look for common issues such as concurrency problems, logic errors, file I/O issues, or syntax "+
+			"problems. "+
 			"4. After identifying a bug, explain the problem clearly and provide a corrected version of the code. "+
 			""+
 			"FILE OPERATION RULES: "+
@@ -120,11 +123,14 @@ func (c *fileChat) setup(ctx context.Context) error {
 			""+
 			"AVAILABLE TOOLS: "+
 			"- save_file: Save content to files (requires confirmation) "+
+			"- replace_content: Replace a specific string in a file to a new string (requires confirmation) "+
 			"- read_file: Read file contents "+
 			"- list_files: List files and directories "+
 			"- search_files: Search for files using patterns "+
+			"- search_content: Search for content in files using patterns "+
 			""+
-			"Use the file operation tools to read existing code, analyze it, and save the fixed version when confirmed by the user."),
+			"Use the file operation tools to read existing code, analyze it, and save the fixed version when confirmed"+
+			" by the user."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithChannelBufferSize(100),
 		llmagent.WithToolSets([]tool.ToolSet{fileToolSet}),

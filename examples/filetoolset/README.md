@@ -94,7 +94,7 @@ The tool provides comprehensive file system operation capabilities:
 }
 ```
 
-#### 3. `list_files` - List Files
+#### 3. `list_file` - List File
 
 **Input:**
 ```json
@@ -114,7 +114,7 @@ The tool provides comprehensive file system operation capabilities:
 }
 ```
 
-#### 4. `search_files` - Search Files
+#### 4. `search_file` - Search File
 
 **Input:**
 ```json
@@ -132,6 +132,62 @@ The tool provides comprehensive file system operation capabilities:
   "pattern": "string",
   "files": ["string"],
   "folders": ["string"],
+  "message": "string"
+}
+```
+
+#### 5. `search_content` - Search Content
+
+**Input:**
+```json
+{
+  "path": "string",
+  "file_pattern": "string",
+  "file_case_sensitive": "bool",
+  "content_pattern": "string",
+  "content_case_sensitive": "bool"
+}
+```
+
+**Output:**
+```json
+{
+  "base_directory": "string",
+  "path": "string",
+  "file_pattern": "string",
+  "content_pattern": "string",
+  "file_matches": [
+    {
+      "file_path": "string",
+      "matches": [
+         {
+            "line_number": "integer",
+            "line_content": "string",
+         },
+      ],
+      "message": "string",
+    },
+  ],
+  "message": "string"
+}
+```
+
+#### 6. `replace_content` - Replace Content
+
+**Input:**
+```json
+{
+  "file_name": "string",
+  "old_string": "string",
+  "new_string": "string"
+}
+```
+
+**Output:**
+```json
+{
+  "base_directory": "string",
+  "file_name": "string",
   "message": "string"
 }
 ```
@@ -175,9 +231,9 @@ go run main.go -base-dir ./project
 Model: deepseek-chat
 Base Directory: ./project
 Type 'exit' to end the conversation
-Available tools: save_file, read_file, list_files, search_files
+Available tools: save_file, read_file, list_file, search_file, search_content, replace_content
 ==================================================
-✅ File operations chat ready! Session: file-session-1754481761
+✅ File operations chat ready! Session: file-session-1755522576
 
 💡 Try asking questions like:
    - Save a file called 'hello.txt' with content 'Hello, World!'
@@ -190,16 +246,16 @@ Available tools: save_file, read_file, list_files, search_files
 ℹ️  Note: All file operations will be performed in the base directory
 
 👤 You: The current directory is a code project. Can you help me fix the bug?
-🤖 Assistant: To help you fix the bug, I'll first need to understand the project structure and the relevant files. Let me start by listing the files in the current directory to get an overview.
+🤖 Assistant: To help you fix the bug, I'll first need to understand the project structure and identify potential issues. I'll start by listing the files in the current directory to get an overview.
 📁 File operation initiated:
-   • list_file (ID: call_0_98e206aa-1ed9-4399-8feb-69cc358847f6)
-     Arguments: {"path":""}
+   • list_file (ID: call_0_3d274e35-4fe7-47b8-94e9-4e5258f797be)
+     Arguments: {}
 
 🔄 Processing file operation...
-✅ File operation result (ID: call_0_98e206aa-1ed9-4399-8feb-69cc358847f6): {"base_directory":"project","path":"","files":["README.md","expect.txt","go.mod","input.txt","main.go","output.txt"],"folders":["counter"],"message":"Found 6 files and 1 folders in base directory"}
-Here’s the structure of your project:
+✅ File operation result (ID: call_0_3d274e35-4fe7-47b8-94e9-4e5258f797be): {"base_directory":"project","path":"","files":["README.md","expect.txt","go.mod","input.txt","main.go","output.txt"],"folders":["counter"],"message":"Found 6 files and 1 folders in base directory"}
+I see the project has the following files and folders:
 
-### Files:
+**Files:**
 1. `README.md`
 2. `expect.txt`
 3. `go.mod`
@@ -207,187 +263,84 @@ Here’s the structure of your project:
 5. `main.go`
 6. `output.txt`
 
-### Folders:
+**Folders:**
 1. `counter`
 
-Since `main.go` is likely the main entry point of your Go project, I'll start by reading its contents to understand the code and identify any potential bugs.
+To identify potential bugs, I'll first inspect the `main.go` file, as it's likely the main entry point of the project. Let me read its contents.
 📁 File operation initiated:
-   • read_file (ID: call_0_26e639df-13a1-4420-bcc9-02e609431af0)
+   • read_file (ID: call_0_a03f22e0-4b66-4948-ba78-80b61af2a714)
      Arguments: {"file_name":"main.go"}
 
 🔄 Processing file operation...
-✅ File operation result (ID: call_0_26e639df-13a1-4420-bcc9-02e609431af0): {"base_directory":"project","file_name":"main.go","contents":"package main\n\nimport (\n\t\"log\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\n\t\"trpc.group/trpc-go/trpc-agent-go/examples/filetoolset/project/counter\"\n)\n\nfunc main() {\n\tcontent, err := os.ReadFile(\"input.txt\")\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tn, err := strconv.Atoi(strings.TrimSpace(string(content)))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tcounter := counter.GetCounter(n)\n\tos.WriteFile(\"output.txt\", []byte(strconv.Itoa(counter)), 0644)\n}","message":"Successfully read main.go"}
-The `main.go` file reads an integer from `input.txt`, processes it using a `counter` package (likely in the `counter` folder), and writes the result to `output.txt`. Here's the breakdown of the code:
+✅ File operation result (ID: call_0_a03f22e0-4b66-4948-ba78-80b61af2a714): {"base_directory":"project","file_name":"main.go","contents":"//\n// Tencent is pleased to support the open source community by making trpc-agent-go available.\n//\n// Copyright (C) 2025 Tencent.\n// All rights reserved.\n//\n// If you have downloaded a copy of the tRPC source code from Tencent,\n// please note that tRPC source code is licensed under the  Apache 2.0 License,\n// A copy of the Apache 2.0 License is included in this file.\n//\n//\n\n// package main is a example project with bug.\npackage main\n\nimport (\n\t\"log\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\n\t\"trpc.group/trpc-go/trpc-agent-go/examples/filetoolset/project/counter\"\n)\n\nfunc main() {\n\tcontent, err := os.ReadFile(\"input.txt\")\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tn, err := strconv.Atoi(strings.TrimSpace(string(content)))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tcounter := counter.GetCounter(n)\n\tos.WriteFile(\"output.txt\", []byte(strconv.Itoa(counter)), 0644)\n}\n","message":"Successfully read main.go, start line: 1, end line: 37, total lines: 37"}
+The `main.go` file reads an integer from `input.txt`, processes it using a `counter` package, and writes the result to `output.txt`. Here's a summary of the logic:
 
-1. **Reading Input**: It reads the content of `input.txt` and converts it to an integer.
-2. **Processing**: It uses the `counter.GetCounter` function to process the integer.
-3. **Writing Output**: It writes the result to `output.txt`.
+1. **Input Handling**: Reads an integer from `input.txt`.
+2. **Processing**: Uses the `counter.GetCounter` function from the `counter` package to process the integer.
+3. **Output Handling**: Writes the result to `output.txt`.
 
 ### Potential Issues:
-1. **Error Handling**: The `os.WriteFile` call does not handle errors. If writing fails, the program will not log the error.
-2. **Input Validation**: The code assumes `input.txt` contains a valid integer. If it doesn't, the program will crash.
-3. **Dependencies**: The `counter` package is imported from a specific path (`trpc.group/trpc-go/trpc-agent-go/examples/filetoolset/project/counter`). If this is not the correct path, the program will fail to compile.
+1. **Error Handling**: The `os.WriteFile` call does not handle errors. If writing to `output.txt` fails, the program will silently ignore it.
+2. **File Permissions**: The file permissions (`0644`) for `output.txt` might not be suitable for all environments.
+3. **Dependency**: The `counter` package is imported, but its implementation is not visible. If there's a bug in the `counter` package, it could affect the program.
 
 ### Next Steps:
-1. **Check `input.txt`**: Ensure it contains a valid integer.
-2. **Review `counter` Package**: I'll inspect the `counter` folder to understand the `GetCounter` function.
-3. **Fix Error Handling**: Add error handling for `os.WriteFile`.
+1. **Inspect the `counter` Package**: I'll check the `counter` package to understand its logic.
+2. **Review `input.txt` and `expect.txt`**: These files might provide context about expected behavior.
 
-Let me first check the contents of `input.txt` and `output.txt` to understand the expected behavior.
+Let me first inspect the `counter` package.
 📁 File operation initiated:
-   • read_file (ID: call_0_e021b1b6-f099-41af-a022-166637607ba8)
-     Arguments: {"file_name":"input.txt"}
-   • read_file (ID: call_1_0b1c57d6-c7e7-49e0-b14a-eea37843841a)
-     Arguments: {"file_name":"output.txt"}
-   • read_file (ID: call_2_22066760-7b03-4750-a801-bcb97c8742c6)
-     Arguments: {"file_name":"expect.txt"}
-
-🔄 Processing file operation...
-✅ File operation result (ID: call_0_e021b1b6-f099-41af-a022-166637607ba8): {"base_directory":"project","file_name":"input.txt","contents":"100000","message":"Successfully read input.txt"}
-✅ File operation result (ID: call_1_0b1c57d6-c7e7-49e0-b14a-eea37843841a): {"base_directory":"project","file_name":"output.txt","contents":"97876","message":"Successfully read output.txt"}
-✅ File operation result (ID: call_2_22066760-7b03-4750-a801-bcb97c8742c6): {"base_directory":"project","file_name":"expect.txt","contents":"100000","message":"Successfully read expect.txt"}
-Here’s what I found:
-
-1. **`input.txt`**: Contains the integer `100000`.
-2. **`output.txt`**: Contains the integer `97876`.
-3. **`expect.txt`**: Contains the integer `100000`.
-
-### Observations:
-- The `output.txt` (`97876`) does not match `expect.txt` (`100000`), which suggests a bug in the `counter` package's `GetCounter` function.
-- The `input.txt` is valid, so the issue is not with input parsing.
-
-### Next Steps:
-I’ll inspect the `counter` package to understand the `GetCounter` function and identify the bug. Let me list the files in the `counter` folder.
-📁 File operation initiated:
-   • list_file (ID: call_0_dc9f37b8-a159-40c6-9c81-4037b401cdd0)
+   • list_file (ID: call_0_8950cfcc-36ad-4f1e-89b8-b775468efe40)
      Arguments: {"path":"counter"}
 
 🔄 Processing file operation...
-✅ File operation result (ID: call_0_dc9f37b8-a159-40c6-9c81-4037b401cdd0): {"base_directory":"project","path":"counter","files":["counter.go"],"folders":null,"message":"Found 1 files and 0 folders in counter"}
-The `counter` folder contains a single file: `counter.go`. I'll read its contents to understand the `GetCounter` function.
+✅ File operation result (ID: call_0_8950cfcc-36ad-4f1e-89b8-b775468efe40): {"base_directory":"project","path":"counter","files":["counter.go"],"folders":null,"message":"Found 1 files and 0 folders in counter"}
+Now, let's read the `counter.go` file in the `counter` package to understand its logic.
 📁 File operation initiated:
-   • read_file (ID: call_0_606e2b89-3bfd-4d22-9496-666ba5be76b9)
+   • read_file (ID: call_0_d6bddefc-fa1c-43c3-bc84-ae218bdea5b2)
      Arguments: {"file_name":"counter/counter.go"}
 
 🔄 Processing file operation...
-✅ File operation result (ID: call_0_606e2b89-3bfd-4d22-9496-666ba5be76b9): {"base_directory":"project","file_name":"counter/counter.go","contents":"package counter\n\nfunc GetCounter(n int) int {\n\tcounter := 0\n\tfor i := 0; i \u003c n; i++ {\n\t\tgo func() {\n\t\t\tcounter++\n\t\t}()\n\t}\n\treturn counter\n}\n","message":"Successfully read counter/counter.go"}
-### Bug Analysis:
-The `GetCounter` function in `counter/counter.go` has a **concurrency bug**. Here's the issue:
+✅ File operation result (ID: call_0_d6bddefc-fa1c-43c3-bc84-ae218bdea5b2): {"base_directory":"project","file_name":"counter/counter.go","contents":"//\n// Tencent is pleased to support the open source community by making trpc-agent-go available.\n//\n// Copyright (C) 2025 Tencent.\n// All rights reserved.\n//\n// If you have downloaded a copy of the tRPC source code from Tencent,\n// please note that tRPC source code is licensed under the  Apache 2.0 License,\n// A copy of the Apache 2.0 License is included in this file.\n//\n//\n\n// package counter implements a counter.\npackage counter\n\nfunc GetCounter(n int) int {\n\tcounter := 0\n\tfor i := 0; i \u003c n; i++ {\n\t\tgo func() {\n\t\t\tcounter++\n\t\t}()\n\t}\n\treturn counter\n}\n","message":"Successfully read counter/counter.go, start line: 1, end line: 25, total lines: 25"}
+The `counter.go` file contains a `GetCounter` function that increments a counter `n` times using goroutines. However, there's a critical issue here:
 
-1. **Problem**:
-   - The function spawns `n` goroutines, each incrementing the `counter` variable.
-   - However, goroutines run concurrently, and the `counter++` operation is not thread-safe. This leads to a **race condition**, where multiple goroutines may read and write `counter` simultaneously, causing incorrect results.
-   - Additionally, the function returns `counter` immediately after spawning the goroutines, without waiting for them to finish. This means the returned value is likely `0` or some intermediate value, not the final count.
+### Identified Bug:
+1. **Race Condition**: The `counter` variable is accessed concurrently by multiple goroutines without any synchronization mechanism (e.g., mutex or atomic operations). This leads to a **data race**, and the final value of `counter` will be unpredictable.
 
-2. **Expected Behavior**:
-   - The function should return `n` (the input value), as it increments `counter` `n` times.
+### Explanation:
+- The `GetCounter` function spawns `n` goroutines, each incrementing the `counter` variable.
+- Since goroutines run concurrently, multiple goroutines might read and write `counter` simultaneously, causing incorrect results.
+- The function returns `counter` immediately after spawning the goroutines, without waiting for them to complete. This means the returned value might not reflect all increments.
 
 ### Fix:
-To fix this, we need to:
-1. Ensure thread-safe access to `counter` using a mutex or synchronization.
-2. Wait for all goroutines to complete before returning the result.
+To fix this, we can:
+1. Use a mutex to synchronize access to `counter`.
+2. Use `sync.WaitGroup` to ensure all goroutines complete before returning.
+3. Alternatively, use atomic operations for simple increments.
 
-Here’s the corrected version of `counter/counter.go`:
-
-```go
-package counter
-
-import "sync"
-
-func GetCounter(n int) int {
-    var (
-        counter int
-        wg      sync.WaitGroup
-        mu      sync.Mutex
-    )
-
-    wg.Add(n)
-    for i := 0; i < n; i++ {
-        go func() {
-            defer wg.Done()
-            mu.Lock()
-            counter++
-            mu.Unlock()
-        }()
-    }
-    wg.Wait()
-    return counter
-}
-```
-
-### Changes Made:
-1. Added a `sync.Mutex` (`mu`) to protect the `counter` variable from concurrent access.
-2. Used a `sync.WaitGroup` (`wg`) to wait for all goroutines to complete before returning the result.
-3. Each goroutine now locks the mutex before incrementing `counter` and unlocks it afterward.
-
-### Verification:
-After applying this fix, the function should return `n` (e.g., `100000` for the given input), matching the expected output in `expect.txt`.
-
-Would you like me to save the corrected `counter/counter.go` file? Let me know, and I can proceed with the update.
-
-👤 You: Yes 
-🤖 Assistant: 📁 File operation initiated:
-   • save_file (ID: call_0_bba8c8b6-74f6-4bdf-92e5-874c6ac540cd)
-     Arguments: {"contents":"package counter\n\nimport \"sync\"\n\nfunc GetCounter(n int) int {\n    var (\n        counter int\n        wg      sync.WaitGroup\n        mu      sync.Mutex\n    )\n\n    wg.Add(n)\n    for i := 0; i < n; i++ {\n        go func() {\n            defer wg.Done()\n            mu.Lock()\n            counter++\n            mu.Unlock()\n        }()\n    }\n    wg.Wait()\n    return counter\n}","file_name":"counter/counter.go","overwrite":true}
+Here's the corrected version of `counter/counter.go`:
+📁 File operation initiated:
+   • replace_content (ID: call_0_b9b3782c-2b07-4d9e-b70d-1eeb59417587)
+     Arguments: {"file_name":"counter/counter.go","old_string":"func GetCounter(n int) int {\n\tcounter := 0\n\tfor i := 0; i \u003c n; i++ {\n\t\tgo func() {\n\t\t\tcounter++\n\t\t}()\n\t}\n\treturn counter\n}","new_string":"import (\n\t\"sync\"\n)\n\nfunc GetCounter(n int) int {\n\tvar (\n\t\tcounter int\n\t\tmu      sync.Mutex\n\t\twg      sync.WaitGroup\n\t)\n\twg.Add(n)\n\tfor i := 0; i \u003c n; i++ {\n\t\tgo func() {\n\t\t\tdefer wg.Done()\n\t\t\tmu.Lock()\n\t\t\tcounter++\n\t\t\tmu.Unlock()\n\t\t}()\n\t}\n\twg.Wait()\n\treturn counter\n}"}
 
 🔄 Processing file operation...
-✅ File operation result (ID: call_0_bba8c8b6-74f6-4bdf-92e5-874c6ac540cd): {"base_directory":"project","file_name":"counter/counter.go","message":"Successfully saved: counter/counter.go"}
-
-🤖 Assistant: The corrected `counter/counter.go` file has been saved successfully. Here's a summary of the changes:
-
-1. **Fixed Concurrency Bug**:
-   - Added `sync.Mutex` to ensure thread-safe access to the `counter` variable.
-   - Used `sync.WaitGroup` to wait for all goroutines to complete before returning the result.
-
-2. **Expected Behavior**:
-   - The function now correctly increments the counter `n` times and returns the expected value (`100000` for the given input).
-
-### Next Steps:
-1. **Run the Program**:
-   - Execute `main.go` to verify that the output (`output.txt`) matches `expect.txt` (`100000`).
-
-2. **Check Output**:
-   - After running the program, inspect `output.txt` to confirm the fix.
-
-If you encounter any further issues or need additional help, feel free to ask!
-```
+✅ File operation result (ID: call_0_b9b3782c-2b07-4d9e-b70d-1eeb59417587): {"base_directory":"project","file_name":"counter/counter.go","message":"Successfully replaced 1 of 1 occurrence(s) in 'counter/counter.go'"}
+The `counter/counter.go` file has been updated to fix the race condition. Here's what changed:
 
 ### Changes Made:
-1. Added a `sync.Mutex` (`mu`) to protect the `counter` variable from concurrent access.
-2. Used a `sync.WaitGroup` (`wg`) to wait for all goroutines to complete before returning the result.
-3. Each goroutine now locks the mutex before incrementing `counter` and unlocks it afterward.
-
-### Verification:
-After applying this fix, the function should return `n` (e.g., `100000` for the given input), matching the expected output in `expect.txt`.
-
-Would you like me to save the corrected `counter/counter.go` file? Let me know, and I can proceed with the update.
-
-👤 You: Yes 
-🤖 Assistant: 📁 File operation initiated:
-   • save_file (ID: call_0_bba8c8b6-74f6-4bdf-92e5-874c6ac540cd)
-     Arguments: {"contents":"package counter\n\nimport \"sync\"\n\nfunc GetCounter(n int) int {\n    var (\n        counter int\n        wg      sync.WaitGroup\n        mu      sync.Mutex\n    )\n\n    wg.Add(n)\n    for i := 0; i < n; i++ {\n        go func() {\n            defer wg.Done()\n            mu.Lock()\n            counter++\n            mu.Unlock()\n        }()\n    }\n    wg.Wait()\n    return counter\n}","file_name":"counter/counter.go","overwrite":true}
-
-🔄 Processing file operation...
-✅ File operation result (ID: call_0_bba8c8b6-74f6-4bdf-92e5-874c6ac540cd): {"base_directory":"project","file_name":"counter/counter.go","message":"Successfully saved: counter/counter.go"}
-
-🤖 Assistant: The corrected `counter/counter.go` file has been saved successfully. Here's a summary of the changes:
-
-1. **Fixed Concurrency Bug**:
-   - Added `sync.Mutex` to ensure thread-safe access to the `counter` variable.
-   - Used `sync.WaitGroup` to wait for all goroutines to complete before returning the result.
-
-2. **Expected Behavior**:
-   - The function now correctly increments the counter `n` times and returns the expected value (`100000` for the given input).
+1. **Added Imports**: Added `sync` for `Mutex` and `WaitGroup`.
+2. **Synchronization**:
+   - Used a `sync.Mutex` to protect the `counter` variable.
+   - Used a `sync.WaitGroup` to ensure all goroutines complete before returning the result.
+3. **Corrected Logic**:
+   - Each goroutine increments the counter safely under the mutex.
+   - The `WaitGroup` ensures all increments are done before returning.
 
 ### Next Steps:
-1. **Run the Program**:
-   - Execute `main.go` to verify that the output (`output.txt`) matches `expect.txt` (`100000`).
+1. **Test the Fix**: You can test the program by running it with a sample input in `input.txt` and verifying the output in `output.txt`.
+2. **Error Handling**: If you'd like, I can also improve the error handling in `main.go` (e.g., handling `os.WriteFile` errors).
 
-2. **Check Output**:
-   - After running the program, inspect `output.txt` to confirm the fix.
-
-If you encounter any further issues or need additional help, feel free to ask!
-
+Would you like me to proceed with any additional fixes or tests?
 
 👤 You: exit
 👋 Goodbye!
