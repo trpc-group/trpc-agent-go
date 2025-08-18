@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -200,5 +197,52 @@ func TestSource_Recursive(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Fatalf("recursive read failed")
+	}
+}
+
+// TestWithMetadataValue verifies the WithMetadataValue option.
+func TestWithMetadataValue(t *testing.T) {
+	const metaKey = "test_key"
+	const metaValue = "test_value"
+
+	src := New([]string{"dummy"}, WithMetadataValue(metaKey, metaValue))
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("WithMetadataValue not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadata verifies the SetMetadata method.
+func TestSetMetadata(t *testing.T) {
+	src := New([]string{"dummy"})
+
+	const metaKey = "dynamic_key"
+	const metaValue = "dynamic_value"
+
+	src.SetMetadata(metaKey, metaValue)
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("SetMetadata not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadataMultiple verifies setting multiple metadata values.
+func TestSetMetadataMultiple(t *testing.T) {
+	src := New([]string{"dummy"})
+
+	metadata := map[string]interface{}{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": 123,
+	}
+
+	for k, v := range metadata {
+		src.SetMetadata(k, v)
+	}
+
+	for k, expectedValue := range metadata {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
 	}
 }

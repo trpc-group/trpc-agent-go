@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -152,7 +149,7 @@ type StreamableFunctionTool[I, O any] struct {
 	description  string
 	inputSchema  *tool.Schema
 	outputSchema *tool.Schema
-	fn           func(I) *tool.StreamReader
+	fn           func(context.Context, I) (*tool.StreamReader, error)
 	longRunning  bool
 	unmarshaler  unmarshaler
 }
@@ -166,7 +163,7 @@ type StreamableFunctionTool[I, O any] struct {
 //
 // Returns:
 //   - A pointer to the newly created StreamableFunctionTool.
-func NewStreamableFunctionTool[I, O any](fn func(I) *tool.StreamReader, opts ...Option) *StreamableFunctionTool[I, O] {
+func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.StreamReader, error), opts ...Option) *StreamableFunctionTool[I, O] {
 	// Set default options
 	options := &functionToolOptions{
 		unmarshaler: &jsonUnmarshaler{},
@@ -214,7 +211,7 @@ func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonA
 	if t.fn == nil {
 		return nil, fmt.Errorf("FunctionTool: %s does not support streaming calls", t.name)
 	}
-	return t.fn(input), nil
+	return t.fn(ctx, input)
 }
 
 // Declaration returns the tool's declaration information.

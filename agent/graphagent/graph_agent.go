@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -143,10 +140,22 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Prepare initial state.
-	initialState := ga.initialState
-	if initialState == nil {
+	var initialState graph.State
+
+	if ga.initialState != nil {
+		// Clone the base initial state to avoid modifying the original.
+		initialState = ga.initialState.Clone()
+	} else {
 		initialState = make(graph.State)
 	}
+
+	// Merge runtime state from RunOptions if provided.
+	if invocation.RunOptions.RuntimeState != nil {
+		for key, value := range invocation.RunOptions.RuntimeState {
+			initialState[key] = value
+		}
+	}
+
 	// Add invocation message to state.
 	if invocation.Message.Content != "" {
 		initialState[graph.StateKeyUserInput] = invocation.Message.Content

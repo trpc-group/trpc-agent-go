@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -123,5 +120,70 @@ func TestReadDocuments_InvalidURL(t *testing.T) {
 	src := New([]string{"http://:@invalid"})
 	if _, err := src.ReadDocuments(context.Background()); err == nil {
 		t.Fatalf("expected error for invalid url")
+	}
+}
+
+// TestWithMetadata verifies the WithMetadata option.
+func TestWithMetadata(t *testing.T) {
+	meta := map[string]interface{}{
+		"source":   "test-source",
+		"priority": "high",
+		"category": "documentation",
+	}
+
+	src := New([]string{"https://example.com"}, WithMetadata(meta))
+
+	for k, expectedValue := range meta {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
+	}
+}
+
+// TestWithMetadataValue verifies the WithMetadataValue option.
+func TestWithMetadataValue(t *testing.T) {
+	const metaKey = "url_key"
+	const metaValue = "url_value"
+
+	src := New([]string{"https://example.com"}, WithMetadataValue(metaKey, metaValue))
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("WithMetadataValue not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadata verifies the SetMetadata method.
+func TestSetMetadata(t *testing.T) {
+	src := New([]string{"https://example.com"})
+
+	const metaKey = "dynamic_url_key"
+	const metaValue = "dynamic_url_value"
+
+	src.SetMetadata(metaKey, metaValue)
+
+	if v, ok := src.metadata[metaKey]; !ok || v != metaValue {
+		t.Fatalf("SetMetadata not applied correctly, expected %s, got %v", metaValue, v)
+	}
+}
+
+// TestSetMetadataMultiple verifies setting multiple metadata values.
+func TestSetMetadataMultiple(t *testing.T) {
+	src := New([]string{"https://example.com"})
+
+	metadata := map[string]interface{}{
+		"url_key1": "url_value1",
+		"url_key2": "url_value2",
+		"url_key3": 456,
+		"url_key4": false,
+	}
+
+	for k, v := range metadata {
+		src.SetMetadata(k, v)
+	}
+
+	for k, expectedValue := range metadata {
+		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
+			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
+		}
 	}
 }

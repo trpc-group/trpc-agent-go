@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -17,6 +14,7 @@ type ServiceOpts struct {
 	sessionEventLimit int
 	url               string
 	instanceName      string
+	extraOptions      []interface{}
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -42,5 +40,13 @@ func WithRedisClientURL(url string) ServiceOpt {
 func WithRedisInstance(instanceName string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.instanceName = instanceName
+	}
+}
+
+// WithExtraOptions sets the extra options for the redis session service.
+// this option mainly used for the customized redis client builder, it will be passed to the builder.
+func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }

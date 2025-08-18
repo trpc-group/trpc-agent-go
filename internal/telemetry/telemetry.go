@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -39,6 +36,13 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
+)
+
+const (
+	// ProtocolGRPC uses gRPC protocol for OTLP exporter.
+	ProtocolGRPC string = "grpc"
+	// ProtocolHTTP uses HTTP protocol for OTLP exporter.
+	ProtocolHTTP string = "http"
 )
 
 // telemetry attributes constants.
@@ -134,8 +138,8 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 	}
 }
 
-// NewConn creates a new gRPC connection to the OpenTelemetry Collector.
-func NewConn(endpoint string) (*grpc.ClientConn, error) {
+// NewGRPCConn creates a new gRPC connection to the OpenTelemetry Collector.
+func NewGRPCConn(endpoint string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through gRPC connection.
 	// You can customize the endpoint using SetConfig() or environment variables.
 	conn, err := grpc.NewClient(endpoint,

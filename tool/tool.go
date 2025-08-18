@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -75,4 +72,8 @@ type Schema struct {
 	Items *Schema `json:"items,omitempty"`
 	// AdditionalProperties: Controls whether properties not defined in Properties are allowed
 	AdditionalProperties any `json:"additionalProperties,omitempty"`
+	// Default value for the parameter
+	Default any `json:"default,omitempty"`
+	// Enum contains the list of allowed values for the parameter
+	Enum []any `json:"enum,omitempty"`
 }

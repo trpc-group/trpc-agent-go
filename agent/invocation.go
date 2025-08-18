@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -75,5 +72,20 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 	return invocation, ok
 }
 
+// RunOption is a function that configures a RunOptions.
+type RunOption func(*RunOptions)
+
+// WithRuntimeState sets the runtime state for the RunOptions.
+func WithRuntimeState(state map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		opts.RuntimeState = state
+	}
+}
+
 // RunOptions is the options for the Run method.
-type RunOptions struct{}
+type RunOptions struct {
+	// RuntimeState contains key-value pairs that will be merged into the initial state
+	// for this specific run. This allows callers to pass dynamic parameters
+	// (e.g., room ID, user context) without modifying the agent's base initial state.
+	RuntimeState map[string]any
+}

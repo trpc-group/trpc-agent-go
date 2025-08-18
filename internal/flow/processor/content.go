@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 // Package processor provides content processing logic for agent requests.
 // It includes utilities for including, filtering, and rearranging session
@@ -39,13 +36,41 @@ type ContentRequestProcessor struct {
 	// IncludeContents determines how to include content from session events.
 	// Options: "none", "all", "filtered" (default: "all").
 	IncludeContents string
+	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+	// When false, foreign agent events are passed directly without the prefix.
+	AddContextPrefix bool
+}
+
+// ContentOption is a functional option for configuring the ContentRequestProcessor.
+type ContentOption func(*ContentRequestProcessor)
+
+// WithIncludeContents sets how to include content from session events.
+func WithIncludeContents(includeContents string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.IncludeContents = includeContents
+	}
+}
+
+// WithAddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+func WithAddContextPrefix(addPrefix bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.AddContextPrefix = addPrefix
+	}
 }
 
 // NewContentRequestProcessor creates a new content request processor.
-func NewContentRequestProcessor() *ContentRequestProcessor {
-	return &ContentRequestProcessor{
-		IncludeContents: IncludeContentsAll, // Default to include all contents.
+func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
+	processor := &ContentRequestProcessor{
+		IncludeContents:  IncludeContentsAll, // Default to include all contents.
+		AddContextPrefix: true,               // Default to add context prefix.
 	}
+
+	// Apply options.
+	for _, opt := range opts {
+		opt(processor)
+	}
+
+	return processor
 }
 
 // ProcessRequest implements the flow.RequestProcessor interface.
@@ -204,27 +229,46 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Build content parts for context.
 	var contentParts []string
-	contentParts = append(contentParts, "For context:")
+	if p.AddContextPrefix {
+		contentParts = append(contentParts, "For context:")
+	}
 
 	for _, choice := range evt.Choices {
 		if choice.Message.Content != "" {
-			contentParts = append(contentParts,
-				fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+			if p.AddContextPrefix {
+				contentParts = append(contentParts,
+					fmt.Sprintf("[%s] said: %s", evt.Author, choice.Message.Content))
+			} else {
+				// When prefix is disabled, pass the content directly.
+				contentParts = append(contentParts, choice.Message.Content)
+			}
 		} else if len(choice.Message.ToolCalls) > 0 {
 			for _, toolCall := range choice.Message.ToolCalls {
-				contentParts = append(contentParts,
-					fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
-						evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				if p.AddContextPrefix {
+					contentParts = append(contentParts,
+						fmt.Sprintf("[%s] called tool `%s` with parameters: %s",
+							evt.Author, toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				} else {
+					// When prefix is disabled, pass tool call info directly.
+					contentParts = append(contentParts,
+						fmt.Sprintf("Tool `%s` called with parameters: %s",
+							toolCall.Function.Name, string(toolCall.Function.Arguments)))
+				}
 			}
 		} else if choice.Message.ToolID != "" {
-			contentParts = append(contentParts,
-				fmt.Sprintf("[%s] `%s` tool returned result: %s",
-					evt.Author, choice.Message.ToolID, choice.Message.Content))
+			if p.AddContextPrefix {
+				contentParts = append(contentParts,
+					fmt.Sprintf("[%s] `%s` tool returned result: %s",
+						evt.Author, choice.Message.ToolID, choice.Message.Content))
+			} else {
+				// When prefix is disabled, pass tool result directly.
+				contentParts = append(contentParts, choice.Message.Content)
+			}
 		}
 	}
 
 	// Set the converted message.
-	if len(contentParts) > 1 {
+	if len(contentParts) > 0 {
 		convertedEvent.Choices = []model.Choice{
 			{
 				Index: 0,
@@ -404,30 +448,18 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	// Start with the first event as base.
 	mergedEvent := functionResponseEvents[0]
 
-	// For simplicity, we'll combine the content from all responses.
-	// In a more sophisticated implementation, we'd handle function_response
-	// ID mapping more precisely.
-	var combinedContent strings.Builder
-	for i, evt := range functionResponseEvents {
-		if len(evt.Choices) > 0 && evt.Choices[0].Message.Content != "" {
-			if i > 0 {
-				combinedContent.WriteString(" ")
+	// Collect all tool response messages, preserving each individual ToolID.
+	var allChoices []model.Choice
+	for _, evt := range functionResponseEvents {
+		for _, choice := range evt.Choices {
+			if choice.Message.Content != "" && choice.Message.ToolID != "" {
+				allChoices = append(allChoices, choice)
 			}
-			combinedContent.WriteString(evt.Choices[0].Message.Content)
 		}
 	}
 
-	if combinedContent.Len() > 0 {
-		mergedEvent.Choices = []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: combinedContent.String(),
-					ToolID:  functionResponseEvents[0].Choices[0].Message.ToolID,
-				},
-			},
-		}
+	if len(allChoices) > 0 {
+		mergedEvent.Choices = allChoices
 	}
 
 	return mergedEvent

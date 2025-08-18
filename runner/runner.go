@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -15,7 +12,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,8 +47,7 @@ type Runner interface {
 		userID string,
 		sessionID string,
 		message model.Message,
-		// Variadic run options placeholder for future extension.
-		runOpts ...agent.RunOptions,
+		runOpts ...agent.RunOption,
 	) (<-chan *event.Event, error)
 }
 
@@ -93,9 +88,9 @@ func (r *runner) Run(
 	userID string,
 	sessionID string,
 	message model.Message,
-	runOpts ...agent.RunOptions,
+	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invocation"))
+	ctx, span := trace.Tracer.Start(ctx, "invocation")
 	defer span.End()
 
 	sessionKey := session.Key{
@@ -146,8 +141,8 @@ func (r *runner) Run(
 	// Create invocation.
 	eventCompletionCh := make(chan string)
 	var ro agent.RunOptions
-	if len(runOpts) > 0 {
-		ro = runOpts[0]
+	for _, opt := range runOpts {
+		opt(&ro)
 	}
 	invocation := &agent.Invocation{
 		Agent:             r.agent,
@@ -174,7 +169,8 @@ func (r *runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil {
+			if agentEvent.StateDelta != nil ||
+				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}

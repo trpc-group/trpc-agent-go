@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -347,13 +344,13 @@ func formatToolResult(content string) string {
 
 // Calculator tool related structures
 type calculatorRequest struct {
-	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate, e.g., '2+3*4', 'sqrt(16)', 'sin(30*pi/180)'"`
+	Expression string `json:"expression" jsonschema:"description=Mathematical expression to calculate. Supports basic operations (+, -, *, /), scientific functions (sin, cos, tan, sqrt, log, ln, abs, pow), and constants (pi, e). Examples: '2+3*4', 'sqrt(16)', 'sin(30*pi/180)', 'log10(100)',required"`
 }
 
 type calculatorResponse struct {
-	Expression string  `json:"expression"`
-	Result     float64 `json:"result"`
-	Message    string  `json:"message"`
+	Expression string  `json:"expression" jsonschema:"description=The original mathematical expression that was calculated"`
+	Result     float64 `json:"result" jsonschema:"description=The numerical result of the calculation"`
+	Message    string  `json:"message" jsonschema:"description=Human-readable description of the calculation result"`
 }
 
 // createCalculatorTool creates a calculator tool
@@ -595,28 +592,27 @@ func evaluateMultiplicationDivisionOnly(expr string) (float64, error) {
 
 // Time tool related structures
 type timeRequest struct {
-	Operation string `json:"operation" jsonschema:"description=Time operation type: 'current' (current time), 'date' (current date), 'weekday' (day of week), 'timestamp' (Unix timestamp)"`
+	Operation string `json:"operation" jsonschema:"description=Time operation type to perform,enum=current,enum=date,enum=weekday,enum=timestamp,required"`
 }
 
 type timeResponse struct {
-	Operation string `json:"operation"`
-	Result    string `json:"result"`
-	Timestamp int64  `json:"timestamp"`
+	Operation string `json:"operation" jsonschema:"description=The operation that was performed"`
+	Result    string `json:"result" jsonschema:"description=The result of the time operation"`
+	Timestamp int64  `json:"timestamp" jsonschema:"description=Unix timestamp of when the operation was performed"`
 }
 
 // createTimeTool creates a time tool
-func createTimeTool() tool.CallableTool {
-	return function.NewFunctionTool(
+func createTimeTool() tool.StreamableTool {
+	return function.NewStreamableFunctionTool[timeRequest, timeResponse](
 		getTimeInfo,
 		function.WithName("time_tool"),
 		function.WithDescription("Get time and date information. Supported operations: 'current'(current time), 'date'(current date), 'weekday'(day of week), 'timestamp'(Unix timestamp)"),
 	)
 }
 
-// getTimeInfo gets time information
-func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
+func getTimeInfo(ctx context.Context, req timeRequest) (*tool.StreamReader, error) {
+	stream := tool.NewStream(10)
 	now := time.Now()
-
 	var result string
 	switch req.Operation {
 	case "current":
@@ -631,25 +627,47 @@ func getTimeInfo(_ context.Context, req timeRequest) (timeResponse, error) {
 	default:
 		result = fmt.Sprintf("Current time: %s", now.Format("2006-01-02 15:04:05"))
 	}
+	output := tool.StreamChunk{
+		Content: timeResponse{
+			Operation: req.Operation,
+			Timestamp: now.Unix(),
+		},
+		Metadata: tool.Metadata{CreatedAt: time.Now()},
+	}
+	if closed := stream.Writer.Send(output, nil); closed {
+		return stream.Reader, fmt.Errorf("stream writer closed")
+	}
 
-	return timeResponse{
-		Operation: req.Operation,
-		Result:    result,
-		Timestamp: now.Unix(),
-	}, nil
+	go func(result string) {
+		for i := 0; i < len(result); i++ {
+			output := tool.StreamChunk{
+				Content: timeResponse{
+					Result: result[i : i+1],
+				},
+				Metadata: tool.Metadata{CreatedAt: time.Now()},
+			}
+			if closed := stream.Writer.Send(output, nil); closed {
+				break
+			}
+			time.Sleep(10 * time.Millisecond) // Simulate delay
+		}
+		stream.Writer.Close()
+	}(result)
+
+	return stream.Reader, nil
 }
 
 // Text tool related structures
 type textRequest struct {
-	Text      string `json:"text" jsonschema:"description=Text content to process"`
-	Operation string `json:"operation" jsonschema:"description=Text operation type: 'uppercase' (to uppercase), 'lowercase' (to lowercase), 'length' (calculate length), 'reverse' (reverse), 'words' (count words)"`
+	Text      string `json:"text" jsonschema:"description=Text content to process,required"`
+	Operation string `json:"operation" jsonschema:"description=Text operation type to perform,enum=uppercase,enum=lowercase,enum=length,enum=reverse,enum=words,required"`
 }
 
 type textResponse struct {
-	OriginalText string `json:"original_text"`
-	Operation    string `json:"operation"`
-	Result       string `json:"result"`
-	Info         string `json:"info"`
+	OriginalText string `json:"original_text" jsonschema:"description=The original text that was processed"`
+	Operation    string `json:"operation" jsonschema:"description=The operation that was performed on the text"`
+	Result       string `json:"result" jsonschema:"description=The result of the text operation"`
+	Info         string `json:"info" jsonschema:"description=Additional information about the operation"`
 }
 
 // createTextTool creates a text processing tool
@@ -703,17 +721,17 @@ func processText(_ context.Context, req textRequest) (textResponse, error) {
 
 // File tool related structures
 type fileRequest struct {
-	Path      string `json:"path" jsonschema:"description=File or directory path"`
-	Operation string `json:"operation" jsonschema:"description=File operation type: 'read' (read file), 'write' (write file), 'list' (list directory), 'exists' (check file existence)"`
-	Content   string `json:"content,omitempty" jsonschema:"description=Content to write when writing files (only for write operation)"`
+	Path      string `json:"path" jsonschema:"description=File or directory path (relative to current working directory for security),required"`
+	Operation string `json:"operation" jsonschema:"description=File operation type to perform,enum=read,enum=write,enum=list,enum=exists,required"`
+	Content   string `json:"content,omitempty" jsonschema:"description=Content to write to the file (only required for write operation)"`
 }
 
 type fileResponse struct {
-	Path      string `json:"path"`
-	Operation string `json:"operation"`
-	Result    string `json:"result"`
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
+	Path      string `json:"path" jsonschema:"description=The file or directory path that was accessed"`
+	Operation string `json:"operation" jsonschema:"description=The file operation that was performed"`
+	Result    string `json:"result" jsonschema:"description=The result of the file operation (file content, directory listing, etc.)"`
+	Success   bool   `json:"success" jsonschema:"description=Whether the file operation was successful"`
+	Message   string `json:"message" jsonschema:"description=Human-readable message about the operation result"`
 }
 
 // createFileTool creates a file operations tool

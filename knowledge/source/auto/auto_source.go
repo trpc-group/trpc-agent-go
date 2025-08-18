@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -194,4 +191,12 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
 	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+}
+
+// SetMetadata sets metadata for this source.
+func (s *Source) SetMetadata(key string, value interface{}) {
+	if s.metadata == nil {
+		s.metadata = make(map[string]interface{})
+	}
+	s.metadata[key] = value
 }

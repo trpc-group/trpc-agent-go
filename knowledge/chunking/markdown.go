@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -21,6 +18,7 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 )
 
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
@@ -78,7 +76,7 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 	content := cleanText(doc.Content)
 
 	// If content is small enough, return as single chunk.
-	if len(content) <= m.chunkSize {
+	if encoding.RuneCount(content) <= m.chunkSize {
 		chunk := createChunk(doc, content, 1)
 		return []*document.Document{chunk}, nil
 	}
@@ -293,7 +291,7 @@ func (m *MarkdownChunking) splitLargeSection(
 	currentSize := 0
 
 	for _, paragraph := range paragraphs {
-		paragraphSize := len(paragraph)
+		paragraphSize := encoding.RuneCount(paragraph)
 
 		// If adding this paragraph would exceed chunk size, create a new chunk.
 		if currentSize+paragraphSize > m.chunkSize && currentSize > 0 {
@@ -360,8 +358,8 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 
 	for i := 1; i < len(chunks); i++ {
 		prevText := chunks[i-1].Content
-		if len(prevText) > m.overlap {
-			prevText = prevText[len(prevText)-m.overlap:]
+		if encoding.RuneCount(prevText) > m.overlap {
+			prevText = encoding.SafeOverlap(prevText, m.overlap)
 		}
 
 		// Create new metadata for overlapped chunk.

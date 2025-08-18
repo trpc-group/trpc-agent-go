@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -57,7 +56,7 @@ func main() {
 const userID, sessionID = "user-123", "session-123"
 
 func processStreamingResponse(ctx context.Context, r runner.Runner, message model.Message) (*model.ToolCall, *askForApprovalOutput) {
-	eventChan, err := r.Run(ctx, userID, sessionID, message, agent.RunOptions{})
+	eventChan, err := r.Run(ctx, userID, sessionID, message)
 	if err != nil {
 		log.Fatalf("failed to run agent: %v", err)
 	}

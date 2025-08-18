@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -19,7 +16,7 @@ import (
 )
 
 // TestMetricsEndpoint validates metrics endpoint precedence rules.
-func TestMetricsEndpoint(t *testing.T) {
+func TestGRPCMetricsEndpoint(t *testing.T) {
 	const (
 		customEndpoint  = "custom-metric:4318"
 		genericEndpoint = "generic-endpoint:4318"
@@ -34,19 +31,19 @@ func TestMetricsEndpoint(t *testing.T) {
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", customEndpoint)
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := metricsEndpoint(); ep != customEndpoint {
+	if ep := metricsEndpoint("grpc"); ep != customEndpoint {
 		t.Fatalf("expected %s, got %s", customEndpoint, ep)
 	}
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := metricsEndpoint(); ep != genericEndpoint {
+	if ep := metricsEndpoint("grpc"); ep != genericEndpoint {
 		t.Fatalf("expected %s, got %s", genericEndpoint, ep)
 	}
 
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	if ep := metricsEndpoint(); ep == "" {
+	if ep := metricsEndpoint("grpc"); ep == "" {
 		t.Fatalf("expected non-empty default endpoint")
 	}
 }

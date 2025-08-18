@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -254,5 +251,58 @@ func TestLLMAgent_WithKnowledge(t *testing.T) {
 			}
 			break
 		}
+	}
+}
+
+// staticModel is a lightweight test model that exposes a fixed name.
+type staticModel struct{ name string }
+
+func (m *staticModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	// Not used in this test since we short-circuit via callbacks.
+	return nil, nil
+}
+
+func (m *staticModel) Info() model.Info { return model.Info{Name: m.name} }
+
+func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
+	mA := &staticModel{name: "model-A"}
+	mB := &staticModel{name: "model-B"}
+
+	// Capture model name seen inside the agent before run.
+	var seen string
+	cbs := agent.NewCallbacks()
+	cbs.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+		if inv.Model != nil {
+			seen = inv.Model.Info().Name
+		}
+		// Short-circuit to avoid invoking underlying flow.
+		return &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "ok"},
+		}}}, nil
+	})
+
+	agt := New("test-agent", WithModel(mA), WithAgentCallbacks(cbs))
+
+	// First run should use model-A.
+	inv1 := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	ch1, err := agt.Run(context.Background(), inv1)
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	<-ch1 // drain one event
+	if seen != "model-A" {
+		t.Fatalf("expected model-A, got %s", seen)
+	}
+
+	// Switch to model-B and verify it is applied.
+	agt.SetModel(mB)
+	inv2 := &agent.Invocation{Message: model.NewUserMessage("hi again")}
+	ch2, err := agt.Run(context.Background(), inv2)
+	if err != nil {
+		t.Fatalf("Run error after SetModel: %v", err)
+	}
+	<-ch2
+	if seen != "model-B" {
+		t.Fatalf("expected model-B after SetModel, got %s", seen)
 	}
 }

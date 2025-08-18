@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -16,6 +13,7 @@ package llmagent
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -23,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -154,10 +153,35 @@ func WithMemory(memoryService memory.Service) Option {
 		opts.Memory = memoryService
 		// Generate memory instruction based on the memory service.
 		if opts.Instruction == "" {
-			opts.Instruction = memory.GenerateInstruction(memoryService)
+			opts.Instruction = imemory.GenerateInstruction(memoryService)
 		} else {
-			opts.Instruction = opts.Instruction + "\n\n" + memory.GenerateInstruction(memoryService)
+			opts.Instruction = opts.Instruction + "\n\n" + imemory.GenerateInstruction(memoryService)
 		}
+	}
+}
+
+// WithOutputKey sets the key in session state to store the output of the agent.
+func WithOutputKey(outputKey string) Option {
+	return func(opts *Options) {
+		opts.OutputKey = outputKey
+	}
+}
+
+// WithOutputSchema sets the JSON schema for validating agent output.
+// When this is set, the agent can ONLY reply and CANNOT use any tools,
+// such as function tools, RAGs, agent transfer, etc.
+func WithOutputSchema(schema map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.OutputSchema = schema
+	}
+}
+
+// WithInputSchema sets the JSON schema for validating agent input.
+// When this is set, the agent's input will be validated against this schema
+// when used as a tool or when receiving input from other agents.
+func WithInputSchema(schema map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.InputSchema = schema
 	}
 }
 
@@ -165,6 +189,46 @@ func WithMemory(memoryService memory.Service) Option {
 func WithAddNameToInstruction(addNameToInstruction bool) Option {
 	return func(opts *Options) {
 		opts.AddNameToInstruction = addNameToInstruction
+	}
+}
+
+// WithEnableParallelTools enables parallel tool execution if set to true.
+// By default, tools execute serially for safety and compatibility.
+func WithEnableParallelTools(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableParallelTools = enable
+	}
+}
+
+// WithAddCurrentTime adds the current time to the system prompt if true.
+func WithAddCurrentTime(addCurrentTime bool) Option {
+	return func(opts *Options) {
+		opts.AddCurrentTime = addCurrentTime
+	}
+}
+
+// WithTimezone specifies the timezone to use for time display.
+func WithTimezone(timezone string) Option {
+	return func(opts *Options) {
+		opts.Timezone = timezone
+	}
+}
+
+// WithTimeFormat specifies the format for time display.
+// The format should be a valid Go time format string.
+// See https://pkg.go.dev/time#Time.Format for more details.
+func WithTimeFormat(timeFormat string) Option {
+	return func(opts *Options) {
+		opts.TimeFormat = timeFormat
+	}
+}
+
+// WithAddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+// When false, foreign agent events are passed directly without the prefix.
+// This is useful for chain agents where you want to pass formatted data between agents.
+func WithAddContextPrefix(addPrefix bool) Option {
+	return func(opts *Options) {
+		opts.AddContextPrefix = addPrefix
 	}
 }
 
@@ -208,11 +272,33 @@ type Options struct {
 	Memory memory.Service
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
+	// EnableParallelTools enables parallel tool execution if true.
+	// If false (default), tools will execute serially for safety.
+	EnableParallelTools bool
+	// AddCurrentTime adds the current time to the system prompt if true.
+	AddCurrentTime bool
+	// Timezone specifies the timezone to use for time display.
+	Timezone string
+	// TimeFormat specifies the format for time display.
+	TimeFormat string
+	// OutputKey is the key in session state to store the output of the agent.
+	OutputKey string
+	// OutputSchema is the JSON schema for validating agent output.
+	// When this is set, the agent can ONLY reply and CANNOT use any tools.
+	OutputSchema map[string]interface{}
+	// InputSchema is the JSON schema for validating agent input.
+	// When this is set, the agent's input will be validated against this schema
+	// when used as a tool or when receiving input from other agents.
+	InputSchema map[string]interface{}
+	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
+	// When false, foreign agent events are passed directly without the prefix.
+	AddContextPrefix bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
 	name           string
+	mu             sync.RWMutex
 	model          model.Model
 	description    string
 	instruction    string
@@ -226,6 +312,9 @@ type LLMAgent struct {
 	agentCallbacks *agent.Callbacks
 	modelCallbacks *model.Callbacks
 	toolCallbacks  *tool.Callbacks
+	outputKey      string                 // Key to store output in session state
+	outputSchema   map[string]interface{} // JSON schema for output validation
+	inputSchema    map[string]interface{} // JSON schema for input validation
 }
 
 // New creates a new LLMAgent with the given options.
@@ -255,7 +344,11 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// 3. Instruction processor - adds instruction content and system prompt.
 	if options.Instruction != "" || options.GlobalInstruction != "" {
-		instructionProcessor := processor.NewInstructionRequestProcessor(options.Instruction, options.GlobalInstruction)
+		instructionProcessor := processor.NewInstructionRequestProcessor(
+			options.Instruction,
+			options.GlobalInstruction,
+			processor.WithOutputSchema(options.OutputSchema),
+		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
 
@@ -269,8 +362,20 @@ func New(name string, opts ...Option) *LLMAgent {
 		requestProcessors = append(requestProcessors, identityProcessor)
 	}
 
-	// 5. Content processor - handles messages from invocation.
-	contentProcessor := processor.NewContentRequestProcessor()
+	// 5. Time processor - adds current time information if enabled.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
+
+	// 6. Content processor - handles messages from invocation.
+	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithAddContextPrefix(options.AddContextPrefix),
+	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
 	// Prepare response processors.
@@ -284,6 +389,12 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
 
+	// Add output response processor if output_key or output_schema is configured.
+	if options.OutputKey != "" || options.OutputSchema != nil {
+		responseProcessors = append(responseProcessors,
+			processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema))
+	}
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()
@@ -292,13 +403,24 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize: options.ChannelBufferSize,
+		ChannelBufferSize:   options.ChannelBufferSize,
+		EnableParallelTools: options.EnableParallelTools,
 	}
 
 	llmFlow := llmflow.New(
 		requestProcessors, responseProcessors,
 		flowOpts,
 	)
+
+	// Validate output_schema configuration before registering tools
+	if options.OutputSchema != nil {
+		if len(options.Tools) > 0 || len(options.ToolSets) > 0 || options.Knowledge != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tools, toolSets, and knowledge must be empty")
+		}
+		if len(options.SubAgents) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
+		}
+	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
@@ -318,6 +440,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		agentCallbacks: options.AgentCallbacks,
 		modelCallbacks: options.ModelCallbacks,
 		toolCallbacks:  options.ToolCallbacks,
+		outputKey:      options.OutputKey,
+		outputSchema:   options.OutputSchema,
+		inputSchema:    options.InputSchema,
 	}
 }
 
@@ -359,7 +484,9 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	defer span.End()
 	// Ensure the invocation has a model set.
 	if invocation.Model == nil && a.model != nil {
+		a.mu.RLock()
 		invocation.Model = a.model
+		a.mu.RUnlock()
 	}
 
 	// Ensure the agent name is set.
@@ -470,8 +597,10 @@ func (a *LLMAgent) wrapEventChannel(
 // It returns the basic information about this agent.
 func (a *LLMAgent) Info() agent.Info {
 	return agent.Info{
-		Name:        a.name,
-		Description: a.description,
+		Name:         a.name,
+		Description:  a.description,
+		InputSchema:  a.inputSchema,
+		OutputSchema: a.outputSchema,
 	}
 }
 
@@ -513,4 +642,13 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// SetModel sets the model for this agent in a concurrency-safe way.
+// This allows callers to manage multiple models externally and switch
+// dynamically during runtime.
+func (a *LLMAgent) SetModel(m model.Model) {
+	a.mu.Lock()
+	a.model = m
+	a.mu.Unlock()
 }

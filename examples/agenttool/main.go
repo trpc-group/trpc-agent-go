@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -104,6 +101,22 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			Stream:      true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
+		// Use input schema to specify the input format of the agent.
+		llmagent.WithInputSchema(map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"operation": map[string]interface{}{
+					"type": "string",
+					"enum": []interface{}{"add", "subtract", "multiply", "divide"},
+				},
+				"a": map[string]interface{}{
+					"type": "number",
+				},
+				"b": map[string]interface{}{
+					"type": "number",
+				},
+			},
+		}),
 	)
 
 	// Create tools.

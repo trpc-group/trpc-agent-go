@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -169,7 +166,6 @@ func (c *cycleChat) setup(_ context.Context) error {
 	cycleAgent := cycleagent.New(
 		"cycle-demo",
 		cycleagent.WithSubAgents([]agent.Agent{generateAgent, criticAgent}),
-		cycleagent.WithTools([]tool.Tool{scoreTool, solutionTool}),
 		cycleagent.WithMaxIterations(*maxIterPtr),
 		cycleagent.WithEscalationFunc(qualityEscalationFunc),
 	)
@@ -318,12 +314,6 @@ func (c *cycleChat) handleAgentTransition(
 		// Update lastAgent BEFORE checking for new iterations.
 		*lastAgent = *currentAgent
 
-		// Check if we're starting a new iteration (cycle back to generate-agent).
-		if event.Author == "generate-agent" && *lastAgent == "critic-agent" {
-			*currentIteration++
-			fmt.Printf("\n🔄 **Iteration %d**\n", *currentIteration+1)
-		}
-
 		*currentAgent = event.Author
 		*agentStarted = true
 		*toolCallsActive = false
@@ -340,14 +330,12 @@ func (c *cycleChat) handleAgentTransition(
 // handleToolCalls detects and displays tool calls.
 func (c *cycleChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
 	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		if !*toolCallsActive {
-			*toolCallsActive = true
-			fmt.Printf("\n🔧 Using tools:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-			}
-			fmt.Printf("🔄 Executing...\n")
+		*toolCallsActive = true
+		fmt.Printf("\n🔧 Using tools:\n")
+		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		}
+		fmt.Printf("🔄 Executing...\n")
 	}
 }
 

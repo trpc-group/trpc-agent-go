@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -16,7 +13,6 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -62,19 +58,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		option(&opts)
 	}
 
-	if opts.url == "" && opts.instanceName == "" {
-		return nil, errors.New("redis url or instance name is required")
-	}
-
 	var redisClient redis.UniversalClient
 	var err error
 	builder := storage.GetClientBuilder()
-	if opts.url != "" {
-		redisClient, err = builder(storage.WithClientBuilderURL(opts.url))
-		if err != nil {
-			return nil, fmt.Errorf("create redis client from url failed: %w", err)
-		}
-	} else if opts.instanceName != "" {
+
+	// if instance name set, and url not set, use instance name to create redis client
+	if opts.url == "" && opts.instanceName != "" {
 		builderOpts, ok := storage.GetRedisInstance(opts.instanceName)
 		if !ok {
 			return nil, fmt.Errorf("redis instance %s not found", opts.instanceName)
@@ -83,8 +72,16 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
+		return &Service{opts: opts, redisClient: redisClient}, nil
 	}
 
+	redisClient, err = builder(
+		storage.WithClientBuilderURL(opts.url),
+		storage.WithExtraOptions(opts.extraOptions...),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create redis client from url failed: %w", err)
+	}
 	return &Service{opts: opts, redisClient: redisClient}, nil
 }
 
@@ -619,7 +616,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	txPipe := s.redisClient.TxPipeline()
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
-		Score:  float64(event.Timestamp.Unix()),
+		Score:  float64(event.Timestamp.UnixNano()),
 		Member: eventBytes,
 	})
 	if s.opts.sessionEventLimit > 0 {

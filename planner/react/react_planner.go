@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -198,6 +195,12 @@ func (p *Planner) buildPlannerInstruction() string {
 			"be under " + ReplanningTag + ". Then use tools to follow the new plan.",
 	}, "\n")
 
+	actionPreamble := strings.Join([]string{
+		"Below are the requirements for the action:",
+		"Explicitly state your next action in the first person ('I will...').",
+		"Execute your action using necessary tools and provide a concise summary of the outcome.",
+	}, "\n")
+
 	reasoningPreamble := strings.Join([]string{
 		"Below are the requirements for the reasoning:",
 		"The reasoning makes a summary of the current trajectory based on the user " +
@@ -246,6 +249,7 @@ func (p *Planner) buildPlannerInstruction() string {
 	return strings.Join([]string{
 		highLevelPreamble,
 		planningPreamble,
+		actionPreamble,
 		reasoningPreamble,
 		finalAnswerPreamble,
 		toolCodePreamble,

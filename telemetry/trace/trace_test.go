@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -18,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestTracesEndpoint(t *testing.T) {
+func TestGRPCTracesEndpoint(t *testing.T) {
 	const (
 		customEndpoint  = "custom-trace:4317"
 		genericEndpoint = "generic-endpoint:4317"
@@ -37,21 +34,21 @@ func TestTracesEndpoint(t *testing.T) {
 	// Case 1: specific variable has precedence over generic.
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", customEndpoint)
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := tracesEndpoint(); ep != customEndpoint {
+	if ep := tracesEndpoint("grpc"); ep != customEndpoint {
 		t.Fatalf("expected %s, got %s", customEndpoint, ep)
 	}
 
 	// Case 2: fallback to generic when specific is empty.
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", genericEndpoint)
-	if ep := tracesEndpoint(); ep != genericEndpoint {
+	if ep := tracesEndpoint("grpc"); ep != genericEndpoint {
 		t.Fatalf("expected %s, got %s", genericEndpoint, ep)
 	}
 
 	// Case 3: default when none set.
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
 	_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	if ep := tracesEndpoint(); ep == "" {
+	if ep := tracesEndpoint("grpc"); ep == "" {
 		t.Fatalf("expected non-empty default endpoint")
 	}
 }

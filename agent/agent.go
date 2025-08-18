@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -24,8 +21,14 @@ import (
 
 // Info contains basic information about an agent.
 type Info struct {
-	Name        string
+	// Name is the name of the agent.
+	Name string
+	// Description is the description of the agent.
 	Description string
+	// InputSchema is the input schema of the agent.
+	InputSchema map[string]interface{}
+	// OutputSchema is the output schema of the agent.
+	OutputSchema map[string]interface{}
 }
 
 // ErrorTypeStopAgentError is the error type used to indicate that an agent should stop execution.

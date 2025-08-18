@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -41,6 +38,7 @@ var (
 	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
 	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	enableParallel  = flag.Bool("enable-parallel", false, "Enable parallel tool execution (default: false, serial execution)")
 )
 
 func main() {
@@ -50,6 +48,13 @@ func main() {
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
+	fmt.Printf("Parallel Tools: %s\n", func() string {
+		if !*enableParallel {
+			return "disabled (serial execution)"
+		}
+		return "enabled (parallel execution)"
+	}())
+	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -118,6 +123,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
+		llmagent.WithEnableParallelTools(*enableParallel),
 	)
 
 	var sessionService session.Service

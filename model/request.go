@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -38,6 +35,8 @@ const (
 	ThinkingEnabledKey = "thinking_enabled"
 	// ThinkingTokensKey is the key used for thinking tokens configuration in API requests.
 	ThinkingTokensKey = "thinking_tokens"
+	// ReasoningContentKey is the key used for reasoning content in API responses.
+	ReasoningContentKey = "reasoning_content"
 )
 
 // String returns the string representation of the role.
@@ -69,6 +68,9 @@ type Message struct {
 	ToolName string `json:"tool_name,omitempty"`
 	// ToolCalls is the optional tool calls for the message.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ReasoningContent is hunyuan or deepseek think content
+	// - https://api-docs.deepseek.com/api/create-chat-completion#responses
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // AddFilePath adds a file path to the message.

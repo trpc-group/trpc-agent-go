@@ -1,12 +1,9 @@
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
-//
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the  Apache 2.0 License,
-// A copy of the Apache 2.0 License is included in this file.
+// Copyright (C) 2025 Tencent.  All rights reserved.
+
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
 
@@ -476,8 +473,9 @@ func TestModel_Callbacks(t *testing.T) {
 			t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
 		}
 		// Only check response model if we got a successful response.
-		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo" {
-			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo", capturedResponse.Model)
+		// Note: OpenAI now returns gpt-3.5-turbo-1106 when requesting gpt-3.5-turbo.
+		if capturedResponse != nil && capturedResponse.Model != "gpt-3.5-turbo-1106" {
+			t.Errorf("expected response model %s, got %s", "gpt-3.5-turbo-1106", capturedResponse.Model)
 		}
 	})
 
@@ -1200,7 +1198,7 @@ func TestConvertUserMessageContent(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	// Check that content parts are converted
 	if len(content.OfArrayOfContentParts) != 1 {
@@ -1233,7 +1231,7 @@ func TestConvertUserMessageContentWithImage(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
@@ -1265,7 +1263,7 @@ func TestConvertUserMessageContentWithAudio(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
@@ -1292,7 +1290,7 @@ func TestConvertUserMessageContentWithFile(t *testing.T) {
 	}
 
 	model := &Model{}
-	content := model.convertUserMessageContent(message)
+	content, _ := model.convertUserMessageContent(message)
 
 	if len(content.OfArrayOfContentParts) != 1 {
 		t.Errorf("Expected 1 content part, got %d", len(content.OfArrayOfContentParts))
@@ -1616,5 +1614,166 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestModel_GenerateContent_WithReasoningContent(t *testing.T) {
+	// Create a mock server that returns streaming responses with reasoning_content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Send response chunks with reasoning_content
+		chunks := []string{
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"First part of reasoning"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"reasoning_content":" second part of reasoning"},"finish_reason":null}]}`,
+			`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"deepseek-chat","choices":[{"index":0,"delta":{"reasoning_content":" final part of reasoning"},"finish_reason":"stop"}]}`,
+		}
+
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}))
+	defer server.Close()
+
+	// Create model instance
+	m := New("deepseek-chat", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	// Create request
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test with reasoning content"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+
+	// Send request
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	// Collect responses
+	var responses []*model.Response
+	for response := range responseChan {
+		responses = append(responses, response)
+		if response.Error != nil {
+			t.Fatalf("Response error: %v", response.Error)
+		}
+	}
+
+	// Verify responses contain reasoning_content
+	if len(responses) < 3 {
+		t.Fatalf("Expected at least 3 responses, got %d", len(responses))
+	}
+
+	// Check the first response chunk
+	if len(responses) > 0 && len(responses[0].Choices) > 0 {
+		if responses[0].Choices[0].Delta.ReasoningContent != "First part of reasoning" {
+			t.Errorf("Expected reasoning_content 'First part of reasoning', got '%s'", responses[0].Choices[0].Delta.ReasoningContent)
+		}
+	}
+
+	// Check if any responses contain reasoning_content
+	foundReasoningContent := false
+	for _, response := range responses {
+		if len(response.Choices) > 0 && response.Choices[0].Delta.ReasoningContent != "" {
+			foundReasoningContent = true
+			break
+		}
+	}
+
+	if !foundReasoningContent {
+		t.Error("Expected to find responses with reasoning_content, but none were found")
+	}
+}
+
+func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
+	// Create a mock server that returns non-streaming responses with reasoning_content
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		// Send non-streaming response with reasoning_content
+		response := `{
+			"id": "test",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "deepseek-chat",
+			"choices": [
+				{
+					"index": 0,
+					"message": {
+						"role": "assistant",
+						"content": "Final answer",
+						"reasoning_content": "Complete reasoning process"
+					},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {
+				"prompt_tokens": 10,
+				"completion_tokens": 20,
+				"total_tokens": 30
+			}
+		}`
+
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	// Create model instance
+	m := New("deepseek-chat", WithBaseURL(server.URL), WithAPIKey("test-key"))
+
+	// Create request (non-streaming)
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "Test with reasoning content"}},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	// Send request
+	ctx := context.Background()
+	responseChan, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		t.Fatalf("GenerateContent failed: %v", err)
+	}
+
+	// Collect responses
+	var responses []*model.Response
+	for response := range responseChan {
+		responses = append(responses, response)
+		if response.Error != nil {
+			t.Fatalf("Response error: %v", response.Error)
+		}
+	}
+
+	// Verify response contains reasoning_content
+	if len(responses) != 1 {
+		t.Fatalf("Expected 1 response, got %d", len(responses))
+	}
+
+	if len(responses[0].Choices) == 0 {
+		t.Fatal("Expected at least one choice in response")
+	}
+
+	// Check that reasoning content is present in the final message
+	if responses[0].Choices[0].Message.ReasoningContent != "Complete reasoning process" {
+		t.Errorf("Expected reasoning_content 'Complete reasoning process', got '%s'", responses[0].Choices[0].Message.ReasoningContent)
+	}
+
+	// Check that content is also present
+	if responses[0].Choices[0].Message.Content != "Final answer" {
+		t.Errorf("Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
 	}
 }
