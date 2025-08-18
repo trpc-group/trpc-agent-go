@@ -29,7 +29,7 @@ func TestFileTool_SaveFile(t *testing.T) {
 		createFileMode: defaultCreateFileMode,
 	}
 	// Test saving a file.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Hello, World!",
 		FileName:  "test.txt",
 		Overwrite: false,
@@ -56,7 +56,7 @@ func TestFileTool_SaveFile_Overwrite_True(t *testing.T) {
 		createFileMode: defaultCreateFileMode,
 	}
 	// Test saving a file.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Hello, World!",
 		FileName:  "test.txt",
 		Overwrite: true,
@@ -86,7 +86,7 @@ func TestFileTool_SaveFile_Overwrite_False(t *testing.T) {
 		createFileMode: defaultCreateFileMode,
 	}
 	// Test saving a file.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Hello, World!",
 		FileName:  "test.txt",
 		Overwrite: false,
@@ -116,7 +116,7 @@ func TestFileTool_SaveFile_EmptyFileName(t *testing.T) {
 	tempDir := t.TempDir()
 	fileToolSet := &fileToolSet{baseDir: tempDir}
 	// Test saving with empty file name.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Hello, World!",
 		FileName:  "",
 		Overwrite: true,
@@ -135,7 +135,7 @@ func TestFileTool_SaveFile_CustomPermissionsForFile(t *testing.T) {
 		createFileMode: customFileMode,
 	}
 	// Test saving a file with custom permissions.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Custom permissions test",
 		FileName:  "custom_perms.txt",
 		Overwrite: false,
@@ -165,7 +165,7 @@ func TestFileTool_SaveFile_WithDirectory(t *testing.T) {
 	}
 	path := filepath.Join("testdir", "testfile.txt")
 	// Try to save to the directory path.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "test content",
 		FileName:  path,
 		Overwrite: false,
@@ -191,7 +191,7 @@ func TestFileTool_SaveFile_CustomPermissionsForDirectory(t *testing.T) {
 		createFileMode: customFileMode,
 	}
 	// Test saving a file with custom permissions.
-	req := saveFileRequest{
+	req := &saveFileRequest{
 		Contents:  "Custom permissions test",
 		FileName:  "testdir/custom_perms.txt",
 		Overwrite: false,

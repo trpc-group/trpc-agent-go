@@ -16,17 +16,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // searchFileRequest represents the input for the search file operation.
 type searchFileRequest struct {
-	Path    string `json:"path" jsonschema:"description=The relative path from the base directory to search in."`
-	Pattern string `json:"pattern" jsonschema:"description=The pattern to search for, e.g. '*.md', 'lib*.a', '**/*.go'"`
+	Path          string `json:"path" jsonschema:"description=The relative path from the base directory to search in."`
+	Pattern       string `json:"pattern" jsonschema:"description=The pattern to search for."`
+	CaseSensitive bool   `json:"case_sensitive" jsonschema:"description=Whether pattern matching should be case sensitive."`
 }
 
 // searchFileResponse represents the output from the search file operation.
@@ -40,79 +39,41 @@ type searchFileResponse struct {
 }
 
 // searchFile performs the search file operation.
-func (f *fileToolSet) searchFile(_ context.Context, req searchFileRequest) (searchFileResponse, error) {
-	// Check if the pattern is empty.
-	if strings.TrimSpace(req.Pattern) == "" {
-		return searchFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Pattern:       req.Pattern,
-			Message:       "Error: Pattern cannot be empty",
-		}, fmt.Errorf("pattern cannot be empty")
+func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*searchFileResponse, error) {
+	rsp := &searchFileResponse{
+		BaseDirectory: f.baseDir,
+		Path:          req.Path,
+		Pattern:       req.Pattern,
+	}
+	// Validate pattern
+	if req.Pattern == "" {
+		rsp.Message = "Error: pattern cannot be empty"
+		return rsp, fmt.Errorf("pattern cannot be empty")
 	}
 	// Resolve and validate the target path.
 	targetPath, err := f.resolvePath(req.Path)
 	if err != nil {
-		return searchFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Pattern:       req.Pattern,
-			Message:       fmt.Sprintf("Error: %v", err),
-		}, err
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
 	}
 	// Check if the target path exists.
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		return searchFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Pattern:       req.Pattern,
-			Message:       fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err),
-		}, fmt.Errorf("accessing path '%s': %w", req.Path, err)
+		rsp.Message = fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err)
+		return rsp, fmt.Errorf("accessing path '%s': %w", req.Path, err)
 	}
 	// Check if the target path is a file.
 	if !stat.IsDir() {
-		// Check if the target path matches the pattern.
-		ok, err := doublestar.PathMatch(req.Pattern, filepath.Base(targetPath))
-		if err != nil {
-			return searchFileResponse{
-				BaseDirectory: f.baseDir,
-				Path:          req.Path,
-				Pattern:       req.Pattern,
-				Message:       fmt.Sprintf("Error: searching files with pattern '%s': %v", req.Pattern, err),
-			}, fmt.Errorf("searching files with pattern '%s': %w", req.Pattern, err)
-		}
-		if !ok {
-			return searchFileResponse{
-				BaseDirectory: f.baseDir,
-				Path:          req.Path,
-				Pattern:       req.Pattern,
-				Message:       fmt.Sprintf("No files found matching pattern '%s' in path '%s'", req.Pattern, req.Path),
-			}, nil
-		}
-		return searchFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Pattern:       req.Pattern,
-			Files:         []string{req.Path},
-			Folders:       []string{},
-			Message:       fmt.Sprintf("Found file: %s", req.Path),
-		}, nil
+		rsp.Message = fmt.Sprintf("Error: target path '%s' is a file, not a directory", req.Path)
+		return rsp, fmt.Errorf("target path '%s' is a file, not a directory", req.Path)
 	}
-	// Use doublestar for all patterns.
-	// It supports both recursive and non-recursive.
-	matches, err := doublestar.Glob(os.DirFS(targetPath), req.Pattern)
+	// Find files matching the pattern.
+	matches, err := f.matchFiles(targetPath, req.Pattern, req.CaseSensitive)
 	if err != nil {
-		return searchFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Pattern:       req.Pattern,
-			Message:       fmt.Sprintf("Error: searching files with pattern '%s': %v", req.Pattern, err),
-		}, fmt.Errorf("searching files with pattern '%s': %w", req.Pattern, err)
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
 	}
 	// Separate files and folders.
-	var files []string
-	var folders []string
 	for _, match := range matches {
 		if match == "." || match == ".." {
 			continue
@@ -125,21 +86,14 @@ func (f *fileToolSet) searchFile(_ context.Context, req searchFileRequest) (sear
 		}
 		relativePath := filepath.Join(req.Path, match)
 		if stat.IsDir() {
-			folders = append(folders, relativePath)
+			rsp.Folders = append(rsp.Folders, relativePath)
 		} else {
-			files = append(files, relativePath)
+			rsp.Files = append(rsp.Files, relativePath)
 		}
 	}
-	message := fmt.Sprintf("Found %d files and %d folders matching pattern '%s' in %s",
-		len(files), len(folders), req.Pattern, targetPath)
-	return searchFileResponse{
-		BaseDirectory: f.baseDir,
-		Path:          req.Path,
-		Pattern:       req.Pattern,
-		Files:         files,
-		Folders:       folders,
-		Message:       message,
-	}, nil
+	rsp.Message = fmt.Sprintf("Found %d files and %d folders matching pattern '%s' in %s",
+		len(rsp.Files), len(rsp.Folders), req.Pattern, targetPath)
+	return rsp, nil
 }
 
 // searchFileTool returns a callable tool for searching file.
@@ -149,9 +103,12 @@ func (f *fileToolSet) searchFileTool() tool.CallableTool {
 		function.WithName("search_file"),
 		function.WithDescription("Searches for files and folders matching the given pattern in a specified directory, "+
 			"and returns separate lists for files and folders. "+
-			"The 'path' parameter is a relative path from the base directory to search in "+
-			"(e.g., 'subdir', 'subdir/nested'). If 'path' is empty or not provided, searches in the base directory. "+
+			"The 'path' parameter specifies the directory to search in, relative to the base directory "+
+			"(e.g., 'subdir', 'subdir/nested'). "+
+			"If 'path' is empty or not provided, searches in the base directory. "+
+			"If 'path' points to a file instead of a directory, returns an error. "+
 			"Supports both recursive ('**') and non-recursive ('*') glob patterns. "+
+			"The 'case_sensitive' parameter controls whether pattern matching is case sensitive, false by default. "+
 			"Pattern examples: '*.txt' (all txt files), 'file*.csv' (csv files starting with 'file'), "+
 			"'subdir/*.go' (go files in subdir), '**/*.go' (all go files recursively), '*data*' (filename or "+
 			"directory containing 'data'). If the pattern is empty or not provided, returns an error."),

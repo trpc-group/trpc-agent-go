@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -24,8 +23,8 @@ import (
 
 // saveFileRequest represents the input for the save file operation.
 type saveFileRequest struct {
-	Contents  string `json:"contents" jsonschema:"description=The contents to save to the file."`
 	FileName  string `json:"file_name" jsonschema:"description=The relative filepath from the base directory to save."`
+	Contents  string `json:"contents" jsonschema:"description=The contents to save to the file."`
 	Overwrite bool   `json:"overwrite" jsonschema:"description=Whether to overwrite the file if it already exists."`
 }
 
@@ -37,56 +36,37 @@ type saveFileResponse struct {
 }
 
 // saveFile performs the save file operation.
-func (f *fileToolSet) saveFile(_ context.Context, req saveFileRequest) (saveFileResponse, error) {
-	// Validate the file name.
-	if strings.TrimSpace(req.FileName) == "" {
-		return saveFileResponse{
-			BaseDirectory: f.baseDir,
-			FileName:      req.FileName,
-			Message:       "Error: File name cannot be empty",
-		}, fmt.Errorf("file name cannot be empty")
+func (f *fileToolSet) saveFile(_ context.Context, req *saveFileRequest) (*saveFileResponse, error) {
+	rsp := &saveFileResponse{
+		BaseDirectory: f.baseDir,
+		FileName:      req.FileName,
 	}
 	// Resolve and validate the file path.
 	filePath, err := f.resolvePath(req.FileName)
 	if err != nil {
-		return saveFileResponse{
-			BaseDirectory: f.baseDir,
-			FileName:      req.FileName,
-			Message:       fmt.Sprintf("Error: %v", err),
-		}, err
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
 	}
 	// Create parent directories if they don't exist.
 	parentDir := filepath.Dir(filePath)
 	if err := os.MkdirAll(parentDir, f.createDirMode); err != nil {
-		return saveFileResponse{
-			BaseDirectory: f.baseDir,
-			FileName:      req.FileName,
-			Message:       fmt.Sprintf("Error: cannot create directory: %v", err),
-		}, fmt.Errorf("error creating directory: %w", err)
+		rsp.Message = fmt.Sprintf("Error: cannot create directory: %v", err)
+		return rsp, fmt.Errorf("error creating directory: %w", err)
 	}
 	// Check if file exists and overwrite is disabled.
 	if !req.Overwrite {
 		if _, err := os.Stat(filePath); err == nil {
-			return saveFileResponse{
-				BaseDirectory: f.baseDir,
-				FileName:      req.FileName,
-				Message:       fmt.Sprintf("Error: file %s already exists and overwrite is disabled", req.FileName),
-			}, fmt.Errorf("file %s already exists and overwrite is disabled", req.FileName)
+			rsp.Message = fmt.Sprintf("Error: file %s already exists and overwrite is disabled", req.FileName)
+			return rsp, fmt.Errorf("file %s already exists and overwrite is disabled", req.FileName)
 		}
 	}
 	// Write the file.
 	if err := os.WriteFile(filePath, []byte(req.Contents), f.createFileMode); err != nil {
-		return saveFileResponse{
-			BaseDirectory: f.baseDir,
-			FileName:      req.FileName,
-			Message:       fmt.Sprintf("Error: cannot write to file '%s': %v", req.FileName, err),
-		}, fmt.Errorf("writing to file '%s': %w", req.FileName, err)
+		rsp.Message = fmt.Sprintf("Error: cannot write to file '%s': %v", req.FileName, err)
+		return rsp, fmt.Errorf("writing to file '%s': %w", req.FileName, err)
 	}
-	return saveFileResponse{
-		BaseDirectory: f.baseDir,
-		FileName:      req.FileName,
-		Message:       fmt.Sprintf("Successfully saved: %s", req.FileName),
-	}, nil
+	rsp.Message = fmt.Sprintf("Successfully saved: %s", req.FileName)
+	return rsp, nil
 }
 
 // saveFileTool returns a callable tool for saving file.

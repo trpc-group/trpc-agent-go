@@ -32,7 +32,7 @@ func TestFileTool_listFile(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	// Test listing files in base directory.
-	req := listFileRequest{}
+	req := &listFileRequest{}
 	rsp, err := fileToolSet.listFile(context.Background(), req)
 	assert.NoError(t, err)
 	// Check that the response contains the expected base directory.
@@ -62,7 +62,7 @@ func TestFileTool_listFile_Subdirectory(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	// Test listing files in subdirectory.
-	req := listFileRequest{Path: "subdir"}
+	req := &listFileRequest{Path: "subdir"}
 	rsp, err := fileToolSet.listFile(context.Background(), req)
 	assert.NoError(t, err)
 	// Check that the response contains the expected base directory.
@@ -95,7 +95,7 @@ func TestFileTool_listFile_WithFolders(t *testing.T) {
 		assert.NoError(t, err)
 	}
 	// Test listing files and folders in base directory.
-	req := listFileRequest{}
+	req := &listFileRequest{}
 	rsp, err := fileToolSet.listFile(context.Background(), req)
 	assert.NoError(t, err)
 	// Check that the response contains the expected base directory.
@@ -121,7 +121,7 @@ func TestFileTool_listFile_SpecificFile(t *testing.T) {
 	err := os.WriteFile(filePath, []byte("test content"), 0644)
 	assert.NoError(t, err)
 	// Test listing files when path points to a file instead of a directory.
-	req := listFileRequest{Path: testFile}
+	req := &listFileRequest{Path: testFile}
 	rsp, err := fileToolSet.listFile(context.Background(), req)
 	// Should return information about the file, not an error.
 	assert.NoError(t, err)
@@ -144,7 +144,7 @@ func TestFileTool_listFile_SpecificFile_InSubdirectory(t *testing.T) {
 	err = os.WriteFile(filePath, []byte("test content"), 0644)
 	assert.NoError(t, err)
 	// Test listing a specific file.
-	req := listFileRequest{Path: testFile}
+	req := &listFileRequest{Path: testFile}
 	rsp, err := fileToolSet.listFile(context.Background(), req)
 	// Should return information about the specific file.
 	assert.NoError(t, err)

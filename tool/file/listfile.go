@@ -15,7 +15,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -36,69 +35,49 @@ type listFileResponse struct {
 }
 
 // listFile performs the list file operation.
-func (f *fileToolSet) listFile(_ context.Context, req listFileRequest) (listFileResponse, error) {
+func (f *fileToolSet) listFile(_ context.Context, req *listFileRequest) (*listFileResponse, error) {
+	rsp := &listFileResponse{
+		BaseDirectory: f.baseDir,
+		Path:          req.Path,
+	}
 	// Resolve the target path.
 	targetPath, err := f.resolvePath(req.Path)
 	if err != nil {
-		return listFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Message:       fmt.Sprintf("Error: %v", err),
-		}, err
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
 	}
 	// Check if the target path exists.
 	stat, err := os.Stat(targetPath)
 	if err != nil {
-		return listFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Message:       fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err),
-		}, fmt.Errorf("accessing path '%s': %w", req.Path, err)
+		rsp.Message = fmt.Sprintf("Error: cannot access path '%s': %v", req.Path, err)
+		return rsp, fmt.Errorf("accessing path '%s': %w", req.Path, err)
 	}
 	// If the target is a file, return information about that file.
 	if !stat.IsDir() {
-		fileName := filepath.Base(targetPath)
-		return listFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Files:         []string{fileName},
-			Folders:       []string{},
-			Message:       fmt.Sprintf("Found file: %s", fileName),
-		}, nil
+		rsp.Message = fmt.Sprintf("Error: path '%s' is a file, not a directory", req.Path)
+		return rsp, fmt.Errorf("path '%s' is a file, not a directory", req.Path)
 	}
 	// If the target is a directory, list its contents.
 	entries, err := os.ReadDir(targetPath)
 	if err != nil {
-		return listFileResponse{
-			BaseDirectory: f.baseDir,
-			Path:          req.Path,
-			Message:       fmt.Sprintf("Error: cannot read directory '%s': %v", req.Path, err),
-		}, fmt.Errorf("reading directory '%s': %w", req.Path, err)
+		rsp.Message = fmt.Sprintf("Error: cannot read directory '%s': %v", req.Path, err)
+		return rsp, fmt.Errorf("reading directory '%s': %w", req.Path, err)
 	}
 	// Collect files and folders.
-	var files []string
-	var folders []string
 	for _, entry := range entries {
 		if entry.IsDir() {
-			folders = append(folders, entry.Name())
+			rsp.Folders = append(rsp.Folders, entry.Name())
 		} else {
-			files = append(files, entry.Name())
+			rsp.Files = append(rsp.Files, entry.Name())
 		}
 	}
 	// Create a summary message.
-	var message string
 	if req.Path == "" {
-		message = fmt.Sprintf("Found %d files and %d folders in base directory", len(files), len(folders))
+		rsp.Message = fmt.Sprintf("Found %d files and %d folders in base directory", len(rsp.Files), len(rsp.Folders))
 	} else {
-		message = fmt.Sprintf("Found %d files and %d folders in %s", len(files), len(folders), req.Path)
+		rsp.Message = fmt.Sprintf("Found %d files and %d folders in %s", len(rsp.Files), len(rsp.Folders), req.Path)
 	}
-	return listFileResponse{
-		BaseDirectory: f.baseDir,
-		Path:          req.Path,
-		Files:         files,
-		Folders:       folders,
-		Message:       message,
-	}, nil
+	return rsp, nil
 }
 
 // listFileTool returns a callable tool for listing file.
@@ -106,9 +85,10 @@ func (f *fileToolSet) listFileTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		f.listFile,
 		function.WithName("list_file"),
-		function.WithDescription("Lists files and folders in a directory, or returns information about a specific "+
-			"file. The 'path' parameter is a relative path from the base directory (e.g., 'subdir', 'subdir/nested',"+
-			" 'file.txt'). If 'path' is empty or not provided, lists the base directory. If 'path' points to a file,"+
-			" just returns that file. If 'path' points to a directory, lists the files and folders in the directory."),
+		function.WithDescription("Lists files and folders in a directory. "+
+			"The 'path' parameter is a relative path from the base directory (e.g., 'subdir', 'subdir/nested'). "+
+			"If 'path' is empty or not provided, lists the base directory. "+
+			"If 'path' points to a directory, lists the files and folders in the directory. "+
+			"If 'path' points to a file, returns an error."),
 	)
 }

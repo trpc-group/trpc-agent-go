@@ -69,6 +69,7 @@ func TestFileTool_SearchFile(t *testing.T) {
 		name            string
 		path            string
 		pattern         string
+		caseSensitive   bool
 		expectedFiles   []string
 		expectedFolders []string
 		expectError     bool
@@ -169,25 +170,27 @@ func TestFileTool_SearchFile(t *testing.T) {
 			expectedFolders: []string{"subdir1/nested"},
 		},
 		{
-			name:          "SingleFilePatternWithPath",
-			path:          "subdir1/data.txt",
-			pattern:       "*",
-			expectedFiles: []string{"subdir1/data.txt"},
+			name:        "SingleFilePatternWithPath",
+			path:        "subdir1/data.txt",
+			pattern:     "*",
+			expectError: true,
 		},
 		{
-			name:            "SingleFilePatternWithPath_NotExists",
-			path:            "subdir1/data.txt",
-			pattern:         "not_exist",
-			expectedFiles:   []string{},
-			expectedFolders: []string{},
+			name:        "path_not_exists",
+			path:        "subdir1/nested/not_exist",
+			pattern:     "*",
+			expectError: true,
 		},
 		{
-			name:            "file_not_exists",
-			path:            "subdir1/nested/not_exist",
-			pattern:         "*",
-			expectedFiles:   []string{},
-			expectedFolders: []string{},
-			expectError:     true,
+			name:          "without_case_sensitive",
+			pattern:       "readme*",
+			expectedFiles: []string{"README.md"},
+			caseSensitive: false,
+		},
+		{
+			name:          "with_case_sensitive",
+			pattern:       "readme*",
+			caseSensitive: true,
 		},
 		{
 			name:        "EmptyPattern",
@@ -198,7 +201,11 @@ func TestFileTool_SearchFile(t *testing.T) {
 	// Run test cases.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := searchFileRequest{Path: tt.path, Pattern: tt.pattern}
+			req := &searchFileRequest{
+				Path:          tt.path,
+				Pattern:       tt.pattern,
+				CaseSensitive: tt.caseSensitive,
+			}
 			rsp, err := fileToolSet.searchFile(context.Background(), req)
 			if tt.expectError {
 				assert.Error(t, err)

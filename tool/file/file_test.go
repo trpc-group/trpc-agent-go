@@ -55,6 +55,13 @@ func TestWithSearchFileEnabled(t *testing.T) {
 	assert.False(t, f.searchFileEnabled)
 }
 
+func TestWithSearchContentEnabled(t *testing.T) {
+	f := &fileToolSet{}
+	opt := WithSearchContentEnabled(false)
+	opt(f)
+	assert.False(t, f.searchContentEnabled)
+}
+
 func TestWithCreateDirMode(t *testing.T) {
 	f := &fileToolSet{}
 	opt := WithCreateDirMode(0700)
@@ -119,6 +126,7 @@ func TestNewToolSet_FeatureSwitch(t *testing.T) {
 		WithReadFileEnabled(false),
 		WithListFileEnabled(false),
 		WithSearchFileEnabled(false),
+		WithSearchContentEnabled(false),
 	)
 	assert.NoError(t, err)
 	fts := set.(*fileToolSet)

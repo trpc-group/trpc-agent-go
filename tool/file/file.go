@@ -12,7 +12,7 @@
 
 // Package file provides file operation tools for AI agents.
 // This tool provides capabilities for saving file, reading file, listing file,
-// and searching file in a specified base directory.
+// searching file, and searching content in a specified base directory.
 package file
 
 import (
@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -32,6 +33,8 @@ const (
 	defaultCreateDirMode = os.FileMode(0755)
 	// defaultCreateFileMode is the default permission mode for file (0644: rw-r--r--).
 	defaultCreateFileMode = os.FileMode(0644)
+	// defaultMaxFileSize is the default maximum file size to read, which is 1MB.
+	defaultMaxFileSize = 1024 * 1024
 )
 
 // Option is a functional option for configuring the file tool set.
@@ -72,6 +75,20 @@ func WithSearchFileEnabled(e bool) Option {
 	}
 }
 
+// WithSearchContentEnabled enables or disables the search content functionality, default is true.
+func WithSearchContentEnabled(e bool) Option {
+	return func(f *fileToolSet) {
+		f.searchContentEnabled = e
+	}
+}
+
+// WithReplaceContentEnabled enables or disables the replace content functionality, default is true.
+func WithReplaceContentEnabled(e bool) Option {
+	return func(f *fileToolSet) {
+		f.replaceContentEnabled = e
+	}
+}
+
 // WithCreateDirMode sets the permission mode for creating directory, default is 0755 (rwxr-xr-x).
 func WithCreateDirMode(m os.FileMode) Option {
 	return func(f *fileToolSet) {
@@ -86,16 +103,26 @@ func WithCreateFileMode(m os.FileMode) Option {
 	}
 }
 
+// WithMaxFileSize sets the maximum file size to read, default is 1MB.
+func WithMaxFileSize(s int64) Option {
+	return func(f *fileToolSet) {
+		f.maxFileSize = s
+	}
+}
+
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
-	baseDir           string
-	saveFileEnabled   bool
-	readFileEnabled   bool
-	listFileEnabled   bool
-	searchFileEnabled bool
-	createDirMode     os.FileMode
-	createFileMode    os.FileMode
-	tools             []tool.CallableTool
+	baseDir               string
+	saveFileEnabled       bool
+	readFileEnabled       bool
+	listFileEnabled       bool
+	searchFileEnabled     bool
+	searchContentEnabled  bool
+	replaceContentEnabled bool
+	createDirMode         os.FileMode
+	createFileMode        os.FileMode
+	maxFileSize           int64
+	tools                 []tool.CallableTool
 }
 
 // Tools implements the ToolSet interface.
@@ -113,13 +140,16 @@ func (f *fileToolSet) Close() error {
 func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	// Apply default configuration.
 	fileToolSet := &fileToolSet{
-		baseDir:           defaultBaseDir,
-		saveFileEnabled:   true,
-		readFileEnabled:   true,
-		listFileEnabled:   true,
-		searchFileEnabled: true,
-		createDirMode:     defaultCreateDirMode,
-		createFileMode:    defaultCreateFileMode,
+		baseDir:               defaultBaseDir,
+		saveFileEnabled:       true,
+		readFileEnabled:       true,
+		listFileEnabled:       true,
+		searchFileEnabled:     true,
+		searchContentEnabled:  true,
+		replaceContentEnabled: true,
+		createDirMode:         defaultCreateDirMode,
+		createFileMode:        defaultCreateFileMode,
+		maxFileSize:           defaultMaxFileSize,
 	}
 	// Apply user-provided options.
 	for _, opt := range opts {
@@ -128,8 +158,12 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	// Clean the base directory.
 	fileToolSet.baseDir = filepath.Clean(fileToolSet.baseDir)
 	// Check if the base directory exists.
-	if _, err := os.Stat(fileToolSet.baseDir); err != nil {
+	stat, err := os.Stat(fileToolSet.baseDir)
+	if err != nil {
 		return nil, fmt.Errorf("base directory '%s' does not exist: %w", fileToolSet.baseDir, err)
+	}
+	if !stat.IsDir() {
+		return nil, fmt.Errorf("base directory '%s' is not a directory", fileToolSet.baseDir)
 	}
 	// Create function tools based on enabled features.
 	var tools []tool.CallableTool
@@ -145,6 +179,12 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	if fileToolSet.searchFileEnabled {
 		tools = append(tools, fileToolSet.searchFileTool())
 	}
+	if fileToolSet.searchContentEnabled {
+		tools = append(tools, fileToolSet.searchContentTool())
+	}
+	if fileToolSet.replaceContentEnabled {
+		tools = append(tools, fileToolSet.replaceContentTool())
+	}
 	fileToolSet.tools = tools
 	return fileToolSet, nil
 }
@@ -156,4 +196,16 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 		return "", fmt.Errorf("invalid path - absolute paths and '..' are not allowed: %s", relativePath)
 	}
 	return filepath.Join(f.baseDir, relativePath), nil
+}
+
+func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitive bool) ([]string, error) {
+	opts := []doublestar.GlobOption{}
+	if !caseSensitive {
+		opts = append(opts, doublestar.WithCaseInsensitive())
+	}
+	files, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
+	}
+	return files, nil
 }
