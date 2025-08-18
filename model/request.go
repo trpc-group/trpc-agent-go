@@ -35,6 +35,8 @@ const (
 	ThinkingEnabledKey = "thinking_enabled"
 	// ThinkingTokensKey is the key used for thinking tokens configuration in API requests.
 	ThinkingTokensKey = "thinking_tokens"
+	// ReasoningContentKey is the key used for reasoning content in API responses.
+	ReasoningContentKey = "reasoning_content"
 )
 
 // String returns the string representation of the role.
