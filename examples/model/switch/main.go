@@ -56,7 +56,7 @@ func main() {
 func (a *chatApp) setup(_ context.Context) error {
 	fmt.Printf("🚀 Model Switching (no runner)\n")
 	fmt.Printf("Default model: %s\n", a.defaultModel)
-	fmt.Printf("Commands: /model, /models, /switch X, /new, /exit\n\n")
+	fmt.Printf("Commands: /switch X, /new, /exit\n\n")
 
 	// Prepare model map.
 	a.models = map[string]model.Model{}
@@ -87,15 +87,6 @@ func (a *chatApp) setup(_ context.Context) error {
 func (a *chatApp) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Print help like runner example.
-	fmt.Println("💡 Special commands:")
-	fmt.Println("   /model     - Show current active model.")
-	fmt.Println("   /models    - List available models.")
-	fmt.Println("   /switch X  - Switch active model to X.")
-	fmt.Println("   /new       - Start a new session.")
-	fmt.Println("   /exit      - Exit the chat.")
-	fmt.Println()
-
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -116,39 +107,6 @@ func (a *chatApp) startChat(ctx context.Context) error {
 			if err := a.handleSwitch(fields[1]); err != nil {
 				fmt.Printf("❌ %v\n", err)
 			}
-			// Show active model using GetModel.
-			if m := a.agent.GetModel(); m != nil {
-				fmt.Printf("🎯 Active model: %s\n", m.Info().Name)
-			}
-			continue
-		}
-
-		// Show active model.
-		if strings.EqualFold(userInput, "/model") {
-			if m := a.agent.GetModel(); m != nil {
-				fmt.Printf("🎯 Active model: %s\n", m.Info().Name)
-			} else {
-				fmt.Println("No active model.")
-			}
-			continue
-		}
-
-		// List available models.
-		if strings.EqualFold(userInput, "/models") {
-			if len(a.models) == 0 {
-				fmt.Println("No models available.")
-				continue
-			}
-			fmt.Printf("📋 Available models: ")
-			first := true
-			for k := range a.models {
-				if !first {
-					fmt.Printf(", ")
-				}
-				fmt.Printf("%s", k)
-				first = false
-			}
-			fmt.Println()
 			continue
 		}
 

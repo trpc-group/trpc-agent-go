@@ -14,8 +14,7 @@ The example shows how to:
 1. Create an `LLMAgent` with an initial model.
 2. Maintain a local map of pre-constructed `model.Model` instances.
 3. Switch the active model at runtime using `LLMAgent.SetModel(model.Model)`.
-4. Query the active model using `LLMAgent.GetModel()`.
-5. Send user messages and print assistant responses.
+4. Send user messages and print assistant responses.
 
 It mirrors the structure used by the Runner example (setup, chat loop, processing), but keeps only the logic necessary for model switching.
 
@@ -23,9 +22,9 @@ It mirrors the structure used by the Runner example (setup, chat loop, processin
 
 1. **Minimal Setup**: No Runner, no tools, only model switching logic.
 2. **Interactive Switching**: Use `/switch <model>` to change the active model.
-3. **Model Introspection**: Use `/model` to view the current active model; `/models` to list all available.
-4. **Session Management**: Simple session ID for telemetry is handled internally.
-5. **Streaming-Friendly**: Accumulates content from streaming or non-streaming responses.
+3. **Session Management**: Simple session ID for telemetry is handled internally.
+4. **Streaming-Friendly**: Accumulates content from streaming or non-streaming responses.
+5. **Extensible**: Easy to add or remove models in the local pool.
 
 ## Environment Variables
 
@@ -73,8 +72,6 @@ go run main.go -model gpt-4o-mini
 ## Commands
 
 - `/switch <model>`: Switches the active model to the specified name.
-- `/model`: Prints the current active model (via `GetModel`).
-- `/models`: Lists all available models from the local pool.
 - `/new`: Starts a new session (resets session id used for telemetry).
 - `/exit`: Exits the program.
 
@@ -87,15 +84,11 @@ Commands: /switch X, /new, /exit
 
 ✅ Ready. Session: session-1700000000
 
-👤 You: /model
-🎯 Active model: gpt-4o-mini
-
-👤 You: /models
-📋 Available models: gpt-4o-mini, gpt-4o, gpt-3.5-turbo
+👤 You: What can you do?
+🤖 I can help answer questions, assist with writing, summarize content, and more.
 
 👤 You: /switch gpt-4o
 ✅ Switched model to: gpt-4o
-🎯 Active model: gpt-4o
 
 👤 You: Write a haiku about code.
 🤖 Silent lines compile
@@ -109,6 +102,7 @@ Below is the core idea used in this example.
 
 ```go
 import (
+    "context"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -125,10 +119,12 @@ models := map[string]model.Model{
 agt := llmagent.New("switching-agent",
     llmagent.WithModel(models["gpt-4o-mini"]))
 
-// Switch and inspect active model.
-agt.SetModel(models["gpt-4o"]) // switch
-active := agt.GetModel()        // inspect
-_ = active
+// Switch active model on demand.
+agt.SetModel(models["gpt-4o"]) // e.g., after parsing "/switch gpt-4o"
+
+// Send a message.
+ctx := context.Background()
+// See the example for how invocation/session are handled internally.
 ```
 
 ## Important Notes
