@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 )
 
 // Special node identifiers for graph routing.
@@ -56,6 +57,14 @@ type ConditionalFunc func(ctx context.Context, state State) (string, error)
 // MultiConditionalFunc returns multiple next nodes for parallel execution.
 type MultiConditionalFunc func(ctx context.Context, state State) ([]string, error)
 
+// channelWriteEntry represents a write operation to a channel.
+type channelWriteEntry struct {
+	Channel  string
+	Value    any
+	SkipNone bool
+	Mapper   func(any) any
+}
+
 // Node represents a node in the graph.
 // Nodes are primarily functions with metadata.
 type Node struct {
@@ -63,6 +72,13 @@ type Node struct {
 	Name        string
 	Description string
 	Function    NodeFunc
+	Type        NodeType // Type of the node (function, llm, tool, etc.)
+
+	// Pregel-style extensions
+	triggers []string            // Channels that trigger this node
+	channels []string            // Channels this node reads from
+	writers  []channelWriteEntry // Channels this node writes to
+	mapper   func(any) any       // Input transformation function
 }
 
 // Edge represents an edge in the graph.
@@ -93,6 +109,9 @@ type Graph struct {
 	edges            map[string][]*Edge
 	conditionalEdges map[string]*ConditionalEdge
 	entryPoint       string
+	// Pregel-style extensions
+	channelManager *channel.Manager
+	triggerToNodes map[string][]string // Maps channel names to nodes that are triggered
 }
 
 // New creates a new empty graph with the given state schema.
@@ -106,6 +125,8 @@ func New(schema *StateSchema) *Graph {
 		nodes:            make(map[string]*Node),
 		edges:            make(map[string][]*Edge),
 		conditionalEdges: make(map[string]*ConditionalEdge),
+		channelManager:   channel.NewChannelManager(),
+		triggerToNodes:   make(map[string][]string),
 	}
 }
 
@@ -202,6 +223,8 @@ type ExecutionContext struct {
 	State        State
 	EventChan    chan<- *event.Event
 	InvocationID string
+
+	stateMutex sync.RWMutex
 }
 
 // Command represents a command that combines state updates with routing.
@@ -281,4 +304,73 @@ func (g *Graph) setEntryPoint(nodeID string) error {
 	}
 	g.entryPoint = nodeID
 	return nil
+}
+
+// Pregel-style methods
+
+// addChannel adds a channel to the graph.
+func (g *Graph) addChannel(name string, channelType channel.Behavior) {
+	g.channelManager.AddChannel(name, channelType)
+}
+
+// getChannel retrieves a channel by name.
+func (g *Graph) getChannel(name string) (*channel.Channel, bool) {
+	return g.channelManager.GetChannel(name)
+}
+
+// getAllChannels returns all channels in the graph.
+func (g *Graph) getAllChannels() map[string]*channel.Channel {
+	return g.channelManager.GetAllChannels()
+}
+
+// getTriggerToNodes returns the mapping of channels to triggered nodes.
+func (g *Graph) getTriggerToNodes() map[string][]string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	result := make(map[string][]string)
+	for k, v := range g.triggerToNodes {
+		result[k] = append([]string{}, v...)
+	}
+	return result
+}
+
+// addNodeTrigger adds a trigger relationship between a channel and a node.
+func (g *Graph) addNodeTrigger(channelName string, nodeID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// Deduplicate
+	existing := g.triggerToNodes[channelName]
+	for _, n := range existing {
+		if n == nodeID {
+			return
+		}
+	}
+	g.triggerToNodes[channelName] = append(existing, nodeID)
+}
+
+// addNodeWriter adds a writer to a node.
+func (g *Graph) addNodeWriter(nodeID string, writer channelWriteEntry) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if node, exists := g.nodes[nodeID]; exists {
+		node.writers = append(node.writers, writer)
+	}
+}
+
+// addNodeTrigger adds a trigger to a node.
+func (g *Graph) addNodeTriggerChannel(nodeID string, channelName string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if node, exists := g.nodes[nodeID]; exists {
+		node.triggers = append(node.triggers, channelName)
+	}
+}
+
+// addNodeChannel adds a channel that a node reads from.
+func (g *Graph) addNodeChannel(nodeID string, channelName string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if node, exists := g.nodes[nodeID]; exists {
+		node.channels = append(node.channels, channelName)
+	}
 }

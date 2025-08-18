@@ -118,5 +118,5 @@ func ExampleGraphAgent_Run() {
 	fmt.Printf("Agent executed successfully with %d events\n", eventCount)
 
 	// Output:
-	// Agent executed successfully with 2 events
+	// Agent executed successfully with 9 events
 }
