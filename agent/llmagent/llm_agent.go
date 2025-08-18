@@ -649,14 +649,13 @@ func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 // dynamically during runtime.
 func (a *LLMAgent) SetModel(m model.Model) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.model = m
-	a.mu.Unlock()
 }
 
 // GetModel returns the current model in a concurrency-safe way.
 func (a *LLMAgent) GetModel() model.Model {
 	a.mu.RLock()
-	m := a.model
-	a.mu.RUnlock()
-	return m
+	defer a.mu.RUnlock()
+	return a.model
 }
