@@ -616,7 +616,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	txPipe := s.redisClient.TxPipeline()
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
-		Score:  float64(event.Timestamp.Unix()),
+		Score:  float64(event.Timestamp.UnixNano()),
 		Member: eventBytes,
 	})
 	if s.opts.sessionEventLimit > 0 {
