@@ -13,6 +13,7 @@ package llmagent
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -297,6 +298,7 @@ type Options struct {
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
 	name           string
+	mu             sync.RWMutex
 	model          model.Model
 	description    string
 	instruction    string
@@ -482,7 +484,9 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	defer span.End()
 	// Ensure the invocation has a model set.
 	if invocation.Model == nil && a.model != nil {
+		a.mu.RLock()
 		invocation.Model = a.model
+		a.mu.RUnlock()
 	}
 
 	// Ensure the agent name is set.
@@ -638,4 +642,13 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// SetModel sets the model for this agent in a concurrency-safe way.
+// This allows callers to manage multiple models externally and switch
+// dynamically during runtime.
+func (a *LLMAgent) SetModel(m model.Model) {
+	a.mu.Lock()
+	a.model = m
+	a.mu.Unlock()
 }
