@@ -45,6 +45,7 @@ type placeholderDemo struct {
 	sessionService session.Service
 	userID         string
 	sessionID      string
+	appName        string
 }
 
 // run starts the interactive demo session.
@@ -80,6 +81,7 @@ func (d *placeholderDemo) initialize(ctx context.Context) error {
 	d.userID = "demo-user"
 	d.sessionID = fmt.Sprintf("placeholder-demo-%d", time.Now().Unix())
 	appName := "placeholder-demo"
+	d.appName = appName
 
 	// Create session with initial research topics.
 	sessionService.CreateSession(ctx, session.Key{
@@ -89,16 +91,20 @@ func (d *placeholderDemo) initialize(ctx context.Context) error {
 	}, session.StateMap{
 		"research_topics": []byte("artificial intelligence, machine learning, " +
 			"deep learning, neural networks"),
+		"user:topics": []byte("quantum computing, cryptography"),
+		"app:banner":  []byte("Research Mode"),
 	})
 
-	// Create research agent with placeholder in instructions.
+	// Create research agent with placeholders in instructions.
 	researchAgent := llmagent.New(
 		"research-agent",
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Research assistant that uses placeholder "+
 			"values from session state"),
 		llmagent.WithInstruction("You are a specialized research assistant. "+
-			"Focus your research on the following topics: {research_topics}. "+
+			"Focus on read-only topics: {research_topics}. "+
+			"Also consider user interests: {user:topics?}. "+
+			"If an app banner is provided, show it briefly: {app:banner?}. "+
 			"Provide comprehensive analysis, recent developments, and practical "+
 			"applications. Be thorough but concise, and always cite sources "+
 			"when possible."),
@@ -114,7 +120,7 @@ func (d *placeholderDemo) initialize(ctx context.Context) error {
 
 	fmt.Printf("✅ Placeholder Demo initialized! Session: %s\n", d.sessionID)
 	fmt.Printf("📝 Agent: %s\n", researchAgent.Info().Name)
-	fmt.Printf("🔗 Placeholder: {research_topics} → Session State\n\n")
+	fmt.Printf("🔗 Placeholders: {research_topics} (readonly), {user:topics?}, {app:banner?}\n\n")
 
 	return nil
 }
@@ -141,13 +147,18 @@ func (d *placeholderDemo) startInteractiveSession(ctx context.Context) error {
 		}
 
 		// Handle session state commands.
-		if strings.HasPrefix(userInput, "/set-topics ") {
-			d.handleSetTopics(ctx, userInput)
+		if strings.HasPrefix(userInput, "/set-user-topics ") {
+			d.handleSetUserTopics(ctx, userInput)
 			continue
 		}
 
-		if strings.HasPrefix(userInput, "/show-topics") {
-			d.handleShowTopics(ctx)
+		if strings.HasPrefix(userInput, "/set-app-banner ") {
+			d.handleSetAppBanner(ctx, userInput)
+			continue
+		}
+
+		if strings.HasPrefix(userInput, "/show-state") || strings.HasPrefix(userInput, "/show-topics") {
+			d.handleShowState(ctx)
 			continue
 		}
 
@@ -166,33 +177,32 @@ func (d *placeholderDemo) startInteractiveSession(ctx context.Context) error {
 	return nil
 }
 
-// handleSetTopics updates the research topics in session state.
-func (d *placeholderDemo) handleSetTopics(ctx context.Context, input string) {
-	topics := strings.TrimPrefix(input, "/set-topics ")
+// handleSetUserTopics updates the research topics in session state.
+func (d *placeholderDemo) handleSetUserTopics(ctx context.Context, input string) {
+	topics := strings.TrimPrefix(input, "/set-user-topics ")
 	if topics == "" {
-		fmt.Println("❌ Please provide topics. Usage: /set-topics <topics>")
+		fmt.Println("❌ Please provide topics. Usage: /set-user-topics <topics>")
 		return
 	}
 
 	// Update user state with new topics.
 	err := d.sessionService.UpdateUserState(ctx, session.UserKey{
-		AppName: "placeholder-demo",
+		AppName: d.appName,
 		UserID:  d.userID,
 	}, session.StateMap{
-		"research_topics": []byte(topics),
+		"topics": []byte(topics),
 	})
 	if err != nil {
-		fmt.Printf("❌ Error updating topics: %v\n", err)
+		fmt.Printf("❌ Error updating user topics: %v\n", err)
 		return
 	}
-
-	fmt.Printf("✅ Research topics updated to: %s\n", topics)
+	fmt.Printf("✅ User topics updated to: %s\n", topics)
 }
 
-// handleShowTopics displays current research topics from session state.
-func (d *placeholderDemo) handleShowTopics(ctx context.Context) {
+// handleShowState displays the current session state.
+func (d *placeholderDemo) handleShowState(ctx context.Context) {
 	state, err := d.sessionService.GetSession(ctx, session.Key{
-		AppName:   "placeholder-demo",
+		AppName:   d.appName,
 		UserID:    d.userID,
 		SessionID: d.sessionID,
 	})
@@ -206,11 +216,30 @@ func (d *placeholderDemo) handleShowTopics(ctx context.Context) {
 		return
 	}
 
-	if topics, exists := state.State["research_topics"]; exists {
-		fmt.Printf("📋 Current research topics: %s\n", string(topics))
-	} else {
-		fmt.Println("📋 No research topics set.")
+	fmt.Printf("📋 Current Session State:\n")
+	for k, v := range state.State {
+		fmt.Printf("   - %s: %s\n", k, string(v))
 	}
+}
+
+// handleSetAppBanner updates the app banner in session state.
+func (d *placeholderDemo) handleSetAppBanner(ctx context.Context, input string) {
+	banner := strings.TrimPrefix(input, "/set-app-banner ")
+	if banner == "" {
+		fmt.Println("❌ Please provide a banner. Usage: /set-app-banner <banner>")
+		return
+	}
+
+	// Update app state with new banner.
+	err := d.sessionService.UpdateAppState(ctx, d.appName, session.StateMap{
+		"banner": []byte(banner),
+	})
+	if err != nil {
+		fmt.Printf("❌ Error updating app banner: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ App banner updated to: %s\n", banner)
 }
 
 // processUserMessage handles a single user message through the agent.
@@ -289,20 +318,21 @@ func main() {
 	fmt.Printf("🔑 Placeholder Demo - Session State Integration\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the session\n")
-	fmt.Println("Features: Dynamic placeholder replacement with session state")
-	fmt.Println("Commands: /set-topics <topics>, /show-topics")
+	fmt.Println("Features: Unprefixed readonly and prefixed placeholders")
+	fmt.Println("Commands: /set-user-topics <topics>, /set-app-banner <text>, /show-state")
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println()
 	fmt.Println("💡 Example interactions:")
 	fmt.Println("   • Ask: 'What are the latest developments?'")
-	fmt.Println("   • Set topics: /set-topics 'quantum computing, cryptography'")
-	fmt.Println("   • Show topics: /show-topics")
+	fmt.Println("   • Set user topics: /set-user-topics 'quantum computing, cryptography'")
+	fmt.Println("   • Set app banner: /set-app-banner 'Research Mode'")
+	fmt.Println("   • Show state: /show-state")
 	fmt.Println("   • Ask: 'Explain recent breakthroughs'")
 	fmt.Println()
 	fmt.Println("🔄 How placeholders work:")
-	fmt.Println("   1. {research_topics} in agent instructions")
-	fmt.Println("   2. Gets replaced with session state value")
-	fmt.Println("   3. Agent uses actual topics for research")
+	fmt.Println("   1. {research_topics} is unprefixed (readonly, set at creation)")
+	fmt.Println("   2. {user:topics} and {app:banner} are modifiable via APIs")
+	fmt.Println("   3. Agent uses these values during research")
 	fmt.Println()
 
 	// Create and run the demo.
