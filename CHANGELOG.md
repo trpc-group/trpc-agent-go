@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **examples**: Enhance knowledge chat example with multiple embedder support and improved configuration. (#211)
 - **examples/telemetry**: Refactor to use environment variables for LangFuse configuration. (#215)
 - **examples**: Reorganize model retry example structure for better clarity. (#225)
-- **exmaples**: Update placeholder example. (#228)
+- **examples**: Update placeholder example. (#228)
 
 ### Documentation
 - **docs**: Update license files across the project. (#217)
