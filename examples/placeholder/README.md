@@ -1,20 +1,30 @@
 # Placeholder Demo - Session State Integration
 
-This example demonstrates how to use placeholders in agent instructions with session service integration. The demo shows how `{research_topics}` placeholder gets replaced with actual values from session state during agent execution.
+This example demonstrates how to use placeholders in agent instructions with
+session service integration. It covers two kinds of placeholders:
+
+- Unprefixed placeholder (readonly): `{research_topics}`. Initialized when the
+  session is created and intended not to be modified at runtime.
+- Prefixed placeholders (modifiable): `{user:topics}` and `{app:banner}`.
+  These are backed by user/app state and can be updated via the session
+  service APIs.
 
 ## Overview
 
 The demo implements an interactive command-line application that:
-1. **Uses Placeholders**: Agent instructions contain `{research_topics}` placeholder
-2. **Session State Integration**: Placeholder values are stored and retrieved from session state
-3. **Dynamic Updates**: Users can change research topics during runtime
+1. **Unprefixed Placeholder (Readonly)**: `{research_topics}` is set at session
+   creation and is not meant to be mutated.
+2. **Prefixed Placeholders (Mutable)**: `{user:topics}` and `{app:banner}` can be
+   updated using the session service.
+3. **Dynamic Updates**: Changes to user/app state affect future responses.
 4. **Interactive Commands**: Command-line interface for managing session state
 
 ## Key Features
 
-- **Placeholder Replacement**: `{research_topics}` in agent instructions gets replaced with session state values
-- **Session State Management**: In-memory session service for storing placeholder values
-- **Interactive Commands**: `/set-topics` and `/show-topics` commands for state management
+- **Placeholder Replacement**: `{research_topics}`, `{user:topics}`,
+  `{app:banner}` are resolved from session state.
+- **Session State Management**: In-memory session service stores app/user state.
+- **Interactive Commands**: `/set-user-topics`, `/set-app-banner`, `/show-state`.
 - **Real-time Updates**: Changes to session state immediately affect agent behavior
 
 ## Architecture
@@ -22,7 +32,8 @@ The demo implements an interactive command-line application that:
 ```
 User Input → Session State → Placeholder Replacement → Agent Execution
      ↓              ↓                    ↓                    ↓
-Commands      {research_topics}      Dynamic Value      Research Results
+Commands  {research_topics} / {user:topics} / {app:banner}    Dynamic Values
+                                                           Research Results
 ```
 
 ## Components
@@ -49,9 +60,11 @@ type placeholderDemo struct {
 
 ### Research Agent
 
-- **Purpose**: Specialized research assistant using placeholder values
-- **Instructions**: Contains `{research_topics}` placeholder for dynamic topic focus
-- **Behavior**: Automatically adapts research focus based on session state
+- **Purpose**: Specialized research assistant using placeholder values.
+- **Instructions**: Contains `{research_topics}` (readonly), `{user:topics?}`
+  and `{app:banner?}`.
+- **Behavior**: Adapts based on session state; optional markers `?` allow the
+  instruction to render even when a value is absent.
 
 ## Usage
 
@@ -72,17 +85,24 @@ go build -o placeholder-demo main.go
 
 The demo supports several interactive commands:
 
-#### Set Research Topics
-```bash
-/set-topics quantum computing, cryptography, blockchain
-```
-Updates the research topics in session state. The agent will focus on these topics in future interactions.
+- Set user topics (user state):
+  ```bash
+  /set-user-topics quantum computing, cryptography
+  ```
+  Updates `{user:topics}` via `UpdateUserState`.
 
-#### Show Current Topics
-```bash
-/show-topics
-```
-Displays the current research topics stored in session state.
+- Set app banner (app state):
+  ```bash
+  /set-app-banner Research Mode
+  ```
+  Updates `{app:banner}` via `UpdateAppState`.
+
+- Show current state snapshot:
+  ```bash
+  /show-state
+  ```
+  Prints the current merged session state so you can see the keys:
+  `research_topics`, `user:topics`, `app:banner`.
 
 #### Regular Queries
 ```bash
@@ -103,13 +123,14 @@ Ends the interactive session.
 Model: deepseek-chat
 Type 'exit' to end the session
 Features: Dynamic placeholder replacement with session state
-Commands: /set-topics <topics>, /show-topics
+Commands: /set-user-topics <topics>, /set-app-banner <text>, /show-state
 ============================================================
 
 💡 Example interactions:
    • Ask: 'What are the latest developments?'
-   • Set topics: /set-topics 'quantum computing, cryptography'
-   • Show topics: /show-topics
+   • Set user topics: /set-user-topics 'quantum computing, cryptography'
+   • Set app banner: /set-app-banner 'Research Mode'
+   • Show state: /show-state
    • Ask: 'Explain recent breakthroughs'
 
 👤 You: /show-topics
@@ -126,18 +147,19 @@ Commands: /set-topics <topics>, /show-topics
 
 ### Placeholder Mechanism
 
-The placeholder system works through session state integration:
-
-1. **Initial Setup**: Session created with default research topics
-2. **Placeholder in Instructions**: Agent instructions contain `{research_topics}`
-3. **Runtime Replacement**: Runner replaces placeholder with actual session state value
-4. **Dynamic Updates**: Users can change topics, affecting future agent responses
+1. **Initial Setup**: Session is created with an unprefixed
+   `research_topics` value used by `{research_topics}` (readonly).
+2. **Prefixed Placeholders**: `{user:topics}` and `{app:banner}` resolve to
+   user/app state; they are populated by `UpdateUserState` and
+   `UpdateAppState`.
+3. **Optional Suffix**: `{...?...}` returns empty string if the variable is not
+   present.
 
 ### Session State Management
 
 The demo uses in-memory session service for simplicity:
 
-- **User State**: Research topics stored at user level
+- **User State**: `topics` stored at user level (referenced as `{user:topics}`).
 - **Session Persistence**: State maintained throughout session
 - **Real-time Updates**: Changes immediately available to agent
 
@@ -145,7 +167,8 @@ The demo uses in-memory session service for simplicity:
 
 The interactive interface processes commands through pattern matching:
 
-- **State Commands**: `/set-topics` and `/show-topics` for session management
+- **State Commands**: `/set-user-topics`, `/set-app-banner`, `/show-state` for
+  session management
 - **Regular Input**: Passed directly to agent for processing
 - **Error Handling**: Graceful handling of invalid commands and state errors
 
