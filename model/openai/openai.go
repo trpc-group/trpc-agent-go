@@ -36,7 +36,12 @@ import (
 const (
 	functionToolType string = "function"
 
+	// defaultChannelBufferSize is the default channel buffer size.
 	defaultChannelBufferSize = 256
+	// defaultBatchCompletionWindow is the default batch completion window.
+	defaultBatchCompletionWindow = "24h"
+	// defaultMaxBatchSize is the default max batch size.
+	defaultMaxBatchSize = 50000
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -172,17 +177,19 @@ type HTTPClientOptions struct {
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
-	client               openai.Client
-	name                 string
-	baseURL              string
-	apiKey               string
-	channelBufferSize    int
-	chatRequestCallback  ChatRequestCallbackFunc
-	chatResponseCallback ChatResponseCallbackFunc
-	chatChunkCallback    ChatChunkCallbackFunc
-	extraFields          map[string]interface{}
-	variant              Variant
-	variantConfig        variantConfig
+	client                openai.Client
+	name                  string
+	baseURL               string
+	apiKey                string
+	channelBufferSize     int
+	chatRequestCallback   ChatRequestCallbackFunc
+	chatResponseCallback  ChatResponseCallbackFunc
+	chatChunkCallback     ChatChunkCallbackFunc
+	extraFields           map[string]interface{}
+	variant               Variant
+	variantConfig         variantConfig
+	batchCompletionWindow string
+	batchMetadata         map[string]interface{}
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -227,6 +234,10 @@ type options struct {
 	ExtraFields map[string]interface{}
 	// Variant for model-specific behavior.
 	Variant Variant
+	// Batch completion window for batch processing.
+	BatchCompletionWindow string
+	// Batch metadata for batch processing.
+	BatchMetadata map[string]interface{}
 }
 
 // Option is a function that configures an OpenAI model.
@@ -335,6 +346,20 @@ func WithVariant(variant Variant) Option {
 	}
 }
 
+// WithBatchCompletionWindow sets the batch completion window.
+func WithBatchCompletionWindow(window string) Option {
+	return func(opts *options) {
+		opts.BatchCompletionWindow = window
+	}
+}
+
+// WithBatchMetadata sets the batch metadata.
+func WithBatchMetadata(metadata map[string]interface{}) Option {
+	return func(opts *options) {
+		opts.BatchMetadata = metadata
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -363,18 +388,27 @@ func New(name string, opts ...Option) *Model {
 	if channelBufferSize <= 0 {
 		channelBufferSize = defaultChannelBufferSize
 	}
+
+	// Set default batch completion window if not specified.
+	batchCompletionWindow := o.BatchCompletionWindow
+	if batchCompletionWindow == "" {
+		batchCompletionWindow = defaultBatchCompletionWindow
+	}
+
 	return &Model{
-		client:               client,
-		name:                 name,
-		baseURL:              o.BaseURL,
-		apiKey:               o.APIKey,
-		channelBufferSize:    channelBufferSize,
-		chatRequestCallback:  o.ChatRequestCallback,
-		chatResponseCallback: o.ChatResponseCallback,
-		chatChunkCallback:    o.ChatChunkCallback,
-		extraFields:          o.ExtraFields,
-		variant:              o.Variant,
-		variantConfig:        variantConfigs[o.Variant],
+		client:                client,
+		name:                  name,
+		baseURL:               o.BaseURL,
+		apiKey:                o.APIKey,
+		channelBufferSize:     channelBufferSize,
+		chatRequestCallback:   o.ChatRequestCallback,
+		chatResponseCallback:  o.ChatResponseCallback,
+		chatChunkCallback:     o.ChatChunkCallback,
+		extraFields:           o.ExtraFields,
+		variant:               o.Variant,
+		variantConfig:         variantConfigs[o.Variant],
+		batchCompletionWindow: batchCompletionWindow,
+		batchMetadata:         o.BatchMetadata,
 	}
 }
 
