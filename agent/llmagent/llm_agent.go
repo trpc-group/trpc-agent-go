@@ -499,6 +499,33 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 }
 
+func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
+	// Start with direct tools.
+	allTools := make([]tool.Tool, 0, len(tools))
+	allTools = append(allTools, tools...)
+
+	// Add tools from each toolset.
+	ctx := context.Background()
+	for _, toolSet := range toolSets {
+		setTools := toolSet.Tools(ctx)
+		for _, t := range setTools {
+			allTools = append(allTools, t)
+		}
+	}
+
+	// Add knowledge search tool if knowledge base is provided.
+	if kb != nil {
+		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
+	}
+
+	// Add memory tool if memory service is provided.
+	if memory != nil {
+		allTools = append(allTools, memory.Tools()...)
+	}
+
+	return allTools
+}
+
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -685,27 +712,4 @@ func (a *LLMAgent) SetModel(m model.Model) {
 	a.mu.Lock()
 	a.model = m
 	a.mu.Unlock()
-}
-
-func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
-	// Start with direct tools.
-	allTools := make([]tool.Tool, 0, len(tools))
-	allTools = append(allTools, tools...)
-	// Add tools from each toolset.
-	ctx := context.Background()
-	for _, toolSet := range toolSets {
-		setTools := toolSet.Tools(ctx)
-		for _, t := range setTools {
-			allTools = append(allTools, t)
-		}
-	}
-	// Add knowledge search tool if knowledge base is provided.
-	if kb != nil {
-		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
-	}
-	// Add memory tool if memory service is provided.
-	if memory != nil {
-		allTools = append(allTools, memory.Tools()...)
-	}
-	return allTools
 }
