@@ -59,6 +59,24 @@ func (g *Generator) Generate(t reflect.Type) map[string]any {
 	return root
 }
 
+// kindToJSONType maps simple Go kinds to their JSON Schema type.
+var kindToJSONType = map[reflect.Kind]string{
+	reflect.Bool:    "boolean",
+	reflect.Int:     "integer",
+	reflect.Int8:    "integer",
+	reflect.Int16:   "integer",
+	reflect.Int32:   "integer",
+	reflect.Int64:   "integer",
+	reflect.Uint:    "integer",
+	reflect.Uint8:   "integer",
+	reflect.Uint16:  "integer",
+	reflect.Uint32:  "integer",
+	reflect.Uint64:  "integer",
+	reflect.Float32: "number",
+	reflect.Float64: "number",
+	reflect.String:  "string",
+}
+
 func (g *Generator) toSchema(t reflect.Type) map[string]any {
 	// Handle pointers by unwrapping to element type.
 	if t.Kind() == reflect.Pointer {
@@ -70,105 +88,117 @@ func (g *Generator) toSchema(t reflect.Type) map[string]any {
 		return map[string]any{"type": "string", "format": "date-time"}
 	}
 
-	switch t.Kind() {
-	case reflect.Bool:
-		return map[string]any{"type": "boolean"}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return map[string]any{"type": "integer"}
-	case reflect.Float32, reflect.Float64:
-		return map[string]any{"type": "number"}
-	case reflect.String:
-		return map[string]any{"type": "string"}
-	case reflect.Slice, reflect.Array:
-		return map[string]any{
-			"type":  "array",
-			"items": g.toSchema(t.Elem()),
-		}
-	case reflect.Map:
-		// Only string keys are representable in JSON object properties.
-		if t.Key().Kind() == reflect.String {
-			return map[string]any{
-				"type":                 "object",
-				"additionalProperties": g.toSchema(t.Elem()),
-			}
-		}
-		// Fallback: represent as array of key-value pairs.
-		kv := map[string]any{
-			"type":  "array",
-			"items": map[string]any{"type": "object"},
-		}
-		return kv
-	case reflect.Struct:
-		// If currently processing this type, return a $ref and mark referenced.
-		if g.processing[t] {
-			defKey, ok := g.visited[t]
-			if !ok {
-				defKey = g.definitionName(t)
-				g.visited[t] = defKey
-			}
-			g.referenced[t] = true
-			return map[string]any{"$ref": "#/$defs/" + defKey}
-		}
+	if typeName, ok := kindToJSONType[t.Kind()]; ok {
+		return map[string]any{"type": typeName}
+	}
 
-		// Ensure a defKey exists for potential recursion.
+	if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		return g.schemaForArray(t)
+	}
+
+	if t.Kind() == reflect.Map {
+		return g.schemaForMap(t)
+	}
+
+	if t.Kind() == reflect.Struct {
+		return g.schemaForStruct(t)
+	}
+
+	return map[string]any{"type": "string"}
+}
+
+func (g *Generator) schemaForArray(t reflect.Type) map[string]any {
+	return map[string]any{
+		"type":  "array",
+		"items": g.toSchema(t.Elem()),
+	}
+}
+
+func (g *Generator) schemaForMap(t reflect.Type) map[string]any {
+	if t.Key().Kind() == reflect.String {
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": g.toSchema(t.Elem()),
+		}
+	}
+	// Fallback: represent as array of key-value pairs.
+	return map[string]any{
+		"type":  "array",
+		"items": map[string]any{"type": "object"},
+	}
+}
+
+func (g *Generator) schemaForStruct(t reflect.Type) map[string]any {
+	// If currently processing this type, return a $ref and mark referenced.
+	if g.processing[t] {
 		defKey, ok := g.visited[t]
 		if !ok {
 			defKey = g.definitionName(t)
 			g.visited[t] = defKey
 		}
+		g.referenced[t] = true
+		return map[string]any{"$ref": "#/$defs/" + defKey}
+	}
 
-		g.processing[t] = true
-		props := map[string]any{}
-		required := make([]string, 0)
-		n := t.NumField()
-		for i := 0; i < n; i++ {
-			f := t.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			jsonTag := f.Tag.Get("json")
-			if jsonTag == "-" {
-				continue
-			}
-			name := fieldJSONName(f)
-			if name == "-" || name == "" {
-				continue
-			}
-			fieldSchema := g.toSchema(f.Type)
-			if desc := strings.TrimSpace(f.Tag.Get("description")); desc != "" {
-				fieldSchema["description"] = desc
-			}
-			if enumTag := strings.TrimSpace(f.Tag.Get("enum")); enumTag != "" {
-				parts := strings.Split(enumTag, ",")
-				enums := make([]any, 0, len(parts))
-				for _, p := range parts {
-					enums = append(enums, strings.TrimSpace(p))
-				}
-				fieldSchema["enum"] = enums
-			}
-			props[name] = fieldSchema
-			if !isOmitEmpty(jsonTag) && !isPointerLike(f.Type) {
-				required = append(required, name)
-			}
-		}
-		g.processing[t] = false
+	// Ensure a defKey exists for potential recursion.
+	defKey, ok := g.visited[t]
+	if !ok {
+		defKey = g.definitionName(t)
+		g.visited[t] = defKey
+	}
 
-		obj := map[string]any{
-			"type":                 "object",
-			"properties":           props,
-			"additionalProperties": false,
+	g.processing[t] = true
+	props := map[string]any{}
+	required := make([]string, 0)
+	n := t.NumField()
+	for i := 0; i < n; i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
 		}
-		if len(required) > 0 {
-			obj["required"] = required
+		jsonTag := f.Tag.Get("json")
+		if jsonTag == "-" {
+			continue
 		}
-		// If this type was referenced via $ref, materialize its definition.
-		if g.referenced[t] {
-			g.defs[defKey] = obj
+		name := fieldJSONName(f)
+		if name == "-" || name == "" {
+			continue
 		}
-		return obj
-	default:
-		return map[string]any{"type": "string"}
+		fieldSchema := g.toSchema(f.Type)
+		applyFieldTags(fieldSchema, f)
+		props[name] = fieldSchema
+		if !isOmitEmpty(jsonTag) && !isPointerLike(f.Type) {
+			required = append(required, name)
+		}
+	}
+	g.processing[t] = false
+
+	obj := map[string]any{
+		"type":                 "object",
+		"properties":           props,
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		obj["required"] = required
+	}
+	// If this type was referenced via $ref, materialize its definition.
+	if g.referenced[t] {
+		g.defs[defKey] = obj
+	}
+	return obj
+}
+
+func applyFieldTags(fieldSchema map[string]any, f reflect.StructField) {
+	if desc := strings.TrimSpace(f.Tag.Get("description")); desc != "" {
+		fieldSchema["description"] = desc
+	}
+	if enumTag := strings.TrimSpace(f.Tag.Get("enum")); enumTag != "" {
+		parts := strings.Split(enumTag, ",")
+		enums := make([]any, 0, len(parts))
+		for _, p := range parts {
+			enums = append(enums, strings.TrimSpace(p))
+		}
+		fieldSchema["enum"] = enums
 	}
 }
 
