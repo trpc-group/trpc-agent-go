@@ -15,6 +15,7 @@ package jsonschema
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -182,7 +183,7 @@ func (g *Generator) definitionName(t reflect.Type) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.seq++
-	return sanitizeRefName("Type" + itoa(g.seq))
+	return sanitizeRefName("Type" + strconv.Itoa(g.seq))
 }
 
 func sanitizeRefName(s string) string {
@@ -225,28 +226,4 @@ func isPointerLike(t reflect.Type) bool {
 	default:
 		return false
 	}
-}
-
-// itoa converts an int to string without importing strconv.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
-	}
-	var b [20]byte
-	bp := len(b)
-	for i > 0 {
-		bp--
-		b[bp] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		bp--
-		b[bp] = '-'
-	}
-	return string(b[bp:])
 }
