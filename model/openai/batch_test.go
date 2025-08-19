@@ -1,0 +1,671 @@
+package openai
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+func TestBatchRequestInput_JSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *BatchRequestInput
+		expected string
+	}{
+		{
+			name: "complete request",
+			input: &BatchRequestInput{
+				CustomID: "test-1",
+				Method:   "POST",
+				URL:      "/v1/chat/completions",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleSystem, Content: "You are a helpful assistant."},
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+					Model: "gpt-3.5-turbo",
+				},
+			},
+			expected: `{"custom_id":"test-1","method":"POST","url":"/v1/chat/completions","body":{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Hello"}],"model":"gpt-3.5-turbo","stream":false}}`,
+		},
+		{
+			name: "minimal request",
+			input: &BatchRequestInput{
+				CustomID: "test-2",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hi"},
+						},
+					},
+				},
+			},
+			expected: `{"custom_id":"test-2","method":"","url":"","body":{"messages":[{"role":"user","content":"Hi"}],"model":"","stream":false}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.expected, string(data))
+
+			// Test unmarshaling back.
+			var unmarshaled BatchRequestInput
+			err = json.Unmarshal(data, &unmarshaled)
+			require.NoError(t, err)
+			assert.Equal(t, tt.input.CustomID, unmarshaled.CustomID)
+			assert.Equal(t, tt.input.Method, unmarshaled.Method)
+			assert.Equal(t, tt.input.URL, unmarshaled.URL)
+			assert.Equal(t, tt.input.Body.Model, unmarshaled.Body.Model)
+			assert.Equal(t, len(tt.input.Body.Messages), len(unmarshaled.Body.Messages))
+		})
+	}
+}
+
+func TestBatchRequest_JSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    BatchRequest
+		expected string
+	}{
+		{
+			name: "with model",
+			input: BatchRequest{
+				Request: model.Request{
+					Messages: []model.Message{
+						{Role: model.RoleUser, Content: "Hello"},
+					},
+					GenerationConfig: model.GenerationConfig{
+						Temperature: float64Ptr(0.7),
+					},
+				},
+				Model: "gpt-4",
+			},
+			expected: `{"messages":[{"role":"user","content":"Hello"}],"temperature":0.7,"model":"gpt-4","stream":false}`,
+		},
+		{
+			name: "without model",
+			input: BatchRequest{
+				Request: model.Request{
+					Messages: []model.Message{
+						{Role: model.RoleSystem, Content: "You are helpful"},
+					},
+				},
+			},
+			expected: `{"messages":[{"role":"system","content":"You are helpful"}],"model":"","stream":false}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.expected, string(data))
+
+			// Test unmarshaling back.
+			var unmarshaled BatchRequest
+			err = json.Unmarshal(data, &unmarshaled)
+			require.NoError(t, err)
+			assert.Equal(t, tt.input.Model, unmarshaled.Model)
+			assert.Equal(t, len(tt.input.Messages), len(unmarshaled.Messages))
+		})
+	}
+}
+
+func TestBatchCreateOptions(t *testing.T) {
+	opts := &BatchCreateOptions{
+		CompletionWindow: "24h",
+		Metadata: map[string]any{
+			"description": "test batch",
+			"priority":    1,
+		},
+	}
+
+	assert.Equal(t, "24h", opts.CompletionWindow)
+	assert.Equal(t, "test batch", opts.Metadata["description"])
+	assert.Equal(t, 1, opts.Metadata["priority"])
+}
+
+func TestBatchCreateOption_Functions(t *testing.T) {
+	opts := &BatchCreateOptions{}
+
+	// Test WithBatchCreateCompletionWindow
+	WithBatchCreateCompletionWindow("48h")(opts)
+	assert.Equal(t, "48h", opts.CompletionWindow)
+
+	// Test WithBatchCreateMetadata
+	metadata := map[string]any{"test": "value"}
+	WithBatchCreateMetadata(metadata)(opts)
+	assert.Equal(t, metadata, opts.Metadata)
+}
+
+func TestValidateBatchRequests(t *testing.T) {
+	tests := []struct {
+		name        string
+		requests    []*BatchRequestInput
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "empty requests",
+			requests:    []*BatchRequestInput{},
+			expectError: true,
+			errorMsg:    "requests cannot be empty",
+		},
+		{
+			name: "nil request",
+			requests: []*BatchRequestInput{
+				nil,
+			},
+			expectError: true,
+			errorMsg:    "request 0 is nil",
+		},
+		{
+			name: "missing custom_id",
+			requests: []*BatchRequestInput{
+				{
+					CustomID: "",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{Role: model.RoleUser, Content: "Hello"},
+							},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "custom_id cannot be empty",
+		},
+		{
+			name: "duplicate custom_id",
+			requests: []*BatchRequestInput{
+				{
+					CustomID: "test-1",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{Role: model.RoleUser, Content: "Hello"},
+							},
+						},
+					},
+				},
+				{
+					CustomID: "test-1",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{Role: model.RoleUser, Content: "World"},
+							},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "duplicate custom_id 'test-1'",
+		},
+		{
+			name: "empty messages",
+			requests: []*BatchRequestInput{
+				{
+					CustomID: "test-1",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "body.messages must be non-empty",
+		},
+		{
+			name: "valid requests",
+			requests: []*BatchRequestInput{
+				{
+					CustomID: "test-1",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{Role: model.RoleUser, Content: "Hello"},
+							},
+						},
+					},
+				},
+				{
+					CustomID: "test-2",
+					Body: BatchRequest{
+						Request: model.Request{
+							Messages: []model.Message{
+								{Role: model.RoleUser, Content: "World"},
+							},
+						},
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{}
+			if tt.name == "empty requests" {
+				// Empty requests are checked in CreateBatch before validateBatchRequests.
+				_, err := m.CreateBatch(context.Background(), tt.requests)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorMsg)
+			} else {
+				err := m.validateBatchRequests(tt.requests)
+				if tt.expectError {
+					require.Error(t, err)
+					assert.Contains(t, err.Error(), tt.errorMsg)
+				} else {
+					assert.NoError(t, err)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateBatchJSONL(t *testing.T) {
+	requests := []*BatchRequestInput{
+		{
+			CustomID: "test-1",
+			Body: BatchRequest{
+				Request: model.Request{
+					Messages: []model.Message{
+						{Role: model.RoleUser, Content: "Hello"},
+					},
+				},
+				Model: "gpt-3.5-turbo",
+			},
+		},
+		{
+			CustomID: "test-2",
+			Body: BatchRequest{
+				Request: model.Request{
+					Messages: []model.Message{
+						{Role: model.RoleUser, Content: "World"},
+					},
+				},
+			},
+		},
+	}
+
+	// Create a mock model for testing.
+	m := &Model{name: "default-model"}
+
+	jsonlData, err := m.generateBatchJSONL(requests)
+	require.NoError(t, err)
+
+	// Verify the generated JSONL.
+	lines := string(jsonlData)
+	assert.Contains(t, lines, `"custom_id":"test-1"`)
+	assert.Contains(t, lines, `"custom_id":"test-2"`)
+	assert.Contains(t, lines, `"method":"POST"`)
+	assert.Contains(t, lines, `"url":"/v1/chat/completions"`)
+	assert.Contains(t, lines, `"model":"gpt-3.5-turbo"`)
+	assert.Contains(t, lines, `"model":"default-model"`)
+
+	// Verify normalization.
+	for _, r := range requests {
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "/v1/chat/completions", r.URL)
+		if r.Body.Model == "" {
+			assert.Equal(t, "default-model", r.Body.Model)
+		}
+	}
+}
+
+func TestBatchRequestOutput_JSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    *BatchRequestOutput
+		expected string
+	}{
+		{
+			name: "successful response",
+			input: &BatchRequestOutput{
+				ID:       stringPtr("req-123"),
+				CustomID: "test-1",
+				Response: BatchResponse{
+					StatusCode: 200,
+					RequestID:  stringPtr("req-456"),
+					Body:       json.RawMessage(`{"choices":[{"message":{"content":"Hello"}}]}`),
+				},
+				Error:   nil,
+				RawLine: `{"id":"req-123","custom_id":"test-1","response":{"status_code":200,"request_id":"req-456","body":{"choices":[{"message":{"content":"Hello"}}]}}}`,
+			},
+			expected: `{"id":"req-123","custom_id":"test-1","response":{"status_code":200,"request_id":"req-456","body":{"choices":[{"message":{"content":"Hello"}}]}},"error":null}`,
+		},
+		{
+			name: "error response",
+			input: &BatchRequestOutput{
+				ID:       stringPtr("req-124"),
+				CustomID: "test-2",
+				Response: BatchResponse{
+					StatusCode: 400,
+					RequestID:  nil,
+					Body:       json.RawMessage(`{"error":{"message":"Bad request"}}`),
+				},
+				Error:   json.RawMessage(`{"type":"invalid_request"}`),
+				RawLine: `{"id":"req-124","custom_id":"test-2","response":{"status_code":400,"body":{"error":{"message":"Bad request"}}},"error":{"type":"invalid_request"}}`,
+			},
+			expected: `{"id":"req-124","custom_id":"test-2","response":{"status_code":400,"request_id":null,"body":{"error":{"message":"Bad request"}}},"error":{"type":"invalid_request"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.expected, string(data))
+
+			// Test unmarshaling back.
+			var unmarshaled BatchRequestOutput
+			err = json.Unmarshal(data, &unmarshaled)
+			require.NoError(t, err)
+			assert.Equal(t, tt.input.ID, unmarshaled.ID)
+			assert.Equal(t, tt.input.CustomID, unmarshaled.CustomID)
+			assert.Equal(t, tt.input.Response.StatusCode, unmarshaled.Response.StatusCode)
+		})
+	}
+}
+
+func TestBatchResponse_JSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    BatchResponse
+		expected string
+	}{
+		{
+			name: "with request_id",
+			input: BatchResponse{
+				StatusCode: 200,
+				RequestID:  stringPtr("req-123"),
+				Body:       json.RawMessage(`{"result":"success"}`),
+			},
+			expected: `{"status_code":200,"request_id":"req-123","body":{"result":"success"}}`,
+		},
+		{
+			name: "without request_id",
+			input: BatchResponse{
+				StatusCode: 500,
+				RequestID:  nil,
+				Body:       json.RawMessage(`{"error":"internal"}`),
+			},
+			expected: `{"status_code":500,"request_id":null,"body":{"error":"internal"}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.expected, string(data))
+
+			// Test unmarshaling back.
+			var unmarshaled BatchResponse
+			err = json.Unmarshal(data, &unmarshaled)
+			require.NoError(t, err)
+			assert.Equal(t, tt.input.StatusCode, unmarshaled.StatusCode)
+			assert.Equal(t, tt.input.RequestID, unmarshaled.RequestID)
+		})
+	}
+}
+
+func TestParseBatchOutput(t *testing.T) {
+	tests := []struct {
+		name        string
+		jsonlInput  string
+		expectCount int
+		expectError bool
+	}{
+		{
+			name: "valid JSONL",
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
+{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"error":"bad request"}}}`,
+			expectCount: 2,
+			expectError: false,
+		},
+		{
+			name: "empty lines",
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
+
+{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"error":"bad request"}}}`,
+			expectCount: 2,
+			expectError: false,
+		},
+		{
+			name: "invalid JSON",
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
+{invalid json}`,
+			expectCount: 0,
+			expectError: true,
+		},
+		{
+			name:        "empty input",
+			jsonlInput:  "",
+			expectCount: 0,
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{}
+			results, err := m.ParseBatchOutput(tt.jsonlInput)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Len(t, results, tt.expectCount)
+
+			// Verify RawLine is preserved.
+			for i, result := range results {
+				assert.NotEmpty(t, result.RawLine)
+				switch i {
+				case 0:
+					assert.Contains(t, result.RawLine, "test-1")
+				case 1:
+					assert.Contains(t, result.RawLine, "test-2")
+				}
+			}
+		})
+	}
+}
+
+func TestParseBatchOutput_EdgeCases(t *testing.T) {
+	m := &Model{}
+
+	// Test with single valid line.
+	results, err := m.ParseBatchOutput(`{"custom_id":"single","response":{"status_code":200,"body":{}}}`)
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.Equal(t, "single", results[0].CustomID)
+	assert.Equal(t, 200, results[0].Response.StatusCode)
+
+	// Test with whitespace-only lines.
+	results, err = m.ParseBatchOutput("   \n\t\n  ")
+	require.NoError(t, err)
+	assert.Len(t, results, 0)
+
+	// Test with mixed content.
+	results, err = m.ParseBatchOutput(`{"custom_id":"test","response":{"status_code":200,"body":{}}}
+   
+{"custom_id":"test2","response":{"status_code":400,"body":{}}}`)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+}
+
+// Helper functions to create pointers.
+func float64Ptr(f float64) *float64 {
+	return &f
+}
+
+// TestBatchOperations_EdgeCases tests edge cases and error conditions for batch operations.
+func TestBatchOperations_EdgeCases(t *testing.T) {
+	t.Run("CreateBatch with invalid requests", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		// Test with nil requests slice.
+		_, err := m.CreateBatch(context.Background(), nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "requests cannot be empty")
+
+		// Test with empty requests slice.
+		_, err = m.CreateBatch(context.Background(), []*BatchRequestInput{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "requests cannot be empty")
+	})
+
+	t.Run("CreateBatch with invalid request data", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		// Test with request that has empty custom_id.
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := m.CreateBatch(context.Background(), requests)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "custom_id cannot be empty")
+	})
+
+	t.Run("CreateBatch with duplicate custom_id", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "duplicate",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "First"},
+						},
+					},
+				},
+			},
+			{
+				CustomID: "duplicate", // Same custom_id.
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Second"},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := m.CreateBatch(context.Background(), requests)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate custom_id 'duplicate'")
+	})
+
+	t.Run("CreateBatch with empty messages", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "test-1",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{}, // Empty messages.
+					},
+				},
+			},
+		}
+
+		_, err := m.CreateBatch(context.Background(), requests)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "body.messages must be non-empty")
+	})
+
+	t.Run("CreateBatch with valid requests", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "test-1",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+			{
+				CustomID: "test-2",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "World"},
+						},
+					},
+				},
+			},
+		}
+
+		// This should pass validation but fail at file upload (no client).
+		_, err := m.CreateBatch(context.Background(), requests)
+		// We expect an error, but it should be after validation passes.
+		assert.Error(t, err)
+		// The error should not be about validation.
+		assert.NotContains(t, err.Error(), "custom_id cannot be empty")
+		assert.NotContains(t, err.Error(), "duplicate custom_id")
+		assert.NotContains(t, err.Error(), "body.messages must be non-empty")
+	})
+}
+
+// TestBatchOptions tests batch creation options and their combinations.
+func TestBatchOptions(t *testing.T) {
+	t.Run("default options", func(t *testing.T) {
+		opts := &BatchCreateOptions{}
+		assert.Equal(t, "", opts.CompletionWindow)
+		assert.Nil(t, opts.Metadata)
+	})
+
+	t.Run("with completion window", func(t *testing.T) {
+		opts := &BatchCreateOptions{}
+		WithBatchCreateCompletionWindow("48h")(opts)
+		assert.Equal(t, "48h", opts.CompletionWindow)
+	})
+
+	t.Run("with metadata", func(t *testing.T) {
+		opts := &BatchCreateOptions{}
+		metadata := map[string]any{"priority": "high", "env": "production"}
+		WithBatchCreateMetadata(metadata)(opts)
+		assert.Equal(t, metadata, opts.Metadata)
+	})
+
+	t.Run("multiple options", func(t *testing.T) {
+		opts := &BatchCreateOptions{}
+		WithBatchCreateCompletionWindow("72h")(opts)
+		WithBatchCreateMetadata(map[string]any{"test": true})(opts)
+
+		assert.Equal(t, "72h", opts.CompletionWindow)
+		assert.Equal(t, true, opts.Metadata["test"])
+	})
+}

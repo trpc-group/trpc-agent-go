@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 
 	openai "github.com/openai/openai-go"
@@ -19,34 +18,37 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const (
-	// maxBatchRequests is the maximum number of requests allowed in one batch.
-	maxBatchRequests = 50000
-	// maxJSONLFileBytes is the maximum JSONL size the framework accepts.
-	maxJSONLFileBytes = 100 * 1024 * 1024
-)
-
 // BatchRequestInput represents one JSONL line for the batch input file.
 // The body is forwarded as-is to the backend.
+// For more details, see https://platform.openai.com/docs/api-reference/batch/request-input.
 type BatchRequestInput struct {
-	CustomID string       `json:"custom_id"`
-	Method   string       `json:"method"`
-	URL      string       `json:"url"`
-	Body     BatchRequest `json:"body"`
+	// CustomID is a developer-provided per-request id that will be used to match outputs to inputs.
+	// Must be unique for each request in a batch.
+	CustomID string `json:"custom_id"`
+	// Method is the HTTP method to be used for the request.
+	Method string `json:"method"`
+	// URL is the OpenAI API relative URL to be used for the request.
+	URL string `json:"url"`
+	// Body is the request body to use for the request.
+	Body BatchRequest `json:"body"`
 }
 
 // BatchRequest is the request body for a single batch input line.
 // It inlines model.Request and includes a model field per OpenAI spec.
 // The model field will be filled from the current model name if empty.
 type BatchRequest struct {
+	// Request is the request to the model. It is inlined from model.Request.
 	model.Request `json:",inline"`
-	Model         string `json:"model"`
+	// Model is the model name to use for the request.
+	Model string `json:"model"`
 }
 
 // BatchCreateOptions configures CreateBatch behavior.
 type BatchCreateOptions struct {
-	CompletionWindow string         // Optional override for completion window.
-	Metadata         map[string]any // Optional override for metadata.
+	// CompletionWindow is the completion window to use for the batch.
+	CompletionWindow string
+	// Metadata is the metadata to use for the batch.
+	Metadata map[string]any
 }
 
 // BatchCreateOption applies a BatchCreateOptions override.
@@ -54,12 +56,16 @@ type BatchCreateOption func(*BatchCreateOptions)
 
 // WithBatchCreateCompletionWindow overrides completion window for this call.
 func WithBatchCreateCompletionWindow(window string) BatchCreateOption {
-	return func(o *BatchCreateOptions) { o.CompletionWindow = window }
+	return func(o *BatchCreateOptions) {
+		o.CompletionWindow = window
+	}
 }
 
 // WithBatchCreateMetadata overrides metadata for this call.
 func WithBatchCreateMetadata(md map[string]any) BatchCreateOption {
-	return func(o *BatchCreateOptions) { o.Metadata = md }
+	return func(o *BatchCreateOptions) {
+		o.Metadata = md
+	}
 }
 
 // CreateBatch validates requests, generates JSONL, uploads it, and creates a batch.
@@ -72,9 +78,6 @@ func (m *Model) CreateBatch(
 	if len(requests) == 0 {
 		return nil, errors.New("requests cannot be empty")
 	}
-	if len(requests) > maxBatchRequests {
-		return nil, fmt.Errorf("batch size cannot exceed %d", maxBatchRequests)
-	}
 
 	if err := m.validateBatchRequests(requests); err != nil {
 		return nil, fmt.Errorf("invalid batch requests: %w", err)
@@ -83,9 +86,6 @@ func (m *Model) CreateBatch(
 	jsonlData, err := m.generateBatchJSONL(requests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate JSONL: %w", err)
-	}
-	if err := m.checkFileSize(jsonlData); err != nil {
-		return nil, err
 	}
 
 	fileID, err := m.UploadFileData(ctx, "batch_input.jsonl", jsonlData,
@@ -144,20 +144,13 @@ func (m *Model) validateBatchRequests(requests []*BatchRequestInput) error {
 			return fmt.Errorf("request %d: duplicate custom_id '%s'", i, r.CustomID)
 		}
 		seen[r.CustomID] = struct{}{}
-		if r.Method != "" && r.Method != http.MethodPost {
-			return fmt.Errorf("request %d: method must be POST", i)
-		}
-		if r.URL != "" && r.URL != string(openai.BatchNewParamsEndpointV1ChatCompletions) {
-			return fmt.Errorf("request %d: url must be /v1/chat/completions", i)
-		}
+
+		// Method and URL will be validated by the OpenAI API,
+		// so we don't need to validate them here.
+
 		// Validate messages are non-empty.
 		if len(r.Body.Messages) == 0 {
 			return fmt.Errorf("request %d: body.messages must be non-empty", i)
-		}
-		// Basic shape check that messages is a slice.
-		rv := reflect.ValueOf(r.Body.Messages)
-		if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
-			return fmt.Errorf("request %d: body.messages must be an array", i)
 		}
 	}
 	return nil
@@ -184,14 +177,6 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 		}
 	}
 	return buf.Bytes(), nil
-}
-
-// checkFileSize validates the generated JSONL size.
-func (m *Model) checkFileSize(data []byte) error {
-	if len(data) > maxJSONLFileBytes {
-		return fmt.Errorf("generated file size %d exceeds limit %d", len(data), maxJSONLFileBytes)
-	}
-	return nil
 }
 
 // RetrieveBatch retrieves a batch job by ID.
@@ -240,40 +225,50 @@ func (m *Model) DownloadFileContent(ctx context.Context, fileID string) (string,
 }
 
 // BatchRequestOutput aligns with OpenAI request-output JSONL line.
-// Reference: https://platform.openai.com/docs/api-reference/batch/request-output.
+// For more details, see https://platform.openai.com/docs/api-reference/batch/request-output.
 type BatchRequestOutput struct {
-	ID       *string         `json:"id"`
-	CustomID string          `json:"custom_id"`
-	Response BatchResponse   `json:"response"`
-	Error    json.RawMessage `json:"error"`
-	Raw      map[string]any  `json:"-"`
+	// ID is the unique identifier for the request within the batch.
+	ID *string `json:"id"`
+	// CustomID is the developer-provided per-request id that was used to match outputs to inputs.
+	CustomID string `json:"custom_id"`
+	// Response contains the response data for the request.
+	Response BatchResponse `json:"response"`
+	// Error contains error information if the request failed.
+	Error json.RawMessage `json:"error"`
+	// RawLine contains the original JSONL line for debugging purposes.
+	RawLine string `json:"-"`
 }
 
 // BatchResponse aligns with the nested response object.
 // It wraps status code, request identifier, and raw JSON body returned by the
 // endpoint.
 type BatchResponse struct {
-	StatusCode int             `json:"status_code"`
-	RequestID  *string         `json:"request_id"`
-	Body       json.RawMessage `json:"body"`
+	// StatusCode is the HTTP status code returned by the endpoint.
+	StatusCode int `json:"status_code"`
+	// RequestID is the unique identifier for the request.
+	RequestID *string `json:"request_id"`
+	// Body contains the raw JSON response body from the endpoint.
+	Body json.RawMessage `json:"body"`
 }
 
 // ParseBatchOutput parses output JSONL into OpenAI-aligned structures.
 func (m *Model) ParseBatchOutput(text string) ([]BatchRequestOutput, error) {
 	scanner := bufio.NewScanner(strings.NewReader(text))
-	entries := make([]BatchRequestOutput, 0, 64)
+	// Pre-allocate with reasonable default capacity to avoid frequent reallocations.
+	var entries []BatchRequestOutput
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
+		// Unmarshal the line into a BatchRequestOutput.
 		var out BatchRequestOutput
 		if err := json.Unmarshal([]byte(line), &out); err != nil {
 			return nil, fmt.Errorf("failed to parse jsonl line: %w", err)
 		}
-		var raw map[string]any
-		_ = json.Unmarshal([]byte(line), &raw)
-		out.Raw = raw
+		// Store the original line for debugging purposes.
+		out.RawLine = line
+		// Append the entry to the slice.
 		entries = append(entries, out)
 	}
 	if err := scanner.Err(); err != nil {
