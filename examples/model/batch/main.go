@@ -23,7 +23,6 @@ import (
 	"time"
 
 	openaisdk "github.com/openai/openai-go"
-	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -41,8 +40,6 @@ func main() {
 	action := flag.String("action", defaultAction, "Action: create|"+
 		"get|cancel|list")
 	modelName := flag.String("model", defaultModelName, "Model name to use")
-	maxRetries := flag.Int("retries", 3, "Max HTTP retries for SDK requests")
-	timeout := flag.Duration("timeout", 30*time.Second, "Request timeout")
 
 	// Create options: user-provided requests.
 	requestsInline := flag.String("requests", "", "Inline requests spec. "+
@@ -66,13 +63,8 @@ func main() {
 	fmt.Printf("   🔑 OpenAI SDK reads OPENAI_API_KEY and OPENAI_BASE_URL from env\n")
 	fmt.Println()
 
-	// Initialize model with retry and timeout options.
-	llm := openai.New(*modelName,
-		openai.WithOpenAIOptions(
-			openaiopt.WithMaxRetries(*maxRetries),
-			openaiopt.WithRequestTimeout(*timeout),
-		),
-	)
+	// Initialize model.
+	llm := openai.New(*modelName)
 
 	ctx := context.Background()
 
@@ -258,21 +250,68 @@ func runList(ctx context.Context, llm *openai.Model, after string, limit int64) 
 	}
 	fmt.Printf("📃 Listing up to %d batches (after=%s).\n", limit, after)
 	for i, item := range page.Data {
-		fmt.Printf("%2d. id=%s status=%s created=%s requests(total=%d,ok=%d,fail=%d)\n",
-			i+1,
-			item.ID,
-			string(item.Status),
-			ts(item.CreatedAt),
-			item.RequestCounts.Total,
-			item.RequestCounts.Completed,
-			item.RequestCounts.Failed,
-		)
+		printBatchListItem(i+1, item)
 	}
 	if page.HasMore && len(page.Data) > 0 {
 		last := page.Data[len(page.Data)-1]
 		fmt.Printf("➡️  More available. Use --after=%s for next page.\n", last.ID)
 	}
 	return nil
+}
+
+// printBatchListItem prints detailed information for a single batch item in the list.
+func printBatchListItem(index int, item openaisdk.Batch) {
+	fmt.Printf("%2d. id=%s status=%s created=%s requests(total=%d,ok=%d,fail=%d)\n",
+		index,
+		item.ID,
+		string(item.Status),
+		ts(item.CreatedAt),
+		item.RequestCounts.Total,
+		item.RequestCounts.Completed,
+		item.RequestCounts.Failed,
+	)
+
+	// Show additional details for each batch.
+	if item.OutputFileID != "" {
+		fmt.Printf("     📤 Output: %s\n", item.OutputFileID)
+	}
+	if item.ErrorFileID != "" {
+		fmt.Printf("     ⚠️  Error File: %s\n", item.ErrorFileID)
+	}
+	if len(item.Errors.Data) > 0 {
+		fmt.Printf("     ❌ Errors:\n")
+		for j, err := range item.Errors.Data {
+			fmt.Printf("        %d. Code: %s, Message: %s\n",
+				j+1,
+				err.Code,
+				err.Message)
+		}
+	}
+	if len(item.Metadata) > 0 {
+		fmt.Printf("     🏷️  Metadata: %v\n", item.Metadata)
+	}
+	if item.CompletionWindow != "" {
+		fmt.Printf("     ⏰ Window: %s\n", item.CompletionWindow)
+	}
+	if item.ExpiresAt != 0 {
+		fmt.Printf("     ⏳ Expires: %s\n", ts(item.ExpiresAt))
+	}
+	if item.CompletedAt != 0 {
+		fmt.Printf("     ✅ Completed: %s\n", ts(item.CompletedAt))
+	}
+	if item.FailedAt != 0 {
+		fmt.Printf("     💥 Failed: %s\n", ts(item.FailedAt))
+	}
+	if item.CancelledAt != 0 {
+		fmt.Printf("     🚫 Cancelled: %s\n", ts(item.CancelledAt))
+	}
+	if item.InProgressAt != 0 {
+		fmt.Printf("     🔄 In Progress: %s\n", ts(item.InProgressAt))
+	}
+	if item.FinalizingAt != 0 {
+		fmt.Printf("     🎯 Finalizing: %s\n", ts(item.FinalizingAt))
+	}
+	fmt.Println() // Add empty line between batches for readability.
 }
 
 // printBatch prints key information of a batch.
@@ -294,6 +333,17 @@ func printBatch(prefix string, b *openaisdk.Batch) {
 		b.RequestCounts.Completed,
 		b.RequestCounts.Failed,
 	)
+
+	// Print errors if available.
+	if len(b.Errors.Data) > 0 {
+		fmt.Printf("   ❌ Errors:\n")
+		for i, err := range b.Errors.Data {
+			fmt.Printf("      %d. Code: %s, Message: %s\n",
+				i+1,
+				err.Code,
+				err.Message)
+		}
+	}
 }
 
 // ts renders a unix seconds timestamp.
@@ -321,46 +371,4 @@ func firstChatContent(body json.RawMessage) (string, bool) {
 		return "", false
 	}
 	return tmp.Choices[0].Message.Content, tmp.Choices[0].Message.Content != ""
-}
-
-// toRequest converts a simple map to BatchInputBody.
-func toRequest(m map[string]any) openai.BatchRequest {
-	var req openai.BatchRequest
-	// Messages.
-	if msgs, ok := m["messages"].([]map[string]string); ok {
-		for _, mm := range msgs {
-			role := mm["role"]
-			content := mm["content"]
-			switch role {
-			case "system":
-				req.Messages = append(req.Messages, model.NewSystemMessage(content))
-			case "user":
-				req.Messages = append(req.Messages, model.NewUserMessage(content))
-			case "assistant":
-				req.Messages = append(req.Messages, model.NewAssistantMessage(content))
-			default:
-				req.Messages = append(req.Messages, model.Message{Role: model.Role(role), Content: content})
-			}
-		}
-	}
-	// Temperature.
-	if v, ok := m["temperature"].(float64); ok {
-		t := v
-		req.Temperature = &t
-	}
-	// TopP.
-	if v, ok := m["top_p"].(float64); ok {
-		t := v
-		req.TopP = &t
-	}
-	// MaxTokens.
-	if v, ok := m["max_tokens"].(float64); ok {
-		iv := int(v)
-		req.MaxTokens = &iv
-	}
-	// Stop.
-	if v, ok := m["stop"].([]string); ok {
-		req.Stop = v
-	}
-	return req
 }
