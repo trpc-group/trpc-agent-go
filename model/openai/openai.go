@@ -1252,7 +1252,9 @@ func (m *Model) UploadFileData(
 
 	// Create file upload parameters with data reader.
 	fileParams := openai.FileNewParams{
-		File:    bytes.NewReader(nil),
+		File: nil, // Set to nil to avoid duplicate multipart form construction by SDK.
+		// The middleware will handle all request body construction to ensure proper
+		// filename preservation and field ordering required by Venus platform.
 		Purpose: fileOpts.Purpose,
 	}
 

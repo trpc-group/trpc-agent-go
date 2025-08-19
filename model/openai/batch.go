@@ -90,6 +90,11 @@ func (m *Model) CreateBatch(
 
 	fileID, err := m.UploadFileData(ctx, "batch_input.jsonl", jsonlData,
 		WithPurpose(openai.FilePurposeBatch),
+		// Use SDK default "/files" path instead of variant-specific path to avoid incorrect path concatenation.
+		// Without WithPath(""), UploadFileData would use m.variantConfig.fileUploadPath
+		// which could result in duplicate paths like base_url + fileUploadPath + "/files".
+		// By explicitly setting WithPath(""), we let the OpenAI SDK use its default "/files" path,
+		// ensuring the correct endpoint: base_url + "/files".
 		WithPath(""),
 	)
 	if err != nil {
