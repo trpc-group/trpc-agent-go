@@ -248,7 +248,11 @@ func runList(ctx context.Context, llm *openai.Model, after string, limit int64) 
 	if err != nil {
 		return fmt.Errorf("failed to list batches: %w", err)
 	}
-	fmt.Printf("📃 Listing up to %d batches (after=%s).\n", limit, after)
+	if after != "" {
+		fmt.Printf("📃 Listing up to %d batches (after=%s).\n", limit, after)
+	} else {
+		fmt.Printf("📃 Listing up to %d batches.\n", limit)
+	}
 	for i, item := range page.Data {
 		printBatchListItem(i+1, item)
 	}
