@@ -27,6 +27,8 @@ const (
 	StateKeyToolCallbacks = "tool_callbacks"
 	// StateKeyModelCallbacks is the key of the model callbacks.
 	StateKeyModelCallbacks = "model_callbacks"
+	// StateKeyCurrentNodeID is the key for storing the current node ID in the state.
+	StateKeyCurrentNodeID = "current_node_id"
 )
 
 // State represents the state that flows through the graph.
