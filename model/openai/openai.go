@@ -187,7 +187,7 @@ type Model struct {
 	variant               Variant
 	variantConfig         variantConfig
 	batchCompletionWindow string
-	batchMetadata         map[string]any
+	batchMetadata         map[string]string
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -235,7 +235,7 @@ type options struct {
 	// Batch completion window for batch processing.
 	BatchCompletionWindow string
 	// Batch metadata for batch processing.
-	BatchMetadata map[string]any
+	BatchMetadata map[string]string
 }
 
 // Option is a function that configures an OpenAI model.
@@ -352,7 +352,7 @@ func WithBatchCompletionWindow(window string) Option {
 }
 
 // WithBatchMetadata sets the batch metadata.
-func WithBatchMetadata(metadata map[string]any) Option {
+func WithBatchMetadata(metadata map[string]string) Option {
 	return func(opts *options) {
 		opts.BatchMetadata = metadata
 	}

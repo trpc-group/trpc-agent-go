@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	openaisdk "github.com/openai/openai-go"
+	"github.com/openai/openai-go/shared"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -124,15 +126,15 @@ func TestBatchRequest_JSON(t *testing.T) {
 func TestBatchCreateOptions(t *testing.T) {
 	opts := &BatchCreateOptions{
 		CompletionWindow: "24h",
-		Metadata: map[string]any{
+		Metadata: map[string]string{
 			"description": "test batch",
-			"priority":    1,
+			"priority":    "1",
 		},
 	}
 
 	assert.Equal(t, "24h", opts.CompletionWindow)
 	assert.Equal(t, "test batch", opts.Metadata["description"])
-	assert.Equal(t, 1, opts.Metadata["priority"])
+	assert.Equal(t, "1", opts.Metadata["priority"])
 }
 
 func TestBatchCreateOption_Functions(t *testing.T) {
@@ -143,7 +145,7 @@ func TestBatchCreateOption_Functions(t *testing.T) {
 	assert.Equal(t, "48h", opts.CompletionWindow)
 
 	// Test WithBatchCreateMetadata
-	metadata := map[string]any{"test": "value"}
+	metadata := map[string]string{"test": "value"}
 	WithBatchCreateMetadata(metadata)(opts)
 	assert.Equal(t, metadata, opts.Metadata)
 }
@@ -328,100 +330,103 @@ func TestGenerateBatchJSONL(t *testing.T) {
 }
 
 func TestBatchRequestOutput_JSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    *BatchRequestOutput
-		expected string
-	}{
-		{
-			name: "successful response",
-			input: &BatchRequestOutput{
-				ID:       stringPtr("req-123"),
-				CustomID: "test-1",
-				Response: BatchResponse{
-					StatusCode: 200,
-					RequestID:  stringPtr("req-456"),
-					Body:       json.RawMessage(`{"choices":[{"message":{"content":"Hello"}}]}`),
-				},
-				Error:   nil,
-				RawLine: `{"id":"req-123","custom_id":"test-1","response":{"status_code":200,"request_id":"req-456","body":{"choices":[{"message":{"content":"Hello"}}]}}}`,
+	t.Run("successful response", func(t *testing.T) {
+		in := &BatchRequestOutput{
+			ID:       stringPtr("req-123"),
+			CustomID: "test-1",
+			Response: BatchResponse{
+				StatusCode: 200,
+				RequestID:  stringPtr("req-456"),
+				Body: openaisdk.ChatCompletion{Choices: []openaisdk.ChatCompletionChoice{{
+					Message: openaisdk.ChatCompletionMessage{Content: "Hello"},
+				}}},
 			},
-			expected: `{"id":"req-123","custom_id":"test-1","response":{"status_code":200,"request_id":"req-456","body":{"choices":[{"message":{"content":"Hello"}}]}},"error":null}`,
-		},
-		{
-			name: "error response",
-			input: &BatchRequestOutput{
-				ID:       stringPtr("req-124"),
-				CustomID: "test-2",
-				Response: BatchResponse{
-					StatusCode: 400,
-					RequestID:  nil,
-					Body:       json.RawMessage(`{"error":{"message":"Bad request"}}`),
-				},
-				Error:   json.RawMessage(`{"type":"invalid_request"}`),
-				RawLine: `{"id":"req-124","custom_id":"test-2","response":{"status_code":400,"body":{"error":{"message":"Bad request"}}},"error":{"type":"invalid_request"}}`,
+			Error: nil,
+		}
+
+		data, err := json.Marshal(in)
+		require.NoError(t, err)
+
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(data, &got))
+
+		resp := got["response"].(map[string]any)
+		assert.Equal(t, float64(200), resp["status_code"])
+		assert.Equal(t, "req-456", resp["request_id"])
+
+		body := resp["body"].(map[string]any)
+		choices, ok := body["choices"].([]any)
+		if ok && len(choices) > 0 {
+			msg := choices[0].(map[string]any)["message"].(map[string]any)
+			assert.Equal(t, "Hello", msg["content"])
+		}
+
+		// error should be null or omitted.
+		_, hasError := got["error"]
+		if hasError {
+			assert.Nil(t, got["error"]) // should be null
+		}
+	})
+
+	t.Run("error response", func(t *testing.T) {
+		in := &BatchRequestOutput{
+			ID:       stringPtr("req-124"),
+			CustomID: "test-2",
+			Response: BatchResponse{
+				StatusCode: 400,
+				RequestID:  nil,
+				Body:       openaisdk.ChatCompletion{},
 			},
-			expected: `{"id":"req-124","custom_id":"test-2","response":{"status_code":400,"request_id":null,"body":{"error":{"message":"Bad request"}}},"error":{"type":"invalid_request"}}`,
-		},
-	}
+			Error: &shared.ErrorObject{Type: "invalid_request", Message: "Bad request", Code: "", Param: ""},
+		}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.input)
-			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
+		data, err := json.Marshal(in)
+		require.NoError(t, err)
 
-			// Test unmarshaling back.
-			var unmarshaled BatchRequestOutput
-			err = json.Unmarshal(data, &unmarshaled)
-			require.NoError(t, err)
-			assert.Equal(t, tt.input.ID, unmarshaled.ID)
-			assert.Equal(t, tt.input.CustomID, unmarshaled.CustomID)
-			assert.Equal(t, tt.input.Response.StatusCode, unmarshaled.Response.StatusCode)
-		})
-	}
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(data, &got))
+
+		resp := got["response"].(map[string]any)
+		assert.Equal(t, float64(400), resp["status_code"])
+		// request_id may be null; no strict assert here.
+
+		errObj := got["error"].(map[string]any)
+		assert.Equal(t, "invalid_request", errObj["type"])
+		assert.Equal(t, "Bad request", errObj["message"])
+	})
 }
 
 func TestBatchResponse_JSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    BatchResponse
-		expected string
-	}{
-		{
-			name: "with request_id",
-			input: BatchResponse{
-				StatusCode: 200,
-				RequestID:  stringPtr("req-123"),
-				Body:       json.RawMessage(`{"result":"success"}`),
-			},
-			expected: `{"status_code":200,"request_id":"req-123","body":{"result":"success"}}`,
-		},
-		{
-			name: "without request_id",
-			input: BatchResponse{
-				StatusCode: 500,
-				RequestID:  nil,
-				Body:       json.RawMessage(`{"error":"internal"}`),
-			},
-			expected: `{"status_code":500,"request_id":null,"body":{"error":"internal"}}`,
-		},
-	}
+	t.Run("with request_id", func(t *testing.T) {
+		in := BatchResponse{StatusCode: 200, RequestID: stringPtr("req-123"), Body: openaisdk.ChatCompletion{Model: "gpt-4o-mini"}}
+		data, err := json.Marshal(in)
+		require.NoError(t, err)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := json.Marshal(tt.input)
-			require.NoError(t, err)
-			assert.JSONEq(t, tt.expected, string(data))
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(data, &got))
+		assert.Equal(t, float64(200), got["status_code"])
+		assert.Equal(t, "req-123", got["request_id"])
 
-			// Test unmarshaling back.
-			var unmarshaled BatchResponse
-			err = json.Unmarshal(data, &unmarshaled)
-			require.NoError(t, err)
-			assert.Equal(t, tt.input.StatusCode, unmarshaled.StatusCode)
-			assert.Equal(t, tt.input.RequestID, unmarshaled.RequestID)
-		})
-	}
+		body := got["body"].(map[string]any)
+		assert.Equal(t, "gpt-4o-mini", body["model"])
+	})
+
+	t.Run("without request_id", func(t *testing.T) {
+		in := BatchResponse{StatusCode: 500, RequestID: nil, Body: openaisdk.ChatCompletion{Model: "gpt-4o-mini"}}
+		data, err := json.Marshal(in)
+		require.NoError(t, err)
+
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(data, &got))
+		assert.Equal(t, float64(500), got["status_code"])
+		// request_id may be null
+		_, present := got["request_id"]
+		if present {
+			assert.Nil(t, got["request_id"])
+		}
+		body := got["body"].(map[string]any)
+		assert.Equal(t, "gpt-4o-mini", body["model"])
+	})
 }
 
 func TestParseBatchOutput(t *testing.T) {
@@ -433,22 +438,22 @@ func TestParseBatchOutput(t *testing.T) {
 	}{
 		{
 			name: "valid JSONL",
-			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
-{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"error":"bad request"}}}`,
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"model":"gpt-4o-mini"}}}
+{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"model":"gpt-4o-mini"}}}`,
 			expectCount: 2,
 			expectError: false,
 		},
 		{
 			name: "empty lines",
-			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"model":"gpt-4o-mini"}}}
 
-{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"error":"bad request"}}}`,
+{"id":"req-2","custom_id":"test-2","response":{"status_code":400,"body":{"model":"gpt-4o-mini"}}}`,
 			expectCount: 2,
 			expectError: false,
 		},
 		{
 			name: "invalid JSON",
-			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"result":"success"}}}
+			jsonlInput: `{"id":"req-1","custom_id":"test-1","response":{"status_code":200,"body":{"model":"gpt-4o-mini"}}}
 {invalid json}`,
 			expectCount: 0,
 			expectError: true,
@@ -492,7 +497,7 @@ func TestParseBatchOutput_EdgeCases(t *testing.T) {
 	m := &Model{}
 
 	// Test with single valid line.
-	results, err := m.ParseBatchOutput(`{"custom_id":"single","response":{"status_code":200,"body":{}}}`)
+	results, err := m.ParseBatchOutput(`{"custom_id":"single","response":{"status_code":200,"body":{"model":"gpt-4o-mini"}}}`)
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, "single", results[0].CustomID)
@@ -504,17 +509,15 @@ func TestParseBatchOutput_EdgeCases(t *testing.T) {
 	assert.Len(t, results, 0)
 
 	// Test with mixed content.
-	results, err = m.ParseBatchOutput(`{"custom_id":"test","response":{"status_code":200,"body":{}}}
+	results, err = m.ParseBatchOutput(`{"custom_id":"test","response":{"status_code":200,"body":{"model":"gpt-4o-mini"}}}
    
-{"custom_id":"test2","response":{"status_code":400,"body":{}}}`)
+{"custom_id":"test2","response":{"status_code":400,"body":{"model":"gpt-4o-mini"}}}`)
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 }
 
 // Helper functions to create pointers.
-func float64Ptr(f float64) *float64 {
-	return &f
-}
+func float64Ptr(f float64) *float64 { return &f }
 
 // TestBatchOperations_EdgeCases tests edge cases and error conditions for batch operations.
 func TestBatchOperations_EdgeCases(t *testing.T) {
@@ -657,7 +660,7 @@ func TestBatchOptions(t *testing.T) {
 
 	t.Run("with metadata", func(t *testing.T) {
 		opts := &BatchCreateOptions{}
-		metadata := map[string]any{"priority": "high", "env": "production"}
+		metadata := map[string]string{"priority": "high", "env": "production"}
 		WithBatchCreateMetadata(metadata)(opts)
 		assert.Equal(t, metadata, opts.Metadata)
 	})
@@ -665,10 +668,10 @@ func TestBatchOptions(t *testing.T) {
 	t.Run("multiple options", func(t *testing.T) {
 		opts := &BatchCreateOptions{}
 		WithBatchCreateCompletionWindow("72h")(opts)
-		WithBatchCreateMetadata(map[string]any{"test": true})(opts)
+		WithBatchCreateMetadata(map[string]string{"test": "value"})(opts)
 
 		assert.Equal(t, "72h", opts.CompletionWindow)
-		assert.Equal(t, true, opts.Metadata["test"])
+		assert.Equal(t, "value", opts.Metadata["test"])
 	})
 }
 

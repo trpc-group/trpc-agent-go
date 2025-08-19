@@ -48,7 +48,7 @@ type BatchCreateOptions struct {
 	// CompletionWindow is the completion window to use for the batch.
 	CompletionWindow string
 	// Metadata is the metadata to use for the batch.
-	Metadata map[string]any
+	Metadata map[string]string
 }
 
 // BatchCreateOption applies a BatchCreateOptions override.
@@ -62,7 +62,7 @@ func WithBatchCreateCompletionWindow(window string) BatchCreateOption {
 }
 
 // WithBatchCreateMetadata overrides metadata for this call.
-func WithBatchCreateMetadata(md map[string]any) BatchCreateOption {
+func WithBatchCreateMetadata(md map[string]string) BatchCreateOption {
 	return func(o *BatchCreateOptions) {
 		o.Metadata = md
 	}
@@ -120,9 +120,7 @@ func (m *Model) CreateBatch(
 	if md != nil {
 		meta = make(shared.Metadata)
 		for k, v := range md {
-			if s, ok := v.(string); ok {
-				meta[k] = s
-			}
+			meta[k] = v
 		}
 	}
 
@@ -239,7 +237,8 @@ type BatchRequestOutput struct {
 	// Response contains the response data for the request.
 	Response BatchResponse `json:"response"`
 	// Error contains error information if the request failed.
-	Error json.RawMessage `json:"error"`
+	// It aligns with OpenAI error object structure.
+	Error *shared.ErrorObject `json:"error"`
 	// RawLine contains the original JSONL line for debugging purposes.
 	RawLine string `json:"-"`
 }
@@ -252,8 +251,9 @@ type BatchResponse struct {
 	StatusCode int `json:"status_code"`
 	// RequestID is the unique identifier for the request.
 	RequestID *string `json:"request_id"`
-	// Body contains the raw JSON response body from the endpoint.
-	Body json.RawMessage `json:"body"`
+	// Body contains the full chat completion response body from the endpoint.
+	// For batch support we currently target /v1/chat/completions endpoint.
+	Body openai.ChatCompletion `json:"body"`
 }
 
 // ParseBatchOutput parses output JSONL into OpenAI-aligned structures.

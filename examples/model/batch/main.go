@@ -13,7 +13,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -215,11 +214,13 @@ func runGet(ctx context.Context, llm *openai.Model, id string) error {
 		}
 		for _, e := range entries {
 			fmt.Printf("[%s] status=%d\n", e.CustomID, e.Response.StatusCode)
-			if content, ok := firstChatContent(e.Response.Body); ok {
-				fmt.Printf("  content: %s\n", content)
+			// Extract first content from ChatCompletion body.
+			if len(e.Response.Body.Choices) > 0 {
+				fmt.Printf("  content: %s\n", e.Response.Body.Choices[0].Message.Content)
 			}
-			if len(e.Error) > 0 {
-				fmt.Printf("  error: %s\n", string(e.Error))
+			// Print error details if present.
+			if e.Error != nil {
+				fmt.Printf("  error: type=%s message=%s\n", e.Error.Type, e.Error.Message)
 			}
 		}
 	}
@@ -356,23 +357,4 @@ func ts(sec int64) string {
 		return "-"
 	}
 	return time.Unix(sec, 0).Format(time.RFC3339)
-}
-
-// firstChatContent extracts the first message content from a chat completions
-// response body.
-func firstChatContent(body json.RawMessage) (string, bool) {
-	var tmp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(body, &tmp); err != nil {
-		return "", false
-	}
-	if len(tmp.Choices) == 0 {
-		return "", false
-	}
-	return tmp.Choices[0].Message.Content, tmp.Choices[0].Message.Content != ""
 }
