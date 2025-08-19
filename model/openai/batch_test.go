@@ -3,6 +3,8 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -667,5 +669,247 @@ func TestBatchOptions(t *testing.T) {
 
 		assert.Equal(t, "72h", opts.CompletionWindow)
 		assert.Equal(t, true, opts.Metadata["test"])
+	})
+}
+
+// TestBatchMethodSignatures tests the method signatures and basic functionality of all batch methods.
+func TestBatchMethodSignatures(t *testing.T) {
+	m := &Model{name: "test-model"}
+	// Test that the method exists and has the correct signature.
+	// Since we can't easily mock the client without API keys,
+	// we'll test the method signature and basic error handling.
+
+	t.Run("RetrieveBatch", func(t *testing.T) {
+		// This will fail due to no client, but we can verify the method exists.
+		_, err := m.RetrieveBatch(context.Background(), "test-id")
+		// We expect an error, but the method should exist and be callable.
+		assert.Error(t, err)
+	})
+
+	t.Run("CancelBatch", func(t *testing.T) {
+		// This will fail due to no client, but we can verify the method exists.
+		_, err := m.CancelBatch(context.Background(), "test-id")
+		// We expect an error, but the method should exist and be callable.
+		assert.Error(t, err)
+	})
+
+	t.Run("ListBatches", func(t *testing.T) {
+		// This will fail due to no client, but we can verify the method exists.
+		_, err := m.ListBatches(context.Background(), "", 10)
+		// We expect an error, but the method should exist and be callable.
+		assert.Error(t, err)
+	})
+
+	t.Run("DownloadFileContent", func(t *testing.T) {
+		// This will fail due to no client, but we can verify the method exists.
+		_, err := m.DownloadFileContent(context.Background(), "test-file-id")
+		// We expect an error, but the method should exist and be callable.
+		assert.Error(t, err)
+	})
+
+	t.Run("validation without client", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+
+		// Create test requests.
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "test-1",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+		}
+
+		// Test that validation passes but fails at file upload due to no client.
+		_, err := m.CreateBatch(context.Background(), requests)
+		// We expect an error, but it should be after validation passes.
+		assert.Error(t, err)
+		// The error should not be about validation.
+		assert.NotContains(t, err.Error(), "custom_id cannot be empty")
+		assert.NotContains(t, err.Error(), "duplicate custom_id")
+		assert.NotContains(t, err.Error(), "body.messages must be non-empty")
+	})
+}
+
+// TestBatchRequestValidation_EdgeCases tests additional edge cases for batch request validation.
+func TestBatchRequestValidation_EdgeCases(t *testing.T) {
+	t.Run("nil request in slice", func(t *testing.T) {
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "valid-1",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+			nil, // This should cause an error.
+			{
+				CustomID: "valid-2",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "World"},
+						},
+					},
+				},
+			},
+		}
+
+		m := &Model{name: "test-model"}
+		err := m.validateBatchRequests(requests)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "request 1 is nil")
+	})
+
+	t.Run("very long custom_id", func(t *testing.T) {
+		longCustomID := strings.Repeat("a", 1000)
+		requests := []*BatchRequestInput{
+			{
+				CustomID: longCustomID,
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+		}
+
+		m := &Model{name: "test-model"}
+		err := m.validateBatchRequests(requests)
+		// Very long custom_id should be valid (no length limit in OpenAI spec).
+		assert.NoError(t, err)
+	})
+
+	t.Run("special characters in custom_id", func(t *testing.T) {
+		specialCustomIDs := []string{
+			"test-123",
+			"test_123",
+			"test.123",
+			"test@123",
+			"test#123",
+			"test$123",
+			"test%123",
+			"test^123",
+			"test&123",
+			"test*123",
+		}
+
+		for _, customID := range specialCustomIDs {
+			t.Run("custom_id: "+customID, func(t *testing.T) {
+				requests := []*BatchRequestInput{
+					{
+						CustomID: customID,
+						Body: BatchRequest{
+							Request: model.Request{
+								Messages: []model.Message{
+									{Role: model.RoleUser, Content: "Hello"},
+								},
+							},
+						},
+					},
+				}
+
+				m := &Model{name: "test-model"}
+				err := m.validateBatchRequests(requests)
+				// Special characters should be valid in custom_id.
+				assert.NoError(t, err)
+			})
+		}
+	})
+}
+
+// TestGenerateBatchJSONL_EdgeCases tests edge cases for JSONL generation.
+func TestGenerateBatchJSONL_EdgeCases(t *testing.T) {
+	t.Run("empty requests slice", func(t *testing.T) {
+		m := &Model{name: "test-model"}
+		// Empty slice should not cause an error in generateBatchJSONL.
+		// The error would occur in CreateBatch during validation.
+		result, err := m.generateBatchJSONL([]*BatchRequestInput{})
+		require.NoError(t, err)
+		assert.Nil(t, result)
+	})
+
+	t.Run("requests with all fields empty", func(t *testing.T) {
+		requests := []*BatchRequestInput{
+			{
+				CustomID: "test-1",
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{Role: model.RoleUser, Content: "Hello"},
+						},
+					},
+				},
+			},
+		}
+
+		m := &Model{name: "test-model"}
+		jsonlData, err := m.generateBatchJSONL(requests)
+		require.NoError(t, err)
+
+		// Verify normalization.
+		lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+		assert.Len(t, lines, 1)
+
+		var decoded BatchRequestInput
+		err = json.Unmarshal([]byte(lines[0]), &decoded)
+		require.NoError(t, err)
+
+		assert.Equal(t, "test-1", decoded.CustomID)
+		assert.Equal(t, "POST", decoded.Method)              // Should be normalized to POST.
+		assert.Equal(t, "/v1/chat/completions", decoded.URL) // Should be normalized.
+		assert.Equal(t, "test-model", decoded.Body.Model)    // Should be filled with model name.
+	})
+
+	t.Run("requests with special characters in messages", func(t *testing.T) {
+		specialMessages := []string{
+			"Hello\nWorld",
+			"Hello\tWorld",
+			"Hello\r\nWorld",
+			"Hello \"World\"",
+			"Hello \\ World",
+			"Hello \u0000 World", // Null byte.
+			"Hello \u2028 World", // Line separator.
+			"Hello \u2029 World", // Paragraph separator.
+		}
+
+		for i, message := range specialMessages {
+			t.Run("message: "+message, func(t *testing.T) {
+				requests := []*BatchRequestInput{
+					{
+						CustomID: fmt.Sprintf("test-%d", i),
+						Body: BatchRequest{
+							Request: model.Request{
+								Messages: []model.Message{
+									{Role: model.RoleUser, Content: message},
+								},
+							},
+						},
+					},
+				}
+
+				m := &Model{name: "test-model"}
+				jsonlData, err := m.generateBatchJSONL(requests)
+				require.NoError(t, err)
+
+				// Verify the JSONL can be parsed back.
+				var decoded BatchRequestInput
+				lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+				err = json.Unmarshal([]byte(lines[0]), &decoded)
+				require.NoError(t, err)
+
+				assert.Equal(t, fmt.Sprintf("test-%d", i), decoded.CustomID)
+				assert.Equal(t, message, decoded.Body.Messages[0].Content)
+			})
+		}
 	})
 }
