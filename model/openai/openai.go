@@ -40,6 +40,8 @@ const (
 	defaultChannelBufferSize = 256
 	// defaultBatchCompletionWindow is the default batch completion window.
 	defaultBatchCompletionWindow = "24h"
+	// defaultBatchEndpoint is the default batch endpoint.
+	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -186,9 +188,10 @@ type Model struct {
 	extraFields           map[string]any
 	variant               Variant
 	variantConfig         variantConfig
-	batchCompletionWindow string
+	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
+	batchEndpoint         openai.BatchNewParamsEndpoint
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -234,11 +237,14 @@ type options struct {
 	// Variant for model-specific behavior.
 	Variant Variant
 	// Batch completion window for batch processing.
-	BatchCompletionWindow string
+	BatchCompletionWindow openai.BatchNewParamsCompletionWindow
 	// Batch metadata for batch processing.
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// BatchEndpoint overrides the endpoint used for batch creation and as the
+	// default URL for JSONL input generation.
+	BatchEndpoint openai.BatchNewParamsEndpoint
 }
 
 // Option is a function that configures an OpenAI model.
@@ -348,7 +354,7 @@ func WithVariant(variant Variant) Option {
 }
 
 // WithBatchCompletionWindow sets the batch completion window.
-func WithBatchCompletionWindow(window string) Option {
+func WithBatchCompletionWindow(window openai.BatchNewParamsCompletionWindow) Option {
 	return func(opts *options) {
 		opts.BatchCompletionWindow = window
 	}
@@ -366,6 +372,14 @@ func WithBatchMetadata(metadata map[string]string) Option {
 func WithBatchBaseURL(url string) Option {
 	return func(opts *options) {
 		opts.BatchBaseURL = url
+	}
+}
+
+// WithBatchEndpoint sets the endpoint used for batch creation and as the
+// default URL when generating JSONL input lines.
+func WithBatchEndpoint(endpoint openai.BatchNewParamsEndpoint) Option {
+	return func(opts *options) {
+		opts.BatchEndpoint = endpoint
 	}
 }
 
@@ -404,6 +418,12 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow = defaultBatchCompletionWindow
 	}
 
+	// Set default batch endpoint if not specified.
+	batchEndpoint := o.BatchEndpoint
+	if batchEndpoint == "" {
+		batchEndpoint = defaultBatchEndpoint
+	}
+
 	return &Model{
 		client:                client,
 		name:                  name,
@@ -419,6 +439,7 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
 		batchBaseURL:          o.BatchBaseURL,
+		batchEndpoint:         batchEndpoint,
 	}
 }
 

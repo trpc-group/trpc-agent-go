@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	openai "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/pagination"
 	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/shared"
@@ -48,7 +48,7 @@ type BatchRequest struct {
 // BatchCreateOptions configures CreateBatch behavior.
 type BatchCreateOptions struct {
 	// CompletionWindow is the completion window to use for the batch.
-	CompletionWindow string
+	CompletionWindow openai.BatchNewParamsCompletionWindow
 	// Metadata is the metadata to use for the batch.
 	Metadata map[string]string
 }
@@ -57,7 +57,7 @@ type BatchCreateOptions struct {
 type BatchCreateOption func(*BatchCreateOptions)
 
 // WithBatchCreateCompletionWindow overrides completion window for this call.
-func WithBatchCreateCompletionWindow(window string) BatchCreateOption {
+func WithBatchCreateCompletionWindow(window openai.BatchNewParamsCompletionWindow) BatchCreateOption {
 	return func(o *BatchCreateOptions) {
 		o.CompletionWindow = window
 	}
@@ -85,6 +85,11 @@ func (m *Model) CreateBatch(
 		return nil, fmt.Errorf("invalid batch requests: %w", err)
 	}
 
+	opt := &BatchCreateOptions{}
+	for _, o := range opts {
+		o(opt)
+	}
+
 	jsonlData, err := m.generateBatchJSONL(requests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate JSONL: %w", err)
@@ -110,19 +115,15 @@ func (m *Model) CreateBatch(
 	}
 
 	// Resolve completion window.
-	cw := m.batchCompletionWindow
-	call := &BatchCreateOptions{}
-	for _, o := range opts {
-		o(call)
-	}
-	if call.CompletionWindow != "" {
-		cw = call.CompletionWindow
+	completionWindow := m.batchCompletionWindow
+	if opt.CompletionWindow != "" {
+		completionWindow = opt.CompletionWindow
 	}
 
 	// Resolve metadata and convert to shared.Metadata.
 	md := m.batchMetadata
-	if call.Metadata != nil {
-		md = call.Metadata
+	if opt.Metadata != nil {
+		md = opt.Metadata
 	}
 	var meta shared.Metadata
 	if md != nil {
@@ -130,14 +131,20 @@ func (m *Model) CreateBatch(
 		maps.Copy(meta, md)
 	}
 
+	// Resolve endpoint from model (fallback when constructed without New()).
+	endpoint := m.batchEndpoint
+	if endpoint == "" {
+		endpoint = defaultBatchEndpoint
+	}
+
 	params := openai.BatchNewParams{
-		CompletionWindow: openai.BatchNewParamsCompletionWindow(cw),
-		Endpoint:         openai.BatchNewParamsEndpointV1ChatCompletions,
+		CompletionWindow: completionWindow,
+		Endpoint:         endpoint,
 		InputFileID:      fileID,
 		Metadata:         meta,
 	}
 	if m.batchBaseURL != "" {
-		return m.client.Batches.New(ctx, params, option.WithBaseURL(m.batchBaseURL))
+		return m.client.Batches.New(ctx, params, openaiopt.WithBaseURL(m.batchBaseURL))
 	}
 	return m.client.Batches.New(ctx, params)
 }
@@ -157,8 +164,7 @@ func (m *Model) validateBatchRequests(requests []*BatchRequestInput) error {
 		}
 		seen[r.CustomID] = struct{}{}
 
-		// Method and URL will be validated by the OpenAI API,
-		// so we don't need to validate them here.
+		// Method and URL will be validated later,so we don't need to validate them here.
 
 		// Validate messages are non-empty.
 		if len(r.Body.Messages) == 0 {
@@ -179,7 +185,11 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 			r.Method = http.MethodPost
 		}
 		if r.URL == "" {
-			r.URL = string(openai.BatchNewParamsEndpointV1ChatCompletions)
+			endpoint := m.batchEndpoint
+			if endpoint == "" {
+				endpoint = defaultBatchEndpoint
+			}
+			r.URL = string(endpoint)
 		}
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
@@ -195,7 +205,7 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 // For more details, see https://platform.openai.com/docs/api-reference/batch/retrieve.
 func (m *Model) RetrieveBatch(ctx context.Context, batchID string) (*openai.Batch, error) {
 	if m.batchBaseURL != "" {
-		return m.client.Batches.Get(ctx, batchID, option.WithBaseURL(m.batchBaseURL))
+		return m.client.Batches.Get(ctx, batchID, openaiopt.WithBaseURL(m.batchBaseURL))
 	}
 	return m.client.Batches.Get(ctx, batchID)
 }
@@ -204,7 +214,7 @@ func (m *Model) RetrieveBatch(ctx context.Context, batchID string) (*openai.Batc
 // For more details, see https://platform.openai.com/docs/api-reference/batch/cancel.
 func (m *Model) CancelBatch(ctx context.Context, batchID string) (*openai.Batch, error) {
 	if m.batchBaseURL != "" {
-		return m.client.Batches.Cancel(ctx, batchID, option.WithBaseURL(m.batchBaseURL))
+		return m.client.Batches.Cancel(ctx, batchID, openaiopt.WithBaseURL(m.batchBaseURL))
 	}
 	return m.client.Batches.Cancel(ctx, batchID)
 }
@@ -226,7 +236,7 @@ func (m *Model) ListBatches(
 	}
 
 	if m.batchBaseURL != "" {
-		return m.client.Batches.List(ctx, params, option.WithBaseURL(m.batchBaseURL))
+		return m.client.Batches.List(ctx, params, openaiopt.WithBaseURL(m.batchBaseURL))
 	}
 	return m.client.Batches.List(ctx, params)
 }
@@ -236,7 +246,7 @@ func (m *Model) DownloadFileContent(ctx context.Context, fileID string) (string,
 	var resp *http.Response
 	var err error
 	if m.batchBaseURL != "" {
-		resp, err = m.client.Files.Content(ctx, fileID, option.WithBaseURL(m.batchBaseURL))
+		resp, err = m.client.Files.Content(ctx, fileID, openaiopt.WithBaseURL(m.batchBaseURL))
 	} else {
 		resp, err = m.client.Files.Content(ctx, fileID)
 	}

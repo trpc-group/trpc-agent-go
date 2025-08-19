@@ -128,14 +128,14 @@ func TestBatchRequest_JSON(t *testing.T) {
 
 func TestBatchCreateOptions(t *testing.T) {
 	opts := &BatchCreateOptions{
-		CompletionWindow: "24h",
+		CompletionWindow: openaisdk.BatchNewParamsCompletionWindow("24h"),
 		Metadata: map[string]string{
 			"description": "test batch",
 			"priority":    "1",
 		},
 	}
 
-	assert.Equal(t, "24h", opts.CompletionWindow)
+	assert.Equal(t, openaisdk.BatchNewParamsCompletionWindow("24h"), opts.CompletionWindow)
 	assert.Equal(t, "test batch", opts.Metadata["description"])
 	assert.Equal(t, "1", opts.Metadata["priority"])
 }
@@ -144,8 +144,8 @@ func TestBatchCreateOption_Functions(t *testing.T) {
 	opts := &BatchCreateOptions{}
 
 	// Test WithBatchCreateCompletionWindow
-	WithBatchCreateCompletionWindow("48h")(opts)
-	assert.Equal(t, "48h", opts.CompletionWindow)
+	WithBatchCreateCompletionWindow(openaisdk.BatchNewParamsCompletionWindow("48h"))(opts)
+	assert.Equal(t, openaisdk.BatchNewParamsCompletionWindow("48h"), opts.CompletionWindow)
 
 	// Test WithBatchCreateMetadata
 	metadata := map[string]string{"test": "value"}
@@ -651,14 +651,14 @@ func TestBatchOperations_EdgeCases(t *testing.T) {
 func TestBatchOptions(t *testing.T) {
 	t.Run("default options", func(t *testing.T) {
 		opts := &BatchCreateOptions{}
-		assert.Equal(t, "", opts.CompletionWindow)
+		assert.Equal(t, openaisdk.BatchNewParamsCompletionWindow(""), opts.CompletionWindow)
 		assert.Nil(t, opts.Metadata)
 	})
 
 	t.Run("with completion window", func(t *testing.T) {
 		opts := &BatchCreateOptions{}
-		WithBatchCreateCompletionWindow("48h")(opts)
-		assert.Equal(t, "48h", opts.CompletionWindow)
+		WithBatchCreateCompletionWindow(openaisdk.BatchNewParamsCompletionWindow("48h"))(opts)
+		assert.Equal(t, openaisdk.BatchNewParamsCompletionWindow("48h"), opts.CompletionWindow)
 	})
 
 	t.Run("with metadata", func(t *testing.T) {
@@ -670,10 +670,10 @@ func TestBatchOptions(t *testing.T) {
 
 	t.Run("multiple options", func(t *testing.T) {
 		opts := &BatchCreateOptions{}
-		WithBatchCreateCompletionWindow("72h")(opts)
+		WithBatchCreateCompletionWindow(openaisdk.BatchNewParamsCompletionWindow("72h"))(opts)
 		WithBatchCreateMetadata(map[string]string{"test": "value"})(opts)
 
-		assert.Equal(t, "72h", opts.CompletionWindow)
+		assert.Equal(t, openaisdk.BatchNewParamsCompletionWindow("72h"), opts.CompletionWindow)
 		assert.Equal(t, "value", opts.Metadata["test"])
 	})
 }
