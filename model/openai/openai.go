@@ -188,6 +188,7 @@ type Model struct {
 	variantConfig         variantConfig
 	batchCompletionWindow string
 	batchMetadata         map[string]string
+	batchBaseURL          string
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -236,6 +237,8 @@ type options struct {
 	BatchCompletionWindow string
 	// Batch metadata for batch processing.
 	BatchMetadata map[string]string
+	// BatchBaseURL overrides the base URL for batch requests (batches/files).
+	BatchBaseURL string
 }
 
 // Option is a function that configures an OpenAI model.
@@ -358,6 +361,14 @@ func WithBatchMetadata(metadata map[string]string) Option {
 	}
 }
 
+// WithBatchBaseURL sets a base URL override for batch requests (batches/files).
+// When set, batch operations will use this base URL via per-request override.
+func WithBatchBaseURL(url string) Option {
+	return func(opts *options) {
+		opts.BatchBaseURL = url
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -407,6 +418,7 @@ func New(name string, opts ...Option) *Model {
 		variantConfig:         variantConfigs[o.Variant],
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
+		batchBaseURL:          o.BatchBaseURL,
 	}
 }
 
@@ -1163,6 +1175,8 @@ type FileOptions struct {
 	Method string
 	// Body for HTTP request (default: auto-generated based on operation).
 	Body []byte
+	// BaseURL override for this file request.
+	BaseURL string
 }
 
 // FileOption is the option for file operations.
@@ -1193,6 +1207,13 @@ func WithMethod(method string) FileOption {
 func WithBody(body []byte) FileOption {
 	return func(options *FileOptions) {
 		options.Body = body
+	}
+}
+
+// WithFileBaseURL sets a per-request base URL override for file operations.
+func WithFileBaseURL(url string) FileOption {
+	return func(options *FileOptions) {
+		options.BaseURL = url
 	}
 }
 
@@ -1248,6 +1269,13 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 	}
 
 	// Upload the file.
+	if fileOpts.BaseURL != "" {
+		fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt, openaiopt.WithBaseURL(fileOpts.BaseURL))
+		if err != nil {
+			return "", fmt.Errorf("failed to upload file: %w", err)
+		}
+		return fileObj.ID, nil
+	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
@@ -1322,6 +1350,13 @@ func (m *Model) UploadFileData(
 		})
 
 	// Upload the file.
+	if fileOpts.BaseURL != "" {
+		fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt, openaiopt.WithBaseURL(fileOpts.BaseURL))
+		if err != nil {
+			return "", fmt.Errorf("failed to upload file data: %w", err)
+		}
+		return fileObj.ID, nil
+	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file data: %w", err)

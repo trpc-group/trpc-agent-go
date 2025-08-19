@@ -1796,6 +1796,9 @@ func TestFileOptions(t *testing.T) {
 		if opts.Body != nil {
 			t.Errorf("expected Body to be nil, got %v", opts.Body)
 		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
 	})
 
 	t.Run("with_path_option", func(t *testing.T) {
@@ -1814,6 +1817,9 @@ func TestFileOptions(t *testing.T) {
 		if opts.Body != nil {
 			t.Errorf("expected Body to be nil, got %v", opts.Body)
 		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
 	})
 
 	t.Run("with_purpose_option", func(t *testing.T) {
@@ -1831,6 +1837,9 @@ func TestFileOptions(t *testing.T) {
 		}
 		if opts.Body != nil {
 			t.Errorf("expected Body to be nil, got %v", opts.Body)
+		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
 		}
 	})
 
@@ -1869,6 +1878,9 @@ func TestFileOptions(t *testing.T) {
 		if string(opts.Body) != string(testBody) {
 			t.Errorf("expected Body %q, got %q", string(testBody), string(opts.Body))
 		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
 	})
 
 	t.Run("multiple_options", func(t *testing.T) {
@@ -1899,8 +1911,9 @@ func TestFileOptions(t *testing.T) {
 		purposeOpt := WithPurpose(openaigo.FilePurposeBatch)
 		methodOpt := WithMethod("DELETE")
 		bodyOpt := WithBody([]byte("test"))
+		baseURLOpt := WithFileBaseURL("http://example.com/v1")
 
-		if pathOpt == nil || purposeOpt == nil || methodOpt == nil || bodyOpt == nil {
+		if pathOpt == nil || purposeOpt == nil || methodOpt == nil || bodyOpt == nil || baseURLOpt == nil {
 			t.Fatal("expected option functions to be non-nil")
 		}
 
@@ -1909,6 +1922,7 @@ func TestFileOptions(t *testing.T) {
 		purposeOpt(opts)
 		methodOpt(opts)
 		bodyOpt(opts)
+		baseURLOpt(opts)
 
 		if opts.Path != "/test" {
 			t.Errorf("expected Path '/test', got %q", opts.Path)
@@ -1921,6 +1935,9 @@ func TestFileOptions(t *testing.T) {
 		}
 		if string(opts.Body) != "test" {
 			t.Errorf("expected Body 'test', got %q", string(opts.Body))
+		}
+		if opts.BaseURL != "http://example.com/v1" {
+			t.Errorf("expected BaseURL 'http://example.com/v1', got %q", opts.BaseURL)
 		}
 	})
 }
@@ -1963,8 +1980,9 @@ func TestUploadFileData_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
-	id, err := m.UploadFileData(context.Background(), "batch_input.jsonl", []byte("hello jsonl"), WithPurpose(openaigo.FilePurposeBatch), WithPath(""))
+	// Model base URL is intentionally wrong; we rely on WithFileBaseURL override.
+	m := New("test-model", WithAPIKey("k"), WithBaseURL("http://wrong-base"))
+	id, err := m.UploadFileData(context.Background(), "batch_input.jsonl", []byte("hello jsonl"), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
 	if err != nil {
 		t.Fatalf("UploadFileData failed: %v", err)
 	}
@@ -2012,7 +2030,7 @@ func TestUploadFile_Success(t *testing.T) {
 	defer server.Close()
 
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
-	id, err := m.UploadFile(context.Background(), tmp.Name(), WithPurpose(openaigo.FilePurposeBatch), WithPath(""))
+	id, err := m.UploadFile(context.Background(), tmp.Name(), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
 	if err != nil {
 		t.Fatalf("UploadFile failed: %v", err)
 	}
