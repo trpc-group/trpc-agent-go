@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -915,4 +918,72 @@ func TestGenerateBatchJSONL_EdgeCases(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestBatchBaseURL_Overrides(t *testing.T) {
+	// Mock server implementing minimal batches endpoints.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/files"):
+			// File upload: accept multipart and return file id.
+			if err := r.ParseMultipartForm(10 << 20); err != nil {
+				http.Error(w, "parse", http.StatusBadRequest)
+				return
+			}
+			io.WriteString(w, `{"id":"file_mock","object":"file","bytes":1,"created_at":1,"filename":"batch_input.jsonl","purpose":"batch"}`)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/files/") && strings.HasSuffix(r.URL.Path, "/content"):
+			w.Header().Set("Content-Type", "text/plain")
+			io.WriteString(w, "line1\nline2")
+		case r.Method == http.MethodPost && r.URL.Path == "/batches":
+			io.WriteString(w, `{"id":"batch_x","object":"batch","endpoint":"/v1/chat/completions","input_file_id":"file_mock","completion_window":"24h","status":"validating","created_at":1,"request_counts":{"total":0,"completed":0,"failed":0}}`)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/batches/") && !strings.HasSuffix(r.URL.Path, "/cancel"):
+			io.WriteString(w, `{"id":"batch_x","object":"batch","endpoint":"/v1/chat/completions","input_file_id":"file_mock","completion_window":"24h","status":"completed","created_at":1,"request_counts":{"total":0,"completed":0,"failed":0}}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
+			io.WriteString(w, `{"id":"batch_x","object":"batch","endpoint":"/v1/chat/completions","input_file_id":"file_mock","completion_window":"24h","status":"cancelled","created_at":1,"request_counts":{"total":0,"completed":0,"failed":0}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/batches":
+			io.WriteString(w, `{"data":[],"first_id":"","last_id":"","has_more":false}`)
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	// Model with wrong global base; batch ops should work via WithBatchBaseURL override.
+	m := New("gpt-4o-mini", WithAPIKey("k"), WithBaseURL("http://wrong-base"), WithBatchBaseURL(server.URL))
+
+	// Prepare minimal valid request set; UploadFileData uses WithPath("") inside CreateBatch.
+	reqs := []*BatchRequestInput{
+		{
+			CustomID: "1",
+			Method:   "POST",
+			URL:      string(openaisdk.BatchNewParamsEndpointV1ChatCompletions),
+			Body:     BatchRequest{Request: model.Request{Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}}}},
+		},
+	}
+
+	// Create.
+	batch, err := m.CreateBatch(context.Background(), reqs)
+	require.NoError(t, err)
+	assert.Equal(t, "batch_x", batch.ID)
+
+	// Retrieve.
+	got, err := m.RetrieveBatch(context.Background(), "batch_x")
+	require.NoError(t, err)
+	assert.Equal(t, "batch_x", got.ID)
+
+	// Cancel.
+	got, err = m.CancelBatch(context.Background(), "batch_x")
+	require.NoError(t, err)
+	assert.Equal(t, "batch_x", got.ID)
+
+	// List.
+	page, err := m.ListBatches(context.Background(), "", 10)
+	require.NoError(t, err)
+	assert.False(t, page.HasMore)
+
+	// Download file content should also honor batch base URL override.
+	content, err := m.DownloadFileContent(context.Background(), "file_mock")
+	require.NoError(t, err)
+	assert.NotEmpty(t, content)
 }

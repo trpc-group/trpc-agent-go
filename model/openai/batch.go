@@ -233,7 +233,13 @@ func (m *Model) ListBatches(
 
 // DownloadFileContent downloads the text content of a file.
 func (m *Model) DownloadFileContent(ctx context.Context, fileID string) (string, error) {
-	resp, err := m.client.Files.Content(ctx, fileID)
+	var resp *http.Response
+	var err error
+	if m.batchBaseURL != "" {
+		resp, err = m.client.Files.Content(ctx, fileID, option.WithBaseURL(m.batchBaseURL))
+	} else {
+		resp, err = m.client.Files.Content(ctx, fileID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch file content: %w", err)
 	}
