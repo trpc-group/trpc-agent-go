@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -115,12 +114,13 @@ func (c *fileChat) setup(ctx context.Context) error {
 			""+
 			"FILE OPERATION RULES: "+
 			"- READ/LIST/SEARCH operations: Can run silently without user confirmation "+
-			"- SAVE operations: Must ask for user confirmation before overwriting or creating files "+
+			"- SAVE/REPLACE operations: Must ask for user confirmation before overwriting or creating files "+
 			"- Always be careful with file operations and explain what you're doing "+
 			""+
 			"AVAILABLE TOOLS: "+
 			"- save_file: Save content to files (requires confirmation) "+
-			"- replace_content: Replace a specific string in a file to a new string (requires confirmation) "+
+			"- replace_content: Replace a specific string in a file to a new string (requires confirmation), "+
+			"prefer to use this tool to edit content instead of save_file when modifying small content"+
 			"- read_file: Read file contents "+
 			"- list_files: List files and directories "+
 			"- search_files: Search for files using patterns "+
@@ -202,7 +202,7 @@ func (c *fileChat) processMessage(ctx context.Context, userMessage string) error
 	message := model.NewUserMessage(userMessage)
 
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.RunOptions{})
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
