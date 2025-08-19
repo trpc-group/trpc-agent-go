@@ -412,10 +412,13 @@ func New(name string, opts ...Option) *LLMAgent {
 		flowOpts,
 	)
 
-	// Validate output_schema configuration before registering tools
+	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
-		if len(options.Tools) > 0 || len(options.ToolSets) > 0 || options.Knowledge != nil {
-			panic("Invalid LLMAgent configuration: if output_schema is set, tools, toolSets, and knowledge must be empty")
+		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		if options.Knowledge != nil || options.Memory != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge and memory must be empty")
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
