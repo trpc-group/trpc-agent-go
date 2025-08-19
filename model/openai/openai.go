@@ -191,7 +191,6 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
-	batchEndpoint         openai.BatchNewParamsEndpoint
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -242,9 +241,6 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
-	// BatchEndpoint overrides the endpoint used for batch creation and as the
-	// default URL for JSONL input generation.
-	BatchEndpoint openai.BatchNewParamsEndpoint
 }
 
 // Option is a function that configures an OpenAI model.
@@ -375,14 +371,6 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithBatchEndpoint sets the endpoint used for batch creation and as the
-// default URL when generating JSONL input lines.
-func WithBatchEndpoint(endpoint openai.BatchNewParamsEndpoint) Option {
-	return func(opts *options) {
-		opts.BatchEndpoint = endpoint
-	}
-}
-
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -418,12 +406,6 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow = defaultBatchCompletionWindow
 	}
 
-	// Set default batch endpoint if not specified.
-	batchEndpoint := o.BatchEndpoint
-	if batchEndpoint == "" {
-		batchEndpoint = defaultBatchEndpoint
-	}
-
 	return &Model{
 		client:                client,
 		name:                  name,
@@ -439,7 +421,6 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
 		batchBaseURL:          o.BatchBaseURL,
-		batchEndpoint:         batchEndpoint,
 	}
 }
 

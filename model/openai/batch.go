@@ -132,10 +132,7 @@ func (m *Model) CreateBatch(
 	}
 
 	// Resolve endpoint from model (fallback when constructed without New()).
-	endpoint := m.batchEndpoint
-	if endpoint == "" {
-		endpoint = defaultBatchEndpoint
-	}
+	endpoint := defaultBatchEndpoint
 
 	params := openai.BatchNewParams{
 		CompletionWindow: completionWindow,
@@ -185,11 +182,7 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 			r.Method = http.MethodPost
 		}
 		if r.URL == "" {
-			endpoint := m.batchEndpoint
-			if endpoint == "" {
-				endpoint = defaultBatchEndpoint
-			}
-			r.URL = string(endpoint)
+			r.URL = string(defaultBatchEndpoint)
 		}
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
