@@ -10,17 +10,22 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -41,6 +46,12 @@ var a2aURL = []string{
 
 func main() {
 	flag.Parse()
+
+	config := zap.NewProductionConfig()
+	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+	logger, _ := config.Build()
+	a2alog.Default = logger.Sugar()
+	agentlog.Default = logger.Sugar()
 
 	go func() {
 		runRemoteAgent("agent1", "i am a remote agent, i can tell a joke", "0.0.0.0:8888")
@@ -80,6 +91,7 @@ func startChat() {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
+		Stream:      true,
 	}
 	desc := "You are a helpful AI assistant that coordinates with other agents to complete user requests. Your job is to understand the user's request and delegate it to the appropriate sub-agent."
 	llmAgent := llmagent.New(
@@ -102,20 +114,29 @@ func startChat() {
 	for {
 		if err := processMessage(r, userID, &sessionID); err != nil {
 			if err.Error() == "exit" {
-				fmt.Println("Goodbye!")
+				fmt.Println("👋 Goodbye!")
 				return
 			}
-			log.Errorf("Error processing message: %v", err)
+			fmt.Printf("❌ Error: %v\n", err)
 		}
+
+		fmt.Println() // Add spacing between turns
 	}
 }
 
 func processMessage(r runner.Runner, userID string, sessionID *string) error {
+	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("You: ")
-	var input string
-	fmt.Scanln(&input)
+	if !scanner.Scan() {
+		return fmt.Errorf("exit")
+	}
 
-	switch input {
+	userInput := strings.TrimSpace(scanner.Text())
+	if userInput == "" {
+		return nil
+	}
+
+	switch strings.ToLower(userInput) {
 	case "exit":
 		return fmt.Errorf("exit")
 	case "new":
@@ -123,7 +144,7 @@ func processMessage(r runner.Runner, userID string, sessionID *string) error {
 		return nil
 	}
 
-	events, err := r.Run(context.Background(), userID, *sessionID, model.NewUserMessage(input))
+	events, err := r.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -136,7 +157,9 @@ func processMessage(r runner.Runner, userID string, sessionID *string) error {
 
 func startNewSession() string {
 	newSessionID := fmt.Sprintf("session_%d", time.Now().UnixNano())
-	fmt.Printf("\n✨ Starting new session: %s\n", newSessionID)
+	fmt.Printf("🆕 Started new session: %s\n", newSessionID)
+	fmt.Printf("   (Conversation history has been reset)\n")
+	fmt.Println()
 	return newSessionID
 }
 
@@ -255,6 +278,7 @@ func handleToolResponses(event *event.Event) bool {
 	if event.Response != nil && len(event.Response.Choices) > 0 {
 		hasToolResponse := false
 		for _, choice := range event.Response.Choices {
+			// Handle traditional tool responses (Role: tool)
 			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
 				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
 					choice.Message.ToolID,
@@ -278,16 +302,22 @@ func handleContent(
 ) {
 	if len(event.Choices) > 0 {
 		choice := event.Choices[0]
-		content := ""
-		if choice.Delta.Content != "" {
-			content = choice.Delta.Content
-		} else {
-			content = choice.Message.Content
-		}
+		content := extractContent(choice)
+
 		if content != "" {
 			displayContent(content, toolCallsDetected, assistantStarted, fullContent)
 		}
 	}
+}
+
+// extractContent extracts content based on streaming mode.
+func extractContent(choice model.Choice) string {
+	// For streaming mode, use delta content
+	if choice.Delta.Content != "" {
+		return choice.Delta.Content
+	}
+	// For non-streaming responses (like A2A agent responses), use message content
+	return choice.Message.Content
 }
 
 // displayContent prints content to console.
