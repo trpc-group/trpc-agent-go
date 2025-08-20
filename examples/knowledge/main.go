@@ -55,6 +55,7 @@ var (
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
 	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
+	loadData     = flag.Bool("load", true, "Load data into the vector store on startup")
 )
 
 // Default values for optional configurations.
@@ -295,7 +296,7 @@ func (c *knowledgeChat) createSources() []source.Source {
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 	// Create vector store.
-	vectorStore, err := c.setupVectorDB()
+	vs, err := c.setupVectorDB()
 	if err != nil {
 		return err
 	}
@@ -311,20 +312,30 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
-		knowledge.WithVectorStore(vectorStore),
+		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(sources),
 	)
-	// Load the knowledge base.
-	if err := c.kb.Load(
-		ctx,
-		knowledge.WithShowProgress(false),  // The default is true.
-		knowledge.WithProgressStepSize(10), // The default is 10.
-		knowledge.WithShowStats(false),     // The default is true.
-		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
-		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
-	); err != nil {
-		return fmt.Errorf("failed to load knowledge base: %w", err)
+	// Decide whether to load the knowledge base.
+	load := *loadData
+	if strings.ToLower(*vectorStore) == "inmemory" && !load {
+		// In-memory store is non-persistent, so force loading.
+		fmt.Println("ℹ️  In-memory store is non-persistent; forcing data load.")
+		load = true
+	}
+
+	// Optionally load the knowledge base.
+	if load {
+		if err := c.kb.Load(
+			ctx,
+			knowledge.WithShowProgress(false),  // The default is true.
+			knowledge.WithProgressStepSize(10), // The default is 10.
+			knowledge.WithShowStats(false),     // The default is true.
+			knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+			knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
+		); err != nil {
+			return fmt.Errorf("failed to load knowledge base: %w", err)
+		}
 	}
 	return nil
 }

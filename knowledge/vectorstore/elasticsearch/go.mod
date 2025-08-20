@@ -7,7 +7,7 @@ toolchain go1.24.4
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
 require (
-	github.com/elastic/go-elasticsearch/v8 v8.19.0
+	github.com/elastic/go-elasticsearch/v9 v9.1.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.2
 )
 
