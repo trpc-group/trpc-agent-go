@@ -399,7 +399,7 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 			fmt.Printf("❌ Error: %v\n", err)
 		}
 
-		fmt.Println() // Add spacing between turns
+		fmt.Println() // Add spacing between turns.
 	}
 
 	if err := scanner.Err(); err != nil {
