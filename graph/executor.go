@@ -43,6 +43,7 @@ type Executor struct {
 	channelBufferSize int
 	maxSteps          int
 	stepTimeout       time.Duration
+	checkpointSaver   CheckpointSaver
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -56,6 +57,8 @@ type ExecutorOptions struct {
 	MaxSteps int
 	// StepTimeout is the timeout for each step (default: 30s).
 	StepTimeout time.Duration
+	// CheckpointSaver is the checkpoint saver for persisting graph state.
+	CheckpointSaver CheckpointSaver
 }
 
 // WithChannelBufferSize sets the buffer size for event channels.
@@ -79,6 +82,13 @@ func WithStepTimeout(timeout time.Duration) ExecutorOption {
 	}
 }
 
+// WithCheckpointSaver sets the checkpoint saver for the executor.
+func WithCheckpointSaver(saver CheckpointSaver) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.CheckpointSaver = saver
+	}
+}
+
 // NewExecutor creates a new graph executor.
 func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
@@ -97,6 +107,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		channelBufferSize: options.ChannelBufferSize,
 		maxSteps:          options.MaxSteps,
 		stepTimeout:       options.StepTimeout,
+		checkpointSaver:   options.CheckpointSaver,
 	}, nil
 }
 
@@ -173,6 +184,31 @@ func (e *Executor) executeGraph(
 		InvocationID: invocation.InvocationID,
 	}
 
+	// Initialize checkpoint configuration if checkpoint saver is available.
+	var checkpointConfig map[string]any
+	if e.checkpointSaver != nil {
+		// Extract thread ID from invocation or generate one.
+		threadID := invocation.InvocationID
+		if threadID == "" {
+			threadID = fmt.Sprintf("thread_%d", time.Now().UnixNano())
+		}
+
+		checkpointConfig = CreateCheckpointConfig(threadID, "", "")
+
+		// Try to resume from existing checkpoint if available.
+		if resumedState, err := e.resumeFromCheckpoint(ctx, checkpointConfig); err == nil && resumedState != nil {
+			execState = resumedState
+			execCtx.State = resumedState
+			// Re-initialize channels with resumed state.
+			e.initializeChannels(resumedState)
+		} else {
+			// Create initial checkpoint.
+			if err := e.createCheckpoint(ctx, checkpointConfig, execState, CheckpointSourceInput, -1); err != nil {
+				log.Warnf("Failed to create initial checkpoint: %v", err)
+			}
+		}
+	}
+
 	// BSP execution loop.
 	for step := 0; step < e.maxSteps; step++ {
 		// Plan phase: determine which nodes to execute.
@@ -191,6 +227,13 @@ func (e *Executor) executeGraph(
 		// Update phase: process channel updates.
 		if err := e.updateChannels(ctx, execCtx, step); err != nil {
 			return fmt.Errorf("update failed at step %d: %w", step, err)
+		}
+
+		// Create checkpoint after each step if checkpoint saver is available.
+		if e.checkpointSaver != nil && checkpointConfig != nil {
+			if err := e.createCheckpoint(ctx, checkpointConfig, execCtx.State, CheckpointSourceLoop, step); err != nil {
+				log.Warnf("Failed to create checkpoint at step %d: %v", step, err)
+			}
 		}
 	}
 	// Emit completion event.
@@ -215,6 +258,66 @@ func (e *Executor) executeGraph(
 	default:
 	}
 	return nil
+}
+
+// createCheckpoint creates a checkpoint for the current state.
+func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, state State, source string, step int) error {
+	if e.checkpointSaver == nil {
+		return nil
+	}
+
+	// Convert state to channel values.
+	channelValues := make(map[string]any)
+	for k, v := range state {
+		channelValues[k] = v
+	}
+
+	// Create channel versions (simple incrementing integers for now).
+	channelVersions := make(map[string]any)
+	for k := range state {
+		channelVersions[k] = 1 // This should be managed by the graph execution.
+	}
+
+	// Create versions seen (simplified for now).
+	versionsSeen := make(map[string]map[string]any)
+
+	// Create checkpoint.
+	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
+
+	// Create metadata.
+	metadata := NewCheckpointMetadata(source, step)
+
+	// Store checkpoint.
+	_, err := e.checkpointSaver.Put(ctx, config, checkpoint, metadata, channelVersions)
+	if err != nil {
+		return fmt.Errorf("failed to store checkpoint: %w", err)
+	}
+
+	return nil
+}
+
+// resumeFromCheckpoint resumes execution from a specific checkpoint.
+func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]any) (State, error) {
+	if e.checkpointSaver == nil {
+		return nil, nil
+	}
+
+	tuple, err := e.checkpointSaver.GetTuple(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
+	}
+
+	if tuple == nil {
+		return nil, nil
+	}
+
+	// Convert channel values back to state.
+	state := make(State)
+	for k, v := range tuple.Checkpoint.ChannelValues {
+		state[k] = v
+	}
+
+	return state, nil
 }
 
 // initializeState initializes the execution state with schema defaults.
