@@ -36,7 +36,12 @@ import (
 const (
 	functionToolType string = "function"
 
+	// defaultChannelBufferSize is the default channel buffer size.
 	defaultChannelBufferSize = 256
+	// defaultBatchCompletionWindow is the default batch completion window.
+	defaultBatchCompletionWindow = "24h"
+	// defaultBatchEndpoint is the default batch endpoint.
+	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -172,17 +177,20 @@ type HTTPClientOptions struct {
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
-	client               openai.Client
-	name                 string
-	baseURL              string
-	apiKey               string
-	channelBufferSize    int
-	chatRequestCallback  ChatRequestCallbackFunc
-	chatResponseCallback ChatResponseCallbackFunc
-	chatChunkCallback    ChatChunkCallbackFunc
-	extraFields          map[string]interface{}
-	variant              Variant
-	variantConfig        variantConfig
+	client                openai.Client
+	name                  string
+	baseURL               string
+	apiKey                string
+	channelBufferSize     int
+	chatRequestCallback   ChatRequestCallbackFunc
+	chatResponseCallback  ChatResponseCallbackFunc
+	chatChunkCallback     ChatChunkCallbackFunc
+	extraFields           map[string]any
+	variant               Variant
+	variantConfig         variantConfig
+	batchCompletionWindow openai.BatchNewParamsCompletionWindow
+	batchMetadata         map[string]string
+	batchBaseURL          string
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -224,9 +232,15 @@ type options struct {
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
-	ExtraFields map[string]interface{}
+	ExtraFields map[string]any
 	// Variant for model-specific behavior.
 	Variant Variant
+	// Batch completion window for batch processing.
+	BatchCompletionWindow openai.BatchNewParamsCompletionWindow
+	// Batch metadata for batch processing.
+	BatchMetadata map[string]string
+	// BatchBaseURL overrides the base URL for batch requests (batches/files).
+	BatchBaseURL string
 }
 
 // Option is a function that configures an OpenAI model.
@@ -314,10 +328,10 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 //	})
 //
 // and "session_id" : "abc" will be added to the HTTP request json body.
-func WithExtraFields(extraFields map[string]interface{}) Option {
+func WithExtraFields(extraFields map[string]any) Option {
 	return func(opts *options) {
 		if opts.ExtraFields == nil {
-			opts.ExtraFields = make(map[string]interface{})
+			opts.ExtraFields = make(map[string]any)
 		}
 		for k, v := range extraFields {
 			opts.ExtraFields[k] = v
@@ -332,6 +346,28 @@ func WithExtraFields(extraFields map[string]interface{}) Option {
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
+	}
+}
+
+// WithBatchCompletionWindow sets the batch completion window.
+func WithBatchCompletionWindow(window openai.BatchNewParamsCompletionWindow) Option {
+	return func(opts *options) {
+		opts.BatchCompletionWindow = window
+	}
+}
+
+// WithBatchMetadata sets the batch metadata.
+func WithBatchMetadata(metadata map[string]string) Option {
+	return func(opts *options) {
+		opts.BatchMetadata = metadata
+	}
+}
+
+// WithBatchBaseURL sets a base URL override for batch requests (batches/files).
+// When set, batch operations will use this base URL via per-request override.
+func WithBatchBaseURL(url string) Option {
+	return func(opts *options) {
+		opts.BatchBaseURL = url
 	}
 }
 
@@ -363,18 +399,28 @@ func New(name string, opts ...Option) *Model {
 	if channelBufferSize <= 0 {
 		channelBufferSize = defaultChannelBufferSize
 	}
+
+	// Set default batch completion window if not specified.
+	batchCompletionWindow := o.BatchCompletionWindow
+	if batchCompletionWindow == "" {
+		batchCompletionWindow = defaultBatchCompletionWindow
+	}
+
 	return &Model{
-		client:               client,
-		name:                 name,
-		baseURL:              o.BaseURL,
-		apiKey:               o.APIKey,
-		channelBufferSize:    channelBufferSize,
-		chatRequestCallback:  o.ChatRequestCallback,
-		chatResponseCallback: o.ChatResponseCallback,
-		chatChunkCallback:    o.ChatChunkCallback,
-		extraFields:          o.ExtraFields,
-		variant:              o.Variant,
-		variantConfig:        variantConfigs[o.Variant],
+		client:                client,
+		name:                  name,
+		baseURL:               o.BaseURL,
+		apiKey:                o.APIKey,
+		channelBufferSize:     channelBufferSize,
+		chatRequestCallback:   o.ChatRequestCallback,
+		chatResponseCallback:  o.ChatResponseCallback,
+		chatChunkCallback:     o.ChatChunkCallback,
+		extraFields:           o.ExtraFields,
+		variant:               o.Variant,
+		variantConfig:         variantConfigs[o.Variant],
+		batchCompletionWindow: batchCompletionWindow,
+		batchMetadata:         o.BatchMetadata,
+		batchBaseURL:          o.BatchBaseURL,
 	}
 }
 
@@ -1131,6 +1177,8 @@ type FileOptions struct {
 	Method string
 	// Body for HTTP request (default: auto-generated based on operation).
 	Body []byte
+	// BaseURL override for this file request.
+	BaseURL string
 }
 
 // FileOption is the option for file operations.
@@ -1164,6 +1212,13 @@ func WithBody(body []byte) FileOption {
 	}
 }
 
+// WithFileBaseURL sets a per-request base URL override for file operations.
+func WithFileBaseURL(url string) FileOption {
+	return func(options *FileOptions) {
+		options.BaseURL = url
+	}
+}
+
 // UploadFile uploads a file to OpenAI and returns the file ID.
 // The file can then be referenced in messages using AddFileID().
 func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOption) (string, error) {
@@ -1186,7 +1241,9 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
@@ -1214,6 +1271,13 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 	}
 
 	// Upload the file.
+	if fileOpts.BaseURL != "" {
+		fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt, openaiopt.WithBaseURL(fileOpts.BaseURL))
+		if err != nil {
+			return "", fmt.Errorf("failed to upload file: %w", err)
+		}
+		return fileObj.ID, nil
+	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
@@ -1240,7 +1304,9 @@ func (m *Model) UploadFileData(
 
 	// Create file upload parameters with data reader.
 	fileParams := openai.FileNewParams{
-		File:    bytes.NewReader(data),
+		File: nil, // Set to nil to avoid duplicate multipart form construction by SDK.
+		// The middleware will handle all request body construction to ensure proper
+		// filename preservation and field ordering required by Venus platform.
 		Purpose: fileOpts.Purpose,
 	}
 
@@ -1248,7 +1314,9 @@ func (m *Model) UploadFileData(
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
 				r.Method = fileOpts.Method
@@ -1257,11 +1325,40 @@ func (m *Model) UploadFileData(
 			if fileOpts.Body != nil {
 				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
 				r.ContentLength = int64(len(fileOpts.Body))
+			} else {
+				// Build multipart form to ensure filename suffix is preserved.
+				buf := &bytes.Buffer{}
+				w := multipart.NewWriter(buf)
+				// purpose.
+				if err := w.WriteField("purpose", string(fileOpts.Purpose)); err != nil {
+					return nil, fmt.Errorf("failed to write purpose field: %w", err)
+				}
+				// file.
+				part, err := w.CreateFormFile("file", filename)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create form file: %w", err)
+				}
+				if _, err := part.Write(data); err != nil {
+					return nil, fmt.Errorf("failed to write file data: %w", err)
+				}
+				if err := w.Close(); err != nil {
+					return nil, fmt.Errorf("failed to close multipart writer: %w", err)
+				}
+				r.Body = io.NopCloser(buf)
+				r.Header.Set("Content-Type", w.FormDataContentType())
+				r.ContentLength = int64(buf.Len())
 			}
 			return next(r)
 		})
 
 	// Upload the file.
+	if fileOpts.BaseURL != "" {
+		fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt, openaiopt.WithBaseURL(fileOpts.BaseURL))
+		if err != nil {
+			return "", fmt.Errorf("failed to upload file data: %w", err)
+		}
+		return fileObj.ID, nil
+	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file data: %w", err)
@@ -1320,7 +1417,9 @@ func (m *Model) GetFile(
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
 			// Set the correct path.
-			r.URL.Path = fileOpts.Path
+			if fileOpts.Path != "" {
+				r.URL.Path = fileOpts.Path
+			}
 			// Set custom HTTP method if specified.
 			if fileOpts.Method != "" {
 				r.Method = fileOpts.Method
