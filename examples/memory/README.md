@@ -256,7 +256,17 @@ if err != nil {
 You can override default tool implementations with custom ones:
 
 ```go
-// Custom clear tool with enhanced logging
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/memory"
+    toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+// Custom clear tool with enhanced logging.
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
     clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
         fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
