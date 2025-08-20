@@ -18,7 +18,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v9"
 )
 
 // DefaultConfig returns default Elasticsearch configuration.
