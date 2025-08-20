@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -305,4 +306,85 @@ func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
 	if seen != "model-B" {
 		t.Fatalf("expected model-B after SetModel, got %s", seen)
 	}
+}
+
+// dummyTool is a minimal tool implementation for testing.
+type dummyTool struct{}
+
+func (d dummyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "dummy"}
+}
+
+// dummyCallableTool implements a callable tool for toolset testing.
+type dummyCallableTool struct{ dummyTool }
+
+func (d dummyCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return nil, nil
+}
+
+// dummyToolSet returns one callable tool.
+type dummyToolSet struct{}
+
+func (s dummyToolSet) Tools(ctx context.Context) []tool.CallableTool {
+	return []tool.CallableTool{dummyCallableTool{}}
+}
+
+func (s dummyToolSet) Close() error { return nil }
+
+func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
+	// Output schema to trigger validation.
+	schema := map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+
+	t.Run("with tools", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithTools([]tool.Tool{dummyTool{}}),
+				)
+			},
+		)
+	})
+
+	t.Run("with toolsets", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithToolSets([]tool.ToolSet{dummyToolSet{}}),
+				)
+			},
+		)
+	})
+
+	t.Run("with knowledge", func(t *testing.T) {
+		kb := &mockKnowledgeBase{documents: map[string]*document.Document{}}
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, knowledge and memory must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithKnowledge(kb),
+				)
+			},
+		)
+	})
+
+	t.Run("with subagents", func(t *testing.T) {
+		sub := New("sub")
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithSubAgents([]agent.Agent{sub}),
+				)
+			},
+		)
+	})
 }
