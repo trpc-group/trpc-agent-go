@@ -43,6 +43,7 @@ import (
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
@@ -53,7 +54,7 @@ var (
 	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
 )
 
 // Default values for optional configurations.
@@ -77,6 +78,13 @@ var (
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
 	tcvectorUsername = getEnvOrDefault("TCVECTOR_USERNAME", "")
 	tcvectorPassword = getEnvOrDefault("TCVECTOR_PASSWORD", "")
+
+	// Elasticsearch.
+	elasticsearchHosts     = getEnvOrDefault("ELASTICSEARCH_HOSTS", "http://localhost:9200")
+	elasticsearchUsername  = getEnvOrDefault("ELASTICSEARCH_USERNAME", "")
+	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "")
+	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
+	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")
 )
 
 func main() {
@@ -85,6 +93,7 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Vector Store: %s\n", *vectorStore)
 	fmt.Printf("Available tools: knowledge_search\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -203,6 +212,25 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
 		}
 		return vs, nil
+	case "elasticsearch":
+		// Parse hosts string into slice.
+		hosts := strings.Split(elasticsearchHosts, ",")
+		for i, host := range hosts {
+			hosts[i] = strings.TrimSpace(host)
+		}
+
+		vs, err := vectorelasticsearch.New(
+			vectorelasticsearch.WithAddresses(hosts),
+			vectorelasticsearch.WithUsername(elasticsearchUsername),
+			vectorelasticsearch.WithPassword(elasticsearchPassword),
+			vectorelasticsearch.WithAPIKey(elasticsearchAPIKey),
+			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
+			vectorelasticsearch.WithMaxRetries(3),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
+		}
+		return vs, nil
 	default:
 		return nil, fmt.Errorf("unsupported vector store type: %s", *vectorStore)
 	}
@@ -309,6 +337,21 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println("   /history  - Show conversation history")
 	fmt.Println("   /new      - Start a new session")
 	fmt.Println("   /exit     - End the conversation")
+	fmt.Println()
+	fmt.Println("🔧 Vector Store Configuration:")
+	switch *vectorStore {
+	case "elasticsearch":
+		fmt.Printf("   Elasticsearch: %s (Index: %s)\n", elasticsearchHosts, elasticsearchIndexName)
+		if elasticsearchUsername != "" {
+			fmt.Printf("   Username: %s\n", elasticsearchUsername)
+		}
+	case "pgvector":
+		fmt.Printf("   PGVector: %s:%s/%s\n", pgvectorHost, pgvectorPort, pgvectorDatabase)
+	case "tcvector":
+		if tcvectorURL != "" {
+			fmt.Printf("   TCVector: %s\n", tcvectorURL)
+		}
+	}
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
 	fmt.Println("   - What is a Large Language Model?")
