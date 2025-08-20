@@ -31,6 +31,7 @@ const (
 type Source struct {
 	filePaths    []string
 	name         string
+	sourceID     string
 	metadata     map[string]interface{}
 	readers      map[string]reader.Reader
 	chunkSize    int
@@ -50,6 +51,11 @@ func New(filePaths []string, opts ...Option) *Source {
 	// Apply options first to capture chunk configuration.
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	// Generate default sourceID if not set
+	if s.sourceID == "" {
+		s.sourceID = isource.GenerateDefaultSourceID("file", s.name)
 	}
 
 	// Initialize readers with potential custom chunk configuration.
@@ -88,6 +94,11 @@ func (s *Source) Type() string {
 	return source.TypeFile
 }
 
+// SourceID returns the unique identifier for this source.
+func (s *Source) SourceID() string {
+	return s.sourceID
+}
+
 // processFile processes a single file and returns its documents.
 func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	fileInfo, err := os.Stat(filePath)
@@ -114,6 +125,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		metadata[k] = v
 	}
 	metadata[source.MetaSource] = source.TypeFile
+	metadata[source.MetaSourceID] = s.sourceID
 	metadata[source.MetaFilePath] = filePath
 	metadata[source.MetaFileName] = filepath.Base(filePath)
 	metadata[source.MetaFileExt] = filepath.Ext(filePath)

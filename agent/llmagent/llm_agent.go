@@ -143,6 +143,20 @@ func WithKnowledge(kb knowledge.Knowledge) Option {
 	}
 }
 
+// WithKnowledgeFilter sets the knowledge filter for the knowledge base.
+func WithKnowledgeFilter(filter map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithEnableKnowledgeAgenticFilter sets whether enable llm generate filter for the knowledge base.
+func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
+	return func(opts *Options) {
+		opts.EnableKnowledgeAgenticFilter = agenticFilter
+	}
+}
+
 // WithMemory sets the memory service for the agent.
 // If provided, the memory tools will be automatically added to the agent's tools.
 // The memory tools will get appName and userID from the agent invocation context at runtime.
@@ -267,6 +281,11 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
+	// KnowledgeFilter is the filter for the knowledge search tool.
+	KnowledgeFilter map[string]interface{}
+	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
+	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
+	EnableKnowledgeAgenticFilter bool
 	// Memory is the memory service for the agent.
 	// If provided, the memory tools will be automatically added.
 	Memory memory.Service
@@ -423,7 +442,14 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
+	tools := registerTools(
+		options.Tools,
+		options.ToolSets,
+		options.Memory,
+		options.Knowledge,
+		options.KnowledgeFilter,
+		options.EnableKnowledgeAgenticFilter,
+	)
 
 	return &LLMAgent{
 		name:           name,
@@ -446,7 +472,14 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 }
 
-func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
+func registerTools(
+	tools []tool.Tool,
+	toolSets []tool.ToolSet,
+	memory memory.Service,
+	kb knowledge.Knowledge,
+	knowledgeFilter map[string]interface{},
+	knowledgeAgentFilter bool,
+) []tool.Tool {
 	// Start with direct tools.
 	allTools := make([]tool.Tool, 0, len(tools))
 	allTools = append(allTools, tools...)
@@ -462,7 +495,11 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 
 	// Add knowledge search tool if knowledge base is provided.
 	if kb != nil {
-		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
+		if knowledgeAgentFilter {
+			allTools = append(allTools, knowledgetool.NewKnowledgeSearchToolWithAgenticFilter(kb, knowledgeFilter))
+		} else {
+			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb, knowledgeFilter))
+		}
 	}
 
 	// Add memory tool if memory service is provided.

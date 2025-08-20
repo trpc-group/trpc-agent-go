@@ -17,16 +17,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 )
 
 const (
@@ -38,6 +32,7 @@ const (
 type Source struct {
 	dirPaths       []string
 	name           string
+	sourceID       string
 	metadata       map[string]interface{}
 	readers        map[string]reader.Reader
 	fileExtensions []string // Optional: filter by file extensions
@@ -62,71 +57,30 @@ func New(dirPaths []string, opts ...Option) *Source {
 		opt(s)
 	}
 
+	// Generate default sourceID if not set
+	if s.sourceID == "" {
+		s.sourceID = isource.GenerateDefaultSourceID(dirSourceType, s.name)
+	}
+
 	// Initialize readers with potential custom chunk configuration.
 	s.initializeReaders()
 
 	return s
 }
 
-// initializeReaders initializes all available readers.
+// initializeReaders sets up readers for different file types.
 func (s *Source) initializeReaders() {
-	// Build readers map.
-	s.readers = make(map[string]reader.Reader)
-
-	// Decide whether to use custom chunk configuration.
-	if s.chunkSize <= 0 && s.chunkOverlap <= 0 {
-		// Default readers.
-		s.readers["text"] = text.New()
-		s.readers["pdf"] = pdf.New()
-		s.readers["markdown"] = markdown.New()
-		s.readers["json"] = json.New()
-		s.readers["csv"] = csv.New()
-		s.readers["docx"] = docx.New()
-		return
+	// Use the common reader initialization with chunk configuration.
+	if s.chunkSize > 0 || s.chunkOverlap > 0 {
+		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
+	} else {
+		s.readers = isource.GetReaders()
 	}
-
-	// Build chunking options.
-	var fixedOpts []chunking.Option
-	var mdOpts []chunking.MarkdownOption
-	if s.chunkSize > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithChunkSize(s.chunkSize))
-		mdOpts = append(mdOpts, chunking.WithMarkdownChunkSize(s.chunkSize))
-	}
-	if s.chunkOverlap > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithOverlap(s.chunkOverlap))
-		mdOpts = append(mdOpts, chunking.WithMarkdownOverlap(s.chunkOverlap))
-	}
-
-	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
-	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
-
-	s.readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
-	s.readers["pdf"] = pdf.New(pdf.WithChunkingStrategy(fixedChunk))
-	s.readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
-	s.readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
-	s.readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
-	s.readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
 }
 
 // getFileType determines the file type based on the file extension.
 func (s *Source) getFileType(filePath string) string {
-	ext := filepath.Ext(filePath)
-	switch ext {
-	case ".txt", ".text":
-		return "text"
-	case ".pdf":
-		return "pdf"
-	case ".md", ".markdown":
-		return "markdown"
-	case ".json":
-		return "json"
-	case ".csv":
-		return "csv"
-	case ".docx", ".doc":
-		return "docx"
-	default:
-		return "text"
-	}
+	return isource.GetFileType(filePath)
 }
 
 // ReadDocuments reads all files in the directories and returns documents using appropriate readers.
@@ -184,6 +138,11 @@ func (s *Source) Name() string {
 // Type returns the type of this source.
 func (s *Source) Type() string {
 	return source.TypeDir
+}
+
+// SourceID returns the unique identifier for this source.
+func (s *Source) SourceID() string {
+	return s.sourceID
 }
 
 // getFilePaths returns all file paths in the specified directory.
@@ -261,6 +220,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		metadata[k] = v
 	}
 	metadata[source.MetaSource] = source.TypeDir
+	metadata[source.MetaSourceID] = s.sourceID
 	metadata[source.MetaFilePath] = filePath
 	metadata[source.MetaFileName] = filepath.Base(filePath)
 	metadata[source.MetaFileExt] = filepath.Ext(filePath)

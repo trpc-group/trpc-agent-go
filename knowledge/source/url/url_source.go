@@ -36,6 +36,7 @@ var defaultClient = &http.Client{Timeout: 30 * time.Second}
 type Source struct {
 	urls         []string
 	name         string
+	sourceID     string
 	metadata     map[string]interface{}
 	readers      map[string]reader.Reader
 	httpClient   *http.Client
@@ -58,6 +59,12 @@ func New(urls []string, opts ...Option) *Source {
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Generate default sourceID if not set
+	if s.sourceID == "" {
+		s.sourceID = isource.GenerateDefaultSourceID("url", s.name)
+	}
+
 	// Initialize readers with potential custom chunk configuration.
 	if s.chunkSize > 0 || s.chunkOverlap > 0 {
 		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
@@ -94,6 +101,11 @@ func (s *Source) Name() string {
 // Type returns the type of this source.
 func (s *Source) Type() string {
 	return source.TypeURL
+}
+
+// SourceID returns the unique identifier for this source.
+func (s *Source) SourceID() string {
+	return s.sourceID
 }
 
 // processURL downloads content from a URL and returns its documents.
@@ -147,6 +159,7 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 		metadata[k] = v
 	}
 	metadata[source.MetaSource] = source.TypeURL
+	metadata[source.MetaSourceID] = s.sourceID
 	metadata[source.MetaURL] = urlStr
 	metadata[source.MetaURLHost] = parsedURL.Host
 	metadata[source.MetaURLPath] = parsedURL.Path
