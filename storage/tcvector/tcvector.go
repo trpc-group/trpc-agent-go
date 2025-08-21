@@ -74,9 +74,12 @@ type ClientBuilderOpt func(*ClientBuilderOpts)
 
 // ClientBuilderOpts is the options for the tcvectordb client.
 type ClientBuilderOpts struct {
-	HTTPURL  string
+	// HTTPURL is the http url for the tcvectordb client.
+	HTTPURL string
+	// UserName is the username for the tcvectordb client.
 	UserName string
-	Key      string
+	// Key is the key for the tcvectordb client.
+	Key string
 }
 
 // WithClientBuilderHTTPURL sets the http url for the tcvectordb client.

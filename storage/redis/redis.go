@@ -11,6 +11,7 @@
 package redis
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/redis/go-redis/v9"
@@ -20,7 +21,7 @@ func init() {
 	redisRegistry = make(map[string][]ClientBuilderOpt)
 }
 
-var redisRegistry = map[string][]ClientBuilderOpt{}
+var redisRegistry map[string][]ClientBuilderOpt
 
 type clientBuilder func(builderOpts ...ClientBuilderOpt) (redis.UniversalClient, error)
 
@@ -44,7 +45,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (redis.UniversalClien
 	}
 
 	if o.URL == "" {
-		return nil, fmt.Errorf("redis: url is empty")
+		return nil, errors.New("redis: url is empty")
 	}
 
 	opts, err := redis.ParseURL(o.URL)
@@ -87,7 +88,7 @@ type ClientBuilderOpts struct {
 	URL string
 
 	// ExtraOptions is the extra options for the redis client.
-	ExtraOptions []interface{}
+	ExtraOptions []any
 }
 
 // WithClientBuilderURL sets the redis client url for clientBuilder.
@@ -99,7 +100,7 @@ func WithClientBuilderURL(url string) ClientBuilderOpt {
 
 // WithExtraOptions sets the redis client extra options for clientBuilder.
 // this option mainly used for the customized redis client builder, it will be passed to the builder.
-func WithExtraOptions(extraOptions ...interface{}) ClientBuilderOpt {
+func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
 	}
