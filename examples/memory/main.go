@@ -26,19 +26,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
-	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
 	modelName      = flag.String("model", "deepseek-chat", "Name of the model to use")
-	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
 	memServiceName = flag.String("memory", "inmemory", "Name of the memory service to use, inmemory / redis")
+	redisAddr      = flag.String("redis-addr", "localhost:6379", "Redis address")
 	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
@@ -48,9 +45,9 @@ func main() {
 
 	fmt.Printf("🧠 Multi Turn Chat with Memory\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("   Memory Service: %s\n", *memServiceName)
+	fmt.Printf("Memory Service: %s\n", *memServiceName)
 	if *memServiceName == "redis" {
-		fmt.Printf("   Redis: %s\n", *redisAddr)
+		fmt.Printf("Redis: %s\n", *redisAddr)
 	}
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Available tools: memory_add, memory_update, memory_search, memory_load\n")
@@ -100,29 +97,26 @@ func (c *memoryChat) setup(_ context.Context) error {
 	modelInstance := openai.New(c.modelName)
 
 	// Create memory service based on configuration.
-	var memoryService memory.Service
-	var err error
+	var (
+		memoryService memory.Service
+		err           error
+	)
 
 	switch c.memServiceName {
-	case "inmemory":
-		memoryService = memoryinmemory.NewMemoryService(
-			// Disable delete tool. In fact, `memory_delete` is disabled by default, so we don't need to do this.
-			memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
-			// Custom clear tool. We create a custom clear tool to demonstrate how to create a custom tool.
-			memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
-		)
 	case "redis":
 		redisURL := fmt.Sprintf("redis://%s", c.redisAddr)
 		memoryService, err = memoryredis.NewService(
 			memoryredis.WithRedisClientURL(redisURL),
-			memoryredis.WithToolEnabled(memory.DeleteToolName, false),
-			memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+			// You can enable or disable tools and create custom tools here.
+			// Note that the custom clear tool is implemented in README.md.
+			// memoryredis.WithToolEnabled(memory.DeleteToolName, false), // delete tool is disabled by default
+			// memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create redis memory service: %w", err)
 		}
-	default:
-		return fmt.Errorf("invalid memory service name: %s", c.memServiceName)
+	default: // inmemory
+		memoryService = memoryinmemory.NewMemoryService()
 	}
 
 	// Setup identifiers first.
@@ -197,7 +191,7 @@ func (c *memoryChat) startChat(ctx context.Context) error {
 			fmt.Printf("❌ Error: %v\n", err)
 		}
 
-		fmt.Println() // Add spacing between turns
+		fmt.Println() // Add spacing between turns.
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -364,34 +358,8 @@ func (c *memoryChat) startNewSession() {
 	fmt.Println()
 }
 
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-	clearFunc := func(ctx context.Context, _ struct{}) (*memorytool.ClearMemoryResponse, error) {
-		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
-		// Get appName and userID from context.
-		appName, userID, err := memorytool.GetAppAndUserFromContext(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get app and user from context: %v", err)
-		}
-
-		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		err = memoryService.ClearMemories(ctx, userKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to clear memories: %v", err)
-		}
-
-		return &memorytool.ClearMemoryResponse{
-			Message: "🎉 All memories cleared successfully with custom magic! ✨",
-		}, nil
-	}
-
-	return function.NewFunctionTool(
-		clearFunc,
-		function.WithName(memory.ClearToolName),
-		function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
-	)
-}
-
 // Helper functions for creating pointers to primitive types.
+
 func intPtr(i int) *int {
 	return &i
 }

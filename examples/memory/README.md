@@ -240,12 +240,33 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
+```go
+// Redis service: enable delete tool.
+memoryService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithToolEnabled(memory.DeleteToolName, true),
+)
+if err != nil {
+    // Handle error appropriately.
+}
+```
+
 ### Custom Tool Implementation
 
 You can override default tool implementations with custom ones:
 
 ```go
-// Custom clear tool with enhanced logging
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/memory"
+    toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+// Custom clear tool with enhanced logging.
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
     clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
         fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
@@ -267,6 +288,17 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
+```
+
+```go
+// Or register the custom tool for Redis service.
+memoryService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+if err != nil {
+    // Handle error appropriately.
+}
 ```
 
 ### Tool Creator Pattern
