@@ -50,6 +50,11 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	// Create session manager
 	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions)
 
+	// Set retry configuration in session manager if provided.
+	if cfg.retryConfig != nil {
+		sessionManager.retryConfig = cfg.retryConfig
+	}
+
 	toolSet := &ToolSet{
 		config:         cfg,
 		sessionManager: sessionManager,
@@ -169,6 +174,7 @@ type mcpSessionManager struct {
 	mu          sync.RWMutex
 	connected   bool
 	initialized bool
+	retryConfig *RetryConfig // Retry configuration for tool calls.
 }
 
 // newMCPSessionManager creates a new MCP session manager.
@@ -404,4 +410,19 @@ func (m *mcpSessionManager) isConnected() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.connected && m.initialized
+}
+
+// getRetryConfig returns a copy of the retry configuration in a thread-safe manner.
+// Returns nil if no retry configuration is set.
+func (m *mcpSessionManager) getRetryConfig() *RetryConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.retryConfig == nil {
+		return nil
+	}
+
+	// Return a copy to prevent external modification
+	config := *m.retryConfig
+	return &config
 }

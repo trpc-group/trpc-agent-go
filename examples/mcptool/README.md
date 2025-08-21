@@ -9,6 +9,7 @@ The trpc-agent-go framework provides built-in support for MCP tools with these k
 - **🔄 Multiple Tool Types**: Native support for Function tools, STDIO MCP tools, SSE MCP tools, and Streamable HTTP tools
 - **🌊 Streaming Responses**: Real-time character-by-character response generation
 - **💾 Tool State Management**: Proper handling of tool calls and responses
+- **🔁 Smart Retry**: Automatic retry for network errors and temporary failures
 - **🔧 Simple Tool Implementations**: Focused examples with minimal complexity
 - **🚀 LLM Integration**: Seamless use of tools with language models
 
@@ -103,6 +104,7 @@ To integrate STDIO MCP tools into your agent, use the following code:
 
 ```go
 // Configure STDIO MCP to connect to our local server.
+// STDIO tools typically don't need retry (process failures are usually permanent)
 stdioToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
         Transport: "stdio",
@@ -119,7 +121,7 @@ stdioToolSet := mcp.NewMCPToolSet(
 To integrate SSE MCP tools into your agent, use the following code:
 
 ```go
-// Create SSE MCP tools.
+// Create SSE MCP tools with advanced retry for persistent connections.
 sseToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
         Transport: "sse",
@@ -130,6 +132,12 @@ sseToolSet := mcp.NewMCPToolSet(
         },
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+    mcp.WithRetry(mcp.RetryConfig{
+        MaxRetries:     5,
+        InitialBackoff: 1 * time.Second,
+        BackoffFactor:  1.5,
+        MaxBackoff:     15 * time.Second,
+    }), // Advanced retry for long-lived connections
 )
 ```
 
@@ -138,7 +146,7 @@ sseToolSet := mcp.NewMCPToolSet(
 To integrate Streamable HTTP tools into your agent, use the following code:
 
 ```go
-// Configure Streamable HTTP MCP connection.
+// Configure Streamable HTTP MCP connection with basic retry for network requests.
 streamableToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
         Transport: "streamable_http",
@@ -146,8 +154,18 @@ streamableToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+    mcp.WithSimpleRetry(3), // Basic retry for HTTP requests
 )
 ```
+
+### Retry Configuration
+
+The framework supports smart retry for MCP tool calls to handle temporary failures:
+
+- **`mcp.WithSimpleRetry(3)`**: Basic retry with 3 attempts (recommended for HTTP-based tools)
+- **`mcp.WithRetry(config)`**: Custom retry configuration for advanced scenarios
+
+Retry is automatically applied to connection errors (refused/reset/timeout), I/O timeouts, and HTTP status codes 408/409/429/5xx. Other errors fail immediately without retry.
 
 ### Using ToolSets with LLM Agent
 
