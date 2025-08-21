@@ -444,6 +444,20 @@ func TestWithInstructionBuilder_AndGenerateInstruction_Redis(t *testing.T) {
 	}
 }
 
+func TestGenerateInstruction_DefaultWhenNoBuilder_Redis(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	// No builder is set. The generator should return default instruction.
+	got := imemory.GenerateInstruction(svc)
+	if !strings.Contains(got, "You have access to memory tools") {
+		t.Fatalf("expected default instruction content for redis, got: %q", got)
+	}
+	if !strings.Contains(got, "Available memory tools:") {
+		t.Fatalf("expected tools list in default instruction for redis, got: %q", got)
+	}
+}
+
 func TestService_InvalidKeys(t *testing.T) {
 	svc, cleanup := newTestService(t)
 	defer cleanup()

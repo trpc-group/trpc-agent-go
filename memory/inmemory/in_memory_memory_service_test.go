@@ -463,6 +463,26 @@ func TestWithInstructionBuilder_AndGenerateInstruction(t *testing.T) {
 	}
 }
 
+func TestGenerateInstruction_DefaultWhenNoBuilder(t *testing.T) {
+	// Create a service WITHOUT a custom instruction builder.
+	svc := NewMemoryService()
+
+	// Ensure default tools exist so enabledTools is non-empty.
+	tools := svc.Tools()
+	if len(tools) == 0 {
+		t.Fatalf("expected default tools to be enabled")
+	}
+
+	// Call the shared instruction generator. Since builder is nil, it should use default.
+	got := imemory.GenerateInstruction(svc)
+	if !strings.Contains(got, "You have access to memory tools") {
+		t.Fatalf("expected default instruction content, got: %q", got)
+	}
+	if !strings.Contains(got, "Available memory tools:") {
+		t.Fatalf("expected tools list in default instruction, got: %q", got)
+	}
+}
+
 // mockTool implements tool.Tool for testing.
 type mockTool struct{ name string }
 
