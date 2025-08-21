@@ -12,11 +12,36 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
+
+// retryableStatusCodes contains HTTP status codes that should be retried.
+// Pre-computed at package level for optimal performance.
+var retryableStatusCodes = []string{
+	// 4xx codes that are retryable
+	strconv.Itoa(http.StatusRequestTimeout),  // 408 - Request Timeout
+	strconv.Itoa(http.StatusConflict),        // 409 - Conflict
+	strconv.Itoa(http.StatusTooManyRequests), // 429 - Too Many Requests
+
+	// All 5xx server errors are retryable
+	strconv.Itoa(http.StatusInternalServerError),           // 500 - Internal Server Error
+	strconv.Itoa(http.StatusNotImplemented),                // 501 - Not Implemented
+	strconv.Itoa(http.StatusBadGateway),                    // 502 - Bad Gateway
+	strconv.Itoa(http.StatusServiceUnavailable),            // 503 - Service Unavailable
+	strconv.Itoa(http.StatusGatewayTimeout),                // 504 - Gateway Timeout
+	strconv.Itoa(http.StatusHTTPVersionNotSupported),       // 505 - HTTP Version Not Supported
+	strconv.Itoa(http.StatusVariantAlsoNegotiates),         // 506 - Variant Also Negotiates
+	strconv.Itoa(http.StatusInsufficientStorage),           // 507 - Insufficient Storage
+	strconv.Itoa(http.StatusLoopDetected),                  // 508 - Loop Detected
+	"509",                                                  // 509 - Bandwidth Limit Exceeded (non-standard, not defined in net/http)
+	strconv.Itoa(http.StatusNotExtended),                   // 510 - Not Extended
+	strconv.Itoa(http.StatusNetworkAuthenticationRequired), // 511 - Network Authentication Required
+}
 
 // isRetryableError determines if an error is retryable based on its characteristics.
 // This function uses precise pattern matching to avoid false positives.
@@ -55,13 +80,7 @@ func isRetryableError(err error) bool {
 // isHTTPStatusRetryable checks if an error contains a retryable HTTP status code.
 // Uses precise patterns to avoid false positives (e.g., "port 5001" won't match "501").
 func isHTTPStatusRetryable(errStr string) bool {
-	// Define retryable status codes: 408, 409, 429, 5xx
-	retryableCodes := []string{
-		"408", "409", "429",
-		"500", "501", "502", "503", "504", "505", "506", "507", "508", "509", "510", "511",
-	}
-
-	for _, code := range retryableCodes {
+	for _, code := range retryableStatusCodes {
 		// Match patterns like "HTTP 500", "status 500", "500 Internal Server Error"
 		if strings.Contains(errStr, "http "+code) ||
 			strings.Contains(errStr, "status "+code) ||
