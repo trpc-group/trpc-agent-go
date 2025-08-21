@@ -503,7 +503,7 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) ma
 					"match_all": map[string]any{},
 				},
 				"script": map[string]any{
-					"source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+					"source": "if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }",
 					"params": map[string]any{
 						"query_vector": query.Vector,
 					},
@@ -550,7 +550,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) ma
 			"match_all": map[string]any{},
 		},
 		"script": map[string]any{
-			"source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+			"source": "if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }",
 			"params": map[string]any{
 				"query_vector": query.Vector,
 			},
