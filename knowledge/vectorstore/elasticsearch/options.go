@@ -52,6 +52,25 @@ type options struct {
 	language string
 }
 
+// defaultOptions returns default configuration.
+var defaultOptions = options{
+	addresses:           []string{"http://localhost:9200"},
+	maxRetries:          3,
+	compressRequestBody: true,
+	enableMetrics:       false,
+	enableDebugLogger:   false,
+	retryOnStatus:       []int{502, 503, 504, 429},
+	indexName:           defaultIndexName,
+	vectorField:         defaultVectorField,
+	contentField:        defaultContentField,
+	metadataField:       defaultMetadataField,
+	scoreThreshold:      defaultScoreThreshold,
+	maxResults:          defaultMaxResults,
+	vectorDimension:     defaultVectorDimension,
+	enableTSVector:      true,
+	language:            "english",
+}
+
 // Option represents a functional option for configuring VectorStore.
 type Option func(*options)
 
@@ -185,26 +204,5 @@ func WithEnableTSVector(enable bool) Option {
 func WithLanguage(language string) Option {
 	return func(o *options) {
 		o.language = language
-	}
-}
-
-// defaultOptions returns default configuration.
-func defaultOptions() options {
-	return options{
-		addresses:           []string{"http://localhost:9200"},
-		maxRetries:          3,
-		compressRequestBody: true,
-		enableMetrics:       false,
-		enableDebugLogger:   false,
-		retryOnStatus:       []int{502, 503, 504, 429},
-		indexName:           defaultIndexName,
-		vectorField:         defaultVectorField,
-		contentField:        defaultContentField,
-		metadataField:       defaultMetadataField,
-		scoreThreshold:      defaultScoreThreshold,
-		maxResults:          defaultMaxResults,
-		vectorDimension:     defaultVectorDimension,
-		enableTSVector:      true,
-		language:            "english",
 	}
 }

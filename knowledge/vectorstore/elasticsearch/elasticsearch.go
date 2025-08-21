@@ -101,7 +101,7 @@ type VectorStore struct {
 
 // New creates a new Elasticsearch vector store with options.
 func New(opts ...Option) (*VectorStore, error) {
-	option := defaultOptions()
+	option := defaultOptions
 	for _, opt := range opts {
 		opt(&option)
 	}
@@ -541,12 +541,22 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 	}
 
 	results := &vectorstore.SearchResult{
-		Results: make([]*vectorstore.ScoredDocument, 0, len(response.Hits.Hits)),
+		Results: make([]*vectorstore.ScoredDocument, 0),
+	}
+
+	// Guard against empty hits (e.g., minimal/mocked responses).
+	if len(response.Hits.Hits) == 0 {
+		return results, nil
 	}
 
 	for _, hit := range response.Hits.Hits {
 		// Skip hits without score.
 		if hit.Score_ == nil {
+			continue
+		}
+
+		// Skip hits without _source payload.
+		if len(hit.Source_) == 0 {
 			continue
 		}
 
