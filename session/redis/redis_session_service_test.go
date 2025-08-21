@@ -507,10 +507,10 @@ func TestService_GetSession(t *testing.T) {
 
 func TestService_AppendEvent_EventOrder(t *testing.T) {
 	tests := []struct {
-		name           string
-		setupEvents    func() []*event.Event
-		expectedOrder  []string
-		description    string
+		name          string
+		setupEvents   func() []*event.Event
+		expectedOrder []string
+		description   string
 	}{
 		{
 			name: "single_event_order",
@@ -673,8 +673,8 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 			require.NotNil(t, finalSess)
 
 			// Verify event count
-			assert.Equal(t, len(tt.expectedOrder), len(finalSess.Events), 
-				"Expected %d events, got %d. Description: %s", 
+			assert.Equal(t, len(tt.expectedOrder), len(finalSess.Events),
+				"Expected %d events, got %d. Description: %s",
 				len(tt.expectedOrder), len(finalSess.Events), tt.description)
 
 			// Verify event order
@@ -683,19 +683,17 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 				actualOrder[i] = evt.ID
 			}
 
-			assert.Equal(t, tt.expectedOrder, actualOrder, 
-				"Event order mismatch. Description: %s\nExpected: %v\nActual: %v", 
+			assert.Equal(t, tt.expectedOrder, actualOrder,
+				"Event order mismatch. Description: %s\nExpected: %v\nActual: %v",
 				tt.description, tt.expectedOrder, actualOrder)
 
-			// Verify event timestamp order (except for same timestamp case)
-			if tt.name != "events_with_same_timestamp" {
-				for i := 1; i < len(finalSess.Events); i++ {
-					assert.True(t, 
-						finalSess.Events[i-1].Timestamp.Before(finalSess.Events[i].Timestamp) || 
+			// Verify event timestamp order
+			for i := 1; i < len(finalSess.Events); i++ {
+				assert.True(t,
+					finalSess.Events[i-1].Timestamp.Before(finalSess.Events[i].Timestamp) ||
 						finalSess.Events[i-1].Timestamp.Equal(finalSess.Events[i].Timestamp),
-						"Events should be in chronological order. Event %s (index %d) should come before or equal to event %s (index %d)",
-						finalSess.Events[i-1].ID, i-1, finalSess.Events[i].ID, i)
-				}
+					"Events should be in chronological order. Event %s (index %d) should come before or equal to event %s (index %d)",
+					finalSess.Events[i-1].ID, i-1, finalSess.Events[i].ID, i)
 			}
 		})
 	}
