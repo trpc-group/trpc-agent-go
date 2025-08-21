@@ -21,9 +21,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// script parameter constants
 const (
+	// scriptParamQueryVector is the name of the script parameter for the query vector.
 	scriptParamQueryVector = "query_vector"
+	// scriptSource is the source of the script for the cosine similarity.
+	scriptSource = "if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }"
 )
 
 // buildVectorSearchQuery builds a vector similarity search query.
@@ -33,7 +35,7 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) *t
 
 	// Create script for cosine similarity using esdsl.
 	script := esdsl.NewScript().
-		Source(esdsl.NewScriptSource().String("if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }")).
+		Source(esdsl.NewScriptSource().String(scriptSource)).
 		AddParam(scriptParamQueryVector, json.RawMessage(vectorJSON))
 
 	// Create match_all query using esdsl.
@@ -82,8 +84,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) *t
 
 	// Create script for vector similarity.
 	script := esdsl.NewScript().
-		Source(esdsl.NewScriptSource().
-			String("if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }")).
+		Source(esdsl.NewScriptSource().String(scriptSource)).
 		AddParam(scriptParamQueryVector, json.RawMessage(vectorJSON))
 
 	// Create match_all query for script_score.
