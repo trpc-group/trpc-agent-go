@@ -72,8 +72,8 @@ func GenerateInstruction(memoryService memory.Service) string {
 	// Get enabled memory tools from the service.
 	enabledTools := getEnabledMemoryTools(memoryService)
 
-	// Generate dynamic instruction based on enabled tools.
-	instruction := `You have access to memory tools to provide personalized assistance. 
+	// Generate default dynamic instruction based on enabled tools.
+	defaultInstruction := `You have access to memory tools to provide personalized assistance. 
 
 IMPORTANT: When users share personal information about themselves (name, preferences, experiences, etc.), 
 ALWAYS use memory_add to remember this information. 
@@ -91,29 +91,29 @@ Examples of when to use memory_add:
 		case memory.AddToolName:
 			// Already covered in the main instruction.
 		case memory.SearchToolName:
-			instruction += `
+			defaultInstruction += `
 
 When users ask about themselves or their preferences, use memory_search to find relevant information.`
 		case memory.LoadToolName:
-			instruction += `
+			defaultInstruction += `
 
 When users ask 'tell me about myself' or similar, use memory_load to get an overview.`
 		case memory.UpdateToolName:
-			instruction += `
+			defaultInstruction += `
 
 When users want to update existing information, use memory_update with the memory_id.`
 		case memory.DeleteToolName:
-			instruction += `
+			defaultInstruction += `
 
 When users want to remove specific memories, use memory_delete with the memory_id.`
 		case memory.ClearToolName:
-			instruction += `
+			defaultInstruction += `
 
 When users want to clear all their memories, use memory_clear to remove all stored information.`
 		}
 	}
 
-	instruction += `
+	defaultInstruction += `
 
 Available memory tools: ` + strings.Join(enabledTools, ", ") + `.
 
@@ -121,5 +121,14 @@ Be helpful, conversational, and proactive about remembering user information.
 Always strive to create memories that capture the essence of what the user shares, 
 making future interactions more personalized and contextually relevant.`
 
-	return instruction
+	// If the service provides a custom instruction builder, use it.
+	if memoryService != nil {
+		if builtInstruction, ok := memoryService.BuildInstruction(
+			enabledTools, defaultInstruction,
+		); ok && builtInstruction != "" {
+			return builtInstruction
+		}
+	}
+
+	return defaultInstruction
 }

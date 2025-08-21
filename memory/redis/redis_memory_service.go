@@ -293,3 +293,13 @@ func generateMemoryID(mem *memory.Memory) string {
 func getUserMemKey(userKey memory.UserKey) string {
 	return fmt.Sprintf("mem:{%s}:%s", userKey.AppName, userKey.UserID)
 }
+
+// BuildInstruction allows the internal memory package to obtain a customized instruction if provided.
+// Returns (prompt, true) when custom builder is configured; otherwise ("", false).
+func (s *Service) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	builder := s.opts.instructionBuilder
+	if builder == nil {
+		return "", false
+	}
+	return builder(enabledTools, defaultPrompt), true
+}
