@@ -13,9 +13,11 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -431,6 +433,53 @@ func TestMemoryService_Tools(t *testing.T) {
 	tools = service.Tools()
 	if len(tools) != 0 {
 		t.Errorf("expected no tools when all disabled, got %d", len(tools))
+	}
+}
+
+func TestWithInstructionBuilder_AndGenerateInstruction(t *testing.T) {
+	// Create a service with a custom instruction builder.
+	svc := NewMemoryService(
+		WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
+			if len(enabledTools) == 0 {
+				t.Fatalf("expected enabled tools to be non-empty")
+			}
+			if !strings.Contains(defaultPrompt, "Available memory tools:") {
+				t.Fatalf("expected default prompt to contain tools list")
+			}
+			return "TEST_BUILDER_PROMPT"
+		}),
+	)
+
+	// Ensure default tools exist so enabledTools is non-empty.
+	tools := svc.Tools()
+	if len(tools) == 0 {
+		t.Fatalf("expected default tools to be enabled")
+	}
+
+	// Call the shared instruction generator.
+	got := imemory.GenerateInstruction(svc)
+	if got != "TEST_BUILDER_PROMPT" {
+		t.Fatalf("expected builder prompt to be used, got: %q", got)
+	}
+}
+
+func TestGenerateInstruction_DefaultWhenNoBuilder(t *testing.T) {
+	// Create a service WITHOUT a custom instruction builder.
+	svc := NewMemoryService()
+
+	// Ensure default tools exist so enabledTools is non-empty.
+	tools := svc.Tools()
+	if len(tools) == 0 {
+		t.Fatalf("expected default tools to be enabled")
+	}
+
+	// Call the shared instruction generator. Since builder is nil, it should use default.
+	got := imemory.GenerateInstruction(svc)
+	if !strings.Contains(got, "You have access to memory tools") {
+		t.Fatalf("expected default instruction content, got: %q", got)
+	}
+	if !strings.Contains(got, "Available memory tools:") {
+		t.Fatalf("expected tools list in default instruction, got: %q", got)
 	}
 }
 

@@ -55,6 +55,8 @@ type serviceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
+	// instructionBuilder builds the memory instruction string from enabled tools and default prompt.
+	instructionBuilder func(enabledTools []string, defaultPrompt string) string
 }
 
 // MemoryService is an in-memory implementation of memory.Service.
@@ -129,6 +131,26 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 		}
 		opts.enabledTools[toolName] = enabled
 	}
+}
+
+// WithInstructionBuilder sets a custom instruction builder used by internal GenerateInstruction.
+// The builder receives enabled tool names and the framework's default prompt, and should return the final prompt.
+func WithInstructionBuilder(builder func(enabledTools []string, defaultPrompt string) string) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.instructionBuilder = builder
+	}
+}
+
+// BuildInstruction allows the internal memory package to obtain a customized instruction if provided.
+// Returns (prompt, true) when custom builder is configured; otherwise ("", false).
+func (s *MemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	s.mu.RLock()
+	builder := s.opts.instructionBuilder
+	s.mu.RUnlock()
+	if builder == nil {
+		return "", false
+	}
+	return builder(enabledTools, defaultPrompt), true
 }
 
 // getAppMemories gets or creates app memories for the given app name.

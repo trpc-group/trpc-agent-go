@@ -240,6 +240,27 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
+### Custom Memory Instruction Prompt
+
+You can provide a custom memory instruction prompt builder at service creation. The framework generates a default English instruction based on enabled tools; your builder can wrap or replace that default:
+
+```go
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
+        header := "[Memory Instruction] Follow these guidelines to manage user memories.\n\n"
+        // Example A: wrap the default content
+        return header + defaultPrompt
+        // Example B: replace with your own content
+        // return fmt.Sprintf("[Memory Instruction] Tools available: %s\n...", strings.Join(enabledTools, ", "))
+    }),
+)
+```
+
+Notes:
+
+- Enabled tools: the set of memory tools currently active for your service. By default, `memory_add`, `memory_update`, `memory_search`, and `memory_load` are enabled; `memory_delete` and `memory_clear` are disabled. Control them with `WithToolEnabled(...)`. The builder’s `enabledTools` argument reflects this list.
+- The default prompt already includes tool-specific guidance; your builder receives it via `defaultPrompt`.
+
 ```go
 // Redis service: enable delete tool.
 memoryService, err := memoryredis.NewService(
