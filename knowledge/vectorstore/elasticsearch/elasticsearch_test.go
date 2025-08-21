@@ -343,19 +343,19 @@ func TestVectorStore_Delete(t *testing.T) {
 
 func TestDefaultOptions(t *testing.T) {
 	opt := defaultOptions()
-	if opt.indexName != DefaultIndexName {
-		t.Errorf("Expected default index name '%s', got '%s'", DefaultIndexName, opt.indexName)
+	if opt.indexName != defaultIndexName {
+		t.Errorf("Expected default index name '%s', got '%s'", defaultIndexName, opt.indexName)
 	}
-	if opt.vectorField != DefaultVectorField {
-		t.Errorf("Expected default vector field '%s', got '%s'", DefaultVectorField, opt.vectorField)
+	if opt.vectorField != defaultVectorField {
+		t.Errorf("Expected default vector field '%s', got '%s'", defaultVectorField, opt.vectorField)
 	}
-	if opt.scoreThreshold != DefaultScoreThreshold {
-		t.Errorf("Expected default score threshold %f, got %f", DefaultScoreThreshold, opt.scoreThreshold)
+	if opt.scoreThreshold != defaultScoreThreshold {
+		t.Errorf("Expected default score threshold %f, got %f", defaultScoreThreshold, opt.scoreThreshold)
 	}
 	if opt.maxResults != 10 {
 		t.Errorf("Expected default max results 10, got %d", opt.maxResults)
 	}
-	if opt.vectorDimension != DefaultVectorDimension {
-		t.Errorf("Expected default vector dimension %d, got %d", DefaultVectorDimension, opt.vectorDimension)
+	if opt.vectorDimension != defaultVectorDimension {
+		t.Errorf("Expected default vector dimension %d, got %d", defaultVectorDimension, opt.vectorDimension)
 	}
 }
