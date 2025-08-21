@@ -35,10 +35,10 @@ import (
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
 
 var (
-	// ErrDocumentCannotBeNil is the error when the document is nil.
-	ErrDocumentCannotBeNil = errors.New("elasticsearch document cannot be nil")
-	// ErrDocumentIDCannotBeEmpty is the error when the document ID is empty.
-	ErrDocumentIDCannotBeEmpty = errors.New("elasticsearch document ID cannot be empty")
+	// errDocumentCannotBeNil is the error when the document is nil.
+	errDocumentCannotBeNil = errors.New("elasticsearch document cannot be nil")
+	// errDocumentIDCannotBeEmpty is the error when the document ID is empty.
+	errDocumentIDCannotBeEmpty = errors.New("elasticsearch document ID cannot be empty")
 )
 
 const (
@@ -250,7 +250,7 @@ func buildESDocument(doc *document.Document, embedding []float64) *esDocument {
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return ErrDocumentCannotBeNil
+		return errDocumentCannotBeNil
 	}
 
 	if len(embedding) == 0 {
@@ -295,7 +295,7 @@ func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, 
 // Get retrieves a document by ID along with its embedding.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, ErrDocumentIDCannotBeEmpty
+		return nil, nil, errDocumentIDCannotBeEmpty
 	}
 
 	data, err := vs.getDocument(ctx, vs.option.indexName, id)
@@ -367,7 +367,7 @@ func (vs *VectorStore) getDocument(ctx context.Context, indexName, id string) ([
 // Update modifies an existing document and its embedding.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return ErrDocumentCannotBeNil
+		return errDocumentCannotBeNil
 	}
 
 	if len(embedding) == 0 {
@@ -431,7 +431,7 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 // Delete removes a document and its embedding.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return ErrDocumentIDCannotBeEmpty
+		return errDocumentIDCannotBeEmpty
 	}
 
 	return vs.deleteDocument(ctx, vs.option.indexName, id)
