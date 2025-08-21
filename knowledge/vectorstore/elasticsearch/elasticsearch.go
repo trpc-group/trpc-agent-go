@@ -32,16 +32,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
-// Error constants for common error messages.
+var _ vectorstore.VectorStore = (*VectorStore)(nil)
+
 var (
-	errDocumentCannotBeNil          = errors.New("elasticsearch document cannot be nil")
-	errDocumentIDCannotBeEmpty      = errors.New("elasticsearch document ID cannot be empty")
-	errDocumentNotFound             = errors.New("elasticsearch document not found")
-	errEmbeddingVectorCannotBeEmpty = errors.New("elasticsearch embedding vector cannot be empty")
-	errEmbeddingNotFound            = errors.New("elasticsearch embedding not found")
-	errInvalidDocumentSource        = errors.New("elasticsearch invalid document source")
-	errQueryVectorCannotBeEmpty     = errors.New("elasticsearch query vector cannot be empty")
-	errSearchQueryCannotBeNil       = errors.New("elasticsearch search query cannot be nil")
+	// ErrDocumentCannotBeNil is the error when the document is nil.
+	ErrDocumentCannotBeNil = errors.New("elasticsearch document cannot be nil")
+	// ErrDocumentIDCannotBeEmpty is the error when the document ID is empty.
+	ErrDocumentIDCannotBeEmpty = errors.New("elasticsearch document ID cannot be empty")
 )
 
 const (
@@ -253,15 +250,16 @@ func buildESDocument(doc *document.Document, embedding []float64) *esDocument {
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return errDocumentCannotBeNil
+		return ErrDocumentCannotBeNil
 	}
 
 	if len(embedding) == 0 {
-		return errEmbeddingVectorCannotBeEmpty
+		return fmt.Errorf("elasticsearch embedding vector cannot be empty for %s", doc.ID)
 	}
 
 	if len(embedding) != vs.option.vectorDimension {
-		return fmt.Errorf("elasticsearch embedding dimension %d does not match expected dimension %d", len(embedding), vs.option.vectorDimension)
+		return fmt.Errorf("elasticsearch embedding dimension %d does not match expected dimension %d",
+			len(embedding), vs.option.vectorDimension)
 	}
 
 	// Prepare document for indexing using helper function.
@@ -297,7 +295,7 @@ func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, 
 // Get retrieves a document by ID along with its embedding.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, errDocumentIDCannotBeEmpty
+		return nil, nil, ErrDocumentIDCannotBeEmpty
 	}
 
 	data, err := vs.getDocument(ctx, vs.option.indexName, id)
@@ -312,13 +310,13 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	if !response.Found {
-		return nil, nil, errDocumentNotFound
+		return nil, nil, fmt.Errorf("elasticsearch document not found: %s", id)
 	}
 
 	// Parse the _source field using our unified esDocument struct.
 	var source esDocument
 	if err := json.Unmarshal(response.Source_, &source); err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", errInvalidDocumentSource, err)
+		return nil, nil, fmt.Errorf("elasticsearch invalid document source: %w", err)
 	}
 
 	// Extract document fields.
@@ -337,7 +335,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 
 	// Extract embedding vector.
 	if len(source.Embedding) == 0 {
-		return nil, nil, errEmbeddingNotFound
+		return nil, nil, fmt.Errorf("elasticsearch embedding vector not found: %s", id)
 	}
 
 	return doc, source.Embedding, nil
@@ -369,15 +367,16 @@ func (vs *VectorStore) getDocument(ctx context.Context, indexName, id string) ([
 // Update modifies an existing document and its embedding.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return errDocumentCannotBeNil
+		return ErrDocumentCannotBeNil
 	}
 
 	if len(embedding) == 0 {
-		return errEmbeddingVectorCannotBeEmpty
+		return fmt.Errorf("elasticsearch embedding vector cannot be empty for %s", doc.ID)
 	}
 
 	if len(embedding) != vs.option.vectorDimension {
-		return fmt.Errorf("elasticsearch embedding dimension %d does not match expected dimension %d", len(embedding), vs.option.vectorDimension)
+		return fmt.Errorf("elasticsearch embedding dimension %d does not match expected dimension %d",
+			len(embedding), vs.option.vectorDimension)
 	}
 
 	// Prepare document for updating using helper function.
@@ -432,7 +431,7 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 // Delete removes a document and its embedding.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errDocumentIDCannotBeEmpty
+		return ErrDocumentIDCannotBeEmpty
 	}
 
 	return vs.deleteDocument(ctx, vs.option.indexName, id)
@@ -459,11 +458,11 @@ func (vs *VectorStore) deleteDocument(ctx context.Context, indexName, id string)
 // Search performs similarity search and returns the most similar documents.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
-		return nil, errSearchQueryCannotBeNil
+		return nil, errors.New("elasticsearch search query cannot be nil")
 	}
 
 	if len(query.Vector) == 0 {
-		return nil, errQueryVectorCannotBeEmpty
+		return nil, fmt.Errorf("elasticsearch query vector cannot be empty for %s", query.Query)
 	}
 
 	if len(query.Vector) != vs.option.vectorDimension {

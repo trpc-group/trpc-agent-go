@@ -12,7 +12,6 @@ package elasticsearch
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -426,7 +425,7 @@ func TestGetFoundFalse200(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = vs.Get(context.Background(), "id")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errDocumentNotFound))
+	assert.Contains(t, err.Error(), "document not found")
 }
 
 func TestGetInvalidResponseJSON(t *testing.T) {
@@ -471,7 +470,7 @@ func TestGetInvalidSource(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = vs.Get(context.Background(), "id")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errInvalidDocumentSource))
+	assert.Contains(t, err.Error(), "invalid document source")
 }
 
 func TestGetMissingEmbedding(t *testing.T) {
@@ -495,7 +494,7 @@ func TestGetMissingEmbedding(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = vs.Get(context.Background(), "id")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errEmbeddingNotFound))
+	assert.Contains(t, err.Error(), "embedding vector not found")
 }
 
 func TestGetSuccess(t *testing.T) {
