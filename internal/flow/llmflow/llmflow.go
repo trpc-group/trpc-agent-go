@@ -686,7 +686,8 @@ func (f *Flow) executeToolCall(
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
-		log.Errorf("CallableTool %s not found", toolCall.Function.Name)
+		log.Errorf("CallableTool %s not found (agent=%s, model=%s)",
+			toolCall.Function.Name, invocation.AgentName, invocation.Model.Info().Name)
 		return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), nil
 	}
 
