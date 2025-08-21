@@ -491,17 +491,16 @@ func (s *Service) getEventsList(
 	limit int,
 	afterTime time.Time,
 ) ([][]event.Event, error) {
-	zrangeBy := &redis.ZRangeBy{
-		Min: fmt.Sprintf("%d", afterTime.Unix()),
-		Max: fmt.Sprintf("%d", time.Now().Unix()),
-	}
-	if limit > 0 {
-		zrangeBy.Offset = 0
-		zrangeBy.Count = int64(limit)
-	}
-
 	pipe := s.redisClient.Pipeline()
 	for _, key := range sessionKeys {
+		zrangeBy := &redis.ZRangeBy{
+			Min: fmt.Sprintf("%d", afterTime.UnixNano()),
+			Max: fmt.Sprintf("%d", time.Now().UnixNano()),
+		}
+		if limit > 0 {
+			zrangeBy.Offset = 0
+			zrangeBy.Count = int64(limit)
+		}
 		pipe.ZRevRangeByScore(ctx, getEventKey(key), zrangeBy)
 	}
 	cmds, err := pipe.Exec(ctx)
@@ -518,6 +517,13 @@ func (s *Service) getEventsList(
 		events, err := processEventCmd(eventCmd)
 		if err != nil {
 			return nil, fmt.Errorf("process event cmd failed: %w", err)
+		}
+
+		// reverse events to get chronological order (oldest first)
+		if len(events) > 1 {
+			for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+				events[i], events[j] = events[j], events[i]
+			}
 		}
 		sessEventsList = append(sessEventsList, events)
 	}
