@@ -13,10 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// roundTripFunc allows mocking http.Transport.
-type roundTripFunc func(*http.Request) *http.Response
+// roundTripper allows mocking http.Transport.
+type roundTripper func(*http.Request) *http.Response
 
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+func (f roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req), nil
 }
 
@@ -184,7 +184,7 @@ func TestClient_Ping_SuccessAndError(t *testing.T) {
 	// Success.
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			return newResponse(200, "{}")
 		}),
 	})
@@ -195,7 +195,7 @@ func TestClient_Ping_SuccessAndError(t *testing.T) {
 	// Error.
 	esErr, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			return newResponse(500, "err")
 		}),
 	})
@@ -210,7 +210,7 @@ func TestClient_IndexLifecycle(t *testing.T) {
 	// Create, Exists, Delete happy paths.
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "_doc") {
 				return newResponse(200, "{}")
 			}
@@ -239,7 +239,7 @@ func TestClient_IndexLifecycle(t *testing.T) {
 func TestClient_DocumentCRUD(t *testing.T) {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			if r.Method == http.MethodGet {
 				return newResponse(200, "{\"_source\":{\"a\":1}}")
 			}
@@ -266,7 +266,7 @@ func TestClient_DocumentCRUD(t *testing.T) {
 func TestClient_GetDocument_Error(t *testing.T) {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			return newResponse(404, "not found")
 		}),
 	})
@@ -281,7 +281,7 @@ func TestClient_GetDocument_Error(t *testing.T) {
 func TestClient_Search_And_Bulk(t *testing.T) {
 	es, err := elasticsearch.NewClient(elasticsearch.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripFunc(func(r *http.Request) *http.Response {
+		Transport: roundTripper(func(r *http.Request) *http.Response {
 			if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_search") {
 				return newResponse(200, "{\"hits\":{}}")
 			}
