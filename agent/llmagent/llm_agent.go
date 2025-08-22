@@ -13,9 +13,11 @@ package llmagent
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -200,6 +202,38 @@ func WithEnableParallelTools(enable bool) Option {
 	}
 }
 
+// WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
+// The schema is constructed automatically from the provided example type.
+// Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
+func WithStructuredOutputJSON(examplePtr any, strict bool, description string) Option {
+	return func(opts *Options) {
+		// Infer reflect.Type from examplePtr.
+		var t reflect.Type
+		if examplePtr == nil {
+			return
+		}
+		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
+			t = rt
+		} else {
+			t = reflect.PointerTo(rt)
+		}
+		// Generate a robust JSON schema via the generator.
+		gen := jsonschema.New()
+		schema := gen.Generate(t.Elem())
+		name := t.Elem().Name()
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+		opts.StructuredOutputType = t
+	}
+}
+
 // WithAddCurrentTime adds the current time to the system prompt if true.
 func WithAddCurrentTime(addCurrentTime bool) Option {
 	return func(opts *Options) {
@@ -293,28 +327,35 @@ type Options struct {
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
+
+	// StructuredOutput defines how the model should produce structured output in normal runs.
+	StructuredOutput *model.StructuredOutput
+	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
+	StructuredOutputType reflect.Type
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
-	name           string
-	mu             sync.RWMutex
-	model          model.Model
-	description    string
-	instruction    string
-	systemPrompt   string
-	genConfig      model.GenerationConfig
-	flow           flow.Flow
-	tools          []tool.Tool // Tools supported by the agent
-	codeExecutor   codeexecutor.CodeExecutor
-	planner        planner.Planner
-	subAgents      []agent.Agent // Sub-agents that can be delegated to
-	agentCallbacks *agent.Callbacks
-	modelCallbacks *model.Callbacks
-	toolCallbacks  *tool.Callbacks
-	outputKey      string                 // Key to store output in session state
-	outputSchema   map[string]interface{} // JSON schema for output validation
-	inputSchema    map[string]interface{} // JSON schema for input validation
+	name                 string
+	mu                   sync.RWMutex
+	model                model.Model
+	description          string
+	instruction          string
+	systemPrompt         string
+	genConfig            model.GenerationConfig
+	flow                 flow.Flow
+	tools                []tool.Tool // Tools supported by the agent
+	codeExecutor         codeexecutor.CodeExecutor
+	planner              planner.Planner
+	subAgents            []agent.Agent // Sub-agents that can be delegated to
+	agentCallbacks       *agent.Callbacks
+	modelCallbacks       *model.Callbacks
+	toolCallbacks        *tool.Callbacks
+	outputKey            string                 // Key to store output in session state
+	outputSchema         map[string]interface{} // JSON schema for output validation
+	inputSchema          map[string]interface{} // JSON schema for input validation
+	structuredOutput     *model.StructuredOutput
+	structuredOutputType reflect.Type
 }
 
 // New creates a new LLMAgent with the given options.
@@ -343,11 +384,21 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" {
+	if options.Instruction != "" || options.GlobalInstruction != "" ||
+		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+		instructionOpts := []processor.InstructionRequestProcessorOption{
+			processor.WithOutputSchema(options.OutputSchema),
+		}
+		// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
+		if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
+			instructionOpts = append(instructionOpts,
+				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
+			)
+		}
 		instructionProcessor := processor.NewInstructionRequestProcessor(
 			options.Instruction,
 			options.GlobalInstruction,
-			processor.WithOutputSchema(options.OutputSchema),
+			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
@@ -389,10 +440,10 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
 
-	// Add output response processor if output_key or output_schema is configured.
-	if options.OutputKey != "" || options.OutputSchema != nil {
-		responseProcessors = append(responseProcessors,
-			processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema))
+	// Add output response processor if output_key or output_schema is configured or structured output is requested.
+	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
+		orp := processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema)
+		responseProcessors = append(responseProcessors, orp)
 	}
 
 	// Add transfer response processor if sub-agents are configured.
@@ -429,23 +480,25 @@ func New(name string, opts ...Option) *LLMAgent {
 	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
 
 	return &LLMAgent{
-		name:           name,
-		model:          options.Model,
-		description:    options.Description,
-		instruction:    options.Instruction,
-		systemPrompt:   options.GlobalInstruction,
-		genConfig:      options.GenerationConfig,
-		flow:           llmFlow,
-		codeExecutor:   options.codeExecutor,
-		tools:          tools,
-		planner:        options.Planner,
-		subAgents:      options.SubAgents,
-		agentCallbacks: options.AgentCallbacks,
-		modelCallbacks: options.ModelCallbacks,
-		toolCallbacks:  options.ToolCallbacks,
-		outputKey:      options.OutputKey,
-		outputSchema:   options.OutputSchema,
-		inputSchema:    options.InputSchema,
+		name:                 name,
+		model:                options.Model,
+		description:          options.Description,
+		instruction:          options.Instruction,
+		systemPrompt:         options.GlobalInstruction,
+		genConfig:            options.GenerationConfig,
+		flow:                 llmFlow,
+		codeExecutor:         options.codeExecutor,
+		tools:                tools,
+		planner:              options.Planner,
+		subAgents:            options.SubAgents,
+		agentCallbacks:       options.AgentCallbacks,
+		modelCallbacks:       options.ModelCallbacks,
+		toolCallbacks:        options.ToolCallbacks,
+		outputKey:            options.OutputKey,
+		outputSchema:         options.OutputSchema,
+		inputSchema:          options.InputSchema,
+		structuredOutput:     options.StructuredOutput,
+		structuredOutputType: options.StructuredOutputType,
 	}
 }
 
@@ -495,6 +548,14 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	// Ensure the agent name is set.
 	if invocation.AgentName == "" {
 		invocation.AgentName = a.name
+	}
+
+	// Propagate structured output configuration into invocation and request path.
+	if invocation.StructuredOutput == nil && a.structuredOutput != nil {
+		invocation.StructuredOutput = a.structuredOutput
+	}
+	if invocation.StructuredOutputType == nil && a.structuredOutputType != nil {
+		invocation.StructuredOutputType = a.structuredOutputType
 	}
 
 	// Set agent callbacks if available.
