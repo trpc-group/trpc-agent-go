@@ -135,6 +135,20 @@ func (sg *StateGraph) AddToolsNode(
 	return sg
 }
 
+// AddAgentNode adds a node that uses a sub-agent by name.
+// The agent name should correspond to a sub-agent in the GraphAgent's sub-agent list.
+func (sg *StateGraph) AddAgentNode(
+	id string,
+	agentName string,
+	opts ...Option,
+) *StateGraph {
+	agentNodeFunc := NewAgentNodeFunc(agentName)
+	// Add agent node type option.
+	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
+	sg.AddNode(id, agentNodeFunc, agentOpts...)
+	return sg
+}
+
 // channelUpdateMarker value for marking channel updates.
 const channelUpdateMarker = "update"
 
@@ -471,6 +485,93 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		return State{
 			StateKeyMessages: updatedMessages,
 		}, nil
+	}
+}
+
+// NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
+// The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
+func NewAgentNodeFunc(agentName string) NodeFunc {
+	return func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
+		defer span.End()
+
+		// Extract execution context for event emission.
+		invocationID, _, eventChan := extractExecutionContext(state)
+
+		// Extract current node ID from state.
+		var nodeID string
+		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+			if id, ok := nodeIDData.(string); ok {
+				nodeID = id
+			}
+		}
+
+		// Extract parent agent from state to find the sub-agent.
+		parentAgent, parentExists := state[StateKeyParentAgent]
+		if !parentExists {
+			return nil, fmt.Errorf("parent agent not found in state for agent node %s", agentName)
+		}
+
+		// Look up the target agent by name from the parent's sub-agents.
+		targetAgent := findSubAgentByName(parentAgent, agentName)
+		if targetAgent == nil {
+			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
+		}
+
+		// Extract agent callbacks from state.
+		agentCallbacks, _ := state[StateKeyAgentCallbacks].(*agent.Callbacks)
+
+		// Build invocation for the target agent.
+		invocation := buildAgentInvocation(state, targetAgent, agentCallbacks)
+
+		// Emit agent execution start event.
+		startTime := time.Now()
+		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
+
+		// Execute the target agent.
+		agentEventChan, err := targetAgent.Run(ctx, invocation)
+		if err != nil {
+			// Emit agent execution error event.
+			endTime := time.Now()
+			emitAgentErrorEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime, err)
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
+		}
+
+		// Forward all events from the target agent.
+		var lastResponse *model.Response
+		for agentEvent := range agentEventChan {
+			// Forward the event to the parent event channel.
+			select {
+			case eventChan <- agentEvent:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+
+			// Track the last response for state update.
+			if agentEvent.Response != nil {
+				lastResponse = agentEvent.Response
+			}
+		}
+		// Emit agent execution complete event.
+		endTime := time.Now()
+		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
+		// Update state with the agent's response.
+		stateUpdate := State{}
+		if lastResponse != nil {
+			stateUpdate[StateKeyLastResponse] = lastResponse
+			// Update messages if the agent returned a response.
+			if len(lastResponse.Choices) > 0 {
+				choice := lastResponse.Choices[0]
+				if choice.Message.Content != "" {
+					// Add the agent's response to the message history.
+					messages := buildMessagesFromState(state, "")
+					messages = append(messages, choice.Message)
+					stateUpdate[StateKeyMessages] = messages
+				}
+			}
+		}
+		return stateUpdate, nil
 	}
 }
 
@@ -870,4 +971,124 @@ func MessagesStateSchema() *StateSchema {
 		Default: func() any { return make(map[string]any) },
 	})
 	return schema
+}
+
+// buildAgentInvocation builds an invocation for the target agent.
+func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
+	// Extract user input from state.
+	var userInput string
+	if input, exists := state[StateKeyUserInput]; exists {
+		if inputStr, ok := input.(string); ok {
+			userInput = inputStr
+		}
+	}
+	// Extract session from state.
+	var sessionData *session.Session
+	if sess, exists := state[StateKeySession]; exists {
+		if sessData, ok := sess.(*session.Session); ok {
+			sessionData = sessData
+		}
+	}
+	// Extract execution context for invocation ID.
+	var invocationID string
+	if execCtx, exists := state[StateKeyExecContext]; exists {
+		if execContext, ok := execCtx.(*ExecutionContext); ok {
+			invocationID = execContext.InvocationID
+		}
+	}
+	// Create the invocation.
+	invocation := &agent.Invocation{
+		Agent:          targetAgent,
+		AgentName:      targetAgent.Info().Name,
+		Message:        model.NewUserMessage(userInput),
+		Session:        sessionData,
+		InvocationID:   invocationID,
+		AgentCallbacks: agentCallbacks,
+	}
+	return invocation
+}
+
+// emitAgentStartEvent emits an agent execution start event.
+func emitAgentStartEvent(
+	eventChan chan<- *event.Event,
+	invocationID, nodeID string,
+	startTime time.Time,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentStartEvent := NewNodeStartEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+	)
+
+	select {
+	case eventChan <- agentStartEvent:
+	default:
+	}
+}
+
+// emitAgentCompleteEvent emits an agent execution complete event.
+func emitAgentCompleteEvent(
+	eventChan chan<- *event.Event,
+	invocationID, agentName, nodeID string,
+	startTime, endTime time.Time,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentCompleteEvent := NewNodeCompleteEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+		WithNodeEventEndTime(endTime),
+	)
+
+	select {
+	case eventChan <- agentCompleteEvent:
+	default:
+	}
+}
+
+// emitAgentErrorEvent emits an agent execution error event.
+func emitAgentErrorEvent(
+	eventChan chan<- *event.Event,
+	invocationID, agentName, nodeID string,
+	startTime, endTime time.Time,
+	err error,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentErrorEvent := NewNodeErrorEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+		WithNodeEventEndTime(endTime),
+		WithNodeEventError(err.Error()),
+	)
+
+	select {
+	case eventChan <- agentErrorEvent:
+	default:
+	}
+}
+
+// findSubAgentByName looks up a sub-agent by name from the parent agent.
+func findSubAgentByName(parentAgent any, agentName string) agent.Agent {
+	// Try to cast to an interface that has SubAgents method.
+	type SubAgentProvider interface {
+		FindSubAgent(name string) agent.Agent
+	}
+	if provider, ok := parentAgent.(SubAgentProvider); ok {
+		return provider.FindSubAgent(agentName)
+	}
+	return nil
 }

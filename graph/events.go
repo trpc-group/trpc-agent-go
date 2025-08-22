@@ -79,6 +79,7 @@ const (
 	NodeTypeFunction NodeType = "function"
 	NodeTypeLLM      NodeType = "llm"
 	NodeTypeTool     NodeType = "tool"
+	NodeTypeAgent    NodeType = "agent"
 	NodeTypeJoin     NodeType = "join"
 	NodeTypeRouter   NodeType = "router"
 )

@@ -205,7 +205,15 @@ func (e *Executor) executeGraph(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
+	// Acquire read lock to safely iterate over state.
+	execCtx.stateMutex.RLock()
+	stateCopy := make(map[string]any)
 	for key, value := range execCtx.State {
+		stateCopy[key] = value
+	}
+	execCtx.stateMutex.RUnlock()
+	// Process the copy to avoid concurrent access during JSON marshaling.
+	for key, value := range stateCopy {
 		if jsonData, err := json.Marshal(value); err == nil {
 			completionEvent.StateDelta[key] = jsonData
 		}
