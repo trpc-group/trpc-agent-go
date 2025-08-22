@@ -149,7 +149,7 @@ func (vs *VectorStore) ensureIndex() error {
 
 	exists, err := vs.indexExists(ctx, vs.option.indexName)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch index exists: %w", err)
 	}
 
 	if exists {
@@ -209,7 +209,7 @@ func (vs *VectorStore) indexExists(ctx context.Context, indexName string) (bool,
 		vs.client.Indices.Exists.WithContext(ctx),
 	)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("elasticsearch index exists: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -220,7 +220,7 @@ func (vs *VectorStore) indexExists(ctx context.Context, indexName string) (bool,
 func (vs *VectorStore) createIndex(ctx context.Context, indexName string, body *indexCreateBody) error {
 	mappingBytes, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch marshal index create body: %w", err)
 	}
 
 	res, err := vs.client.Indices.Create(
@@ -229,7 +229,7 @@ func (vs *VectorStore) createIndex(ctx context.Context, indexName string, body *
 		vs.client.Indices.Create.WithBody(bytes.NewReader(mappingBytes)),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch create index: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -239,8 +239,8 @@ func (vs *VectorStore) createIndex(ctx context.Context, indexName string, body *
 	return nil
 }
 
-// buildESDocument creates an Elasticsearch document from document.Document and embedding.
-func buildESDocument(doc *document.Document, embedding []float64) *esDocument {
+// newESDocument creates an Elasticsearch document from document.Document and embedding.
+func newESDocument(doc *document.Document, embedding []float64) *esDocument {
 	return &esDocument{
 		Document:  doc,
 		Embedding: embedding,
@@ -263,7 +263,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	}
 
 	// Prepare document for indexing using helper function.
-	esDoc := buildESDocument(doc, embedding)
+	esDoc := newESDocument(doc, embedding)
 
 	return vs.indexDocument(ctx, vs.option.indexName, doc.ID, esDoc)
 }
@@ -272,7 +272,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, document *esDocument) error {
 	documentBytes, err := json.Marshal(document)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch marshal index document: %w", err)
 	}
 
 	res, err := vs.client.Index(
@@ -282,7 +282,7 @@ func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, 
 		vs.client.Index.WithDocumentID(id),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch index document: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -300,13 +300,13 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 
 	data, err := vs.getDocument(ctx, vs.option.indexName, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("elasticsearch get document: %w", err)
 	}
 
 	// Use official GetResult struct for better type safety.
 	var response types.GetResult
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("elasticsearch unmarshal get document: %w", err)
 	}
 
 	if !response.Found {
@@ -349,7 +349,7 @@ func (vs *VectorStore) getDocument(ctx context.Context, indexName, id string) ([
 		vs.client.Get.WithContext(ctx),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch marshal update document: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -380,7 +380,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Prepare document for updating using helper function.
-	esDoc := buildESDocument(doc, embedding)
+	esDoc := newESDocument(doc, embedding)
 
 	return vs.updateDocument(ctx, vs.option.indexName, doc.ID, esDoc)
 }
@@ -398,7 +398,7 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 	// Marshal the update document to JSON.
 	docBytes, err := json.Marshal(updateDoc)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch marshal update document: %w", err)
 	}
 
 	// Use official update.Request type.
@@ -408,7 +408,7 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 	// Marshal the complete update request.
 	updateBytes, err := json.Marshal(updateReq)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch marshal update request: %w", err)
 	}
 
 	res, err := vs.client.Update(
@@ -418,7 +418,7 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 		vs.client.Update.WithContext(ctx),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch update document: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -445,7 +445,7 @@ func (vs *VectorStore) deleteDocument(ctx context.Context, indexName, id string)
 		vs.client.Delete.WithContext(ctx),
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("elasticsearch delete document: %w", err)
 	}
 	defer res.Body.Close()
 
@@ -471,32 +471,37 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 
 	// Build search query based on search mode.
 	var searchQuery *types.SearchRequestBody
+	var err error
 
 	switch query.SearchMode {
 	case vectorstore.SearchModeVector:
-		searchQuery = vs.buildVectorSearchQuery(query)
+		searchQuery, err = vs.buildVectorSearchQuery(query)
 	case vectorstore.SearchModeKeyword:
 		if !vs.option.enableTSVector {
 			log.Infof("elasticsearch: keyword search is not supported when enableTSVector is disabled, use vector search instead")
-			searchQuery = vs.buildVectorSearchQuery(query)
+			searchQuery, err = vs.buildVectorSearchQuery(query)
 		} else {
-			searchQuery = vs.buildKeywordSearchQuery(query)
+			searchQuery, err = vs.buildKeywordSearchQuery(query)
 		}
 	case vectorstore.SearchModeHybrid:
 		if !vs.option.enableTSVector {
 			log.Infof("elasticsearch: hybrid search is not supported when enableTSVector is disabled, use vector search instead")
-			searchQuery = vs.buildVectorSearchQuery(query)
+			searchQuery, err = vs.buildVectorSearchQuery(query)
 		} else {
-			searchQuery = vs.buildHybridSearchQuery(query)
+			searchQuery, err = vs.buildHybridSearchQuery(query)
 		}
 	default:
-		searchQuery = vs.buildVectorSearchQuery(query)
+		searchQuery, err = vs.buildVectorSearchQuery(query)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch build search query: %w", err)
 	}
 
 	// Execute search.
 	data, err := vs.search(ctx, vs.option.indexName, searchQuery)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch search: %w", err)
 	}
 
 	// Parse search results.
@@ -507,7 +512,7 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 func (vs *VectorStore) search(ctx context.Context, indexName string, query *types.SearchRequestBody) ([]byte, error) {
 	queryBytes, err := json.Marshal(query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch marshal search query: %w", err)
 	}
 
 	res, err := vs.client.Search(
@@ -516,13 +521,13 @@ func (vs *VectorStore) search(ctx context.Context, indexName string, query *type
 		vs.client.Search.WithBody(bytes.NewReader(queryBytes)),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch search: %w", err)
 	}
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch read search response: %w", err)
 	}
 
 	if res.IsError() {
@@ -536,7 +541,7 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 	// Use official SearchResponse struct for better type safety.
 	var response search.Response
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch unmarshal search response: %w", err)
 	}
 
 	results := &vectorstore.SearchResult{

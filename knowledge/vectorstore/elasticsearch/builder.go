@@ -29,9 +29,12 @@ const (
 )
 
 // buildVectorSearchQuery builds a vector similarity search query.
-func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) *types.SearchRequestBody {
+func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	// Marshal query vector to a valid JSON array for script params.
-	vectorJSON, _ := json.Marshal(query.Vector)
+	vectorJSON, err := json.Marshal(query.Vector)
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch failed to marshal query vector: %w", err)
+	}
 
 	// Create script for cosine similarity using esdsl.
 	script := esdsl.NewScript().
@@ -54,11 +57,11 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) *t
 		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
 	}
 
-	return searchBody.SearchRequestBodyCaster()
+	return searchBody.SearchRequestBodyCaster(), nil
 }
 
 // buildKeywordSearchQuery builds a keyword-based search query.
-func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) *types.SearchRequestBody {
+func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	// Create multi_match query using esdsl.
 	multiMatchQuery := esdsl.NewMultiMatchQuery(query.Query).
 		Fields("content^2", "name^1.5").
@@ -74,13 +77,16 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) *
 		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
 	}
 
-	return searchBody.SearchRequestBodyCaster()
+	return searchBody.SearchRequestBodyCaster(), nil
 }
 
 // buildHybridSearchQuery builds a hybrid search query combining vector and keyword search.
-func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) *types.SearchRequestBody {
+func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	// Marshal query vector to a valid JSON array for script params.
-	vectorJSON, _ := json.Marshal(query.Vector)
+	vectorJSON, err := json.Marshal(query.Vector)
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch failed to marshal query vector: %w", err)
+	}
 
 	// Create script for vector similarity.
 	script := esdsl.NewScript().
@@ -113,7 +119,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) *t
 		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
 	}
 
-	return searchBody.SearchRequestBodyCaster()
+	return searchBody.SearchRequestBodyCaster(), nil
 }
 
 // buildFilterQuery builds a filter query for search results.

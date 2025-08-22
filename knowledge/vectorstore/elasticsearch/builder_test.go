@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
@@ -29,8 +30,8 @@ func TestBuildVectorSearchQuery(t *testing.T) {
 		SearchMode: vectorstore.SearchModeVector,
 	}
 
-	result := vs.buildVectorSearchQuery(query)
-
+	result, err := vs.buildVectorSearchQuery(query)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 20, *result.Size)
 	assert.NotNil(t, result.Query)
@@ -49,8 +50,8 @@ func TestBuildKeywordSearchQuery(t *testing.T) {
 		SearchMode: vectorstore.SearchModeKeyword,
 	}
 
-	result := vs.buildKeywordSearchQuery(query)
-
+	result, err := vs.buildKeywordSearchQuery(query)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 15, *result.Size)
 	assert.NotNil(t, result.Query)
@@ -70,8 +71,8 @@ func TestBuildHybridSearchQuery(t *testing.T) {
 		SearchMode: vectorstore.SearchModeHybrid,
 	}
 
-	result := vs.buildHybridSearchQuery(query)
-
+	result, err := vs.buildHybridSearchQuery(query)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 25, *result.Size)
 	assert.NotNil(t, result.Query)
