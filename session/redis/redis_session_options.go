@@ -9,12 +9,17 @@
 
 package redis
 
+import "time"
+
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
 	sessionEventLimit int
 	url               string
 	instanceName      string
 	extraOptions      []interface{}
+	sessionTTL        time.Duration // TTL for session state and event list
+	appStateTTL       time.Duration // TTL for app state
+	userStateTTL      time.Duration // TTL for user state
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -48,5 +53,29 @@ func WithRedisInstance(instanceName string) ServiceOpt {
 func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
+	}
+}
+
+// WithSessionTTL sets the TTL for session state and event list.
+// If not set, session will expire in 30 min, set 0 will not expire.
+func WithSessionTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.sessionTTL = ttl
+	}
+}
+
+// WithAppStateTTL sets the TTL for app state.
+// If not set, app state will not expire.
+func WithAppStateTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.appStateTTL = ttl
+	}
+}
+
+// WithUserStateTTL sets the TTL for user state.
+// If not set, user state will not expire.
+func WithUserStateTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.userStateTTL = ttl
 	}
 }
