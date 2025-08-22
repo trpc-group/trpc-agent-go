@@ -146,4 +146,4 @@ You can customize the React planner by:
 - Integrating additional tools
 - Adjusting the response processing logic
 
-See the `orchestration/planner/react` package for implementation details. 
+See the [planner/react](https://github.com/trpc-group/trpc-agent-go/tree/main/planner/react) package for implementation details. 
