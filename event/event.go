@@ -50,6 +50,10 @@ type Event struct {
 
 	// StateDelta contains state changes to be applied to the session.
 	StateDelta map[string][]byte `json:"stateDelta,omitempty"`
+
+	// StructuredOutput carries a typed, in-memory structured output payload.
+	// This is not serialized and is meant for immediate consumer access.
+	StructuredOutput any `json:"-"`
 }
 
 // Clone creates a deep copy of the event.
@@ -101,6 +105,14 @@ func WithObject(o string) Option {
 func WithStateDelta(stateDelta map[string][]byte) Option {
 	return func(e *Event) {
 		e.StateDelta = stateDelta
+	}
+}
+
+// WithStructuredOutputPayload sets a typed structured output payload on the event.
+// This data is not serialized and is intended for immediate consumption.
+func WithStructuredOutputPayload(payload any) Option {
+	return func(e *Event) {
+		e.StructuredOutput = payload
 	}
 }
 

@@ -69,6 +69,11 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	// Set generation configuration.
 	req.GenerationConfig = p.GenerationConfig
 
+	// Propagate structured output from invocation to request if present.
+	if invocation != nil && invocation.StructuredOutput != nil {
+		req.StructuredOutput = invocation.StructuredOutput
+	}
+
 	// Send a preprocessing event.
 	if invocation != nil {
 		evt := event.New(invocation.InvocationID, invocation.AgentName)
