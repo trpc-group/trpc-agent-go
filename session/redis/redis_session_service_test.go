@@ -204,11 +204,11 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 				assert.True(t, finalSess.UpdatedAt.After(initialTime))
 				assert.Equal(t, len(events), len(finalSess.Events))
 
-				// Redis returns events in reverse chronological order (newest first)
-				// event2 (newest), event1, event0 (oldest)
-				assert.Equal(t, "event2", finalSess.Events[0].ID)
+				// Redis returns events in chronological order (oldest first)
+				// event0 (oldest), event1, event2 (newest)
+				assert.Equal(t, "event0", finalSess.Events[0].ID)
 				assert.Equal(t, "event1", finalSess.Events[1].ID)
-				assert.Equal(t, "event0", finalSess.Events[2].ID)
+				assert.Equal(t, "event2", finalSess.Events[2].ID)
 			},
 		},
 		{
@@ -230,10 +230,10 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			},
 			validate: func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event) {
 				assert.Equal(t, 2, len(finalSess.Events))
-				// Redis returns events in reverse chronological order (newest first)
-				// event2 (newer timestamp) should come before event1
-				assert.Equal(t, "event2", finalSess.Events[0].ID)
-				assert.Equal(t, "event1", finalSess.Events[1].ID)
+				// Redis returns events in chronological order (oldest first)
+				// event1 (older timestamp) should come before event2
+				assert.Equal(t, "event1", finalSess.Events[0].ID)
+				assert.Equal(t, "event2", finalSess.Events[1].ID)
 			},
 		},
 	}
@@ -444,9 +444,9 @@ func TestService_GetSession(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				require.Len(t, sess.Events, 2)
-				// Redis uses ZRevRangeByScore, returning newest events first
-				assert.Equal(t, "event4", sess.Events[0].ID)
-				assert.Equal(t, "event3", sess.Events[1].ID)
+				// With limit, get latest 2 events but return in chronological order (oldest first)
+				assert.Equal(t, "event3", sess.Events[0].ID)
+				assert.Equal(t, "event4", sess.Events[1].ID)
 			},
 		},
 		{
@@ -462,9 +462,9 @@ func TestService_GetSession(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				require.Len(t, sess.Events, 2)
-				// Redis returns events after the specified time in reverse chronological order (newest first)
-				assert.Equal(t, "event4", sess.Events[0].ID)
-				assert.Equal(t, "event3", sess.Events[1].ID)
+				// Redis returns events after the specified time in chronological order (oldest first)
+				assert.Equal(t, "event3", sess.Events[0].ID)
+				assert.Equal(t, "event4", sess.Events[1].ID)
 			},
 		},
 		{
@@ -481,7 +481,7 @@ func TestService_GetSession(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, sess)
 				require.Len(t, sess.Events, 1)
-				// Redis returns the newest event after the time filter
+				// With limit=1, returns the newest event after the time filter
 				assert.Equal(t, "event4", sess.Events[0].ID)
 			},
 		},
@@ -501,6 +501,200 @@ func TestService_GetSession(t *testing.T) {
 
 			sess, err := tt.setup(service, baseTime)
 			tt.validate(t, sess, err, baseTime)
+		})
+	}
+}
+
+func TestService_AppendEvent_EventOrder(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupEvents   func() []*event.Event
+		expectedOrder []string
+		description   string
+	}{
+		{
+			name: "single_event_order",
+			setupEvents: func() []*event.Event {
+				return []*event.Event{
+					{
+						ID:           "event1",
+						Timestamp:    time.Now(),
+						Response:     &model.Response{Object: "message1", Done: false},
+						InvocationID: "inv1",
+						Author:       "agent1",
+					},
+				}
+			},
+			expectedOrder: []string{"event1"},
+			description:   "single event should be returned correctly",
+		},
+		{
+			name: "multiple_events_chronological_order",
+			setupEvents: func() []*event.Event {
+				baseTime := time.Now()
+				return []*event.Event{
+					{
+						ID:           "event1",
+						Timestamp:    baseTime.Add(-3 * time.Hour),
+						Response:     &model.Response{Object: "message1", Done: false},
+						InvocationID: "inv1",
+						Author:       "agent1",
+					},
+					{
+						ID:           "event2",
+						Timestamp:    baseTime.Add(-2 * time.Hour),
+						Response:     &model.Response{Object: "message2", Done: false},
+						InvocationID: "inv2",
+						Author:       "agent2",
+					},
+					{
+						ID:           "event3",
+						Timestamp:    baseTime.Add(-1 * time.Hour),
+						Response:     &model.Response{Object: "message3", Done: true},
+						InvocationID: "inv3",
+						Author:       "agent3",
+					},
+				}
+			},
+			expectedOrder: []string{"event1", "event2", "event3"},
+			description:   "multiple events should be returned in chronological order (oldest first)",
+		},
+		{
+			name: "events_added_out_of_order",
+			setupEvents: func() []*event.Event {
+				baseTime := time.Now()
+				// Add events in non-chronological order
+				return []*event.Event{
+					{
+						ID:           "event_newest",
+						Timestamp:    baseTime.Add(-1 * time.Hour),
+						Response:     &model.Response{Object: "newest", Done: false},
+						InvocationID: "inv_newest",
+						Author:       "agent_newest",
+					},
+					{
+						ID:           "event_oldest",
+						Timestamp:    baseTime.Add(-5 * time.Hour),
+						Response:     &model.Response{Object: "oldest", Done: false},
+						InvocationID: "inv_oldest",
+						Author:       "agent_oldest",
+					},
+					{
+						ID:           "event_middle",
+						Timestamp:    baseTime.Add(-3 * time.Hour),
+						Response:     &model.Response{Object: "middle", Done: true},
+						InvocationID: "inv_middle",
+						Author:       "agent_middle",
+					},
+				}
+			},
+			expectedOrder: []string{"event_oldest", "event_middle", "event_newest"},
+			description:   "events should be returned in chronological order even when added out of order",
+		},
+		{
+			name: "events_with_same_timestamp",
+			setupEvents: func() []*event.Event {
+				sameTime := time.Now().Add(-2 * time.Hour)
+				return []*event.Event{
+					{
+						ID:           "event_a",
+						Timestamp:    sameTime,
+						Response:     &model.Response{Object: "messageA", Done: false},
+						InvocationID: "inv_a",
+						Author:       "agent_a",
+					},
+					{
+						ID:           "event_b",
+						Timestamp:    sameTime,
+						Response:     &model.Response{Object: "messageB", Done: true},
+						InvocationID: "inv_b",
+						Author:       "agent_b",
+					},
+				}
+			},
+			expectedOrder: []string{"event_a", "event_b"},
+			description:   "events with same timestamp should be returned in insertion order",
+		},
+		{
+			name: "large_number_of_events",
+			setupEvents: func() []*event.Event {
+				baseTime := time.Now()
+				events := make([]*event.Event, 10)
+				for i := 0; i < 10; i++ {
+					events[i] = &event.Event{
+						ID:           fmt.Sprintf("event_%02d", i),
+						Timestamp:    baseTime.Add(time.Duration(-10+i) * time.Hour),
+						Response:     &model.Response{Object: fmt.Sprintf("message%d", i), Done: i%2 == 0},
+						InvocationID: fmt.Sprintf("inv_%d", i),
+						Author:       fmt.Sprintf("agent_%d", i),
+					}
+				}
+				return events
+			},
+			expectedOrder: []string{"event_00", "event_01", "event_02", "event_03", "event_04", "event_05", "event_06", "event_07", "event_08", "event_09"},
+			description:   "large number of events should be returned in correct chronological order",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			service, err := NewService(WithRedisClientURL(redisURL))
+			require.NoError(t, err)
+			defer service.Close()
+
+			// Create session
+			sessionKey := session.Key{
+				AppName:   "testapp",
+				UserID:    "user123",
+				SessionID: "session123",
+			}
+
+			initialState := session.StateMap{
+				"test_key": []byte("test_value"),
+			}
+
+			sess, err := service.CreateSession(context.Background(), sessionKey, initialState)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+
+			// Add events
+			events := tt.setupEvents()
+			for _, evt := range events {
+				err = service.AppendEvent(context.Background(), sess, evt, session.WithEventTime(evt.Timestamp))
+				require.NoError(t, err, "Failed to append event %s: %v", evt.ID, err)
+			}
+
+			// Get session and verify event order
+			finalSess, err := service.GetSession(context.Background(), sessionKey)
+			require.NoError(t, err)
+			require.NotNil(t, finalSess)
+
+			// Verify event count
+			assert.Equal(t, len(tt.expectedOrder), len(finalSess.Events),
+				"Expected %d events, got %d. Description: %s",
+				len(tt.expectedOrder), len(finalSess.Events), tt.description)
+
+			// Verify event order
+			actualOrder := make([]string, len(finalSess.Events))
+			for i, evt := range finalSess.Events {
+				actualOrder[i] = evt.ID
+			}
+
+			assert.Equal(t, tt.expectedOrder, actualOrder,
+				"Event order mismatch. Description: %s\nExpected: %v\nActual: %v",
+				tt.description, tt.expectedOrder, actualOrder)
+
+			// Verify event timestamp order
+			for i := 1; i < len(finalSess.Events); i++ {
+				assert.True(t,
+					finalSess.Events[i-1].Timestamp.Before(finalSess.Events[i].Timestamp) ||
+						finalSess.Events[i-1].Timestamp.Equal(finalSess.Events[i].Timestamp),
+					"Events should be in chronological order. Event %s (index %d) should come before or equal to event %s (index %d)",
+					finalSess.Events[i-1].ID, i-1, finalSess.Events[i].ID, i)
+			}
 		})
 	}
 }

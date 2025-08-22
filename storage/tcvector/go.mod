@@ -4,15 +4,20 @@ go 1.24.1
 
 toolchain go1.24.4
 
-require github.com/tencent/vectordatabase-sdk-go v1.8.0
+require (
+	github.com/stretchr/testify v1.10.0
+	github.com/tencent/vectordatabase-sdk-go v1.8.0
+)
 
 require (
 	github.com/clbanning/mxj v1.8.4 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ego/gse v0.80.3 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.66 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
@@ -22,4 +27,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

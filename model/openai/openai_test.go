@@ -12,6 +12,7 @@ package openai
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1775,5 +1776,299 @@ func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
 	// Check that content is also present
 	if responses[0].Choices[0].Message.Content != "Final answer" {
 		t.Errorf("Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
+	}
+}
+
+// TestFileOptions verifies the FileOptions struct and its option functions.
+func TestFileOptions(t *testing.T) {
+	t.Run("default_options", func(t *testing.T) {
+		opts := &FileOptions{}
+
+		if opts.Path != "" {
+			t.Errorf("expected Path to be empty, got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurpose("") {
+			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
+		}
+		if opts.Method != "" {
+			t.Errorf("expected Method to be empty, got %q", opts.Method)
+		}
+		if opts.Body != nil {
+			t.Errorf("expected Body to be nil, got %v", opts.Body)
+		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
+	})
+
+	t.Run("with_path_option", func(t *testing.T) {
+		opts := &FileOptions{}
+		WithPath("/custom/files")(opts)
+
+		if opts.Path != "/custom/files" {
+			t.Errorf("expected Path '/custom/files', got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurpose("") {
+			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
+		}
+		if opts.Method != "" {
+			t.Errorf("expected Method to be empty, got %q", opts.Method)
+		}
+		if opts.Body != nil {
+			t.Errorf("expected Body to be nil, got %v", opts.Body)
+		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
+	})
+
+	t.Run("with_purpose_option", func(t *testing.T) {
+		opts := &FileOptions{}
+		WithPurpose(openaigo.FilePurposeBatch)(opts)
+
+		if opts.Path != "" {
+			t.Errorf("expected Path to be empty, got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurposeBatch {
+			t.Errorf("expected Purpose 'batch', got %q", opts.Purpose)
+		}
+		if opts.Method != "" {
+			t.Errorf("expected Method to be empty, got %q", opts.Method)
+		}
+		if opts.Body != nil {
+			t.Errorf("expected Body to be nil, got %v", opts.Body)
+		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
+	})
+
+	t.Run("with_method_option", func(t *testing.T) {
+		opts := &FileOptions{}
+		WithMethod("PUT")(opts)
+
+		if opts.Path != "" {
+			t.Errorf("expected Path to be empty, got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurpose("") {
+			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
+		}
+		if opts.Method != "PUT" {
+			t.Errorf("expected Method 'PUT', got %q", opts.Method)
+		}
+		if opts.Body != nil {
+			t.Errorf("expected Body to be nil, got %v", opts.Body)
+		}
+	})
+
+	t.Run("with_body_option", func(t *testing.T) {
+		opts := &FileOptions{}
+		testBody := []byte("{\"test\":\"data\"}")
+		WithBody(testBody)(opts)
+
+		if opts.Path != "" {
+			t.Errorf("expected Path to be empty, got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurpose("") {
+			t.Errorf("expected Purpose to be empty, got %q", opts.Purpose)
+		}
+		if opts.Method != "" {
+			t.Errorf("expected Method to be empty, got %q", opts.Method)
+		}
+		if string(opts.Body) != string(testBody) {
+			t.Errorf("expected Body %q, got %q", string(testBody), string(opts.Body))
+		}
+		if opts.BaseURL != "" {
+			t.Errorf("expected BaseURL to be empty, got %q", opts.BaseURL)
+		}
+	})
+
+	t.Run("multiple_options", func(t *testing.T) {
+		opts := &FileOptions{}
+		testBody := []byte("{\"test\":\"data\"}")
+
+		WithPath("/custom/path")(opts)
+		WithPurpose(openaigo.FilePurposeUserData)(opts)
+		WithMethod("POST")(opts)
+		WithBody(testBody)(opts)
+
+		if opts.Path != "/custom/path" {
+			t.Errorf("expected Path '/custom/path', got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurposeUserData {
+			t.Errorf("expected Purpose 'user_data', got %q", opts.Purpose)
+		}
+		if opts.Method != "POST" {
+			t.Errorf("expected Method 'POST', got %q", opts.Method)
+		}
+		if string(opts.Body) != string(testBody) {
+			t.Errorf("expected Body %q, got %q", string(testBody), string(opts.Body))
+		}
+	})
+
+	t.Run("option_functions_return_functions", func(t *testing.T) {
+		pathOpt := WithPath("/test")
+		purposeOpt := WithPurpose(openaigo.FilePurposeBatch)
+		methodOpt := WithMethod("DELETE")
+		bodyOpt := WithBody([]byte("test"))
+		baseURLOpt := WithFileBaseURL("http://example.com/v1")
+
+		if pathOpt == nil || purposeOpt == nil || methodOpt == nil || bodyOpt == nil || baseURLOpt == nil {
+			t.Fatal("expected option functions to be non-nil")
+		}
+
+		opts := &FileOptions{}
+		pathOpt(opts)
+		purposeOpt(opts)
+		methodOpt(opts)
+		bodyOpt(opts)
+		baseURLOpt(opts)
+
+		if opts.Path != "/test" {
+			t.Errorf("expected Path '/test', got %q", opts.Path)
+		}
+		if opts.Purpose != openaigo.FilePurposeBatch {
+			t.Errorf("expected Purpose 'batch', got %q", opts.Purpose)
+		}
+		if opts.Method != "DELETE" {
+			t.Errorf("expected Method 'DELETE', got %q", opts.Method)
+		}
+		if string(opts.Body) != "test" {
+			t.Errorf("expected Body 'test', got %q", string(opts.Body))
+		}
+		if opts.BaseURL != "http://example.com/v1" {
+			t.Errorf("expected BaseURL 'http://example.com/v1', got %q", opts.BaseURL)
+		}
+	})
+}
+
+// TestUploadFileData_Success tests UploadFileData end-to-end with a mock server.
+func TestUploadFileData_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/files") {
+			http.Error(w, "bad", http.StatusBadRequest)
+			return
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "parse", http.StatusBadRequest)
+			return
+		}
+		vals := r.MultipartForm.Value["purpose"]
+		if len(vals) == 0 || vals[0] != string(openaigo.FilePurposeBatch) {
+			http.Error(w, "purpose", http.StatusBadRequest)
+			return
+		}
+		files := r.MultipartForm.File["file"]
+		if len(files) == 0 {
+			http.Error(w, "file", http.StatusBadRequest)
+			return
+		}
+		fh := files[0]
+		f, err := fh.Open()
+		if err != nil {
+			http.Error(w, "open", http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		b, _ := io.ReadAll(f)
+		if string(b) != "hello jsonl" {
+			http.Error(w, "content", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "{\"id\":\"file_test_1\",\"object\":\"file\",\"bytes\":%d,\"created_at\":123,\"filename\":%q,\"purpose\":%q}", len(b), fh.Filename, string(openaigo.FilePurposeBatch))
+	}))
+	defer server.Close()
+
+	// Model base URL is intentionally wrong; we rely on WithFileBaseURL override.
+	m := New("test-model", WithAPIKey("k"), WithBaseURL("http://wrong-base"))
+	id, err := m.UploadFileData(context.Background(), "batch_input.jsonl", []byte("hello jsonl"), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("UploadFileData failed: %v", err)
+	}
+	if id != "file_test_1" {
+		t.Fatalf("expected id=file_test_1, got %s", id)
+	}
+}
+
+// TestUploadFile_Success tests UploadFile with a temp file and mock server.
+func TestUploadFile_Success(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "batch_input_*.jsonl")
+	if err != nil {
+		t.Fatalf("temp: %v", err)
+	}
+	defer tmp.Close()
+	if _, err := tmp.WriteString("hello jsonl"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/files") {
+			http.Error(w, "bad", http.StatusBadRequest)
+			return
+		}
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "parse", http.StatusBadRequest)
+			return
+		}
+		files := r.MultipartForm.File["file"]
+		if len(files) == 0 {
+			http.Error(w, "file", http.StatusBadRequest)
+			return
+		}
+		fh := files[0]
+		f, _ := fh.Open()
+		defer f.Close()
+		b, _ := io.ReadAll(f)
+		if string(b) != "hello jsonl" {
+			http.Error(w, "content", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, "{\"id\":\"file_test_2\",\"object\":\"file\",\"bytes\":%d,\"created_at\":123,\"filename\":%q,\"purpose\":%q}", len(b), fh.Filename, string(openaigo.FilePurposeBatch))
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	id, err := m.UploadFile(context.Background(), tmp.Name(), WithPurpose(openaigo.FilePurposeBatch), WithPath(""), WithFileBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("UploadFile failed: %v", err)
+	}
+	if id != "file_test_2" {
+		t.Fatalf("expected id=file_test_2, got %s", id)
+	}
+}
+
+// TestGetFile_Success tests GetFile using a mock server.
+func TestGetFile_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Accept any path and method; return a valid file object JSON.
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"file_x","object":"file","bytes":10,"created_at":1,"filename":"a.jsonl","purpose":"batch"}`)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	obj, err := m.GetFile(context.Background(), "file_x")
+	if err != nil {
+		t.Fatalf("GetFile failed: %v", err)
+	}
+	if obj == nil || obj.ID != "file_x" {
+		t.Fatalf("unexpected file object: %#v", obj)
+	}
+}
+
+// TestDeleteFile_Success tests DeleteFile using a mock server.
+func TestDeleteFile_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Accept any path and method; return a valid deletion JSON.
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"file_z","object":"file","deleted":true}`)
+	}))
+	defer server.Close()
+
+	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
+	if err := m.DeleteFile(context.Background(), "file_z"); err != nil {
+		t.Fatalf("DeleteFile failed: %v", err)
 	}
 }

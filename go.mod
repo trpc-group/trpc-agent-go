@@ -5,6 +5,7 @@ go 1.24.1
 toolchain go1.24.4
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/docker/docker v28.3.2+incompatible
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/gomutex/godocx v0.1.5
