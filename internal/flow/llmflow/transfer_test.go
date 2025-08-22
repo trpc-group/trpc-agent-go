@@ -13,93 +13,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
-// Mock tool for compatibility testing
-type mockCompatibilityTool struct {
-	name        string
-	description string
-}
-
-func (m *mockCompatibilityTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{
-		Name:        m.name,
-		Description: m.description,
-	}
-}
-
-// Mock agent info for compatibility testing
-type mockCompatibilityAgentInfo struct {
-	name        string
-	description string
-}
-
-func (m *mockCompatibilityAgentInfo) Name() string        { return m.name }
-func (m *mockCompatibilityAgentInfo) Description() string { return m.description }
-
-// Mock sub-agent for compatibility testing
-type mockCompatibilitySubAgent struct {
-	info *mockCompatibilityAgentInfo
-}
-
-func (m *mockCompatibilitySubAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	return nil, nil
-}
-
-func (m *mockCompatibilitySubAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (m *mockCompatibilitySubAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        m.info.name,
-		Description: m.info.description,
-	}
-}
-
-func (m *mockCompatibilitySubAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (m *mockCompatibilitySubAgent) FindSubAgent(name string) agent.Agent {
-	return nil
-}
-
-// Mock agent for compatibility testing
-type mockCompatibilityAgent struct {
-	subAgents []agent.Agent
-}
-
-func (m *mockCompatibilityAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	return nil, nil
-}
-
-func (m *mockCompatibilityAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (m *mockCompatibilityAgent) Info() agent.Info {
-	return agent.Info{}
-}
-
-func (m *mockCompatibilityAgent) SubAgents() []agent.Agent {
-	return m.subAgents
-}
-
-func (m *mockCompatibilityAgent) FindSubAgent(name string) agent.Agent {
-	for _, a := range m.subAgents {
-		if a.Info().Name == name {
-			return a
-		}
-	}
-	return nil
-}
-
-// Mock invocation for compatibility testing
-type mockCompatibilityInvocation struct {
-	agent *mockCompatibilityAgent
-}
-
-func (m *mockCompatibilityInvocation) Agent() agent.Agent { return m.agent }
-
 func TestFindCompatibleTool(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -113,17 +26,17 @@ func TestFindCompatibleTool(t *testing.T) {
 			name:      "should find compatible tool when sub-agent exists",
 			requested: "weather-agent",
 			tools: map[string]tool.Tool{
-				transfer.TransferToolName: &mockCompatibilityTool{name: transfer.TransferToolName},
+				transfer.TransferToolName: &mockTransferTool{name: transfer.TransferToolName},
 			},
 			invocation: &agent.Invocation{
-				Agent: &mockCompatibilityAgent{
+				Agent: &mockTransferAgent{
 					subAgents: []agent.Agent{
-						&mockCompatibilitySubAgent{info: &mockCompatibilityAgentInfo{name: "weather-agent"}},
-						&mockCompatibilitySubAgent{info: &mockCompatibilityAgentInfo{name: "math-agent"}},
+						&mockTransferSubAgent{info: &mockTransferAgentInfo{name: "weather-agent"}},
+						&mockTransferSubAgent{info: &mockTransferAgentInfo{name: "math-agent"}},
 					},
 				},
 			},
-			expectedResult: &mockCompatibilityTool{name: transfer.TransferToolName},
+			expectedResult: &mockTransferTool{name: transfer.TransferToolName},
 			description:    "should return transfer tool when weather-agent is requested",
 		},
 		{
@@ -131,9 +44,9 @@ func TestFindCompatibleTool(t *testing.T) {
 			requested: "weather-agent",
 			tools:     map[string]tool.Tool{},
 			invocation: &agent.Invocation{
-				Agent: &mockCompatibilityAgent{
+				Agent: &mockTransferAgent{
 					subAgents: []agent.Agent{
-						&mockCompatibilitySubAgent{info: &mockCompatibilityAgentInfo{name: "weather-agent"}},
+						&mockTransferSubAgent{info: &mockTransferAgentInfo{name: "weather-agent"}},
 					},
 				},
 			},
@@ -144,7 +57,7 @@ func TestFindCompatibleTool(t *testing.T) {
 			name:      "should return nil when invocation is nil",
 			requested: "weather-agent",
 			tools: map[string]tool.Tool{
-				transfer.TransferToolName: &mockCompatibilityTool{name: transfer.TransferToolName},
+				transfer.TransferToolName: &mockTransferTool{name: transfer.TransferToolName},
 			},
 			invocation:     nil,
 			expectedResult: nil,
@@ -154,7 +67,7 @@ func TestFindCompatibleTool(t *testing.T) {
 			name:      "should return nil when agent is nil",
 			requested: "weather-agent",
 			tools: map[string]tool.Tool{
-				transfer.TransferToolName: &mockCompatibilityTool{name: transfer.TransferToolName},
+				transfer.TransferToolName: &mockTransferTool{name: transfer.TransferToolName},
 			},
 			invocation: &agent.Invocation{
 				Agent: nil,
@@ -166,13 +79,13 @@ func TestFindCompatibleTool(t *testing.T) {
 			name:      "should return nil when sub-agent not found",
 			requested: "unknown-agent",
 			tools: map[string]tool.Tool{
-				transfer.TransferToolName: &mockCompatibilityTool{name: transfer.TransferToolName},
+				transfer.TransferToolName: &mockTransferTool{name: transfer.TransferToolName},
 			},
 			invocation: &agent.Invocation{
-				Agent: &mockCompatibilityAgent{
+				Agent: &mockTransferAgent{
 					subAgents: []agent.Agent{
-						&mockCompatibilitySubAgent{info: &mockCompatibilityAgentInfo{name: "weather-agent"}},
-						&mockCompatibilitySubAgent{info: &mockCompatibilityAgentInfo{name: "math-agent"}},
+						&mockTransferSubAgent{info: &mockTransferAgentInfo{name: "weather-agent"}},
+						&mockTransferSubAgent{info: &mockTransferAgentInfo{name: "math-agent"}},
 					},
 				},
 			},
@@ -301,3 +214,90 @@ func TestSubAgentCall(t *testing.T) {
 		assert.Equal(t, "", input.Message)
 	})
 }
+
+// Mock tool for transfer testing
+type mockTransferTool struct {
+	name        string
+	description string
+}
+
+func (m *mockTransferTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        m.name,
+		Description: m.description,
+	}
+}
+
+// Mock agent info for transfer testing
+type mockTransferAgentInfo struct {
+	name        string
+	description string
+}
+
+func (m *mockTransferAgentInfo) Name() string        { return m.name }
+func (m *mockTransferAgentInfo) Description() string { return m.description }
+
+// Mock sub-agent for transfer testing
+type mockTransferSubAgent struct {
+	info *mockTransferAgentInfo
+}
+
+func (m *mockTransferSubAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (m *mockTransferSubAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockTransferSubAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.info.name,
+		Description: m.info.description,
+	}
+}
+
+func (m *mockTransferSubAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *mockTransferSubAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+// Mock agent for transfer testing
+type mockTransferAgent struct {
+	subAgents []agent.Agent
+}
+
+func (m *mockTransferAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (m *mockTransferAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockTransferAgent) Info() agent.Info {
+	return agent.Info{}
+}
+
+func (m *mockTransferAgent) SubAgents() []agent.Agent {
+	return m.subAgents
+}
+
+func (m *mockTransferAgent) FindSubAgent(name string) agent.Agent {
+	for _, a := range m.subAgents {
+		if a.Info().Name == name {
+			return a
+		}
+	}
+	return nil
+}
+
+// Mock invocation for transfer testing
+type mockTransferInvocation struct {
+	agent *mockTransferAgent
+}
+
+func (m *mockTransferInvocation) Agent() agent.Agent { return m.agent }
