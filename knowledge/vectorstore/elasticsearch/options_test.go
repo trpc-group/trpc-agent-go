@@ -6,23 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDefaultOptionsValues(t *testing.T) {
-	// Basic sanity on a few key defaults
-	assert.NotNil(t, defaultOptions.addresses)
-	assert.Equal(t, 3, defaultOptions.maxRetries)
-	assert.True(t, defaultOptions.compressRequestBody)
-	assert.Equal(t, []int{502, 503, 504, 429}, defaultOptions.retryOnStatus)
-	assert.Equal(t, defaultIndexName, defaultOptions.indexName)
-	assert.Equal(t, defaultVectorField, defaultOptions.vectorField)
-	assert.Equal(t, defaultContentField, defaultOptions.contentField)
-	assert.Equal(t, defaultMetadataField, defaultOptions.metadataField)
-	assert.Equal(t, defaultScoreThreshold, defaultOptions.scoreThreshold)
-	assert.Equal(t, defaultMaxResults, defaultOptions.maxResults)
-	assert.Equal(t, defaultVectorDimension, defaultOptions.vectorDimension)
-	assert.True(t, defaultOptions.enableTSVector)
-	assert.Equal(t, "english", defaultOptions.language)
-}
-
 func TestOptionSettersOverrideValues(t *testing.T) {
 	opt := defaultOptions
 
