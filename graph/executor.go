@@ -285,7 +285,15 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 			return nil, errors.New("no entry point defined")
 		}
 
-		task := e.createTask(entryPoint, execCtx.State, step)
+		// Acquire read lock to safely access state for task creation.
+		execCtx.stateMutex.RLock()
+		stateCopy := make(State, len(execCtx.State))
+		for key, value := range execCtx.State {
+			stateCopy[key] = value
+		}
+		execCtx.stateMutex.RUnlock()
+
+		task := e.createTask(entryPoint, stateCopy, step)
 		if task != nil {
 			tasks = append(tasks, task)
 		} else if entryPoint != End {

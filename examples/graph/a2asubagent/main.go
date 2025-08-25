@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -236,7 +237,10 @@ func (w *customerSupportWorkflow) setup() error {
 
 	// Create A2A agent for remote technical support.
 	a2aURL := fmt.Sprintf("http://%s", w.a2aHost)
-	a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(a2aURL))
+	a2aAgent, err := a2aagent.New(
+		a2aagent.WithAgentCardURL(a2aURL),
+		a2aagent.WithName(agentTechnicalSupport),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create a2a agent: %w", err)
 	}
@@ -302,8 +306,8 @@ func (w *customerSupportWorkflow) createCustomerSupportGraph() (*graph.Graph, er
 			graph.WithName("Analyze Customer Query"),
 			graph.WithDescription("Analyzes the customer query to determine type and priority"),
 		).
-		// Technical support using A2A agent.
-		AddAgentNode(nodeTechnicalSupport, agentTechnicalSupport,
+		// Technical support using A2A agent wrapper.
+		AddNode(nodeTechnicalSupport, w.handleTechnicalSupport,
 			graph.WithName("Technical Support"),
 			graph.WithDescription("Routes to A2A technical support agent for specialized assistance"),
 		).
@@ -416,73 +420,134 @@ func (w *customerSupportWorkflow) processQuery(ctx context.Context, query string
 		return fmt.Errorf("failed to run workflow: %w", err)
 	}
 
-	// Process and display events.
-	hasContent := false
-	var finalState graph.State
-	var responseContent strings.Builder
+	// Process streaming response.
+	return w.processStreamingResponse(events)
+}
 
-	for event := range events {
-		// Handle response events (from A2A agent)
-		if event.Response != nil {
-			if event.Response.Error != nil {
-				// Skip context cancellation errors as they're expected
-				if !strings.Contains(event.Response.Error.Message, "context canceled") {
-					fmt.Printf("Error: %s", event.Response.Error.Message)
-					hasContent = true
-				}
-				continue
-			}
-			if len(event.Response.Choices) > 0 {
-				choice := event.Response.Choices[0]
-				if choice.Delta.Content != "" {
-					responseContent.WriteString(choice.Delta.Content)
-					hasContent = true
-				} else if choice.Message.Content != "" {
-					responseContent.WriteString(choice.Message.Content)
-					hasContent = true
+// processStreamingResponse handles the streaming workflow response.
+func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
+	var (
+		stageCount      int
+		responseStarted bool
+	)
+
+	for event := range eventChan {
+		// Handle errors.
+		if event.Error != nil {
+			fmt.Printf("❌ Error: %s\n", event.Error.Message)
+			continue
+		}
+
+		// Track node execution events.
+		if event.Author == graph.AuthorGraphNode {
+			// Try to extract node metadata from StateDelta.
+			if event.StateDelta != nil {
+				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+					var nodeMetadata graph.NodeExecutionMetadata
+					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+						switch nodeMetadata.Phase {
+						case graph.ExecutionPhaseStart:
+							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+
+							// Add model information for LLM nodes.
+							if nodeMetadata.NodeType == graph.NodeTypeLLM {
+								fmt.Printf("   🤖 Using model: %s\n", w.modelName)
+
+								// Display model input if available.
+								if nodeMetadata.ModelInput != "" {
+									fmt.Printf("   📝 Model Input: %s\n", truncateString(nodeMetadata.ModelInput, 100))
+								}
+							}
+
+							// Add agent information for agent nodes.
+							if nodeMetadata.NodeType == graph.NodeTypeAgent {
+								fmt.Printf("   🤖 Executing A2A agent: %s\n", nodeMetadata.NodeID)
+							}
+						case graph.ExecutionPhaseComplete:
+							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						case graph.ExecutionPhaseError:
+							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						}
+					}
 				}
 			}
 		}
 
-		// Track state updates
+		// Process streaming content from LLM nodes and A2A agents (events with model names as authors).
+		if len(event.Choices) > 0 {
+			choice := event.Choices[0]
+			// Handle streaming delta content.
+			if choice.Delta.Content != "" {
+				if !responseStarted {
+					fmt.Print("🤖 Response: ")
+					responseStarted = true
+				}
+				fmt.Print(choice.Delta.Content)
+			}
+			// Add newline when streaming is complete (when choice is done).
+			if choice.Delta.Content == "" && responseStarted {
+				fmt.Println()           // Add newline after streaming completes
+				responseStarted = false // Reset for next response
+			}
+		}
+
+		// Check for A2A agent responses in state updates.
 		if event.StateDelta != nil {
-			// This is a completion event with final state
-			if finalState == nil {
-				finalState = make(graph.State)
-			}
-			// Create a copy of StateDelta to avoid concurrent access
-			stateDeltaCopy := make(map[string][]byte)
-			for key, valueBytes := range event.StateDelta {
-				stateDeltaCopy[key] = valueBytes
-			}
-			// Process the copy
-			for key, valueBytes := range stateDeltaCopy {
-				var value any
-				if err := json.Unmarshal(valueBytes, &value); err == nil {
-					finalState[key] = value
+			// Look for A2A agent responses in the state delta.
+			if responseData, exists := event.StateDelta[graph.StateKeyLastResponse]; exists {
+				var response *model.Response
+				if err := json.Unmarshal(responseData, &response); err == nil && response != nil {
+					if len(response.Choices) > 0 && response.Choices[0].Message.Content != "" {
+						if !responseStarted {
+							fmt.Print("🤖 A2A Agent Response: ")
+							responseStarted = true
+						}
+						fmt.Print(response.Choices[0].Message.Content)
+						fmt.Println() // Add newline after A2A response
+						responseStarted = false
+					}
 				}
 			}
 		}
-	}
 
-	// Print accumulated response content (only if it's not just error logs)
-	responseStr := responseContent.String()
-	if responseStr != "" {
-		fmt.Printf("%s", responseStr)
-	}
-
-	// If no response from events, check final state for response
-	if !hasContent && finalState != nil {
-		if response, exists := finalState[stateKeyResponse]; exists {
-			if respStr, ok := response.(string); ok {
-				fmt.Printf("%s", respStr)
-				hasContent = true
+		// Track workflow stages.
+		if event.Author == graph.AuthorGraphExecutor {
+			stageCount++
+			if stageCount >= 1 && len(event.Response.Choices) > 0 {
+				content := event.Response.Choices[0].Message.Content
+				if content != "" {
+					fmt.Printf("\n🔄 Stage %d completed, %s\n", stageCount, content)
+				} else {
+					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
+				}
 			}
 		}
-	}
 
-	if !hasContent {
-		fmt.Printf("No response received")
+		// Handle completion and final response.
+		if event.Done {
+			// Check for final response in the completion event.
+			if event.Response != nil && len(event.Response.Choices) > 0 {
+				content := event.Response.Choices[0].Message.Content
+				if content != "" && !responseStarted {
+					fmt.Print("🤖 Final Response: ")
+					fmt.Println(content)
+				}
+			}
+
+			// Check for final answer in state delta.
+			if event.StateDelta != nil {
+				if finalAnswerData, exists := event.StateDelta[stateKeyFinalAnswer]; exists {
+					var finalAnswer string
+					if err := json.Unmarshal(finalAnswerData, &finalAnswer); err == nil && finalAnswer != "" {
+						if !responseStarted {
+							fmt.Print("🤖 Final Response: ")
+							fmt.Println(finalAnswer)
+						}
+					}
+				}
+			}
+			break
+		}
 	}
 
 	return nil
@@ -566,6 +631,71 @@ func (w *customerSupportWorkflow) handleBillingQuery(ctx context.Context, state 
 		Build(), nil
 }
 
+// handleTechnicalSupport handles technical support queries using the A2A agent.
+func (w *customerSupportWorkflow) handleTechnicalSupport(ctx context.Context, state graph.State) (any, error) {
+	query := state[stateKeyCustomerQuery].(string)
+
+	// Create user message for A2A agent.
+	userMessage := model.Message{
+		Role:    model.RoleUser,
+		Content: query,
+	}
+
+	// Get the A2A agent from the parent agent.
+	parentAgent := state[graph.StateKeyParentAgent].(*graphagent.GraphAgent)
+	a2aAgent := parentAgent.FindSubAgent(agentTechnicalSupport)
+	if a2aAgent == nil {
+		return newStateBuilder().
+			SetResponse("Technical support agent is currently unavailable. Please try again later.").
+			Build(), nil
+	}
+
+	// Create a temporary session for A2A agent call.
+	sessionService := inmemory.NewSessionService()
+	tempRunner := runner.NewRunner("temp-a2a", a2aAgent, runner.WithSessionService(sessionService))
+
+	userID := "temp-user"
+	sessionID := fmt.Sprintf("temp-session-%d", time.Now().UnixNano())
+
+	// Call the A2A agent.
+	events, err := tempRunner.Run(ctx, userID, sessionID, userMessage)
+	if err != nil {
+		return newStateBuilder().
+			SetResponse(fmt.Sprintf("Error calling technical support agent: %v", err)).
+			Build(), nil
+	}
+
+	// Collect the response from the A2A agent.
+	var responseContent strings.Builder
+	for event := range events {
+		if event.Response != nil && event.Response.Error != nil {
+			// Skip context cancellation errors as they're expected
+			if !strings.Contains(event.Response.Error.Message, "context canceled") {
+				responseContent.WriteString(fmt.Sprintf("Error: %s", event.Response.Error.Message))
+			}
+			continue
+		}
+		if event.Response != nil && len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
+			if choice.Delta.Content != "" {
+				responseContent.WriteString(choice.Delta.Content)
+			} else if choice.Message.Content != "" {
+				responseContent.WriteString(choice.Message.Content)
+			}
+		}
+	}
+
+	response := responseContent.String()
+	if response == "" {
+		response = "Technical support agent is currently busy. Please try again later."
+	}
+
+	// Return state update with response
+	return newStateBuilder().
+		SetResponse(response).
+		Build(), nil
+}
+
 // handleGeneralQuery handles general customer service queries.
 func (w *customerSupportWorkflow) handleGeneralQuery(ctx context.Context, state graph.State) (any, error) {
 	query := state[stateKeyCustomerQuery].(string)
@@ -611,15 +741,10 @@ func (w *customerSupportWorkflow) formatFinalResponse(ctx context.Context, state
 		"Thank you for contacting our support team!",
 		queryType, priority, response)
 
-	// Return a model response that will generate an event
-	return &model.Response{
-		Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: finalResponse,
-			},
-		}},
-	}, nil
+	// Return state update with final response
+	return newStateBuilder().
+		SetFinalAnswer(finalResponse).
+		Build(), nil
 }
 
 // Helper functions.
@@ -676,4 +801,12 @@ func (sb *stateBuilder) SetFinalAnswer(answer string) *stateBuilder {
 // Build returns the built state.
 func (sb *stateBuilder) Build() graph.State {
 	return sb.state
+}
+
+// truncateString truncates a string to the specified length and adds ellipsis if needed.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
