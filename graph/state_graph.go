@@ -132,6 +132,17 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 	}
 }
 
+// WithAgentNodeEventCallback sets a callback that will be executed when an agent event is emitted.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.AgentEvent = append(node.callbacks.AgentEvent, callback)
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -191,7 +202,7 @@ func (sg *StateGraph) AddAgentNode(
 	agentName string,
 	opts ...Option,
 ) *StateGraph {
-	agentNodeFunc := NewAgentNodeFunc(agentName)
+	agentNodeFunc := NewAgentNodeFunc(agentName, opts...)
 	// Add agent node type option.
 	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
 	sg.AddNode(id, agentNodeFunc, agentOpts...)
@@ -539,7 +550,12 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 
 // NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
 // The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
-func NewAgentNodeFunc(agentName string) NodeFunc {
+func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
+	dummyNode := &Node{}
+	for _, opt := range opts {
+		opt(dummyNode)
+	}
+	nodeCallbacks := dummyNode.callbacks
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
 		defer span.End()
@@ -590,6 +606,14 @@ func NewAgentNodeFunc(agentName string) NodeFunc {
 		// Forward all events from the target agent.
 		var acc string
 		for agentEvent := range agentEventChan {
+			if nodeCallbacks != nil {
+				for _, callback := range nodeCallbacks.AgentEvent {
+					callback(ctx, &NodeCallbackContext{
+						NodeID:   nodeID,
+						NodeName: agentName,
+					}, state, agentEvent)
+				}
+			}
 			// Forward the event to the parent event channel.
 			select {
 			case eventChan <- agentEvent:
