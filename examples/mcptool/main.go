@@ -39,6 +39,10 @@ func main() {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time, echo, add, get_weather, get_news, sse_echo, sse_info\n")
+	fmt.Printf("🔄 Retry configuration by transport:\n")
+	fmt.Printf("   • STDIO tools: No retry (local process failures are usually permanent)\n")
+	fmt.Printf("   • Streamable tools: Basic retry (3 attempts for HTTP requests)\n")
+	fmt.Printf("   • SSE tools: Advanced retry (5 attempts with gentle backoff for persistent connections)\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -99,10 +103,11 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			Timeout:   10 * time.Second,
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
+		// No retry configuration - STDIO failures are usually permanent (process start issues).
 	)
 	fmt.Println("STDIO MCP Toolset created successfully")
 
-	// Create Streamable MCP tools.
+	// Create Streamable MCP tools with basic retry (recommended for HTTP-based transports).
 	streamableToolSet := mcp.NewMCPToolSet(
 		mcp.ConnectionConfig{
 			Transport: "streamable_http",
@@ -110,10 +115,11 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			Timeout:   10 * time.Second,
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+		mcp.WithSimpleRetry(3), // Basic retry for network requests.
 	)
-	fmt.Println("Streamable MCP Toolset created successfully")
+	fmt.Println("Streamable MCP Toolset created successfully with retry support")
 
-	// Create SSE MCP tools.
+	// Create SSE MCP tools with advanced retry (long-lived connections may need more attempts).
 	sseToolSet := mcp.NewMCPToolSet(
 		mcp.ConnectionConfig{
 			Transport: "sse",
@@ -124,8 +130,14 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			},
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+		mcp.WithRetry(mcp.RetryConfig{
+			MaxRetries:     5,
+			InitialBackoff: 1 * time.Second,  // Longer initial delay for SSE reconnection
+			BackoffFactor:  1.5,              // Gentler backoff for persistent connections
+			MaxBackoff:     15 * time.Second, // Higher max for connection recovery
+		}), // Advanced retry configuration for persistent connections
 	)
-	fmt.Println("SSE MCP Toolset created successfully")
+	fmt.Println("SSE MCP Toolset created successfully with advanced retry support")
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{

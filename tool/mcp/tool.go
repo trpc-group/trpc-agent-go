@@ -55,6 +55,12 @@ func (t *mcpTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		rawArguments = make(map[string]any)
 	}
 
+	// Thread-safe access to retry configuration
+	retryConfig := t.sessionManager.getRetryConfig()
+	if retryConfig != nil {
+		return t.callWithRetry(ctx, rawArguments, retryConfig)
+	}
+
 	return t.callOnce(ctx, rawArguments)
 }
 
@@ -66,6 +72,16 @@ func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]any) (any, 
 	}
 
 	return content, nil
+}
+
+// callWithRetry performs MCP tool call with retry logic using exponential backoff.
+func (t *mcpTool) callWithRetry(ctx context.Context, arguments map[string]any, retryConfig *RetryConfig) (any, error) {
+	operation := func() (any, error) {
+		return t.callOnce(ctx, arguments)
+	}
+
+	operationName := fmt.Sprintf("mcp_tool_%s", t.mcpToolRef.Name)
+	return executeWithRetry(ctx, retryConfig, operation, operationName)
 }
 
 // Declaration implements the Tool interface.
