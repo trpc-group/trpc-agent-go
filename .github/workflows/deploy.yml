@@ -5,6 +5,8 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'mkdocs.yml'
+  workflow_dispatch:
 permissions:
   contents: write # write to gh-pages branch
 jobs:
