@@ -9,22 +9,8 @@ nav:
   - Overview: index.md
   - Components:
     - Agent: agent.md
-    - MultiAgent: multiagent.md
-    - Runner: runner.md
-    - Model: model.md
-    - Tool: tool.md
-    - Session: session.md
-    - Memory: memory.md
-    - Knowledge: knowledge.md
     - Planner: planner.md
-    - Callback: callback.md
-    - Graph: graph.md
     - Event: event.md
-  - Debug: debugserver.md
-  - Observability: observability.md
-  - A2A: a2a.md
-  - Artifacts: artifacts.md
-  - Ecosystem: ecosystem.md
 
 plugins:
   - search
@@ -43,22 +29,8 @@ plugins:
             - 概览: index.md
             - 组件:
               - Agent: agent.md
-              - MultiAgent: multiagent.md
-              - Runner: runner.md
-              - Model: model.md
-              - Tool: tool.md
-              - Session: session.md
-              - Memory: memory.md
-              - Knowledge: knowledge.md
               - Planner: planner.md
-              - Callback: callback.md
-              - Graph: graph.md
               - Event: event.md
-            - 调试: debugserver.md
-            - 可观测: observability.md
-            - A2A: a2a.md
-            - 制品: artifacts.md
-            - 生态: ecosystem.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: iso_datetime
