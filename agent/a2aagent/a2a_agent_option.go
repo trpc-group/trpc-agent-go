@@ -45,3 +45,26 @@ func WithAgentCard(agentCard *server.AgentCard) Option {
 		a.agentCard = agentCard
 	}
 }
+
+// WithForceNonStreaming forces the agent to use non-streaming mode
+// even if the remote agent supports streaming
+func WithForceNonStreaming(force bool) Option {
+	return func(a *A2AAgent) {
+		a.forceNonStreaming = force
+	}
+}
+
+// WithCustomEventConverter adds a custom A2A event converter to the A2AAgent.
+func WithCustomEventConverter(converter A2AEventConverter) Option {
+	return func(a *A2AAgent) {
+		a.customEventConverters = converter
+	}
+}
+
+// WithCustomA2AConverter adds a custom A2A message converter to the A2AAgent.
+// This converter will be used to convert invocations to A2A protocol messages.
+func WithCustomA2AConverter(converter EventA2AConverter) Option {
+	return func(a *A2AAgent) {
+		a.customA2AConverters = converter
+	}
+}
