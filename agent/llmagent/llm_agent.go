@@ -172,7 +172,7 @@ func WithOutputKey(outputKey string) Option {
 // WithOutputSchema sets the JSON schema for validating agent output.
 // When this is set, the agent can ONLY reply and CANNOT use any tools,
 // such as function tools, RAGs, agent transfer, etc.
-func WithOutputSchema(schema map[string]interface{}) Option {
+func WithOutputSchema(schema map[string]any) Option {
 	return func(opts *Options) {
 		opts.OutputSchema = schema
 	}
@@ -181,7 +181,7 @@ func WithOutputSchema(schema map[string]interface{}) Option {
 // WithInputSchema sets the JSON schema for validating agent input.
 // When this is set, the agent's input will be validated against this schema
 // when used as a tool or when receiving input from other agents.
-func WithInputSchema(schema map[string]interface{}) Option {
+func WithInputSchema(schema map[string]any) Option {
 	return func(opts *Options) {
 		opts.InputSchema = schema
 	}
@@ -319,11 +319,11 @@ type Options struct {
 	OutputKey string
 	// OutputSchema is the JSON schema for validating agent output.
 	// When this is set, the agent can ONLY reply and CANNOT use any tools.
-	OutputSchema map[string]interface{}
+	OutputSchema map[string]any
 	// InputSchema is the JSON schema for validating agent input.
 	// When this is set, the agent's input will be validated against this schema
 	// when used as a tool or when receiving input from other agents.
-	InputSchema map[string]interface{}
+	InputSchema map[string]any
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
@@ -351,9 +351,9 @@ type LLMAgent struct {
 	agentCallbacks       *agent.Callbacks
 	modelCallbacks       *model.Callbacks
 	toolCallbacks        *tool.Callbacks
-	outputKey            string                 // Key to store output in session state
-	outputSchema         map[string]interface{} // JSON schema for output validation
-	inputSchema          map[string]interface{} // JSON schema for input validation
+	outputKey            string         // Key to store output in session state
+	outputSchema         map[string]any // JSON schema for output validation
+	inputSchema          map[string]any // JSON schema for input validation
 	structuredOutput     *model.StructuredOutput
 	structuredOutputType reflect.Type
 }
@@ -368,66 +368,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Prepare request processors in the correct order.
-	var requestProcessors []flow.RequestProcessor
-
-	// 1. Basic processor - handles generation config.
-	basicOptions := []processor.BasicOption{
-		processor.WithGenerationConfig(options.GenerationConfig),
-	}
-	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
-	requestProcessors = append(requestProcessors, basicProcessor)
-
-	// 2. Planning processor - handles planning instructions if planner is configured.
-	if options.Planner != nil {
-		planningProcessor := processor.NewPlanningRequestProcessor(options.Planner)
-		requestProcessors = append(requestProcessors, planningProcessor)
-	}
-
-	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" ||
-		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
-		instructionOpts := []processor.InstructionRequestProcessorOption{
-			processor.WithOutputSchema(options.OutputSchema),
-		}
-		// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
-		if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
-			instructionOpts = append(instructionOpts,
-				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
-			)
-		}
-		instructionProcessor := processor.NewInstructionRequestProcessor(
-			options.Instruction,
-			options.GlobalInstruction,
-			instructionOpts...,
-		)
-		requestProcessors = append(requestProcessors, instructionProcessor)
-	}
-
-	// 4. Identity processor - sets agent identity.
-	if name != "" || options.Description != "" {
-		identityProcessor := processor.NewIdentityRequestProcessor(
-			name,
-			options.Description,
-			processor.WithAddNameToInstruction(options.AddNameToInstruction),
-		)
-		requestProcessors = append(requestProcessors, identityProcessor)
-	}
-
-	// 5. Time processor - adds current time information if enabled.
-	if options.AddCurrentTime {
-		timeProcessor := processor.NewTimeRequestProcessor(
-			processor.WithAddCurrentTime(true),
-			processor.WithTimezone(options.Timezone),
-			processor.WithTimeFormat(options.TimeFormat),
-		)
-		requestProcessors = append(requestProcessors, timeProcessor)
-	}
-
-	// 6. Content processor - handles messages from invocation.
-	contentProcessor := processor.NewContentRequestProcessor(
-		processor.WithAddContextPrefix(options.AddContextPrefix),
-	)
-	requestProcessors = append(requestProcessors, contentProcessor)
+	requestProcessors := buildRequestProcessors(name, &options)
 
 	// Prepare response processors.
 	var responseProcessors []flow.ResponseProcessor
@@ -500,6 +441,72 @@ func New(name string, opts ...Option) *LLMAgent {
 		structuredOutput:     options.StructuredOutput,
 		structuredOutputType: options.StructuredOutputType,
 	}
+}
+
+// buildRequestProcessors constructs the request processors in the required order.
+func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor {
+	var requestProcessors []flow.RequestProcessor
+
+	// 1. Basic processor - handles generation config.
+	basicOptions := []processor.BasicOption{
+		processor.WithGenerationConfig(options.GenerationConfig),
+	}
+	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
+	requestProcessors = append(requestProcessors, basicProcessor)
+
+	// 2. Planning processor - handles planning instructions if planner is configured.
+	if options.Planner != nil {
+		planningProcessor := processor.NewPlanningRequestProcessor(options.Planner)
+		requestProcessors = append(requestProcessors, planningProcessor)
+	}
+
+	// 3. Instruction processor - adds instruction content and system prompt.
+	if options.Instruction != "" || options.GlobalInstruction != "" ||
+		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+		instructionOpts := []processor.InstructionRequestProcessorOption{
+			processor.WithOutputSchema(options.OutputSchema),
+		}
+		// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
+		if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
+			instructionOpts = append(instructionOpts,
+				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
+			)
+		}
+		instructionProcessor := processor.NewInstructionRequestProcessor(
+			options.Instruction,
+			options.GlobalInstruction,
+			instructionOpts...,
+		)
+		requestProcessors = append(requestProcessors, instructionProcessor)
+	}
+
+	// 4. Identity processor - sets agent identity.
+	if name != "" || options.Description != "" {
+		identityProcessor := processor.NewIdentityRequestProcessor(
+			name,
+			options.Description,
+			processor.WithAddNameToInstruction(options.AddNameToInstruction),
+		)
+		requestProcessors = append(requestProcessors, identityProcessor)
+	}
+
+	// 5. Time processor - adds current time information if enabled.
+	if options.AddCurrentTime {
+		timeProcessor := processor.NewTimeRequestProcessor(
+			processor.WithAddCurrentTime(true),
+			processor.WithTimezone(options.Timezone),
+			processor.WithTimeFormat(options.TimeFormat),
+		)
+		requestProcessors = append(requestProcessors, timeProcessor)
+	}
+
+	// 6. Content processor - handles messages from invocation.
+	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithAddContextPrefix(options.AddContextPrefix),
+	)
+	requestProcessors = append(requestProcessors, contentProcessor)
+
+	return requestProcessors
 }
 
 func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {

@@ -351,7 +351,7 @@ type mockTool struct {
 	shouldError bool
 	shouldPanic bool
 	delay       time.Duration
-	result      interface{}
+	result      any
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -361,7 +361,7 @@ func (m *mockTool) Declaration() *tool.Declaration {
 	}
 }
 
-func (m *mockTool) Call(ctx context.Context, args []byte) (interface{}, error) {
+func (m *mockTool) Call(ctx context.Context, args []byte) (any, error) {
 	// Add delay to simulate processing time
 	if m.delay > 0 {
 		select {

@@ -26,9 +26,9 @@ type Info struct {
 	// Description is the description of the agent.
 	Description string
 	// InputSchema is the input schema of the agent.
-	InputSchema map[string]interface{}
+	InputSchema map[string]any
 	// OutputSchema is the output schema of the agent.
-	OutputSchema map[string]interface{}
+	OutputSchema map[string]any
 }
 
 // ErrorTypeStopAgentError is the error type used to indicate that an agent should stop execution.
