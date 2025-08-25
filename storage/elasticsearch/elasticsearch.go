@@ -21,22 +21,6 @@ import (
 	"github.com/elastic/go-elasticsearch/v9"
 )
 
-// DefaultConfig returns default Elasticsearch configuration.
-func DefaultConfig() *Config {
-	return &Config{
-		Addresses:           []string{"http://localhost:9200"},
-		MaxRetries:          3,
-		RetryOnTimeout:      true,
-		RequestTimeout:      30 * time.Second,
-		IndexPrefix:         "trpc_agent",
-		VectorDimension:     1536,
-		CompressRequestBody: true,
-		EnableMetrics:       false,
-		EnableDebugLogger:   false,
-		RetryOnStatus:       []int{502, 503, 504, 429},
-	}
-}
-
 // Config holds Elasticsearch client configuration.
 type Config struct {
 	// Addresses is a list of Elasticsearch node addresses.

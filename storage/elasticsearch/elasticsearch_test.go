@@ -13,6 +13,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// defaultConfig returns default Elasticsearch configuration.
+func defaultConfig() *Config {
+	return &Config{
+		Addresses:           []string{"http://localhost:9200"},
+		MaxRetries:          3,
+		RetryOnTimeout:      true,
+		RequestTimeout:      30 * time.Second,
+		IndexPrefix:         "trpc_agent",
+		VectorDimension:     1536,
+		CompressRequestBody: true,
+		EnableMetrics:       false,
+		EnableDebugLogger:   false,
+		RetryOnStatus: []int{
+			http.StatusRequestTimeout,     // 408
+			http.StatusConflict,           // 409
+			http.StatusTooManyRequests,    // 429
+			http.StatusBadGateway,         // 502
+			http.StatusServiceUnavailable, // 503
+			http.StatusGatewayTimeout,     // 504
+		},
+	}
+}
+
 // roundTripper allows mocking http.Transport.
 type roundTripper func(*http.Request) *http.Response
 
@@ -29,15 +52,6 @@ func newResponse(status int, body string) *http.Response {
 	}
 	resp.Header.Set("X-Elastic-Product", "Elasticsearch")
 	return resp
-}
-
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	require.Equal(t, []string{"http://localhost:9200"}, cfg.Addresses)
-	require.Equal(t, 3, cfg.MaxRetries)
-	require.True(t, cfg.RetryOnTimeout)
-	require.Equal(t, "trpc_agent", cfg.IndexPrefix)
-	require.Equal(t, 1536, cfg.VectorDimension)
 }
 
 func TestSetGetClientBuilder(t *testing.T) {
@@ -115,7 +129,7 @@ func TestDefaultClientBuilder_PassesOptions(t *testing.T) {
 		WithRetryOnStatus([]int{429, 503}),
 		WithMaxRetries(5),
 		WithRetryOnTimeout(true),
-		WithRequestTimeout(DefaultConfig().RequestTimeout),
+		WithRequestTimeout(defaultConfig().RequestTimeout),
 		WithIndexPrefix("pfx"),
 		WithVectorDimension(42),
 	)
@@ -189,7 +203,7 @@ func TestClient_Ping_SuccessAndError(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: DefaultConfig()}
+	c := &client{esClient: es, config: defaultConfig()}
 	require.NoError(t, c.Ping(context.Background()))
 
 	// Error.
@@ -200,7 +214,7 @@ func TestClient_Ping_SuccessAndError(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c = &client{esClient: esErr, config: DefaultConfig()}
+	c = &client{esClient: esErr, config: defaultConfig()}
 	err = c.Ping(context.Background())
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "ping failed"))
@@ -227,7 +241,7 @@ func TestClient_IndexLifecycle(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: DefaultConfig()}
+	c := &client{esClient: es, config: defaultConfig()}
 
 	require.NoError(t, c.CreateIndex(context.Background(), "idx", map[string]any{"m": 1}))
 	exists, err := c.IndexExists(context.Background(), "idx")
@@ -253,7 +267,7 @@ func TestClient_DocumentCRUD(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: DefaultConfig()}
+	c := &client{esClient: es, config: defaultConfig()}
 
 	require.NoError(t, c.IndexDocument(context.Background(), "idx", "id1", map[string]any{"k": "v"}))
 	body, err := c.GetDocument(context.Background(), "idx", "id1")
@@ -271,7 +285,7 @@ func TestClient_GetDocument_Error(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: DefaultConfig()}
+	c := &client{esClient: es, config: defaultConfig()}
 
 	_, err = c.GetDocument(context.Background(), "idx", "id1")
 	require.Error(t, err)
@@ -292,7 +306,7 @@ func TestClient_Search_And_Bulk(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: DefaultConfig()}
+	c := &client{esClient: es, config: defaultConfig()}
 
 	resp, err := c.Search(context.Background(), "idx", map[string]any{"q": 1})
 	require.NoError(t, err)
