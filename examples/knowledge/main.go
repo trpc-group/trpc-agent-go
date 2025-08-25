@@ -15,10 +15,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -40,6 +41,7 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -50,10 +52,21 @@ import (
 
 // command line flags.
 var (
-	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
-	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	modelName           = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	streaming           = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	embedderType        = flag.String("embedder", "openai", "Embedder type: openai, gemini")
+	vectorStore         = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	loadData            = flag.Bool("load_data", true, "Load data from a directory or file")
+	removeDataAfterLoad = flag.Bool("remove_data", true, "Remove data if it loaded in this round")
+)
+
+var (
+	// if not set sourceID, it will be generated automatically
+	fileLLMSourceID    = "file_llm_source_" + time.Now().Format("20060102150405")
+	fileGolangSourceID = "file_golang_source_" + time.Now().Format("20060102150405")
+	urlSourceID        = "url_source_" + time.Now().Format("20060102150405")
+	dirSourceID        = "dir_source_" + time.Now().Format("20060102150405")
+	autoSourceID       = "auto_source_" + time.Now().Format("20060102150405")
 )
 
 // Default values for optional configurations.
@@ -95,8 +108,44 @@ func main() {
 		vectorStore:  *vectorStore,
 	}
 
-	if err := chat.run(); err != nil {
-		log.Fatalf("Chat failed: %v", err)
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run chat in a goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- chat.run()
+	}()
+
+	// Wait for either completion or signal
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Fatalf("Chat failed: %v", err)
+		}
+		// Normal completion, perform cleanup
+		cleanupSources(chat)
+	case sig := <-sigChan:
+		log.Infof("Received signal %v, performing cleanup...", sig)
+		// Signal received, perform cleanup
+		cleanupSources(chat)
+		log.Infof("Cleanup completed, exiting...")
+		os.Exit(0)
+	}
+}
+
+// cleanupSources removes loaded sources if configured to do so
+func cleanupSources(chat *knowledgeChat) {
+	if *removeDataAfterLoad && *loadData && chat.kb != nil {
+		sourceIDs := []string{fileLLMSourceID, fileGolangSourceID, urlSourceID, dirSourceID, autoSourceID}
+		for _, sourceID := range sourceIDs {
+			deleted, err := chat.kb.RemoveSource(context.Background(), sourceID)
+			if err != nil {
+				log.Errorf("Remove source failed: %v", err)
+			}
+			log.Infof("Removed %d documents from source %s", deleted, sourceID)
+		}
 	}
 }
 
@@ -149,6 +198,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
+		llmagent.WithKnowledgeFilter(map[string]interface{}{"tag": "llm"}),
 	)
 
 	// Create session service.
@@ -198,6 +248,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
+			vectortcvector.WithCollection("examplegolang"),
+			vectortcvector.WithFilterFields([]string{"tag"}),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -229,16 +281,28 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./data/llm.md",
 			},
 			filesource.WithName("Large Language Model"),
-			filesource.WithMetadataValue("type", "documentation"),
+			filesource.WithMetadataValue("type", "llm"),
+			filesource.WithSourceID(fileLLMSourceID),
+			filesource.WithMetadataValue("tag", "llm"),
 		),
-
+		filesource.New(
+			[]string{
+				"./data/golang.md",
+			},
+			filesource.WithName("Golang"),
+			filesource.WithMetadataValue("type", "golang"),
+			filesource.WithSourceID(fileGolangSourceID),
+			filesource.WithMetadataValue("tag", "golang"),
+		),
 		dirsource.New(
 			[]string{
 				"./dir",
 			},
 			dirsource.WithName("Data Directory"),
+			dirsource.WithMetadataValue("type", "transformer"),
+			dirsource.WithMetadataValue("tag", "llm"),
+			dirsource.WithSourceID(dirSourceID),
 		),
-
 		// URL source for web content.
 		urlsource.New(
 			[]string{
@@ -247,8 +311,9 @@ func (c *knowledgeChat) createSources() []source.Source {
 			urlsource.WithName("Byte-pair encoding"),
 			urlsource.WithMetadataValue("topic", "Byte-pair encoding"),
 			urlsource.WithMetadataValue("source", "official"),
+			urlsource.WithMetadataValue("tag", "llm"),
+			urlsource.WithSourceID(urlSourceID),
 		),
-
 		// Auto source that can handle mixed inputs.
 		autosource.New(
 			[]string{
@@ -259,6 +324,8 @@ func (c *knowledgeChat) createSources() []source.Source {
 			autosource.WithName("Mixed Content Source"),
 			autosource.WithMetadataValue("topic", "Cloud Computing"),
 			autosource.WithMetadataValue("type", "mixed"),
+			autosource.WithMetadataValue("tag", "llm"),
+			autosource.WithSourceID(autoSourceID),
 		),
 	}
 	return sources
@@ -288,15 +355,17 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithSources(sources),
 	)
 	// Load the knowledge base.
-	if err := c.kb.Load(
-		ctx,
-		knowledge.WithShowProgress(false),  // The default is true.
-		knowledge.WithProgressStepSize(10), // The default is 10.
-		knowledge.WithShowStats(false),     // The default is true.
-		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
-		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
-	); err != nil {
-		return fmt.Errorf("failed to load knowledge base: %w", err)
+	if *loadData {
+		if err := c.kb.Load(
+			ctx,
+			knowledge.WithShowProgress(false),  // The default is true.
+			knowledge.WithProgressStepSize(10), // The default is 10.
+			knowledge.WithShowStats(false),     // The default is true.
+			knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+			knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
+		); err != nil {
+			return fmt.Errorf("failed to load knowledge base: %w", err)
+		}
 	}
 	return nil
 }

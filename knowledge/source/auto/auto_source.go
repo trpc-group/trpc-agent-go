@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 )
 
@@ -36,6 +37,7 @@ const (
 type Source struct {
 	inputs       []string
 	name         string
+	sourceID     string
 	metadata     map[string]interface{}
 	textReader   reader.Reader
 	chunkSize    int
@@ -55,6 +57,11 @@ func New(inputs []string, opts ...Option) *Source {
 	// Apply options first so chunk config is captured.
 	for _, opt := range opts {
 		opt(sourceObj)
+	}
+
+	// Generate default sourceID if not set
+	if sourceObj.sourceID == "" {
+		sourceObj.sourceID = isource.GenerateDefaultSourceID(autoSourceType, sourceObj.name)
 	}
 
 	// Initialize readers.
@@ -108,6 +115,11 @@ func (s *Source) Type() string {
 	return source.TypeAuto
 }
 
+// SourceID returns the unique identifier for this source.
+func (s *Source) SourceID() string {
+	return s.sourceID
+}
+
 // processInput determines the input type and processes it accordingly.
 func (s *Source) processInput(ctx context.Context, input string) ([]*document.Document, error) {
 	// Check if it's a URL.
@@ -150,6 +162,7 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 		[]string{input},
 		urlsource.WithChunkSize(s.chunkSize),
 		urlsource.WithChunkOverlap(s.chunkOverlap),
+		urlsource.WithSourceID(s.sourceID),
 	)
 	// Copy metadata.
 	for k, v := range s.metadata {
@@ -164,6 +177,7 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 		[]string{input},
 		dirsource.WithChunkSize(s.chunkSize),
 		dirsource.WithChunkOverlap(s.chunkOverlap),
+		dirsource.WithSourceID(s.sourceID),
 	)
 	// Copy metadata.
 	for k, v := range s.metadata {
@@ -178,8 +192,8 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 		[]string{input},
 		filesource.WithChunkSize(s.chunkSize),
 		filesource.WithChunkOverlap(s.chunkOverlap),
+		filesource.WithSourceID(s.sourceID),
 	)
-
 	// Copy metadata.
 	for k, v := range s.metadata {
 		fileSource.SetMetadata(k, v)
@@ -190,7 +204,25 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 // processAsText processes the input as text content.
 func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
-	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	docs, err := s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+	
+	// Add metadata for each document
+	for _, doc := range docs {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]interface{})
+		}
+		// Copy existing metadata
+		for k, v := range s.metadata {
+			doc.Metadata[k] = v
+		}
+		doc.Metadata[source.MetaSource] = source.TypeAuto
+		doc.Metadata[source.MetaSourceID] = s.sourceID
+	}
+	
+	return docs, nil
 }
 
 // SetMetadata sets metadata for this source.

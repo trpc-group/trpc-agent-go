@@ -66,3 +66,12 @@ func WithChunkOverlap(overlap int) Option {
 		s.chunkOverlap = overlap
 	}
 }
+
+// WithSourceID sets the source ID for the Source.
+// Note: The provided ID should be globally unique across all sources to avoid conflicts.
+// If not set, a default unique ID will be automatically generated.
+func WithSourceID(id string) Option {
+	return func(s *Source) {
+		s.sourceID = id
+	}
+}

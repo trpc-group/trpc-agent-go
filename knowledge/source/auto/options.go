@@ -46,9 +46,18 @@ func WithChunkSize(size int) Option {
 	}
 }
 
-// WithChunkOverlap sets the desired chunk overlap for document splitting.
+// WithChunkOverlap sets the chunk overlap for the Source.
 func WithChunkOverlap(overlap int) Option {
 	return func(s *Source) {
 		s.chunkOverlap = overlap
+	}
+}
+
+// WithSourceID sets the source ID for the Source.
+// Note: The provided ID should be globally unique across all sources to avoid conflicts.
+// If not set, a default unique ID will be automatically generated.
+func WithSourceID(id string) Option {
+	return func(s *Source) {
+		s.sourceID = id
 	}
 }

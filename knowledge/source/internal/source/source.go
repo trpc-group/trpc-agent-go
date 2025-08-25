@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
@@ -34,6 +35,13 @@ func GetReaders() map[string]reader.Reader {
 	readers["csv"] = csv.New()
 	readers["docx"] = docx.New()
 	return readers
+}
+
+// GenerateDefaultSourceID generates a unique ID for a source.
+func GenerateDefaultSourceID(sourceType, name string) string {
+	// Generate ID based on source type, name and UUID for better uniqueness.
+	cleanName := strings.ReplaceAll(sourceType+"_"+name, " ", "_")
+	return cleanName + "_" + uuid.New().String()
 }
 
 // GetFileType determines the file type based on the file extension.

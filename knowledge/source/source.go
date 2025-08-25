@@ -26,22 +26,18 @@ const (
 
 // Metadata keys
 const (
-	MetaSource        = "source"
-	MetaFilePath      = "file_path"
-	MetaFileName      = "file_name"
-	MetaFileExt       = "file_ext"
-	MetaFileSize      = "file_size"
-	MetaFileMode      = "file_mode"
-	MetaModifiedAt    = "modified_at"
-	MetaContentLength = "content_length"
-	MetaFileCount     = "file_count"
-	MetaFilePaths     = "file_paths"
-	MetaURL           = "url"
-	MetaURLHost       = "url_host"
-	MetaURLPath       = "url_path"
-	MetaURLScheme     = "url_scheme"
-	MetaInputCount    = "input_count"
-	MetaInputs        = "inputs"
+	MetaSource     = "trpc_agent_go_source"
+	MetaSourceID   = "trpc_agent_go_source_id"
+	MetaFilePath   = "trpc_agent_go_file_path"
+	MetaFileName   = "trpc_agent_go_file_name"
+	MetaFileExt    = "trpc_agent_go_file_ext"
+	MetaFileSize   = "trpc_agent_go_file_size"
+	MetaFileMode   = "trpc_agent_go_file_mode"
+	MetaModifiedAt = "trpc_agent_go_modified_at"
+	MetaURL        = "trpc_agent_go_url"
+	MetaURLHost    = "trpc_agent_go_url_host"
+	MetaURLPath    = "trpc_agent_go_url_path"
+	MetaURLScheme  = "trpc_agent_go_url_scheme"
 )
 
 // Source represents a knowledge source that can provide documents.
@@ -55,4 +51,8 @@ type Source interface {
 
 	// Type returns the type of this source (e.g., "file", "url", "dir").
 	Type() string
+
+	// SourceID returns a unique identifier for this source.
+	// This ID can be used for source management operations like update and delete.
+	SourceID() string
 }
