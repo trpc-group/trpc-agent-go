@@ -133,7 +133,10 @@ func (r *A2AAgent) resolveAgentCardFromURL() (*server.AgentCard, error) {
 	if r.description == "" {
 		r.description = agentCard.Description
 	}
-
+	// If URL is not set in the agent card, use the provided agent URL.
+	if agentCard.URL == "" {
+		agentCard.URL = agentURL
+	}
 	return &agentCard, nil
 }
 

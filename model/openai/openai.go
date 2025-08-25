@@ -449,6 +449,23 @@ func (m *Model) GenerateContent(
 		Tools:    m.convertTools(request.Tools),
 	}
 
+	// Set response_format for native structured outputs when requested.
+	if request.StructuredOutput != nil &&
+		request.StructuredOutput.Type == model.StructuredOutputJSONSchema &&
+		request.StructuredOutput.JSONSchema != nil {
+		js := request.StructuredOutput.JSONSchema
+		chatRequest.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:        js.Name,
+					Schema:      js.Schema,
+					Strict:      openai.Bool(js.Strict),
+					Description: openai.String(js.Description),
+				},
+			},
+		}
+	}
+
 	// Set optional parameters if provided.
 	if request.MaxTokens != nil {
 		chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64

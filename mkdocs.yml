@@ -1,0 +1,118 @@
+site_name: tRPC-Agent-Go
+site_url: https://trpc-group.github.io/trpc-agent-go/
+repo_url: https://github.com/trpc-group/trpc-agent-go
+repo_name: trpc-group/trpc-agent-go
+edit_uri: edit/main/docs/
+docs_dir: docs/
+
+nav:
+  - Overview: index.md
+  - Components:
+    - Agent: agent.md
+    - MultiAgent: multiagent.md
+    - Runner: runner.md
+    - Model: model.md
+    - Tool: tool.md
+    - Session: session.md
+    - Memory: memory.md
+    - Knowledge: knowledge.md
+    - Planner: planner.md
+    - Callback: callback.md
+    - Graph: graph.md
+    - Event: event.md
+  - Debug: debugserver.md
+  - Observability: observability.md
+  - A2A: a2a.md
+  - Artifacts: artifacts.md
+  - Ecosystem: ecosystem.md
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: folder
+      reconfigure_material: true
+      languages:
+        - locale: en
+          name: English
+          build: true
+          default: true
+        - locale: zh
+          name: 中文
+          build: true
+          nav:
+            - 概览: index.md
+            - 组件:
+              - Agent: agent.md
+              - MultiAgent: multiagent.md
+              - Runner: runner.md
+              - Model: model.md
+              - Tool: tool.md
+              - Session: session.md
+              - Memory: memory.md
+              - Knowledge: knowledge.md
+              - Planner: planner.md
+              - Callback: callback.md
+              - Graph: graph.md
+              - Event: event.md
+            - 调试: debugserver.md
+            - 可观测: observability.md
+            - A2A: a2a.md
+            - 制品: artifacts.md
+            - 生态: ecosystem.md
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: iso_datetime
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.tabs
+    - search.suggest
+    - search.share
+    - content.action.edit
+    - content.action.view
+  logo: assets/img/logo.png
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7 
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+extra:
+  analytics: 
+    provider: google
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/emoticon-happy-outline
+          name: This page was helpful
+          data: 1
+          note: >-
+            Thanks for your feedback!
+        - icon: material/emoticon-sad-outline
+          name: This page could be improved
+          data: 0
+          note: >- 
+            Thanks for your feedback!<br>Please help us improve by
+            opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.

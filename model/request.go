@@ -343,6 +343,12 @@ type Request struct {
 	// GenerationConfig contains the generation parameters.
 	GenerationConfig `json:",inline"`
 
+	// StructuredOutput defines how the model should produce structured output.
+	// When set, the underlying model adapter may use native structured output
+	// capabilities (e.g. OpenAI response_format with json_schema) to enforce
+	// JSON formatting. This field is optional and provider-agnostic.
+	StructuredOutput *StructuredOutput `json:"structured_output,omitempty"`
+
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }
 
@@ -410,4 +416,32 @@ func inferMimeType(path string) (string, error) {
 		return mime, nil
 	}
 	return "", fmt.Errorf("unknown file extension: %s", ext)
+}
+
+// StructuredOutputType defines the type of structured output.
+type StructuredOutputType string
+
+const (
+	// StructuredOutputJSONSchema enables structured JSON output.
+	StructuredOutputJSONSchema StructuredOutputType = "json_schema"
+)
+
+// JSONSchemaConfig defines the configuration for JSON schema structured output.
+type JSONSchemaConfig struct {
+	// Name is the name of the structured output format.
+	Name string `json:"name,omitempty"`
+	// Schema is the JSON schema definition.
+	Schema map[string]interface{} `json:"schema"`
+	// Strict controls whether to enforce strict schema adherence.
+	Strict bool `json:"strict,omitempty"`
+	// Description provides context for the model about the structured output.
+	Description string `json:"description,omitempty"`
+}
+
+// StructuredOutput defines how the model should produce structured output.
+type StructuredOutput struct {
+	// Type specifies the structured output type.
+	Type StructuredOutputType `json:"type"`
+	// JSONSchema is used when Type is StructuredOutputJSONSchema.
+	JSONSchema *JSONSchemaConfig `json:"json_schema,omitempty"`
 }
