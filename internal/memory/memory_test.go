@@ -19,7 +19,8 @@ import (
 
 // mockMemoryService is a simple mock implementation for testing.
 type mockMemoryService struct {
-	tools []tool.Tool
+	tools   []tool.Tool
+	builder func(enabled []string, defaultPrompt string) string
 }
 
 func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error {
@@ -48,6 +49,13 @@ func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.U
 
 func (m *mockMemoryService) Tools() []tool.Tool {
 	return m.tools
+}
+
+func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	if m.builder == nil {
+		return "", false
+	}
+	return m.builder(enabledTools, defaultPrompt), true
 }
 
 // mockTool is a simple mock tool implementation.
@@ -180,5 +188,25 @@ func TestIsValidToolName(t *testing.T) {
 				t.Errorf("IsValidToolName(%s) = %v, want %v", tt.toolName, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestGenerateInstruction_UsesServiceBuilder(t *testing.T) {
+	mockService := &mockMemoryService{
+		tools: []tool.Tool{
+			&mockTool{name: memory.AddToolName},
+			&mockTool{name: memory.SearchToolName},
+		},
+	}
+	mockService.builder = func(enabled []string, defaultPrompt string) string {
+		if len(enabled) == 0 || defaultPrompt == "" {
+			t.Fatalf("builder should receive enabled tools and default prompt")
+		}
+		return "CUSTOM_MEMORY_INSTRUCTION"
+	}
+
+	got := GenerateInstruction(mockService)
+	if got != "CUSTOM_MEMORY_INSTRUCTION" {
+		t.Fatalf("expected custom instruction to be used, got: %q", got)
 	}
 }
