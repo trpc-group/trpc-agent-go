@@ -120,6 +120,10 @@ func (m *mockMemoryService) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
+func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	return "", false
+}
+
 // createMockContext creates a mock context with session information.
 func createMockContext(appName, userID string) context.Context {
 	mockSession := &session.Session{

@@ -23,6 +23,9 @@ type ServiceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	enabledTools map[string]bool
 	extraOptions []interface{}
+
+	// Instruction builder used to customize memory instruction.
+	instructionBuilder func(enabledTools []string, defaultPrompt string) string
 }
 
 // ServiceOpt is the option for the redis memory service.
@@ -80,5 +83,13 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
+	}
+}
+
+// WithInstructionBuilder sets a custom instruction builder used by internal GenerateInstruction.
+// The builder receives enabled tool names and the framework's default prompt, and should return the final prompt.
+func WithInstructionBuilder(builder func(enabledTools []string, defaultPrompt string) string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.instructionBuilder = builder
 	}
 }

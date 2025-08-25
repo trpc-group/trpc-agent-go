@@ -10,6 +10,7 @@ package redis
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -408,6 +410,52 @@ func TestService_Tools_DefaultEnabled(t *testing.T) {
 	assert.True(t, names[memory.LoadToolName])
 	assert.False(t, names[memory.DeleteToolName])
 	assert.False(t, names[memory.ClearToolName])
+}
+
+func TestWithInstructionBuilder_AndGenerateInstruction_Redis(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	// Recreate service with builder (need to construct new service due to options on creation)
+	url, _ := setupTestRedis(t)
+	var err error
+	svc, err = NewService(
+		WithRedisClientURL(url),
+		WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
+			if len(enabledTools) == 0 {
+				t.Fatalf("expected enabled tools to be non-empty")
+			}
+			if !strings.Contains(defaultPrompt, "Available memory tools:") {
+				t.Fatalf("expected default prompt to contain tools list")
+			}
+			return "TEST_BUILDER_PROMPT_REDIS"
+		}),
+	)
+	require.NoError(t, err)
+
+	// Verify defaults provide tools
+	tools := svc.Tools()
+	require.NotEmpty(t, tools)
+
+	// Ensure the internal generator uses the builder
+	got := imemory.GenerateInstruction(svc)
+	if got != "TEST_BUILDER_PROMPT_REDIS" {
+		t.Fatalf("expected builder prompt to be used for redis, got: %q", got)
+	}
+}
+
+func TestGenerateInstruction_DefaultWhenNoBuilder_Redis(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	// No builder is set. The generator should return default instruction.
+	got := imemory.GenerateInstruction(svc)
+	if !strings.Contains(got, "You have access to memory tools") {
+		t.Fatalf("expected default instruction content for redis, got: %q", got)
+	}
+	if !strings.Contains(got, "Available memory tools:") {
+		t.Fatalf("expected tools list in default instruction for redis, got: %q", got)
+	}
 }
 
 func TestService_InvalidKeys(t *testing.T) {

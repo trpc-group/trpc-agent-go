@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -57,6 +58,11 @@ type Invocation struct {
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
+
+	// StructuredOutput defines how the model should produce structured output for this invocation.
+	StructuredOutput *model.StructuredOutput
+	// StructuredOutputType is the Go type to unmarshal the final JSON into.
+	StructuredOutputType reflect.Type
 }
 
 type invocationKey struct{}

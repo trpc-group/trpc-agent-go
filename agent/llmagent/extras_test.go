@@ -343,6 +343,10 @@ func (m *mockMemoryService) EnabledTools() []string {
 	return nil
 }
 
+func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	return "", false
+}
+
 func TestLLMAgent_WithEnableParallelTools_Option(t *testing.T) {
 	// Test that WithEnableParallelTools option sets the correct value
 	tests := []struct {
