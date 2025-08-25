@@ -30,17 +30,17 @@ type InstructionRequestProcessor struct {
 	SystemPrompt string
 	// OutputSchema is the JSON schema for output validation.
 	// When provided, JSON output instructions are automatically injected.
-	OutputSchema map[string]interface{}
+	OutputSchema map[string]any
 	// StructuredOutputSchema is the JSON schema generated from structured_output.
 	// When provided, it takes precedence over OutputSchema for instruction injection.
-	StructuredOutputSchema map[string]interface{}
+	StructuredOutputSchema map[string]any
 }
 
 // InstructionRequestProcessorOption is a function that can be used to configure the instruction request processor.
 type InstructionRequestProcessorOption func(*InstructionRequestProcessor)
 
 // WithOutputSchema adds the output schema to the instruction request processor.
-func WithOutputSchema(outputSchema map[string]interface{}) InstructionRequestProcessorOption {
+func WithOutputSchema(outputSchema map[string]any) InstructionRequestProcessorOption {
 	return func(p *InstructionRequestProcessor) {
 		p.OutputSchema = outputSchema
 	}
@@ -48,7 +48,7 @@ func WithOutputSchema(outputSchema map[string]interface{}) InstructionRequestPro
 
 // WithStructuredOutputSchema adds the structured output schema to the instruction request processor.
 // This is used as a fallback when the model provider does not natively enforce JSON Schema.
-func WithStructuredOutputSchema(schema map[string]interface{}) InstructionRequestProcessorOption {
+func WithStructuredOutputSchema(schema map[string]any) InstructionRequestProcessorOption {
 	return func(p *InstructionRequestProcessor) {
 		p.StructuredOutputSchema = schema
 	}
@@ -246,7 +246,7 @@ func containsInstruction(content, instruction string) bool {
 }
 
 // generateJSONInstructions generates JSON output instructions based on a schema.
-func (p *InstructionRequestProcessor) generateJSONInstructions(schema map[string]interface{}) string {
+func (p *InstructionRequestProcessor) generateJSONInstructions(schema map[string]any) string {
 	if schema == nil {
 		return ""
 	}
@@ -266,7 +266,7 @@ func (p *InstructionRequestProcessor) generateJSONInstructions(schema map[string
 }
 
 // formatSchemaForInstruction formats the schema for inclusion in instructions.
-func (p *InstructionRequestProcessor) formatSchemaForInstruction(schema map[string]interface{}) string {
+func (p *InstructionRequestProcessor) formatSchemaForInstruction(schema map[string]any) string {
 	// For now, we'll create a simple JSON representation.
 	// In a more sophisticated implementation, we could parse the schema more intelligently.
 	jsonBytes, err := json.MarshalIndent(schema, "", "  ")

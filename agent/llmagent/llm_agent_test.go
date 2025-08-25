@@ -310,9 +310,9 @@ func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
 
 func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	// Output schema to trigger validation.
-	schema := map[string]interface{}{
+	schema := map[string]any{
 		"type":       "object",
-		"properties": map[string]interface{}{},
+		"properties": map[string]any{},
 	}
 
 	t.Run("with tools", func(t *testing.T) {
