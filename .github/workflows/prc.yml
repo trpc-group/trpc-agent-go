@@ -70,6 +70,7 @@ jobs:
         fetch-depth: 0
         sparse-checkout: |
           docs
+        lfs: true
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
