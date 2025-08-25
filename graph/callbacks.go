@@ -12,6 +12,8 @@ package graph
 import (
 	"context"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 // StateKeyNodeCallbacks is the key for storing node callbacks in the state.
@@ -66,6 +68,14 @@ type OnNodeErrorCallback func(
 	err error,
 )
 
+// AgentEventCallback is called when an agent event is emitted.
+type AgentEventCallback func(
+	ctx context.Context,
+	callbackCtx *NodeCallbackContext,
+	state State,
+	evt *event.Event,
+)
+
 // NodeCallbacks holds callbacks for node operations.
 type NodeCallbacks struct {
 	// BeforeNode is a list of callbacks that are called before the node is executed.
@@ -74,6 +84,8 @@ type NodeCallbacks struct {
 	AfterNode []AfterNodeCallback
 	// OnNodeError is a list of callbacks that are called when a node execution fails.
 	OnNodeError []OnNodeErrorCallback
+	// AgentEvent is a list of callbacks that are called when an agent event is emitted.
+	AgentEvent []AgentEventCallback
 }
 
 // NewNodeCallbacks creates a new NodeCallbacks instance.
