@@ -308,29 +308,6 @@ func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
 	}
 }
 
-// dummyTool is a minimal tool implementation for testing.
-type dummyTool struct{}
-
-func (d dummyTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{Name: "dummy"}
-}
-
-// dummyCallableTool implements a callable tool for toolset testing.
-type dummyCallableTool struct{ dummyTool }
-
-func (d dummyCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	return nil, nil
-}
-
-// dummyToolSet returns one callable tool.
-type dummyToolSet struct{}
-
-func (s dummyToolSet) Tools(ctx context.Context) []tool.CallableTool {
-	return []tool.CallableTool{dummyCallableTool{}}
-}
-
-func (s dummyToolSet) Close() error { return nil }
-
 func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	// Output schema to trigger validation.
 	schema := map[string]interface{}{
