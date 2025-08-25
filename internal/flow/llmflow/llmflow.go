@@ -686,9 +686,21 @@ func (f *Flow) executeToolCall(
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
-		log.Errorf("CallableTool %s not found (agent=%s, model=%s)",
-			toolCall.Function.Name, invocation.AgentName, invocation.Model.Info().Name)
-		return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), nil
+		// Compatibility: map sub-agent name calls to transfer_to_agent if present.
+		if mapped := findCompatibleTool(toolCall.Function.Name, tools, invocation); mapped != nil {
+			tl = mapped
+			if newArgs := convertToolArguments(
+				toolCall.Function.Name, toolCall.Function.Arguments,
+				mapped.Declaration().Name,
+			); newArgs != nil {
+				toolCall.Function.Name = mapped.Declaration().Name
+				toolCall.Function.Arguments = newArgs
+			}
+		} else {
+			log.Errorf("CallableTool %s not found (agent=%s, model=%s)",
+				toolCall.Function.Name, invocation.AgentName, invocation.Model.Info().Name)
+			return f.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), nil
+		}
 	}
 
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
