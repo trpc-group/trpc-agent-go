@@ -598,7 +598,7 @@ func NewAgentNodeFunc(agentName string) NodeFunc {
 			}
 
 			// Track the last response for state update.
-			if agentEvent.Response != nil {
+			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 && !agentEvent.Response.IsPartial {
 				lastResponse = agentEvent.Response
 			}
 		}
