@@ -438,6 +438,6 @@ func (s *simpleTestTool) Declaration() *tool.Declaration {
 	}
 }
 
-func (s *simpleTestTool) Call(_ []byte) (interface{}, error) {
+func (s *simpleTestTool) Call(_ []byte) (any, error) {
 	return map[string]string{"result": s.name}, nil
 }
