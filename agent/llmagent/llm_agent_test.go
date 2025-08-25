@@ -308,13 +308,6 @@ func TestLLMAgent_SetModel_UpdatesInvocationModel(t *testing.T) {
 	}
 }
 
-// dummyCallableTool implements a callable tool for toolset testing.
-type dummyCallableTool struct{ dummyTool }
-
-func (d dummyCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	return nil, nil
-}
-
 func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	// Output schema to trigger validation.
 	schema := map[string]interface{}{

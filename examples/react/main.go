@@ -278,13 +278,13 @@ func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
 // search simulates a search tool.
 func (c *reactPlanningChat) search(_ context.Context, args searchArgs) (searchResult, error) {
 	results := map[string]string{
-		"tokyo population": "Tokyo has a population of approximately 14 million people in the city proper and " +
+		"tokyo": "Tokyo has a population of approximately 14 million people in the city proper and " +
 			"38 million in the greater metropolitan area.",
-		"new york population": "New York City has a population of approximately 8.3 million people, " +
+		"new york": "New York City has a population of approximately 8.3 million people, " +
 			"with about 20 million in the metropolitan area.",
 		"paris weather": "Paris currently has partly cloudy skies with a temperature of 15°C (59°F). " +
 			"Light rain is expected later today.",
-		"compound interest": "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), " + //nolint:gosec
+		"compound interest": "Compound interest is calculated using the formula A = P(1 + r/n)^(nt), " +
 			"where A is the amount, P is principal, r is annual interest rate, " +
 			"n is number of times interest compounds per year, and t is time in years.",
 	}
