@@ -588,7 +588,7 @@ func NewAgentNodeFunc(agentName string) NodeFunc {
 		}
 
 		// Forward all events from the target agent.
-		var lastResponse *model.Response
+		var lastResponse string
 		for agentEvent := range agentEventChan {
 			// Forward the event to the parent event channel.
 			select {
@@ -598,8 +598,10 @@ func NewAgentNodeFunc(agentName string) NodeFunc {
 			}
 
 			// Track the last response for state update.
-			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 && !agentEvent.Response.IsPartial {
-				lastResponse = agentEvent.Response
+			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
+				agentEvent.Response.Choices[0].Message.Content != "" &&
+				!agentEvent.Response.IsPartial {
+				lastResponse = agentEvent.Response.Choices[0].Message.Content
 			}
 		}
 		// Emit agent execution complete event.
@@ -607,19 +609,7 @@ func NewAgentNodeFunc(agentName string) NodeFunc {
 		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
 		// Update state with the agent's response.
 		stateUpdate := State{}
-		if lastResponse != nil {
-			stateUpdate[StateKeyLastResponse] = lastResponse
-			// Update messages if the agent returned a response.
-			if len(lastResponse.Choices) > 0 {
-				choice := lastResponse.Choices[0]
-				if choice.Message.Content != "" {
-					// Add the agent's response to the message history.
-					messages := buildMessagesFromState(state, "")
-					messages = append(messages, choice.Message)
-					stateUpdate[StateKeyMessages] = messages
-				}
-			}
-		}
+		stateUpdate[StateKeyLastResponse] = lastResponse
 		return stateUpdate, nil
 	}
 }
