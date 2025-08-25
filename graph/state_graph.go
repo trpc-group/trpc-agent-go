@@ -83,6 +83,55 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
+// WithPreNodeCallback sets a callback that will be executed before this specific node.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithPreNodeCallback(callback BeforeNodeCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterBeforeNode(callback)
+	}
+}
+
+// WithPostNodeCallback sets a callback that will be executed after this specific node.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithPostNodeCallback(callback AfterNodeCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterAfterNode(callback)
+	}
+}
+
+// WithNodeErrorCallback sets a callback that will be executed when this specific node fails.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithNodeErrorCallback(callback OnNodeErrorCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterOnNodeError(callback)
+	}
+}
+
+// WithNodeCallbacks sets multiple callbacks for this specific node.
+// This allows setting multiple callbacks at once for convenience.
+func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		// Merge the provided callbacks with existing ones
+		if callbacks != nil {
+			node.callbacks.BeforeNode = append(node.callbacks.BeforeNode, callbacks.BeforeNode...)
+			node.callbacks.AfterNode = append(node.callbacks.AfterNode, callbacks.AfterNode...)
+			node.callbacks.OnNodeError = append(node.callbacks.OnNodeError, callbacks.OnNodeError...)
+		}
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.

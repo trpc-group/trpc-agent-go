@@ -74,6 +74,9 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
+	// Per-node callbacks for fine-grained control
+	callbacks *NodeCallbacks
+
 	// Pregel-style extensions
 	triggers []string            // Channels that trigger this node
 	channels []string            // Channels this node reads from
