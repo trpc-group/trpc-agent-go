@@ -63,6 +63,12 @@ go run main.go -vectorstore=pgvector
 # Use TcVector
 go run main.go -vectorstore=tcvector
 
+# Use Elasticsearch
+go run main.go -vectorstore=elasticsearch
+
+# Use Elasticsearch (or other persistent storage) and skip loading with -load=false
+go run main.go -vectorstore=elasticsearch -load=false
+
 # Specify a different model
 go run main.go -model="gpt-4o-mini" -vectorstore=pgvector
 
@@ -118,6 +124,25 @@ go run main.go -streaming=false
   export TCVECTOR_PASSWORD="your_password"
   ```
 
+### Elasticsearch
+
+- Use case: Persistent search with hybrid vector + keyword retrieval.
+- Setup: Requires a running Elasticsearch cluster.
+- Environment Variables:
+  ```bash
+  export ELASTICSEARCH_HOSTS="http://localhost:9200"
+  export ELASTICSEARCH_USERNAME=""            # Optional
+  export ELASTICSEARCH_PASSWORD=""            # Optional
+  export ELASTICSEARCH_API_KEY=""             # Optional
+  export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
+  ```
+  Start a local single-node via Docker:
+  ```bash
+  docker run -d --name elasticsearch -p 9200:9200 \
+    -e discovery.type=single-node -e xpack.security.enabled=false \
+    docker.elastic.co/elasticsearch/elasticsearch:9.1.0
+  ```
+
 ## Embedder Options
 
 ### OpenAI Embedder (Default)
@@ -167,7 +192,8 @@ export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini em
 -model string       LLM model name (default: "claude-4-sonnet-20250514")
 -streaming bool     Enable streaming mode for responses (default: true)
 -embedder string    Embedder type: openai, gemini (default: "openai")
--vectorstore string Vector store type: inmemory, pgvector, tcvector (default: "inmemory")
+-vectorstore string Vector store type: inmemory, pgvector, tcvector, elasticsearch (default: "inmemory")
+-load bool         Load data into the vector store on startup (default: true)
 ```
 
 ---
