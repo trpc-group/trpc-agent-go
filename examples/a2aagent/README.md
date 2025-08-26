@@ -83,20 +83,44 @@ export OPENAI_API_KEY="your-openai-api-key"
 
 ```
 $ ./a2a-demo
-User: tell me a joke 
-Agent: Why don't scientists trust atoms?
+
+------- Agent Card -------
+Name: agent_joker
+Description: i am a remote agent, i can tell a joke
+URL: http://0.0.0.0:8888
+------------------------
+Chat with the agent. Type 'new' for a new session, or 'exit' to quit.
+User: tell me a joke
+======== remote agent ========
+🤖 Assistant: Why don't scientists trust atoms?
 
 Because they make up everything! 😄
 
-Here's the setup: Atoms are the basic building blocks of matter, and when we say they "make up" everything, it has a double meaning - they literally compose all matter, but "make up" can also mean "fabricate" or "lie." So the joke plays on this wordplay to create a silly pun about atoms being untrustworthy because they "make up" (fabricate) everything!
+======== local agent ========
+🤖 Assistant: Here's a joke for you:
+
+Why did the programmer quit his job?
+
+Because he didn't get arrays! (a raise) 😄
 ```
 
 ## Key Features
+
+### Dual Agent Comparison
+- Runs both remote A2A agent and local agent for comparison
+- Shows responses from both agents side by side
+- Demonstrates the transparency of A2A protocol
 
 ### Automatic Agent Discovery
 - Fetches agent cards from `/.well-known/agent.json` endpoints
 - Validates agent metadata and capabilities
 - Configures client based on discovered information
+
+### Interactive Chat Interface
+- Real-time conversation with agents
+- Session management with 'new' command
+- Graceful exit with 'exit' command
+- Visual separation between remote and local agent responses
 
 ### Protocol Translation
 - Converts local `model.Message` to A2A `protocol.Message`
@@ -104,14 +128,15 @@ Here's the setup: Atoms are the basic building blocks of matter, and when we say
 - Maintains conversation context across protocol boundaries
 
 ### Error Handling
-- Network timeout configuration
+- Network timeout configuration (60 seconds for agent requests)
 - Connection failure recovery
 - Protocol error reporting
 
 ### Flexible Configuration
 - Custom HTTP client support
-- Configurable timeouts (default: 120s)
+- Configurable timeouts
 - Multiple agent card resolution methods
+- Streaming and non-streaming mode support
 
 ## Code Structure
 
@@ -130,24 +155,25 @@ Here's the setup: Atoms are the basic building blocks of matter, and when we say
    server.Start(*host)
    ```
 
-2. **Client Setup** (`callRemoteAgent`)
+2. **Client Setup** (`startChat`)
    ```go
    // Create A2A agent client
    a2aAgent, err := a2aagent.New(
-       a2aagent.WithAgentCardURL(a2aURL)
+       a2aagent.WithAgentCardURL(httpURL)
    )
    
    // Use with runner
-   runner := runner.NewRunner(agentCard.Name, a2aAgent, 
-       runner.WithSessionService(sessionService))
+   remoteRunner := runner.NewRunner("test", a2aAgent)
+   localRunner := runner.NewRunner("test", localAgent)
    ```
 
 3. **Agent Configuration** (`buildRemoteAgent`)
    ```go
    llmAgent := llmagent.New(
-       "remoteAgent",
+       agentName,
        llmagent.WithModel(modelInstance),
        llmagent.WithDescription(desc),
+       llmagent.WithInstruction(desc),
        llmagent.WithGenerationConfig(genConfig),
    )
    ```
@@ -157,6 +183,7 @@ Here's the setup: Atoms are the basic building blocks of matter, and when we say
 ### Command Line Flags
 - `-model`: Model name (default: "deepseek-chat")
 - `-host`: Server host and port (default: "0.0.0.0:8888")
+- `-streaming`: Enable streaming mode (default: true)
 
 ### A2A Agent Options
 - `WithAgentCard()`: Use pre-configured agent card
