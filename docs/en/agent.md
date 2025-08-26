@@ -1,40 +1,46 @@
-## Agent User Guide
+# Agent Usage Documentation
 
-`Agent` is the core execution unit of the tRPC-Agent-Go framework. It handles user input and produces responses. Every `Agent` implements a unified interface and supports streaming output and callback mechanisms.
+Agent is the core execution unit of the tRPC-Agent-Go framework, responsible for processing user input and generating corresponding responses. Each Agent implements a unified interface, supporting streaming output and callback mechanisms.
 
-The framework provides multiple `Agent` types, including `LLMAgent`, `ChainAgent`, `ParallelAgent`, `CycleAgent`, and `GraphAgent`. This document focuses on `LLMAgent`. For other `Agent` types and multi-agent systems, see [multiagent](./multiagent.md).
+The framework provides multiple types of Agents, including LLMAgent, ChainAgent, ParallelAgent, CycleAgent, and GraphAgent. This document focuses on LLMAgent. For detailed information about other Agent types and multi-Agent systems, please refer to [Multi-Agent](./multiagent.md).
 
-### Quick Start
+## Quick Start
 
-This example uses OpenAI's `GPT-4o-mini` model. Before you begin, make sure you have an `OPENAI_API_KEY` and export it via an environment variable:
+**Recommended Usage: Runner**
+
+We strongly recommend using Runner to execute Agents instead of directly calling Agent interfaces. Runner provides a more user-friendly interface, integrating services like Session and Memory, making usage much simpler.
+
+**📖 Learn More:** For detailed usage methods, please refer to [Runner](./runner.md)
+
+This example uses OpenAI's GPT-4o-mini model. Before starting, please ensure you have prepared the corresponding `OPENAI_API_KEY` and exported it through environment variables:
 
 ```shell
 export OPENAI_API_KEY="your_api_key"
 ```
 
-In addition, the framework supports OpenAI-compatible APIs, configurable via environment variables:
+Additionally, the framework supports OpenAI API-compatible models, which can be configured through environment variables:
 
 ```shell
 export OPENAI_BASE_URL="your_api_base_url"
 export OPENAI_API_KEY="your_api_key"
 ```
 
-#### Create a Model Instance
+### Creating Model Instance
 
-First, create a model instance using OpenAI's `GPT-4o-mini`:
+First, you need to create a model instance. Here we use OpenAI's GPT-4o-mini model:
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model/openai"
 
 modelName := flag.String("model", "gpt-4o-mini", "Name of the model to use")
 flag.Parse()
-// Create an OpenAI model instance.
+// Create OpenAI model instance.
 modelInstance := openai.New(*modelName, openai.Options{})
 ```
 
-#### Configure Generation Parameters
+### Configuring Generation Parameters
 
-Set generation parameters including max tokens, temperature, and whether to use streaming output:
+Set the model's generation parameters, including maximum tokens, temperature, and whether to use streaming output:
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model"
@@ -43,16 +49,16 @@ maxTokens := 1000
 temperature := 0.7
 genConfig := model.GenerationConfig{
     MaxTokens:   &maxTokens,   // Maximum number of tokens to generate.
-    Temperature: &temperature, // Temperature controls randomness.
+    Temperature: &temperature, // Temperature parameter, controls output randomness.
     Stream:      true,         // Enable streaming output.
 }
 ```
 
-#### Create an LLMAgent
+### Creating LLMAgent
 
-Create an `LLMAgent` with the model instance and configuration. Also set the `Agent`'s Description and Instruction.
+Use the model instance and configuration to create an LLMAgent, while setting the Agent's Description and Instruction.
 
-`Description` describes the `Agent`'s basic functionality and characteristics, while `Instruction` defines the specific guidelines and behavioral rules the `Agent` should follow during execution.
+Description is used to describe the basic functionality and characteristics of the Agent, while Instruction defines the specific instructions and behavioral guidelines that the Agent should follow when executing tasks.
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -62,47 +68,37 @@ llmAgent := llmagent.New(
     llmagent.WithModel(modelInstance), // Set model.
     llmagent.WithDescription("A helpful AI assistant for demonstrations"),              // Set description.
     llmagent.WithInstruction("Be helpful, concise, and informative in your responses"), // Set instruction.
-    llmagent.WithGenerationConfig(genConfig),                                           // Set generation params.
+    llmagent.WithGenerationConfig(genConfig),                                           // Set generation parameters.
 )
 ```
 
-#### Create an Invocation Context
+### Using Runner to Execute Agent
 
-Create an `Invocation` object that contains everything required for the execution:
+Use Runner to execute the Agent, which is the recommended usage:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/agent"
+import "trpc.group/trpc-go/trpc-agent-go/runner"
 
-invocation := &agent.Invocation{
-    AgentName:     "demo-agent",                                                   // Agent name.
-    InvocationID:  "demo-invocation-001",                                          // Invocation ID.
-    EndInvocation: false,                                                          // Whether to end invocation.
-    Model:         modelInstance,                                                  // Model used.
-    Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"), // User message.
-    Session:       &session.Session{ID: "session-001"},
+// Create Runner.
+runner := runner.NewRunner("demo-app", llmAgent)
+
+// Send message directly without creating complex Invocation.
+message := model.NewUserMessage("Hello! Can you tell me about yourself?")
+eventChan, err := runner.Run(ctx, "user-001", "session-001", message)
+if err != nil {
+    log.Fatalf("Failed to execute Agent: %v", err)
 }
 ```
 
-#### Run the Agent
+### Handling Event Stream
 
-Call the `Agent.Run` method to start execution:
+Receive execution results through the event channel:
 
 ```go
 import "context"
 
 ctx := context.Background()
-eventChan, err := llmAgent.Run(ctx, invocation)
-if err != nil {
-    log.Fatalf("failed to run Agent: %v", err)
-}
-```
-
-#### Consume the Event Stream
-
-Receive execution results via the event channel:
-
-```go
-// Handle events.
+// Handle Event.
 for event := range eventChan {
     // Check for errors.
     if event.Error != nil {
@@ -117,60 +113,128 @@ for event := range eventChan {
             fmt.Print(choice.Delta.Content)
         }
     }
-    // Check completion.
+    // Check if completed.
     if event.Done {
         break
     }
 }
 ```
 
-You can find the complete example at [examples/llmagent](http://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent).
+### Handling Event Stream
+
+Receive execution results through the event channel:
+
+```go
+// Handle Event.
+for event := range eventChan {
+    // Check for errors.
+    if event.Error != nil {
+        log.Printf("err: %s", event.Error.Message)
+        continue
+    }
+    // Handle content.
+    if len(event.Choices) > 0 {
+        choice := event.Choices[0]
+        if choice.Delta.Content != "" {
+            // Streaming output.
+            fmt.Print(choice.Delta.Content)
+        }
+    }
+    // Check if completed.
+    if event.Done {
+        break
+    }
+}
+```
+
+The complete code for this example can be found at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+
+**Why is Runner recommended?**
+
+1. **Simpler Interface**: No need to create complex Invocation objects
+2. **Integrated Services**: Automatically integrates Session, Memory and other services
+3. **Better Management**: Unified management of Agent execution flow
+4. **Production Ready**: Suitable for production environment use
+
+**💡 Tip:** Want to learn more about Runner's detailed usage and advanced features? Please check [Runner](./runner.md)
+
+**Advanced Usage: Direct Agent Usage**
+
+If you need more fine-grained control, you can also use the Agent interface directly, but this requires creating Invocation objects:
 
 ## Core Concepts
 
-### Invocation
+### Invocation (Advanced Usage)
 
-`Invocation` is the context object for the `Agent` execution flow. It includes all information required for a single run:
+Invocation is the context object for Agent execution flow, containing all information needed for a single call. **Note: This is advanced usage, we recommend using Runner to simplify operations.**
 
 ```go
-// Invocation is the context object for the Agent execution flow. It contains all information required for a single run.
+import "trpc.group/trpc-go/trpc-agent-go/agent"
+
+// Create Invocation object (advanced usage).
+invocation := &agent.Invocation{
+    AgentName:     "demo-agent",                                                   // Agent name.
+    InvocationID:  "demo-invocation-001",                                          // Invocation ID.
+    EndInvocation: false,                                                          // Whether to end invocation.
+    Model:         modelInstance,                                                  // Model to use.
+    Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"), // User message.
+    Session:       &session.Session{ID: "session-001"},
+}
+
+// Call Agent directly (advanced usage).
+ctx := context.Background()
+eventChan, err := llmAgent.Run(ctx, invocation)
+if err != nil {
+    log.Fatalf("Failed to execute Agent: %v", err)
+}
+```
+
+**When to use direct calls?**
+
+- Need complete control over execution flow
+- Custom Session and Memory management
+- Implement special invocation logic
+- Debugging and testing scenarios
+
+```go
+// Invocation is the context object for Agent execution flow, containing all information needed for a single call.
 type Invocation struct {
-    // Agent specifies the Agent instance to invoke.
-    Agent Agent
-    // AgentName identifies the Agent instance to invoke.
-    AgentName string
-    // InvocationID provides a unique identifier for each invocation.
-    InvocationID string
-    // Branch is a branch identifier used for hierarchical event filtering.
-    Branch string
-    // EndInvocation indicates whether to end the invocation.
-    EndInvocation bool
-    // Session maintains the conversational context state.
-    Session *session.Session
-    // Model specifies the model instance to use.
-    Model model.Model
-    // Message is the user content sent to the Agent.
-    Message model.Message
-    // EventCompletionCh signals when events are written to the session.
-    EventCompletionCh <-chan string
-    // RunOptions contains options for the Run method.
-    RunOptions RunOptions
-    // TransferInfo supports control transfer between Agents.
-    TransferInfo *TransferInfo
-    // AgentCallbacks allows injecting custom logic at different stages of Agent execution.
-    AgentCallbacks *AgentCallbacks
-    // ModelCallbacks allows injecting custom logic at different stages of model invocation.
-    ModelCallbacks *model.ModelCallbacks
-    // ToolCallbacks allows injecting custom logic at different stages of tool execution.
-    ToolCallbacks *tool.ToolCallbacks
+	// Agent specifies the Agent instance to call.
+	Agent Agent
+	// AgentName identifies the name of the Agent instance to call.
+	AgentName string
+	// InvocationID provides a unique identifier for each call.
+	InvocationID string
+	// Branch is a branch identifier for hierarchical event filtering.
+	Branch string
+	// EndInvocation is a flag indicating whether to end the invocation.
+	EndInvocation bool
+	// Session maintains the context state of the conversation.
+	Session *session.Session
+	// Model specifies the model instance to use.
+	Model model.Model
+	// Message is the specific content sent by the user to the Agent.
+	Message model.Message
+	// EventCompletionCh is used to signal when events are written to the session.
+	EventCompletionCh <-chan string
+	// RunOptions are option configurations for the Run method.
+	RunOptions RunOptions
+	// TransferInfo supports control transfer between Agents.
+	TransferInfo *TransferInfo
+	// AgentCallbacks allows inserting custom logic at different stages of Agent execution.
+	AgentCallbacks *AgentCallbacks
+	// ModelCallbacks allows inserting custom logic at different stages of model calls.
+	ModelCallbacks *model.ModelCallbacks
+	// ToolCallbacks allows inserting custom logic at different stages of tool calls.
+	ToolCallbacks *tool.ToolCallbacks
 }
 ```
 
 ### Event
 
-`Event` represents real-time feedback generated during `Agent` execution. It reports progress through an event stream.
+Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.
 
-Main event types include:
+Events mainly include the following types:
 
 - Model conversation events
 - Tool call and response events
@@ -178,86 +242,85 @@ Main event types include:
 - Error events
 
 ```go
-// Event represents real-time feedback generated during Agent execution and reports progress through an event stream.
+// Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.
 type Event struct {
-    // Response contains model response content, tool call results, and statistics.
-    *model.Response
-    // InvocationID associates the event to a specific invocation.
-    InvocationID string `json:"invocationId"`
-    // Author identifies the source of the event, such as Agent or tool.
-    Author string `json:"author"`
-    // ID is the unique identifier of the event.
-    ID string `json:"id"`
-    // Timestamp records when the event occurred.
-    Timestamp time.Time `json:"timestamp"`
-    // Branch is a branch identifier used for hierarchical event filtering.
-    Branch string `json:"branch,omitempty"`
-    // RequiresCompletion indicates whether this event requires a completion signal.
-    RequiresCompletion bool `json:"requiresCompletion,omitempty"`
-    // CompletionID is used to complete this event.
-    CompletionID string `json:"completionId,omitempty"`
-    // LongRunningToolIDs contains IDs of long-running function calls so clients can track them.
-    // Only valid for function-call events.
-    LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
+	// Response contains model response content, tool call results and statistics.
+	*model.Response
+	// InvocationID is associated with a specific invocation.
+	InvocationID string `json:"invocationId"`
+	// Author is the source of the event, such as Agent or tool.
+	Author string `json:"author"`
+	// ID is the unique identifier of the event.
+	ID string `json:"id"`
+	// Timestamp records the time when the event occurred.
+	Timestamp time.Time `json:"timestamp"`
+	// Branch is a branch identifier for hierarchical event filtering.
+	Branch string `json:"branch,omitempty"`
+	// RequiresCompletion identifies whether this event requires a completion signal.
+	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
+	// CompletionID is used for the completion signal of this event.
+	CompletionID string `json:"completionId,omitempty"`
+	// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.
+	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }
 ```
 
-The streaming nature of `Event` lets you observe the `Agent`'s work in real time, making the interaction feel natural—like a conversation. Simply iterate over the event stream, check the content and status of each event, and you can fully process the `Agent`'s execution results.
+The streaming nature of Events allows you to see the Agent's working process in real-time, just like having a natural conversation with a real person. You only need to iterate through the Event stream, check the content and status of each Event, and you can completely handle the Agent's execution results.
 
 ### Agent Interface
 
-The `Agent` interface defines the core behaviors that all `Agents` must implement. It provides a unified way to use different `Agent` types and supports tool calls and sub-Agent management.
+The Agent interface defines the core behaviors that all Agents must implement. This interface allows you to uniformly use different types of Agents while supporting tool calls and sub-Agent management.
 
 ```go
 type Agent interface {
-    // Run accepts the execution context and invocation information and returns an event channel.
-    // You can receive the Agent's progress and results in real time via this channel.
+    // Run receives execution context and invocation information, returns an event channel. Through this channel, you can receive Agent execution progress and results in real-time.
     Run(ctx context.Context, invocation *Invocation) (<-chan *event.Event, error)
-    // Tools returns the list of tools accessible to the Agent.
+    // Tools returns the list of tools that this Agent can access and execute.
     Tools() []tool.Tool
-    // Info returns the Agent's basic information, including name and description.
+    // Info method provides basic information about the Agent, including name and description, for easy identification and management.
     Info() Info
-    // SubAgents returns the list of available sub-Agents.
-    // SubAgents and FindSubAgent support cooperation between Agents,
-    // enabling an Agent to delegate tasks to others and build complex multi-agent systems.
+    // SubAgents returns the list of sub-Agents available to this Agent.
+    // SubAgents and FindSubAgent methods support collaboration between Agents. An Agent can delegate tasks to other Agents, building complex multi-Agent systems.
     SubAgents() []Agent
-    // FindSubAgent looks up a sub-Agent by name.
+    // FindSubAgent finds sub-Agent by name.
     FindSubAgent(name string) Agent
 }
 ```
 
+The framework provides multiple types of Agent implementations, including LLMAgent, ChainAgent, ParallelAgent, CycleAgent, and GraphAgent. For detailed information about different types of Agents and multi-Agent systems, please refer to [Multi-Agent](./multiagent.md).
+
 ## Callbacks
 
-Callbacks provide hooks at key stages of `Agent` execution so you can inject custom logic.
+Callbacks provide a rich callback mechanism that allows you to inject custom logic at key points during Agent execution.
 
 ### Callback Types
 
-The framework provides three kinds of callbacks:
+The framework provides three types of callbacks:
 
 **Agent Callbacks**: Triggered before and after Agent execution
 
 ```go
 type AgentCallbacks struct {
-    BeforeAgent []BeforeAgentCallback  // Callback before Agent runs.
-    AfterAgent  []AfterAgentCallback   // Callback after Agent finishes.
+    BeforeAgent []BeforeAgentCallback  // Callbacks before Agent runs.
+    AfterAgent  []AfterAgentCallback   // Callbacks after Agent runs.
 }
 ```
 
-**Model Callbacks**: Triggered before and after model invocation
+**Model Callbacks**: Triggered before and after model calls
 
 ```go
 type ModelCallbacks struct {
-    BeforeModel []BeforeModelCallback  // Callback before model call.
-    AfterModel  []AfterModelCallback   // Callback after model call.
+    BeforeModel []BeforeModelCallback  // Callbacks before model calls.
+    AfterModel  []AfterModelCallback   // Callbacks after model calls.
 }
 ```
 
-**Tool Callbacks**: Triggered before and after tool invocation
+**Tool Callbacks**: Triggered before and after tool calls
 
 ```go
 type ToolCallbacks struct {
-    BeforeTool []BeforeToolCallback  // Callback before tool call.
-    AfterTool  []AfterToolCallback   // Callback after tool call.
+	BeforeTool []BeforeToolCallback  // Callbacks before tool calls.
+	AfterTool []AfterToolCallback    // Callbacks after tool calls.
 }
 ```
 
@@ -268,16 +331,16 @@ type ToolCallbacks struct {
 callbacks := &agent.AgentCallbacks{
     BeforeAgent: []agent.BeforeAgentCallback{
         func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-            log.Printf("Agent %s is about to run", invocation.AgentName)
+            log.Printf("Agent %s started execution", invocation.AgentName)
             return nil, nil
         },
     },
     AfterAgent: []agent.AfterAgentCallback{
         func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
             if runErr != nil {
-                log.Printf("Agent %s failed: %v", invocation.AgentName, runErr)
+                log.Printf("Agent %s execution error: %v", invocation.AgentName, runErr)
             } else {
-                log.Printf("Agent %s finished successfully", invocation.AgentName)
+                log.Printf("Agent %s execution completed", invocation.AgentName)
             }
             return nil, nil
         },
@@ -286,25 +349,31 @@ callbacks := &agent.AgentCallbacks{
 
 // Use callbacks in Invocation.
 invocation := &agent.Invocation{
-    AgentName:      "demo-agent",
-    InvocationID:   "demo-001",
+    AgentName:     "demo-agent",
+    InvocationID:  "demo-001",
     AgentCallbacks: callbacks,
-    Model:          modelInstance,
-    Message:        model.NewUserMessage("User input"),
+    Model:         modelInstance,
+    Message:       model.NewUserMessage("User input"),
     Session: &session.Session{
         ID: "session-001",
     },
 }
 ```
 
-Callbacks let you precisely control the `Agent`'s lifecycle and implement more sophisticated business logic.
+The callback mechanism allows you to precisely control the Agent's execution process and implement more complex business logic.
 
 ## Advanced Usage
 
-The framework also provides advanced capabilities such as `Runner`, `Session`, and `Memory` for constructing more complex `Agent` systems.
+The framework provides advanced features like Runner, Session, and Memory for building more complex Agent systems.
 
-- `Runner` is the `Agent` executor that orchestrates the `Agent` execution flow and connects to `Session` or `Memory` services.
-- `Session` Service manages conversational state, including history and context.
-- `Memory` Service stores user preference information to enable personalization.
+**Runner is the recommended usage**, responsible for managing Agent execution flow, connecting Session/Memory Service capabilities, and providing a more user-friendly interface.
 
-For details, see [runner](runner.md), [session](session.md), and [memory](memory.md).
+Session Service is used to manage session state, supporting conversation history and context maintenance.
+
+Memory Service is used to record user preference information, supporting personalized experiences.
+
+**Recommended Reading Order:**
+
+1. [Runner](runner.md) - Learn the recommended usage
+2. [Session](session.md) - Understand session management
+3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems

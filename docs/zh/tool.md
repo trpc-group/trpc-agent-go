@@ -1,0 +1,527 @@
+# Tool 工具使用文档
+
+Tool 工具系统是 tRPC-Agent-Go 框架的核心组件，为 Agent 提供了与外部服务和功能交互的能力。框架支持多种工具类型，包括函数工具和基于 MCP（Model Context Protocol）标准的外部工具集成。
+
+## 概述
+
+### 🎯 核心特性
+
+- **🔧 多类型工具**：支持函数工具（Function Tools）和 MCP 标准工具
+- **🌊 流式响应**：支持实时流式响应和普通响应两种模式  
+- **⚡ 并行执行**：工具调用支持并行执行以提升性能
+- **🔄 MCP 协议**：完整支持 STDIO、SSE、Streamable HTTP 三种传输方式
+- **🛠️ 配置支持**：提供配置选项和过滤器支持
+
+### 核心概念
+
+#### 🔧 Tool（工具）
+
+Tool 是单个功能的抽象，实现 `tool.Tool` 接口。每个 Tool 提供特定的能力，如数学计算、搜索、时间查询等。
+
+```go
+type Tool interface {
+    Declaration() *Declaration  // 返回工具元数据
+}
+
+type CallableTool interface {
+    Call(ctx context.Context, jsonArgs []byte) (any, error)
+    Tool
+}
+```
+
+#### 📦 ToolSet（工具集）
+
+ToolSet 是一组相关工具的集合，实现 `tool.ToolSet` 接口。ToolSet 负责管理工具的生命周期、连接和资源清理。
+
+```go
+type ToolSet interface {
+    Tools(context.Context) []CallableTool  // 返回工具列表
+    Close() error                          // 资源清理
+}
+```
+
+**Tool 与 ToolSet 的关系：**
+
+- 一个 **Tool** = 一个具体功能（如计算器）
+- 一个 **ToolSet** = 一组相关的 Tool（如MCP服务器提供的所有工具）
+- Agent 可以同时使用多个 Tool 和多个 ToolSet
+
+#### 🌊 流式工具支持
+
+框架支持流式工具，提供实时响应能力：
+
+```go
+// 流式工具接口
+type StreamableTool interface {
+    StreamableCall(ctx context.Context, jsonArgs []byte) (*StreamReader, error)
+    Tool
+}
+
+// 流式数据单元
+type StreamChunk struct {
+    Content  any      `json:"content"`
+    Metadata Metadata `json:"metadata,omitempty"`
+}
+```
+
+**流式工具特点：**
+
+- 🚀 **实时响应**：数据逐步返回，无需等待完整结果
+- 📊 **大数据处理**：适用于日志查询、数据分析等场景
+- ⚡ **用户体验**：提供即时反馈和进度显示
+
+### 工具类型说明
+
+| 工具类型 | 定义 | 集成方式 |
+|---------|------|---------|
+| **Function Tools** | 直接调用 Go 函数实现的工具 | `Tool` 接口，进程内调用 |
+| **DuckDuckGo Tool** | 基于 DuckDuckGo API 的搜索工具 | `Tool` 接口，HTTP API |
+| **MCP ToolSet** | 基于 MCP 协议的外部工具集 | `ToolSet` 接口，支持多种传输方式 |
+
+> **📖 相关文档**：Agent 间协作相关的 Agent Tool 和 Transfer Tool 请参考 [多 Agent 系统文档](multiagent.md)。
+
+## Function Tools 函数工具
+
+Function Tools 通过 Go 函数直接实现工具逻辑，是最简单直接的工具类型。
+
+### 基本用法
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/function"
+
+// 1. 定义工具函数
+func calculator(ctx context.Context, req struct {
+    Operation string  `json:"operation"`
+    A         float64 `json:"a"`
+    B         float64 `json:"b"`
+}) (map[string]interface{}, error) {
+    switch req.Operation {
+    case "add":
+        return map[string]interface{}{"result": req.A + req.B}, nil
+    case "multiply":
+        return map[string]interface{}{"result": req.A * req.B}, nil
+    default:
+        return nil, fmt.Errorf("unsupported operation: %s", req.Operation)
+    }
+}
+
+// 2. 创建工具
+calculatorTool := function.NewFunctionTool(
+    calculator,
+    function.WithName("calculator"),
+    function.WithDescription("执行数学运算"),
+)
+
+// 3. 集成到 Agent
+agent := llmagent.New("math-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{calculatorTool}))
+```
+
+### 流式工具示例
+
+```go
+// 1. 定义输入输出结构
+type weatherInput struct {
+    Location string `json:"location"`
+}
+
+type weatherOutput struct {
+    Weather string `json:"weather"`
+}
+
+// 2. 实现流式工具函数
+func getStreamableWeather(input weatherInput) *tool.StreamReader {
+    stream := tool.NewStream(10)
+    go func() {
+        defer stream.Writer.Close()
+        
+        // 模拟逐步返回天气数据
+        result := "Sunny, 25°C in " + input.Location
+        for i := 0; i < len(result); i++ {
+            chunk := tool.StreamChunk{
+                Content: weatherOutput{
+                    Weather: result[i : i+1],
+                },
+                Metadata: tool.Metadata{CreatedAt: time.Now()},
+            }
+            
+            if closed := stream.Writer.Send(chunk, nil); closed {
+                break
+            }
+            time.Sleep(10 * time.Millisecond) // 模拟延迟
+        }
+    }()
+    
+    return stream.Reader
+}
+
+// 3. 创建流式工具
+weatherStreamTool := function.NewStreamableFunctionTool[weatherInput, weatherOutput](
+    getStreamableWeather,
+    function.WithName("get_weather_stream"),
+    function.WithDescription("流式获取天气信息"),
+)
+
+// 4. 使用流式工具
+reader, err := weatherStreamTool.StreamableCall(ctx, jsonArgs)
+if err != nil {
+    return err
+}
+
+// 接收流式数据
+for {
+    chunk, err := reader.Recv()
+    if err == io.EOF {
+        break // 流结束
+    }
+    if err != nil {
+        return err
+    }
+    
+    // 处理每个数据块
+    fmt.Printf("收到数据: %v\n", chunk.Content)
+}
+reader.Close()
+```
+
+## 内置工具类型
+
+### DuckDuckGo 搜索工具
+
+DuckDuckGo 工具基于 DuckDuckGo Instant Answer API，提供事实性、百科类信息搜索功能。
+
+#### 基础用法
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
+
+// 创建 DuckDuckGo 搜索工具
+searchTool := duckduckgo.NewTool()
+
+// 集成到 Agent
+searchAgent := llmagent.New("search-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{searchTool}))
+```
+
+#### 高级配置
+
+```go
+import (
+    "net/http"
+    "time"
+    "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
+)
+
+// 自定义配置
+searchTool := duckduckgo.NewTool(
+    duckduckgo.WithBaseURL("https://api.duckduckgo.com"),
+    duckduckgo.WithUserAgent("my-app/1.0"),
+    duckduckgo.WithHTTPClient(&http.Client{
+        Timeout: 15 * time.Second,
+    }),
+)
+```
+
+## MCP Tools 协议工具
+
+MCP（Model Context Protocol）是一个开放协议，标准化了应用程序向 LLM 提供上下文的方式。MCP 工具基于 JSON-RPC 2.0 协议，为 Agent 提供了与外部服务的标准化集成能力。
+
+**MCP ToolSet 特点：**
+
+- 🔗 **统一接口**：所有 MCP 工具都通过 `mcp.NewMCPToolSet()` 创建
+- 🚀 **多种传输**：支持 STDIO、SSE、Streamable HTTP 三种传输方式
+- 🔧 **工具过滤**：支持包含/排除特定工具
+
+### 基本用法
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+
+// 创建 MCP 工具集（以 STDIO 为例）
+mcpToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "stdio",           // 传输方式
+        Command:   "go",              // 执行命令
+        Args:      []string{"run", "./stdio_server/main.go"},
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")), // 可选：工具过滤
+)
+
+// 集成到 Agent
+agent := llmagent.New("mcp-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
+```
+
+### 传输方式配置
+
+MCP ToolSet 通过 `Transport` 字段支持三种传输方式：
+
+#### 1. STDIO 传输
+
+通过标准输入输出与外部进程通信，适用于本地脚本和命令行工具。
+
+```go
+mcpToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "stdio",
+        Command:   "python",
+        Args:      []string{"-m", "my_mcp_server"},
+        Timeout:   10 * time.Second,
+    },
+)
+```
+
+#### 2. SSE 传输
+
+使用 Server-Sent Events 进行通信，支持实时数据推送和流式响应。
+
+```go
+mcpToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+        Headers: map[string]string{
+            "Authorization": "Bearer your-token",
+        },
+    },
+)
+```
+
+#### 3. Streamable HTTP 传输
+使用标准 HTTP 协议进行通信，支持普通HTTP和流式响应。
+
+```go
+mcpToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "streamable_http",  // 注意：使用完整名称
+        ServerURL: "http://localhost:3000/mcp",
+        Timeout:   10 * time.Second,
+    },
+)
+```
+
+## 工具集成与使用
+
+### 创建 Agent 与工具集成
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+// 创建函数工具
+calculatorTool := function.NewFunctionTool(calculator,
+    function.WithName("calculator"),
+    function.WithDescription("执行基础数学运算"))
+
+timeTool := function.NewFunctionTool(getCurrentTime,
+    function.WithName("current_time"), 
+    function.WithDescription("获取当前时间"))
+
+// 创建内置工具
+searchTool := duckduckgo.NewTool()
+
+// 创建 MCP 工具集（不同传输方式的示例）
+stdioToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "stdio",
+        Command:   "python",
+        Args:      []string{"-m", "my_mcp_server"},
+        Timeout:   10 * time.Second,
+    },
+)
+
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+)
+
+streamableToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "streamable_http",
+        ServerURL: "http://localhost:3000/mcp",
+        Timeout:   10 * time.Second,
+    },
+)
+
+// 创建 Agent 并集成所有工具
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithInstruction("你是一个有帮助的AI助手，可以使用多种工具协助用户"),
+    // 添加单个工具（Tool 接口）
+    llmagent.WithTools([]tool.Tool{
+        calculatorTool, timeTool, searchTool,
+    }),
+    // 添加工具集（ToolSet 接口）
+    llmagent.WithToolSets([]tool.ToolSet{stdioToolSet, sseToolSet, streamableToolSet}),
+)
+```
+
+### 工具过滤器
+
+```go
+// 包含过滤器：只使用指定工具
+includeFilter := mcp.NewIncludeFilter("get_weather", "get_news", "calculator")
+
+// 排除过滤器：排除指定工具
+excludeFilter := mcp.NewExcludeFilter("deprecated_tool", "slow_tool")
+
+// 组合过滤器
+combinedToolSet := mcp.NewMCPToolSet(
+    connectionConfig,
+    mcp.WithToolFilter(includeFilter),
+)
+```
+
+### 并行工具执行
+
+```go
+// 启用并行工具执行（可选，用于性能优化）
+agent := llmagent.New("ai-assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(tools),
+    llmagent.WithToolSets(toolSets),
+    llmagent.WithEnableParallelTools(true), // 启用并行执行
+)
+```
+
+**并行执行效果：**
+
+```bash
+# 并行执行（启用时）
+Tool 1: get_weather     [====] 50ms
+Tool 2: get_population  [====] 50ms  
+Tool 3: get_time       [====] 50ms
+总时间: ~50ms（同时执行）
+
+# 串行执行（默认）
+Tool 1: get_weather     [====] 50ms
+Tool 2: get_population       [====] 50ms
+Tool 3: get_time                  [====] 50ms  
+总时间: ~150ms（依次执行）
+```
+
+## 快速开始
+
+### 环境准备
+
+```bash
+# 设置 API 密钥
+export OPENAI_API_KEY="your-api-key"
+```
+
+### 简单示例
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+func main() {
+    // 1. 创建简单工具
+    calculatorTool := function.NewFunctionTool(
+        func(ctx context.Context, req struct {
+            Operation string  `json:"operation"`
+            A         float64 `json:"a"`
+            B         float64 `json:"b"`
+        }) (map[string]interface{}, error) {
+            var result float64
+            switch req.Operation {
+            case "add":
+                result = req.A + req.B
+            case "multiply":
+                result = req.A * req.B
+            default:
+                return nil, fmt.Errorf("unsupported operation")
+            }
+            return map[string]interface{}{"result": result}, nil
+        },
+        function.WithName("calculator"),
+        function.WithDescription("简单计算器"),
+    )
+    
+    // 2. 创建模型和 Agent
+    llmModel := openai.New("DeepSeek-V3-Online-64K")
+    agent := llmagent.New("calculator-assistant",
+        llmagent.WithModel(llmModel),
+        llmagent.WithInstruction("你是一个数学助手"),
+        llmagent.WithTools([]tool.Tool{calculatorTool}))
+    
+    // 3. 创建 Runner 并执行
+    r := runner.NewRunner("math-app", agent)
+    
+    ctx := context.Background()
+    userMessage := model.NewUserMessage("请计算 25 乘以 4")
+    
+    eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
+    if err != nil {
+        panic(err)
+    }
+    
+    // 4. 处理响应
+    for event := range eventChan {
+        if event.Error != nil {
+            fmt.Printf("错误: %s\n", event.Error.Message)
+            continue
+        }
+        
+        // 显示工具调用
+        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+                fmt.Printf("🔧 调用工具: %s\n", toolCall.Function.Name)
+                fmt.Printf("   参数: %s\n", string(toolCall.Function.Arguments))
+            }
+        }
+        
+        // 显示流式内容
+        if len(event.Choices) > 0 {
+            fmt.Print(event.Choices[0].Delta.Content)
+        }
+        
+        if event.Done {
+            break
+        }
+    }
+}
+```
+
+### 运行示例
+
+```bash
+# 进入工具示例目录
+cd examples/tool
+go run .
+
+# 进入 MCP 工具示例目录  
+cd examples/mcp_tool
+
+# 启动外部服务器
+cd streamalbe_server && go run main.go &
+
+# 运行主程序
+go run main.go -model="deepseek-chat"
+```
+
+## 总结
+
+Tool 工具系统为 tRPC-Agent-Go 提供了丰富的扩展能力，支持函数工具、DuckDuckGo 搜索工具和 MCP 协议工具。
