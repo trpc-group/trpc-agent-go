@@ -98,8 +98,7 @@ func (c *summarizerChat) setup(_ context.Context) error {
 
 	// Configure summarizer and manager.
 	summarizer := summary.NewSummarizer(
-		// Model used for LLM-based summarization.
-		summary.WithModel(modelInstance),
+		modelInstance, // Model used for LLM-based summarization.
 
 		// Keep the most recent events after compression.
 		// Default is 10; use a smaller number for concise demos.

@@ -62,13 +62,14 @@ type sessionSummarizer struct {
 }
 
 // NewSummarizer creates a new session summarizer.
-func NewSummarizer(opts ...Option) SessionSummarizer {
+func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
 		prompt:           defaultSummarizerPrompt,
 		checks:           defaultCheckers,
 		maxSummaryLength: defaultMaxSummaryLength,
 		keepRecentCount:  defaultKeepRecent,
 	}
+	s.model = m
 
 	for _, opt := range opts {
 		opt(s)

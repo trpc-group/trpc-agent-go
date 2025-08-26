@@ -40,8 +40,8 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 func TestManager_Summarize_CacheAndCompression(t *testing.T) {
 	ctx := context.Background()
 
-	// Summarizer without model uses simple concatenation.
-	s := NewSummarizer(WithKeepRecentCount(2))
+	// Summarizer with mock model.
+	s := NewSummarizer(&mockModel{name: "mock", resp: "summary"}, WithKeepRecentCount(2))
 	mgr := NewManager(s)
 
 	// Prepare session with 5 events.
@@ -78,12 +78,8 @@ func TestSummarizer_PromptFormatting_ModelUsed(t *testing.T) {
 	ctx := context.Background()
 
 	mock := &mockModel{name: "mock-llm", resp: "- bullet one"}
-	customPrompt := "Conversation:\n%s\n\nSummary:"
-	s := NewSummarizer(
-		WithModel(mock),
-		WithPrompt(customPrompt),
-		WithKeepRecentCount(1),
-	)
+	customPrompt := "Conversation:\n{conversation_text}\n\nSummary:"
+	s := NewSummarizer(mock, WithPrompt(customPrompt), WithKeepRecentCount(1))
 
 	// Build a session with 3 events so we have 2 old events to summarize when keepRecent=1.
 	sess := &session.Session{
@@ -125,7 +121,7 @@ func TestSummarizer_PromptFormatting_ModelUsed(t *testing.T) {
 
 func TestMetadata_IncludesModelInfo(t *testing.T) {
 	mock := &mockModel{name: "mock-llm", resp: "ok"}
-	s := NewSummarizer(WithModel(mock))
+	s := NewSummarizer(mock)
 	md := s.Metadata()
 	assert.Equal(t, "mock-llm", md[MetadataKeyModelName])
 }
@@ -179,7 +175,7 @@ func (f *fakeService) GetSessionSummaryText(ctx context.Context, sess *session.S
 func (f *fakeService) Close() error { return nil }
 
 func TestManager_WithAutoSummarize_Disable(t *testing.T) {
-	s := NewSummarizer(WithEventThreshold(1))
+	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithEventThreshold(1))
 	m := NewManager(s, WithAutoSummarize(false))
 	sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
 	assert.False(t, m.ShouldSummarize(sess))
@@ -187,7 +183,7 @@ func TestManager_WithAutoSummarize_Disable(t *testing.T) {
 
 func TestManager_WithBaseService_AppendsAndMetadata(t *testing.T) {
 	// Build a session that will summarize and compress.
-	s := NewSummarizer(WithKeepRecentCount(1))
+	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithKeepRecentCount(1))
 	sess := &session.Session{
 		ID:      "sess-1",
 		AppName: "app",
@@ -223,7 +219,7 @@ func TestManager_SetSessionService_ForceAndNonForce(t *testing.T) {
 	ctx := context.Background()
 
 	// Use a simple summarizer that always compresses when forced.
-	s := NewSummarizer(WithKeepRecentCount(1))
+	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithKeepRecentCount(1))
 	m := NewManager(s)
 
 	// Two fake services to distinguish which one receives AppendEvent.
@@ -269,8 +265,8 @@ func TestManager_SetSummarizer_ForceAndNonForce(t *testing.T) {
 	ctx := context.Background()
 
 	// Build two summarizers with different keepRecent to observe effects.
-	sA := NewSummarizer(WithKeepRecentCount(1))
-	sB := NewSummarizer(WithKeepRecentCount(2))
+	sA := NewSummarizer(&mockModel{name: "mockA", resp: "ok"}, WithKeepRecentCount(1))
+	sB := NewSummarizer(&mockModel{name: "mockB", resp: "ok"}, WithKeepRecentCount(2))
 	m := NewManager(sA)
 
 	sess := &session.Session{

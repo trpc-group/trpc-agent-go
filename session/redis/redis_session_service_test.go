@@ -808,7 +808,7 @@ func TestService_CreateSessionSummary_InMemoryOnly(t *testing.T) {
 	defer cleanup()
 
 	// Build summarizer that always compresses when forced.
-	s := summary.NewSummarizer(summary.WithKeepRecentCount(1))
+	s := summary.NewSummarizer(&mockModel{name: "mock", resp: "ok"}, summary.WithKeepRecentCount(1))
 	mgr := summary.NewManager(s)
 
 	// Build service with summarizer manager attached (in-memory only).
@@ -822,8 +822,12 @@ func TestService_CreateSessionSummary_InMemoryOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	events := []*event.Event{
-		{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "a"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
-		{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b"}}}}, Timestamp: time.Now().Add(-1 * time.Second)},
+		{Response: &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Content: "a"}}},
+		}, Timestamp: time.Now().Add(-2 * time.Second)},
+		{Response: &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Content: "b"}}},
+		}, Timestamp: time.Now().Add(-1 * time.Second)},
 	}
 	for _, e := range events {
 		require.NoError(t, service.AppendEvent(context.Background(), sess, e))
@@ -842,4 +846,18 @@ func TestService_CreateSessionSummary_InMemoryOnly(t *testing.T) {
 	count, err := client.ZCard(context.Background(), getEventKey(sessKey)).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), count)
+}
+
+// mockModel is a minimal model for tests.
+type mockModel struct {
+	name string
+	resp string
+}
+
+func (m *mockModel) Info() model.Info { return model.Info{Name: m.name} }
+func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: m.resp}}}}
+	close(ch)
+	return ch, nil
 }
