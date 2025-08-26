@@ -7,7 +7,7 @@
 //
 //
 
-// Package elasticsearch provides Elasticsearch client interface and implementation.
+// Package elasticsearch provides Elasticsearch client interface, implementation and options.
 package elasticsearch
 
 import (
@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/elastic/go-elasticsearch/v9"
@@ -241,7 +242,7 @@ func (c *client) IndexExists(ctx context.Context, indexName string) (bool, error
 		return false, err
 	}
 	defer res.Body.Close()
-	return res.StatusCode == 200, nil
+	return res.StatusCode == http.StatusOK, nil
 }
 
 // IndexDocument indexes a document.
@@ -347,10 +348,7 @@ func (c *client) Search(ctx context.Context, indexName string, query map[string]
 		return nil, err
 	}
 	if res.IsError() {
-		return nil, fmt.Errorf(
-			"elasticsearch search failed: %s: %s",
-			res.Status(), string(body),
-		)
+		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(body))
 	}
 	return body, nil
 }

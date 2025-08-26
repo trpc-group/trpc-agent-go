@@ -26,6 +26,11 @@ const (
 	scriptParamQueryVector = "query_vector"
 	// scriptSource is the source of the script for the cosine similarity.
 	scriptSource = "if (doc['embedding'].size() > 0) { cosineSimilarity(params.query_vector, 'embedding') + 1.0 } else { 0.0 }"
+
+	// searchFieldContent is the content field for text search with higher weight.
+	searchFieldContent = "content^2"
+	// searchFieldName is the name field for text search with medium weight.
+	searchFieldName = "name^1.5"
 )
 
 // buildVectorSearchQuery builds a vector similarity search query.
@@ -64,7 +69,7 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	// Create multi_match query using esdsl.
 	multiMatchQuery := esdsl.NewMultiMatchQuery(query.Query).
-		Fields("content^2", "name^1.5").
+		Fields(searchFieldContent, searchFieldName).
 		Type(textquerytype.Bestfields)
 
 	// Build the complete search request using official SearchRequestBody.
@@ -101,7 +106,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Create multi_match query.
 	multiMatchQuery := esdsl.NewMultiMatchQuery(query.Query).
-		Fields("content^2", "name^1.5").
+		Fields(searchFieldContent, searchFieldName).
 		Type(textquerytype.Bestfields)
 
 	// Combine queries using bool query.

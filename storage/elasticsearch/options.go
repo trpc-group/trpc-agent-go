@@ -7,6 +7,7 @@
 //
 //
 
+// Package elasticsearch provides Elasticsearch client interface, implementation and options.
 package elasticsearch
 
 import "time"
