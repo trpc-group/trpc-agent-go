@@ -306,10 +306,29 @@ func (w *customerSupportWorkflow) createCustomerSupportGraph() (*graph.Graph, er
 			graph.WithName("Analyze Customer Query"),
 			graph.WithDescription("Analyzes the customer query to determine type and priority"),
 		).
-		// Technical support using A2A agent wrapper.
-		AddNode(nodeTechnicalSupport, w.handleTechnicalSupport,
+		// Technical support using built-in agent node that routes to sub-agent.
+		AddAgentNode(nodeTechnicalSupport, agentTechnicalSupport,
 			graph.WithName("Technical Support"),
 			graph.WithDescription("Routes to A2A technical support agent for specialized assistance"),
+			graph.WithPostNodeCallback(func(
+				ctx context.Context,
+				callbackCtx *graph.NodeCallbackContext,
+				state graph.State,
+				result any,
+				nodeErr error,
+			) (any, error) {
+				// Get last response from result, since state merge happens after
+				// post-node callback runs.
+				if resState, ok := result.(graph.State); ok {
+					if v, ok := resState[graph.StateKeyLastResponse].(string); ok {
+						fmt.Printf("🤖 A2A agent response: %s\n", v)
+					}
+				}
+				if nodeErr != nil {
+					fmt.Printf("🤖 A2A agent error: %v\n", nodeErr)
+				}
+				return result, nodeErr
+			}),
 		).
 		// Billing support node.
 		AddNode(nodeBillingSupport, w.handleBillingQuery,
@@ -631,71 +650,6 @@ func (w *customerSupportWorkflow) handleBillingQuery(ctx context.Context, state 
 		Build(), nil
 }
 
-// handleTechnicalSupport handles technical support queries using the A2A agent.
-func (w *customerSupportWorkflow) handleTechnicalSupport(ctx context.Context, state graph.State) (any, error) {
-	query := state[stateKeyCustomerQuery].(string)
-
-	// Create user message for A2A agent.
-	userMessage := model.Message{
-		Role:    model.RoleUser,
-		Content: query,
-	}
-
-	// Get the A2A agent from the parent agent.
-	parentAgent := state[graph.StateKeyParentAgent].(*graphagent.GraphAgent)
-	a2aAgent := parentAgent.FindSubAgent(agentTechnicalSupport)
-	if a2aAgent == nil {
-		return newStateBuilder().
-			SetResponse("Technical support agent is currently unavailable. Please try again later.").
-			Build(), nil
-	}
-
-	// Create a temporary session for A2A agent call.
-	sessionService := inmemory.NewSessionService()
-	tempRunner := runner.NewRunner("temp-a2a", a2aAgent, runner.WithSessionService(sessionService))
-
-	userID := "temp-user"
-	sessionID := fmt.Sprintf("temp-session-%d", time.Now().UnixNano())
-
-	// Call the A2A agent.
-	events, err := tempRunner.Run(ctx, userID, sessionID, userMessage)
-	if err != nil {
-		return newStateBuilder().
-			SetResponse(fmt.Sprintf("Error calling technical support agent: %v", err)).
-			Build(), nil
-	}
-
-	// Collect the response from the A2A agent.
-	var responseContent strings.Builder
-	for event := range events {
-		if event.Response != nil && event.Response.Error != nil {
-			// Skip context cancellation errors as they're expected
-			if !strings.Contains(event.Response.Error.Message, "context canceled") {
-				responseContent.WriteString(fmt.Sprintf("Error: %s", event.Response.Error.Message))
-			}
-			continue
-		}
-		if event.Response != nil && len(event.Response.Choices) > 0 {
-			choice := event.Response.Choices[0]
-			if choice.Delta.Content != "" {
-				responseContent.WriteString(choice.Delta.Content)
-			} else if choice.Message.Content != "" {
-				responseContent.WriteString(choice.Message.Content)
-			}
-		}
-	}
-
-	response := responseContent.String()
-	if response == "" {
-		response = "Technical support agent is currently busy. Please try again later."
-	}
-
-	// Return state update with response
-	return newStateBuilder().
-		SetResponse(response).
-		Build(), nil
-}
-
 // handleGeneralQuery handles general customer service queries.
 func (w *customerSupportWorkflow) handleGeneralQuery(ctx context.Context, state graph.State) (any, error) {
 	query := state[stateKeyCustomerQuery].(string)
@@ -722,11 +676,16 @@ func (w *customerSupportWorkflow) formatFinalResponse(ctx context.Context, state
 		}
 	}
 
-	// If no response from previous node, try to get from A2A agent response
+	// If no response from previous node, try to get from agent/LLM response.
 	if response == "" {
 		if lastResponse, exists := state[graph.StateKeyLastResponse]; exists {
-			if resp, ok := lastResponse.(*model.Response); ok && len(resp.Choices) > 0 {
-				response = resp.Choices[0].Message.Content
+			switch resp := lastResponse.(type) {
+			case string:
+				response = resp
+			case *model.Response:
+				if resp != nil && len(resp.Choices) > 0 {
+					response = resp.Choices[0].Message.Content
+				}
 			}
 		}
 	}

@@ -632,6 +632,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
 		// Update state with the agent's response.
 		stateUpdate := State{}
+		fmt.Printf("agent node %s response: %s\n", agentName, acc)
 		stateUpdate[StateKeyLastResponse] = acc
 		return stateUpdate, nil
 	}
