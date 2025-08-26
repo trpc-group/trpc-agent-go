@@ -20,6 +20,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	// TransferToolName is the name of the transfer_to_agent tool.
+	TransferToolName = "transfer_to_agent"
+	// FieldAgentName is the name of the agent_name field.
+	FieldAgentName = "agent_name"
+	// FieldMessage is the name of the message field.
+	FieldMessage = "message"
+	// FieldEndInvocation is the name of the end_invocation field.
+	FieldEndInvocation = "end_invocation"
+)
+
 // Request represents the request structure for transfer_to_agent tool.
 type Request struct {
 	// AgentName is the name of the target agent to transfer to.
@@ -82,26 +93,26 @@ func (t *Tool) Declaration() *tool.Declaration {
 	schema := &tool.Schema{
 		Type: "object",
 		Properties: map[string]*tool.Schema{
-			"agent_name": {
+			FieldAgentName: {
 				Type: "string",
 				Description: fmt.Sprintf(
 					"Name of the agent to transfer control to.\n\nAvailable agents:\n%s\n\nValid agent names: %v",
 					agentDetailsText, agentNames),
 			},
-			"message": {
+			FieldMessage: {
 				Type:        "string",
 				Description: "Optional message to pass to the target agent",
 			},
-			"end_invocation": {
+			FieldEndInvocation: {
 				Type:        "boolean",
 				Description: "Whether to end current invocation after transfer (default: true)",
 			},
 		},
-		Required: []string{"agent_name"},
+		Required: []string{FieldAgentName},
 	}
 
 	return &tool.Declaration{
-		Name:        "transfer_to_agent",
+		Name:        TransferToolName,
 		Description: "Transfer control to another agent. This will hand over the conversation to the specified agent.",
 		InputSchema: schema,
 	}
