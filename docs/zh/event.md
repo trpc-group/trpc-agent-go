@@ -1,16 +1,16 @@
 # Event 使用文档
 
-`Event` 是 tRPC-Agent-Go 中 `Agent` 与用户之间通信的核心机制。它就像一个消息信封，承载着 `Agent` 的响应内容、工具调用结果、错误信息等。通过 `Event`，你可以实时了解 `Agent` 的工作状态，处理流式响应，实现多 `Agent` 协作，以及追踪工具执行。
+Event 是 trpc-agent-go 中 Agent 与用户之间通信的核心机制。它就像一个消息信封，承载着 Agent 的响应内容、工具调用结果、错误信息等。通过 Event，你可以实时了解 Agent 的工作状态，处理流式响应，实现多 Agent 协作，以及追踪工具执行。
 
 ## Event 概述
 
-`Event` 是 `Agent` 与用户之间通信的载体。
+Event 是 Agent 与用户之间通信的载体。
 
-用户通过 `runner.Run()` 方法获取事件流，然后监听事件通道来处理 `Agent` 的响应。
+用户通过 `runner.Run()` 方法获取事件流，然后监听事件通道来处理 Agent 的响应。
 
 ### Event 结构
 
-`Event` 表示 `Agent` 与用户之间的一次事件，结构定义如下：
+`Event` 表示 Agent 与用户之间的一次事件，结构定义如下：
 
 ```go
 type Event struct {
@@ -45,7 +45,7 @@ type Event struct {
 }
 ```
 
-`model.Response` 是 `Event` 的基础响应结构，承载了 LLM 的响应、工具调用以及错误等信息，定义如下：
+`model.Response` 是 Event 的基础响应结构，承载了 LLM 的响应、工具调用以及错误等信息，定义如下：
 
 ```go
 type Response struct {
@@ -135,17 +135,17 @@ type Usage struct {
 
 ### Event 类型
 
-`Event` 在以下场景中会被创建和发送：
+Event 在以下场景中会被创建和发送：
 
 1. **用户消息事件**：用户发送消息时自动创建
-2. **`Agent` 响应事件**：`Agent` 生成响应时创建
+2. **Agent 响应事件**：Agent 生成响应时创建
 3. **流式响应事件**：流式模式下每个响应块都会创建
-4. **工具调用事件**：`Agent` 调用工具时创建
+4. **工具调用事件**：Agent 调用工具时创建
 5. **错误事件**：发生错误时创建
-6. **`Agent` 转移事件**：`Agent` 转移给其他 `Agent` 时创建
+6. **Agent 转移事件**：Agent 转移给其他 Agent 时创建
 7. **完成事件**：Agent 执行完成时创建
 
-根据 `model.Response.Object` 字段，`Event` 可以分为以下类型：
+根据 `model.Response.Object` 字段，Event 可以分为以下类型：
 
 ```go
 const (
@@ -176,9 +176,9 @@ const (
 
 ### Event 创建
 
-在开发自定义 `Agent` 类型或 `Processor` 时，需要创建 `Event`。
+在开发自定义 Agent 类型或 Processor 时，需要创建 Event。
 
-`Event` 提供了三种创建方法，适用于不同场景。
+Event 提供了三种创建方法，适用于不同场景。
 
 ```go
 // 创建新事件
@@ -195,12 +195,12 @@ func NewResponseEvent(invocationID, author string, response *model.Response) *Ev
 
 - `invocationID string`：调用唯一标识
 - `author string`：事件发起者
-- `opts ...Option`：可选的配置选项（仅 `New` 方法）
-- `errorType string`：错误类型（仅 `NewErrorEvent` 方法）
-- `errorMessage string`：错误消息（仅 `NewErrorEvent` 方法）
-- `response *model.Response`：响应对象（仅 `NewResponseEvent` 方法）
+- `opts ...Option`：可选的配置选项（仅 New 方法）
+- `errorType string`：错误类型（仅 NewErrorEvent 方法）
+- `errorMessage string`：错误消息（仅 NewErrorEvent 方法）
+- `response *model.Response`：响应对象（仅 NewResponseEvent 方法）
 
-框架支持以下 `Option` 用以配置 `Event`：
+框架支持以下 Option 用以配置 Event：
 
 - `WithBranch(branch string)`：设置事件的分支标识
 - `WithResponse(response *model.Response)`：设置事件的响应内容
@@ -228,7 +228,7 @@ evt := event.NewResponseEvent("invoke-123", "agent", response)
 
 ### Event 方法
 
-`Event` 提供了 `Clone` 方法，用于创建 `Event` 的深拷贝。
+Event 提供了 `Clone` 方法，用于创建 Event 的深拷贝。
 
 ```go
 func (e *Event) Clone() *Event
@@ -236,12 +236,12 @@ func (e *Event) Clone() *Event
 
 ## Event 使用示例
 
-这个示例展示了如何在实际应用中使用 `Event` 处理 `Agent` 的流式响应、工具调用和错误处理。
+这个示例展示了如何在实际应用中使用 Event 处理 Agent 的流式响应、工具调用和错误处理。
 
 ### 核心流程
 
-1. **发送用户消息**：通过 `runner.Run()` 启动 `Agent` 处理
-2. **接收事件流**：实时处理 `Agent` 返回的事件
+1. **发送用户消息**：通过 `runner.Run()` 启动 Agent 处理
+2. **接收事件流**：实时处理 Agent 返回的事件
 3. **处理不同类型事件**：区分流式内容、工具调用、错误等
 4. **可视化输出**：为用户提供友好的交互体验
 

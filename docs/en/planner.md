@@ -1,20 +1,19 @@
-## Planner User Guide
+# Planner Usage Guide
 
-`Planner` is the component that enables planning capabilities for an `Agent`. It allows an `Agent` to formulate a plan before executing tasks, improving both efficiency and accuracy.
+Planner is a component for implementing planning capabilities for Agents. It allows an Agent to formulate a plan before executing tasks, thereby improving execution efficiency and accuracy.
 
-The framework provides two `Planner` implementations for different model types:
+The framework provides two Planner implementations, each suited for different types of models:
 
-- `BuiltinPlanner`: for models that natively support internal reasoning/thinking
-- `ReActPlanner`: for models without native thinking, guiding them to output in a tagged, structured format
+- BuiltinPlanner: Suitable for models that support native reasoning/thinking.
+- ReActPlanner: Suitable for models that do not support native reasoning, guiding the model to output in a fixed, labeled format to provide a structured reasoning process.
 
-### Planner Interface
+## Planner Interface
 
-The `Planner` interface defines the methods that all planners must implement:
+The Planner interface defines the methods that all planners must implement:
 
 ```go
 type Planner interface {
-    // BuildPlanningInstruction applies necessary configuration to the LLM request
-    // and returns the system instruction to attach for planning.
+    // BuildPlanningInstruction applies necessary configurations to the LLM request and constructs the system instruction to be attached for planning.
     // Return an empty string if no instruction is needed.
     BuildPlanningInstruction(
         ctx context.Context,
@@ -22,7 +21,7 @@ type Planner interface {
         llmRequest *model.Request,
     ) string
 
-    // ProcessPlanningResponse processes the LLM planning response and returns the processed response.
+    // ProcessPlanningResponse processes the LLM's planning response and returns the processed response.
     // Return nil if no processing is needed.
     ProcessPlanningResponse(
         ctx context.Context,
@@ -34,34 +33,34 @@ type Planner interface {
 
 Planner workflow:
 
-1. Request phase: before sending the LLM request, `BuildPlanningInstruction` adds planning instructions or applies configuration
-2. Response phase: `ProcessPlanningResponse` organizes the LLM response content and structure
+1. Request processing phase: Before the LLM request is sent, the Planner adds planning instructions or configurations via `BuildPlanningInstruction`.
+2. Response processing phase: The Planner processes the LLM response and organizes the content structure via `ProcessPlanningResponse`.
 
-### BuiltinPlanner
+## BuiltinPlanner
 
-`BuiltinPlanner` targets models that support native thinking. It does not generate explicit planning instructions. Instead, it configures the model to leverage its internal reasoning mechanism to achieve planning.
+BuiltinPlanner is suitable for models that support native reasoning. It does not generate explicit planning instructions, but instead configures the model to use its internal reasoning mechanisms to implement planning.
 
 Model configuration:
 
 ```go
 type Options struct {
-    // ReasoningEffort constrains the reasoning intensity of reasoning-enabled models.
+    // ReasoningEffort limits the reasoning effort of the reasoning model.
     // Supported values: "low", "medium", "high".
     // Only effective for OpenAI o-series models.
     ReasoningEffort *string
     // ThinkingEnabled enables thinking mode for models that support it.
-    // Only effective for Claude and Gemini models via OpenAI-compatible API.
+    // Only effective for Claude and Gemini models via OpenAI API.
     ThinkingEnabled *bool
-    // ThinkingTokens controls the length of the thinking process.
-    // Only effective for Claude and Gemini models via OpenAI-compatible API.
+    // ThinkingTokens controls the length of thinking.
+    // Only effective for Claude and Gemini models via OpenAI API.
     ThinkingTokens *int
 }
 ```
 
-Implementation details:
+Implementation details for BuiltinPlanner:
 
-- `BuildPlanningInstruction`: applies thinking parameters to the LLM request. Since the model supports native reasoning, no planning tags are needed, so return an empty string
-- `ProcessPlanningResponse`: returns nil because the model's response already includes its planning process
+- `BuildPlanningInstruction`: Injects reasoning parameters into the LLM request. Since the model supports native thinking, no planning tags are required, so it returns an empty string.
+- `ProcessPlanningResponse`: Since the model's response already contains the planning process, it directly returns nil.
 
 Example:
 
@@ -81,7 +80,7 @@ planner := builtin.New(builtin.Options{
     ReasoningEffort: &reasoningEffort,
 })
 
-// Create LLMAgent and configure the Planner.
+// Create LLMAgent and configure Planner.
 llmAgent := llmagent.New(
     "demo-agent",
     llmagent.WithModel(modelInstance),
@@ -91,22 +90,22 @@ llmAgent := llmagent.New(
 )
 ```
 
-### ReActPlanner
+## ReActPlanner
 
-`ReActPlanner` targets models that do not support native thinking. It guides the LLM to follow a specific, tagged format to structure planning, reasoning, actions, and the final answer, thereby achieving a structured thinking process.
+ReActPlanner is suitable for models that do not support native reasoning. It guides the LLM to follow a specific format and uses specific tags to structure planning, reasoning, actions, and the final answer, thus enabling a structured reasoning process.
 
-ReActPlanner uses the following tags to organize response content:
+ReActPlanner uses the following specific tags to organize response content:
 
-1. Planning phase (`/*PLANNING*/`): create a clear plan to answer the user's question
-2. Reasoning phase (`/*REASONING*/`): provide reasoning between tool executions
-3. Action phase (`/*ACTION*/`): execute tools based on the plan
-4. Re-planning (`/*REPLANNING*/`): revise the plan based on results when needed
-5. Final answer (`/*FINAL_ANSWER*/`): provide the synthesized answer
+1. Planning phase (`/*PLANNING*/`): Create a clear plan to answer the user's question.
+2. Reasoning phase (`/*REASONING*/`): Provide reasoning between tool executions.
+3. Action phase (`/*ACTION*/`): Execute tools according to the plan.
+4. Replanning (`/*REPLANNING*/`): Revise the plan as needed based on results.
+5. Final answer (`/*FINAL_ANSWER*/`): Provide a comprehensive answer.
 
-Implementation details:
+Implementation details for ReActPlanner:
 
-- `BuildPlanningInstruction`: returns comprehensive instructions containing high-level guidance, planning requirements, and reasoning requirements, prompting the model to output in the tagged format
-- `ProcessPlanningResponse`: filters out tool calls with empty names; if the content contains the `/*FINAL_ANSWER*/` tag, keep only the final answer section; otherwise, return the original content, separating planning content from the final answer
+- `BuildPlanningInstruction`: Returns a comprehensive instruction that includes high-level guidance, planning requirements, reasoning requirements, etc., guiding the model to output using labeled format.
+- `ProcessPlanningResponse`: Filters tool calls with empty names. If the content contains the `/*FINAL_ANSWER*/` tag, only the final answer part is retained; otherwise, the original content is returned, separating planning content from the final answer.
 
 Usage example:
 
@@ -131,7 +130,7 @@ searchTool := function.NewFunctionTool(
 // Create ReActPlanner.
 planner := react.New()
 
-// Create LLMAgent and configure the Planner.
+// Create LLMAgent and configure Planner.
 llmAgent := llmagent.New(
     "react-agent",
     llmagent.WithModel(modelInstance),
@@ -142,11 +141,11 @@ llmAgent := llmagent.New(
 )
 ```
 
-See the full example at [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react).
+See the complete example at examples/react.
 
-### Custom Planner
+## Custom Planner
 
-Besides the two built-in `Planner` implementations, you can implement the `Planner` interface to create a custom `Planner` for specific needs:
+In addition to the two Planner implementations provided by the framework, you can also create a custom Planner by implementing the `Planner` interface to meet specific needs:
 
 ```go
 type customPlanner struct {
@@ -158,8 +157,8 @@ func (p *customPlanner) BuildPlanningInstruction(
     invocation *agent.Invocation,
     llmRequest *model.Request,
 ) string {
-    // Return your custom planning instruction.
-    return "your custom planning instruction"
+    // Return custom planning instruction.
+    return "Your custom planning instruction"
 }
 
 func (p *customPlanner) ProcessPlanningResponse(
@@ -167,11 +166,11 @@ func (p *customPlanner) ProcessPlanningResponse(
     invocation *agent.Invocation,
     response *model.Response,
 ) *model.Response {
-    // Process the response.
+    // Process response.
     return response
 }
 
-// Create LLMAgent and configure the custom Planner.
+// Create LLMAgent and configure custom Planner.
 llmAgent := llmagent.New(
     "react-agent",
     llmagent.WithModel(modelInstance),
