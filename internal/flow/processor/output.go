@@ -24,13 +24,13 @@ import (
 // OutputResponseProcessor processes final responses and handles output_key and output_schema functionality.
 type OutputResponseProcessor struct {
 	outputKey    string
-	outputSchema map[string]interface{}
+	outputSchema map[string]any
 }
 
 // NewOutputResponseProcessor creates a new instance of OutputResponseProcessor.
 func NewOutputResponseProcessor(
 	outputKey string,
-	outputSchema map[string]interface{},
+	outputSchema map[string]any,
 ) *OutputResponseProcessor {
 	return &OutputResponseProcessor{
 		outputKey:    outputKey,
@@ -41,53 +41,81 @@ func NewOutputResponseProcessor(
 // ProcessResponse processes the model response and handles output_key and output_schema functionality.
 // This mimics the behavior of adk-python's output processing using event.actions.state_delta pattern.
 func (p *OutputResponseProcessor) ProcessResponse(
-	ctx context.Context, invocation *agent.Invocation, rsp *model.Response, ch chan<- *event.Event) {
+	ctx context.Context,
+	invocation *agent.Invocation,
+	rsp *model.Response,
+	ch chan<- *event.Event,
+) {
 	// Only process complete (non-partial) responses.
-	if rsp.IsPartial {
-		return
-	}
 	// Extract text content from the response.
-	if len(rsp.Choices) == 0 || rsp.Choices[0].Message.Content == "" {
+	content, ok := p.extractFinalContent(rsp)
+	if !ok {
 		return
 	}
-	content := rsp.Choices[0].Message.Content
 
 	// 1) Emit typed structured output payload if configured.
-	if invocation != nil && invocation.StructuredOutputType != nil {
-		contentTrim := strings.TrimSpace(content)
-		candidate := contentTrim
-		if !strings.HasPrefix(contentTrim, "{") {
-			if obj, ok := extractFirstJSONObject(contentTrim); ok {
-				candidate = obj
-				log.Debugf("Extracted JSON object candidate for structured output.")
-			}
-		}
-		if strings.HasPrefix(candidate, "{") {
-			var instance any
-			if invocation.StructuredOutputType.Kind() == reflect.Pointer {
-				instance = reflect.New(invocation.StructuredOutputType.Elem()).Interface()
-			} else {
-				instance = reflect.New(invocation.StructuredOutputType).Interface()
-			}
-			if err := json.Unmarshal([]byte(candidate), instance); err == nil {
-				typedEvt := event.New(invocation.InvocationID, invocation.AgentName,
-					event.WithObject(model.ObjectTypeStateUpdate),
-					event.WithStructuredOutputPayload(instance),
-				)
-				typedEvt.RequiresCompletion = true
-				select {
-				case ch <- typedEvt:
-					log.Debugf("Emitted typed structured output payload event.")
-				case <-ctx.Done():
-					return
-				}
-			} else {
-				log.Errorf("Structured output unmarshal failed: %v", err)
-			}
-		}
-	}
+	p.emitTypedStructuredOutput(ctx, invocation, content, ch)
 
 	// 2) Handle output_key functionality (raw persistence, optional schema validation).
+	p.handleOutputKey(ctx, invocation, content, ch)
+}
+
+// extractFinalContent returns the final text content if response is complete.
+func (p *OutputResponseProcessor) extractFinalContent(rsp *model.Response) (string, bool) {
+	if rsp == nil || rsp.IsPartial {
+		return "", false
+	}
+	if len(rsp.Choices) == 0 || rsp.Choices[0].Message.Content == "" {
+		return "", false
+	}
+	return rsp.Choices[0].Message.Content, true
+}
+
+// emitTypedStructuredOutput emits a typed payload event when StructuredOutputType is set.
+func (p *OutputResponseProcessor) emitTypedStructuredOutput(
+	ctx context.Context, invocation *agent.Invocation, content string, ch chan<- *event.Event,
+) {
+	if invocation == nil || invocation.StructuredOutputType == nil {
+		return
+	}
+	contentTrim := strings.TrimSpace(content)
+	candidate := contentTrim
+	if !strings.HasPrefix(contentTrim, "{") {
+		if obj, ok := extractFirstJSONObject(contentTrim); ok {
+			candidate = obj
+			log.Debugf("Extracted JSON object candidate for structured output.")
+		}
+	}
+	if !strings.HasPrefix(candidate, "{") {
+		return
+	}
+	var instance any
+	if invocation.StructuredOutputType.Kind() == reflect.Pointer {
+		instance = reflect.New(invocation.StructuredOutputType.Elem()).Interface()
+	} else {
+		instance = reflect.New(invocation.StructuredOutputType).Interface()
+	}
+	if err := json.Unmarshal([]byte(candidate), instance); err != nil {
+		log.Errorf("Structured output unmarshal failed: %v", err)
+		return
+	}
+	typedEvt := event.New(invocation.InvocationID, invocation.AgentName,
+		event.WithObject(model.ObjectTypeStateUpdate),
+		event.WithStructuredOutputPayload(instance),
+	)
+	typedEvt.RequiresCompletion = true
+	select {
+	case ch <- typedEvt:
+		log.Debugf("Emitted typed structured output payload event.")
+	case <-ctx.Done():
+		return
+	}
+}
+
+// handleOutputKey validates and emits state delta for output_key/output_schema cases.
+func (p *OutputResponseProcessor) handleOutputKey(
+	ctx context.Context, invocation *agent.Invocation, content string, ch chan<- *event.Event,
+) {
 	if p.outputKey == "" && p.outputSchema == nil {
 		return
 	}
@@ -97,7 +125,7 @@ func (p *OutputResponseProcessor) ProcessResponse(
 		if strings.TrimSpace(content) == "" {
 			return
 		}
-		var parsedJSON interface{}
+		var parsedJSON any
 		if err := json.Unmarshal([]byte(content), &parsedJSON); err != nil {
 			log.Warnf("Failed to parse output as JSON for output_schema validation: %v", err)
 			return

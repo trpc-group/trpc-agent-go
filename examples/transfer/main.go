@@ -218,7 +218,7 @@ func (c *transferChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("💡 Try different types of requests:")
-	fmt.Println("   • Math: 'Calculate the compound interest on $5000 at 6% for 8 years'")
+	fmt.Println("   • Math: 'Calculate the power of 2 to 10'")
 	fmt.Println("   • Weather: 'What's the weather like in Tokyo?'")
 	fmt.Println("   • Research: 'Tell me about renewable energy trends'")
 	fmt.Println("   • General: 'Hello, what can you help me with?'")
