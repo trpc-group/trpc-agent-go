@@ -507,7 +507,7 @@ func (r *A2AAgent) shouldUseStreaming() bool {
 
 // runStreaming handles streaming A2A communication
 func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 10)
+	eventChan := make(chan *event.Event, 1024)
 	go func() {
 		defer close(eventChan)
 
