@@ -80,10 +80,10 @@ func (c *summarizerChat) run() error {
 // setup creates runner, session service, summarizer manager and agent.
 func (c *summarizerChat) setup(_ context.Context) error {
 	// Create model and agent.
-	mdl := openai.New(c.modelName)
-	llm := llmagent.New(
+	modelInstance := openai.New(c.modelName)
+	llmAgent := llmagent.New(
 		"chat-assistant",
-		llmagent.WithModel(mdl),
+		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant focusing on summarization."),
 		llmagent.WithInstruction("Answer the user's questions concisely and helpfully."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
@@ -97,22 +97,56 @@ func (c *summarizerChat) setup(_ context.Context) error {
 	c.sessSvc = inmemory.NewSessionService()
 
 	// Configure summarizer and manager.
-	sum := summary.NewSummarizer(
-		summary.WithModel(mdl),
+	summarizer := summary.NewSummarizer(
+		// Model used for LLM-based summarization.
+		summary.WithModel(modelInstance),
+
+		// Keep the most recent events after compression.
+		// Default is 10; use a smaller number for concise demos.
 		summary.WithKeepRecentCount(2),
+
+		// Cap the generated summary length to avoid overlong outputs.
+		// Default is 1000; larger values preserve more details.
+		summary.WithMaxSummaryLength(1000),
+
+		// Trigger logic: you can combine multiple checkers with AND or OR.
+		// - WithChecksAll([]Checker{...}): all conditions must pass.
+		// - WithChecksAny([]Checker{...}): any condition is sufficient.
+		// - WithChecks([]Checker{...}): replace default checks entirely.
+
+		// Example: AND logic.
+		// summary.WithChecksAll([]summary.Checker{
+		// 	summary.SetEventThreshold(30),             // Events reach 30.
+		// 	summary.SetTimeThreshold(5 * time.Minute), // Idle ≥ 5 minutes.
+		// }),
+
+		// Example: OR logic.
 		summary.WithChecksAny([]summary.Checker{
-			summary.SetEventThreshold(c.turnsToSum * 2), // User + assistant events per turn.
+			// Event threshold approximates turns (user + assistant ≈ 2 events).
+			summary.SetEventThreshold(c.turnsToSum * 2),
+			// Time threshold ensures periodic summarization for long-idle sessions.
 			summary.SetTimeThreshold(5 * time.Minute),
 		}),
+
+		// Optional checkers you can enable as needed:
+		// summary.WithChecks([]summary.Checker{ // Replace default checks.
+		// 	summary.SetConversationThreshold(100), // Turns proxy using event count.
+		// 	summary.SetTokenThreshold(1000),       // Rough token estimate: len/4.
+		// 	summary.SetImportantThreshold(2000),   // Total trimmed chars threshold.
+		// }),
+
+		// Optional: customize the summarization prompt if needed.
+		// The prompt must contain {conversation_text} which will be replaced at runtime.
+		// summary.WithPrompt("Your summarizer prompt with {conversation_text} for conversation text."),
 	)
-	c.mgr = summary.NewManager(sum)
+	c.mgr = summary.NewManager(summarizer)
 	// Attach summarizer to the session service for service-based triggers.
 	c.sessSvc = inmemory.NewSessionService(inmemory.WithSummarizerManager(c.mgr))
 
 	// Create runner with summarizer.
 	c.runner = runner.NewRunner(
 		"summarizer-demo",
-		llm,
+		llmAgent,
 		runner.WithSessionService(c.sessSvc),
 	)
 
@@ -129,6 +163,7 @@ func (c *summarizerChat) startChat(ctx context.Context) error {
 
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /summary  - Show current cached summary")
+	fmt.Println("   /force    - Force-generate summary now")
 	fmt.Println("   /new      - Start a new session")
 	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
@@ -153,6 +188,9 @@ func (c *summarizerChat) startChat(ctx context.Context) error {
 		case "/summary":
 			c.printCurrentSummary(ctx)
 			continue
+		case "/force":
+			c.forceSummarize(ctx)
+			continue
 		}
 
 		if err := c.processMessage(ctx, userInput); err != nil {
@@ -170,8 +208,8 @@ func (c *summarizerChat) startChat(ctx context.Context) error {
 
 // processMessage handles a single message exchange.
 func (c *summarizerChat) processMessage(ctx context.Context, userMessage string) error {
-	msg := model.NewUserMessage(userMessage)
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, msg)
+	message := model.NewUserMessage(userMessage)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -181,18 +219,18 @@ func (c *summarizerChat) processMessage(ctx context.Context, userMessage string)
 // processResponse handles streaming and non-streaming responses.
 func (c *summarizerChat) processResponse(eventChan <-chan *event.Event) error {
 	fmt.Print("🤖 Assistant: ")
-	var full string
+	var fullContent string
 	for ev := range eventChan {
 		if ev.Response != nil && len(ev.Response.Choices) > 0 {
 			if c.streaming {
 				piece := ev.Response.Choices[0].Delta.Content
-				full += piece
+				fullContent += piece
 				fmt.Print(piece)
 			} else {
-				full = ev.Response.Choices[0].Message.Content
+				fullContent = ev.Response.Choices[0].Message.Content
 			}
 			if ev.Done && !c.streaming {
-				fmt.Print(full)
+				fmt.Print(fullContent)
 			}
 		}
 	}
@@ -212,6 +250,25 @@ func (c *summarizerChat) printCurrentSummary(ctx context.Context) {
 		return
 	}
 	fmt.Println("No summary available yet.")
+}
+
+// forceSummarize triggers a forced summarization and prints the result.
+func (c *summarizerChat) forceSummarize(ctx context.Context) {
+	key := session.Key{AppName: "summarizer-demo", UserID: c.userID, SessionID: c.sessionID}
+	sess, err := c.sessSvc.GetSession(ctx, key)
+	if err != nil || sess == nil {
+		fmt.Println("No session found.")
+		return
+	}
+	if err := c.sessSvc.CreateSessionSummary(ctx, sess, true); err != nil {
+		fmt.Printf("Failed to force summarize: %v\n", err)
+		return
+	}
+	if text, ok := c.sessSvc.GetSessionSummaryText(ctx, sess); ok {
+		fmt.Printf("📄 Forced summary:\n%s\n", text)
+		return
+	}
+	fmt.Println("No summary generated.")
 }
 
 // startNewSession creates a new session ID.

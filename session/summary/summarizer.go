@@ -22,6 +22,8 @@ import (
 )
 
 const (
+	// conversationTextPlaceholder is the placeholder for conversation text.
+	conversationTextPlaceholder = "{conversation_text}"
 	// default summarizer prompt is the default prompt for summarization.
 	defaultSummarizerPrompt = "Please summarize the following conversation, focusing on:\n" +
 		"1. Key decisions made\n" +
@@ -29,7 +31,7 @@ const (
 		"3. Actions taken or planned\n" +
 		"4. Context that should be remembered for future interactions\n\n" +
 		"Keep the summary concise but comprehensive. Focus on what would be most important to remember for continuing the conversation.\n\n" +
-		"Conversation:\n%s\n\n" +
+		"Conversation:\n" + conversationTextPlaceholder + "\n\n" +
 		"Summary:"
 	// default max summary length is the default max length for summary.
 	defaultMaxSummaryLength = 1000
@@ -200,7 +202,7 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	}
 
 	// Create summarization prompt.
-	prompt := fmt.Sprintf(s.prompt, conversationText)
+	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
 
 	// Create LLM request.
 	request := &model.Request{

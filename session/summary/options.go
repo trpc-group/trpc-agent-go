@@ -26,6 +26,8 @@ func WithModel(model model.Model) Option {
 }
 
 // WithPrompt sets the custom prompt for summarization.
+// The prompt must include the placeholder {conversation_text}, which will be
+// replaced with the extracted conversation when generating the summary.
 func WithPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
