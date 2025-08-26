@@ -62,7 +62,9 @@ func main() {
     // 2. Create Agent.
     agent := llmagent.New("assistant", 
         llmagent.WithModel(llmModel),
-        llmagent.WithInstruction("You are a helpful AI assistant."))
+        llmagent.WithInstruction("You are a helpful AI assistant."),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
+    )
     
     // 3. Create Runner.
     r := runner.NewRunner("my-app", agent)

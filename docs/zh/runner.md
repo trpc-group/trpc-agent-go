@@ -62,7 +62,9 @@ func main() {
     // 2. 创建 Agent
     agent := llmagent.New("assistant", 
         llmagent.WithModel(llmModel),
-        llmagent.WithInstruction("你是一个有帮助的AI助手"))
+        llmagent.WithInstruction("你是一个有帮助的AI助手"),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
+    )
     
     // 3. 创建 Runner
     r := runner.NewRunner("my-app", agent)

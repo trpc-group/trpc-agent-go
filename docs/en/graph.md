@@ -240,10 +240,7 @@ func main() {
         }
         
         if len(event.Choices) > 0 {
-            choice := event.Choices[0]
-            if choice.Delta.Content != "" {
-                fmt.Print(choice.Delta.Content)
-            }
+            fmt.Print(event.Choices[0].Message.Content)
         }
         
         if event.Done {
