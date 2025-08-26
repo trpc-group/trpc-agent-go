@@ -19,7 +19,9 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 const (
@@ -49,6 +51,8 @@ func newAppSessions() *appSessions {
 type serviceOpts struct {
 	// sessionEventLimit is the limit of events in a session.
 	sessionEventLimit int
+	// summarizerManager is the session summarizer manager used for summaries.
+	summarizerManager summary.SummarizerManager
 }
 
 // SessionService provides an in-memory implementation of SessionService.
@@ -65,6 +69,13 @@ type ServiceOpt func(*serviceOpts)
 func WithSessionEventLimit(limit int) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.sessionEventLimit = limit
+	}
+}
+
+// WithSummarizerManager sets the summarizer manager used by this service.
+func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.summarizerManager = m
 	}
 }
 
@@ -453,6 +464,34 @@ func (s *SessionService) AppendEvent(
 	}
 	s.updateSessionState(storedSession, event)
 	return nil
+}
+
+// CreateSessionSummary creates or updates the session summary.
+func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if s.opts.summarizerManager == nil {
+		return nil
+	}
+	// Ensure the manager knows about this base service for persistence best-effort.
+	s.opts.summarizerManager.SetSessionService(s, false)
+	if err := s.opts.summarizerManager.Summarize(ctx, sess, force); err != nil {
+		return fmt.Errorf("inmemory.CreateSessionSummary failed for session %s: %w", sess.ID, err)
+	}
+	return nil
+}
+
+// GetSessionSummaryText returns the cached summary text if present.
+func (s *SessionService) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) {
+	if s.opts.summarizerManager == nil {
+		return "", false
+	}
+	sum, err := s.opts.summarizerManager.GetSummary(sess)
+	if err != nil || sum == nil {
+		if err != nil {
+			log.Debugf("GetSummary miss for session %s: %v", sess.ID, err)
+		}
+		return "", false
+	}
+	return sum.Summary, true
 }
 
 // Close closes the service.

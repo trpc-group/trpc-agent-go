@@ -106,14 +106,14 @@ func (c *summarizerChat) setup(_ context.Context) error {
 		}),
 	)
 	c.mgr = summary.NewManager(sum)
-	c.mgr.SetSessionService(c.sessSvc, false)
+	// Attach summarizer to the session service for service-based triggers.
+	c.sessSvc = inmemory.NewSessionService(inmemory.WithSummarizerManager(c.mgr))
 
 	// Create runner with summarizer.
 	c.runner = runner.NewRunner(
 		"summarizer-demo",
 		llm,
 		runner.WithSessionService(c.sessSvc),
-		runner.WithSummarizer(c.mgr),
 	)
 
 	// Identifiers.
@@ -207,8 +207,8 @@ func (c *summarizerChat) printCurrentSummary(ctx context.Context) {
 		fmt.Println("No session found.")
 		return
 	}
-	if s, err := c.mgr.GetSummary(sess); err == nil && s != nil {
-		fmt.Printf("📄 Summary (created %s):\n%s\n", s.CreatedAt.Format(time.RFC3339), s.Summary)
+	if text, ok := c.sessSvc.GetSessionSummaryText(ctx, sess); ok {
+		fmt.Printf("📄 Summary:\n%s\n", text)
 		return
 	}
 	fmt.Println("No summary available yet.")

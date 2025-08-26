@@ -22,7 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -38,13 +37,6 @@ type Option func(*Options)
 func WithSessionService(service session.Service) Option {
 	return func(opts *Options) {
 		opts.sessionService = service
-	}
-}
-
-// WithSummarizer sets the summarizer manager to use.
-func WithSummarizer(m summary.SummarizerManager) Option {
-	return func(opts *Options) {
-		opts.summarizer = m
 	}
 }
 
@@ -64,13 +56,11 @@ type runner struct {
 	appName        string
 	agent          agent.Agent
 	sessionService session.Service
-	summarizer     summary.SummarizerManager
 }
 
 // Options is the options for the Runner.
 type Options struct {
 	sessionService session.Service
-	summarizer     summary.SummarizerManager
 }
 
 // NewRunner creates a new Runner.
@@ -85,14 +75,10 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 	if options.sessionService == nil {
 		options.sessionService = inmemory.NewSessionService()
 	}
-	if options.summarizer != nil {
-		options.summarizer.SetSessionService(options.sessionService, false)
-	}
 	return &runner{
 		appName:        appName,
 		agent:          agent,
 		sessionService: options.sessionService,
-		summarizer:     options.summarizer,
 	}
 }
 
@@ -235,14 +221,13 @@ func (r *runner) handleAgentEvents(
 	// Emit final runner completion event after all agent events are processed.
 	r.emitRunnerCompletion(ctx, sess, invocationID, processedEventCh)
 
-	// After a turn completes, trigger summarization asynchronously to avoid blocking the main thread.
-	if r.summarizer != nil {
-		go func() {
-			if err := r.summarizer.Summarize(ctx, sess, false); err != nil {
-				log.Warnf("Failed to summarize session: %v", err)
-			}
-		}()
-	}
+	// After a turn completes, trigger summarization via the session service
+	// asynchronously to avoid blocking the main thread.
+	go func() {
+		if err := r.sessionService.CreateSessionSummary(ctx, sess, false); err != nil {
+			log.Warnf("Failed to summarize session: %v", err)
+		}
+	}()
 }
 
 // shouldAppend returns true when event should be persisted into the session.
