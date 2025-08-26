@@ -11,10 +11,10 @@
         <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/planner/">
       
       
-        <link rel="prev" href="../agent/">
+        <link rel="prev" href="../knowledge/">
       
       
-        <link rel="next" href="../event/">
+        <link rel="next" href="../graph/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#planner-user-guide" class="md-skip">
+        <a href="#planner-usage-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -298,6 +298,82 @@
   
 
       
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../debugserver/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Debug
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../observability/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Observability
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../a2a/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  A2A
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Ecosystem
+
+      </a>
+    </li>
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -437,6 +513,144 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi-Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -445,6 +659,8 @@
       
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
+      
+        
       
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
@@ -478,6 +694,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -486,16 +704,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#planner-user-guide" class="md-nav__link">
-    <span class="md-ellipsis">
-      Planner User Guide
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Planner User Guide">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#planner-interface" class="md-nav__link">
     <span class="md-ellipsis">
       Planner Interface
@@ -503,8 +711,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#builtinplanner" class="md-nav__link">
     <span class="md-ellipsis">
       BuiltinPlanner
@@ -512,8 +720,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#reactplanner" class="md-nav__link">
     <span class="md-ellipsis">
       ReActPlanner
@@ -521,8 +729,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#custom-planner" class="md-nav__link">
     <span class="md-ellipsis">
       Custom Planner
@@ -530,16 +738,34 @@
   </a>
   
 </li>
-        
-      </ul>
-    </nav>
-  
-</li>
       
     </ul>
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -575,6 +801,94 @@
   
 
     
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../debugserver/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Debug
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Observability
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ecosystem
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -592,6 +906,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -600,16 +916,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#planner-user-guide" class="md-nav__link">
-    <span class="md-ellipsis">
-      Planner User Guide
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Planner User Guide">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#planner-interface" class="md-nav__link">
     <span class="md-ellipsis">
       Planner Interface
@@ -617,8 +923,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#builtinplanner" class="md-nav__link">
     <span class="md-ellipsis">
       BuiltinPlanner
@@ -626,8 +932,8 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#reactplanner" class="md-nav__link">
     <span class="md-ellipsis">
       ReActPlanner
@@ -635,18 +941,13 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#custom-planner" class="md-nav__link">
     <span class="md-ellipsis">
       Custom Planner
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -682,17 +983,15 @@
   
 
 
-  <h1>Planner</h1>
-
-<h2 id="planner-user-guide">Planner User Guide</h2>
-<p><code>Planner</code> is the component that enables planning capabilities for an <code>Agent</code>. It allows an <code>Agent</code> to formulate a plan before executing tasks, improving both efficiency and accuracy.</p>
-<p>The framework provides two <code>Planner</code> implementations for different model types:</p>
+<h1 id="planner-usage-guide">Planner Usage Guide</h1>
+<p>Planner is a component for implementing planning capabilities for Agents. It allows an Agent to formulate a plan before executing tasks, thereby improving execution efficiency and accuracy.</p>
+<p>The framework provides two Planner implementations, each suited for different types of models:</p>
 <ul>
-<li><code>BuiltinPlanner</code>: for models that natively support internal reasoning/thinking</li>
-<li><code>ReActPlanner</code>: for models without native thinking, guiding them to output in a tagged, structured format</li>
+<li>BuiltinPlanner: Suitable for models that support native reasoning/thinking.</li>
+<li>ReActPlanner: Suitable for models that do not support native reasoning, guiding the model to output in a fixed, labeled format to provide a structured reasoning process.</li>
 </ul>
-<h3 id="planner-interface">Planner Interface</h3>
-<p>The <code>Planner</code> interface defines the methods that all planners must implement:</p>
+<h2 id="planner-interface">Planner Interface</h2>
+<p>The Planner interface defines the methods that all planners must implement:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
@@ -709,33 +1008,31 @@
 <span class="normal"><a href="#__codelineno-0-14">14</a></span>
 <span class="normal"><a href="#__codelineno-0-15">15</a></span>
 <span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Planner</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="c1">// BuildPlanningInstruction applies necessary configuration to the LLM request</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="c1">// and returns the system instruction to attach for planning.</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="c1">// Return an empty string if no instruction is needed.</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">BuildPlanningInstruction</span><span class="p">(</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">        </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">        </span><span class="nx">llmRequest</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// ProcessPlanningResponse processes the LLM planning response and returns the processed response.</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// Return nil if no processing is needed.</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">ProcessPlanningResponse</span><span class="p">(</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">        </span><span class="nx">response</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Planner</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="c1">// BuildPlanningInstruction applies necessary configurations to the LLM request and constructs the system instruction to be attached for planning.</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="c1">// Return an empty string if no instruction is needed.</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">BuildPlanningInstruction</span><span class="p">(</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">        </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">        </span><span class="nx">llmRequest</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="c1">// ProcessPlanningResponse processes the LLM&#39;s planning response and returns the processed response.</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// Return nil if no processing is needed.</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">ProcessPlanningResponse</span><span class="p">(</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">response</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Planner workflow:</p>
 <ol>
-<li>Request phase: before sending the LLM request, <code>BuildPlanningInstruction</code> adds planning instructions or applies configuration</li>
-<li>Response phase: <code>ProcessPlanningResponse</code> organizes the LLM response content and structure</li>
+<li>Request processing phase: Before the LLM request is sent, the Planner adds planning instructions or configurations via <code>BuildPlanningInstruction</code>.</li>
+<li>Response processing phase: The Planner processes the LLM response and organizes the content structure via <code>ProcessPlanningResponse</code>.</li>
 </ol>
-<h3 id="builtinplanner">BuiltinPlanner</h3>
-<p><code>BuiltinPlanner</code> targets models that support native thinking. It does not generate explicit planning instructions. Instead, it configures the model to leverage its internal reasoning mechanism to achieve planning.</p>
+<h2 id="builtinplanner">BuiltinPlanner</h2>
+<p>BuiltinPlanner is suitable for models that support native reasoning. It does not generate explicit planning instructions, but instead configures the model to use its internal reasoning mechanisms to implement planning.</p>
 <p>Model configuration:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
@@ -749,22 +1046,22 @@
 <span class="normal"><a href="#__codelineno-1-10">10</a></span>
 <span class="normal"><a href="#__codelineno-1-11">11</a></span>
 <span class="normal"><a href="#__codelineno-1-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Options</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="c1">// ReasoningEffort constrains the reasoning intensity of reasoning-enabled models.</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="c1">// ReasoningEffort limits the reasoning effort of the reasoning model.</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="c1">// Supported values: &quot;low&quot;, &quot;medium&quot;, &quot;high&quot;.</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="c1">// Only effective for OpenAI o-series models.</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="w"> </span><span class="o">*</span><span class="kt">string</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="c1">// ThinkingEnabled enables thinking mode for models that support it.</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI-compatible API.</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI API.</span>
 </span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">ThinkingEnabled</span><span class="w"> </span><span class="o">*</span><span class="kt">bool</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="c1">// ThinkingTokens controls the length of the thinking process.</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI-compatible API.</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="c1">// ThinkingTokens controls the length of thinking.</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="c1">// Only effective for Claude and Gemini models via OpenAI API.</span>
 </span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span>
 </span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Implementation details:</p>
+<p>Implementation details for BuiltinPlanner:</p>
 <ul>
-<li><code>BuildPlanningInstruction</code>: applies thinking parameters to the LLM request. Since the model supports native reasoning, no planning tags are needed, so return an empty string</li>
-<li><code>ProcessPlanningResponse</code>: returns nil because the model's response already includes its planning process</li>
+<li><code>BuildPlanningInstruction</code>: Injects reasoning parameters into the LLM request. Since the model supports native thinking, no planning tags are required, so it returns an empty string.</li>
+<li><code>ProcessPlanningResponse</code>: Since the model's response already contains the planning process, it directly returns nil.</li>
 </ul>
 <p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
@@ -804,7 +1101,7 @@
 </span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">ReasoningEffort</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">reasoningEffort</span><span class="p">,</span>
 </span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="p">})</span>
 </span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="c1">// Create LLMAgent and configure the Planner.</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="c1">// Create LLMAgent and configure Planner.</span>
 </span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="s">&quot;demo-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
@@ -813,20 +1110,20 @@
 </span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPlanner</span><span class="p">(</span><span class="nx">planner</span><span class="p">),</span><span class="w"> </span><span class="c1">// Configure Planner.</span>
 </span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="reactplanner">ReActPlanner</h3>
-<p><code>ReActPlanner</code> targets models that do not support native thinking. It guides the LLM to follow a specific, tagged format to structure planning, reasoning, actions, and the final answer, thereby achieving a structured thinking process.</p>
-<p>ReActPlanner uses the following tags to organize response content:</p>
+<h2 id="reactplanner">ReActPlanner</h2>
+<p>ReActPlanner is suitable for models that do not support native reasoning. It guides the LLM to follow a specific format and uses specific tags to structure planning, reasoning, actions, and the final answer, thus enabling a structured reasoning process.</p>
+<p>ReActPlanner uses the following specific tags to organize response content:</p>
 <ol>
-<li>Planning phase (<code>/*PLANNING*/</code>): create a clear plan to answer the user's question</li>
-<li>Reasoning phase (<code>/*REASONING*/</code>): provide reasoning between tool executions</li>
-<li>Action phase (<code>/*ACTION*/</code>): execute tools based on the plan</li>
-<li>Re-planning (<code>/*REPLANNING*/</code>): revise the plan based on results when needed</li>
-<li>Final answer (<code>/*FINAL_ANSWER*/</code>): provide the synthesized answer</li>
+<li>Planning phase (<code>/*PLANNING*/</code>): Create a clear plan to answer the user's question.</li>
+<li>Reasoning phase (<code>/*REASONING*/</code>): Provide reasoning between tool executions.</li>
+<li>Action phase (<code>/*ACTION*/</code>): Execute tools according to the plan.</li>
+<li>Replanning (<code>/*REPLANNING*/</code>): Revise the plan as needed based on results.</li>
+<li>Final answer (<code>/*FINAL_ANSWER*/</code>): Provide a comprehensive answer.</li>
 </ol>
-<p>Implementation details:</p>
+<p>Implementation details for ReActPlanner:</p>
 <ul>
-<li><code>BuildPlanningInstruction</code>: returns comprehensive instructions containing high-level guidance, planning requirements, and reasoning requirements, prompting the model to output in the tagged format</li>
-<li><code>ProcessPlanningResponse</code>: filters out tool calls with empty names; if the content contains the <code>/*FINAL_ANSWER*/</code> tag, keep only the final answer section; otherwise, return the original content, separating planning content from the final answer</li>
+<li><code>BuildPlanningInstruction</code>: Returns a comprehensive instruction that includes high-level guidance, planning requirements, reasoning requirements, etc., guiding the model to output using labeled format.</li>
+<li><code>ProcessPlanningResponse</code>: Filters tool calls with empty names. If the content contains the <code>/*FINAL_ANSWER*/</code> tag, only the final answer part is retained; otherwise, the original content is returned, separating planning content from the final answer.</li>
 </ul>
 <p>Usage example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
@@ -877,7 +1174,7 @@
 </span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="c1">// Create ReActPlanner.</span>
 </span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="nx">planner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">react</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
 </span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="c1">// Create LLMAgent and configure the Planner.</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="c1">// Create LLMAgent and configure Planner.</span>
 </span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">    </span><span class="s">&quot;react-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
@@ -887,9 +1184,9 @@
 </span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Configure tools.</span>
 </span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>See the full example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react">examples/react</a>.</p>
-<h3 id="custom-planner">Custom Planner</h3>
-<p>Besides the two built-in <code>Planner</code> implementations, you can implement the <code>Planner</code> interface to create a custom <code>Planner</code> for specific needs:</p>
+<p>See the complete example at examples/react.</p>
+<h2 id="custom-planner">Custom Planner</h2>
+<p>In addition to the two Planner implementations provided by the framework, you can also create a custom Planner by implementing the <code>Planner</code> interface to meet specific needs:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
@@ -929,8 +1226,8 @@
 </span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
 </span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="nx">llmRequest</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span>
 </span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="c1">// Return your custom planning instruction.</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;your custom planning instruction&quot;</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="c1">// Return custom planning instruction.</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;Your custom planning instruction&quot;</span>
 </span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="p">}</span>
 </span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>
 </span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">customPlanner</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessPlanningResponse</span><span class="p">(</span>
@@ -938,11 +1235,11 @@
 </span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">    </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span>
 </span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">    </span><span class="nx">response</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span>
 </span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="c1">// Process the response.</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="c1">// Process response.</span>
 </span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">response</span>
 </span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">}</span>
 </span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// Create LLMAgent and configure the custom Planner.</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// Create LLMAgent and configure custom Planner.</span>
 </span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="nx">llmAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">    </span><span class="s">&quot;react-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
@@ -974,7 +1271,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 25, 2025 07:06:16 UTC">2025-08-25 07:06:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 26, 2025 09:28:07 UTC">2025-08-26 09:28:07</span>
   </span>
 
     
@@ -1065,7 +1362,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../agent/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Agent">
+          <a href="../knowledge/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Knowledge">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1075,20 +1372,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Agent
+                Knowledge
               </div>
             </div>
           </a>
         
         
           
-          <a href="../event/" class="md-footer__link md-footer__link--next" aria-label="Next: Event">
+          <a href="../graph/" class="md-footer__link md-footer__link--next" aria-label="Next: Graph">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Event
+                Graph
               </div>
             </div>
             <div class="md-footer__button md-icon">
