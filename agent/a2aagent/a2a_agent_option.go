@@ -13,7 +13,12 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/server"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+// StreamingRespHandler handles the streaming response content
+// return the content will be added to the final aggregated content
+type StreamingRespHandler func(resp *model.Response) (string, error)
 
 // Option configures the A2AAgent
 type Option func(*A2AAgent)
@@ -58,5 +63,19 @@ func WithCustomEventConverter(converter A2AEventConverter) Option {
 func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 	return func(a *A2AAgent) {
 		a.a2aMessageConverter = converter
+	}
+}
+
+// WithStreamingChannelBufSize set the buf size of streaming protocol
+func WithStreamingChannelBufSize(size int) Option {
+	return func(a *A2AAgent) {
+		a.streamingBufSize = size
+	}
+}
+
+// WithStreamingRespHandler sets a handler function to process streaming responses.
+func WithStreamingRespHandler(handler StreamingRespHandler) Option {
+	return func(a *A2AAgent) {
+		a.streamingRespHandler = handler
 	}
 }
