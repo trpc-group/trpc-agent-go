@@ -24,8 +24,6 @@ type serviceOpts struct {
 	// cleanupInterval is the interval for automatic cleanup of expired data.
 	// If set to 0, automatic cleanup is disabled.
 	cleanupInterval time.Duration
-	// disableAutoCleanup disables automatic cleanup even when TTL is configured.
-	disableAutoCleanup bool
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -68,13 +66,5 @@ func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.cleanupInterval = interval
-	}
-}
-
-// WithDisableAutoCleanup disables automatic cleanup even when TTL is configured.
-// By default, automatic cleanup is enabled when any TTL is configured.
-func WithDisableAutoCleanup(disable bool) ServiceOpt {
-	return func(opts *serviceOpts) {
-		opts.disableAutoCleanup = disable
 	}
 }

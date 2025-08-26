@@ -27,10 +27,7 @@ import (
 var _ session.Service = (*Service)(nil)
 
 const (
-	defaultSessionEventLimit     = 100
-	defaultSessionExpireSecond   = 3600 // 1 hour
-	defaultAppStateExpireSecond  = 0    // no expire
-	defaultUserStateExpireSecond = 0    // no expire
+	defaultSessionEventLimit = 1000
 )
 
 // SessionState is the state of a session.
@@ -59,9 +56,9 @@ type Service struct {
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
 		sessionEventLimit: defaultSessionEventLimit,
-		sessionTTL:        defaultSessionExpireSecond * time.Second,
-		appStateTTL:       defaultAppStateExpireSecond * time.Second,
-		userStateTTL:      defaultUserStateExpireSecond * time.Second,
+		sessionTTL:        0,
+		appStateTTL:       0,
+		userStateTTL:      0,
 	}
 	for _, option := range options {
 		option(&opts)

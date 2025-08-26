@@ -250,7 +250,6 @@ func TestTTLCleanupBehavior(t *testing.T) {
 
 func TestTTLRefresh(t *testing.T) {
 	service := NewSessionService(WithSessionTTL(200 * time.Millisecond))
-
 	key := session.Key{
 		AppName:   "test-app",
 		UserID:    "test-user",
@@ -259,47 +258,45 @@ func TestTTLRefresh(t *testing.T) {
 	state := session.StateMap{"key": []byte("value")}
 
 	// Create session
-	sess, err := service.CreateSession(context.Background(), key, state)
+	_, err := service.CreateSession(context.Background(), key, state)
 	require.NoError(t, err)
-	require.NotNil(t, sess)
 
 	// Wait half the TTL time
 	time.Sleep(100 * time.Millisecond)
 
-	// Access session (should refresh TTL)
-	retrievedSess, err := service.GetSession(context.Background(), key)
+	// Access session to refresh TTL
+	_, err = service.GetSession(context.Background(), key)
 	require.NoError(t, err)
-	require.NotNil(t, retrievedSess)
 
-	// Wait another half TTL time (total time > original TTL)
-	time.Sleep(120 * time.Millisecond)
+	// Wait another half TTL time, total time is now > original TTL
+	time.Sleep(150 * time.Millisecond)
 
 	// Session should still be accessible due to TTL refresh
 	stillValidSess, err := service.GetSession(context.Background(), key)
 	require.NoError(t, err)
-	// Note: This test might be flaky due to timing, but demonstrates TTL refresh concept
-	// In a real implementation, you might want to track access times more precisely
-	_ = stillValidSess // We don't assert here due to potential timing issues
+	assert.NotNil(t, stillValidSess, "Session should be valid after TTL refresh")
 }
 
-func TestAutoCleanupDisabledWhenAllTTLDisabled(t *testing.T) {
-	// Create service with all TTLs explicitly set to 0 (disabled)
-	service := NewSessionService(
-		WithSessionTTL(0),
-		WithAppStateTTL(0),
-		WithUserStateTTL(0),
-	)
-	defer service.Close()
-
-	// Verify cleanup interval is 0 when all TTLs are disabled
-	if service.opts.cleanupInterval != 0 {
-		t.Errorf("Expected cleanup interval to be 0, got %v", service.opts.cleanupInterval)
+func TestTTLNoRefresh(t *testing.T) {
+	service := NewSessionService(WithSessionTTL(100 * time.Millisecond))
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session-no-refresh",
 	}
+	state := session.StateMap{"key": []byte("value")}
 
-	// Verify cleanup ticker is not running
-	if service.cleanupTicker != nil {
-		t.Error("Expected cleanup ticker to be nil when all TTLs are disabled")
-	}
+	// Create session
+	_, err := service.CreateSession(context.Background(), key, state)
+	require.NoError(t, err)
+
+	// Wait for TTL to expire without accessing the session
+	time.Sleep(150 * time.Millisecond)
+
+	// Session should be expired
+	expiredSess, err := service.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	assert.Nil(t, expiredSess, "Session should be expired as it was not refreshed")
 }
 
 func TestAutoCleanupNegativeIntervalBehavior(t *testing.T) {
@@ -321,23 +318,31 @@ func TestAutoCleanupNegativeIntervalBehavior(t *testing.T) {
 	}
 }
 
-func TestAutoCleanupDisableOverridesInterval(t *testing.T) {
+func TestAutoCleanupDefault(t *testing.T) {
 	// Test that disabling auto cleanup overrides cleanup interval
-	service := NewSessionService(
-		WithCleanupInterval(200*time.Millisecond),
-		WithDisableAutoCleanup(true),
-		WithSessionTTL(time.Hour), // Configure TTL
-	)
+	service := NewSessionService()
 	defer service.Close()
 
 	// Verify cleanup interval remains as set when auto cleanup is disabled
-	if service.opts.cleanupInterval != 200*time.Millisecond {
-		t.Errorf("Expected cleanup interval to remain 200ms, got %v", service.opts.cleanupInterval)
+	if service.opts.cleanupInterval != 0 {
+		t.Errorf("Expected cleanup interval to remain 0, got %v", service.opts.cleanupInterval)
 	}
 
 	// Verify cleanup ticker is not running when auto cleanup is disabled
 	if service.cleanupTicker != nil {
-		t.Error("Expected cleanup ticker to be nil when auto cleanup is disabled")
+		t.Errorf("Expected cleanup ticker to be nil when auto cleanup is disabled, got %v", service.cleanupTicker)
+	}
+
+	if service.opts.sessionTTL != 0 {
+		t.Errorf("Expected session TTL to remain 0, got %v", service.opts.sessionTTL)
+	}
+
+	if service.opts.appStateTTL != 0 {
+		t.Errorf("Expected app state TTL to remain 0, got %v", service.opts.appStateTTL)
+	}
+
+	if service.opts.userStateTTL != 0 {
+		t.Errorf("Expected user state TTL to remain 0, got %v", service.opts.userStateTTL)
 	}
 }
 
@@ -465,57 +470,6 @@ func TestAutoCleanupWithCustomInterval(t *testing.T) {
 	sess, _ := service.GetSession(ctx, sessionKey)
 	if sess != nil {
 		t.Error("Expected session to be nil after cleanup")
-	}
-}
-
-func TestAutoCleanupDisabled(t *testing.T) {
-	// Create service with TTL but disabled cleanup
-	service := NewSessionService(
-		WithSessionTTL(100*time.Millisecond),
-		WithDisableAutoCleanup(true), // Disable auto cleanup
-	)
-	defer service.Close()
-
-	ctx := context.Background()
-
-	// Create session
-	sessionKey := session.Key{
-		AppName:   "test-app",
-		UserID:    "user1",
-		SessionID: "session1",
-	}
-	sessionState := session.StateMap{
-		"key1": []byte("value1"),
-	}
-	service.CreateSession(ctx, sessionKey, sessionState)
-
-	// Verify cleanup ticker is not running
-	if service.cleanupTicker != nil {
-		t.Error("Expected cleanup ticker to be nil when disabled")
-	}
-
-	// Verify cleanup interval is 0
-	if service.opts.cleanupInterval != 0 {
-		t.Errorf("Expected cleanup interval to be 0, got %v", service.opts.cleanupInterval)
-	}
-
-	// Wait for data to expire
-	time.Sleep(150 * time.Millisecond)
-
-	// Expired data should still be in memory (no auto cleanup)
-	service.mu.RLock()
-	app, exists := service.apps["test-app"]
-	service.mu.RUnlock()
-	if !exists {
-		t.Error("Expected app to exist in memory")
-		return
-	}
-
-	app.mu.RLock()
-	sessionExists := len(app.sessions["user1"]) > 0
-	app.mu.RUnlock()
-	if !sessionExists {
-		t.Error("Expected expired session to still be in memory without auto cleanup")
 	}
 }
 

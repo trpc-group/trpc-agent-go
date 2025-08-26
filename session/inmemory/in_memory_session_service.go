@@ -23,10 +23,7 @@ import (
 )
 
 const (
-	defaultSessionEventLimit     = 100
-	defaultSessionExpireSecond   = 3600 // 1 hour
-	defaultUserStateExpireSecond = 0
-	defaultAppStateExpireSecond  = 0
+	defaultSessionEventLimit     = 1000
 	defaultCleanupIntervalSecond = 300 // 5 min
 )
 
@@ -103,19 +100,15 @@ type SessionService struct {
 // NewSessionService creates a new in-memory session service.
 func NewSessionService(options ...ServiceOpt) *SessionService {
 	opts := serviceOpts{
-		sessionEventLimit:  defaultSessionEventLimit,
-		cleanupInterval:    0, // Default to 0 (disabled)
-		sessionTTL:         defaultSessionExpireSecond * time.Second,
-		userStateTTL:       defaultUserStateExpireSecond * time.Second,
-		appStateTTL:        defaultAppStateExpireSecond * time.Second,
-		disableAutoCleanup: false, // Default to false (auto cleanup enabled)
+		sessionEventLimit: defaultSessionEventLimit,
+		cleanupInterval:   0,
 	}
 	for _, option := range options {
 		option(&opts)
 	}
 
 	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
-	if opts.cleanupInterval <= 0 && !opts.disableAutoCleanup {
+	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
 			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
 		}
@@ -128,7 +121,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	}
 
 	// Start automatic cleanup if cleanup interval is configured and auto cleanup is not disabled
-	if opts.cleanupInterval > 0 && !opts.disableAutoCleanup {
+	if opts.cleanupInterval > 0 {
 		s.startCleanupRoutine()
 	}
 	return s
@@ -244,8 +237,8 @@ func (s *SessionService) GetSession(
 		return nil, nil
 	}
 
-	app.mu.RLock()
-	defer app.mu.RUnlock()
+	app.mu.Lock()
+	defer app.mu.Unlock()
 	if _, ok := app.sessions[key.UserID]; !ok {
 		return nil, nil
 	}
@@ -259,6 +252,9 @@ func (s *SessionService) GetSession(
 	if sess == nil {
 		return nil, nil
 	}
+
+	// Refresh TTL on access
+	sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 
 	copiedSess := copySession(sess)
 
