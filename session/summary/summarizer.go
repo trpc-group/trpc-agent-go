@@ -52,20 +52,20 @@ var defaultCheckers = []Checker{
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model      model.Model
-	prompt     string
-	checks     []Checker
-	maxLength  int
-	keepRecent int
+	model            model.Model
+	prompt           string
+	checks           []Checker
+	maxSummaryLength int
+	keepRecentCount  int
 }
 
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:     defaultSummarizerPrompt,
-		maxLength:  defaultMaxSummaryLength,
-		keepRecent: defaultKeepRecent,
-		checks:     defaultCheckers,
+		prompt:           defaultSummarizerPrompt,
+		checks:           defaultCheckers,
+		maxSummaryLength: defaultMaxSummaryLength,
+		keepRecentCount:  defaultKeepRecent,
 	}
 
 	for _, opt := range opts {
@@ -96,7 +96,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	if keepRecent <= 0 {
-		keepRecent = s.keepRecent
+		keepRecent = s.keepRecentCount
 	}
 
 	// Extract conversation text from old events.
@@ -129,8 +129,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	// Truncate if too long.
-	if len(summaryText) > s.maxLength {
-		summaryText = summaryText[:s.maxLength-3] + "..."
+	if len(summaryText) > s.maxSummaryLength {
+		summaryText = summaryText[:s.maxSummaryLength-3] + "..."
 	}
 
 	// Create summary event.
@@ -165,8 +165,8 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	}
 	return map[string]any{
 		MetadataKeyModelName:        modelName,
-		MetadataKeyMaxSummaryLength: s.maxLength,
-		MetadataKeyKeepRecentCount:  s.keepRecent,
+		MetadataKeyMaxSummaryLength: s.maxSummaryLength,
+		MetadataKeyKeepRecentCount:  s.keepRecentCount,
 		MetadataKeyModelAvailable:   modelAvailable,
 		MetadataKeyCheckFunctions:   len(s.checks),
 	}

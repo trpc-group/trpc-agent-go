@@ -43,20 +43,20 @@ func WithChecks(checks []Checker) Option {
 	}
 }
 
-// WithMaxLength sets the maximum length for generated summaries.
-func WithMaxLength(maxLength int) Option {
+// WithMaxSummaryLength sets the maximum length for generated summaries.
+func WithMaxSummaryLength(maxSummaryLength int) Option {
 	return func(s *sessionSummarizer) {
-		if maxLength > 0 {
-			s.maxLength = maxLength
+		if maxSummaryLength > 0 {
+			s.maxSummaryLength = maxSummaryLength
 		}
 	}
 }
 
-// WithKeepRecent sets the number of recent events to keep after summarization.
-func WithKeepRecent(keepRecent int) Option {
+// WithKeepRecentCount sets the number of recent events to keep after summarization.
+func WithKeepRecentCount(keepRecentCount int) Option {
 	return func(s *sessionSummarizer) {
-		if keepRecent > 0 {
-			s.keepRecent = keepRecent
+		if keepRecentCount > 0 {
+			s.keepRecentCount = keepRecentCount
 		}
 	}
 }

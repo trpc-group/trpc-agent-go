@@ -41,7 +41,7 @@ func TestManager_Summarize_CacheAndCompression(t *testing.T) {
 	ctx := context.Background()
 
 	// Summarizer without model uses simple concatenation.
-	s := NewSummarizer(WithKeepRecent(2))
+	s := NewSummarizer(WithKeepRecentCount(2))
 	mgr := NewManager(s)
 
 	// Prepare session with 5 events.
@@ -82,7 +82,7 @@ func TestSummarizer_PromptFormatting_ModelUsed(t *testing.T) {
 	s := NewSummarizer(
 		WithModel(mock),
 		WithPrompt(customPrompt),
-		WithKeepRecent(1),
+		WithKeepRecentCount(1),
 	)
 
 	// Build a session with 3 events so we have 2 old events to summarize when keepRecent=1.
@@ -187,7 +187,7 @@ func TestManager_WithAutoSummarize_Disable(t *testing.T) {
 
 func TestManager_WithBaseService_AppendsAndMetadata(t *testing.T) {
 	// Build a session that will summarize and compress.
-	s := NewSummarizer(WithKeepRecent(1))
+	s := NewSummarizer(WithKeepRecentCount(1))
 	sess := &session.Session{
 		ID:      "sess-1",
 		AppName: "app",
@@ -223,7 +223,7 @@ func TestManager_SetSessionService_ForceAndNonForce(t *testing.T) {
 	ctx := context.Background()
 
 	// Use a simple summarizer that always compresses when forced.
-	s := NewSummarizer(WithKeepRecent(1))
+	s := NewSummarizer(WithKeepRecentCount(1))
 	m := NewManager(s)
 
 	// Two fake services to distinguish which one receives AppendEvent.
@@ -269,8 +269,8 @@ func TestManager_SetSummarizer_ForceAndNonForce(t *testing.T) {
 	ctx := context.Background()
 
 	// Build two summarizers with different keepRecent to observe effects.
-	sA := NewSummarizer(WithKeepRecent(1))
-	sB := NewSummarizer(WithKeepRecent(2))
+	sA := NewSummarizer(WithKeepRecentCount(1))
+	sB := NewSummarizer(WithKeepRecentCount(2))
 	m := NewManager(sA)
 
 	sess := &session.Session{

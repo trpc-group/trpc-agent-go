@@ -21,7 +21,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -48,8 +47,6 @@ type SessionState struct {
 type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
-	// summarizer is in-memory only. No summary persistence to Redis.
-	summarizer summary.SummarizerManager
 }
 
 // NewService creates a new redis session service.
@@ -75,7 +72,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		svc := &Service{opts: opts, redisClient: redisClient, summarizer: opts.summarizerManager}
+		svc := &Service{opts: opts, redisClient: redisClient}
 		return svc, nil
 	}
 
@@ -86,7 +83,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	svc := &Service{opts: opts, redisClient: redisClient, summarizer: opts.summarizerManager}
+	svc := &Service{opts: opts, redisClient: redisClient}
 	return svc, nil
 }
 
@@ -332,18 +329,18 @@ func (s *Service) AppendEvent(
 // CreateSessionSummary creates or updates the session summary in memory.
 // It delegates to the configured summarizer manager if present.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
-	if s.summarizer == nil {
+	if s.opts.summarizerManager == nil {
 		return nil
 	}
-	return s.summarizer.Summarize(ctx, sess, force)
+	return s.opts.summarizerManager.Summarize(ctx, sess, force)
 }
 
 // GetSessionSummaryText returns the cached session summary text if present.
-func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) {
-	if s.summarizer == nil {
+func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) { //nolint:revive
+	if s.opts.summarizerManager == nil {
 		return "", false
 	}
-	ss, err := s.summarizer.GetSummary(sess)
+	ss, err := s.opts.summarizerManager.GetSummary(sess)
 	if err != nil || ss == nil {
 		return "", false
 	}

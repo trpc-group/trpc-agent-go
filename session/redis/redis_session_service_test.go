@@ -808,7 +808,7 @@ func TestService_CreateSessionSummary_InMemoryOnly(t *testing.T) {
 	defer cleanup()
 
 	// Build summarizer that always compresses when forced.
-	s := summary.NewSummarizer(summary.WithKeepRecent(1))
+	s := summary.NewSummarizer(summary.WithKeepRecentCount(1))
 	mgr := summary.NewManager(s)
 
 	// Build service with summarizer manager attached (in-memory only).

@@ -99,7 +99,7 @@ func TestOptions(t *testing.T) {
 
 	t.Run("WithMaxLength_MetadataAndTruncation", func(t *testing.T) {
 		// Set a small max length and ensure metadata reflects it and output is truncated.
-		s := NewSummarizer(WithMaxLength(50), WithKeepRecent(1))
+		s := NewSummarizer(WithMaxSummaryLength(50), WithKeepRecentCount(1))
 		md := s.Metadata()
 		assert.Equal(t, 50, md[MetadataKeyMaxSummaryLength])
 
@@ -114,7 +114,7 @@ func TestOptions(t *testing.T) {
 
 	t.Run("WithMaxLength_IgnoresNonPositive", func(t *testing.T) {
 		// Non-positive should be ignored, default remains in metadata.
-		s := NewSummarizer(WithMaxLength(0))
+		s := NewSummarizer(WithMaxSummaryLength(0))
 		md := s.Metadata()
 		// Default is 1000.
 		assert.Equal(t, 1000, md[MetadataKeyMaxSummaryLength])

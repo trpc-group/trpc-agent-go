@@ -21,7 +21,7 @@ func TestSummarizer_Errors_NoEvents(t *testing.T) {
 }
 
 func TestSummarizer_Errors_NoOldEvents(t *testing.T) {
-	s := NewSummarizer(WithKeepRecent(10))
+	s := NewSummarizer(WithKeepRecentCount(10))
 	sess := &session.Session{ID: "no-old", Events: make([]event.Event, 5)}
 	for i := range sess.Events {
 		sess.Events[i] = event.Event{Timestamp: time.Now()}
@@ -32,7 +32,7 @@ func TestSummarizer_Errors_NoOldEvents(t *testing.T) {
 }
 
 func TestSummarizer_Errors_NoConversationText(t *testing.T) {
-	s := NewSummarizer(WithKeepRecent(1))
+	s := NewSummarizer(WithKeepRecentCount(1))
 	sess := &session.Session{ID: "no-text", Events: make([]event.Event, 3)}
 	for i := range sess.Events {
 		sess.Events[i] = event.Event{Timestamp: time.Now()} // No Response content.
@@ -53,7 +53,7 @@ func TestWithChecksAny_ORLogic(t *testing.T) {
 }
 
 func TestSummarizer_SimpleConcatSummary(t *testing.T) {
-	s := NewSummarizer(WithKeepRecent(1))
+	s := NewSummarizer(WithKeepRecentCount(1))
 	sess := &session.Session{ID: "concat", Events: []event.Event{
 		{
 			Response: &model.Response{

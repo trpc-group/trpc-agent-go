@@ -99,7 +99,7 @@ func (c *summarizerChat) setup(_ context.Context) error {
 	// Configure summarizer and manager.
 	sum := summary.NewSummarizer(
 		summary.WithModel(mdl),
-		summary.WithKeepRecent(2),
+		summary.WithKeepRecentCount(2),
 		summary.WithChecksAny([]summary.Checker{
 			summary.SetEventThreshold(c.turnsToSum * 2), // User + assistant events per turn.
 			summary.SetTimeThreshold(5 * time.Minute),
