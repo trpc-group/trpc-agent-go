@@ -11,19 +11,11 @@ package summary
 import (
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Option is a function that configures a SessionSummarizer.
 type Option func(*sessionSummarizer)
-
-// WithModel sets the model for summarization.
-func WithModel(model model.Model) Option {
-	return func(s *sessionSummarizer) {
-		s.model = model
-	}
-}
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
