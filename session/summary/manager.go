@@ -31,10 +31,7 @@ type summarizerManager struct {
 }
 
 // NewManager creates a new summarizer manager.
-func NewManager(
-	summarizer SessionSummarizer,
-	opts ...ManagerOption,
-) SummarizerManager {
+func NewManager(summarizer SessionSummarizer, opts ...ManagerOption) SummarizerManager {
 	m := &summarizerManager{
 		summarizer:    summarizer,
 		autoSummarize: true, // Default to true

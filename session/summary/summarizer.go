@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -93,19 +92,22 @@ func (s *sessionSummarizer) ShouldSummarize(sess *session.Session) bool {
 }
 
 // Summarize generates a summary and compresses the session.
-func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session, keepRecent int) (string, error) {
+func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session, keepRecentCount int) (string, error) {
+	if s.model == nil {
+		return "", fmt.Errorf("no model configured for summarization for session %s", sess.ID)
+	}
 	if len(sess.Events) == 0 {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 
-	if keepRecent <= 0 {
-		keepRecent = s.keepRecentCount
+	if keepRecentCount <= 0 {
+		keepRecentCount = s.keepRecentCount
 	}
 
 	// Extract conversation text from old events.
-	oldEvents := sess.Events[:len(sess.Events)-keepRecent]
+	oldEvents := sess.Events[:len(sess.Events)-keepRecentCount]
 	if len(oldEvents) == 0 {
-		return "", fmt.Errorf("no old events to summarize for session %s (events=%d, keepRecent=%d)", sess.ID, len(sess.Events), keepRecent)
+		return "", fmt.Errorf("no old events to summarize for session %s (events=%d, keepRecent=%d)", sess.ID, len(sess.Events), keepRecentCount)
 	}
 
 	conversationText := s.extractConversationText(oldEvents)
@@ -113,20 +115,10 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no conversation text extracted for session %s (old_events=%d)", sess.ID, len(oldEvents))
 	}
 
-	// Generate summary using LLM if available, otherwise use simple concatenation.
-	var summaryText string
-	var err error
-	if s.model != nil {
-		summaryText, err = s.generateSummary(ctx, conversationText)
-		if err != nil {
-			// Fallback to simple concatenation if LLM fails.
-			log.Warnf("failed to generate summary using LLM, falling back to simple concatenation: %v", err)
-			summaryText = s.buildSimpleSummary(oldEvents)
-		}
-	} else {
-		summaryText = s.buildSimpleSummary(oldEvents)
+	summaryText, err := s.generateSummary(ctx, conversationText)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
-
 	if summaryText == "" {
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
 	}
@@ -152,7 +144,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	// Replace old events with summary and keep recent events.
-	recentEvents := sess.Events[len(sess.Events)-keepRecent:]
+	recentEvents := sess.Events[len(sess.Events)-keepRecentCount:]
 	sess.Events = append([]event.Event{*summaryEvent}, recentEvents...)
 
 	return summaryText, nil
@@ -250,30 +242,6 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 	}
 
 	return summary, nil
-}
-
-// buildSimpleSummary creates a simple summary by concatenating event content.
-func (s *sessionSummarizer) buildSimpleSummary(events []event.Event) string {
-	const maxChars = 2000
-	var buf []rune
-
-	for i := len(events) - 1; i >= 0; i-- {
-		e := events[i]
-		if e.Response != nil && len(e.Response.Choices) > 0 {
-			content := e.Response.Choices[0].Message.Content
-			if content == "" {
-				continue
-			}
-
-			r := []rune(content)
-			if len(buf)+len(r) > maxChars {
-				break
-			}
-			buf = append(r, buf...)
-		}
-	}
-
-	return string(buf)
 }
 
 // Helper functions for creating pointers to primitive types.
