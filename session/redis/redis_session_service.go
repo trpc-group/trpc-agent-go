@@ -336,7 +336,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 }
 
 // GetSessionSummaryText returns the cached session summary text if present.
-func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) { //nolint:revive
+func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) {
 	if s.opts.summarizerManager == nil {
 		return "", false
 	}

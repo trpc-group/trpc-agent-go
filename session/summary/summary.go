@@ -62,6 +62,9 @@ type SummarizerManager interface {
 	// SetSummarizer sets the summarizer to use.
 	SetSummarizer(summarizer SessionSummarizer, force bool)
 
+	// ShouldSummarize checks if a session should be summarized.
+	ShouldSummarize(sess *session.Session) bool
+
 	// Summarize creates a session summary and compresses if needed.
 	Summarize(ctx context.Context, sess *session.Session, force bool) error
 
@@ -70,9 +73,6 @@ type SummarizerManager interface {
 
 	// Metadata returns metadata about the summarizer configuration.
 	Metadata() map[string]any
-
-	// ShouldSummarize checks if a session should be summarized.
-	ShouldSummarize(sess *session.Session) bool
 }
 
 // SessionSummary represents a summary of a session's conversation history.
