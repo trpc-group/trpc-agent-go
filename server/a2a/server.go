@@ -300,15 +300,12 @@ func (m *messageProcessor) processMessage(
 
 	var a2aMsg *protocol.Message
 	if len(allParts) > 0 {
-		a2aMsg = &protocol.Message{
-			Role:  protocol.MessageRoleAgent,
-			Parts: allParts,
-		}
+		msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
+		a2aMsg = &msg
 	} else {
-		a2aMsg = &protocol.Message{
-			Role:  protocol.MessageRoleAgent,
-			Parts: []protocol.Part{protocol.NewTextPart("No response from agent")},
-		}
+		log.Warnf("no response from agent, use default message")
+		msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
+		a2aMsg = &msg
 	}
 
 	return &taskmanager.MessageProcessingResult{

@@ -34,11 +34,11 @@ import (
 var (
 	modelName = flag.String("model", "deepseek-chat", "Model to use")
 	host      = flag.String("host", "0.0.0.0:8888", "Host to use")
+	streaming = flag.Bool("streaming", true, "Streaming to use")
 )
 
 func main() {
 	flag.Parse()
-
 	config := zap.NewProductionConfig()
 	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 	logger, _ := config.Build()
@@ -137,7 +137,7 @@ func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
 		a2a.WithHost(host),
-		a2a.WithAgent(remoteAgent, true),
+		a2a.WithAgent(remoteAgent, *streaming),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -156,7 +156,7 @@ func buildRemoteAgent(agentName, desc string) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true,
+		Stream:      *streaming,
 	}
 	llmAgent := llmagent.New(
 		agentName,
@@ -284,8 +284,10 @@ func handleContent(
 
 // extractContent extracts content based on streaming mode.
 func extractContent(choice model.Choice) string {
-	return choice.Delta.Content
-
+	if *streaming {
+		return choice.Delta.Content
+	}
+	return choice.Message.Content
 }
 
 // displayContent prints content to console.
