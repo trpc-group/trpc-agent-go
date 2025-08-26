@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -47,6 +48,8 @@ type SessionState struct {
 type Service struct {
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
+	// summarizer is in-memory only. No summary persistence to Redis.
+	summarizer summary.SummarizerManager
 }
 
 // NewService creates a new redis session service.
@@ -72,7 +75,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		return &Service{opts: opts, redisClient: redisClient}, nil
+		svc := &Service{opts: opts, redisClient: redisClient, summarizer: opts.summarizerManager}
+		return svc, nil
 	}
 
 	redisClient, err = builder(
@@ -82,7 +86,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	return &Service{opts: opts, redisClient: redisClient}, nil
+	svc := &Service{opts: opts, redisClient: redisClient, summarizer: opts.summarizerManager}
+	return svc, nil
 }
 
 // CreateSession creates a new session.
@@ -322,6 +327,27 @@ func (s *Service) AppendEvent(
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
 	return nil
+}
+
+// CreateSessionSummary creates or updates the session summary in memory.
+// It delegates to the configured summarizer manager if present.
+func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if s.summarizer == nil {
+		return nil
+	}
+	return s.summarizer.Summarize(ctx, sess, force)
+}
+
+// GetSessionSummaryText returns the cached session summary text if present.
+func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) {
+	if s.summarizer == nil {
+		return "", false
+	}
+	ss, err := s.summarizer.GetSummary(sess)
+	if err != nil || ss == nil {
+		return "", false
+	}
+	return ss.Summary, true
 }
 
 // Close closes the service.

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func setupTestRedis(t testing.TB) (string, func()) {
@@ -800,4 +801,45 @@ func TestService_Atomicity(t *testing.T) {
 			tt.validate(t, client, service, sessionKey, err)
 		})
 	}
+}
+
+func TestService_CreateSessionSummary_InMemoryOnly(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Build summarizer that always compresses when forced.
+	s := summary.NewSummarizer(summary.WithKeepRecent(1))
+	mgr := summary.NewManager(s)
+
+	// Build service with summarizer manager attached (in-memory only).
+	service, err := NewService(WithRedisClientURL(redisURL), WithSummarizerManager(mgr))
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Create session and add some events to summarize.
+	sessKey := session.Key{AppName: "testapp", UserID: "user123", SessionID: "sess1"}
+	sess, err := service.CreateSession(context.Background(), sessKey, session.StateMap{})
+	require.NoError(t, err)
+
+	events := []*event.Event{
+		{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "a"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
+		{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b"}}}}, Timestamp: time.Now().Add(-1 * time.Second)},
+	}
+	for _, e := range events {
+		require.NoError(t, service.AppendEvent(context.Background(), sess, e))
+	}
+
+	// Create summary with force.
+	require.NoError(t, service.CreateSessionSummary(context.Background(), sess, true))
+
+	// Verify summary text is available in memory via service API.
+	text, ok := service.GetSessionSummaryText(context.Background(), sess)
+	assert.True(t, ok)
+	assert.NotEmpty(t, text)
+
+	// Verify Redis does not contain any synthetic summary event (only original 2).
+	client := buildRedisClient(t, redisURL)
+	count, err := client.ZCard(context.Background(), getEventKey(sessKey)).Result()
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), count)
 }
