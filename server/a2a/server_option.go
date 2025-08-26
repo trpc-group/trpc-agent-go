@@ -58,13 +58,16 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService     session.Service
-	agent              agent.Agent
-	agentCard          *a2a.AgentCard
-	processorBuilder   ProcessorBuilder
-	taskManagerBuilder TaskManagerBuilder
-	host               string
-	extraOptions       []a2a.Option
+	sessionService      session.Service
+	agent               agent.Agent
+	enableStreaming     bool
+	agentCard           *a2a.AgentCard
+	processorBuilder    ProcessorBuilder
+	taskManagerBuilder  TaskManagerBuilder
+	a2aToAgentConverter A2AMessageToAgentMessage
+	eventToA2AConverter EventToA2AMessage
+	host                string
+	extraOptions        []a2a.Option
 }
 
 // Option is a function that configures a Server.
@@ -82,9 +85,10 @@ func WithSessionService(service session.Service) Option {
 }
 
 // WithAgent sets the agent to use.
-func WithAgent(agent agent.Agent) Option {
+func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	return func(opts *options) {
 		opts.agent = agent
+		opts.enableStreaming = enableStreaming
 	}
 }
 
@@ -120,5 +124,19 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
+	}
+}
+
+// WithA2AToAgentConverter sets the A2A message to agent message converter to use.
+func WithA2AToAgentConverter(converter A2AMessageToAgentMessage) Option {
+	return func(opts *options) {
+		opts.a2aToAgentConverter = converter
+	}
+}
+
+// WithEventToA2AConverter sets the event to A2A message converter to use.
+func WithEventToA2AConverter(converter EventToA2AMessage) Option {
+	return func(opts *options) {
+		opts.eventToA2AConverter = converter
 	}
 }
