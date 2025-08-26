@@ -141,9 +141,9 @@ func calculator(ctx context.Context, req calculatorReq) (calculatorRsp, error) {
 }
 
 type calculatorReq struct {
-    A  float64 `json:"a"`
-    B  float64 `json:"b"`
-    Op string  `json:"op"`
+    A  float64 `json:"A"  jsonschema:"description=First integer operand,required"`
+    B  float64 `json:"B"  jsonschema:"description=Second integer operand,required"`
+    Op string  `json:"Op" jsonschema:"description=Operation type,enum=add,enum=sub,enum=mul,enum=div,required"`
 }
 
 type calculatorRsp struct {
