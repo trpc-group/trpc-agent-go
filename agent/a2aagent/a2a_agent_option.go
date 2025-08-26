@@ -57,14 +57,14 @@ func WithForceNonStreaming(force bool) Option {
 // WithCustomEventConverter adds a custom A2A event converter to the A2AAgent.
 func WithCustomEventConverter(converter A2AEventConverter) Option {
 	return func(a *A2AAgent) {
-		a.customEventConverters = converter
+		a.eventConverter = converter
 	}
 }
 
 // WithCustomA2AConverter adds a custom A2A message converter to the A2AAgent.
 // This converter will be used to convert invocations to A2A protocol messages.
-func WithCustomA2AConverter(converter EventA2AConverter) Option {
+func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 	return func(a *A2AAgent) {
-		a.customA2AConverters = converter
+		a.a2aMessageConverter = converter
 	}
 }

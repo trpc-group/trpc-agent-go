@@ -25,24 +25,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 var (
-	modelName = flag.String("model", "DeepSeek-V3-Online-64K", "Model to use")
+	modelName = flag.String("model", "deepseek-chat", "Model to use")
+	host      = flag.String("host", "0.0.0.0:8888", "Host to use")
 )
-
-var a2aURL = []string{
-	// other a2a agent url you like
-	"http://j.woa.com/apiserver/assistant/a2a",
-	"http://0.0.0.0:8888",
-	"http://0.0.0.0:8889",
-}
 
 func main() {
 	flag.Parse()
@@ -51,60 +43,29 @@ func main() {
 	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 	logger, _ := config.Build()
 	a2alog.Default = logger.Sugar()
-	agentlog.Default = logger.Sugar()
 
-	go func() {
-		runRemoteAgent("agent1", "i am a remote agent, i can tell a joke", "0.0.0.0:8888")
-	}()
-
-	go func() {
-		runRemoteAgent("agent2", "i am a remote agent, i can translate", "0.0.0.0:8889")
-	}()
+	localAgent := runRemoteAgent("agent_joker", "i am a remote agent, i can tell a joke", *host)
 
 	time.Sleep(1 * time.Second)
-	startChat()
+	startChat(localAgent)
 }
 
-func startChat() {
-	var agentList []agent.Agent
-	for _, host := range a2aURL {
-		a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(host))
-		if err != nil {
-			fmt.Printf("Failed to create a2a agent: %v", err)
-			return
-		}
-		agentList = append(agentList, a2aAgent)
-		card := a2aAgent.GetAgentCard()
-		fmt.Printf("\n------- Agent Card -------\n")
-		fmt.Printf("Name: %s\n", card.Name)
-		fmt.Printf("Description: %s\n", card.Description)
-		fmt.Printf("URL: %s\n", host)
-		fmt.Printf("------------------------\n")
+func startChat(localAgent agent.Agent) {
+	httpURL := fmt.Sprintf("http://%s", *host)
+	a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(httpURL))
+	if err != nil {
+		fmt.Printf("Failed to create a2a agent: %v", err)
+		return
 	}
+	card := a2aAgent.GetAgentCard()
+	fmt.Printf("\n------- Agent Card -------\n")
+	fmt.Printf("Name: %s\n", card.Name)
+	fmt.Printf("Description: %s\n", card.Description)
+	fmt.Printf("URL: %s\n", httpURL)
+	fmt.Printf("------------------------\n")
 
-	modelInstance := openai.New(*modelName,
-		// enable tajiji func toolcall
-		openai.WithExtraFields(map[string]interface{}{
-			"openai_infer": true,
-			"tool_choice":  "auto",
-		}))
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
-	}
-	desc := "You are a helpful AI assistant that coordinates with other agents to complete user requests. Your job is to understand the user's request and delegate it to the appropriate sub-agent."
-	llmAgent := llmagent.New(
-		"entranceAgent",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription(desc),
-		llmagent.WithInstruction(desc),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithSubAgents(agentList),
-	)
-
-	sessionService := inmemory.NewSessionService()
-	r := runner.NewRunner("test", llmAgent, runner.WithSessionService(sessionService))
+	remoteRunner := runner.NewRunner("test", a2aAgent)
+	localRunner := runner.NewRunner("test", localAgent)
 
 	userID := "user1"
 	sessionID := "session1"
@@ -112,7 +73,7 @@ func startChat() {
 	fmt.Println("Chat with the agent. Type 'new' for a new session, or 'exit' to quit.")
 
 	for {
-		if err := processMessage(r, userID, &sessionID); err != nil {
+		if err := processMessage(remoteRunner, localRunner, userID, &sessionID); err != nil {
 			if err.Error() == "exit" {
 				fmt.Println("👋 Goodbye!")
 				return
@@ -124,9 +85,9 @@ func startChat() {
 	}
 }
 
-func processMessage(r runner.Runner, userID string, sessionID *string) error {
+func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userID string, sessionID *string) error {
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Print("You: ")
+	fmt.Print("User: ")
 	if !scanner.Scan() {
 		return fmt.Errorf("exit")
 	}
@@ -144,11 +105,20 @@ func processMessage(r runner.Runner, userID string, sessionID *string) error {
 		return nil
 	}
 
-	events, err := r.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	fmt.Printf("%s remote agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
+	events, err := remoteRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
+	if err := processResponse(events); err != nil {
+		return fmt.Errorf("failed to process response: %w", err)
+	}
 
+	fmt.Printf("\n%s local agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
+	events, err = localRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	if err != nil {
+		return fmt.Errorf("failed to run agent: %w", err)
+	}
 	if err := processResponse(events); err != nil {
 		return fmt.Errorf("failed to process response: %w", err)
 	}
@@ -163,16 +133,19 @@ func startNewSession() string {
 	return newSessionID
 }
 
-func runRemoteAgent(agentName, desc, host string) {
+func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
 		a2a.WithHost(host),
-		a2a.WithAgent(remoteAgent),
+		a2a.WithAgent(remoteAgent, true),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
 	}
-	server.Start(host)
+	go func() {
+		server.Start(host)
+	}()
+	return remoteAgent
 }
 
 func buildRemoteAgent(agentName, desc string) agent.Agent {
@@ -183,6 +156,7 @@ func buildRemoteAgent(agentName, desc string) agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
+		Stream:      true,
 	}
 	llmAgent := llmagent.New(
 		agentName,
@@ -197,8 +171,6 @@ func buildRemoteAgent(agentName, desc string) agent.Agent {
 
 // processResponse handles both streaming and non-streaming responses with tool call visualization.
 func processResponse(eventChan <-chan *event.Event) error {
-	fmt.Print("🤖 Assistant: ")
-
 	var (
 		fullContent       string
 		toolCallsDetected bool
@@ -312,12 +284,8 @@ func handleContent(
 
 // extractContent extracts content based on streaming mode.
 func extractContent(choice model.Choice) string {
-	// For streaming mode, use delta content
-	if choice.Delta.Content != "" {
-		return choice.Delta.Content
-	}
-	// For non-streaming responses (like A2A agent responses), use message content
-	return choice.Message.Content
+	return choice.Delta.Content
+
 }
 
 // displayContent prints content to console.
@@ -330,6 +298,8 @@ func displayContent(
 	if !*assistantStarted {
 		if *toolCallsDetected {
 			fmt.Printf("\n🤖 Assistant: ")
+		} else {
+			fmt.Printf("🤖 Assistant: ")
 		}
 		*assistantStarted = true
 	}
