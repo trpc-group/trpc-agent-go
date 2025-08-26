@@ -28,6 +28,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+var defaultStreamingChannelSize = 1024
+var defaultNonStreamingChannelSize = 10
+
 const (
 	// AgentCardWellKnownPath is the standard path for agent card discovery
 	AgentCardWellKnownPath = "/.well-known/agent.json"
@@ -37,29 +40,17 @@ const (
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
-	name        string
-	description string
-
-	// Agent card and resolution state
-	agentCard *server.AgentCard
-	agentURL  string
-
-	// HTTP client configuration
-	httpClient *http.Client
-
-	// A2A client
-	a2aClient *client.A2AClient
-
-	// Streaming configuration
-	forceNonStreaming bool // Force non-streaming mode even if agent supports streaming
-
-	// eventConverter holds custom A2A event converters
-	eventConverter A2AEventConverter
-
-	// a2aMessageConverter holds custom A2A message converters for requests
-	a2aMessageConverter InvocationA2AConverter
-
-	extraA2AOptions []client.Option
+	name                 string
+	description          string
+	agentCard            *server.AgentCard // Agent card and resolution state
+	agentURL             string            // URL of the remote A2A agent
+	httpClient           *http.Client
+	a2aClient            *client.A2AClient
+	eventConverter       A2AEventConverter      // Custom A2A event converters
+	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
+	extraA2AOptions      []client.Option        // Additional A2A client options
+	streamingBufSize     int                    // Buffer size for streaming responses
+	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
 }
 
 // New creates a new A2AAgent.
@@ -71,6 +62,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 	agent := &A2AAgent{
 		eventConverter:      &defaultA2AEventConverter{},
 		a2aMessageConverter: &defaultEventA2AConverter{},
+		streamingBufSize:    defaultStreamingChannelSize,
 	}
 
 	for _, opt := range opts {
@@ -174,11 +166,6 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 
 // shouldUseStreaming determines whether to use streaming protocol
 func (r *A2AAgent) shouldUseStreaming() bool {
-	// If force non-streaming is enabled, always use non-streaming
-	if r.forceNonStreaming {
-		return false
-	}
-
 	// Check if agent card supports streaming
 	if r.agentCard != nil && r.agentCard.Capabilities.Streaming != nil {
 		return *r.agentCard.Capabilities.Streaming
@@ -205,7 +192,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 	if r.eventConverter == nil {
 		return nil, fmt.Errorf("event converter not set")
 	}
-	eventChan := make(chan *event.Event, 10)
+	eventChan := make(chan *event.Event, r.streamingBufSize)
 	go func() {
 		defer close(eventChan)
 
@@ -246,7 +233,16 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 
 			// Aggregate content from delta
 			if event.Response != nil && len(event.Response.Choices) > 0 {
-				if event.Response.Choices[0].Delta.Content != "" {
+				if r.streamingRespHandler != nil {
+					content, err := r.streamingRespHandler(event.Response)
+					if err != nil {
+						r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
+						return
+					}
+					if content != "" {
+						aggregatedContent += content
+					}
+				} else if event.Response.Choices[0].Delta.Content != "" {
 					aggregatedContent += event.Response.Choices[0].Delta.Content
 				}
 			}
@@ -281,7 +277,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, 1)
+	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
 	go func() {
 		defer close(eventChan)
 
