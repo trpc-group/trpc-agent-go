@@ -604,7 +604,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Forward all events from the target agent.
-		var acc string
+		var lastResponse string
 		for agentEvent := range agentEventChan {
 			if nodeCallbacks != nil {
 				for _, callback := range nodeCallbacks.AgentEvent {
@@ -624,7 +624,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			// Track the last response for state update.
 			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
 				agentEvent.Response.Choices[0].Message.Content != "" {
-				acc += agentEvent.Response.Choices[0].Message.Content
+				lastResponse = agentEvent.Response.Choices[0].Message.Content
 			}
 		}
 		// Emit agent execution complete event.
@@ -632,8 +632,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
 		// Update state with the agent's response.
 		stateUpdate := State{}
-		fmt.Printf("agent node %s response: %s\n", agentName, acc)
-		stateUpdate[StateKeyLastResponse] = acc
+		stateUpdate[StateKeyLastResponse] = lastResponse
 		return stateUpdate, nil
 	}
 }
