@@ -10,6 +10,8 @@
 // Package elasticsearch contains option definitions for the Elasticsearch vector store.
 package elasticsearch
 
+import "net/http"
+
 // options holds Elasticsearch vectorstore configuration.
 type options struct {
 	// addresses is a list of Elasticsearch node addresses.
@@ -34,12 +36,6 @@ type options struct {
 	maxRetries int
 	// indexName is the name of the Elasticsearch index.
 	indexName string
-	// vectorField is the field name for embedding vectors.
-	vectorField string
-	// contentField is the field name for document content.
-	contentField string
-	// metadataField is the field name for document metadata.
-	metadataField string
 	// scoreThreshold is the minimum similarity score threshold.
 	scoreThreshold float64
 	// maxResults is the maximum number of search results.
@@ -48,8 +44,6 @@ type options struct {
 	vectorDimension int
 	// enableTSVector enables text search vector capabilities.
 	enableTSVector bool
-	// language for text search (e.g., "english", "chinese").
-	language string
 }
 
 // defaultOptions returns default configuration.
@@ -59,16 +53,13 @@ var defaultOptions = options{
 	compressRequestBody: true,
 	enableMetrics:       false,
 	enableDebugLogger:   false,
-	retryOnStatus:       []int{502, 503, 504, 429},
-	indexName:           defaultIndexName,
-	vectorField:         defaultVectorField,
-	contentField:        defaultContentField,
-	metadataField:       defaultMetadataField,
-	scoreThreshold:      defaultScoreThreshold,
-	maxResults:          defaultMaxResults,
-	vectorDimension:     defaultVectorDimension,
-	enableTSVector:      true,
-	language:            "english",
+	retryOnStatus: []int{http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusTooManyRequests},
+	indexName:       defaultIndexName,
+	scoreThreshold:  defaultScoreThreshold,
+	maxResults:      defaultMaxResults,
+	vectorDimension: defaultVectorDimension,
+	enableTSVector:  true,
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -151,27 +142,6 @@ func WithIndexName(indexName string) Option {
 	}
 }
 
-// WithVectorField sets the field name for embedding vectors.
-func WithVectorField(vectorField string) Option {
-	return func(o *options) {
-		o.vectorField = vectorField
-	}
-}
-
-// WithContentField sets the field name for document content.
-func WithContentField(contentField string) Option {
-	return func(o *options) {
-		o.contentField = contentField
-	}
-}
-
-// WithMetadataField sets the field name for document metadata.
-func WithMetadataField(metadataField string) Option {
-	return func(o *options) {
-		o.metadataField = metadataField
-	}
-}
-
 // WithScoreThreshold sets the minimum similarity score threshold.
 func WithScoreThreshold(threshold float64) Option {
 	return func(o *options) {
@@ -197,12 +167,5 @@ func WithVectorDimension(dimension int) Option {
 func WithEnableTSVector(enable bool) Option {
 	return func(o *options) {
 		o.enableTSVector = enable
-	}
-}
-
-// WithLanguage sets the language for text search.
-func WithLanguage(language string) Option {
-	return func(o *options) {
-		o.language = language
 	}
 }

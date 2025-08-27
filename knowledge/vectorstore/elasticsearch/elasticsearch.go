@@ -44,12 +44,6 @@ var (
 const (
 	// defaultIndexName is the default index name for documents.
 	defaultIndexName = "trpc_agent_documents"
-	// defaultVectorField is the default field name for embedding vectors.
-	defaultVectorField = fieldEmbedding
-	// defaultContentField is the default field name for document content.
-	defaultContentField = fieldContent
-	// defaultMetadataField is the default field name for document metadata.
-	defaultMetadataField = fieldMetadata
 	// defaultScoreThreshold is the default minimum similarity score.
 	defaultScoreThreshold = 0.7
 	// defaultVectorDimension is the default dimension for embedding vectors.

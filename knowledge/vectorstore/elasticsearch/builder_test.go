@@ -119,3 +119,34 @@ func TestBuildFilterQueryWithBothFilters(t *testing.T) {
 	result := vs.buildFilterQuery(filter)
 	assert.NotNil(t, result)
 }
+
+func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
+	// Create a mock VectorStore with options
+	vs := &VectorStore{
+		option: options{
+			maxResults: 30,
+		},
+	}
+
+	query := &vectorstore.SearchQuery{
+		Vector:     []float64{0.1, 0.2, 0.3},
+		Query:      "test query",
+		SearchMode: vectorstore.SearchModeHybrid,
+		Filter: &vectorstore.SearchFilter{
+			IDs: []string{"doc1", "doc2"},
+			Metadata: map[string]any{
+				"category": "test",
+				"type":     "document",
+			},
+		},
+	}
+
+	result, err := vs.buildHybridSearchQuery(query)
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, 30, *result.Size)
+	assert.NotNil(t, result.Query)
+
+	// Verify that PostFilter is set when filter is provided
+	assert.NotNil(t, result.PostFilter)
+}
