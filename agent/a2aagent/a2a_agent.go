@@ -29,7 +29,7 @@ import (
 )
 
 var defaultStreamingChannelSize = 1024
-var defaultNonStreamingChannelSize = 64
+var defaultNonStreamingChannelSize = 10
 
 const (
 	// AgentCardWellKnownPath is the standard path for agent card discovery
