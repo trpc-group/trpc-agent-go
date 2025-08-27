@@ -29,7 +29,7 @@ import (
 )
 
 var defaultStreamingChannelSize = 1024
-var defaultNonStreamingChannelSize = 10
+var defaultNonStreamingChannelSize = 64
 
 const (
 	// AgentCardWellKnownPath is the standard path for agent card discovery
@@ -40,24 +40,22 @@ const (
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
+	// options
 	name                 string
 	description          string
-	agentCard            *server.AgentCard // Agent card and resolution state
-	agentURL             string            // URL of the remote A2A agent
-	httpClient           *http.Client
-	a2aClient            *client.A2AClient
+	agentCard            *server.AgentCard      // Agent card and resolution state
+	agentURL             string                 // URL of the remote A2A agent
 	eventConverter       A2AEventConverter      // Custom A2A event converters
 	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
+
+	httpClient *http.Client
+	a2aClient  *client.A2AClient
 }
 
 // New creates a new A2AAgent.
-//
-// The agent can be configured with:
-// - A *server.AgentCard object
-// - A URL string to A2A endpoint
 func New(opts ...Option) (*A2AAgent, error) {
 	agent := &A2AAgent{
 		eventConverter:      &defaultA2AEventConverter{},

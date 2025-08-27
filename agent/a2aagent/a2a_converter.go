@@ -127,7 +127,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 			}
 		case model.ContentTypeImage:
 			if contentPart.Image != nil {
-				if contentPart.Image.Data != nil && len(contentPart.Image.Data) > 0 {
+				if len(contentPart.Image.Data) > 0 {
 					// Handle inline image data
 					parts = append(parts, protocol.NewFilePartWithBytes(
 						"image",
@@ -242,10 +242,13 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 
 // convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
-	return &protocol.Message{
-		Role:  protocol.MessageRoleAgent,
-		Parts: []protocol.Part{},
+	msg := &protocol.Message{
+		Role: protocol.MessageRoleAgent,
 	}
+	if event.Status.Message != nil {
+		msg.Parts = event.Status.Message.Parts
+	}
+	return msg
 }
 
 // convertTaskArtifactToMessage converts a TaskArtifactUpdateEvent to a Message
