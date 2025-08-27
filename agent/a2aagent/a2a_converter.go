@@ -242,10 +242,13 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 
 // convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
-	return &protocol.Message{
+	msg := &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
-		Parts: event.Status.Message.Parts,
 	}
+	if event.Status.Message != nil {
+		msg.Parts = event.Status.Message.Parts
+	}
+	return msg
 }
 
 // convertTaskArtifactToMessage converts a TaskArtifactUpdateEvent to a Message
