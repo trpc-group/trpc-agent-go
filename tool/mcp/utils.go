@@ -78,6 +78,30 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 					propSchema.Enum = enumArr
 				}
 			}
+			// Recursively process nested properties.
+			if nestedPropsVal, ok := propMap["properties"].(map[string]any); ok {
+				propSchema.Properties = convertProperties(nestedPropsVal)
+			}
+			// Handle required field.
+			if reqVal, ok := propMap["required"].([]any); ok {
+				required := make([]string, len(reqVal))
+				for i, req := range reqVal {
+					if reqStr, ok := req.(string); ok {
+						required[i] = reqStr
+					}
+				}
+				propSchema.Required = required
+			}
+			// Handle items field (for array types).
+			if itemsVal, exists := propMap["items"]; exists {
+				if itemsMap, ok := itemsVal.(map[string]any); ok {
+					propSchema.Items = convertMCPSchemaToSchema(itemsMap)
+				}
+			}
+			// Handle additionalProperties field.
+			if additionalPropsVal, exists := propMap["additionalProperties"]; exists {
+				propSchema.AdditionalProperties = additionalPropsVal
+			}
 			result[name] = propSchema
 		}
 	}
