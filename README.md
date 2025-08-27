@@ -17,13 +17,17 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 
 - [Quick Start](#quick-start)
 - [Examples](#examples)
-  - [Tool Usage](#1-tool-usage-examplestool)
-  - [LLM-only Agent](#2-llm-only-agent-examplesllmagent)
-  - [Multi-Agent Runners](#3-multi-agent-runners-examplesmultiagent)
-  - [Telemetry & Tracing](#4-telemetry--tracing-examplestelemetry)
+  - [Tool Usage](#1-tool-usage-examples)
+  - [LLM-only Agent](#2-llm-only-agent)
+  - [Multi-Agent Runners](#3-multi-agent-runners)
+  - [Graph Agent](#4-graph-agent)
+  - [Memory](#5-memory)
+  - [Knowledge](#6-knowledge)
+  - [Telemetry & Tracing](#7-telemetry--tracing)
+  - [MCP Integration](#8-mcp-integration)
+  - [Debug Web Demo](#9-debug-web-demo)
 - [Architecture Overview](#architecture-overview)
 - [Using Built-in Agents](#using-built-in-agents)
-- [Memory & Knowledge](#memory--knowledge)
 - [Future Enhancements](#future-enhancements)
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
@@ -33,31 +37,133 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 ### Prerequisites
 
 1. Go 1.24.1 or later.
-2. An LLM provider key (e.g. `OPENAI_API_KEY`).
+2. An LLM provider key (e.g. `OPENAI_API_KEY`, `OPENAI_BASE_URL`).
+
+### Run the example
+
+Use the commands below to configure your environment and start a multi-turn
+chat session with streaming and tool calls via the Runner.
 
 ```bash
-# Install the module
-go get trpc.group/trpc-go/trpc-agent-go@latest
+# Clone the project
+git clone https://github.com/trpc-group/trpc-agent-go.git
+cd trpc-agent-go
 
-# Run the tool example
-export OPENAI_API_KEY="<your-key>"
-cd examples/tool
-go run . -model="gpt-4o-mini"
+# Run a quick example
+export OPENAI_API_KEY="<your-api-key>"
+export OPENAI_BASE_URL="<your-base-url>"
+cd examples/runner
+go run . -model="gpt-4o-mini" -streaming=true
 ```
 
-The example shows an agent that calls **function tools** to retrieve weather and
-population data. Switch between streaming and non-streaming modes with
-`streaming_input.go` and `non-streaming.go`.
+[examples/runner](examples/runner) demonstrates multi‑turn chat via the **Runner** with session management, streaming output, and tool calling.
+It includes two tools: a calculator and a current time tool. Toggle behavior with flags like `-streaming` and `-enable-parallel`.
+
+### Basic Usage
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+func main() {
+    // Create model.
+    modelInstance := openai.New("deepseek-chat")
+
+    // Create tool.
+    calculatorTool := function.NewFunctionTool(
+        calculator,
+        function.WithName("calculator"),
+        function.WithDescription("Execute addition, subtraction, multiplication, and division. "+
+            "Parameters: a, b are numeric values, op takes values add/sub/mul/div; "+
+            "returns result as the calculation result."),
+    )
+
+    // Enable streaming output.
+    genConfig := model.GenerationConfig{
+        Stream: true,
+    }
+
+    // Create Agent.
+    agent := llmagent.New("assistant",
+        llmagent.WithModel(modelInstance),
+        llmagent.WithTools([]tool.Tool{calculatorTool}),
+        llmagent.WithGenerationConfig(genConfig),
+    )
+
+    // Create Runner.
+    runner := runner.NewRunner("calculator-app", agent)
+
+    // Execute conversation.
+    ctx := context.Background()
+    events, err := runner.Run(ctx,
+        "user-001",
+        "session-001",
+        model.NewUserMessage("Calculate what 2+3 equals"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Process event stream.
+    for event := range events {
+        if event.Object == "chat.completion.chunk" {
+            fmt.Print(event.Choices[0].Delta.Content)
+        }
+    }
+    fmt.Println()
+}
+
+func calculator(ctx context.Context, req calculatorReq) (calculatorRsp, error) {
+    var result float64
+    switch req.Op {
+    case "add", "+":
+        result = req.A + req.B
+    case "sub", "-":
+        result = req.A - req.B
+    case "mul", "*":
+        result = req.A * req.B
+    case "div", "/":
+        result = req.A / req.B
+    }
+    return calculatorRsp{Result: result}, nil
+}
+
+type calculatorReq struct {
+    A  float64 `json:"A"  jsonschema:"description=First integer operand,required"`
+    B  float64 `json:"B"  jsonschema:"description=Second integer operand,required"`
+    Op string  `json:"Op" jsonschema:"description=Operation type,enum=add,enum=sub,enum=mul,enum=div,required"`
+}
+
+type calculatorRsp struct {
+    Result float64 `json:"result"`
+}
+```
 
 ## Examples
 
 The `examples` directory contains runnable demos covering every major feature.
 
-### 1. Tool Usage ([examples/tool](examples/tool))
+### 1. Tool Usage
 
-- Create JSON-schema function tools.
-- Let the LLM decide when to invoke a tool.
-- Streaming vs. non-streaming interaction patterns.
+- [examples/agenttool](examples/agenttool) – Wrap agents as callable tools.
+- [examples/multitools](examples/multitools) – Multiple tools orchestration.
+- [examples/duckduckgo](examples/duckduckgo) – Web search tool integration.
+- [examples/filetoolset](examples/filetoolset) – File operations as tools.
+- [examples/fileinput](examples/fileinput) – Provide files as inputs.
+- [examples/agenttool](examples/agenttool) shows streaming and non-streaming
+  patterns.
 
 ### 2. LLM-Only Agent ([examples/llmagent](examples/llmagent))
 
@@ -78,12 +184,22 @@ The `examples` directory contains runnable demos covering every major feature.
   how to construct a graph-based agent, manage state safely, implement
   conditional routing, and orchestrate execution with the Runner.
 
-### 5. Telemetry & Tracing ([examples/telemetry](examples/telemetry))
+### 5. Memory ([examples/memory](examples/memory))
+
+- In‑memory and Redis memory services with CRUD, search and tool integration.
+- How to configure, call tools and customize prompts.
+
+### 6. Knowledge ([examples/knowledge](examples/knowledge))
+
+- Basic RAG example: load sources, embed to a vector store, and search.
+- How to use conversation context and tune loading/concurrency options.
+
+### 7. Telemetry & Tracing ([examples/telemetry](examples/telemetry))
 
 - OpenTelemetry hooks across model, tool and runner layers.
 - Export traces to OTLP endpoint for real-time analysis.
 
-### 6. MCP Integration ([examples/mcp_tool](examples/mcp_tool))
+### 8. MCP Integration ([examples/mcptool](examples/mcptool))
 
 - Wrapper utilities around **trpc-mcp-go**, an implementation of the
   **Model Context Protocol (MCP)**.
@@ -92,12 +208,17 @@ The `examples` directory contains runnable demos covering every major feature.
 - Enables dynamic tool execution and context-rich interactions between agents
   and LLMs.
 
-### 7. Debug Web Demo ([examples/debugserver](examples/debugserver))
+### 9. Debug Web Demo ([examples/debugserver](examples/debugserver))
 
 - Launches a **debug Server** that speaks ADK-compatible HTTP endpoints.
 - Front-end: [google/adk-web](https://github.com/google/adk-web) connects via
   `/run_sse`, streams agent responses in real-time.
 - Great starting point for building your own chat UI.
+
+Other notable examples:
+
+- [examples/humaninloop](examples/humaninloop) – Human in the loop.
+- [examples/codeexecution](examples/codeexecution) – Secure code execution.
 
 See individual `README.md` files in each example folder for usage details.
 
@@ -105,32 +226,38 @@ See individual `README.md` files in each example folder for usage details.
 
 ```text
 ┌─────────────────────┐
-│       Runner        │  orchestrates sessions & events
+│       Runner        │  orchestrates session, memory, ...
 └─────────┬───────────┘
           │ invokes
 ┌─────────▼───────────┐
-│       Agent         │  implements business logic
-└───────┬┴┬┬┬┬────────┘
-        │ ││││ sub-agents / tools
-┌───────▼─▼▼▼▼────────┐
-│     Planner &       │  breakpoint reasoning / TODO planning
-│   Generation Loop   │
-└──────────┬──────────┘
-           │ calls
-┌──────────▼──────────┐
-│      LLM Model      │  chat-completion, embedding, …
-└─────────────────────┘
+│       Agent         │  implements business logic, integrated with knowledge, code executor, ...
+└─────────┬───────────┘
+          │ sub-agents(LLM, Graph, Multi, A2A agents)
+┌─────────▼───────────┐
+│       Planner       │  decide next action / tool use
+└────────┬────────────┘
+         │ LLM flow
+┌────────▼──────────┐   ┌──────────────┐
+│     Model Call    │──►│    Tools     │ function / agent / MCP
+└────────┬──────────┘   └──────────────┘
+         │ calls
+┌────────▼──────────┐
+│     LLM Model     │  chat-completion, batch, embedding, …
+└───────────────────┘
 ```
 
 Key packages:
 
-| Package   | Responsibility                                                                                   |
-| --------- | ------------------------------------------------------------------------------------------------ |
-| `agent`   | Core interfaces & built-in `ChainAgent`, `ParallelAgent`, `LLMAgent`, etc.                       |
-| `tool`    | Unified tool specification, JSON schema, execution helpers & built-ins (e.g. DuckDuckGo search). |
-| `planner` | Next-step planners: built-in & ReAct-style reasoning.                                            |
-| `runner`  | Session lifecycle, event persistence, OpenTelemetry tracing.                                     |
-| `memory`  | Abstract memory interfaces (vector DB integrations coming soon).                                 |
+| Package     | Responsibility                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------------- |
+| `agent`     | Core execution unit, responsible for processing user input and generating responses.                        |
+| `runner`    | Agent executor, responsible for managing execution flow and connecting Session/Memory Service capabilities. |
+| `model`     | Supports multiple LLM models (OpenAI, DeepSeek, etc.).                                                      |
+| `tool`      | Provides various tool capabilities (Function, MCP, DuckDuckGo, etc.).                                       |
+| `session`   | Manages user session state and events.                                                                      |
+| `memory`    | Records user long-term memory and personalized information.                                                 |
+| `knowledge` | Implements RAG knowledge retrieval capabilities.                                                            |
+| `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 
 ## Using Built-in Agents
 
@@ -145,7 +272,7 @@ agents that you can compose like Lego bricks:
 | `ParallelAgent` | Executes sub-agents concurrently and merges output. |
 | `CycleAgent`    | Loops over a planner + executor until stop signal.  |
 
-### Quick composition example
+### Multi-Agent Collaboration Example
 
 ```go
 // 1. Create a base LLM agent.
@@ -177,12 +304,6 @@ for ev := range events { /* ... */ }
 The composition API lets you nest chains, cycles, or parallels to build complex
 workflows without low-level plumbing.
 
-## Memory & Knowledge
-
-`tRPC-Agent-Go` ships with an in-memory session store. Future releases will add
-vector store integrations (Milvus, Pinecone, Qdrant) and long-term knowledge
-bases under `knowledge/`.
-
 ## Future Enhancements
 
 - Persistent memory adapters (PostgreSQL, Redis).
@@ -199,6 +320,10 @@ Pull requests, issues and suggestions are very welcome! Please read
 
 ## Acknowledgements
 
-Inspired by Google Adk.
+Thanks to Tencent internal businesses such as Tencent Yuanbao, Tencent Video, Tencent News, IMA, QQ Music,
+and other businesses for their support. Business scenario refinement is the best validation for the framework.
+
+Thanks to excellent open-source frameworks like ADK, Agno, CrewAI, AutoGen, etc., for their inspiration,
+providing ideas for tRPC-Agent-Go development.
 
 Licensed under the Apache 2.0 License.
