@@ -244,7 +244,7 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
 	return &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
-		Parts: []protocol.Part{},
+		Parts: event.Status.Message.Parts,
 	}
 }
 
