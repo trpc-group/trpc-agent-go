@@ -135,8 +135,8 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return nil, nil
 	}
 
-	var parts []protocol.Part
 	if event.Response.Choices[0].Message.Content != "" {
+		var parts []protocol.Part
 		parts = append(parts, protocol.NewTextPart(event.Response.Choices[0].Message.Content))
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 		return &msg, nil

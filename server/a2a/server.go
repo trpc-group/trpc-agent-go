@@ -237,7 +237,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 	batch []*event.Event,
 	subscriber taskmanager.TaskSubscriber,
 ) (bool, error) {
-	var hasFinalEvent bool
+	hasFinalEvent := false
 	for _, agentEvent := range batch {
 		if agentEvent.Response == nil {
 			continue
@@ -250,9 +250,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 			continue
 		}
 		if a2aMsg != nil {
-			if err := subscriber.Send(protocol.StreamingMessageEvent{
-				Result: a2aMsg,
-			}); err != nil {
+			if err := subscriber.Send(protocol.StreamingMessageEvent{Result: a2aMsg}); err != nil {
 				log.Errorf("Failed to send message event: %v", err)
 			}
 		}
@@ -303,7 +301,7 @@ func (m *messageProcessor) processMessage(
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
 		a2aMsg = &msg
 	} else {
-		log.Warnf("no response from agent, use default message")
+		log.Warnf("no response from agent, return empty message")
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
 		a2aMsg = &msg
 	}
@@ -356,8 +354,4 @@ func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.
 	}
 
 	return skills
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }

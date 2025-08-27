@@ -178,7 +178,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 }
 
 // buildRespEvent converts A2A response to tRPC event
-func (c *defaultA2AEventConverter) buildRespEvent(
+func (d *defaultA2AEventConverter) buildRespEvent(
 	isStreaming bool,
 	msg *protocol.Message,
 	agentName string,
@@ -204,6 +204,7 @@ func (c *defaultA2AEventConverter) buildRespEvent(
 		Content: content,
 	}
 	event := event.New(invocation.InvocationID, agentName)
+
 	if isStreaming {
 		event.Response = &model.Response{
 			Choices:   []model.Choice{{Delta: message}},
@@ -213,16 +214,16 @@ func (c *defaultA2AEventConverter) buildRespEvent(
 			Done:      false,
 		}
 		return event
-	} else {
-		event.Response = &model.Response{
-			Choices:   []model.Choice{{Message: message}},
-			Timestamp: time.Now(),
-			Created:   time.Now().Unix(),
-			IsPartial: false,
-			Done:      true,
-		}
-		return event
 	}
+
+	event.Response = &model.Response{
+		Choices:   []model.Choice{{Message: message}},
+		Timestamp: time.Now(),
+		Created:   time.Now().Unix(),
+		IsPartial: false,
+		Done:      true,
+	}
+	return event
 }
 
 // convertTaskToMessage converts a Task to a Message

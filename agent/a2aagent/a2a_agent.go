@@ -199,22 +199,16 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
 			return
 		}
-
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
 		}
-
-		// Use streaming API
 		streamChan, err := r.a2aClient.StreamMessage(ctx, params)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
 			return
 		}
 
-		// Aggregate content from all streaming events
 		var aggregatedContent string
-
-		// Process streaming responses
 		for streamEvent := range streamChan {
 			select {
 			case <-ctx.Done():
@@ -289,7 +283,6 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
 		}
-
 		result, err := r.a2aClient.SendMessage(ctx, params)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A request failed to %s: %v", r.agentCard.URL, err))
