@@ -312,6 +312,10 @@ workflows without low-level plumbing.
 - gRPC & HTTP servers for remote agent invocation.
 - Comprehensive benchmark & test suite.
 
+## Documentation
+
+Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.io/trpc-agent-go/) covers everything from basic concepts to advanced techniques, helping you build powerful AI applications with confidence. Whether you're new to AI agents or an experienced developer, you'll find detailed guides, practical examples, and best practices to accelerate your development journey.
+
 ## Contributing
 
 Pull requests, issues and suggestions are very welcome! Please read
