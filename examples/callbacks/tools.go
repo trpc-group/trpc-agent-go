@@ -106,3 +106,7 @@ type timeResult struct {
 	Weekday   string `json:"weekday"`
 	Formatted string `json:"formatted,omitempty"`
 }
+
+// Helper functions for creating pointers to primitive types.
+func intPtr(i int) *int           { return &i }
+func floatPtr(f float64) *float64 { return &f }

@@ -385,7 +385,3 @@ func (c *multiTurnChatWithCallbacks) startNewSession() {
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
 }
-
-// Helper functions for creating pointers to primitive types.
-func intPtr(i int) *int           { return &i }
-func floatPtr(f float64) *float64 { return &f }
