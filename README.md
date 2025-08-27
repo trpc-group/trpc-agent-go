@@ -1,3 +1,5 @@
+English | [中文](README.zh_CN.md)
+
 # tRPC-Agent-Go
 
 [![Go Reference](https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg)](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go)
