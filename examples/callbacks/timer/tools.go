@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -18,7 +19,7 @@ import (
 // Tool implementations.
 
 // calculator performs basic operations.
-func (e *toolTimerExample) calculator(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
+func (e *toolTimerExample) calculator(ctx context.Context, args *calculatorArgs) (*calculatorResult, error) {
 	var result float64
 	switch strings.ToLower(args.Operation) {
 	case "add", "+":
@@ -31,13 +32,13 @@ func (e *toolTimerExample) calculator(ctx context.Context, args calculatorArgs) 
 		if args.B != 0 {
 			result = args.A / args.B
 		} else {
-			return calculatorResult{}, fmt.Errorf("division by zero")
+			return nil, errors.New("division by zero")
 		}
 	default:
-		return calculatorResult{}, fmt.Errorf("unsupported operation: %s", args.Operation)
+		return nil, fmt.Errorf("unsupported operation: %s", args.Operation)
 	}
 
-	return calculatorResult{
+	return &calculatorResult{
 		Operation: args.Operation,
 		A:         args.A,
 		B:         args.B,

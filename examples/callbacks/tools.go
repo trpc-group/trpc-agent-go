@@ -18,7 +18,7 @@ import (
 // CallableTool implementations.
 
 // calculate performs basic mathematical operations.
-func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
+func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args *calculatorArgs) (*calculatorResult, error) {
 	var result float64
 
 	switch strings.ToLower(args.Operation) {
@@ -38,7 +38,7 @@ func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args calcula
 		result = 0
 	}
 
-	return calculatorResult{
+	return &calculatorResult{
 		Operation: args.Operation,
 		A:         args.A,
 		B:         args.B,
@@ -47,7 +47,7 @@ func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args calcula
 }
 
 // getCurrentTime returns current time information.
-func (c *multiTurnChatWithCallbacks) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
+func (c *multiTurnChatWithCallbacks) getCurrentTime(_ context.Context, args *timeArgs) (*timeResult, error) {
 	now := time.Now()
 	var t time.Time
 	timezone := args.Timezone
@@ -70,7 +70,7 @@ func (c *multiTurnChatWithCallbacks) getCurrentTime(_ context.Context, args time
 		timezone = "UTC"
 	}
 
-	return timeResult{
+	return &timeResult{
 		Timezone: timezone,
 		Time:     t.Format("15:04:05"),
 		Date:     t.Format("2006-01-02"),
