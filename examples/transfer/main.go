@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -28,8 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
 func main() {
@@ -104,84 +103,7 @@ func (c *transferChat) setup(_ context.Context) error {
 	c.sessionID = fmt.Sprintf("transfer-session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Agent transfer system ready! Session: %s\n\n", c.sessionID)
-
 	return nil
-}
-
-// createMathAgent creates a specialized math agent.
-func (c *transferChat) createMathAgent(modelInstance model.Model) agent.Agent {
-	// Math calculation tool.
-	calculateTool := function.NewFunctionTool(
-		c.calculate,
-		function.WithName("calculate"),
-		function.WithDescription("Perform mathematical calculations"),
-	)
-
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.3), // Lower temperature for more precise calculations
-		Stream:      true,
-	}
-
-	return llmagent.New(
-		"math-agent",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A specialized mathematical computation agent"),
-		llmagent.WithInstruction("You are a math expert. Solve mathematical problems step by step with clear explanations."),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools([]tool.Tool{calculateTool}),
-	)
-}
-
-// createWeatherAgent creates a specialized weather agent.
-func (c *transferChat) createWeatherAgent(modelInstance model.Model) agent.Agent {
-	// Weather tool.
-	weatherTool := function.NewFunctionTool(
-		c.getWeather,
-		function.WithName("get_weather"),
-		function.WithDescription("Get current weather information for a location"),
-	)
-
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(1500),
-		Temperature: floatPtr(0.5),
-		Stream:      true,
-	}
-
-	return llmagent.New(
-		"weather-agent",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A specialized weather information agent"),
-		llmagent.WithInstruction("You are a weather expert. Provide detailed weather information and recommendations."),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools([]tool.Tool{weatherTool}),
-	)
-}
-
-// createResearchAgent creates a specialized research agent.
-func (c *transferChat) createResearchAgent(modelInstance model.Model) agent.Agent {
-	// Search tool.
-	searchTool := function.NewFunctionTool(
-		c.search,
-		function.WithName("search"),
-		function.WithDescription("Search for information on a given topic"),
-	)
-
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(3000),
-		Temperature: floatPtr(0.7),
-		Stream:      true,
-	}
-
-	return llmagent.New(
-		"research-agent",
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A specialized research and information gathering agent"),
-		llmagent.WithInstruction("You are a research expert. "+
-			"Gather comprehensive information and provide well-structured answers."),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools([]tool.Tool{searchTool}),
-	)
 }
 
 // createCoordinatorAgent creates the main coordinator agent with sub-agents.
@@ -483,7 +405,7 @@ func (c *transferChat) getAgentFromTransfer(event *event.Event) string {
 }
 
 func (c *transferChat) isTransferTool(toolCall model.ToolCall) bool {
-	return toolCall.Function.Name == "transfer_to_agent"
+	return toolCall.Function.Name == transfer.TransferToolName
 }
 
 func (c *transferChat) isTransferResponse(event *event.Event) bool {
@@ -492,174 +414,6 @@ func (c *transferChat) isTransferResponse(event *event.Event) bool {
 
 func (c *transferChat) isToolEvent(event *event.Event) bool {
 	return len(event.Choices) > 0 && event.Choices[0].Message.Role == model.RoleTool
-}
-
-// Tool implementations for demonstration.
-
-// calculate performs mathematical operations.
-func (c *transferChat) calculate(_ context.Context, args calcArgs) (calcResult, error) {
-	var result float64
-	switch args.Operation {
-	case "add":
-		result = args.A + args.B
-	case "subtract":
-		result = args.A - args.B
-	case "multiply":
-		result = args.A * args.B
-	case "divide":
-		if args.B == 0 {
-			return calcResult{
-				Operation: args.Operation,
-				A:         args.A,
-				B:         args.B,
-				Result:    0,
-				Error:     "Division by zero",
-			}, fmt.Errorf("division by zero")
-		}
-		result = args.A / args.B
-	case "power":
-		result = 1
-		for i := 0; i < int(args.B); i++ {
-			result *= args.A
-		}
-	default:
-		return calcResult{
-			Operation: args.Operation,
-			A:         args.A,
-			B:         args.B,
-			Result:    0,
-			Error:     "Unknown operation",
-		}, fmt.Errorf("unknown operation")
-	}
-
-	return calcResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// getWeather returns weather information for a location.
-func (c *transferChat) getWeather(_ context.Context, args weatherArgs) (weatherResult, error) {
-	// Simulate weather data based on location.
-	weather := map[string]weatherResult{
-		"tokyo": {
-			Location:       "Tokyo, Japan",
-			Temperature:    22.5,
-			Condition:      "Partly Cloudy",
-			Humidity:       65,
-			Recommendation: "Perfect weather for outdoor activities",
-		},
-		"london": {
-			Location:       "London, UK",
-			Temperature:    15.2,
-			Condition:      "Rainy",
-			Humidity:       85,
-			Recommendation: "Bring an umbrella and dress warmly",
-		},
-		"new york": {
-			Location:       "New York, USA",
-			Temperature:    18.7,
-			Condition:      "Sunny",
-			Humidity:       45,
-			Recommendation: "Great day for outdoor activities",
-		},
-	}
-
-	location := strings.ToLower(args.Location)
-	if result, exists := weather[location]; exists {
-		return result, nil
-	}
-
-	// Default response for unknown locations.
-	return weatherResult{
-		Location:       args.Location,
-		Temperature:    20.0,
-		Condition:      "Clear",
-		Humidity:       50,
-		Recommendation: "Weather data not available, but looks pleasant",
-	}, nil
-}
-
-// search performs information search.
-func (c *transferChat) search(_ context.Context, args searchArgs) (searchResult, error) {
-	// Simulate search results based on query.
-	query := strings.ToLower(args.Query)
-
-	var results []string
-	if strings.Contains(query, "renewable energy") {
-		results = []string{
-			"Renewable energy capacity increased by 295 GW in 2022",
-			"Solar and wind power account for 90% of new renewable capacity",
-			"Global investment in renewable energy reached $1.8 trillion",
-			"Renewable energy costs have decreased by 85% since 2010",
-		}
-	} else if strings.Contains(query, "ai") || strings.Contains(query, "artificial intelligence") {
-		results = []string{
-			"AI market expected to reach $1.8 trillion by 2030",
-			"Large language models showing breakthrough capabilities",
-			"AI adoption accelerating across healthcare and finance",
-			"Concerns about AI safety and regulation increasing",
-		}
-	} else if strings.Contains(query, "climate") {
-		results = []string{
-			"Global temperatures have risen 1.1°C since pre-industrial times",
-			"Arctic sea ice declining at 13% per decade",
-			"Extreme weather events becoming more frequent",
-			"Countries committing to net-zero emissions by 2050",
-		}
-	} else {
-		results = []string{
-			fmt.Sprintf("Search result 1 for '%s'", args.Query),
-			fmt.Sprintf("Search result 2 for '%s'", args.Query),
-			fmt.Sprintf("Search result 3 for '%s'", args.Query),
-		}
-	}
-
-	return searchResult{
-		Query:   args.Query,
-		Results: results,
-		Count:   len(results),
-	}, nil
-}
-
-// Data structures for tool arguments and results.
-
-type calcArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide, power"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-type calcResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-	Error     string  `json:"error,omitempty"`
-}
-
-type weatherArgs struct {
-	Location string `json:"location" description:"The location to get weather for"`
-}
-
-type weatherResult struct {
-	Location       string  `json:"location"`
-	Temperature    float64 `json:"temperature"`
-	Condition      string  `json:"condition"`
-	Humidity       int     `json:"humidity"`
-	Recommendation string  `json:"recommendation"`
-}
-
-type searchArgs struct {
-	Query string `json:"query" description:"The search query"`
-}
-
-type searchResult struct {
-	Query   string   `json:"query"`
-	Results []string `json:"results"`
-	Count   int      `json:"count"`
 }
 
 // Helper functions.
