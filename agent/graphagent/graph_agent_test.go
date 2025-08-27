@@ -325,7 +325,7 @@ func TestGraphAgentWithSubAgents(t *testing.T) {
 		})
 
 	g, err := graph.NewStateGraph(schema).
-		AddAgentNode("call_sub_agent", "sub-agent",
+		AddAgentNode("call_sub_agent",
 			graph.WithName("Call Sub Agent"),
 			graph.WithDescription("Calls the sub-agent to process the input"),
 		).

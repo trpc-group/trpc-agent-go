@@ -199,10 +199,9 @@ func (sg *StateGraph) AddToolsNode(
 // The agent name should correspond to a sub-agent in the GraphAgent's sub-agent list.
 func (sg *StateGraph) AddAgentNode(
 	id string,
-	agentName string,
 	opts ...Option,
 ) *StateGraph {
-	agentNodeFunc := NewAgentNodeFunc(agentName, opts...)
+	agentNodeFunc := NewAgentNodeFunc(id, opts...)
 	// Add agent node type option.
 	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
 	sg.AddNode(id, agentNodeFunc, agentOpts...)
@@ -369,6 +368,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			InvocationID:   invocationID,
 			SessionID:      sessionID,
 			Span:           span,
+			NodeID:         nodeID,
 		})
 
 		// Emit model execution complete event.
@@ -439,6 +439,8 @@ type modelResponseConfig struct {
 	LLMModel       model.Model
 	Request        *model.Request
 	Span           oteltrace.Span
+	// NodeID, when provided, is used as the event author.
+	NodeID string
 }
 
 // processModelResponse processes a single model response.
@@ -454,7 +456,11 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		}
 	}
 	if config.EventChan != nil && !config.Response.Done {
-		llmEvent := event.NewResponseEvent(config.InvocationID, config.LLMModel.Info().Name, config.Response)
+		author := config.LLMModel.Info().Name
+		if config.NodeID != "" {
+			author = config.NodeID
+		}
+		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
 		// Trace the LLM call using the telemetry package.
 		itelemetry.TraceCallLLM(config.Span, &agent.Invocation{
 			InvocationID: config.InvocationID,
@@ -775,6 +781,8 @@ type modelExecutionConfig struct {
 	InvocationID   string
 	SessionID      string
 	Span           oteltrace.Span
+	// NodeID, when provided, is used as the event author.
+	NodeID string
 }
 
 // executeModelWithEvents executes the model with event processing.
@@ -797,6 +805,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			LLMModel:       config.LLMModel,
 			Request:        config.Request,
 			Span:           config.Span,
+			NodeID:         config.NodeID,
 		}); err != nil {
 			return nil, err
 		}
@@ -867,6 +876,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			EventChan:     config.EventChan,
 			Span:          config.Span,
 			ToolCallbacks: toolCallbacks,
+			State:         config.State,
 		})
 		if err != nil {
 			return nil, err
@@ -885,6 +895,7 @@ type singleToolCallConfig struct {
 	EventChan     chan<- *event.Event
 	Span          oteltrace.Span
 	ToolCallbacks *tool.Callbacks
+	State         State
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -898,8 +909,21 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	startTime := time.Now()
 
+	// Extract current node ID from state for event authoring.
+	var nodeID string
+	if state := config.State; state != nil {
+		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+			if id, ok := nodeIDData.(string); ok {
+				nodeID = id
+			}
+		}
+	}
+
 	// Emit tool execution start event.
-	emitToolStartEvent(config.EventChan, config.InvocationID, name, id, startTime, config.ToolCall.Function.Arguments)
+	emitToolStartEvent(
+		config.EventChan, config.InvocationID, name, id, nodeID,
+		startTime, config.ToolCall.Function.Arguments,
+	)
 
 	// Execute the tool.
 	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
@@ -910,6 +934,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		InvocationID: config.InvocationID,
 		ToolName:     name,
 		ToolID:       id,
+		NodeID:       nodeID,
 		StartTime:    startTime,
 		Result:       result,
 		Error:        err,
@@ -934,7 +959,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 // emitToolStartEvent emits a tool execution start event.
 func emitToolStartEvent(
 	eventChan chan<- *event.Event,
-	invocationID, toolName, toolID string,
+	invocationID, toolName, toolID, nodeID string,
 	startTime time.Time,
 	arguments []byte,
 ) {
@@ -946,6 +971,7 @@ func emitToolStartEvent(
 		WithToolEventInvocationID(invocationID),
 		WithToolEventToolName(toolName),
 		WithToolEventToolID(toolID),
+		WithToolEventNodeID(nodeID),
 		WithToolEventPhase(ToolExecutionPhaseStart),
 		WithToolEventStartTime(startTime),
 		WithToolEventInput(string(arguments)),
@@ -963,6 +989,7 @@ type toolCompleteEventConfig struct {
 	InvocationID string
 	ToolName     string
 	ToolID       string
+	NodeID       string
 	StartTime    time.Time
 	Result       any
 	Error        error
@@ -987,6 +1014,7 @@ func emitToolCompleteEvent(config toolCompleteEventConfig) {
 		WithToolEventInvocationID(config.InvocationID),
 		WithToolEventToolName(config.ToolName),
 		WithToolEventToolID(config.ToolID),
+		WithToolEventNodeID(config.NodeID),
 		WithToolEventPhase(ToolExecutionPhaseComplete),
 		WithToolEventStartTime(config.StartTime),
 		WithToolEventEndTime(endTime),
