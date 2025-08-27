@@ -419,8 +419,12 @@ func (c *knowledgeChat) processMessage(ctx context.Context, userMessage string) 
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
 
-	// Process streaming response.
-	return c.processStreamingResponse(eventChan)
+	// Process response based on streaming mode.
+	if *streaming {
+		return c.processStreamingResponse(eventChan)
+	} else {
+		return c.processNonStreamingResponse(eventChan)
+	}
 }
 
 // processStreamingResponse handles the streaming response from the agent.
@@ -489,6 +493,73 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		// Check if this is the final event.
 		// Don't break on tool response events (Done=true but not final assistant response).
 		if event.Done && !c.isToolEvent(event) {
+			fmt.Printf("\n")
+			break
+		}
+	}
+
+	return nil
+}
+
+// processNonStreamingResponse handles the non-streaming response from the agent.
+func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Event) error {
+	fmt.Print("🤖 Assistant: ")
+
+	var fullContent string
+	var hasToolCalls bool
+
+	for event := range eventChan {
+		if event == nil {
+			continue
+		}
+
+		// Handle errors.
+		if event.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+			continue
+		}
+
+		// Detect and display tool calls.
+		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+			if !hasToolCalls {
+				fmt.Printf("\n🔧 Tool calls initiated:\n")
+				hasToolCalls = true
+			}
+			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+				if len(toolCall.Function.Arguments) > 0 {
+					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+				}
+			}
+			fmt.Printf("\n🔄 Executing tools...\n")
+		}
+
+		// Detect tool responses.
+		if event.Response != nil && len(event.Response.Choices) > 0 {
+			hasToolResponse := false
+			for _, choice := range event.Response.Choices {
+				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+					fmt.Printf("✅ Tool response (ID: %s): %s\n",
+						choice.Message.ToolID,
+						strings.TrimSpace(choice.Message.Content))
+					hasToolResponse = true
+				}
+			}
+			if hasToolResponse {
+				continue
+			}
+		}
+
+		// Process final content from non-streaming response.
+		if event.Done && !c.isToolEvent(event) {
+			// In non-streaming mode, the final content should be in the Message.Content
+			if len(event.Choices) > 0 {
+				choice := event.Choices[0]
+				if choice.Message.Content != "" {
+					fullContent = choice.Message.Content
+					fmt.Print(fullContent)
+				}
+			}
 			fmt.Printf("\n")
 			break
 		}
