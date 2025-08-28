@@ -9,6 +9,11 @@
 
 package tcvector
 
+import (
+	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+)
+
 // options contains the options for tcvectordb.
 type options struct {
 	username       string
@@ -27,6 +32,9 @@ type options struct {
 	textWeight   float64 // Default: Text relevance weight 30%
 	language     string  // Default: zh, options: zh, en
 
+	// filterField is the field name to filter the document.
+	filterFields  []string
+	filterIndexes []tcvectordb.FilterIndex
 }
 
 var defaultOptions = options{
@@ -39,6 +47,14 @@ var defaultOptions = options{
 	vectorWeight:   0.7,
 	textWeight:     0.3,
 	language:       "en",
+	filterFields:   []string{source.MetaSourceID},
+	filterIndexes: []tcvectordb.FilterIndex{
+		{
+			FieldName: source.MetaSourceID,
+			IndexType: tcvectordb.FILTER,
+			FieldType: tcvectordb.String,
+		},
+	},
 }
 
 // Option is the option for tcvectordb.
@@ -139,5 +155,20 @@ func WithLanguage(language string) Option {
 func WithTCVectorInstance(name string) Option {
 	return func(o *options) {
 		o.instanceName = name
+	}
+}
+
+// WithFilterFields sets the filter fields for the vector database.
+// Only support string type temporally.
+func WithFilterFields(fields []string) Option {
+	return func(o *options) {
+		o.filterFields = append(o.filterFields, fields...)
+		for _, field := range fields {
+			o.filterIndexes = append(o.filterIndexes, tcvectordb.FilterIndex{
+				FieldName: field,
+				IndexType: tcvectordb.FILTER,
+				FieldType: tcvectordb.String,
+			})
+		}
 	}
 }

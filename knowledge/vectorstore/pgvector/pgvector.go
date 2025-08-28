@@ -222,7 +222,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Build update using updateBuilder
-	ub := newUpdateBuilder(vs.option.table, doc.ID, vs.option.language)
+	ub := newUpdateBuilder(vs.option.table, doc.ID)
 
 	if doc.Name != "" {
 		ub.addField("name", doc.Name)
@@ -272,6 +272,27 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("pgvector document not found: %s", id)
 	}
 	return nil
+}
+
+// DeleteByFilter delete documents by filter
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
+	if len(filter) == 0 {
+		return 0, fmt.Errorf("pgvector: filter is required for DeleteByFilter")
+	}
+
+	// Build delete query with filter conditions
+	qb := newDeleteQueryBuilder(vs.option.table)
+	qb.addMetadataFilter(filter)
+
+	// Execute the delete query directly
+	deleteSQL, deleteArgs := qb.buildDeleteQuery()
+	result, err := vs.pool.Exec(ctx, deleteSQL, deleteArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("pgvector delete documents: %w", err)
+	}
+
+	rowsAffected := int(result.RowsAffected())
+	return rowsAffected, nil
 }
 
 // Search performs similarity search and returns the most similar documents.
