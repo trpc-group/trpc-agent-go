@@ -205,7 +205,15 @@ func (e *Executor) executeGraph(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
+	// Snapshot the state under read lock to avoid concurrent map iteration
+	// while other goroutines may still append metadata.
+	execCtx.stateMutex.RLock()
+	stateSnapshot := make(State, len(execCtx.State))
 	for key, value := range execCtx.State {
+		stateSnapshot[key] = value
+	}
+	execCtx.stateMutex.RUnlock()
+	for key, value := range stateSnapshot {
 		if jsonData, err := json.Marshal(value); err == nil {
 			completionEvent.StateDelta[key] = jsonData
 		}
@@ -646,8 +654,13 @@ func (e *Executor) handleNodeResult(
 // updateStateFromResult updates the execution context state from a State result.
 func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult State) {
 	execCtx.stateMutex.Lock()
-	for key, value := range stateResult {
-		execCtx.State[key] = value
+	// Use schema reducers when available to preserve history and merge correctly.
+	if e.graph.Schema() != nil {
+		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
+	} else {
+		for key, value := range stateResult {
+			execCtx.State[key] = value
+		}
 	}
 	execCtx.stateMutex.Unlock()
 }
