@@ -20,10 +20,10 @@ func TestNewOutputResponseProcessor(t *testing.T) {
 	}
 
 	// Test with output_schema only
-	schema := map[string]interface{}{
+	schema := map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"test": map[string]interface{}{
+		"properties": map[string]any{
+			"test": map[string]any{
 				"type": "string",
 			},
 		},

@@ -12,6 +12,7 @@ package a2aagent
 import (
 	"strings"
 
+	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -63,6 +64,13 @@ func WithCustomEventConverter(converter A2AEventConverter) Option {
 func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 	return func(a *A2AAgent) {
 		a.a2aMessageConverter = converter
+	}
+}
+
+// WithA2AClientExtraOptions adds extra options to the A2A client.
+func WithA2AClientExtraOptions(opts ...client.Option) Option {
+	return func(a *A2AAgent) {
+		a.extraA2AOptions = append(a.extraA2AOptions, opts...)
 	}
 }
 

@@ -127,7 +127,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 			}
 		case model.ContentTypeImage:
 			if contentPart.Image != nil {
-				if contentPart.Image.Data != nil && len(contentPart.Image.Data) > 0 {
+				if len(contentPart.Image.Data) > 0 {
 					// Handle inline image data
 					parts = append(parts, protocol.NewFilePartWithBytes(
 						"image",
@@ -178,7 +178,7 @@ func (d *defaultEventA2AConverter) ConvertToA2AMessage(
 }
 
 // buildRespEvent converts A2A response to tRPC event
-func (c *defaultA2AEventConverter) buildRespEvent(
+func (d *defaultA2AEventConverter) buildRespEvent(
 	isStreaming bool,
 	msg *protocol.Message,
 	agentName string,
@@ -213,16 +213,16 @@ func (c *defaultA2AEventConverter) buildRespEvent(
 			Done:      false,
 		}
 		return event
-	} else {
-		event.Response = &model.Response{
-			Choices:   []model.Choice{{Message: message}},
-			Timestamp: time.Now(),
-			Created:   time.Now().Unix(),
-			IsPartial: false,
-			Done:      true,
-		}
-		return event
 	}
+
+	event.Response = &model.Response{
+		Choices:   []model.Choice{{Message: message}},
+		Timestamp: time.Now(),
+		Created:   time.Now().Unix(),
+		IsPartial: false,
+		Done:      true,
+	}
+	return event
 }
 
 // convertTaskToMessage converts a Task to a Message
@@ -243,7 +243,7 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 // convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
 	msg := &protocol.Message{
-		Role:  protocol.MessageRoleAgent,
+		Role: protocol.MessageRoleAgent,
 	}
 	if event.Status.Message != nil {
 		msg.Parts = event.Status.Message.Parts

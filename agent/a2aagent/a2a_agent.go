@@ -40,24 +40,22 @@ const (
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
+	// options
 	name                 string
 	description          string
-	agentCard            *server.AgentCard // Agent card and resolution state
-	agentURL             string            // URL of the remote A2A agent
-	httpClient           *http.Client
-	a2aClient            *client.A2AClient
+	agentCard            *server.AgentCard      // Agent card and resolution state
+	agentURL             string                 // URL of the remote A2A agent
 	eventConverter       A2AEventConverter      // Custom A2A event converters
 	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
+
+	httpClient *http.Client
+	a2aClient  *client.A2AClient
 }
 
 // New creates a new A2AAgent.
-//
-// The agent can be configured with:
-// - A *server.AgentCard object
-// - A URL string to A2A endpoint
 func New(opts ...Option) (*A2AAgent, error) {
 	agent := &A2AAgent{
 		eventConverter:      &defaultA2AEventConverter{},
@@ -201,22 +199,16 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
 			return
 		}
-
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
 		}
-
-		// Use streaming API
 		streamChan, err := r.a2aClient.StreamMessage(ctx, params)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
 			return
 		}
 
-		// Aggregate content from all streaming events
 		var aggregatedContent string
-
-		// Process streaming responses
 		for streamEvent := range streamChan {
 			select {
 			case <-ctx.Done():
@@ -291,7 +283,6 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
 		}
-
 		result, err := r.a2aClient.SendMessage(ctx, params)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A request failed to %s: %v", r.agentCard.URL, err))
