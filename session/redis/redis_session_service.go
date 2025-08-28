@@ -27,7 +27,7 @@ import (
 var _ session.Service = (*Service)(nil)
 
 const (
-	defaultSessionEventLimit = 100
+	defaultSessionEventLimit = 1000
 )
 
 // SessionState is the state of a session.
@@ -45,14 +45,20 @@ type SessionState struct {
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
 type Service struct {
-	opts        ServiceOpts
-	redisClient redis.UniversalClient
+	opts         ServiceOpts
+	redisClient  redis.UniversalClient
+	sessionTTL   time.Duration // TTL for session state and event list
+	appStateTTL  time.Duration // TTL for app state
+	userStateTTL time.Duration // TTL for user state
 }
 
 // NewService creates a new redis session service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
 		sessionEventLimit: defaultSessionEventLimit,
+		sessionTTL:        0,
+		appStateTTL:       0,
+		userStateTTL:      0,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -72,7 +78,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		return &Service{opts: opts, redisClient: redisClient}, nil
+		return &Service{
+			opts:         opts,
+			redisClient:  redisClient,
+			sessionTTL:   opts.sessionTTL,
+			appStateTTL:  opts.appStateTTL,
+			userStateTTL: opts.userStateTTL,
+		}, nil
 	}
 
 	redisClient, err = builder(
@@ -82,7 +94,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	return &Service{opts: opts, redisClient: redisClient}, nil
+	return &Service{
+		opts:         opts,
+		redisClient:  redisClient,
+		sessionTTL:   opts.sessionTTL,
+		appStateTTL:  opts.appStateTTL,
+		userStateTTL: opts.userStateTTL,
+	}, nil
 }
 
 // CreateSession creates a new session.
@@ -108,11 +126,45 @@ func (s *Service) CreateSession(
 	for k, v := range state {
 		sessState.State[k] = v
 	}
-	if err := s.storeSessionState(ctx, key, sessState); err != nil {
+
+	// Use pipeline to store session and query states
+	sessKey := getSessionStateKey(key)
+	userStateKey := getUserStateKey(key)
+	appStateKey := getAppStateKey(key.AppName)
+
+	sessBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return nil, fmt.Errorf("marshal session failed: %w", err)
+	}
+
+	pipe := s.redisClient.Pipeline()
+	// Store session state
+	pipe.HSet(ctx, sessKey, key.SessionID, sessBytes)
+	if s.sessionTTL > 0 {
+		// expire session state, don't expire event list, it's still empty
+		pipe.Expire(ctx, sessKey, s.sessionTTL)
+	}
+	// Query app and user states
+	userStateCmd := pipe.HGetAll(ctx, userStateKey)
+	appStateCmd := pipe.HGetAll(ctx, appStateKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("create session failed: %w", err)
+	}
+
+	// Process app state
+	appState, err := processStateCmd(appStateCmd)
+	if err != nil {
 		return nil, err
 	}
 
-	return &session.Session{
+	// Process user state
+	userState, err := processStateCmd(userStateCmd)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create session with merged states
+	sess := &session.Session{
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
@@ -120,7 +172,9 @@ func (s *Service) CreateSession(
 		Events:    []event.Event{},
 		UpdatedAt: sessState.UpdatedAt,
 		CreatedAt: sessState.CreatedAt,
-	}, nil
+	}
+
+	return mergeState(appState, userState, sess), nil
 }
 
 // GetSession gets a session.
@@ -179,9 +233,14 @@ func (s *Service) UpdateAppState(ctx context.Context, appName string, state sess
 	}
 
 	pipe := s.redisClient.TxPipeline()
+	appStateKey := getAppStateKey(appName)
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
-		pipe.HSet(ctx, getAppStateKey(appName), k, v)
+		pipe.HSet(ctx, appStateKey, k, v)
+	}
+	// Set TTL for app state if configured
+	if s.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.appStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -237,12 +296,17 @@ func (s *Service) UpdateUserState(ctx context.Context, userKey session.UserKey, 
 		return err
 	}
 	pipe := s.redisClient.TxPipeline()
+	userStateKey := getUserStateKey(session.Key{
+		AppName: userKey.AppName,
+		UserID:  userKey.UserID,
+	})
 	for k, v := range state {
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
-		pipe.HSet(ctx, getUserStateKey(session.Key{
-			AppName: userKey.AppName,
-			UserID:  userKey.UserID,
-		}), k, v)
+		pipe.HSet(ctx, userStateKey, k, v)
+	}
+	// Set TTL for user state if configured
+	if s.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.userStateTTL)
 	}
 
 	// should not return redis.Nil error
@@ -348,18 +412,6 @@ func getSessionStateKey(key session.Key) string {
 	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
 }
 
-func (s *Service) storeSessionState(ctx context.Context, key session.Key, sessState *SessionState) error {
-	sessKey := getSessionStateKey(key)
-	sessBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session failed: %w", err)
-	}
-	if err := s.redisClient.HSet(ctx, sessKey, key.SessionID, sessBytes).Err(); err != nil {
-		return fmt.Errorf("store session failed: %w", err)
-	}
-	return nil
-}
-
 func (s *Service) getSession(
 	ctx context.Context,
 	key session.Key,
@@ -367,11 +419,24 @@ func (s *Service) getSession(
 	afterTime time.Time,
 ) (*session.Session, error) {
 	sessKey := getSessionStateKey(key)
+	userStateKey := getUserStateKey(key)
+	appStateKey := getAppStateKey(key.AppName)
 	pipe := s.redisClient.Pipeline()
-	userStateCmd := pipe.HGetAll(ctx, getUserStateKey(key))
-	appStateCmd := pipe.HGetAll(ctx, getAppStateKey(key.AppName))
+	userStateCmd := pipe.HGetAll(ctx, userStateKey)
+	appStateCmd := pipe.HGetAll(ctx, appStateKey)
 
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
+	// Add TTL refresh commands to the same pipeline if configured
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, sessKey, s.sessionTTL)
+		pipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+	}
+	if s.appStateTTL > 0 {
+		pipe.Expire(ctx, appStateKey, s.appStateTTL)
+	}
+	if s.userStateTTL > 0 {
+		pipe.Expire(ctx, userStateKey, s.userStateTTL)
+	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("get session state failed: %w", err)
 	}
@@ -627,6 +692,11 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	})
 	if s.opts.sessionEventLimit > 0 {
 		txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
+	}
+	// Set TTL for session state and event list if configured
+	if s.sessionTTL > 0 {
+		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
+		txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
 	}
 	if _, err := txPipe.Exec(ctx); err != nil {
 		return fmt.Errorf("store event failed: %w", err)
