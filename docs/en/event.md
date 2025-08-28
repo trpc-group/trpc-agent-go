@@ -1,35 +1,35 @@
 # Event Usage Documentation
 
-`Event` is the core communication mechanism between `Agent` and users in tRPC-Agent-Go. It acts like a message envelope, carrying `Agent` response content, tool call results, error information, and more. Through `Event`, you can understand `Agent`'s working status in real-time, handle streaming responses, implement multi-agent collaboration, and track tool execution.
+Event is the core communication mechanism between Agent and users in trpc-agent-go. It's like a message envelope that carries Agent response content, tool call results, error information, etc. Through Event, you can understand Agent's working status in real-time, handle streaming responses, implement multi-Agent collaboration, and track tool execution.
 
 ## Event Overview
 
-`Event` is the carrier for communication between `Agent` and users.
+Event is the carrier for communication between Agent and users.
 
-Users obtain event streams through the `runner.Run()` method, then listen to event channels to process `Agent` responses.
+Users obtain event streams through the `runner.Run()` method, then listen to event channels to handle Agent responses.
 
 ### Event Structure
 
-`Event` represents an event between `Agent` and users, with the following structure definition:
+`Event` represents an event between Agent and users, with the following structure definition:
 
 ```go
 type Event struct {
-    // Response is the base response structure of Event, carrying LLM responses.
+    // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
 
-    // InvocationID is the unique identifier for this call.
+    // InvocationID is the unique identifier for this invocation.
     InvocationID string `json:"invocationId"`
 
-    // Author is the event initiator.
+    // Author is the initiator of the event.
     Author string `json:"author"`
 
-    // ID is the unique identifier for the event.
+    // ID is the unique identifier of the event.
     ID string `json:"id"`
 
-    // Timestamp is the event timestamp.
+    // Timestamp is the timestamp of the event.
     Timestamp time.Time `json:"timestamp"`
 
-    // Branch is the branch identifier for multi-agent collaboration.
+    // Branch is a branch identifier for multi-Agent collaboration.
     Branch string `json:"branch,omitempty"`
 
     // RequiresCompletion indicates whether this event requires a completion signal.
@@ -38,21 +38,21 @@ type Event struct {
     // CompletionID is used for the completion signal of this event.
     CompletionID string `json:"completionId,omitempty"`
 
-    // LongRunningToolIDs is a collection of IDs for long-running function calls.
+    // LongRunningToolIDs is a set of IDs for long-running function calls.
     // Agent clients will understand which function calls are long-running from this field.
     // Only valid for function call events.
     LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }
 ```
 
-`model.Response` is the base response structure of `Event`, carrying LLM responses, tool calls, errors, and other information. It is defined as follows:
+`model.Response` is the basic response structure of Event, carrying LLM responses, tool calls, and error information, defined as follows:
 
 ```go
 type Response struct {
     // Response unique identifier.
     ID string `json:"id"`
     
-    // Object type (such as "chat.completion", "error", etc.), helping clients identify processing methods.
+    // Object type (such as "chat.completion", "error", etc.), helps clients identify processing methods.
     Object string `json:"object"`
     
     // Creation timestamp.
@@ -61,10 +61,10 @@ type Response struct {
     // Model name used.
     Model string `json:"model"`
     
-    // Response choices, LLM may generate multiple candidate responses for user selection, default is only 1.
+    // Response options, LLM may generate multiple candidate responses for user selection, default is 1.
     Choices []Choice `json:"choices"`
     
-    // Usage statistics, recording token usage.
+    // Usage statistics, records token usage.
     Usage *Usage `json:"usage,omitempty"`
     
     // System fingerprint.
@@ -87,10 +87,10 @@ type Choice struct {
     // Choice index.
     Index int `json:"index"`
     
-    // Complete message, containing the entire response.
+    // Complete message, contains the entire response.
     Message Message `json:"message,omitempty"`
     
-    // Incremental message, used for streaming responses, only containing new content of the current chunk.
+    // Incremental message, used for streaming responses, only contains new content of current chunk.
     // For example: complete response "Hello, how can I help you?" in streaming response:
     // First event: Delta.Content = "Hello"
     // Second event: Delta.Content = ", how"  
@@ -102,19 +102,19 @@ type Choice struct {
 }
 
 type Message struct {
-    // Role of the message initiator, such as "system", "user", "assistant", "tool".
+    // Role of message initiator, such as "system", "user", "assistant", "tool".
     Role string `json:"role"`
 
     // Message content.
     Content string `json:"content"`
 
-    // Content parts for multimodal messages.
+    // Content fragments for multimodal messages.
     ContentParts []ContentPart `json:"content_parts,omitempty"`
 
-    // ID of the tool used by the tool response.
+    // ID of the tool used by tool response.
     ToolID string `json:"tool_id,omitempty"`
 
-    // Name of the tool used by the tool response.
+    // Name of the tool used by tool response.
     ToolName string `json:"tool_name,omitempty"`
 
     // Optional tool calls.
@@ -128,31 +128,31 @@ type Usage struct {
     // Number of tokens used in completion.
     CompletionTokens int `json:"completion_tokens"`
 
-    // Total number of tokens used in the response.
+    // Total number of tokens used in response.
     TotalTokens int `json:"total_tokens"`
 }
 ```
 
 ### Event Types
 
-`Event` is created and sent in the following scenarios:
+Events are created and sent in the following scenarios:
 
-1. **User message events**: Automatically created when users send messages
-2. **`Agent` response events**: Created when `Agent` generates responses
-3. **Streaming response events**: Created for each response chunk in streaming mode
-4. **Tool call events**: Created when `Agent` calls tools
-5. **Error events**: Created when errors occur
-6. **`Agent` transfer events**: Created when `Agent` transfers to other agents
-7. **Completion events**: Created when Agent execution completes
+1. **User Message Events**: Automatically created when users send messages
+2. **Agent Response Events**: Created when Agent generates responses
+3. **Streaming Response Events**: Created for each response chunk in streaming mode
+4. **Tool Call Events**: Created when Agent calls tools
+5. **Error Events**: Created when errors occur
+6. **Agent Transfer Events**: Created when Agent transfers to other Agents
+7. **Completion Events**: Created when Agent execution completes
 
-Based on the `model.Response.Object` field, `Event` can be divided into the following types:
+Based on the `model.Response.Object` field, Events can be divided into the following types:
 
 ```go
 const (
-    // Error events.
+    // Error event.
     ObjectTypeError = "error"
     
-    // Tool response events.
+    // Tool response event.
     ObjectTypeToolResponse = "tool.response"
     
     // Preprocessing events.
@@ -166,19 +166,19 @@ const (
     ObjectTypePostprocessingPlanning = "postprocessing.planning"
     ObjectTypePostprocessingCodeExecution = "postprocessing.code_execution"
     
-    // Agent transfer events.
+    // Agent transfer event.
     ObjectTypeTransfer = "agent.transfer"
     
-    // Runner completion events.
+    // Runner completion event.
     ObjectTypeRunnerCompletion = "runner.completion"
 )
 ```
 
 ### Event Creation
 
-When developing custom `Agent` types or `Processor`, you need to create `Event`.
+When developing custom Agent types or Processors, you need to create Events.
 
-`Event` provides three creation methods, suitable for different scenarios.
+Event provides three creation methods, suitable for different scenarios.
 
 ```go
 // Create new event.
@@ -191,22 +191,22 @@ func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event
 func NewResponseEvent(invocationID, author string, response *model.Response) *Event
 ```
 
-**Parameter description:**
+**Parameter Description:**
 
-- `invocationID string`: Call unique identifier
+- `invocationID string`: Invocation unique identifier
 - `author string`: Event initiator
-- `opts ...Option`: Optional configuration options (only for `New` method)
-- `errorType string`: Error type (only for `NewErrorEvent` method)
-- `errorMessage string`: Error message (only for `NewErrorEvent` method)
-- `response *model.Response`: Response object (only for `NewResponseEvent` method)
+- `opts ...Option`: Optional configuration options (New method only)
+- `errorType string`: Error type (NewErrorEvent method only)
+- `errorMessage string`: Error message (NewErrorEvent method only)
+- `response *model.Response`: Response object (NewResponseEvent method only)
 
-The framework supports the following `Option` for configuring `Event`:
+The framework supports the following Options for configuring Event:
 
-- `WithBranch(branch string)`: Set the branch identifier for the event
-- `WithResponse(response *model.Response)`: Set the response content for the event
-- `WithObject(o string)`: Set the type for the event
+- `WithBranch(branch string)`: Set event branch identifier
+- `WithResponse(response *model.Response)`: Set event response content
+- `WithObject(o string)`: Set event type
 
-**Examples:**
+**Example:**
 ```go
 // Create basic event.
 evt := event.New("invoke-123", "agent")
@@ -228,7 +228,7 @@ evt := event.NewResponseEvent("invoke-123", "agent", response)
 
 ### Event Methods
 
-`Event` provides the `Clone` method for creating deep copies of `Event`.
+Event provides the `Clone` method for creating deep copies of Events.
 
 ```go
 func (e *Event) Clone() *Event
@@ -236,16 +236,16 @@ func (e *Event) Clone() *Event
 
 ## Event Usage Examples
 
-This example demonstrates how to use `Event` in practical applications to handle `Agent` streaming responses, tool calls, and error handling.
+This example demonstrates how to use Event in real applications to handle Agent streaming responses, tool calls, and error handling.
 
-### Core Process
+### Core Flow
 
-1. **Send user message**: Start `Agent` processing through `runner.Run()`
-2. **Receive event stream**: Process events returned by `Agent` in real-time
-3. **Handle different event types**: Distinguish streaming content, tool calls, errors, etc.
-4. **Visualize output**: Provide user-friendly interactive experience
+1. **Send User Message**: Start Agent processing through `runner.Run()`
+2. **Receive Event Stream**: Handle events returned by Agent in real-time
+3. **Handle Different Event Types**: Distinguish streaming content, tool calls, errors, etc.
+4. **Visual Output**: Provide user-friendly interactive experience
 
-### Code Examples
+### Code Example
 
 ```go
 // processMessage handles single message interaction.
@@ -253,13 +253,13 @@ func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) 
     message := model.NewUserMessage(userMessage)
 
     // Run agent through runner.
-eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
-if err != nil {
-    return fmt.Errorf("failed to run agent: %w", err)
-}
+    eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+    if err != nil {
+        return fmt.Errorf("failed to run agent: %w", err)
+    }
 
-// Process response.
-return c.processResponse(eventChan)
+    // Handle response.
+    return c.processResponse(eventChan)
 }
 
 // processResponse handles response, including streaming response and tool call visualization.
@@ -274,15 +274,15 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 
     for event := range eventChan {
         // Handle single event.
-if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
-    return err
-}
+        if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
+            return err
+        }
 
-// Check if it's the final event.
-if event.Done && !c.isToolEvent(event) {
-    fmt.Printf("\n")
-    break
-}
+        // Check if it's the final event.
+        if event.Done && !c.isToolEvent(event) {
+            fmt.Printf("\n")
+            break
+        }
     }
 
     return nil
@@ -296,23 +296,23 @@ func (c *multiTurnChat) handleEvent(
     fullContent *string,
 ) error {
     // 1. Handle error events.
-if event.Error != nil {
-    fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
-    return nil
-}
+    if event.Error != nil {
+        fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+        return nil
+    }
 
-// 2. Handle tool calls.
-if c.handleToolCalls(event, toolCallsDetected, assistantStarted) {
-    return nil
-}
+    // 2. Handle tool calls.
+    if c.handleToolCalls(event, toolCallsDetected, assistantStarted) {
+        return nil
+    }
 
-// 3. Handle tool responses.
-if c.handleToolResponses(event) {
-    return nil
-}
+    // 3. Handle tool responses.
+    if c.handleToolResponses(event) {
+        return nil
+    }
 
-// 4. Handle content.
-c.handleContent(event, toolCallsDetected, assistantStarted, fullContent)
+    // 4. Handle content.
+    c.handleContent(event, toolCallsDetected, assistantStarted, fullContent)
 
     return nil
 }
@@ -356,7 +356,7 @@ func (c *multiTurnChat) handleToolResponses(event *event.Event) bool {
     return false
 }
 
-// handleContent processes and displays content.
+// handleContent handles and displays content.
 func (c *multiTurnChat) handleContent(
     event *event.Event,
     toolCallsDetected *bool,
@@ -377,10 +377,10 @@ func (c *multiTurnChat) handleContent(
 func (c *multiTurnChat) extractContent(choice model.Choice) string {
     if c.streaming {
         // Streaming mode: use incremental content.
-return choice.Delta.Content
-}
-// Non-streaming mode: use complete message content.
-return choice.Message.Content
+        return choice.Delta.Content
+    }
+    // Non-streaming mode: use complete message content.
+    return choice.Message.Content
 }
 
 // displayContent prints content to console.
@@ -400,28 +400,28 @@ func (c *multiTurnChat) displayContent(
     *fullContent += content
 }
 
-// isToolEvent checks if the event is a tool response.
+// isToolEvent checks if event is a tool response.
 func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
     if event.Response == nil {
         return false
     }
     
     // Check if there are tool calls.
-if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-    return true
-}
-
-// Check if there's a tool ID.
-if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-    return true
-}
-
-// Check if it's a tool role.
-for _, choice := range event.Response.Choices {
-    if choice.Message.Role == model.RoleTool {
+    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
         return true
     }
-}
+    
+    // Check if there's a tool ID.
+    if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
+        return true
+    }
+
+    // Check if it's a tool role.
+    for _, choice := range event.Response.Choices {
+        if choice.Message.Role == model.RoleTool {
+            return true
+        }
+    }
 
     return false
 }

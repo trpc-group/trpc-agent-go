@@ -1,15 +1,15 @@
 # Planner 使用文档
 
-`Planner` 是用于实现 `Agent` 规划能力的组件。它允许 `Agent` 在执行任务前制定计划，从而提高执行效率和准确性。
+Planner 是用于实现 Agent 规划能力的组件。它允许 Agent 在执行任务前制定计划，从而提高执行效率和准确性。
 
-框架提供了两种 `Planner` 实现，分别适用于不同类型的模型：
+框架提供了两种 Planner 实现，分别适用于不同类型的模型：
 
-- `BuiltinPlanner`：适用于支持原生思考功能的模型
-- `ReActPlanner`：适用于不支持原生思考的模型，通过标签化指令引导模型按固定格式输出，提供结构化的思考过程
+- BuiltinPlanner：适用于支持原生思考功能的模型
+- ReActPlanner：适用于不支持原生思考的模型，通过标签化指令引导模型按固定格式输出，提供结构化的思考过程
 
 ## Planner 接口
 
-`Planner` 接口定义了所有规划器必须实现的方法：
+Planner 接口定义了所有规划器必须实现的方法：
 
 ```go
 type Planner interface {
@@ -31,14 +31,14 @@ type Planner interface {
 }
 ```
 
-`Planner` 的工作流程：
+Planner 的工作流程：
 
-1. 请求处理阶段：`Planner` 在 LLM 请求发送前通过 `BuildPlanningInstruction` 添加规划指令或配置
-2. 响应处理阶段：`Planner` 处理 LLM 响应，通过 `ProcessPlanningResponse` 组织内容结构
+1. 请求处理阶段：Planner 在 LLM 请求发送前通过 `BuildPlanningInstruction` 添加规划指令或配置
+2. 响应处理阶段：Planner 处理 LLM 响应，通过 `ProcessPlanningResponse` 组织内容结构
 
 ## BuiltinPlanner
 
-`BuiltinPlanner` 适用于支持原生思考功能的模型。它不生成显式的规划指令，而是通过配置模型使用其内部的思考机制来实现规划功能。
+BuiltinPlanner 适用于支持原生思考功能的模型。它不生成显式的规划指令，而是通过配置模型使用其内部的思考机制来实现规划功能。
 
 模型配置如下：
 
@@ -92,7 +92,7 @@ llmAgent := llmagent.New(
 
 ## ReActPlanner
 
-`ReActPlanner` 适用于不支持原生思考的模型。它通过引导 LLM 遵循特定的格式，使用特定标签来组织规划、推理、行动和最终答案，从而实现结构化的思考过程。
+ReActPlanner 适用于不支持原生思考的模型。它通过引导 LLM 遵循特定的格式，使用特定标签来组织规划、推理、行动和最终答案，从而实现结构化的思考过程。
 
 ReActPlanner 使用以下特定标签来组织响应内容：
 
@@ -102,7 +102,7 @@ ReActPlanner 使用以下特定标签来组织响应内容：
 4. 重新规划（`/*REPLANNING*/`）：根据结果需要时修订计划
 5. 最终答案（`/*FINAL_ANSWER*/`）：提供综合答案
 
-在实现上，`ReActPlanner` 通过以下方式工作：
+在实现上，ReActPlanner 通过以下方式工作：
 
 - `BuildPlanningInstruction`：返回包含高层次指导、规划要求、推理要求等的综合指令，引导模型按标签格式输出
 - `ProcessPlanningResponse`：过滤空名称的工具调用，如果内容包含 `/*FINAL_ANSWER*/` 标签则只保留最终答案部分，否则返回原内容，将规划内容与最终答案分离
@@ -145,7 +145,7 @@ llmAgent := llmagent.New(
 
 ## 自定义 Planner
 
-除了框架提供的两种 `Planner` 实现，你还可以通过实现 `Planner` 接口来创建自定义的 `Planner`，以满足特定需求：
+除了框架提供的两种 Planner 实现，你还可以通过实现 `Planner` 接口来创建自定义的 Planner，以满足特定需求：
 
 ```go
 type customPlanner struct {

@@ -30,18 +30,21 @@ The transfer system enables intelligent task delegation across multiple speciali
 ## Sub-Agents
 
 ### Math Agent (`math-agent`)
+
 - **Purpose**: Mathematical calculations and numerical problems
 - **Tools**: `calculate` - performs arithmetic operations
 - **Specialization**: Step-by-step mathematical reasoning
 - **Temperature**: 0.3 (precision-focused)
 
 ### Weather Agent (`weather-agent`)
+
 - **Purpose**: Weather information and recommendations
 - **Tools**: `get_weather` - retrieves weather data for locations
 - **Specialization**: Weather analysis and activity recommendations
 - **Temperature**: 0.5 (balanced)
 
 ### Research Agent (`research-agent`)
+
 - **Purpose**: Information gathering and research
 - **Tools**: `search` - finds information on topics
 - **Specialization**: Comprehensive research and structured answers
@@ -73,6 +76,7 @@ export OPENAI_BASE_URL="https://api.deepseek.com/v1"  # For DeepSeek
 ## Example Interactions
 
 ### Mathematical Task Transfer
+
 ```
 You: Calculate compound interest on $5000 at 6% for 8 years
 
@@ -95,6 +99,7 @@ The compound interest calculation:
 ```
 
 ### Weather Information Transfer
+
 ```
 You: What's the weather like in Tokyo today?
 
@@ -114,6 +119,7 @@ Current weather in Tokyo, Japan:
 ```
 
 ### Research Task Transfer
+
 ```
 You: Tell me about renewable energy trends
 
@@ -135,23 +141,27 @@ Based on current research, here are key renewable energy trends:
 ## Key Features
 
 ### Intelligent Delegation
+
 - The coordinator analyzes request content and context
 - Automatically selects the most appropriate specialist
 - Explains the reasoning for each transfer
 
 ### Visual Transfer Flow
+
 - 🎯 Coordinator Agent responses
-- 🧮 Math Agent responses  
+- 🧮 Math Agent responses
 - 🌤️ Weather Agent responses
 - 🔍 Research Agent responses
 - 🔄 Transfer events and tool executions
 
 ### Seamless Context Passing
+
 - Complete conversation history is maintained
 - Each specialist has full context of the request
 - No information is lost during transfers
 
 ### Flexible Architecture
+
 - Easy to add new sub-agents
 - Configurable agent personalities and parameters
 - Modular tool assignments
@@ -172,7 +182,7 @@ coordinatorAgent := llmagent.New(
     llmagent.WithModel(modelInstance),
     llmagent.WithSubAgents([]agent.Agent{
         mathAgent,
-        weatherAgent, 
+        weatherAgent,
         researchAgent,
     }),
     // ... other options
@@ -202,7 +212,7 @@ The example demonstrates handling transfer events:
 ```go
 // Handle agent transfers
 if event.Object == model.ObjectTypeTransfer {
-    fmt.Printf("🔄 Transfer Event: %s\n", 
+    fmt.Printf("🔄 Transfer Event: %s\n",
                event.Response.Choices[0].Message.Content)
     // Update current agent context
     currentAgent = getAgentFromTransfer(event)
@@ -212,21 +222,25 @@ if event.Object == model.ObjectTypeTransfer {
 ## Best Practices
 
 ### Agent Specialization
+
 - Give each agent a clear, focused domain
 - Configure appropriate tools for each specialty
 - Adjust temperature based on task requirements
 
 ### Coordinator Instructions
+
 - Provide clear guidelines for when to transfer
 - List available agents and their capabilities
 - Include transfer reasoning in responses
 
 ### Tool Design
+
 - Keep tools focused on specific domains
 - Provide clear descriptions and parameters
 - Handle edge cases gracefully
 
 ### Error Handling
+
 - Check for failed transfers
 - Provide fallback options
 - Maintain conversation flow during errors
@@ -234,18 +248,21 @@ if event.Object == model.ObjectTypeTransfer {
 ## Extending the Example
 
 ### Adding New Agents
+
 1. Create agent with specialized tools
 2. Add to sub-agents list
 3. Update coordinator instructions
 4. Add display formatting
 
 ### Custom Tools
+
 1. Implement tool function
 2. Create tool declaration
 3. Add to appropriate agent
 4. Test integration
 
 ### Advanced Features
+
 - Multi-step agent chains
 - Conditional transfers
 - Agent-to-agent communication
@@ -254,15 +271,17 @@ if event.Object == model.ObjectTypeTransfer {
 ## Troubleshooting
 
 ### Common Issues
+
 - **Agent not found**: Check agent names match exactly
 - **Transfer fails**: Verify sub-agents are properly configured
 - **Missing tools**: Ensure tools are added to correct agents
 - **API errors**: Check environment variables and API keys
 
 ### Debug Tips
+
 - Enable debug logging to trace transfers
 - Check event.Author to track active agent
 - Verify tool availability in each agent
 - Test individual agents before integration
 
-This example provides a complete foundation for building sophisticated multi-agent systems with intelligent task delegation in trpc-agent-go. 
+This example provides a complete foundation for building sophisticated multi-agent systems with intelligent task delegation in trpc-agent-go.
