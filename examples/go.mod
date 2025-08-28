@@ -6,6 +6,7 @@ toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
@@ -22,10 +23,11 @@ require (
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.2
 	trpc.group/trpc-go/trpc-agent-go v0.0.2
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.2
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.2
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.2-0.20250807061029-66942a6b44d9
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.3
 )
 
@@ -39,6 +41,8 @@ require (
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
+	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
 	github.com/getkin/kin-openapi v0.132.0 // indirect
 	github.com/go-ego/gse v0.80.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
