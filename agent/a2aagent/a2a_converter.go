@@ -204,7 +204,6 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 		Content: content,
 	}
 	event := event.New(invocation.InvocationID, agentName)
-
 	if isStreaming {
 		event.Response = &model.Response{
 			Choices:   []model.Choice{{Delta: message}},

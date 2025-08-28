@@ -83,6 +83,66 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
+// WithPreNodeCallback sets a callback that will be executed before this specific node.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithPreNodeCallback(callback BeforeNodeCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterBeforeNode(callback)
+	}
+}
+
+// WithPostNodeCallback sets a callback that will be executed after this specific node.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithPostNodeCallback(callback AfterNodeCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterAfterNode(callback)
+	}
+}
+
+// WithNodeErrorCallback sets a callback that will be executed when this specific node fails.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithNodeErrorCallback(callback OnNodeErrorCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.RegisterOnNodeError(callback)
+	}
+}
+
+// WithNodeCallbacks sets multiple callbacks for this specific node.
+// This allows setting multiple callbacks at once for convenience.
+func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		// Merge the provided callbacks with existing ones
+		if callbacks != nil {
+			node.callbacks.BeforeNode = append(node.callbacks.BeforeNode, callbacks.BeforeNode...)
+			node.callbacks.AfterNode = append(node.callbacks.AfterNode, callbacks.AfterNode...)
+			node.callbacks.OnNodeError = append(node.callbacks.OnNodeError, callbacks.OnNodeError...)
+		}
+	}
+}
+
+// WithAgentNodeEventCallback sets a callback that will be executed when an agent event is emitted.
+// This callback is specific to this node and will be executed in addition to any global callbacks.
+func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
+	return func(node *Node) {
+		if node.callbacks == nil {
+			node.callbacks = NewNodeCallbacks()
+		}
+		node.callbacks.AgentEvent = append(node.callbacks.AgentEvent, callback)
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -132,6 +192,19 @@ func (sg *StateGraph) AddToolsNode(
 	// Add tool node type option
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
+	return sg
+}
+
+// AddAgentNode adds a node that uses a sub-agent by name.
+// The agent name should correspond to a sub-agent in the GraphAgent's sub-agent list.
+func (sg *StateGraph) AddAgentNode(
+	id string,
+	opts ...Option,
+) *StateGraph {
+	agentNodeFunc := NewAgentNodeFunc(id, opts...)
+	// Add agent node type option.
+	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
+	sg.AddNode(id, agentNodeFunc, agentOpts...)
 	return sg
 }
 
@@ -295,6 +368,7 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			InvocationID:   invocationID,
 			SessionID:      sessionID,
 			Span:           span,
+			NodeID:         nodeID,
 		})
 
 		// Emit model execution complete event.
@@ -369,6 +443,8 @@ type modelResponseConfig struct {
 	LLMModel       model.Model
 	Request        *model.Request
 	Span           oteltrace.Span
+	// NodeID, when provided, is used as the event author.
+	NodeID string
 }
 
 // processModelResponse processes a single model response.
@@ -384,7 +460,11 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		}
 	}
 	if config.EventChan != nil && !config.Response.Done {
-		llmEvent := event.NewResponseEvent(config.InvocationID, config.LLMModel.Info().Name, config.Response)
+		author := config.LLMModel.Info().Name
+		if config.NodeID != "" {
+			author = config.NodeID
+		}
+		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
 		// Trace the LLM call using the telemetry package.
 		itelemetry.TraceCallLLM(config.Span, &agent.Invocation{
 			InvocationID: config.InvocationID,
@@ -471,6 +551,95 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		return State{
 			StateKeyMessages: newMessages,
 		}, nil
+	}
+}
+
+// NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
+// The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
+func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
+	dummyNode := &Node{}
+	for _, opt := range opts {
+		opt(dummyNode)
+	}
+	nodeCallbacks := dummyNode.callbacks
+	return func(ctx context.Context, state State) (any, error) {
+		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
+		defer span.End()
+
+		// Extract execution context for event emission.
+		invocationID, _, eventChan := extractExecutionContext(state)
+
+		// Extract current node ID from state.
+		var nodeID string
+		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+			if id, ok := nodeIDData.(string); ok {
+				nodeID = id
+			}
+		}
+
+		// Extract parent agent from state to find the sub-agent.
+		parentAgent, parentExists := state[StateKeyParentAgent]
+		if !parentExists {
+			return nil, fmt.Errorf("parent agent not found in state for agent node %s", agentName)
+		}
+
+		// Look up the target agent by name from the parent's sub-agents.
+		targetAgent := findSubAgentByName(parentAgent, agentName)
+		if targetAgent == nil {
+			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
+		}
+
+		// Extract agent callbacks from state.
+		agentCallbacks, _ := state[StateKeyAgentCallbacks].(*agent.Callbacks)
+
+		// Build invocation for the target agent.
+		invocation := buildAgentInvocation(state, targetAgent, agentCallbacks)
+
+		// Emit agent execution start event.
+		startTime := time.Now()
+		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
+
+		// Execute the target agent.
+		agentEventChan, err := targetAgent.Run(ctx, invocation)
+		if err != nil {
+			// Emit agent execution error event.
+			endTime := time.Now()
+			emitAgentErrorEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime, err)
+			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
+			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
+		}
+
+		// Forward all events from the target agent.
+		var lastResponse string
+		for agentEvent := range agentEventChan {
+			if nodeCallbacks != nil {
+				for _, callback := range nodeCallbacks.AgentEvent {
+					callback(ctx, &NodeCallbackContext{
+						NodeID:   nodeID,
+						NodeName: agentName,
+					}, state, agentEvent)
+				}
+			}
+			// Forward the event to the parent event channel.
+			select {
+			case eventChan <- agentEvent:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+
+			// Track the last response for state update.
+			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
+				agentEvent.Response.Choices[0].Message.Content != "" {
+				lastResponse = agentEvent.Response.Choices[0].Message.Content
+			}
+		}
+		// Emit agent execution complete event.
+		endTime := time.Now()
+		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
+		// Update state with the agent's response.
+		stateUpdate := State{}
+		stateUpdate[StateKeyLastResponse] = lastResponse
+		return stateUpdate, nil
 	}
 }
 
@@ -612,6 +781,8 @@ type modelExecutionConfig struct {
 	InvocationID   string
 	SessionID      string
 	Span           oteltrace.Span
+	// NodeID, when provided, is used as the event author.
+	NodeID string
 }
 
 // executeModelWithEvents executes the model with event processing.
@@ -634,6 +805,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 			LLMModel:       config.LLMModel,
 			Request:        config.Request,
 			Span:           config.Span,
+			NodeID:         config.NodeID,
 		}); err != nil {
 			return nil, err
 		}
@@ -704,6 +876,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			EventChan:     config.EventChan,
 			Span:          config.Span,
 			ToolCallbacks: toolCallbacks,
+			State:         config.State,
 		})
 		if err != nil {
 			return nil, err
@@ -722,6 +895,7 @@ type singleToolCallConfig struct {
 	EventChan     chan<- *event.Event
 	Span          oteltrace.Span
 	ToolCallbacks *tool.Callbacks
+	State         State
 }
 
 // executeSingleToolCall executes a single tool call with event emission.
@@ -735,8 +909,21 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	startTime := time.Now()
 
+	// Extract current node ID from state for event authoring.
+	var nodeID string
+	if state := config.State; state != nil {
+		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+			if id, ok := nodeIDData.(string); ok {
+				nodeID = id
+			}
+		}
+	}
+
 	// Emit tool execution start event.
-	emitToolStartEvent(config.EventChan, config.InvocationID, name, id, startTime, config.ToolCall.Function.Arguments)
+	emitToolStartEvent(
+		config.EventChan, config.InvocationID, name, id, nodeID,
+		startTime, config.ToolCall.Function.Arguments,
+	)
 
 	// Execute the tool.
 	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
@@ -747,6 +934,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		InvocationID: config.InvocationID,
 		ToolName:     name,
 		ToolID:       id,
+		NodeID:       nodeID,
 		StartTime:    startTime,
 		Result:       result,
 		Error:        err,
@@ -771,7 +959,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 // emitToolStartEvent emits a tool execution start event.
 func emitToolStartEvent(
 	eventChan chan<- *event.Event,
-	invocationID, toolName, toolID string,
+	invocationID, toolName, toolID, nodeID string,
 	startTime time.Time,
 	arguments []byte,
 ) {
@@ -783,6 +971,7 @@ func emitToolStartEvent(
 		WithToolEventInvocationID(invocationID),
 		WithToolEventToolName(toolName),
 		WithToolEventToolID(toolID),
+		WithToolEventNodeID(nodeID),
 		WithToolEventPhase(ToolExecutionPhaseStart),
 		WithToolEventStartTime(startTime),
 		WithToolEventInput(string(arguments)),
@@ -800,6 +989,7 @@ type toolCompleteEventConfig struct {
 	InvocationID string
 	ToolName     string
 	ToolID       string
+	NodeID       string
 	StartTime    time.Time
 	Result       any
 	Error        error
@@ -824,6 +1014,7 @@ func emitToolCompleteEvent(config toolCompleteEventConfig) {
 		WithToolEventInvocationID(config.InvocationID),
 		WithToolEventToolName(config.ToolName),
 		WithToolEventToolID(config.ToolID),
+		WithToolEventNodeID(config.NodeID),
 		WithToolEventPhase(ToolExecutionPhaseComplete),
 		WithToolEventStartTime(config.StartTime),
 		WithToolEventEndTime(endTime),
@@ -870,4 +1061,124 @@ func MessagesStateSchema() *StateSchema {
 		Default: func() any { return make(map[string]any) },
 	})
 	return schema
+}
+
+// buildAgentInvocation builds an invocation for the target agent.
+func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
+	// Extract user input from state.
+	var userInput string
+	if input, exists := state[StateKeyUserInput]; exists {
+		if inputStr, ok := input.(string); ok {
+			userInput = inputStr
+		}
+	}
+	// Extract session from state.
+	var sessionData *session.Session
+	if sess, exists := state[StateKeySession]; exists {
+		if sessData, ok := sess.(*session.Session); ok {
+			sessionData = sessData
+		}
+	}
+	// Extract execution context for invocation ID.
+	var invocationID string
+	if execCtx, exists := state[StateKeyExecContext]; exists {
+		if execContext, ok := execCtx.(*ExecutionContext); ok {
+			invocationID = execContext.InvocationID
+		}
+	}
+	// Create the invocation.
+	invocation := &agent.Invocation{
+		Agent:          targetAgent,
+		AgentName:      targetAgent.Info().Name,
+		Message:        model.NewUserMessage(userInput),
+		Session:        sessionData,
+		InvocationID:   invocationID,
+		AgentCallbacks: agentCallbacks,
+	}
+	return invocation
+}
+
+// emitAgentStartEvent emits an agent execution start event.
+func emitAgentStartEvent(
+	eventChan chan<- *event.Event,
+	invocationID, nodeID string,
+	startTime time.Time,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentStartEvent := NewNodeStartEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+	)
+
+	select {
+	case eventChan <- agentStartEvent:
+	default:
+	}
+}
+
+// emitAgentCompleteEvent emits an agent execution complete event.
+func emitAgentCompleteEvent(
+	eventChan chan<- *event.Event,
+	invocationID, agentName, nodeID string,
+	startTime, endTime time.Time,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentCompleteEvent := NewNodeCompleteEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+		WithNodeEventEndTime(endTime),
+	)
+
+	select {
+	case eventChan <- agentCompleteEvent:
+	default:
+	}
+}
+
+// emitAgentErrorEvent emits an agent execution error event.
+func emitAgentErrorEvent(
+	eventChan chan<- *event.Event,
+	invocationID, agentName, nodeID string,
+	startTime, endTime time.Time,
+	err error,
+) {
+	if eventChan == nil {
+		return
+	}
+
+	agentErrorEvent := NewNodeErrorEvent(
+		WithNodeEventInvocationID(invocationID),
+		WithNodeEventNodeID(nodeID),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(startTime),
+		WithNodeEventEndTime(endTime),
+		WithNodeEventError(err.Error()),
+	)
+
+	select {
+	case eventChan <- agentErrorEvent:
+	default:
+	}
+}
+
+// findSubAgentByName looks up a sub-agent by name from the parent agent.
+func findSubAgentByName(parentAgent any, agentName string) agent.Agent {
+	// Try to cast to an interface that has SubAgents method.
+	type SubAgentProvider interface {
+		FindSubAgent(name string) agent.Agent
+	}
+	if provider, ok := parentAgent.(SubAgentProvider); ok {
+		return provider.FindSubAgent(agentName)
+	}
+	return nil
 }

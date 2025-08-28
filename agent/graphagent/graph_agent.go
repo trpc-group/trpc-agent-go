@@ -75,12 +75,21 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
+// WithSubAgents sets the list of sub-agents available to this agent.
+func WithSubAgents(subAgents []agent.Agent) Option {
+	return func(opts *Options) {
+		opts.SubAgents = subAgents
+	}
+}
+
 // Options contains configuration options for creating a GraphAgent.
 type Options struct {
 	// Description is a description of the agent.
 	Description string
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// SubAgents is the list of sub-agents available to this agent.
+	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
@@ -100,6 +109,7 @@ type GraphAgent struct {
 	graph             *graph.Graph
 	executor          *graph.Executor
 	tools             []tool.Tool
+	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
 	modelCallbacks    *model.Callbacks
 	toolCallbacks     *tool.Callbacks
@@ -129,6 +139,7 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		graph:             g,
 		executor:          executor,
 		tools:             options.Tools,
+		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
 		modelCallbacks:    options.ModelCallbacks,
 		toolCallbacks:     options.ToolCallbacks,
@@ -168,6 +179,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	if invocation.Session != nil {
 		initialState[graph.StateKeySession] = invocation.Session
 	}
+	// Add parent agent to state so agent nodes can access sub-agents.
+	initialState[graph.StateKeyParentAgent] = ga
 	// Set agent callbacks if available.
 	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
 		invocation.AgentCallbacks = ga.agentCallbacks
@@ -221,13 +234,16 @@ func (ga *GraphAgent) Info() agent.Info {
 
 // SubAgents returns the list of sub-agents available to this agent.
 func (ga *GraphAgent) SubAgents() []agent.Agent {
-	// GraphAgent does not support sub-agents.
-	return nil
+	return ga.subAgents
 }
 
 // FindSubAgent finds a sub-agent by name.
 func (ga *GraphAgent) FindSubAgent(name string) agent.Agent {
-	// GraphAgent does not support sub-agents.
+	for _, subAgent := range ga.subAgents {
+		if subAgent.Info().Name == name {
+			return subAgent
+		}
+	}
 	return nil
 }
 
