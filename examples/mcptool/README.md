@@ -46,11 +46,11 @@ The trpc-agent-go framework provides built-in support for MCP tools with these k
 
 ```bash
 # Start the Streamable HTTP Server
-cd streamalbe_server
+cd streamalbeserver
 go run main.go
 
 # Start the SSE Server
-cd sse_server
+cd sseserver
 go run main.go
 ```
 
@@ -64,13 +64,13 @@ go run main.go
 ## Project Structure
 
 ```
-mcp-tool/
+mcptool/
 ├── main.go                # Main runner with interactive chat and direct tool testing
-├── stdio_server/
+├── stdioserver/
 │   └── main.go            # Simple STDIO MCP server with echo and add tools
-├── sse_server/
+├── sseserver/
 │   └── main.go            # Simple SSE MCP server with recipe and health tip tools
-├── streamalbe_server/     # Note: Directory name has a typo, maintained for compatibility
+├── streamalbeserver/      # Note: Directory name has a typo, maintained for compatibility
 │   └── main.go            # Simple HTTP MCP server with weather and news tools
 └── README.md              # This document
 ```
@@ -107,7 +107,7 @@ stdioToolSet := mcp.NewMCPToolSet(
     mcp.ConnectionConfig{
         Transport: "stdio",
         Command:   "go",
-        Args:      []string{"run", "./stdio_server/main.go"},
+        Args:      []string{"run", "./stdioserver/main.go"},
         Timeout:   10 * time.Second,
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
@@ -130,6 +130,20 @@ sseToolSet := mcp.NewMCPToolSet(
         },
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+    mcp.WithMCPOptions(
+        // WithRetry: Custom retry configuration for fine-tuned control
+        // Retry sequence: 1s -> 1.5s -> 2.25s -> 3.375s -> 5.0625s (capped at 15s)
+        tmcp.WithRetry(tmcp.RetryConfig{
+            MaxRetries:     5,                      // Maximum retry attempts (range: 0-10, default: 2)
+            InitialBackoff: 1 * time.Second,       // Initial delay before first retry (range: 1ms-30s, default: 500ms)
+            BackoffFactor:  1.5,                   // Exponential backoff multiplier (range: 1.0-10.0, default: 2.0)
+            MaxBackoff:     15 * time.Second,      // Maximum delay cap (range: up to 5 minutes, default: 8s)
+        }),
+        // other mcp options.
+        // tmcp.WithHTTPHeaders(http.Header{
+        //     "User-Agent": []string{"trpc-agent-go/1.0.0"},
+        // }),
+    ),
 )
 ```
 
@@ -146,6 +160,19 @@ streamableToolSet := mcp.NewMCPToolSet(
         Timeout:   10 * time.Second,
     },
     mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+    mcp.WithMCPOptions(
+        // WithSimpleRetry(3): Uses default settings with 3 retry attempts
+        // - MaxRetries: 3 (range: 0-10)
+        // - InitialBackoff: 500ms (default, range: 1ms-30s)
+        // - BackoffFactor: 2.0 (default, range: 1.0-10.0)
+        // - MaxBackoff: 8s (default, range: up to 5 minutes)
+        // Retry sequence: 500ms -> 1s -> 2s (total max delay: ~3.5s)
+        tmcp.WithSimpleRetry(3),
+        // other mcp options.
+        // tmcp.WithHTTPHeaders(http.Header{
+        //     "User-Agent": []string{"trpc-agent-go/1.0.0"},
+        // }),
+    ),
 )
 ```
 
@@ -171,6 +198,66 @@ llmAgent := llmagent.New(
 )
 ```
 
+## Retry Mechanism for Network Tools
+
+The trpc-agent-go framework provides automatic retry functionality for MCP tools to handle temporary network failures. This feature is available for network-based transports (Streamable HTTP and SSE), but not for STDIO transport due to its process-based nature.
+
+### Simple Retry Configuration
+
+For most use cases, use the simple retry configuration with a specified number of retry attempts:
+
+```go
+mcp.WithMCPOptions(
+    // WithSimpleRetry(3): Uses default settings with 3 retry attempts
+    // - MaxRetries: 3 (range: 0-10)
+    // - InitialBackoff: 500ms (default, range: 1ms-30s)
+    // - BackoffFactor: 2.0 (default, range: 1.0-10.0)
+    // - MaxBackoff: 8s (default, range: up to 5 minutes)
+    // Retry sequence: 500ms -> 1s -> 2s (total max delay: ~3.5s)
+    tmcp.WithSimpleRetry(3),
+)
+```
+
+### Advanced Retry Configuration
+
+For specific scenarios requiring fine-tuned retry behavior:
+
+```go
+mcp.WithMCPOptions(
+    // WithRetry: Custom retry configuration for fine-tuned control
+    // Retry sequence: 1s -> 1.5s -> 2.25s -> 3.375s -> 5.0625s (capped at 15s)
+    tmcp.WithRetry(tmcp.RetryConfig{
+        MaxRetries:     5,                      // Maximum retry attempts (range: 0-10, default: 2)
+        InitialBackoff: 1 * time.Second,       // Initial delay before first retry (range: 1ms-30s, default: 500ms)
+        BackoffFactor:  1.5,                   // Exponential backoff multiplier (range: 1.0-10.0, default: 2.0)
+        MaxBackoff:     15 * time.Second,      // Maximum delay cap (range: up to 5 minutes, default: 8s)
+    }),
+)
+```
+
+### What Errors Are Retried?
+
+Automatic retry handles temporary failures:
+- **Network issues**: Connection refused/reset/timeout, I/O timeout, EOF, broken pipe
+- **HTTP server errors**: 408, 409, 429, and all 5xx status codes
+
+### Key Features
+
+- **Transport Layer**: Works across all MCP operations (tools, resources, prompts)
+- **Exponential Backoff**: Intelligent delay strategy to avoid server overload
+- **Error Classification**: Only retries temporary failures, not permanent errors
+- **Silent Operation**: Transparent retry with no logging noise by default
+
+### Import Requirements
+
+To use retry functionality, import the trpc-mcp-go package:
+
+```go
+import (
+    tmcp "trpc.group/trpc-go/trpc-mcp-go"
+)
+```
+
 ## Running the Example
 
 ### Prerequisites
@@ -181,13 +268,13 @@ Ensure you have Go installed and set up properly.
 
 1. **Start the Streamable HTTP Server**:
    ```bash
-   cd streamalbe_server
+   cd streamalbeserver
    go run main.go
    ```
 
 2. **Start the SSE Server**:
    ```bash
-   cd sse_server
+   cd sseserver
    go run main.go -port 8080  # Default port is 8080
    ```
 
