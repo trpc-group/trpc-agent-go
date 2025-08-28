@@ -7,7 +7,7 @@
 //
 //
 
-package graph
+package sqlite
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
 const (
@@ -71,17 +73,17 @@ const (
 	sqliteDeleteThreadWrites = "DELETE FROM checkpoint_writes WHERE thread_id = ?"
 )
 
-// SQLiteCheckpointSaver is a SQLite-backed implementation of CheckpointSaver.
+// Saver is a SQLite-backed implementation of CheckpointSaver.
 // It expects an initialized *sql.DB and will create the required schema.
 // This saver stores the entire checkpoint and metadata as JSON blobs.
 // It is suitable for production usage when paired with a persistent DB.
-type SQLiteCheckpointSaver struct {
+type Saver struct {
 	db *sql.DB
 }
 
-// NewSQLiteCheckpointSaverFromDB creates a new saver using the provided DB.
+// NewSaver creates a new saver using the provided DB.
 // The DB must use a SQLite driver. The constructor creates tables if needed.
-func NewSQLiteCheckpointSaverFromDB(db *sql.DB) (*SQLiteCheckpointSaver, error) {
+func NewSaver(db *sql.DB) (*Saver, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
@@ -91,11 +93,11 @@ func NewSQLiteCheckpointSaverFromDB(db *sql.DB) (*SQLiteCheckpointSaver, error) 
 	if _, err := db.Exec(sqliteCreateWrites); err != nil {
 		return nil, fmt.Errorf("create writes table: %w", err)
 	}
-	return &SQLiteCheckpointSaver{db: db}, nil
+	return &Saver{db: db}, nil
 }
 
 // Get returns the checkpoint for the given config.
-func (s *SQLiteCheckpointSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
+func (s *Saver) Get(ctx context.Context, config map[string]any) (*graph.Checkpoint, error) {
 	t, err := s.GetTuple(ctx, config)
 	if err != nil {
 		return nil, err
@@ -107,10 +109,10 @@ func (s *SQLiteCheckpointSaver) Get(ctx context.Context, config map[string]any) 
 }
 
 // GetTuple returns the checkpoint tuple for the given config.
-func (s *SQLiteCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
-	threadID := GetThreadID(config)
-	checkpointNS := GetNamespace(config)
-	checkpointID := GetCheckpointID(config)
+func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.CheckpointTuple, error) {
+	threadID := graph.GetThreadID(config)
+	checkpointNS := graph.GetNamespace(config)
+	checkpointID := graph.GetCheckpointID(config)
 	if threadID == "" {
 		return nil, errors.New("thread_id is required")
 	}
@@ -125,24 +127,24 @@ func (s *SQLiteCheckpointSaver) GetTuple(ctx context.Context, config map[string]
 			}
 			return nil, fmt.Errorf("select latest: %w", err)
 		}
-		var ckpt Checkpoint
+		var ckpt graph.Checkpoint
 		if err := json.Unmarshal(checkpointJSON, &ckpt); err != nil {
 			return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
 		}
-		var meta CheckpointMetadata
+		var meta graph.CheckpointMetadata
 		if err := json.Unmarshal(metadataJSON, &meta); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
-		cfg := CreateCheckpointConfig(threadID, foundID, checkpointNS)
+		cfg := graph.CreateCheckpointConfig(threadID, foundID, checkpointNS)
 		writes, err := s.loadWrites(ctx, threadID, checkpointNS, foundID)
 		if err != nil {
 			return nil, err
 		}
 		var parentCfg map[string]any
 		if parentID != "" {
-			parentCfg = CreateCheckpointConfig(threadID, parentID, checkpointNS)
+			parentCfg = graph.CreateCheckpointConfig(threadID, parentID, checkpointNS)
 		}
-		return &CheckpointTuple{
+		return &graph.CheckpointTuple{
 			Config:        cfg,
 			Checkpoint:    &ckpt,
 			Metadata:      &meta,
@@ -159,24 +161,24 @@ func (s *SQLiteCheckpointSaver) GetTuple(ctx context.Context, config map[string]
 		}
 		return nil, fmt.Errorf("select by id: %w", err)
 	}
-	var ckpt Checkpoint
+	var ckpt graph.Checkpoint
 	if err := json.Unmarshal(checkpointJSON, &ckpt); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
 	}
-	var meta CheckpointMetadata
+	var meta graph.CheckpointMetadata
 	if err := json.Unmarshal(metadataJSON, &meta); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
-	cfg := CreateCheckpointConfig(threadID, checkpointID, checkpointNS)
+	cfg := graph.CreateCheckpointConfig(threadID, checkpointID, checkpointNS)
 	writes, err := s.loadWrites(ctx, threadID, checkpointNS, checkpointID)
 	if err != nil {
 		return nil, err
 	}
 	var parentCfg map[string]any
 	if parentID != "" {
-		parentCfg = CreateCheckpointConfig(threadID, parentID, checkpointNS)
+		parentCfg = graph.CreateCheckpointConfig(threadID, parentID, checkpointNS)
 	}
-	return &CheckpointTuple{
+	return &graph.CheckpointTuple{
 		Config:        cfg,
 		Checkpoint:    &ckpt,
 		Metadata:      &meta,
@@ -186,99 +188,96 @@ func (s *SQLiteCheckpointSaver) GetTuple(ctx context.Context, config map[string]
 }
 
 // List returns checkpoints for the thread/namespace, with optional filters.
-func (s *SQLiteCheckpointSaver) List(
+func (s *Saver) List(
 	ctx context.Context,
 	config map[string]any,
-	filter *CheckpointFilter,
-) ([]*CheckpointTuple, error) {
-	threadID := GetThreadID(config)
-	checkpointNS := GetNamespace(config)
+	filter *graph.CheckpointFilter,
+) ([]*graph.CheckpointTuple, error) {
+	threadID := graph.GetThreadID(config)
+	checkpointNS := graph.GetNamespace(config)
 	if threadID == "" {
 		return nil, errors.New("thread_id is required")
 	}
 	rows, err := s.db.QueryContext(ctx, sqliteSelectIDsAsc, threadID, checkpointNS)
 	if err != nil {
-		return nil, fmt.Errorf("select ids: %w", err)
+		return nil, fmt.Errorf("select checkpoints: %w", err)
 	}
 	defer rows.Close()
-	var tuples []*CheckpointTuple
-	var beforeID string
-	var limit int
-	if filter != nil {
-		if filter.Before != nil {
-			beforeID = GetCheckpointID(filter.Before)
-		}
-		limit = filter.Limit
-	}
+	var tuples []*graph.CheckpointTuple
 	for rows.Next() {
-		var id string
+		var checkpointID string
 		var ts int64
-		if err := rows.Scan(&id, &ts); err != nil {
-			return nil, fmt.Errorf("scan id: %w", err)
+		if err := rows.Scan(&checkpointID, &ts); err != nil {
+			return nil, fmt.Errorf("scan checkpoint: %w", err)
 		}
-		if beforeID != "" && id >= beforeID {
-			continue
-		}
-		cfg := CreateCheckpointConfig(threadID, id, checkpointNS)
-		t, err := s.GetTuple(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		if t == nil {
-			continue
-		}
-		if filter != nil && filter.Metadata != nil {
-			match := true
-			for k, v := range filter.Metadata {
-				if t.Metadata == nil || t.Metadata.Extra == nil || t.Metadata.Extra[k] != v {
-					match = false
-					break
-				}
-			}
-			if !match {
+		// Apply before filter if specified.
+		if filter != nil && filter.Before != nil {
+			beforeID := graph.GetCheckpointID(filter.Before)
+			if beforeID != "" && checkpointID >= beforeID {
 				continue
 			}
 		}
-		tuples = append(tuples, t)
-		if limit > 0 && len(tuples) >= limit {
+		// Get full tuple for this checkpoint.
+		cfg := graph.CreateCheckpointConfig(threadID, checkpointID, checkpointNS)
+		tuple, err := s.GetTuple(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if tuple == nil {
+			continue
+		}
+		// Apply metadata filter if specified.
+		if filter != nil && filter.Metadata != nil {
+			matches := true
+			for key, value := range filter.Metadata {
+				if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
+					matches = false
+					break
+				}
+				if tuple.Metadata.Extra[key] != value {
+					matches = false
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+		}
+		tuples = append(tuples, tuple)
+		// Apply limit if specified.
+		if filter != nil && filter.Limit > 0 && len(tuples) >= filter.Limit {
 			break
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iter ids: %w", err)
+		return nil, fmt.Errorf("iter checkpoints: %w", err)
 	}
 	return tuples, nil
 }
 
 // Put stores the checkpoint and returns the updated config with checkpoint ID.
-func (s *SQLiteCheckpointSaver) Put(
-	ctx context.Context,
-	config map[string]any,
-	checkpoint *Checkpoint,
-	metadata *CheckpointMetadata,
-	newVersions map[string]any,
-) (map[string]any, error) {
-	if checkpoint == nil {
+func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, error) {
+	if req.Checkpoint == nil {
 		return nil, errors.New("checkpoint cannot be nil")
 	}
-	threadID := GetThreadID(config)
-	checkpointNS := GetNamespace(config)
+	threadID := graph.GetThreadID(req.Config)
+	checkpointNS := graph.GetNamespace(req.Config)
 	if threadID == "" {
 		return nil, errors.New("thread_id is required")
 	}
-	parentID := GetCheckpointID(config)
-	checkpointJSON, err := json.Marshal(checkpoint)
+	parentID := graph.GetCheckpointID(req.Config)
+	checkpointJSON, err := json.Marshal(req.Checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("marshal checkpoint: %w", err)
 	}
-	if metadata == nil {
-		metadata = &CheckpointMetadata{Source: CheckpointSourceUpdate, Step: 0}
+	if req.Metadata == nil {
+		req.Metadata = &graph.CheckpointMetadata{Source: graph.CheckpointSourceUpdate, Step: 0}
 	}
-	metadataJSON, err := json.Marshal(metadata)
+	metadataJSON, err := json.Marshal(req.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
-	ts := checkpoint.Timestamp.Unix()
+	ts := req.Checkpoint.Timestamp.Unix()
 	if ts == 0 {
 		// Ensure non-zero timestamp for ordering.
 		ts = time.Now().UTC().Unix()
@@ -288,7 +287,7 @@ func (s *SQLiteCheckpointSaver) Put(
 		sqliteInsertCheckpoint,
 		threadID,
 		checkpointNS,
-		checkpoint.ID,
+		req.Checkpoint.ID,
 		parentID,
 		ts,
 		checkpointJSON,
@@ -297,24 +296,18 @@ func (s *SQLiteCheckpointSaver) Put(
 	if err != nil {
 		return nil, fmt.Errorf("insert checkpoint: %w", err)
 	}
-	return CreateCheckpointConfig(threadID, checkpoint.ID, checkpointNS), nil
+	return graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, checkpointNS), nil
 }
 
 // PutWrites stores write entries for a checkpoint.
-func (s *SQLiteCheckpointSaver) PutWrites(
-	ctx context.Context,
-	config map[string]any,
-	writes []PendingWrite,
-	taskID string,
-	taskPath string,
-) error {
-	threadID := GetThreadID(config)
-	checkpointNS := GetNamespace(config)
-	checkpointID := GetCheckpointID(config)
+func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error {
+	threadID := graph.GetThreadID(req.Config)
+	checkpointNS := graph.GetNamespace(req.Config)
+	checkpointID := graph.GetCheckpointID(req.Config)
 	if threadID == "" || checkpointID == "" {
 		return errors.New("thread_id and checkpoint_id are required")
 	}
-	for idx, w := range writes {
+	for idx, w := range req.Writes {
 		valueJSON, err := json.Marshal(w.Value)
 		if err != nil {
 			return fmt.Errorf("marshal write: %w", err)
@@ -325,11 +318,11 @@ func (s *SQLiteCheckpointSaver) PutWrites(
 			threadID,
 			checkpointNS,
 			checkpointID,
-			taskID,
+			req.TaskID,
 			idx,
 			w.Channel,
 			valueJSON,
-			taskPath,
+			req.TaskPath,
 		)
 		if err != nil {
 			return fmt.Errorf("insert write: %w", err)
@@ -339,7 +332,7 @@ func (s *SQLiteCheckpointSaver) PutWrites(
 }
 
 // DeleteThread deletes all checkpoints and writes for the thread.
-func (s *SQLiteCheckpointSaver) DeleteThread(ctx context.Context, threadID string) error {
+func (s *Saver) DeleteThread(ctx context.Context, threadID string) error {
 	if threadID == "" {
 		return errors.New("thread_id is required")
 	}
@@ -352,10 +345,18 @@ func (s *SQLiteCheckpointSaver) DeleteThread(ctx context.Context, threadID strin
 	return nil
 }
 
-func (s *SQLiteCheckpointSaver) loadWrites(
+// Close releases resources held by the saver.
+func (s *Saver) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
+	return nil
+}
+
+func (s *Saver) loadWrites(
 	ctx context.Context,
 	threadID, checkpointNS, checkpointID string,
-) ([]PendingWrite, error) {
+) ([]graph.PendingWrite, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		sqliteSelectWrites,
@@ -367,7 +368,7 @@ func (s *SQLiteCheckpointSaver) loadWrites(
 		return nil, fmt.Errorf("select writes: %w", err)
 	}
 	defer rows.Close()
-	var writes []PendingWrite
+	var writes []graph.PendingWrite
 	for rows.Next() {
 		var taskID string
 		var idx int
@@ -381,7 +382,7 @@ func (s *SQLiteCheckpointSaver) loadWrites(
 		if err := json.Unmarshal(valueJSON, &value); err != nil {
 			return nil, fmt.Errorf("unmarshal write: %w", err)
 		}
-		writes = append(writes, PendingWrite{Channel: channel, Value: value})
+		writes = append(writes, graph.PendingWrite{Channel: channel, Value: value})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iter writes: %w", err)

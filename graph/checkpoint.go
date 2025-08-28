@@ -12,7 +12,6 @@ package graph
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +32,10 @@ const (
 
 	// DefaultCheckpointNamespace is the default namespace for checkpoints.
 	DefaultCheckpointNamespace = ""
+	// DefaultChannelVersion is the default version for channels.
+	DefaultChannelVersion = 1
+	// DefaultMaxCheckpointsPerThread is the default maximum number of checkpoints per thread.
+	DefaultMaxCheckpointsPerThread = 100
 )
 
 // Checkpoint represents a snapshot of graph state at a specific point in time.
@@ -87,6 +90,22 @@ type PendingWrite struct {
 	Value any `json:"value"`
 }
 
+// PutRequest contains all data needed to store a checkpoint.
+type PutRequest struct {
+	Config      map[string]any
+	Checkpoint  *Checkpoint
+	Metadata    *CheckpointMetadata
+	NewVersions map[string]any
+}
+
+// PutWritesRequest contains all data needed to store writes.
+type PutWritesRequest struct {
+	Config   map[string]any
+	Writes   []PendingWrite
+	TaskID   string
+	TaskPath string
+}
+
 // CheckpointSaver defines the interface for checkpoint storage implementations.
 type CheckpointSaver interface {
 	// Get retrieves a checkpoint by configuration.
@@ -96,11 +115,13 @@ type CheckpointSaver interface {
 	// List retrieves checkpoints matching criteria.
 	List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error)
 	// Put stores a checkpoint.
-	Put(ctx context.Context, config map[string]any, checkpoint *Checkpoint, metadata *CheckpointMetadata, newVersions map[string]any) (map[string]any, error)
+	Put(ctx context.Context, req PutRequest) (map[string]any, error)
 	// PutWrites stores intermediate writes linked to a checkpoint.
-	PutWrites(ctx context.Context, config map[string]any, writes []PendingWrite, taskID string, taskPath string) error
+	PutWrites(ctx context.Context, req PutWritesRequest) error
 	// DeleteThread removes all checkpoints for a thread.
 	DeleteThread(ctx context.Context, threadID string) error
+	// Close releases resources held by the saver.
+	Close() error
 }
 
 // CheckpointFilter defines filtering criteria for listing checkpoints.
@@ -113,20 +134,30 @@ type CheckpointFilter struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-// CheckpointConfig contains configuration for checkpoint operations.
+// CheckpointConfig provides a structured way to handle checkpoint configuration.
 type CheckpointConfig struct {
 	// ThreadID is the unique identifier for the conversation thread.
-	ThreadID string `json:"thread_id"`
+	ThreadID string
 	// CheckpointID is the specific checkpoint to retrieve.
-	CheckpointID string `json:"checkpoint_id,omitempty"`
+	CheckpointID string
 	// Namespace is the checkpoint namespace.
-	Namespace string `json:"checkpoint_ns,omitempty"`
-	// Additional configuration fields.
-	Extra map[string]any `json:"extra,omitempty"`
+	Namespace string
+	// Extra contains additional configuration fields.
+	Extra map[string]any
 }
 
 // NewCheckpoint creates a new checkpoint with the given data.
 func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any, versionsSeen map[string]map[string]any) *Checkpoint {
+	if channelValues == nil {
+		channelValues = make(map[string]any)
+	}
+	if channelVersions == nil {
+		channelVersions = make(map[string]any)
+	}
+	if versionsSeen == nil {
+		versionsSeen = make(map[string]map[string]any)
+	}
+
 	return &Checkpoint{
 		Version:         CheckpointVersion,
 		ID:              uuid.New().String(),
@@ -134,6 +165,7 @@ func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any,
 		ChannelValues:   channelValues,
 		ChannelVersions: channelVersions,
 		VersionsSeen:    versionsSeen,
+		UpdatedChannels: make([]string, 0),
 	}
 }
 
@@ -142,9 +174,129 @@ func NewCheckpointMetadata(source string, step int) *CheckpointMetadata {
 	return &CheckpointMetadata{
 		Source:  source,
 		Step:    step,
-		Parents: map[string]string{},
-		Extra:   map[string]any{},
+		Parents: make(map[string]string),
+		Extra:   make(map[string]any),
 	}
+}
+
+// NewCheckpointConfig creates a new checkpoint configuration.
+func NewCheckpointConfig(threadID string) *CheckpointConfig {
+	return &CheckpointConfig{
+		ThreadID:  threadID,
+		Namespace: DefaultCheckpointNamespace,
+		Extra:     make(map[string]any),
+	}
+}
+
+// WithCheckpointID sets the checkpoint ID.
+func (c *CheckpointConfig) WithCheckpointID(checkpointID string) *CheckpointConfig {
+	c.CheckpointID = checkpointID
+	return c
+}
+
+// WithNamespace sets the namespace.
+func (c *CheckpointConfig) WithNamespace(namespace string) *CheckpointConfig {
+	c.Namespace = namespace
+	return c
+}
+
+// WithExtra sets additional configuration.
+func (c *CheckpointConfig) WithExtra(key string, value any) *CheckpointConfig {
+	if c.Extra == nil {
+		c.Extra = make(map[string]any)
+	}
+	c.Extra[key] = value
+	return c
+}
+
+// ToMap converts the config to a map for backward compatibility.
+func (c *CheckpointConfig) ToMap() map[string]any {
+	config := map[string]any{
+		"configurable": map[string]any{
+			"thread_id": c.ThreadID,
+		},
+	}
+
+	if c.CheckpointID != "" {
+		config["configurable"].(map[string]any)["checkpoint_id"] = c.CheckpointID
+	}
+
+	if c.Namespace != "" {
+		config["configurable"].(map[string]any)["checkpoint_ns"] = c.Namespace
+	}
+
+	// Add extra fields.
+	for k, v := range c.Extra {
+		config[k] = v
+	}
+
+	return config
+}
+
+// NewCheckpointFilter creates a new checkpoint filter.
+func NewCheckpointFilter() *CheckpointFilter {
+	return &CheckpointFilter{
+		Metadata: make(map[string]any),
+	}
+}
+
+// WithBefore sets the before filter.
+func (f *CheckpointFilter) WithBefore(before map[string]any) *CheckpointFilter {
+	f.Before = before
+	return f
+}
+
+// WithLimit sets the limit.
+func (f *CheckpointFilter) WithLimit(limit int) *CheckpointFilter {
+	f.Limit = limit
+	return f
+}
+
+// WithMetadata sets metadata filter.
+func (f *CheckpointFilter) WithMetadata(key string, value any) *CheckpointFilter {
+	if f.Metadata == nil {
+		f.Metadata = make(map[string]any)
+	}
+	f.Metadata[key] = value
+	return f
+}
+
+// deepCopyMap performs a deep copy of a map[string]any.
+func deepCopyMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		switch val := v.(type) {
+		case map[string]any:
+			dst[k] = deepCopyMap(val)
+		case []any:
+			dst[k] = deepCopySlice(val)
+		default:
+			dst[k] = v
+		}
+	}
+	return dst
+}
+
+// deepCopySlice performs a deep copy of a []any.
+func deepCopySlice(src []any) []any {
+	if src == nil {
+		return nil
+	}
+	dst := make([]any, len(src))
+	for i, v := range src {
+		switch val := v.(type) {
+		case map[string]any:
+			dst[i] = deepCopyMap(val)
+		case []any:
+			dst[i] = deepCopySlice(val)
+		default:
+			dst[i] = v
+		}
+	}
+	return dst
 }
 
 // Copy creates a deep copy of the checkpoint.
@@ -154,24 +306,15 @@ func (c *Checkpoint) Copy() *Checkpoint {
 	}
 
 	// Deep copy channel values.
-	channelValues := make(map[string]any, len(c.ChannelValues))
-	for k, v := range c.ChannelValues {
-		channelValues[k] = v
-	}
+	channelValues := deepCopyMap(c.ChannelValues)
 
 	// Deep copy channel versions.
-	channelVersions := make(map[string]any, len(c.ChannelVersions))
-	for k, v := range c.ChannelVersions {
-		channelVersions[k] = v
-	}
+	channelVersions := deepCopyMap(c.ChannelVersions)
 
 	// Deep copy versions seen.
 	versionsSeen := make(map[string]map[string]any, len(c.VersionsSeen))
 	for k, v := range c.VersionsSeen {
-		versionsSeen[k] = make(map[string]any, len(v))
-		for k2, v2 := range v {
-			versionsSeen[k][k2] = v2
-		}
+		versionsSeen[k] = deepCopyMap(v)
 	}
 
 	// Deep copy updated channels.
@@ -191,6 +334,9 @@ func (c *Checkpoint) Copy() *Checkpoint {
 
 // GetCheckpointID extracts checkpoint ID from configuration.
 func GetCheckpointID(config map[string]any) string {
+	if config == nil {
+		return ""
+	}
 	if configurable, ok := config["configurable"].(map[string]any); ok {
 		if checkpointID, ok := configurable["checkpoint_id"].(string); ok {
 			return checkpointID
@@ -201,6 +347,9 @@ func GetCheckpointID(config map[string]any) string {
 
 // GetThreadID extracts thread ID from configuration.
 func GetThreadID(config map[string]any) string {
+	if config == nil {
+		return ""
+	}
 	if configurable, ok := config["configurable"].(map[string]any); ok {
 		if threadID, ok := configurable["thread_id"].(string); ok {
 			return threadID
@@ -211,6 +360,9 @@ func GetThreadID(config map[string]any) string {
 
 // GetNamespace extracts namespace from configuration.
 func GetNamespace(config map[string]any) string {
+	if config == nil {
+		return DefaultCheckpointNamespace
+	}
 	if configurable, ok := config["configurable"].(map[string]any); ok {
 		if namespace, ok := configurable["checkpoint_ns"].(string); ok {
 			return namespace
@@ -219,265 +371,16 @@ func GetNamespace(config map[string]any) string {
 	return DefaultCheckpointNamespace
 }
 
-// CreateCheckpointConfig creates a checkpoint configuration.
+// CreateCheckpointConfig creates a checkpoint configuration (legacy function).
 func CreateCheckpointConfig(threadID string, checkpointID string, namespace string) map[string]any {
-	config := map[string]any{
-		"configurable": map[string]any{
-			"thread_id": threadID,
-		},
-	}
-
+	config := NewCheckpointConfig(threadID)
 	if checkpointID != "" {
-		config["configurable"].(map[string]any)["checkpoint_id"] = checkpointID
+		config.WithCheckpointID(checkpointID)
 	}
-
 	if namespace != "" {
-		config["configurable"].(map[string]any)["checkpoint_ns"] = namespace
+		config.WithNamespace(namespace)
 	}
-
-	return config
-}
-
-// InMemoryCheckpointSaver provides an in-memory implementation of CheckpointSaver.
-// This is suitable for testing and debugging but not for production use.
-type InMemoryCheckpointSaver struct {
-	mu      sync.RWMutex
-	storage map[string]map[string]map[string]*CheckpointTuple // threadID -> namespace -> checkpointID -> tuple
-	writes  map[string]map[string]map[string][]PendingWrite   // threadID -> namespace -> checkpointID -> writes
-}
-
-// NewInMemoryCheckpointSaver creates a new in-memory checkpoint saver.
-func NewInMemoryCheckpointSaver() *InMemoryCheckpointSaver {
-	return &InMemoryCheckpointSaver{
-		storage: make(map[string]map[string]map[string]*CheckpointTuple),
-		writes:  make(map[string]map[string]map[string][]PendingWrite),
-	}
-}
-
-// Get retrieves a checkpoint by configuration.
-func (s *InMemoryCheckpointSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
-	tuple, err := s.GetTuple(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	if tuple == nil {
-		return nil, nil
-	}
-	return tuple.Checkpoint, nil
-}
-
-// GetTuple retrieves a checkpoint tuple by configuration.
-func (s *InMemoryCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	threadID := GetThreadID(config)
-	namespace := GetNamespace(config)
-	checkpointID := GetCheckpointID(config)
-
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
-	}
-
-	// Get the latest checkpoint if no specific ID is provided.
-	if checkpointID == "" {
-		namespaces, exists := s.storage[threadID]
-		if !exists {
-			return nil, nil
-		}
-
-		checkpoints, exists := namespaces[namespace]
-		if !exists || len(checkpoints) == 0 {
-			return nil, nil
-		}
-
-		// Find the latest checkpoint by ID (assuming UUIDs are sortable).
-		var latestID string
-		for id := range checkpoints {
-			if id > latestID {
-				latestID = id
-			}
-		}
-
-		if latestID == "" {
-			return nil, nil
-		}
-
-		checkpointID = latestID
-		// Update config with the found checkpoint ID.
-		if configurable, ok := config["configurable"].(map[string]any); ok {
-			configurable["checkpoint_id"] = checkpointID
-		}
-	}
-
-	// Retrieve the specific checkpoint.
-	namespaces, exists := s.storage[threadID]
-	if !exists {
-		return nil, nil
-	}
-
-	checkpoints, exists := namespaces[namespace]
-	if !exists {
-		return nil, nil
-	}
-
-	tuple, exists := checkpoints[checkpointID]
-	if !exists {
-		return nil, nil
-	}
-
-	// Add pending writes if they exist.
-	if writes, exists := s.writes[threadID][namespace][checkpointID]; exists {
-		tuple.PendingWrites = writes
-	}
-
-	return tuple, nil
-}
-
-// List retrieves checkpoints matching criteria.
-func (s *InMemoryCheckpointSaver) List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	threadID := GetThreadID(config)
-	namespace := GetNamespace(config)
-
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
-	}
-
-	var results []*CheckpointTuple
-
-	namespaces, exists := s.storage[threadID]
-	if !exists {
-		return results, nil
-	}
-
-	checkpoints, exists := namespaces[namespace]
-	if !exists {
-		return results, nil
-	}
-
-	// Apply filters and collect results.
-	for checkpointID, tuple := range checkpoints {
-		// Apply before filter.
-		if filter != nil && filter.Before != nil {
-			beforeID := GetCheckpointID(filter.Before)
-			if beforeID != "" && checkpointID >= beforeID {
-				continue
-			}
-		}
-
-		// Apply metadata filter.
-		if filter != nil && filter.Metadata != nil {
-			matches := true
-			for key, value := range filter.Metadata {
-				if tuple.Metadata.Extra[key] != value {
-					matches = false
-					break
-				}
-			}
-			if !matches {
-				continue
-			}
-		}
-
-		// Add pending writes.
-		if writes, exists := s.writes[threadID][namespace][checkpointID]; exists {
-			tuple.PendingWrites = writes
-		}
-
-		results = append(results, tuple)
-
-		// Apply limit.
-		if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
-			break
-		}
-	}
-
-	return results, nil
-}
-
-// Put stores a checkpoint.
-func (s *InMemoryCheckpointSaver) Put(ctx context.Context, config map[string]any, checkpoint *Checkpoint, metadata *CheckpointMetadata, newVersions map[string]any) (map[string]any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	threadID := GetThreadID(config)
-	namespace := GetNamespace(config)
-
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
-	}
-
-	if checkpoint == nil {
-		return nil, fmt.Errorf("checkpoint cannot be nil")
-	}
-
-	// Initialize storage structure if needed.
-	if s.storage[threadID] == nil {
-		s.storage[threadID] = make(map[string]map[string]*CheckpointTuple)
-	}
-	if s.storage[threadID][namespace] == nil {
-		s.storage[threadID][namespace] = make(map[string]*CheckpointTuple)
-	}
-
-	// Create checkpoint tuple.
-	tuple := &CheckpointTuple{
-		Config:     config,
-		Checkpoint: checkpoint,
-		Metadata:   metadata,
-	}
-
-	// Set parent config if there's a parent checkpoint ID.
-	if parentID := GetCheckpointID(config); parentID != "" {
-		tuple.ParentConfig = CreateCheckpointConfig(threadID, parentID, namespace)
-	}
-
-	// Store the checkpoint.
-	s.storage[threadID][namespace][checkpoint.ID] = tuple
-
-	// Return updated config with the new checkpoint ID.
-	updatedConfig := CreateCheckpointConfig(threadID, checkpoint.ID, namespace)
-	return updatedConfig, nil
-}
-
-// PutWrites stores intermediate writes linked to a checkpoint.
-func (s *InMemoryCheckpointSaver) PutWrites(ctx context.Context, config map[string]any, writes []PendingWrite, taskID string, taskPath string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	threadID := GetThreadID(config)
-	namespace := GetNamespace(config)
-	checkpointID := GetCheckpointID(config)
-
-	if threadID == "" || checkpointID == "" {
-		return fmt.Errorf("thread_id and checkpoint_id are required")
-	}
-
-	// Initialize writes structure if needed.
-	if s.writes[threadID] == nil {
-		s.writes[threadID] = make(map[string]map[string][]PendingWrite)
-	}
-	if s.writes[threadID][namespace] == nil {
-		s.writes[threadID][namespace] = make(map[string][]PendingWrite)
-	}
-
-	// Store the writes.
-	s.writes[threadID][namespace][checkpointID] = writes
-
-	return nil
-}
-
-// DeleteThread removes all checkpoints for a thread.
-func (s *InMemoryCheckpointSaver) DeleteThread(ctx context.Context, threadID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	delete(s.storage, threadID)
-	delete(s.writes, threadID)
-
-	return nil
+	return config.ToMap()
 }
 
 // CheckpointManager provides high-level checkpoint management functionality.
@@ -494,6 +397,10 @@ func NewCheckpointManager(saver CheckpointSaver) *CheckpointManager {
 
 // CreateCheckpoint creates a new checkpoint from the current state.
 func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[string]any, state State, source string, step int) (*Checkpoint, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
 	// Convert state to channel values.
 	channelValues := make(map[string]any)
 	for k, v := range state {
@@ -503,7 +410,7 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[st
 	// Create channel versions (simple incrementing integers for now).
 	channelVersions := make(map[string]any)
 	for k := range state {
-		channelVersions[k] = 1 // This should be managed by the graph execution.
+		channelVersions[k] = DefaultChannelVersion
 	}
 
 	// Create versions seen (simplified for now).
@@ -516,7 +423,13 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[st
 	metadata := NewCheckpointMetadata(source, step)
 
 	// Store checkpoint.
-	_, err := cm.saver.Put(ctx, config, checkpoint, metadata, channelVersions)
+	req := PutRequest{
+		Config:      config,
+		Checkpoint:  checkpoint,
+		Metadata:    metadata,
+		NewVersions: channelVersions,
+	}
+	_, err := cm.saver.Put(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store checkpoint: %w", err)
 	}
@@ -526,6 +439,10 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[st
 
 // ResumeFromCheckpoint resumes execution from a specific checkpoint.
 func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config map[string]any) (State, error) {
+	if cm.saver == nil {
+		return nil, nil
+	}
+
 	tuple, err := cm.saver.GetTuple(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
@@ -533,6 +450,10 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config ma
 
 	if tuple == nil {
 		return nil, fmt.Errorf("checkpoint not found")
+	}
+
+	if tuple.Checkpoint == nil {
+		return nil, fmt.Errorf("checkpoint data is nil")
 	}
 
 	// Convert channel values back to state.
@@ -546,10 +467,16 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config ma
 
 // ListCheckpoints lists checkpoints for a thread.
 func (cm *CheckpointManager) ListCheckpoints(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
 	return cm.saver.List(ctx, config, filter)
 }
 
 // DeleteThread removes all checkpoints for a thread.
 func (cm *CheckpointManager) DeleteThread(ctx context.Context, threadID string) error {
+	if cm.saver == nil {
+		return fmt.Errorf("checkpoint saver is not configured")
+	}
 	return cm.saver.DeleteThread(ctx, threadID)
 }

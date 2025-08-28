@@ -288,7 +288,13 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 	metadata := NewCheckpointMetadata(source, step)
 
 	// Store checkpoint.
-	_, err := e.checkpointSaver.Put(ctx, config, checkpoint, metadata, channelVersions)
+	req := PutRequest{
+		Config:      config,
+		Checkpoint:  checkpoint,
+		Metadata:    metadata,
+		NewVersions: channelVersions,
+	}
+	_, err := e.checkpointSaver.Put(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to store checkpoint: %w", err)
 	}
