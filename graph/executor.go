@@ -285,7 +285,15 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 			return nil, errors.New("no entry point defined")
 		}
 
-		task := e.createTask(entryPoint, execCtx.State, step)
+		// Acquire read lock to safely access state for task creation.
+		execCtx.stateMutex.RLock()
+		stateCopy := make(State, len(execCtx.State))
+		for key, value := range execCtx.State {
+			stateCopy[key] = value
+		}
+		execCtx.stateMutex.RUnlock()
+
+		task := e.createTask(entryPoint, stateCopy, step)
 		if task != nil {
 			tasks = append(tasks, task)
 		} else if entryPoint != End {
@@ -442,10 +450,20 @@ func (e *Executor) executeSingleTask(
 	// Add current node ID to state so nodes can access it.
 	stateCopy[StateKeyCurrentNodeID] = t.NodeID
 
+	// Get global and per-node callbacks.
+	globalCallbacks, _ := stateCopy[StateKeyNodeCallbacks].(*NodeCallbacks)
+	node, exists := e.graph.Node(t.NodeID)
+	var perNodeCallbacks *NodeCallbacks
+	if exists {
+		perNodeCallbacks = node.callbacks
+	}
+
+	// Merge callbacks: global callbacks run first, then per-node callbacks.
+	mergedCallbacks := e.mergeNodeCallbacks(globalCallbacks, perNodeCallbacks)
+
 	// Run before node callbacks.
-	nodeCallbacks, _ := stateCopy[StateKeyNodeCallbacks].(*NodeCallbacks)
-	if nodeCallbacks != nil {
-		customResult, err := nodeCallbacks.RunBeforeNode(ctx, callbackCtx, stateCopy)
+	if mergedCallbacks != nil {
+		customResult, err := mergedCallbacks.RunBeforeNode(ctx, callbackCtx, stateCopy)
 		if err != nil {
 			e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
 			return fmt.Errorf("before node callback failed for node %s: %w", t.NodeID, err)
@@ -469,16 +487,16 @@ func (e *Executor) executeSingleTask(
 	result, err := e.executeNodeFunction(ctx, execCtx, t.NodeID)
 	if err != nil {
 		// Run on node error callbacks.
-		if nodeCallbacks != nil {
-			nodeCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
+		if mergedCallbacks != nil {
+			mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
 		}
 		e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
 		return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
 	}
 
 	// Run after node callbacks.
-	if nodeCallbacks != nil {
-		customResult, err := nodeCallbacks.RunAfterNode(ctx, callbackCtx, stateCopy, result, nil)
+	if mergedCallbacks != nil {
+		customResult, err := mergedCallbacks.RunAfterNode(ctx, callbackCtx, stateCopy, result, nil)
 		if err != nil {
 			e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
 			return fmt.Errorf("after node callback failed for node %s: %w", t.NodeID, err)
@@ -535,6 +553,36 @@ func (e *Executor) getSessionID(execCtx *ExecutionContext) string {
 		}
 	}
 	return ""
+}
+
+// mergeNodeCallbacks merges global and per-node callbacks.
+// Global callbacks are executed first, followed by per-node callbacks.
+// This allows per-node callbacks to override or extend global behavior.
+func (e *Executor) mergeNodeCallbacks(global, perNode *NodeCallbacks) *NodeCallbacks {
+	if global == nil && perNode == nil {
+		return nil
+	}
+	if global == nil {
+		return perNode
+	}
+	if perNode == nil {
+		return global
+	}
+
+	// Create a new merged callbacks instance.
+	merged := NewNodeCallbacks()
+
+	// Add global callbacks first (they execute first).
+	merged.BeforeNode = append(merged.BeforeNode, global.BeforeNode...)
+	merged.AfterNode = append(merged.AfterNode, global.AfterNode...)
+	merged.OnNodeError = append(merged.OnNodeError, global.OnNodeError...)
+
+	// Add per-node callbacks (they execute after global callbacks).
+	merged.BeforeNode = append(merged.BeforeNode, perNode.BeforeNode...)
+	merged.AfterNode = append(merged.AfterNode, perNode.AfterNode...)
+	merged.OnNodeError = append(merged.OnNodeError, perNode.OnNodeError...)
+
+	return merged
 }
 
 // emitNodeStartEvent emits the node start event.

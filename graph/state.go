@@ -27,8 +27,12 @@ const (
 	StateKeyToolCallbacks = "tool_callbacks"
 	// StateKeyModelCallbacks is the key of the model callbacks.
 	StateKeyModelCallbacks = "model_callbacks"
+	// StateKeyAgentCallbacks is the key of the agent callbacks.
+	StateKeyAgentCallbacks = "agent_callbacks"
 	// StateKeyCurrentNodeID is the key for storing the current node ID in the state.
 	StateKeyCurrentNodeID = "current_node_id"
+	// StateKeyParentAgent is the key for storing the parent GraphAgent that owns sub-agents.
+	StateKeyParentAgent = "parent_agent"
 )
 
 // State represents the state that flows through the graph.
