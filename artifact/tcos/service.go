@@ -51,6 +51,11 @@ import (
 
 // Service is a Tencent Cloud Object Storage implementation of the artifact service.
 // It provides cloud-based storage for artifacts using Tencent COS.
+// The Object name format used depends on whether the filename has a user namespace:
+//   - For files with user namespace (starting with "user:"):
+//     {app_name}/{user_id}/user/{filename}/{version}
+//   - For regular session-scoped files:
+//     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
 	cosClient *cos.Client
 }
@@ -310,4 +315,9 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 		}
 	}
 	return versions, nil
+}
+
+// setCosClient sets the COS client for the service for testing purposes.
+func (s *Service) setCosClient(cosClient *cos.Client) {
+	s.cosClient = cosClient
 }

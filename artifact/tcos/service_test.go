@@ -1,25 +1,208 @@
 package tcos
 
 import (
+	"bytes"
 	"context"
-	"os"
+	"encoding/xml"
+	"fmt"
+	"hash/crc64"
+	"io"
+	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tencentyun/cos-go-sdk-v5"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
+// MockTransport implements http.RoundTripper to mock COS HTTP requests
+type MockTransport struct {
+	objects map[string][]byte            // objectName -> data
+	headers map[string]map[string]string // objectName -> headers
+}
+
+func NewMockTransport() *MockTransport {
+	return &MockTransport{
+		objects: make(map[string][]byte),
+		headers: make(map[string]map[string]string),
+	}
+}
+
+// ListBucketResult represents the XML structure for COS list bucket response
+type ListBucketResult struct {
+	XMLName     xml.Name `xml:"ListBucketResult"`
+	Name        string   `xml:"Name"`
+	Prefix      string   `xml:"Prefix"`
+	MaxKeys     int      `xml:"MaxKeys"`
+	IsTruncated bool     `xml:"IsTruncated"`
+	Contents    []struct {
+		Key  string `xml:"Key"`
+		Size int64  `xml:"Size"`
+	} `xml:"Contents"`
+}
+
+func (m *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	switch req.Method {
+	case "PUT":
+		// Object upload
+		objectKey := strings.TrimPrefix(req.URL.Path, "/")
+
+		// Read request body
+		data, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		// Store object data
+		m.objects[objectKey] = data
+
+		// Store headers
+		if m.headers[objectKey] == nil {
+			m.headers[objectKey] = make(map[string]string)
+		}
+		if contentType := req.Header.Get("Content-Type"); contentType != "" {
+			m.headers[objectKey]["Content-Type"] = contentType
+		}
+
+		// Calculate CRC64 for the data to match COS SDK expectations
+		crc64Table := crc64.MakeTable(crc64.ECMA)
+		crc64Value := crc64.Checksum(data, crc64Table)
+
+		// Create response with required headers for COS SDK
+		header := make(http.Header)
+		header.Set("x-cos-hash-crc64ecma", strconv.FormatUint(crc64Value, 10))
+		header.Set("ETag", `"mocketagvalue"`)
+
+		return &http.Response{
+			StatusCode: 200,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+
+	case "GET":
+		if req.URL.RawQuery != "" {
+			// List objects request
+			params, _ := url.ParseQuery(req.URL.RawQuery)
+			prefix := params.Get("prefix")
+
+			result := ListBucketResult{
+				Name:        "test-bucket",
+				Prefix:      prefix,
+				MaxKeys:     1000,
+				IsTruncated: false,
+			}
+
+			for key := range m.objects {
+				if prefix == "" || strings.HasPrefix(key, prefix) {
+					result.Contents = append(result.Contents, struct {
+						Key  string `xml:"Key"`
+						Size int64  `xml:"Size"`
+					}{
+						Key:  key,
+						Size: int64(len(m.objects[key])),
+					})
+				}
+			}
+
+			xmlData, err := xml.Marshal(result)
+			if err != nil {
+				return nil, err
+			}
+
+			return &http.Response{
+				StatusCode: 200,
+				Header:     map[string][]string{"Content-Type": {"application/xml"}},
+				Body:       io.NopCloser(bytes.NewReader(xmlData)),
+			}, nil
+		} else {
+			// Object download
+			objectKey := strings.TrimPrefix(req.URL.Path, "/")
+
+			if data, exists := m.objects[objectKey]; exists {
+				header := make(http.Header)
+
+				// Set stored headers
+				if headers, hasHeaders := m.headers[objectKey]; hasHeaders {
+					for k, v := range headers {
+						header.Set(k, v)
+					}
+				}
+				// Set default content type if not set
+				if header.Get("Content-Type") == "" {
+					header.Set("Content-Type", "application/octet-stream")
+				}
+
+				return &http.Response{
+					StatusCode: 200,
+					Header:     header,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+				}, nil
+			}
+
+			// Object not found
+			return &http.Response{
+				StatusCode: 404,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code></Error>`)),
+			}, nil
+		}
+
+	case "DELETE":
+		// Object deletion
+		objectKey := strings.TrimPrefix(req.URL.Path, "/")
+		delete(m.objects, objectKey)
+		delete(m.headers, objectKey)
+
+		return &http.Response{
+			StatusCode: 204,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	}
+
+	return &http.Response{
+		StatusCode: 405,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("Method not allowed")),
+	}, nil
+}
+
+// createMockService creates a Service instance using mock COS client
+func createMockService() (*Service, *MockTransport) {
+	mockTransport := NewMockTransport()
+
+	mockClient := &http.Client{
+		Transport: mockTransport,
+	}
+
+	// Create service with dummy bucket URL since we'll replace the client
+	service := NewService("https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com")
+
+	// Create a mock COS client with the mock transport
+	mockBucketURL, _ := url.Parse("https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com")
+	mockCosClient := cos.NewClient(&cos.BaseURL{BucketURL: mockBucketURL}, mockClient)
+
+	// Inject the mock COS client for testing
+	service.setCosClient(mockCosClient)
+
+	return service, mockTransport
+}
+
 func TestArtifact_SessionScope(t *testing.T) {
-	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	t.Skip("Skipping TCOS integration test, need to set up environment variables TCOS_SECRETID, TCOS_SECRETKEY and TCOS_BUCKET_URL")
-	s := NewService(os.Getenv("TCOS_BUCKET_URL"))
+	s, _ := createMockService()
+	ctx := context.Background()
+
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user1",
 		SessionID: "session1",
 	}
 	sessionScopeKey := "test.txt"
+
 	var artifacts []*artifact.Artifact
 	for i := 0; i < 3; i++ {
 		artifacts = append(artifacts, &artifact.Artifact{
@@ -28,101 +211,102 @@ func TestArtifact_SessionScope(t *testing.T) {
 			Name:     "display_name_user_scope_test.txt",
 		})
 	}
-	t.Cleanup(func() {
-		if err := s.DeleteArtifact(context.Background(), sessionInfo, sessionScopeKey); err != nil {
-			t.Logf("Cleanup: DeleteArtifact: %v", err)
-		}
-	})
 
+	// Save artifacts and verify versions
 	for i, a := range artifacts {
-		version, err := s.SaveArtifact(context.Background(),
-			sessionInfo, sessionScopeKey, a)
+		version, err := s.SaveArtifact(ctx, sessionInfo, sessionScopeKey, a)
 		require.NoError(t, err)
 		require.Equal(t, i, version)
 	}
 
-	version, err := s.ListVersions(context.Background(), sessionInfo, sessionScopeKey)
+	// List versions
+	versions, err := s.ListVersions(ctx, sessionInfo, sessionScopeKey)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, version)
+	require.ElementsMatch(t, []int{0, 1, 2}, versions)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	// Load latest version (should be version 2)
+	a, err := s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, &artifact.Artifact{
 		Data:     []byte("Hello, World!" + strconv.Itoa(2)),
 		MimeType: "text/plain",
 		Name:     sessionScopeKey,
 	}, a)
+
+	// Load specific versions
 	for i, wanted := range artifacts {
-		got, err := s.LoadArtifact(context.Background(),
-			sessionInfo, sessionScopeKey, &i)
+		got, err := s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, &i)
 		require.NoError(t, err)
 		require.EqualValues(t, wanted.Data, got.Data)
 		require.EqualValues(t, wanted.MimeType, got.MimeType)
 		require.EqualValues(t, sessionScopeKey, got.Name)
 	}
 
-	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
+	// List artifact keys
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{sessionScopeKey}, keys)
 
-	err = s.DeleteArtifact(context.Background(), sessionInfo, sessionScopeKey)
+	// Delete artifact
+	err = s.DeleteArtifact(ctx, sessionInfo, sessionScopeKey)
 	require.NoError(t, err)
 
-	keys, err = s.ListArtifactKeys(context.Background(), sessionInfo)
+	// Verify artifact is deleted
+	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
 	require.NoError(t, err)
 	require.Empty(t, keys)
 
-	version, err = s.ListVersions(context.Background(), sessionInfo, sessionScopeKey)
+	// Verify versions are empty
+	versions, err = s.ListVersions(ctx, sessionInfo, sessionScopeKey)
 	require.NoError(t, err)
-	require.Empty(t, version)
+	require.Empty(t, versions)
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, sessionScopeKey, nil)
+	// Verify artifact cannot be loaded
+	a, err = s.LoadArtifact(ctx, sessionInfo, sessionScopeKey, nil)
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
 
 func TestArtifact_UserScope(t *testing.T) {
-	t.Skip("Skipping TCOS integration test, need to set up environment variables TCOS_BUCKET_URL, TCOS_SECRETID and TCOS_SECRETKEY")
-	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	s := NewService(os.Getenv("TCOS_BUCKET_URL"))
+	s, _ := createMockService()
+	ctx := context.Background()
+
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user2",
 		SessionID: "session1",
 	}
 	userScopeKey := "user:test.txt"
-	t.Cleanup(func() {
-		if err := s.DeleteArtifact(context.Background(), sessionInfo, userScopeKey); err != nil {
-			t.Logf("Cleanup: DeleteArtifact: %v", err)
-		}
-	})
 
+	// Save multiple versions
 	for i := 0; i < 3; i++ {
 		data := []byte("Hi, World!" + strconv.Itoa(i))
-		version, err := s.SaveArtifact(context.Background(),
-			sessionInfo, userScopeKey, &artifact.Artifact{
-				Data:     data,
-				MimeType: "text/plain",
-				Name:     "display_name_user_scope_test.txt",
-			})
+		version, err := s.SaveArtifact(ctx, sessionInfo, userScopeKey, &artifact.Artifact{
+			Data:     data,
+			MimeType: "text/plain",
+			Name:     "display_name_user_scope_test.txt",
+		})
 		require.NoError(t, err)
 		require.Equal(t, i, version)
 	}
 
-	version, err := s.ListVersions(context.Background(), sessionInfo, userScopeKey)
+	// List versions
+	versions, err := s.ListVersions(ctx, sessionInfo, userScopeKey)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []int{0, 1, 2}, version)
+	require.ElementsMatch(t, []int{0, 1, 2}, versions)
 
-	a, err := s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
+	// Load latest version
+	a, err := s.LoadArtifact(ctx, sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(t, &artifact.Artifact{
 		Data:     []byte("Hi, World!" + strconv.Itoa(2)),
 		MimeType: "text/plain",
 		Name:     userScopeKey,
 	}, a)
+
+	// Load specific versions
 	for i := 0; i < 3; i++ {
-		a, err := s.LoadArtifact(context.Background(),
-			sessionInfo, userScopeKey, &i)
+		a, err := s.LoadArtifact(ctx, sessionInfo, userScopeKey, &i)
 		require.NoError(t, err)
 		require.EqualValues(t, &artifact.Artifact{
 			Data:     []byte("Hi, World!" + strconv.Itoa(i)),
@@ -131,158 +315,211 @@ func TestArtifact_UserScope(t *testing.T) {
 		}, a)
 	}
 
-	keys, err := s.ListArtifactKeys(context.Background(), sessionInfo)
+	// List artifact keys
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{userScopeKey}, keys)
 
-	err = s.DeleteArtifact(context.Background(), sessionInfo, userScopeKey)
+	// Delete artifact
+	err = s.DeleteArtifact(ctx, sessionInfo, userScopeKey)
 	require.NoError(t, err)
 
-	keys, err = s.ListArtifactKeys(context.Background(), sessionInfo)
+	// Verify artifact is deleted
+	keys, err = s.ListArtifactKeys(ctx, sessionInfo)
 	require.NoError(t, err)
 	require.Empty(t, keys)
 
-	version, err = s.ListVersions(context.Background(), sessionInfo, userScopeKey)
+	// Verify versions are empty
+	versions, err = s.ListVersions(ctx, sessionInfo, userScopeKey)
 	require.NoError(t, err)
-	require.Empty(t, version)
+	require.Empty(t, versions)
 
-	a, err = s.LoadArtifact(context.Background(), sessionInfo, userScopeKey, nil)
+	// Verify artifact cannot be loaded
+	a, err = s.LoadArtifact(ctx, sessionInfo, userScopeKey, nil)
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
 
-// MockVersionService is a test helper that simulates version tracking
-type MockVersionService struct {
-	versions map[string][]int // map of object name prefix to list of versions
-}
+func TestMixedScopeArtifacts(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
 
-func NewMockVersionService() *MockVersionService {
-	return &MockVersionService{
-		versions: make(map[string][]int),
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
 	}
-}
 
-func (m *MockVersionService) GetVersions(objectPrefix string) []int {
-	return m.versions[objectPrefix]
-}
-
-func (m *MockVersionService) AddVersion(objectPrefix string, version int) {
-	if m.versions[objectPrefix] == nil {
-		m.versions[objectPrefix] = []int{}
+	// Save session-scoped artifact
+	sessionArtifact := &artifact.Artifact{
+		Data:     []byte("session data"),
+		MimeType: "text/plain",
+		Name:     "session.txt",
 	}
-	m.versions[objectPrefix] = append(m.versions[objectPrefix], version)
+	version, err := s.SaveArtifact(ctx, sessionInfo, "session.txt", sessionArtifact)
+	require.NoError(t, err)
+	assert.Equal(t, 0, version)
+
+	// Save user-scoped artifact
+	userArtifact := &artifact.Artifact{
+		Data:     []byte("user data"),
+		MimeType: "text/plain",
+		Name:     "user:profile.txt",
+	}
+	version, err = s.SaveArtifact(ctx, sessionInfo, "user:profile.txt", userArtifact)
+	require.NoError(t, err)
+	assert.Equal(t, 0, version)
+
+	// List all keys should include both
+	keys, err := s.ListArtifactKeys(ctx, sessionInfo)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"session.txt", "user:profile.txt"}, keys)
+
+	// Load both artifacts
+	loadedSession, err := s.LoadArtifact(ctx, sessionInfo, "session.txt", nil)
+	require.NoError(t, err)
+	assert.Equal(t, sessionArtifact.Data, loadedSession.Data)
+
+	loadedUser, err := s.LoadArtifact(ctx, sessionInfo, "user:profile.txt", nil)
+	require.NoError(t, err)
+	assert.Equal(t, userArtifact.Data, loadedUser.Data)
 }
 
-// TestSaveArtifact_ArtifactValidation tests artifact validation logic
-func TestSaveArtifact_ArtifactValidation(t *testing.T) {
+func TestLoadNonexistentArtifact(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	// Load non-existent artifact
+	artifact, err := s.LoadArtifact(ctx, sessionInfo, "nonexistent.txt", nil)
+	require.NoError(t, err)
+	assert.Nil(t, artifact)
+
+	// Load non-existent version
+	invalidVersion := 999
+	artifact, err = s.LoadArtifact(ctx, sessionInfo, "nonexistent.txt", &invalidVersion)
+	require.NoError(t, err)
+	assert.Nil(t, artifact)
+}
+
+func TestDeleteNonexistentArtifact(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	// Delete non-existent artifact should not error
+	err := s.DeleteArtifact(ctx, sessionInfo, "nonexistent.txt")
+	require.NoError(t, err)
+}
+
+func TestListVersionsNonexistentArtifact(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	// List versions for non-existent artifact
+	versions, err := s.ListVersions(ctx, sessionInfo, "nonexistent.txt")
+	require.NoError(t, err)
+	assert.Empty(t, versions)
+}
+
+func TestMultipleVersionsAndDeletion(t *testing.T) {
+	s, _ := createMockService()
+	ctx := context.Background()
+
+	sessionInfo := artifact.SessionInfo{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	filename := "versioned.txt"
+
+	// Save multiple versions
+	for i := 0; i < 5; i++ {
+		artifact := &artifact.Artifact{
+			Data:     []byte(fmt.Sprintf("version %d data", i)),
+			MimeType: "text/plain",
+			Name:     filename,
+		}
+		version, err := s.SaveArtifact(ctx, sessionInfo, filename, artifact)
+		require.NoError(t, err)
+		assert.Equal(t, i, version)
+	}
+
+	// List all versions
+	versions, err := s.ListVersions(ctx, sessionInfo, filename)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{0, 1, 2, 3, 4}, versions)
+
+	// Load specific versions
+	for i := 0; i < 5; i++ {
+		loadedArtifact, err := s.LoadArtifact(ctx, sessionInfo, filename, &i)
+		require.NoError(t, err)
+		expected := fmt.Sprintf("version %d data", i)
+		assert.Equal(t, []byte(expected), loadedArtifact.Data)
+	}
+
+	// Delete all versions
+	err = s.DeleteArtifact(ctx, sessionInfo, filename)
+	require.NoError(t, err)
+
+	// Verify all versions are deleted
+	versions, err = s.ListVersions(ctx, sessionInfo, filename)
+	require.NoError(t, err)
+	assert.Empty(t, versions)
+}
+
+func TestNewServiceWithOptions(t *testing.T) {
 	tests := []struct {
-		name     string
-		artifact *artifact.Artifact
-		wantErr  bool
+		name      string
+		bucketURL string
+		options   []Option
 	}{
 		{
-			name: "valid_text_artifact",
-			artifact: &artifact.Artifact{
-				Data:     []byte("Hello, World!"),
-				MimeType: "text/plain",
-				Name:     "test.txt",
+			name:      "with secret credentials",
+			bucketURL: "https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com",
+			options: []Option{
+				WithSecretID("test-id"),
+				WithSecretKey("test-key"),
 			},
-			wantErr: false,
 		},
 		{
-			name: "valid_binary_artifact",
-			artifact: &artifact.Artifact{
-				Data:     []byte{0x89, 0x50, 0x4E, 0x47}, // PNG header
-				MimeType: "image/png",
-				Name:     "image.png",
+			name:      "with custom timeout",
+			bucketURL: "https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com",
+			options: []Option{
+				WithTimeout(30 * 1000000000), // 30 seconds in nanoseconds
 			},
-			wantErr: false,
 		},
 		{
-			name: "empty_data_valid",
-			artifact: &artifact.Artifact{
-				Data:     []byte{},
-				MimeType: "text/plain",
-				Name:     "empty.txt",
+			name:      "with custom http client",
+			bucketURL: "https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com",
+			options: []Option{
+				WithHTTPClient(&http.Client{}),
 			},
-			wantErr: false,
-		},
-		{
-			name: "nil_data_invalid",
-			artifact: &artifact.Artifact{
-				Data:     nil,
-				MimeType: "text/plain",
-				Name:     "nil_data.txt",
-			},
-			wantErr: false, // nil data might be valid in some cases
-		},
-		{
-			name:     "nil_artifact",
-			artifact: nil,
-			wantErr:  true, // nil artifact should cause error in real implementation
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test basic artifact properties
-			if tt.artifact != nil {
-				if tt.artifact.Data == nil && !tt.wantErr {
-					// This is acceptable - empty data is different from nil data
-				}
-				if tt.artifact.MimeType == "" && !tt.wantErr {
-					t.Error("Valid artifact should have MimeType")
-				}
-			}
-		})
-	}
-}
-
-// TestService_NewService tests service creation with different bucket URLs
-func TestService_NewService(t *testing.T) {
-	tests := []struct {
-		name           string
-		bucketURL      string
-		expectNonNil   bool
-		expectedBucket string
-	}{
-		{
-			name:           "valid_bucket_url",
-			bucketURL:      "https://test-bucket.cos.ap-guangzhou.myqcloud.com",
-			expectNonNil:   true,
-			expectedBucket: "test-bucket",
-		},
-		{
-			name:           "different_region",
-			bucketURL:      "https://my-app-bucket.cos.ap-beijing.myqcloud.com",
-			expectNonNil:   true,
-			expectedBucket: "my-app-bucket",
-		},
-		{
-			name:           "bucket_with_numbers",
-			bucketURL:      "https://bucket-123.cos.ap-shanghai.myqcloud.com",
-			expectNonNil:   true,
-			expectedBucket: "bucket-123",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			service := NewService(tt.bucketURL)
-
-			if tt.expectNonNil {
-				if service == nil {
-					t.Error("NewService() returned nil, expected non-nil service")
-					return
-				}
-				if service.cosClient == nil {
-					t.Error("NewService() cosClient is nil, expected non-nil client")
-				}
-			} else {
-				if service != nil {
-					t.Error("NewService() returned non-nil, expected nil")
-				}
-			}
+			service := NewService(tt.bucketURL, tt.options...)
+			assert.NotNil(t, service)
+			assert.NotNil(t, service.cosClient)
 		})
 	}
 }
