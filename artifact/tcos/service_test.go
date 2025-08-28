@@ -2,6 +2,7 @@ package tcos
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"testing"
 
@@ -11,8 +12,8 @@ import (
 
 func TestArtifact_SessionScope(t *testing.T) {
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID and COS_SECRETKEY")
-	s := NewService("https://trpc-agent-go-test-1259770036.cos.ap-guangzhou.myqcloud.com")
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_BUCKET_URL, COS_SECRETID and COS_SECRETKEY")
+	s := NewService(os.Getenv("COS_BUCKET_URL"))
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user1",
@@ -81,9 +82,9 @@ func TestArtifact_SessionScope(t *testing.T) {
 }
 
 func TestArtifact_UserScope(t *testing.T) {
-	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID and COS_SECRETKEY")
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_BUCKET_URL, COS_SECRETID and COS_SECRETKEY")
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	s := NewService("https://trpc-agent-go-test-1259770036.cos.ap-guangzhou.myqcloud.com")
+	s := NewService(os.Getenv("COS_BUCKET_URL"))
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user2",
