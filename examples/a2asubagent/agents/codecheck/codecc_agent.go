@@ -1,10 +1,9 @@
-// Package main provides an entrance agent for A2A (Agent-to-Agent) communication.
+// Package main provides a code check agent for A2A (Agent-to-Agent) communication.
 package main
 
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,46 +12,31 @@ import (
 	a2aserver "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/examples/a2a/registry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (
-	entranceAgentName = "EntranceAgent"
-	codeCheckAgent    = "CodeCheckAgent"
+	agentName = "CodeCheckAgent"
 )
 
 func main() {
 	// Parse command-line flags.
-	host := flag.String("host", "localhost:8087", "Host to listen on")
+	host := flag.String("host", "0.0.0.0:8088", "Host to listen on")
 	modelName := flag.String("model", "deepseek-chat", "Model to use")
 	flag.Parse()
 
-	// simulate a registry center
-	registry.RegisterAgentService(codeCheckAgent, "http://localhost:8088/a2a/codecheck/")
-
-	// generate tool list
-	agentList, err := registry.GenerateToolList()
-	if err != nil {
-		log.Fatalf("failed to generate tool list: %v", err)
-	}
-
-	// Build the entrance agent
-	entranceAgent := buildEntranceAgent(*modelName, agentList)
-
-	// Create agent card
-	agentCard := buildAgentCard(*host, agentList)
-
-	// Create a2a server with the agent
+	// Build the code check agent
+	codeCheckAgent := buildCodeCheckAgent(*modelName)
+	agentCard := buildAgentCard()
 	server, err := a2a.New(
 		a2a.WithHost(*host),
-		a2a.WithAgent(entranceAgent),
+		a2a.WithAgent(codeCheckAgent, true),
 		a2a.WithAgentCard(agentCard),
-		a2a.WithExtraA2AOptions(a2aserver.WithBasePath("/a2a/entrance/")),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -70,7 +54,6 @@ func main() {
 		}
 	}()
 
-	// Wait for termination signal.
 	sig := <-sigChan
 	log.Infof("Received signal %v, shutting down...", sig)
 
@@ -82,49 +65,33 @@ func main() {
 	}
 }
 
-func buildEntranceAgent(modelName string, agentList []tool.Tool) agent.Agent {
-	// Create OpenAI model.
+func buildCodeCheckAgent(modelName string) agent.Agent {
 	modelInstance := openai.New(modelName)
-
-	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream:      true,
 	}
-
-	desc := "A entrance agent, it will delegate the task to the sub-agent by a2a protocol, or try to solve the task by itself, agent list:"
-	for _, tool := range agentList {
-		desc += fmt.Sprintf("\n- %s: %s", tool.Declaration().Name, tool.Declaration().Description)
-	}
-
-	llmAgent := llmagent.New(
-		entranceAgentName,
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription(desc),
-		llmagent.WithInstruction(desc),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools(agentList),
+	readSpecTool := function.NewFunctionTool(
+		readSpecFile,
+		function.WithName("ReadGolangStandardSpec"),
+		function.WithDescription("Read the golang standard spec file from go language standard"),
 	)
-
+	llmAgent := llmagent.New(
+		agentName,
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A agent that can analyze code and check code quality by Go Language Standard"),
+		llmagent.WithInstruction("Analyze the code and check code quality by Go Language Standard"),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithTools([]tool.Tool{readSpecTool}),
+	)
 	return llmAgent
 }
 
-func buildAgentCard(host string, agentList []tool.Tool) a2aserver.AgentCard {
-	desc := "A entrance agent, it will delegate the task to the sub-agent by a2a protocol, or try to solve the task by itself"
-	skills := make([]a2aserver.AgentSkill, 0, len(agentList))
-	for _, tool := range agentList {
-		skills = append(skills, a2aserver.AgentSkill{
-			ID:          tool.Declaration().Name,
-			Name:        tool.Declaration().Name,
-			Description: stringPtr(tool.Declaration().Description),
-		})
-	}
-
+func buildAgentCard() a2aserver.AgentCard {
 	return a2aserver.AgentCard{
-		Name:        entranceAgentName,
-		Description: desc,
-		URL:         fmt.Sprintf("http://%s/a2a/entrance/", host),
+		Name:        agentName,
+		Description: "Check code quality by Go Language Standard; Query the golang standard/spec that user needed",
 		Version:     "1.0.0",
 		Provider: &a2aserver.AgentProvider{
 			Organization: "tRPC-Go",
@@ -137,7 +104,22 @@ func buildAgentCard(host string, agentList []tool.Tool) a2aserver.AgentCard {
 		},
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
-		Skills:             skills,
+		Skills: []a2aserver.AgentSkill{
+			{
+				ID:          "code_check",
+				Name:        "code_check",
+				Description: stringPtr("Check code quality by Go Language Standard; Query the golang standard/spec that user needed"),
+				Tags:        []string{"code", "check", "golang"},
+				Examples: []string{
+					`
+					Analyze the code and check code quality by Go Language Standard.
+					Query the golang standard spec/standard file.
+					`,
+				},
+				InputModes:  []string{"text"},
+				OutputModes: []string{"text"},
+			},
+		},
 	}
 }
 

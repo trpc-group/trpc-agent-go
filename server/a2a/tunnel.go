@@ -80,7 +80,6 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 			if event != nil {
 				t.batch = append(t.batch, event)
 				if len(t.batch) >= t.batchSize {
-					fmt.Printf("flushing batch batch size: %d\n", len(t.batch))
 					ok, err := t.flushBatch()
 					if err != nil {
 						return fmt.Errorf("tunnel error during batch flush: %v", err)
@@ -94,7 +93,6 @@ func (t *eventTunnel) Run(ctx context.Context) error {
 			select {
 			case <-ticker.C:
 				if len(t.batch) > 0 {
-					fmt.Printf("flushing batch now %s, batch size: %d\n", time.Now().Format("2006-01-02 15:04:05.000"), len(t.batch))
 					ok, err := t.flushBatch()
 					if err != nil {
 						return fmt.Errorf("tunnel error during timer flush: %v", err)

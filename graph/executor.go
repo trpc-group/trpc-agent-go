@@ -213,14 +213,17 @@ func (e *Executor) executeGraph(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
-	// Serialize final state under write lock to avoid concurrent map mutations (including nested maps).
-	execCtx.stateMutex.Lock()
-	for key, value := range execCtx.State {
+	// Snapshot the state under read lock to avoid concurrent map iteration
+	// while other goroutines may still append metadata.
+	execCtx.stateMutex.RLock()
+	stateSnapshot := make(State, len(execCtx.State))
+	maps.Copy(stateSnapshot, execCtx.State)
+	execCtx.stateMutex.RUnlock()
+	for key, value := range stateSnapshot {
 		if jsonData, err := json.Marshal(value); err == nil {
 			completionEvent.StateDelta[key] = jsonData
 		}
 	}
-	execCtx.stateMutex.Unlock()
 
 	select {
 	case eventChan <- completionEvent:
@@ -727,17 +730,17 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	defer execCtx.stateMutex.Unlock()
 
 	// Special handling for message-related state to preserve GraphAgent functionality.
-	// Check if this is a message state update that should use direct assignment.
 	if _, hasMessages := stateResult[StateKeyMessages]; hasMessages {
-		// For message state, use direct assignment to preserve GraphAgent's message management.
 		maps.Copy(execCtx.State, stateResult)
-	} else if e.graph != nil && e.graph.Schema() != nil {
-		// For non-message state, use schema-based updates for proper reducer handling.
-		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
-	} else {
-		// Fallback to direct assignment if no schema available.
-		maps.Copy(execCtx.State, stateResult)
+		return
 	}
+	// Use schema-based reducers when available for proper merging.
+	if e.graph != nil && e.graph.Schema() != nil {
+		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
+		return
+	}
+	// Fallback to direct assignment if no schema available.
+	maps.Copy(execCtx.State, stateResult)
 }
 
 // handleCommandResult handles a Command result from node execution.
