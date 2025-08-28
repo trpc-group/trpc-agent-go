@@ -255,6 +255,46 @@ sessionService := inmemory.NewSessionService(
 )
 ```
 
+#### In-memory Configuration Options
+
+- **`WithSessionEventLimit(limit int)`**: Sets the maximum number of events stored per session. Default is 1000. When the limit is exceeded, older events are evicted.
+- **`WithSessionTTL(ttl time.Duration)`**: Sets the TTL for session state and event list. Default is 0 (no expiration). If set to 0, sessions will not expire automatically.
+- **`WithAppStateTTL(ttl time.Duration)`**: Sets the TTL for application-level state. Default is 0 (no expiration). If not set, app state will not expire automatically.
+- **`WithUserStateTTL(ttl time.Duration)`**: Sets the TTL for user-level state. Default is 0 (no expiration). If not set, user state will not expire automatically.
+- **`WithCleanupInterval(interval time.Duration)`**: Sets the interval for automatic cleanup of expired data. Default is 0 (auto-determined). If set to 0, automatic cleanup will be determined based on TTL configuration. Default cleanup interval is 5 minutes if any TTL is configured.
+
+**Example with full configuration:**
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSessionEventLimit(500),
+    inmemory.WithSessionTTL(30*time.Minute),
+    inmemory.WithAppStateTTL(24*time.Hour),
+    inmemory.WithUserStateTTL(7*24*time.Hour),
+    inmemory.WithCleanupInterval(10*time.Minute),
+)
+
+// Configuration effects:
+// - Each session stores up to 500 events, automatically evicting oldest events when exceeded
+// - Session data expires after 30 minutes of inactivity
+// - Application-level state expires after 24 hours
+// - User-level state expires after 7 days
+// - Cleanup operation runs every 10 minutes to remove expired data
+```
+
+**Default configuration example:**
+
+```go
+// Create in-memory session service with default configuration
+sessionService := inmemory.NewSessionService()
+
+// Default configuration effects:
+// - Each session stores up to 1000 events (default value)
+// - All data never expires (TTL is 0)
+// - No automatic cleanup (CleanupInterval is 0)
+// - Suitable for development environments or short-running applications
+```
+
 ### Redis Storage
 
 Suitable for production environments and distributed applications:
@@ -272,6 +312,48 @@ sessionService, err := redis.NewService(
 sessionService, err := redis.NewService(
     redis.WithInstanceName("my-redis-instance"),
 )
+```
+
+#### Redis Configuration Options
+
+- **`WithSessionEventLimit(limit int)`**: Sets the maximum number of events stored per session. Default is 1000. When the limit is exceeded, older events are evicted.
+- **`WithRedisClientURL(url string)`**: Creates a Redis client from URL. Format: `redis://[username:password@]host:port[/database]`.
+- **`WithRedisInstance(instanceName string)`**: Uses a preconfigured Redis instance from storage. Note: `WithRedisClientURL` has higher priority than `WithRedisInstance`.
+- **`WithExtraOptions(extraOptions ...interface{})`**: Sets extra options for the Redis session service. This option is mainly used for customized Redis client builders and will be passed to the builder.
+- **`WithSessionTTL(ttl time.Duration)`**: Sets the TTL for session state and event list. Default is 0 (no expiration). If set to 0, sessions will not expire.
+- **`WithAppStateTTL(ttl time.Duration)`**: Sets the TTL for application-level state. Default is 0 (no expiration). If not set, app state will not expire.
+- **`WithUserStateTTL(ttl time.Duration)`**: Sets the TTL for user-level state. Default is 0 (no expiration). If not set, user state will not expire.
+
+**Example with full configuration:**
+
+```go
+sessionService, err := redis.NewService(
+    redis.WithRedisClientURL("redis://localhost:6379/0"),
+    redis.WithSessionEventLimit(1000),
+    redis.WithSessionTTL(30*time.Minute),
+    redis.WithAppStateTTL(24*time.Hour),
+    redis.WithUserStateTTL(7*24*time.Hour),
+)
+
+// Configuration effects:
+// - Connects to local Redis server database 0
+// - Each session stores up to 1000 events, automatically evicting oldest events when exceeded
+// - Session data expires after 30 minutes of inactivity
+// - Application-level state expires after 24 hours
+// - User-level state expires after 7 days
+// - Uses Redis TTL mechanism for automatic cleanup, no manual cleanup needed
+
+**Default configuration example:**
+
+```go
+// Create Redis session service with default configuration (requires pre-configured Redis instance)
+sessionService, err := redis.NewService()
+
+// Default configuration effects:
+// - Each session stores up to 1000 events (default value)
+// - All data never expires (TTL is 0)
+// - Requires pre-registered Redis instance via storage.RegisterRedisInstance
+// - Suitable for scenarios requiring persistence but no automatic expiration
 ```
 
 #### Configuration Reuse
