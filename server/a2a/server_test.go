@@ -239,8 +239,8 @@ func TestNew(t *testing.T) {
 			errMsg:  "host is required",
 		},
 		{
-			name: "no options",
-			opts: []Option{},
+			name:    "no options",
+			opts:    []Option{},
 			wantErr: true,
 			errMsg:  "agent is required",
 		},
