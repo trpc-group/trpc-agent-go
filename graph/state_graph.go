@@ -330,7 +330,8 @@ func buildMessagesFromState(state State, instruction string) []model.Message {
 	}
 	// Check if the last message is from assistant, and if so, append current user input.
 	// This is required by some APIs that enforce the last message must be from user.
-	if len(messages) > 0 && messages[len(messages)-1].Role == model.RoleAssistant {
+	if len(messages) > 0 && (messages[len(messages)-1].Role == model.RoleAssistant ||
+		messages[len(messages)-1].Role == model.RoleSystem) {
 		if userInput, exists := state[StateKeyUserInput]; exists {
 			if input, ok := userInput.(string); ok && input != "" {
 				messages = append(messages, model.NewUserMessage(input))
