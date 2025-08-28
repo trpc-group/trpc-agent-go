@@ -8,16 +8,17 @@ docs_dir: docs/
 nav:
   - Overview: index.md
   - Components:
-    - Agent: agent.md
-    - Multi-Agent: multiagent.md
-    - Runner: runner.md
-    - Model: model.md
-    - Tool: tool.md
-    - Session: session.md
-    - Knowledge: knowledge.md
-    - Planner: planner.md
-    - Graph: graph.md
-    - Event: event.md
+      - Agent: agent.md
+      - Multi-Agent: multiagent.md
+      - Runner: runner.md
+      - Model: model.md
+      - Memory: memory.md
+      - Tool: tool.md
+      - Session: session.md
+      - Knowledge: knowledge.md
+      - Planner: planner.md
+      - Graph: graph.md
+      - Event: event.md
   - Debug: debugserver.md
   - Observability: observability.md
   - A2A: a2a.md
@@ -39,16 +40,17 @@ plugins:
           nav:
             - 概览: index.md
             - 组件:
-              - Agent: agent.md
-              - Multi-Agent: multiagent.md
-              - Runner: runner.md
-              - Model: model.md
-              - Tool: tool.md
-              - Session: session.md
-              - Knowledge: knowledge.md
-              - Planner: planner.md
-              - Graph: graph.md
-              - Event: event.md
+                - Agent: agent.md
+                - Multi-Agent: multiagent.md
+                - Runner: runner.md
+                - Model: model.md
+                - Memory: memory.md
+                - Tool: tool.md
+                - Session: session.md
+                - Knowledge: knowledge.md
+                - Planner: planner.md
+                - Graph: graph.md
+                - Event: event.md
             - 调试: debugserver.md
             - 可观测: observability.md
             - A2A: a2a.md
@@ -73,7 +75,7 @@ theme:
   palette:
     - scheme: default
       toggle:
-        icon: material/brightness-7 
+        icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
       toggle:
@@ -94,7 +96,7 @@ extra_css:
   - assets/stylesheets/extra.css
 
 extra:
-  analytics: 
+  analytics:
     provider: google
     feedback:
       title: Was this page helpful?
@@ -107,6 +109,6 @@ extra:
         - icon: material/emoticon-sad-outline
           name: This page could be improved
           data: 0
-          note: >- 
+          note: >-
             Thanks for your feedback!<br>Please help us improve by
             opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
