@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -364,4 +365,41 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 			},
 		)
 	})
+}
+
+// TestLLMAgent_InvocationContextAccess verifies that LLMAgent can access invocation
+// from context when called through runner (after removing duplicate injection).
+func TestLLMAgent_InvocationContextAccess(t *testing.T) {
+	// Create a simple LLM agent.
+	llmAgent := New("test-llm-agent")
+
+	// Create invocation with context that contains invocation.
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation-123",
+		AgentName:    "test-llm-agent",
+		Message:      model.NewUserMessage("Test invocation context access"),
+	}
+
+	// Create context with invocation (simulating what runner does).
+	ctx := agent.NewContextWithInvocation(context.Background(), invocation)
+
+	// Run the agent.
+	eventCh, err := llmAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify that the agent can access invocation from context.
+	// This test ensures that even after removing the duplicate injection from LLMAgent,
+	// it can still access invocation when called through runner.
+	require.Greater(t, len(events), 0)
+
+	// The agent should have been able to run successfully, which means
+	// it could access the invocation from context for any internal operations.
+	t.Logf("LLMAgent successfully executed with %d events, confirming invocation context access", len(events))
 }

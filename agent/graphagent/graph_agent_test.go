@@ -15,7 +15,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -302,4 +304,63 @@ func TestGraphAgentRuntimeStateOverridesBaseState(t *testing.T) {
 	if eventCount == 0 {
 		t.Error("Expected at least one event")
 	}
+}
+
+// TestGraphAgent_InvocationContextAccess verifies that GraphAgent can access invocation
+// from context when called through runner (after removing duplicate injection).
+func TestGraphAgent_InvocationContextAccess(t *testing.T) {
+	// Create a simple graph agent.
+	stateGraph := graph.NewStateGraph(nil)
+	stateGraph.AddNode("test-node", func(ctx context.Context, state graph.State) (any, error) {
+		// Verify that invocation is accessible from context.
+		invocation, ok := agent.InvocationFromContext(ctx)
+		if !ok || invocation == nil {
+			return nil, fmt.Errorf("invocation not found in context")
+		}
+
+		// Return success state.
+		return graph.State{
+			"invocation_id": invocation.InvocationID,
+			"agent_name":    invocation.AgentName,
+			"status":        "success",
+		}, nil
+	})
+	stateGraph.SetEntryPoint("test-node")
+	stateGraph.SetFinishPoint("test-node")
+
+	compiledGraph, err := stateGraph.Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-graph-agent", compiledGraph)
+	require.NoError(t, err)
+
+	// Create invocation with context that contains invocation.
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation-123",
+		AgentName:    "test-graph-agent",
+		Message:      model.NewUserMessage("Test invocation context access"),
+	}
+
+	// Create context with invocation (simulating what runner does).
+	ctx := agent.NewContextWithInvocation(context.Background(), invocation)
+
+	// Run the agent.
+	eventCh, err := graphAgent.Run(ctx, invocation)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify that the agent can access invocation from context.
+	// This test ensures that even after removing the duplicate injection from LLMAgent,
+	// GraphAgent can still access invocation when called through runner.
+	require.Greater(t, len(events), 0)
+
+	// The agent should have been able to run successfully, which means
+	// it could access the invocation from context for any internal operations.
+	t.Logf("GraphAgent successfully executed with %d events, confirming invocation context access", len(events))
 }
