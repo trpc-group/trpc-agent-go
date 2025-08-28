@@ -13,8 +13,11 @@ package llmagent
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -169,7 +172,7 @@ func WithOutputKey(outputKey string) Option {
 // WithOutputSchema sets the JSON schema for validating agent output.
 // When this is set, the agent can ONLY reply and CANNOT use any tools,
 // such as function tools, RAGs, agent transfer, etc.
-func WithOutputSchema(schema map[string]interface{}) Option {
+func WithOutputSchema(schema map[string]any) Option {
 	return func(opts *Options) {
 		opts.OutputSchema = schema
 	}
@@ -178,7 +181,7 @@ func WithOutputSchema(schema map[string]interface{}) Option {
 // WithInputSchema sets the JSON schema for validating agent input.
 // When this is set, the agent's input will be validated against this schema
 // when used as a tool or when receiving input from other agents.
-func WithInputSchema(schema map[string]interface{}) Option {
+func WithInputSchema(schema map[string]any) Option {
 	return func(opts *Options) {
 		opts.InputSchema = schema
 	}
@@ -196,6 +199,38 @@ func WithAddNameToInstruction(addNameToInstruction bool) Option {
 func WithEnableParallelTools(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableParallelTools = enable
+	}
+}
+
+// WithStructuredOutputJSON sets a JSON schema structured output for normal runs.
+// The schema is constructed automatically from the provided example type.
+// Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
+func WithStructuredOutputJSON(examplePtr any, strict bool, description string) Option {
+	return func(opts *Options) {
+		// Infer reflect.Type from examplePtr.
+		var t reflect.Type
+		if examplePtr == nil {
+			return
+		}
+		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
+			t = rt
+		} else {
+			t = reflect.PointerTo(rt)
+		}
+		// Generate a robust JSON schema via the generator.
+		gen := jsonschema.New()
+		schema := gen.Generate(t.Elem())
+		name := t.Elem().Name()
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+		opts.StructuredOutputType = t
 	}
 }
 
@@ -284,35 +319,43 @@ type Options struct {
 	OutputKey string
 	// OutputSchema is the JSON schema for validating agent output.
 	// When this is set, the agent can ONLY reply and CANNOT use any tools.
-	OutputSchema map[string]interface{}
+	OutputSchema map[string]any
 	// InputSchema is the JSON schema for validating agent input.
 	// When this is set, the agent's input will be validated against this schema
 	// when used as a tool or when receiving input from other agents.
-	InputSchema map[string]interface{}
+	InputSchema map[string]any
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
+
+	// StructuredOutput defines how the model should produce structured output in normal runs.
+	StructuredOutput *model.StructuredOutput
+	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
+	StructuredOutputType reflect.Type
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
 type LLMAgent struct {
-	name           string
-	model          model.Model
-	description    string
-	instruction    string
-	systemPrompt   string
-	genConfig      model.GenerationConfig
-	flow           flow.Flow
-	tools          []tool.Tool // Tools supported by the agent
-	codeExecutor   codeexecutor.CodeExecutor
-	planner        planner.Planner
-	subAgents      []agent.Agent // Sub-agents that can be delegated to
-	agentCallbacks *agent.Callbacks
-	modelCallbacks *model.Callbacks
-	toolCallbacks  *tool.Callbacks
-	outputKey      string                 // Key to store output in session state
-	outputSchema   map[string]interface{} // JSON schema for output validation
-	inputSchema    map[string]interface{} // JSON schema for input validation
+	name                 string
+	mu                   sync.RWMutex
+	model                model.Model
+	description          string
+	instruction          string
+	systemPrompt         string
+	genConfig            model.GenerationConfig
+	flow                 flow.Flow
+	tools                []tool.Tool // Tools supported by the agent
+	codeExecutor         codeexecutor.CodeExecutor
+	planner              planner.Planner
+	subAgents            []agent.Agent // Sub-agents that can be delegated to
+	agentCallbacks       *agent.Callbacks
+	modelCallbacks       *model.Callbacks
+	toolCallbacks        *tool.Callbacks
+	outputKey            string         // Key to store output in session state
+	outputSchema         map[string]any // JSON schema for output validation
+	inputSchema          map[string]any // JSON schema for input validation
+	structuredOutput     *model.StructuredOutput
+	structuredOutputType reflect.Type
 }
 
 // New creates a new LLMAgent with the given options.
@@ -325,6 +368,83 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Prepare request processors in the correct order.
+	requestProcessors := buildRequestProcessors(name, &options)
+
+	// Prepare response processors.
+	var responseProcessors []flow.ResponseProcessor
+
+	// Add planning response processor if planner is configured.
+	if options.Planner != nil {
+		planningResponseProcessor := processor.NewPlanningResponseProcessor(options.Planner)
+		responseProcessors = append(responseProcessors, planningResponseProcessor)
+	}
+
+	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
+
+	// Add output response processor if output_key or output_schema is configured or structured output is requested.
+	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
+		orp := processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema)
+		responseProcessors = append(responseProcessors, orp)
+	}
+
+	// Add transfer response processor if sub-agents are configured.
+	if len(options.SubAgents) > 0 {
+		transferResponseProcessor := processor.NewTransferResponseProcessor()
+		responseProcessors = append(responseProcessors, transferResponseProcessor)
+	}
+
+	// Create flow with the provided processors and options.
+	flowOpts := llmflow.Options{
+		ChannelBufferSize:   options.ChannelBufferSize,
+		EnableParallelTools: options.EnableParallelTools,
+	}
+
+	llmFlow := llmflow.New(
+		requestProcessors, responseProcessors,
+		flowOpts,
+	)
+
+	// Validate output_schema configuration before registering tools.
+	if options.OutputSchema != nil {
+		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		if options.Knowledge != nil || options.Memory != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge and memory must be empty")
+		}
+		if len(options.SubAgents) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
+		}
+	}
+
+	// Register tools from both tools and toolsets, including knowledge search tool if provided.
+	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
+
+	return &LLMAgent{
+		name:                 name,
+		model:                options.Model,
+		description:          options.Description,
+		instruction:          options.Instruction,
+		systemPrompt:         options.GlobalInstruction,
+		genConfig:            options.GenerationConfig,
+		flow:                 llmFlow,
+		codeExecutor:         options.codeExecutor,
+		tools:                tools,
+		planner:              options.Planner,
+		subAgents:            options.SubAgents,
+		agentCallbacks:       options.AgentCallbacks,
+		modelCallbacks:       options.ModelCallbacks,
+		toolCallbacks:        options.ToolCallbacks,
+		outputKey:            options.OutputKey,
+		outputSchema:         options.OutputSchema,
+		inputSchema:          options.InputSchema,
+		structuredOutput:     options.StructuredOutput,
+		structuredOutputType: options.StructuredOutputType,
+	}
+}
+
+// buildRequestProcessors constructs the request processors in the required order.
+func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor {
 	var requestProcessors []flow.RequestProcessor
 
 	// 1. Basic processor - handles generation config.
@@ -341,11 +461,21 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" {
+	if options.Instruction != "" || options.GlobalInstruction != "" ||
+		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+		instructionOpts := []processor.InstructionRequestProcessorOption{
+			processor.WithOutputSchema(options.OutputSchema),
+		}
+		// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
+		if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
+			instructionOpts = append(instructionOpts,
+				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
+			)
+		}
 		instructionProcessor := processor.NewInstructionRequestProcessor(
 			options.Instruction,
 			options.GlobalInstruction,
-			processor.WithOutputSchema(options.OutputSchema),
+			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
 	}
@@ -376,72 +506,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// Prepare response processors.
-	var responseProcessors []flow.ResponseProcessor
-
-	// Add planning response processor if planner is configured.
-	if options.Planner != nil {
-		planningResponseProcessor := processor.NewPlanningResponseProcessor(options.Planner)
-		responseProcessors = append(responseProcessors, planningResponseProcessor)
-	}
-
-	responseProcessors = append(responseProcessors, processor.NewCodeExecutionResponseProcessor())
-
-	// Add output response processor if output_key or output_schema is configured.
-	if options.OutputKey != "" || options.OutputSchema != nil {
-		responseProcessors = append(responseProcessors,
-			processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema))
-	}
-
-	// Add transfer response processor if sub-agents are configured.
-	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor()
-		responseProcessors = append(responseProcessors, transferResponseProcessor)
-	}
-
-	// Create flow with the provided processors and options.
-	flowOpts := llmflow.Options{
-		ChannelBufferSize:   options.ChannelBufferSize,
-		EnableParallelTools: options.EnableParallelTools,
-	}
-
-	llmFlow := llmflow.New(
-		requestProcessors, responseProcessors,
-		flowOpts,
-	)
-
-	// Validate output_schema configuration before registering tools
-	if options.OutputSchema != nil {
-		if len(options.Tools) > 0 || len(options.ToolSets) > 0 || options.Knowledge != nil {
-			panic("Invalid LLMAgent configuration: if output_schema is set, tools, toolSets, and knowledge must be empty")
-		}
-		if len(options.SubAgents) > 0 {
-			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
-		}
-	}
-
-	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
-
-	return &LLMAgent{
-		name:           name,
-		model:          options.Model,
-		description:    options.Description,
-		instruction:    options.Instruction,
-		systemPrompt:   options.GlobalInstruction,
-		genConfig:      options.GenerationConfig,
-		flow:           llmFlow,
-		codeExecutor:   options.codeExecutor,
-		tools:          tools,
-		planner:        options.Planner,
-		subAgents:      options.SubAgents,
-		agentCallbacks: options.AgentCallbacks,
-		modelCallbacks: options.ModelCallbacks,
-		toolCallbacks:  options.ToolCallbacks,
-		outputKey:      options.OutputKey,
-		outputSchema:   options.OutputSchema,
-		inputSchema:    options.InputSchema,
-	}
+	return requestProcessors
 }
 
 func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
@@ -482,12 +547,22 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	defer span.End()
 	// Ensure the invocation has a model set.
 	if invocation.Model == nil && a.model != nil {
+		a.mu.RLock()
 		invocation.Model = a.model
+		a.mu.RUnlock()
 	}
 
 	// Ensure the agent name is set.
 	if invocation.AgentName == "" {
 		invocation.AgentName = a.name
+	}
+
+	// Propagate structured output configuration into invocation and request path.
+	if invocation.StructuredOutput == nil && a.structuredOutput != nil {
+		invocation.StructuredOutput = a.structuredOutput
+	}
+	if invocation.StructuredOutputType == nil && a.structuredOutputType != nil {
+		invocation.StructuredOutputType = a.structuredOutputType
 	}
 
 	// Set agent callbacks if available.
@@ -638,4 +713,13 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 // This allows the agent to execute code blocks in different environments.
 func (a *LLMAgent) CodeExecutor() codeexecutor.CodeExecutor {
 	return a.codeExecutor
+}
+
+// SetModel sets the model for this agent in a concurrency-safe way.
+// This allows callers to manage multiple models externally and switch
+// dynamically during runtime.
+func (a *LLMAgent) SetModel(m model.Model) {
+	a.mu.Lock()
+	a.model = m
+	a.mu.Unlock()
 }

@@ -30,16 +30,27 @@ type InstructionRequestProcessor struct {
 	SystemPrompt string
 	// OutputSchema is the JSON schema for output validation.
 	// When provided, JSON output instructions are automatically injected.
-	OutputSchema map[string]interface{}
+	OutputSchema map[string]any
+	// StructuredOutputSchema is the JSON schema generated from structured_output.
+	// When provided, it takes precedence over OutputSchema for instruction injection.
+	StructuredOutputSchema map[string]any
 }
 
 // InstructionRequestProcessorOption is a function that can be used to configure the instruction request processor.
 type InstructionRequestProcessorOption func(*InstructionRequestProcessor)
 
 // WithOutputSchema adds the output schema to the instruction request processor.
-func WithOutputSchema(outputSchema map[string]interface{}) InstructionRequestProcessorOption {
+func WithOutputSchema(outputSchema map[string]any) InstructionRequestProcessorOption {
 	return func(p *InstructionRequestProcessor) {
 		p.OutputSchema = outputSchema
+	}
+}
+
+// WithStructuredOutputSchema adds the structured output schema to the instruction request processor.
+// This is used as a fallback when the model provider does not natively enforce JSON Schema.
+func WithStructuredOutputSchema(schema map[string]any) InstructionRequestProcessorOption {
+	return func(p *InstructionRequestProcessor) {
+		p.StructuredOutputSchema = schema
 	}
 }
 
@@ -93,9 +104,13 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(invocation *a
 	processedInstruction := p.Instruction
 	processedSystemPrompt := p.SystemPrompt
 
-	// Automatically inject JSON output instructions if output schema is provided.
-	if p.OutputSchema != nil {
-		jsonInstructions := p.generateJSONInstructions()
+	// Automatically inject JSON output instructions.
+	// Precedence: StructuredOutputSchema > OutputSchema.
+	if p.StructuredOutputSchema != nil {
+		jsonInstructions := p.generateJSONInstructions(p.StructuredOutputSchema)
+		processedInstruction = p.combineInstructions(processedInstruction, jsonInstructions)
+	} else if p.OutputSchema != nil {
+		jsonInstructions := p.generateJSONInstructions(p.OutputSchema)
 		processedInstruction = p.combineInstructions(processedInstruction, jsonInstructions)
 	}
 
@@ -230,22 +245,28 @@ func containsInstruction(content, instruction string) bool {
 	return strings.Contains(content, instruction)
 }
 
-// generateJSONInstructions generates JSON output instructions based on the output schema.
-func (p *InstructionRequestProcessor) generateJSONInstructions() string {
-	if p.OutputSchema == nil {
+// generateJSONInstructions generates JSON output instructions based on a schema.
+func (p *InstructionRequestProcessor) generateJSONInstructions(schema map[string]any) string {
+	if schema == nil {
 		return ""
 	}
 
-	// Convert schema to a readable format for the instruction
-	schemaStr := p.formatSchemaForInstruction(p.OutputSchema)
+	// Convert schema to a readable format for the instruction.
+	schemaStr := p.formatSchemaForInstruction(schema)
 
-	return fmt.Sprintf("IMPORTANT: You must respond with valid JSON in the following format:\n%s\n\n"+
-		"Your response must be valid JSON that matches this schema exactly. "+
-		"Do not include ```json or ``` in the beginning or end of the response.", schemaStr)
+	return fmt.Sprintf(
+		"IMPORTANT: Return ONLY a JSON object that conforms to the schema below.\n"+
+			"- Do NOT include the schema itself in your output.\n"+
+			"- Do NOT include explanations, comments, or markdown fences.\n"+
+			"- Do NOT add keys other than those defined in the schema's properties.\n"+
+			"- The response must be a single JSON object instance, not wrapped, and no trailing text.\n\n"+
+			"Schema (for reference only, do not include this in your output):\n%s\n",
+		schemaStr,
+	)
 }
 
 // formatSchemaForInstruction formats the schema for inclusion in instructions.
-func (p *InstructionRequestProcessor) formatSchemaForInstruction(schema map[string]interface{}) string {
+func (p *InstructionRequestProcessor) formatSchemaForInstruction(schema map[string]any) string {
 	// For now, we'll create a simple JSON representation.
 	// In a more sophisticated implementation, we could parse the schema more intelligently.
 	jsonBytes, err := json.MarshalIndent(schema, "", "  ")

@@ -240,12 +240,54 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
+### Custom Memory Instruction Prompt
+
+You can provide a custom memory instruction prompt builder at service creation. The framework generates a default English instruction based on enabled tools; your builder can wrap or replace that default:
+
+```go
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
+        header := "[Memory Instruction] Follow these guidelines to manage user memories.\n\n"
+        // Example A: wrap the default content
+        return header + defaultPrompt
+        // Example B: replace with your own content
+        // return fmt.Sprintf("[Memory Instruction] Tools available: %s\n...", strings.Join(enabledTools, ", "))
+    }),
+)
+```
+
+Notes:
+
+- Enabled tools: the set of memory tools currently active for your service. By default, `memory_add`, `memory_update`, `memory_search`, and `memory_load` are enabled; `memory_delete` and `memory_clear` are disabled. Control them with `WithToolEnabled(...)`. The builder’s `enabledTools` argument reflects this list.
+- The default prompt already includes tool-specific guidance; your builder receives it via `defaultPrompt`.
+
+```go
+// Redis service: enable delete tool.
+memoryService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithToolEnabled(memory.DeleteToolName, true),
+)
+if err != nil {
+    // Handle error appropriately.
+}
+```
+
 ### Custom Tool Implementation
 
 You can override default tool implementations with custom ones:
 
 ```go
-// Custom clear tool with enhanced logging
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/memory"
+    toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+// Custom clear tool with enhanced logging.
 func customClearMemoryTool(memoryService memory.Service) tool.Tool {
     clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
         fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
@@ -267,6 +309,17 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
+```
+
+```go
+// Or register the custom tool for Redis service.
+memoryService, err := memoryredis.NewService(
+    memoryredis.WithRedisClientURL("redis://localhost:6379"),
+    memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
+)
+if err != nil {
+    // Handle error appropriately.
+}
 ```
 
 ### Tool Creator Pattern

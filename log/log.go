@@ -26,19 +26,19 @@ const (
 	LevelFatal = "fatal"
 )
 
+var zapLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+
 // Default borrows logging utilities from zap.
 // You may replace it with whatever logger you like as long as it implements log.Logger interface.
 var Default Logger = zap.New(
 	zapcore.NewCore(
 		zapcore.NewConsoleEncoder(encoderConfig),
 		zapcore.AddSync(os.Stdout),
-		zap.NewAtomicLevelAt(zapcore.InfoLevel), // Default to info level
+		zapLevel,
 	),
 	zap.AddCaller(),
 	zap.AddCallerSkip(1),
 ).Sugar()
-
-var zapLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 
 // SetLevel sets the log level to the specified level.
 // Valid levels are: "debug", "info", "warn", "error", "fatal"

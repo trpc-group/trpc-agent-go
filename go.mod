@@ -5,6 +5,7 @@ go 1.24.1
 toolchain go1.24.4
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/docker/docker v28.3.2+incompatible
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/gomutex/godocx v0.1.5
@@ -31,8 +32,8 @@ require (
 	golang.org/x/text v0.26.0
 	google.golang.org/genai v1.15.0
 	google.golang.org/grpc v1.73.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.1
-	trpc.group/trpc-go/trpc-mcp-go v0.0.0-20250714033254-da2a7c43bebd
+	trpc.group/trpc-go/trpc-a2a-go v0.2.2
+	trpc.group/trpc-go/trpc-mcp-go v0.0.3
 )
 
 require (

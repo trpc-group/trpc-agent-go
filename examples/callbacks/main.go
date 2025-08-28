@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -21,68 +21,19 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
-	modelName       = flag.String("model", "deepseek-chat", "Name of the model to use")
-	redisAddr       = flag.String("redis-addr", "localhost:6379", "Redis address")
-	sessServiceName = flag.String("session", "inmemory", "Name of the session service to use, inmemory / redis")
-	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
-
-	// Global callback configurations using chain registration.
-	// This demonstrates how to create reusable callback configurations.
-	_ = model.NewCallbacks().
-		RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-			fmt.Printf("🌐 Global BeforeModel: processing %d messages\n", len(req.Messages))
-			return nil, nil
-		}).
-		RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
-			if modelErr != nil {
-				fmt.Printf("🌐 Global AfterModel: error occurred\n")
-			} else {
-				fmt.Printf("🌐 Global AfterModel: processed successfully\n")
-			}
-			return nil, nil
-		})
-
-	_ = tool.NewCallbacks().
-		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-			fmt.Printf("🌐 Global BeforeTool: executing %s\n", toolName)
-			return nil, nil
-		}).
-		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-			if runErr != nil {
-				fmt.Printf("🌐 Global AfterTool: %s failed\n", toolName)
-			} else {
-				fmt.Printf("🌐 Global AfterTool: %s completed\n", toolName)
-			}
-			return nil, nil
-		})
-
-	_ = agent.NewCallbacks().
-		RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-			fmt.Printf("🌐 Global BeforeAgent: starting %s\n", invocation.AgentName)
-			return nil, nil
-		}).
-		RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-			if runErr != nil {
-				fmt.Printf("🌐 Global AfterAgent: execution failed\n")
-			} else {
-				fmt.Printf("🌐 Global AfterAgent: execution completed\n")
-			}
-			return nil, nil
-		})
+	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
 func main() {
@@ -142,20 +93,34 @@ func (c *multiTurnChatWithCallbacks) setup(_ context.Context) error {
 	agentCallbacks := c.createAgentCallbacks()
 
 	// Create LLM agent with tools and callbacks.
-	llmAgent := c.createLLMAgent(modelInstance, tools, modelCallbacks, toolCallbacks, agentCallbacks)
-
-	// Create session service.
-	sessionService, err := c.createSessionService()
-	if err != nil {
-		return fmt.Errorf("failed to create session service: %w", err)
+	genConfig := model.GenerationConfig{
+		MaxTokens:   intPtr(2000),
+		Temperature: floatPtr(0.7),
+		Stream:      c.streaming,
 	}
+	llmAgent := llmagent.New(
+		"chat-assistant",
+		llmagent.WithModel(modelInstance),
+		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
+		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
+			"Be helpful and conversational."),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithTools(tools),
+		llmagent.WithAgentCallbacks(agentCallbacks),
+		llmagent.WithModelCallbacks(modelCallbacks),
+		llmagent.WithToolCallbacks(toolCallbacks),
+	)
 
-	// Create runner.
-	c.createRunner(llmAgent, sessionService)
+	// Create runner with in-memory session service.
+	c.runner = runner.NewRunner(
+		"multi-turn-chat-callbacks",
+		llmAgent,
+		runner.WithSessionService(inmemory.NewSessionService()),
+	)
 
 	// Setup identifiers.
-	c.setupIdentifiers()
-
+	c.userID = "user"
+	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
 	fmt.Printf("✅ Chat with callbacks ready! Session: %s\n\n", c.sessionID)
 
 	return nil
@@ -174,266 +139,6 @@ func (c *multiTurnChatWithCallbacks) createTools() []tool.Tool {
 		function.WithDescription("Get the current time and date for a specific timezone"),
 	)
 	return []tool.Tool{calculatorTool, timeTool}
-}
-
-// createModelCallbacks creates and configures model callbacks.
-func (c *multiTurnChatWithCallbacks) createModelCallbacks() *model.Callbacks {
-	// Using traditional registration.
-	modelCallbacks := model.NewCallbacks()
-	modelCallbacks.RegisterBeforeModel(c.createBeforeModelCallback())
-	modelCallbacks.RegisterAfterModel(c.createAfterModelCallback())
-	return modelCallbacks
-}
-
-// createBeforeModelCallback creates the before model callback.
-func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeModelCallback {
-	return func(ctx context.Context, req *model.Request) (*model.Response, error) {
-		userMsg := c.extractLastUserMessage(req)
-		fmt.Printf("\n🔵 BeforeModelCallback: model=%s, lastUserMsg=%q\n",
-			c.modelName,
-			userMsg,
-		)
-
-		if c.shouldReturnCustomResponse(userMsg) {
-			fmt.Printf("🔵 BeforeModelCallback: triggered, returning custom response for 'custom model'.\n")
-			return c.createCustomResponse(), nil
-		}
-		return nil, nil
-	}
-}
-
-// createAfterModelCallback creates the after model callback.
-func (c *multiTurnChatWithCallbacks) createAfterModelCallback() model.AfterModelCallback {
-	return func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-		c.handleModelFinished(resp)
-		c.demonstrateOriginalRequestAccess(req, resp)
-
-		if c.shouldOverrideResponse(resp) {
-			fmt.Printf("🟣 AfterModelCallback: triggered, overriding response for 'override me'.\n")
-			return c.createOverrideResponse(), nil
-		}
-		return nil, nil
-	}
-}
-
-// createToolCallbacks creates and configures tool callbacks.
-func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
-	// Using traditional registration.
-	toolCallbacks := tool.NewCallbacks()
-	toolCallbacks.RegisterBeforeTool(c.createBeforeToolCallback())
-	toolCallbacks.RegisterAfterTool(c.createAfterToolCallback())
-	return toolCallbacks
-}
-
-// createBeforeToolCallback creates the before tool callback.
-func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
-
-		if c.shouldReturnCustomToolResult(toolName, jsonArgs) {
-			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
-			return c.createCustomCalculatorResult(), nil
-		}
-		return nil, nil
-	}
-}
-
-// createAfterToolCallback creates the after tool callback.
-func (c *multiTurnChatWithCallbacks) createAfterToolCallback() tool.AfterToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-		fmt.Printf("\n🟤 AfterToolCallback: tool=%s, args=%s, result=%v, err=%v\n", toolName, string(jsonArgs), result, runErr)
-
-		if c.shouldFormatTimeResult(toolName, result) {
-			fmt.Println("\n🟤 AfterToolCallback: triggered, formatted result.")
-			return c.formatTimeResult(result), nil
-		}
-		return nil, nil
-	}
-}
-
-// createAgentCallbacks creates and configures agent callbacks.
-func (c *multiTurnChatWithCallbacks) createAgentCallbacks() *agent.Callbacks {
-	// Using traditional registration.
-	agentCallbacks := agent.NewCallbacks()
-	agentCallbacks.RegisterBeforeAgent(c.createBeforeAgentCallback())
-	agentCallbacks.RegisterAfterAgent(c.createAfterAgentCallback())
-	return agentCallbacks
-}
-
-// createBeforeAgentCallback creates the before agent callback.
-func (c *multiTurnChatWithCallbacks) createBeforeAgentCallback() agent.BeforeAgentCallback {
-	return func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-		fmt.Printf("\n🟢 BeforeAgentCallback: agent=%s, invocationID=%s, userMsg=%q\n",
-			invocation.AgentName,
-			invocation.InvocationID,
-			invocation.Message.Content,
-		)
-		return nil, nil
-	}
-}
-
-// createAfterAgentCallback creates the after agent callback.
-func (c *multiTurnChatWithCallbacks) createAfterAgentCallback() agent.AfterAgentCallback {
-	return func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-		respContent := c.extractResponseContent(invocation)
-		fmt.Printf("\n🟡 AfterAgentCallback: agent=%s, invocationID=%s, runErr=%v, userMsg=%q\n",
-			invocation.AgentName,
-			invocation.InvocationID,
-			runErr,
-			respContent,
-		)
-		return nil, nil
-	}
-}
-
-// createLLMAgent creates the LLM agent with all configurations.
-func (c *multiTurnChatWithCallbacks) createLLMAgent(
-	modelInstance model.Model,
-	tools []tool.Tool,
-	modelCallbacks *model.Callbacks,
-	toolCallbacks *tool.Callbacks,
-	agentCallbacks *agent.Callbacks,
-) agent.Agent {
-	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
-	}
-
-	agentName := "chat-assistant"
-	return llmagent.New(
-		agentName,
-		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
-		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
-			"Be helpful and conversational."),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools(tools),
-		llmagent.WithAgentCallbacks(agentCallbacks),
-		llmagent.WithModelCallbacks(modelCallbacks),
-		llmagent.WithToolCallbacks(toolCallbacks),
-	)
-}
-
-// createSessionService creates the session service based on configuration.
-func (c *multiTurnChatWithCallbacks) createSessionService() (session.Service, error) {
-	switch *sessServiceName {
-	case "inmemory":
-		return inmemory.NewSessionService(), nil
-	case "redis":
-		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
-		return redis.NewService(redis.WithRedisClientURL(redisURL))
-	default:
-		return nil, fmt.Errorf("invalid session service name: %s", *sessServiceName)
-	}
-}
-
-// createRunner creates the runner with the agent and session service.
-func (c *multiTurnChatWithCallbacks) createRunner(llmAgent agent.Agent, sessionService session.Service) {
-	appName := "multi-turn-chat-callbacks"
-	c.runner = runner.NewRunner(
-		appName,
-		llmAgent,
-		runner.WithSessionService(sessionService),
-	)
-}
-
-// setupIdentifiers sets up user and session identifiers.
-func (c *multiTurnChatWithCallbacks) setupIdentifiers() {
-	c.userID = "user"
-	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
-}
-
-// Helper functions for callback logic.
-
-func (c *multiTurnChatWithCallbacks) extractLastUserMessage(req *model.Request) string {
-	if len(req.Messages) > 0 {
-		return req.Messages[len(req.Messages)-1].Content
-	}
-	return ""
-}
-
-func (c *multiTurnChatWithCallbacks) shouldReturnCustomResponse(userMsg string) bool {
-	return userMsg != "" && strings.Contains(userMsg, "custom model")
-}
-
-func (c *multiTurnChatWithCallbacks) createCustomResponse() *model.Response {
-	return &model.Response{
-		Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: "[This is a custom response from before model callback]",
-			},
-		}},
-	}
-}
-
-func (c *multiTurnChatWithCallbacks) handleModelFinished(resp *model.Response) {
-	if resp != nil && resp.Done {
-		fmt.Printf("\n🟣 AfterModelCallback: model=%s has finished\n", c.modelName)
-	}
-}
-
-func (c *multiTurnChatWithCallbacks) demonstrateOriginalRequestAccess(req *model.Request, resp *model.Response) {
-	// Only demonstrate when the response is complete (Done=true) to avoid multiple triggers during streaming.
-	if resp == nil || !resp.Done {
-		return
-	}
-
-	if req != nil && len(req.Messages) > 0 {
-		lastUserMsg := req.Messages[len(req.Messages)-1].Content
-		if strings.Contains(lastUserMsg, "original request") {
-			fmt.Printf("🟣 AfterModelCallback: detected 'original request' in user message: %q\n", lastUserMsg)
-			fmt.Printf("🟣 AfterModelCallback: this demonstrates access to the original request in after callback.\n")
-		}
-	}
-}
-
-func (c *multiTurnChatWithCallbacks) shouldOverrideResponse(resp *model.Response) bool {
-	return resp != nil && len(resp.Choices) > 0 && strings.Contains(resp.Choices[0].Message.Content, "override me")
-}
-
-func (c *multiTurnChatWithCallbacks) createOverrideResponse() *model.Response {
-	return &model.Response{
-		Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: "[This response was overridden by after model callback]",
-			},
-		}},
-	}
-}
-
-func (c *multiTurnChatWithCallbacks) shouldReturnCustomToolResult(toolName string, jsonArgs []byte) bool {
-	return toolName == "calculator" && strings.Contains(string(jsonArgs), "42")
-}
-
-func (c *multiTurnChatWithCallbacks) createCustomCalculatorResult() calculatorResult {
-	return calculatorResult{
-		Operation: "custom",
-		A:         42,
-		B:         42,
-		Result:    4242,
-	}
-}
-
-func (c *multiTurnChatWithCallbacks) shouldFormatTimeResult(toolName string, result any) bool {
-	return toolName == "current_time"
-}
-
-func (c *multiTurnChatWithCallbacks) formatTimeResult(result any) any {
-	if timeResult, ok := result.(timeResult); ok {
-		timeResult.Formatted = fmt.Sprintf("%s %s (%s)", timeResult.Date, timeResult.Time, timeResult.Timezone)
-		return timeResult
-	}
-	return result
-}
-
-func (c *multiTurnChatWithCallbacks) extractResponseContent(invocation *agent.Invocation) string {
-	if invocation != nil && invocation.Message.Content != "" {
-		return invocation.Message.Content
-	}
-	return "<nil>"
 }
 
 // startChat runs the interactive conversation loop.
@@ -679,105 +384,4 @@ func (c *multiTurnChatWithCallbacks) startNewSession() {
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
-}
-
-// CallableTool implementations.
-
-// calculate performs basic mathematical operations.
-func (c *multiTurnChatWithCallbacks) calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
-	var result float64
-
-	switch strings.ToLower(args.Operation) {
-	case "add", "+":
-		result = args.A + args.B
-	case "subtract", "-":
-		result = args.A - args.B
-	case "multiply", "*":
-		result = args.A * args.B
-	case "divide", "/":
-		if args.B != 0 {
-			result = args.A / args.B
-		} else {
-			result = 0 // Handle division by zero.
-		}
-	default:
-		result = 0
-	}
-
-	return calculatorResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// getCurrentTime returns current time information.
-func (c *multiTurnChatWithCallbacks) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
-	now := time.Now()
-	var t time.Time
-	timezone := args.Timezone
-
-	// Handle timezone conversion.
-	switch strings.ToUpper(args.Timezone) {
-	case "UTC":
-		t = now.UTC()
-	case "EST", "EASTERN":
-		t = now.Add(-5 * time.Hour) // Simplified EST.
-	case "PST", "PACIFIC":
-		t = now.Add(-8 * time.Hour) // Simplified PST.
-	case "CST", "CENTRAL":
-		t = now.Add(-6 * time.Hour) // Simplified CST.
-	case "":
-		t = now
-		timezone = "Local"
-	default:
-		t = now.UTC()
-		timezone = "UTC"
-	}
-
-	return timeResult{
-		Timezone: timezone,
-		Time:     t.Format("15:04:05"),
-		Date:     t.Format("2006-01-02"),
-		Weekday:  t.Weekday().String(),
-	}, nil
-}
-
-// calculatorArgs represents arguments for the calculator tool.
-type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-// calculatorResult represents the result of a calculation.
-type calculatorResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-}
-
-// timeArgs represents arguments for the time tool.
-type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
-}
-
-// timeResult represents the current time information.
-type timeResult struct {
-	Timezone  string `json:"timezone"`
-	Time      string `json:"time"`
-	Date      string `json:"date"`
-	Weekday   string `json:"weekday"`
-	Formatted string `json:"formatted,omitempty"`
-}
-
-// Helper functions for creating pointers to primitive types.
-func intPtr(i int) *int {
-	return &i
-}
-
-func floatPtr(f float64) *float64 {
-	return &f
 }
