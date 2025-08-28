@@ -30,6 +30,9 @@ type VectorStore interface {
 	// Delete removes a document and its embedding.
 	Delete(ctx context.Context, id string) error
 
+	// DeleteByFilter deletes documents based on filter criteria.
+	DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error)
+
 	// Search performs similarity search and returns the most similar documents.
 	Search(ctx context.Context, query *SearchQuery) (*SearchResult, error)
 

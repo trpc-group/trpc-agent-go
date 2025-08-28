@@ -31,17 +31,15 @@ type updateBuilder struct {
 	setParts []string
 	args     []interface{}
 	argIndex int
-	language string
 }
 
-func newUpdateBuilder(table, id, language string) *updateBuilder {
+func newUpdateBuilder(table, id string) *updateBuilder {
 	return &updateBuilder{
 		table:    table,
 		id:       id,
 		setParts: []string{"updated_at = $2"},
 		args:     []interface{}{id, time.Now().Unix()},
 		argIndex: 3,
-		language: language,
 	}
 }
 
@@ -106,6 +104,44 @@ func newHybridQueryBuilder(table string, language string, vectorWeight, textWeig
 // newFilterQueryBuilder creates a builder for filter-only search
 func newFilterQueryBuilder(table string, language string) *queryBuilder {
 	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeFilter, 0, 0)
+}
+
+// deleteQueryBuilder builds DELETE SQL statements safely
+type deleteQueryBuilder struct {
+	table      string
+	conditions []string
+	args       []interface{}
+	argIndex   int
+}
+
+// newDeleteQueryBuilder creates a builder for DELETE operations
+func newDeleteQueryBuilder(table string) *deleteQueryBuilder {
+	return &deleteQueryBuilder{
+		table:      table,
+		conditions: []string{"1=1"},
+		args:       make([]interface{}, 0),
+		argIndex:   1,
+	}
+}
+
+// addMetadataFilter adds metadata filter conditions to the delete query
+func (dqb *deleteQueryBuilder) addMetadataFilter(metadata map[string]interface{}) {
+	if len(metadata) == 0 {
+		return
+	}
+
+	condition := fmt.Sprintf("metadata @> $%d::jsonb", dqb.argIndex)
+	dqb.conditions = append(dqb.conditions, condition)
+
+	metadataJSON := mapToJSON(metadata)
+	dqb.args = append(dqb.args, metadataJSON)
+	dqb.argIndex++
+}
+
+// buildDeleteQuery builds the actual DELETE query
+func (dqb *deleteQueryBuilder) buildDeleteQuery() (string, []interface{}) {
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dqb.table, strings.Join(dqb.conditions, " AND "))
+	return sql, dqb.args
 }
 
 // newQueryBuilderWithMode creates a query builder with specific search mode and weights
