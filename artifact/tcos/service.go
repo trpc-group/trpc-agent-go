@@ -39,18 +39,51 @@ type Service struct {
 	cosClient *cos.Client
 }
 
-// NewService creates a new TCOS artifact service.
-func NewService(bucketURL string) *Service {
+const defaultTimeout = 60 * time.Second
+
+// NewService creates a new TCOS artifact service with optional configurations.
+func NewService(bucketURL string, opts ...Option) *Service {
+	// Set default options
+	options := &options{
+		timeout:   defaultTimeout,
+		secretID:  os.Getenv("COS_SECRETID"),
+		secretKey: os.Getenv("COS_SECRETKEY"),
+	}
+
+	// Apply provided options
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	u, _ := url.Parse(bucketURL)
 	b := &cos.BaseURL{BucketURL: u}
-	return &Service{
-		cosClient: cos.NewClient(b, &http.Client{
-			Timeout: 60 * time.Second,
+
+	// Use provided HTTP client or create a default one
+	var httpClient *http.Client
+	if options.httpClient != nil {
+		httpClient = options.httpClient
+		// If user provided their own client but no timeout was explicitly set,
+		// and the client doesn't have a timeout, set our default timeout
+		if httpClient.Timeout == 0 && options.timeout > 0 {
+			// Create a copy to avoid modifying the user's client
+			httpClient = &http.Client{
+				Timeout:   options.timeout,
+				Transport: httpClient.Transport,
+			}
+		}
+	} else {
+		// Create default HTTP client with COS authentication
+		httpClient = &http.Client{
+			Timeout: options.timeout,
 			Transport: &cos.AuthorizationTransport{
-				SecretID:  os.Getenv("COS_SECRETID"),
-				SecretKey: os.Getenv("COS_SECRETKEY"),
+				SecretID:  options.secretID,
+				SecretKey: options.secretKey,
 			},
-		}),
+		}
+	}
+
+	return &Service{
+		cosClient: cos.NewClient(b, httpClient),
 	}
 }
 
