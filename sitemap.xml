@@ -57,6 +57,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/memory/</loc>
+        <lastmod>2025-08-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/memory/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/memory/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/model/</loc>
         <lastmod>2025-08-28</lastmod>
         <changefreq>daily</changefreq>
@@ -160,6 +167,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/memory/</loc>
+        <lastmod>2025-08-28</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/memory/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/memory/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/model/</loc>
