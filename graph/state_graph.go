@@ -328,10 +328,14 @@ func buildMessagesFromState(state State, instruction string) []model.Message {
 	if instruction != "" && (len(messages) == 0 || messages[0].Role != model.RoleSystem) {
 		messages = append([]model.Message{model.NewSystemMessage(instruction)}, messages...)
 	}
-	// Add user input if available.
-	if userInput, exists := state[StateKeyUserInput]; exists {
-		if input, ok := userInput.(string); ok && input != "" {
-			messages = append(messages, model.NewUserMessage(input))
+	// Check if the last message is from assistant, and if so, append current user input.
+	// This is required by some APIs that enforce the last message must be from user.
+	if len(messages) > 0 && (messages[len(messages)-1].Role == model.RoleAssistant ||
+		messages[len(messages)-1].Role == model.RoleSystem) {
+		if userInput, exists := state[StateKeyUserInput]; exists {
+			if input, ok := userInput.(string); ok && input != "" {
+				messages = append(messages, model.NewUserMessage(input))
+			}
 		}
 	}
 	return messages
@@ -444,7 +448,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		defer span.End()
 
 		// Extract and validate messages from state.
-		messages, toolCalls, err := extractToolCallsFromState(state, span)
+		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
 			return nil, err
 		}
@@ -464,12 +468,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 		if err != nil {
 			return nil, err
 		}
-
-		// Append tool result messages to the existing message history.
-		// This preserves the conversation context and prevents infinite loops.
-		updatedMessages := append(messages, newMessages...)
 		return State{
-			StateKeyMessages: updatedMessages,
+			StateKeyMessages: newMessages,
 		}, nil
 	}
 }
@@ -659,7 +659,7 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 }
 
 // extractToolCallsFromState extracts and validates tool calls from the state.
-func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.Message, []model.ToolCall, error) {
+func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCall, error) {
 	var messages []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
 		if msgs, ok := msgData.([]model.Message); ok {
@@ -669,16 +669,16 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.Messag
 
 	if len(messages) == 0 {
 		span.SetAttributes(attribute.String("trpc.go.agent.error", "no messages in state"))
-		return nil, nil, errors.New("no messages in state")
+		return nil, errors.New("no messages in state")
 	}
 
 	lastMessage := messages[len(messages)-1]
 	if lastMessage.Role != model.RoleAssistant {
 		span.SetAttributes(attribute.String("trpc.go.agent.error", "last message is not an assistant message"))
-		return nil, nil, errors.New("last message is not an assistant message")
+		return nil, errors.New("last message is not an assistant message")
 	}
 
-	return messages, lastMessage.ToolCalls, nil
+	return lastMessage.ToolCalls, nil
 }
 
 // toolCallsConfig contains configuration for processing tool calls.
