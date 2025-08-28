@@ -18,7 +18,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestNewSessionService(t *testing.T) {
@@ -831,4 +833,57 @@ func TestAppIsolation(t *testing.T) {
 	if len(app2Sessions) > 0 {
 		assert.Equal(t, "app2", app2Sessions[0].AppName)
 	}
+}
+
+func TestInMemory_CreateSessionSummary_AndGetText(t *testing.T) {
+	// Attach summarizer manager to service.
+	s := summary.NewSummarizer(&mockModel{name: "mock", resp: "ok"}, summary.WithKeepRecentCount(1))
+	mgr := summary.NewManager(s)
+	serviceWithMgr := NewSessionService(WithSummarizerManager(mgr))
+
+	// Create session and add events.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sess, err := serviceWithMgr.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	events := []*event.Event{
+		{Response: &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Content: "hello"}}},
+		}, Timestamp: time.Now().Add(-2 * time.Second)},
+		{Response: &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Content: "world"}}},
+		}, Timestamp: time.Now().Add(-1 * time.Second)},
+	}
+	for _, e := range events {
+		require.NoError(t, serviceWithMgr.AppendEvent(context.Background(), sess, e))
+	}
+
+	// Force summarization.
+	require.NoError(t, serviceWithMgr.CreateSessionSummary(context.Background(), sess, true))
+
+	// Get summary text.
+	text, ok := serviceWithMgr.GetSessionSummaryText(context.Background(), sess)
+	assert.True(t, ok)
+	assert.NotEmpty(t, text)
+
+	// Re-fetch session to verify compressed events plus persisted summary event.
+	sess2, err := serviceWithMgr.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sess2)
+	assert.GreaterOrEqual(t, len(sess2.Events), 2) // At least summary + recent; manager may append an extra summary event.
+}
+
+// mockModel is a minimal model for summarizer tests.
+type mockModel struct {
+	name string
+	resp string
+}
+
+func (m *mockModel) Info() model.Info { return model.Info{Name: m.name} }
+func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: m.resp}}}}
+	close(ch)
+	return ch, nil
 }

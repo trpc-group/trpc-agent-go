@@ -1,0 +1,91 @@
+package summary
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func TestSummarizer_Errors_NoEvents(t *testing.T) {
+	s := NewSummarizer(&fakeModel{})
+	sess := &session.Session{ID: "empty", Events: []event.Event{}}
+	_, err := s.Summarize(context.Background(), sess, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no events to summarize")
+}
+
+func TestSummarizer_Errors_NoOldEvents(t *testing.T) {
+	s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(10))
+	sess := &session.Session{ID: "no-old", Events: make([]event.Event, 5)}
+	for i := range sess.Events {
+		sess.Events[i] = event.Event{Timestamp: time.Now()}
+	}
+	_, err := s.Summarize(context.Background(), sess, 5)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no old events to summarize")
+}
+
+func TestSummarizer_Errors_NoConversationText(t *testing.T) {
+	s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(1))
+	sess := &session.Session{ID: "no-text", Events: make([]event.Event, 3)}
+	for i := range sess.Events {
+		sess.Events[i] = event.Event{Timestamp: time.Now()} // No Response content.
+	}
+	_, err := s.Summarize(context.Background(), sess, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no conversation text extracted")
+}
+
+func TestWithChecksAny_ORLogic(t *testing.T) {
+	checks := []Checker{SetTokenThreshold(10000), SetEventThreshold(3)}
+	s := NewSummarizer(&fakeModel{}, WithChecksAny(checks))
+	sess := &session.Session{Events: make([]event.Event, 4)}
+	for i := range sess.Events {
+		sess.Events[i] = event.Event{Timestamp: time.Now()}
+	}
+	assert.True(t, s.ShouldSummarize(sess))
+}
+
+func TestSummarizer_SimpleConcatSummary(t *testing.T) {
+	s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(1))
+	sess := &session.Session{ID: "concat", Events: []event.Event{
+		{
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "hello"}}},
+			},
+			Timestamp: time.Now(),
+		},
+		{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "world"}}}}, Timestamp: time.Now()},
+		{
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.Message{Content: "recent"}}},
+			},
+			Timestamp: time.Now(),
+		},
+	}}
+	text, err := s.Summarize(context.Background(), sess, 0)
+	require.NoError(t, err)
+	assert.Contains(t, text, "hello")
+	assert.Contains(t, text, "world")
+}
+
+// fakeModel is a minimal model that returns the prompt back to simulate LLM.
+type fakeModel struct{}
+
+func (f *fakeModel) Info() model.Info { return model.Info{Name: "fake"} }
+func (f *fakeModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	content := ""
+	if len(req.Messages) > 0 {
+		content = req.Messages[0].Content
+	}
+	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: content}}}}
+	close(ch)
+	return ch, nil
+}

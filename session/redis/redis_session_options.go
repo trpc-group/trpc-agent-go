@@ -9,12 +9,19 @@
 
 package redis
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
 	sessionEventLimit int
 	url               string
 	instanceName      string
 	extraOptions      []interface{}
+	// summarizerManager holds an optional in-memory summarizer manager.
+	// Summary is not persisted to Redis.
+	summarizerManager summary.SummarizerManager
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -48,5 +55,13 @@ func WithRedisInstance(instanceName string) ServiceOpt {
 func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
+	}
+}
+
+// WithSummarizerManager attaches a summarizer manager for in-memory summaries.
+// The summary will not be persisted to Redis.
+func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summarizerManager = m
 	}
 }

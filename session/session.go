@@ -99,6 +99,15 @@ type Service interface {
 	// AppendEvent appends an event to a session.
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
 
+	// CreateSessionSummary creates or updates the summary for the given session.
+	// Implementations may decide whether to actually summarize based on internal
+	// configuration unless force is true.
+	CreateSessionSummary(ctx context.Context, sess *Session, force bool) error
+
+	// GetSessionSummaryText returns the current cached session summary text and a
+	// boolean indicating whether it exists.
+	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
+
 	// Close closes the service.
 	Close() error
 }

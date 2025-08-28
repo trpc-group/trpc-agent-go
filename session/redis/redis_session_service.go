@@ -72,7 +72,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		return &Service{opts: opts, redisClient: redisClient}, nil
+		svc := &Service{opts: opts, redisClient: redisClient}
+		return svc, nil
 	}
 
 	redisClient, err = builder(
@@ -82,7 +83,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	return &Service{opts: opts, redisClient: redisClient}, nil
+	svc := &Service{opts: opts, redisClient: redisClient}
+	return svc, nil
 }
 
 // CreateSession creates a new session.
@@ -322,6 +324,27 @@ func (s *Service) AppendEvent(
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
 	return nil
+}
+
+// CreateSessionSummary creates or updates the session summary in memory.
+// It delegates to the configured summarizer manager if present.
+func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if s.opts.summarizerManager == nil {
+		return nil
+	}
+	return s.opts.summarizerManager.Summarize(ctx, sess, force)
+}
+
+// GetSessionSummaryText returns the cached session summary text if present.
+func (s *Service) GetSessionSummaryText(_ context.Context, sess *session.Session) (string, bool) {
+	if s.opts.summarizerManager == nil {
+		return "", false
+	}
+	ss, err := s.opts.summarizerManager.GetSummary(sess)
+	if err != nil || ss == nil {
+		return "", false
+	}
+	return ss.Summary, true
 }
 
 // Close closes the service.

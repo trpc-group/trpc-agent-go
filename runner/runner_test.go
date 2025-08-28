@@ -81,6 +81,81 @@ func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
 
+// spySessionService wraps a real session.Service and records whether
+// CreateSessionSummary was called.
+type spySessionService struct {
+	base   session.Service
+	called bool
+}
+
+func (s *spySessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	return s.base.CreateSession(ctx, key, state, options...)
+}
+func (s *spySessionService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	return s.base.GetSession(ctx, key, options...)
+}
+func (s *spySessionService) ListSessions(ctx context.Context, userKey session.UserKey, options ...session.Option) ([]*session.Session, error) {
+	return s.base.ListSessions(ctx, userKey, options...)
+}
+func (s *spySessionService) DeleteSession(ctx context.Context, key session.Key, options ...session.Option) error {
+	return s.base.DeleteSession(ctx, key, options...)
+}
+func (s *spySessionService) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
+	return s.base.UpdateAppState(ctx, appName, state)
+}
+func (s *spySessionService) DeleteAppState(ctx context.Context, appName string, key string) error {
+	return s.base.DeleteAppState(ctx, appName, key)
+}
+func (s *spySessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	return s.base.ListAppStates(ctx, appName)
+}
+func (s *spySessionService) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
+	return s.base.UpdateUserState(ctx, userKey, state)
+}
+func (s *spySessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	return s.base.ListUserStates(ctx, userKey)
+}
+func (s *spySessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
+	return s.base.DeleteUserState(ctx, userKey, key)
+}
+func (s *spySessionService) AppendEvent(ctx context.Context, session *session.Session, ev *event.Event, options ...session.Option) error {
+	return s.base.AppendEvent(ctx, session, ev, options...)
+}
+func (s *spySessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	s.called = true
+	return s.base.CreateSessionSummary(ctx, sess, force)
+}
+func (s *spySessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	return s.base.GetSessionSummaryText(ctx, sess)
+}
+func (s *spySessionService) Close() error { return s.base.Close() }
+
+func TestRunner_TriggersCreateSessionSummary(t *testing.T) {
+	// Use inmemory service with no summarizer manager configured.
+	// The CreateSessionSummary will early-return nil, which is fine for this test.
+	base := inmemory.NewSessionService()
+	spy := &spySessionService{base: base}
+
+	mockAgent := &mockAgent{name: "test-agent"}
+	r := NewRunner("test-app", mockAgent, WithSessionService(spy))
+
+	ctx := context.Background()
+	msg := model.NewUserMessage("hello")
+	ch, err := r.Run(ctx, "u", "s", msg)
+	require.NoError(t, err)
+
+	// Drain events to let the runner finish the turn and trigger summarization.
+	for range ch {
+	}
+
+	// Wait briefly for the async summarization trigger.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for !spy.called && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.True(t, spy.called, "CreateSessionSummary should be called asynchronously.")
+}
+
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
 	sessionService := inmemory.NewSessionService()

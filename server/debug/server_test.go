@@ -391,6 +391,14 @@ func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.S
 	return nil
 }
 
+func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	return nil
+}
+
+func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	return "", false
+}
+
 func (m *mockSessionService) Close() error {
 	return nil
 }
