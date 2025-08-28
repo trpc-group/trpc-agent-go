@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -43,6 +43,7 @@ import (
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
@@ -53,7 +54,8 @@ var (
 	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
+	loadData     = flag.Bool("load", true, "Load data into the vector store on startup")
 )
 
 // Default values for optional configurations.
@@ -77,6 +79,13 @@ var (
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
 	tcvectorUsername = getEnvOrDefault("TCVECTOR_USERNAME", "")
 	tcvectorPassword = getEnvOrDefault("TCVECTOR_PASSWORD", "")
+
+	// Elasticsearch.
+	elasticsearchHosts     = getEnvOrDefault("ELASTICSEARCH_HOSTS", "http://localhost:9200")
+	elasticsearchUsername  = getEnvOrDefault("ELASTICSEARCH_USERNAME", "")
+	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "")
+	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
+	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")
 )
 
 func main() {
@@ -85,6 +94,7 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Vector Store: %s\n", *vectorStore)
 	fmt.Printf("Available tools: knowledge_search\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -203,6 +213,25 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
 		}
 		return vs, nil
+	case "elasticsearch":
+		// Parse hosts string into slice.
+		hosts := strings.Split(elasticsearchHosts, ",")
+		for i, host := range hosts {
+			hosts[i] = strings.TrimSpace(host)
+		}
+
+		vs, err := vectorelasticsearch.New(
+			vectorelasticsearch.WithAddresses(hosts),
+			vectorelasticsearch.WithUsername(elasticsearchUsername),
+			vectorelasticsearch.WithPassword(elasticsearchPassword),
+			vectorelasticsearch.WithAPIKey(elasticsearchAPIKey),
+			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
+			vectorelasticsearch.WithMaxRetries(3),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
+		}
+		return vs, nil
 	default:
 		return nil, fmt.Errorf("unsupported vector store type: %s", *vectorStore)
 	}
@@ -267,7 +296,7 @@ func (c *knowledgeChat) createSources() []source.Source {
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 	// Create vector store.
-	vectorStore, err := c.setupVectorDB()
+	vs, err := c.setupVectorDB()
 	if err != nil {
 		return err
 	}
@@ -283,20 +312,30 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
-		knowledge.WithVectorStore(vectorStore),
+		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(sources),
 	)
-	// Load the knowledge base.
-	if err := c.kb.Load(
-		ctx,
-		knowledge.WithShowProgress(false),  // The default is true.
-		knowledge.WithProgressStepSize(10), // The default is 10.
-		knowledge.WithShowStats(false),     // The default is true.
-		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
-		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
-	); err != nil {
-		return fmt.Errorf("failed to load knowledge base: %w", err)
+	// Decide whether to load the knowledge base.
+	load := *loadData
+	if strings.ToLower(*vectorStore) == "inmemory" && !load {
+		// In-memory store is non-persistent, so force loading.
+		fmt.Println("ℹ️  In-memory store is non-persistent; forcing data load.")
+		load = true
+	}
+
+	// Optionally load the knowledge base.
+	if load {
+		if err := c.kb.Load(
+			ctx,
+			knowledge.WithShowProgress(false),  // The default is true.
+			knowledge.WithProgressStepSize(10), // The default is 10.
+			knowledge.WithShowStats(false),     // The default is true.
+			knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+			knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
+		); err != nil {
+			return fmt.Errorf("failed to load knowledge base: %w", err)
+		}
 	}
 	return nil
 }
@@ -309,6 +348,21 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println("   /history  - Show conversation history")
 	fmt.Println("   /new      - Start a new session")
 	fmt.Println("   /exit     - End the conversation")
+	fmt.Println()
+	fmt.Println("🔧 Vector Store Configuration:")
+	switch *vectorStore {
+	case "elasticsearch":
+		fmt.Printf("   Elasticsearch: %s (Index: %s)\n", elasticsearchHosts, elasticsearchIndexName)
+		if elasticsearchUsername != "" {
+			fmt.Printf("   Username: %s\n", elasticsearchUsername)
+		}
+	case "pgvector":
+		fmt.Printf("   PGVector: %s:%s/%s\n", pgvectorHost, pgvectorPort, pgvectorDatabase)
+	case "tcvector":
+		if tcvectorURL != "" {
+			fmt.Printf("   TCVector: %s\n", tcvectorURL)
+		}
+	}
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
 	fmt.Println("   - What is a Large Language Model?")
@@ -345,7 +399,7 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 			fmt.Printf("❌ Error: %v\n", err)
 		}
 
-		fmt.Println() // Add spacing between turns
+		fmt.Println() // Add spacing between turns.
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -365,8 +419,12 @@ func (c *knowledgeChat) processMessage(ctx context.Context, userMessage string) 
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
 
-	// Process streaming response.
-	return c.processStreamingResponse(eventChan)
+	// Process response based on streaming mode.
+	if *streaming {
+		return c.processStreamingResponse(eventChan)
+	} else {
+		return c.processNonStreamingResponse(eventChan)
+	}
 }
 
 // processStreamingResponse handles the streaming response from the agent.
@@ -435,6 +493,73 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		// Check if this is the final event.
 		// Don't break on tool response events (Done=true but not final assistant response).
 		if event.Done && !c.isToolEvent(event) {
+			fmt.Printf("\n")
+			break
+		}
+	}
+
+	return nil
+}
+
+// processNonStreamingResponse handles the non-streaming response from the agent.
+func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Event) error {
+	fmt.Print("🤖 Assistant: ")
+
+	var fullContent string
+	var hasToolCalls bool
+
+	for event := range eventChan {
+		if event == nil {
+			continue
+		}
+
+		// Handle errors.
+		if event.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+			continue
+		}
+
+		// Detect and display tool calls.
+		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+			if !hasToolCalls {
+				fmt.Printf("\n🔧 Tool calls initiated:\n")
+				hasToolCalls = true
+			}
+			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+				if len(toolCall.Function.Arguments) > 0 {
+					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+				}
+			}
+			fmt.Printf("\n🔄 Executing tools...\n")
+		}
+
+		// Detect tool responses.
+		if event.Response != nil && len(event.Response.Choices) > 0 {
+			hasToolResponse := false
+			for _, choice := range event.Response.Choices {
+				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+					fmt.Printf("✅ Tool response (ID: %s): %s\n",
+						choice.Message.ToolID,
+						strings.TrimSpace(choice.Message.Content))
+					hasToolResponse = true
+				}
+			}
+			if hasToolResponse {
+				continue
+			}
+		}
+
+		// Process final content from non-streaming response.
+		if event.Done && !c.isToolEvent(event) {
+			// In non-streaming mode, the final content should be in the Message.Content
+			if len(event.Choices) > 0 {
+				choice := event.Choices[0]
+				if choice.Message.Content != "" {
+					fullContent = choice.Message.Content
+					fmt.Print(fullContent)
+				}
+			}
 			fmt.Printf("\n")
 			break
 		}
