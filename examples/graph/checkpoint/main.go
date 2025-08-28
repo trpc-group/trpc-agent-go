@@ -26,6 +26,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
 
 const (
@@ -72,7 +73,7 @@ func main() {
 		log.Fatalf("failed to build graph: %v", err)
 	}
 
-	saver := graph.NewInMemoryCheckpointSaver()
+	saver := inmemory.NewSaver()
 	exec, err := graph.NewExecutor(g, graph.WithCheckpointSaver(saver))
 	if err != nil {
 		log.Fatalf("failed to create executor: %v", err)
@@ -252,7 +253,13 @@ func createManualCheckpoint(ctx context.Context, saver graph.CheckpointSaver, th
 		}
 		meta.Extra["category"] = category
 	}
-	_, err := saver.Put(ctx, cfg, ckpt, meta, chVers)
+	req := graph.PutRequest{
+		Config:      cfg,
+		Checkpoint:  ckpt,
+		Metadata:    meta,
+		NewVersions: chVers,
+	}
+	_, err := saver.Put(ctx, req)
 	if err != nil {
 		return fmt.Errorf("manual checkpoint failed: %w", err)
 	}
