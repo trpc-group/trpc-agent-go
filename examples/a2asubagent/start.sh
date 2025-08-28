@@ -71,7 +71,7 @@ check_ports() {
     if lsof -i :8087 >/dev/null 2>&1; then
         print_warning "Port 8087 is already in use"
         echo "Attempting to close the process using the port..."
-        pkill -f "entrance_agent" || true
+        pkill -f "calculator_agent" || true
         sleep 2
     fi
     
@@ -82,10 +82,10 @@ check_ports() {
 build_all() {
     print_info "Building all components..."
     
-    # Build entrance agent
-    print_info "Building entrance agent..."
-    cd agents/entrance
-    go build -o entrance_agent .
+    # Build calculator agent
+    print_info "Building calculator agent..."
+    cd agents/calculator
+    go build -o calculator_agent .
     cd ../..
     
     # Build code check agent
@@ -122,15 +122,17 @@ start_agents() {
     echo $CODECC_PID > logs/codecc_agent.pid
     sleep 2
     
-    # Start entrance agent (second)
-    print_info "Starting entrance agent (port 8087)..."
-    cd agents/entrance
-    nohup ./entrance_agent -model="$MODEL_NAME" > ../../logs/entrance_agent.log 2>&1 &
-    ENTRANCE_PID=$!
+    # Start calculator agent (second)
+    print_info "Starting calculator agent (port 8087)..."
+    cd agents/calculator
+    nohup ./calculator_agent -model="$MODEL_NAME" > ../../logs/calculator_agent.log 2>&1 &
+    calculator_PID=$!
     cd ../..
-    echo $ENTRANCE_PID > logs/entrance_agent.pid
+    echo $calculator_PID > logs/calculator_agent.pid
     sleep 2
-    
+
+
+
     print_success "Agent servers started successfully"
 }
 
@@ -147,15 +149,17 @@ check_agents() {
         exit 1
     fi
     
-    # Check entrance agent (second)
+    # Check calculator agent (second)
     if curl -s http://localhost:8087/.well-known/agent.json >/dev/null; then
-        print_success "Entrance agent (8087) running normally"
+        print_success "calculator agent (8087) running normally"
     else
-        print_error "Entrance agent (8087) failed to start"
+        print_error "calculator agent (8087) failed to start"
         show_logs
         exit 1
     fi
-    
+
+
+
     echo ""
     print_success "All agents running normally!"
 }
@@ -171,11 +175,13 @@ show_logs() {
         echo ""
     fi
     
-    if [ -f logs/entrance_agent.log ]; then
-        echo "=== Entrance Agent Logs ==="
-        tail -10 logs/entrance_agent.log
+    if [ -f logs/calculator_agent.log ]; then
+        echo "=== calculator Agent Logs ==="
+        tail -10 logs/calculator_agent.log
         echo ""
     fi
+
+
 }
 
 # Show agent information
@@ -185,78 +191,44 @@ show_agent_info() {
     echo "┌─────────────────────────────────────────────────────────────────┐"
     echo "│                     A2A Agent Service                           │"
     echo "├─────────────────────────────────────────────────────────────────┤"
-    echo "│   Entrance Agent  │ http://localhost:8087/a2a/entrance/         │"
-    echo "│   Code Check Agent│ http://localhost:8088/a2a/codecheck/        │"
+    echo "│   Calculator Agent│ http://localhost:8087/                      │"
+    echo "│   Code Check Agent│ http://localhost:8088/                      │"
     echo "├─────────────────────────────────────────────────────────────────┤"
     echo "│   Agent Cards     |                                             │"
-    echo "│   Entrance Agent  │ http://localhost:8087/.well-known/agent.json│"
+    echo "│   Calculator Agent│ http://localhost:8087/.well-known/agent.json│"
     echo "│   Code Check Agent│ http://localhost:8088/.well-known/agent.json|"
     echo "└─────────────────────────────────────────────────────────────────┘"
     echo ""
 }
 
-# Start client menu
+# Start client
 client_menu() {
-    echo ""
-    print_info "Select an agent to connect to:"
-    echo "1) Entrance Agent (http://localhost:8087/a2a/entrance/)"
-    echo "2) Code Check Agent (http://localhost:8088/a2a/codecheck/)"
-    echo "3) Custom URL"
-    echo "4) Exit"
-    echo ""
-    read -p "Please choose [1-4]: " choice
-    
-    case $choice in
-        1)
-            print_info "Connecting to Entrance Agent..."
-            cd client
-            ./client -url http://localhost:8087/a2a/entrance/
-            cd ..
-            ;;
-        2)
-            print_info "Connecting to Code Check Agent..."
-            cd client
-            ./client -url http://localhost:8088/a2a/codecheck/
-            cd ..
-            ;;
-        3)
-            read -p "Please enter agent URL: " custom_url
-            print_info "Connecting to $custom_url..."
-            cd client
-            ./client -url "$custom_url"
-            cd ..
-            ;;
-        4)
-            print_info "Exiting client menu"
-            return
-            ;;
-        *)
-            print_error "Invalid choice"
-            client_menu
-            ;;
-    esac
+    print_info "Starting client..."
+    cd client
+    ./client
+    cd ..
 }
 
 # Stop all agents
 stop_agents() {
     print_info "Stopping all agents..."
     
-    # First stop entrance agent (reverse order of startup)
-    if [ -f logs/entrance_agent.pid ]; then
-        ENTRANCE_PID=$(cat logs/entrance_agent.pid)
-        kill $ENTRANCE_PID 2>/dev/null || true
-        rm -f logs/entrance_agent.pid
+    # First stop calculator agent (reverse order of startup)
+    if [ -f logs/calculator_agent.pid ]; then
+        calculator_PID=$(cat logs/calculator_agent.pid)
+        kill $calculator_PID 2>/dev/null || true
+        rm -f logs/calculator_agent.pid
     fi
-    
-    # Then stop code check agent
+
+    # Finally stop code check agent
     if [ -f logs/codecc_agent.pid ]; then
         CODECC_PID=$(cat logs/codecc_agent.pid)
         kill $CODECC_PID 2>/dev/null || true
         rm -f logs/codecc_agent.pid
     fi
-    
+
     # Force kill processes
-    pkill -f "entrance_agent" || true
+    pkill -f "calculator_agent" || true
     pkill -f "codecc_agent" || true
     
     print_success "All agents stopped"
@@ -352,7 +324,7 @@ main() {
     echo ""
     print_info "Available commands:"
     echo "  View logs: tail -f logs/codecc_agent.log"
-    echo "  View logs: tail -f logs/entrance_agent.log"
+    echo "  View logs: tail -f logs/calculator_agent.log"
     echo "  Stop agents: $0 --stop"
     echo "  Start client: $0 --client"
     echo ""
