@@ -1,3 +1,5 @@
+English | [中文](README.zh_CN.md)
+
 # tRPC-Agent-Go
 
 [![Go Reference](https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg)](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go)
@@ -6,6 +8,7 @@
 [![Releases](https://img.shields.io/github/release/trpc-group/trpc-agent-go.svg?style=flat-square)](https://github.com/trpc-group/trpc-agent-go/releases)
 [![Tests](https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml/badge.svg)](https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml)
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
+[![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
 A powerful Go framework for building intelligent **agent systems** with large
 language models (LLMs), hierarchical planners, memory, telemetry and a rich
@@ -15,6 +18,7 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 
 ## Table of Contents
 
+- [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Examples](#examples)
   - [Tool Usage](#1-tool-usage-examples)
@@ -31,6 +35,10 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 - [Future Enhancements](#future-enhancements)
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
+
+## Documentation
+
+Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.io/trpc-agent-go/) covers everything from basic concepts to advanced techniques, helping you build powerful AI applications with confidence. Whether you're new to AI agents or an experienced developer, you'll find detailed guides, practical examples, and best practices to accelerate your development journey.
 
 ## Quick Start
 
