@@ -8,11 +8,19 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 - **Multi-turn Conversation**: Maintains context across multiple user turns
 - **Streaming Output**: Real-time streaming of model responses
-- **Session Management**: Supports persistent chat sessions (inmemory/redis)
+- **Session Management**: Uses in-memory session service (no external dependency)
 - **Tool Integration**: Built-in calculator and time tools
 - **Callback Mechanism**: Pluggable model, tool, and agent callbacks for extensibility and debugging
-- **Command Line Interface**: Configurable via command-line flags
-- **Performance Monitoring**: See [Timer Example](./timer/README.md) for comprehensive timing measurements with OpenTelemetry integration
+- **Command Line Interface**: Configurable model and streaming flags
+- **Invocation access via context**: Callbacks can access `Invocation` using `agent.InvocationFromContext(ctx)`
+
+---
+
+## Project Layout
+
+- `main.go`: App entry, wiring model, tools, agent, runner (in-memory session), and CLI flags
+- `callbacks.go`: All callback registrations and helper logic
+- `tools.go`: Tool implementations and their arguments/results
 
 ---
 
@@ -21,12 +29,13 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 ### 1. ModelCallbacks
 
 - **BeforeModelCallback**: Triggered before each model inference. Use for input interception, logging, or mocking responses.
-- **AfterModelCallback**: Triggered on each streaming output chunk from the model (can be customized to print only on the first/last chunk). Use for output interception, content moderation, or logging. The callback receives the original request for scenarios like content restoration and processing.
+- **AfterModelCallback**: Triggered on each streaming output chunk from the model (you can choose to log only the first/last chunk). Use for output interception, content moderation, or logging. The callback receives the original request for scenarios like content restoration and processing.
 
 **Example output:**
 
 ```
 🔵 BeforeModelCallback: model=deepseek-chat, lastUserMsg="Hello"
+🔵 BeforeModelCallback: ✅ Invocation present in ctx (agent=..., id=...)
 🟣 AfterModelCallback: model=deepseek-chat has finished
 🟣 AfterModelCallback: detected 'original request' in user message: "show me original request"
 🟣 AfterModelCallback: this demonstrates access to the original request in after callback.
@@ -47,7 +56,8 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 ```
 🟠 BeforeToolCallback: tool=calculator, args={"operation":"add","a":1,"b":2}
-🟤 AfterToolCallback: tool=calculator, args={...}, result=map[...], err=<nil>
+🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=..., id=...)
+🟤 AfterToolCallback: tool=calculator, args={...}, result=..., err=<nil>
 ```
 
 ### 3. AgentCallbacks
@@ -66,16 +76,7 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 ## Declaring and Registering Callbacks
 
-To use callbacks, you need to declare them and register your handler functions. The framework supports both traditional and chain registration patterns. Chain registration is recommended for cleaner, more readable code.
-
-### Chain Registration Benefits
-
-- **Cleaner Code**: Single chain for multiple registrations
-- **Global Configuration**: Easy to create reusable callback configurations
-- **Better Readability**: More fluent and intuitive syntax
-- **Reduced Boilerplate**: No need for multiple statements
-
-Below are examples for each callback type:
+The framework supports both traditional and chain registration patterns. Chain registration is recommended for cleaner code. See `callbacks.go` for complete, runnable examples.
 
 ### ModelCallbacks
 
@@ -99,21 +100,6 @@ modelCallbacks := model.NewCallbacks().
     }).
     RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
         // Your logic here - now with access to original request
-        return nil, nil
-    })
-
-// Global callback configuration
-var globalModelCallbacks = model.NewCallbacks().
-    RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-        fmt.Printf("Processing %d messages\n", len(req.Messages))
-        return nil, nil
-    }).
-    RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-        if runErr != nil {
-            fmt.Printf("Model error occurred\n")
-        } else {
-            fmt.Printf("Model processed successfully\n")
-        }
         return nil, nil
     })
 ```
@@ -142,21 +128,6 @@ toolCallbacks := tool.NewCallbacks().
         // Your logic here
         return nil, nil
     })
-
-// Global callback configuration
-var globalToolCallbacks = tool.NewCallbacks().
-    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-        fmt.Printf("Executing tool: %s\n", toolName)
-        return nil, nil
-    }).
-    RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
-        if runErr != nil {
-            fmt.Printf("Tool %s failed\n", toolName)
-        } else {
-            fmt.Printf("Tool %s completed\n", toolName)
-        }
-        return nil, nil
-    })
 ```
 
 ### AgentCallbacks
@@ -183,35 +154,13 @@ agentCallbacks := agent.NewCallbacks().
         // Your logic here
         return nil, nil
     })
-
-// Global callback configuration
-var globalAgentCallbacks = agent.NewCallbacks().
-    RegisterBeforeAgent(func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
-        fmt.Printf("Starting agent: %s\n", invocation.AgentName)
-        return nil, nil
-    }).
-    RegisterAfterAgent(func(ctx context.Context, invocation *agent.Invocation, runErr error) (*model.Response, error) {
-        if runErr != nil {
-            fmt.Printf("Agent execution failed\n")
-        } else {
-            fmt.Printf("Agent execution completed\n")
-        }
-        return nil, nil
-    })
 ```
 
-After declaring and registering your callbacks, pass them to the agent or runner during construction:
+After declaring and registering your callbacks, pass them to the agent during construction (see `main.go`).
 
-```go
-llmAgent := llmagent.New(
-    ...,
-    llmagent.WithModelCallbacks(modelCallbacks),
-    llmagent.WithToolCallbacks(toolCallbacks),
-    llmagent.WithAgentCallbacks(agentCallbacks),
-)
-```
+---
 
-### Skipping Execution in Callbacks
+## Skipping Execution in Callbacks
 
 You can short-circuit (skip) the default execution of a model, tool, or agent by returning a non-nil response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
 
@@ -228,7 +177,6 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
         originalText := req.Messages[len(req.Messages)-1].Content
         // Process response with original context
         if strings.Contains(originalText, "restore") {
-            // Restore original formatting or structure
             return restoreFormatting(resp, originalText), nil
         }
     }
@@ -242,12 +190,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
     if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
         // Return a mock result and skip actual tool execution.
-        return calculatorResult{
-            Operation: "custom",
-            A:         42,
-            B:         42,
-            Result:    4242,
-        }, nil
+        return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
     }
     return nil, nil
 })
@@ -258,21 +201,13 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, tool
 ```go
 modelCallbacks.RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
     if strings.Contains(req.Messages[len(req.Messages)-1].Content, "block me") {
-        // Return a custom response and skip model inference.
-        return &model.Response{
-            Choices: []model.Choice{{
-                Message: model.Message{
-                    Role:    model.RoleAssistant,
-                    Content: "This request was blocked by a callback.",
-                },
-            }},
-        }, nil
+        return &model.Response{Choices: []model.Choice{{
+            Message: model.Message{Role: model.RoleAssistant, Content: "This request was blocked by a callback."},
+        }}}, nil
     }
     return nil, nil
 })
 ```
-
-This mechanism allows you to flexibly intercept, mock, or block any step in the agent/model/tool pipeline.
 
 ---
 
@@ -288,17 +223,14 @@ export OPENAI_API_KEY="your-api-key"
 2. Start the demo with options:
 
 ```bash
-# Basic usage
-go run main.go
+# Basic usage (in-memory session service)
+go run .
 
 # With custom model
-go run main.go -model gpt-4
-
-# With Redis session storage
-go run main.go -session redis -redis-addr localhost:6379
+go run . -model gpt-4o-mini
 
 # Disable streaming
-go run main.go -streaming=false
+go run . -streaming=false
 ```
 
 3. Follow the prompts to interact with the chat, trigger tool calls, and observe callback logs.
@@ -318,15 +250,13 @@ go run main.go -streaming=false
 ## Command Line Options
 
 - `-model`: Model name to use (default: "deepseek-chat")
-- `-redis-addr`: Redis address for session storage (default: "localhost:6379")
-- `-session`: Session service type, "inmemory" or "redis" (default: "inmemory")
 - `-streaming`: Enable streaming mode for responses (default: true)
 
 ---
 
 ## Customizing Callbacks
 
-- In `main.go`, look for `RegisterBeforeModel`, `RegisterAfterModel`, `RegisterBeforeTool`, `RegisterAfterTool`, `RegisterBeforeAgent`, and `RegisterAfterAgent` to customize callback logic.
+- In `callbacks.go`, see `RegisterBeforeModel`, `RegisterAfterModel`, `RegisterBeforeTool`, `RegisterAfterTool`, `RegisterBeforeAgent`, and `RegisterAfterAgent` to customize callback logic.
 - Callback functions can return custom responses (for mocking or interception) or simply perform logging/monitoring.
 - Typical use cases:
   - Logging and tracing
@@ -349,10 +279,8 @@ go run main.go -streaming=false
 
 ## References
 
-- [runner/README.md](../runner/README.md) (basic multi-turn chat and tool calling)
-- This directory's `main.go` (full callback registration and usage)
-- [Timer Example](./timer/README.md) (comprehensive timing measurements with OpenTelemetry integration for agent, model, and tool execution)
-
----
+- `main.go` (wiring of model/agent/runner and in-memory session)
+- `callbacks.go` (full callback registration and usage)
+- `tools.go` (tool implementations)
 
 For advanced customization or production integration, see the source code or contact the maintainers.
