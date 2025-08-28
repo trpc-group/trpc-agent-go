@@ -21,7 +21,7 @@ import (
 
 // New creates a new a2a server.
 func New(opts ...Option) (*a2a.A2AServer, error) {
-	options := defaultOptions
+	options := &options{}
 	for _, opt := range opts {
 		opt(options)
 	}
