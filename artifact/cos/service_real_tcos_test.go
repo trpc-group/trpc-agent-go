@@ -1,4 +1,4 @@
-package tcos_test
+package cos_test
 
 import (
 	"context"
@@ -8,13 +8,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
-	"trpc.group/trpc-go/trpc-agent-go/artifact/tcos"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/cos"
 )
 
 func TestArtifact_SessionScope(t *testing.T) {
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	t.Skip("Skipping TCOS integration test, need to set up environment variables TCOS_SECRETID, TCOS_SECRETKEY and TCOS_BUCKET_URL")
-	s := tcos.NewService(os.Getenv("TCOS_BUCKET_URL"))
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID, COS_SECRETKEY and COS_BUCKET_URL")
+	s := cos.NewService(os.Getenv("COS_BUCKET_URL"))
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user1",
@@ -83,9 +83,9 @@ func TestArtifact_SessionScope(t *testing.T) {
 }
 
 func TestArtifact_UserScope(t *testing.T) {
-	t.Skip("Skipping TCOS integration test, need to set up environment variables TCOS_BUCKET_URL, TCOS_SECRETID and TCOS_SECRETKEY")
+	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_BUCKET_URL, COS_SECRETID and COS_SECRETKEY")
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	s := tcos.NewService(os.Getenv("TCOS_BUCKET_URL"))
+	s := cos.NewService(os.Getenv("COS_BUCKET_URL"))
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user2",

@@ -1,4 +1,4 @@
-package tcos
+package cos
 
 import (
 	"bytes"

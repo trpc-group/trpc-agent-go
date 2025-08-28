@@ -7,7 +7,7 @@
 //
 //
 
-// Package tcos provides a Tencent Cloud Object Storage (COS) implementation of the artifact service.
+// Package cos provides a Tencent Cloud Object Storage (COS) implementation of the artifact service.
 //
 // The object name format used depends on whether the filename has a user namespace:
 //   - For files with user namespace (starting with "user:"):
@@ -17,18 +17,18 @@
 //
 // Authentication:
 // The service requires COS credentials which can be provided via:
-// - Environment variables: TCOS_SECRETID and TCOS_SECRETKEY (recommended)
+// - Environment variables: COS_SECRETID and COS_SECRETKEY (recommended)
 // - Option functions: WithSecretID() and WithSecretKey()
 //
 // Example:
 //
 //	// Set environment variables
-//	export TCOS_SECRETID="your-secret-id"
-//	export TCOS_SECRETKEY="your-secret-key"
+//	export COS_SECRETID="your-secret-id"
+//	export COS_SECRETKEY="your-secret-key"
 //
 //	// Create service
-//	service := tcos.NewService("https://bucket.cos.region.myqcloud.com")
-package tcos
+//	service := cos.NewService("https://bucket.cos.region.myqcloud.com")
+package cos
 
 import (
 	"bytes"
@@ -65,27 +65,27 @@ const defaultTimeout = 60 * time.Second
 // NewService creates a new TCOS artifact service with optional configurations.
 //
 // Authentication credentials can be provided in two ways:
-// 1. Set environment variables TCOS_SECRETID and TCOS_SECRETKEY (recommended)
+// 1. Set environment variables COS_SECRETID and COS_SECRETKEY (recommended)
 // 2. Use WithSecretID() and WithSecretKey() options
 //
 // Example usage:
 //
-//	// Using environment variables (set TCOS_SECRETID and TCOS_SECRETKEY)
-//	service := tcos.NewService("https://bucket.cos.region.myqcloud.com")
+//	// Using environment variables (set COS_SECRETID and COS_SECRETKEY)
+//	service := cos.NewService("https://bucket.cos.region.myqcloud.com")
 //
 //	// Using option functions
-//	service := tcos.NewService(
+//	service := cos.NewService(
 //	    "https://bucket.cos.region.myqcloud.com",
-//	    tcos.WithSecretID("your-secret-id"),
-//	    tcos.WithSecretKey("your-secret-key"),
-//	    tcos.WithTimeout(30*time.Second),
+//	    cos.WithSecretID("your-secret-id"),
+//	    cos.WithSecretKey("your-secret-key"),
+//	    cos.WithTimeout(30*time.Second),
 //	)
 func NewService(bucketURL string, opts ...Option) *Service {
 	// Set default options
 	options := &options{
 		timeout:   defaultTimeout,
-		secretID:  os.Getenv("TCOS_SECRETID"),
-		secretKey: os.Getenv("TCOS_SECRETKEY"),
+		secretID:  os.Getenv("COS_SECRETID"),
+		secretKey: os.Getenv("COS_SECRETKEY"),
 	}
 
 	// Apply provided options

@@ -7,7 +7,7 @@
 //
 //
 
-package tcos
+package cos
 
 import (
 	"net/http"
@@ -40,7 +40,7 @@ func WithTimeout(timeout time.Duration) Option {
 }
 
 // WithSecretID sets the COS secret ID for authentication.
-// If not provided, the service will use the TCOS_SECRETID environment variable.
+// If not provided, the service will use the COS_SECRETID environment variable.
 func WithSecretID(secretID string) Option {
 	return func(o *options) {
 		o.secretID = secretID
@@ -48,7 +48,7 @@ func WithSecretID(secretID string) Option {
 }
 
 // WithSecretKey sets the COS secret key for authentication.
-// If not provided, the service will use the TCOS_SECRETKEY environment variable.
+// If not provided, the service will use the COS_SECRETKEY environment variable.
 func WithSecretKey(secretKey string) Option {
 	return func(o *options) {
 		o.secretKey = secretKey
