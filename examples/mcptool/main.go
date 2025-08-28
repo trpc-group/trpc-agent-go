@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+	tmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 func main() {
@@ -95,7 +96,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 		mcp.ConnectionConfig{
 			Transport: "stdio",
 			Command:   "go",
-			Args:      []string{"run", "./stdio_server/main.go"},
+			Args:      []string{"run", "./stdioserver/main.go"},
 			Timeout:   10 * time.Second,
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("echo", "add")),
@@ -110,6 +111,19 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			Timeout:   10 * time.Second,
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("get_weather", "get_news")),
+		mcp.WithMCPOptions(
+			// WithSimpleRetry(3): Uses default settings with 3 retry attempts
+			// - MaxRetries: 3 (range: 0-10)
+			// - InitialBackoff: 500ms (default, range: 1ms-30s)
+			// - BackoffFactor: 2.0 (default, range: 1.0-10.0)
+			// - MaxBackoff: 8s (default, range: up to 5 minutes)
+			// Retry sequence: 500ms -> 1s -> 2s (total max delay: ~3.5s)
+			tmcp.WithSimpleRetry(3),
+			// other mcp options.
+			// tmcp.WithHTTPHeaders(http.Header{
+			// 	"User-Agent": []string{"trpc-agent-go/1.0.0"},
+			// }),
+		),
 	)
 	fmt.Println("Streamable MCP Toolset created successfully")
 
@@ -124,6 +138,16 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			},
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+		mcp.WithMCPOptions(
+			// WithRetry: Custom retry configuration for fine-tuned control.
+			// Retry sequence: 1s -> 1.5s -> 2.25s -> 3.375s -> 5.0625s (capped at 15s)
+			tmcp.WithRetry(tmcp.RetryConfig{
+				MaxRetries:     5,                // Maximum retry attempts (range: 0-10, default: 2)
+				InitialBackoff: 1 * time.Second,  // Initial delay before first retry (range: 1ms-30s, default: 500ms)
+				BackoffFactor:  1.5,              // Exponential backoff multiplier (range: 1.0-10.0, default: 2.0)
+				MaxBackoff:     15 * time.Second, // Maximum delay cap (range: up to 5 minutes, default: 8s)
+			}),
+		),
 	)
 	fmt.Println("SSE MCP Toolset created successfully")
 
