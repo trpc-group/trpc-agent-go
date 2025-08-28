@@ -154,6 +154,11 @@ func (r *runner) Run(
 		EventCompletionCh: eventCompletionCh,
 	}
 
+	// Ensure the invocation can be accessed by downstream components (e.g., tools)
+	// by embedding it into the context. This is necessary for tools like
+	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
+	ctx = agent.NewContextWithInvocation(ctx, invocation)
+
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {

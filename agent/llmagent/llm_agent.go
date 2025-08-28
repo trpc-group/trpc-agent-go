@@ -539,10 +539,6 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	// Ensure the invocation can be accessed by downstream components (e.g., tools)
-	// by embedding it into the context. This is necessary for tools like
-	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
-	ctx = agent.NewContextWithInvocation(ctx, invocation)
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
 	// Ensure the invocation has a model set.

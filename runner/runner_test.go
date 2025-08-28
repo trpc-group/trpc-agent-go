@@ -218,3 +218,122 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	assert.Len(t, sess.Events, 2)
 	assert.Equal(t, "test-agent", sess.Events[0].Author)
 }
+
+// TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
+func TestRunner_InvocationInjection(t *testing.T) {
+	// Create an in-memory session service.
+	sessionService := inmemory.NewSessionService()
+
+	// Create a simple mock agent that verifies invocation is in context.
+	mockAgent := &invocationVerificationAgent{name: "test-agent"}
+
+	// Create runner.
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "test-user"
+	sessionID := "test-session"
+	message := model.NewUserMessage("Test invocation injection")
+
+	// Run the agent.
+	eventCh, err := runner.Run(ctx, userID, sessionID, message)
+	require.NoError(t, err)
+	require.NotNil(t, eventCh)
+
+	// Collect all events.
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+
+	// Verify we received the success response indicating invocation was found in context.
+	require.Len(t, events, 2)
+
+	// First event should be from the mock agent.
+	agentEvent := events[0]
+	assert.Equal(t, "test-agent", agentEvent.Author)
+	assert.Equal(t, "invocation-verification-success", agentEvent.Response.ID)
+	assert.True(t, agentEvent.Response.Done)
+
+	// Verify the response content indicates success.
+	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Invocation found in context with ID:")
+}
+
+// invocationVerificationAgent is a simple mock agent that verifies invocation is present in context.
+type invocationVerificationAgent struct {
+	name string
+}
+
+func (m *invocationVerificationAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for testing invocation injection",
+	}
+}
+
+func (m *invocationVerificationAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *invocationVerificationAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *invocationVerificationAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 1)
+
+	// Verify that invocation is present in context.
+	ctxInvocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || ctxInvocation == nil {
+		// Create error event if invocation is not in context.
+		errorEvent := &event.Event{
+			Response: &model.Response{
+				ID:    "invocation-verification-error",
+				Model: "test-model",
+				Done:  true,
+				Error: &model.ResponseError{
+					Type:    "invocation_verification_error",
+					Message: "Invocation not found in context",
+				},
+			},
+			InvocationID: invocation.InvocationID,
+			Author:       m.name,
+			ID:           "error-event-id",
+			Timestamp:    time.Now(),
+		}
+		eventCh <- errorEvent
+		close(eventCh)
+		return eventCh, nil
+	}
+
+	// Create success response event.
+	responseEvent := &event.Event{
+		Response: &model.Response{
+			ID:    "invocation-verification-success",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "Invocation found in context with ID: " + ctxInvocation.InvocationID,
+					},
+				},
+			},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "success-event-id",
+		Timestamp:    time.Now(),
+	}
+
+	eventCh <- responseEvent
+	close(eventCh)
+
+	return eventCh, nil
+}
+
+func (m *invocationVerificationAgent) Tools() []tool.Tool {
+	return []tool.Tool{}
+}
