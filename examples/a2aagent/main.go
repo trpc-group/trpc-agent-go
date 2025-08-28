@@ -10,9 +10,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,113 +23,143 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 var (
 	modelName = flag.String("model", "deepseek-chat", "Model to use")
-	host      = flag.String("host", "0.0.0.0:8888", "Host to bind")
+	host      = flag.String("host", "0.0.0.0:8888", "Host to use")
+	streaming = flag.Bool("streaming", true, "Streaming to use")
 )
 
 func main() {
 	flag.Parse()
-
 	config := zap.NewProductionConfig()
 	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
 	logger, _ := config.Build()
 	a2alog.Default = logger.Sugar()
-	agentlog.Default = logger.Sugar()
 
-	go func() {
-		runRemoteAgent()
-	}()
+	localAgent := runRemoteAgent("agent_joker", "i am a remote agent, i can tell a joke", *host)
+
 	time.Sleep(1 * time.Second)
-	callRemoteAgent()
+	startChat(localAgent)
 }
 
-func callRemoteAgent() {
-	a2aURL := fmt.Sprintf("http://%s", *host)
-	a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(a2aURL))
+func startChat(localAgent agent.Agent) {
+	httpURL := fmt.Sprintf("http://%s", *host)
+	a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(httpURL))
 	if err != nil {
-		log.Fatalf("Failed to create a2a agent: %v", err)
+		fmt.Printf("Failed to create a2a agent: %v", err)
+		return
 	}
+	card := a2aAgent.GetAgentCard()
+	fmt.Printf("\n------- Agent Card -------\n")
+	fmt.Printf("Name: %s\n", card.Name)
+	fmt.Printf("Description: %s\n", card.Description)
+	fmt.Printf("URL: %s\n", httpURL)
+	fmt.Printf("------------------------\n")
 
-	agentCard := a2aAgent.GetAgentCard()
-	if agentCard == nil {
-		log.Fatalf("Failed to get agent card")
-	}
-	sessionService := inmemory.NewSessionService()
-	runner := runner.NewRunner(agentCard.Name, a2aAgent, runner.WithSessionService(sessionService))
+	remoteRunner := runner.NewRunner("test", a2aAgent)
+	localRunner := runner.NewRunner("test", localAgent)
 
 	userID := "user1"
 	sessionID := "session1"
-	msg := "tell me a joke"
 
-	fmt.Printf("User: %s \n", msg)
-	events, err := runner.Run(context.Background(), userID, sessionID, model.Message{
-		Role:    model.RoleUser,
-		Content: msg,
-	})
-	if err != nil {
-		log.Fatalf("Failed to run agent: %v", err)
-	}
-	fmt.Printf("Agent: ")
-	hasContent := false
-	for event := range events {
-		if event.Response.Error != nil {
-			fmt.Printf("Error: %s", event.Response.Error.Message)
-			hasContent = true
-			continue
+	fmt.Println("Chat with the agent. Type 'new' for a new session, or 'exit' to quit.")
+
+	for {
+		if err := processMessage(remoteRunner, localRunner, userID, &sessionID); err != nil {
+			if err.Error() == "exit" {
+				fmt.Println("👋 Goodbye!")
+				return
+			}
+			fmt.Printf("❌ Error: %v\n", err)
 		}
-		if len(event.Response.Choices) == 0 {
-			continue
-		}
-		if event.Response.Choices[0].Delta.Content != "" {
-			fmt.Printf("%s", event.Response.Choices[0].Delta.Content)
-			hasContent = true
-		} else if event.Response.Choices[0].Message.Content != "" {
-			fmt.Printf("%s", event.Response.Choices[0].Message.Content)
-			hasContent = true
-		}
+
+		fmt.Println() // Add spacing between turns
 	}
-	if !hasContent {
-		fmt.Printf("No response received")
-	}
-	fmt.Print("\n")
 }
 
-func runRemoteAgent() {
-	remoteAgent := buildRemoteAgent(*modelName)
+func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userID string, sessionID *string) error {
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Print("User: ")
+	if !scanner.Scan() {
+		return fmt.Errorf("exit")
+	}
+
+	userInput := strings.TrimSpace(scanner.Text())
+	if userInput == "" {
+		return nil
+	}
+
+	switch strings.ToLower(userInput) {
+	case "exit":
+		return fmt.Errorf("exit")
+	case "new":
+		*sessionID = startNewSession()
+		return nil
+	}
+
+	fmt.Printf("%s remote agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
+	events, err := remoteRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	if err != nil {
+		return fmt.Errorf("failed to run agent: %w", err)
+	}
+	if err := processResponse(events); err != nil {
+		return fmt.Errorf("failed to process response: %w", err)
+	}
+
+	fmt.Printf("\n%s local agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
+	events, err = localRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	if err != nil {
+		return fmt.Errorf("failed to run agent: %w", err)
+	}
+	if err := processResponse(events); err != nil {
+		return fmt.Errorf("failed to process response: %w", err)
+	}
+	return nil
+}
+
+func startNewSession() string {
+	newSessionID := fmt.Sprintf("session_%d", time.Now().UnixNano())
+	fmt.Printf("🆕 Started new session: %s\n", newSessionID)
+	fmt.Printf("   (Conversation history has been reset)\n")
+	fmt.Println()
+	return newSessionID
+}
+
+func runRemoteAgent(agentName, desc, host string) agent.Agent {
+	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
-		a2a.WithHost(*host),
-		a2a.WithAgent(remoteAgent),
+		a2a.WithHost(host),
+		a2a.WithAgent(remoteAgent, *streaming),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
 	}
-	server.Start(*host)
+	go func() {
+		server.Start(host)
+	}()
+	return remoteAgent
 }
 
-func buildRemoteAgent(modelName string) agent.Agent {
+func buildRemoteAgent(agentName, desc string) agent.Agent {
 	// Create OpenAI model.
-	modelInstance := openai.New(modelName)
+	modelInstance := openai.New(*modelName)
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
-		Stream:      false, // Enable streaming
+		Stream:      *streaming,
 	}
-	desc := "A remote agent, it will call the remote agent by a2a protocol."
-
 	llmAgent := llmagent.New(
-		"remoteAgent",
+		agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription(desc),
 		llmagent.WithInstruction(desc),
@@ -134,6 +167,168 @@ func buildRemoteAgent(modelName string) agent.Agent {
 	)
 
 	return llmAgent
+}
+
+// processResponse handles both streaming and non-streaming responses with tool call visualization.
+func processResponse(eventChan <-chan *event.Event) error {
+	var (
+		fullContent       string
+		toolCallsDetected bool
+		assistantStarted  bool
+	)
+
+	for event := range eventChan {
+		if err := handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
+			return err
+		}
+
+		// Check if this is the final event.
+		if event.Done && !isToolEvent(event) {
+			fmt.Printf("\n")
+			break
+		}
+	}
+
+	return nil
+}
+
+// handleEvent processes a single event from the event channel.
+func handleEvent(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) error {
+	// Handle errors.
+	if event.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+		return nil
+	}
+
+	// Handle tool calls.
+	if handleToolCalls(event, toolCallsDetected, assistantStarted) {
+		return nil
+	}
+
+	// Handle tool responses.
+	if handleToolResponses(event) {
+		return nil
+	}
+
+	// Handle content.
+	handleContent(event, toolCallsDetected, assistantStarted, fullContent)
+
+	return nil
+}
+
+// handleToolCalls detects and displays tool calls.
+func handleToolCalls(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+) bool {
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		*toolCallsDetected = true
+		if *assistantStarted {
+			fmt.Printf("\n")
+		}
+		fmt.Printf("🔧 CallableTool calls initiated:\n")
+		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
+			if len(toolCall.Function.Arguments) > 0 {
+				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+			}
+		}
+		fmt.Printf("\n🔄 Executing tools...\n")
+		return true
+	}
+	return false
+}
+
+// handleToolResponses detects and displays tool responses.
+func handleToolResponses(event *event.Event) bool {
+	if event.Response != nil && len(event.Response.Choices) > 0 {
+		hasToolResponse := false
+		for _, choice := range event.Response.Choices {
+			// Handle traditional tool responses (Role: tool)
+			if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
+				fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+					choice.Message.ToolID,
+					strings.TrimSpace(choice.Message.Content))
+				hasToolResponse = true
+			}
+		}
+		if hasToolResponse {
+			return true
+		}
+	}
+	return false
+}
+
+// handleContent processes and displays content.
+func handleContent(
+	event *event.Event,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) {
+	if len(event.Choices) > 0 {
+		choice := event.Choices[0]
+		content := extractContent(choice)
+
+		if content != "" {
+			displayContent(content, toolCallsDetected, assistantStarted, fullContent)
+		}
+	}
+}
+
+// extractContent extracts content based on streaming mode.
+func extractContent(choice model.Choice) string {
+	if *streaming {
+		return choice.Delta.Content
+	}
+	return choice.Message.Content
+}
+
+// displayContent prints content to console.
+func displayContent(
+	content string,
+	toolCallsDetected *bool,
+	assistantStarted *bool,
+	fullContent *string,
+) {
+	if !*assistantStarted {
+		if *toolCallsDetected {
+			fmt.Printf("\n🤖 Assistant: ")
+		} else {
+			fmt.Printf("🤖 Assistant: ")
+		}
+		*assistantStarted = true
+	}
+	fmt.Print(content)
+	*fullContent += content
+}
+
+// isToolEvent checks if an event is a tool response (not a final response).
+func isToolEvent(event *event.Event) bool {
+	if event.Response == nil {
+		return false
+	}
+	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		return true
+	}
+	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
+		return true
+	}
+
+	// Check if this is a tool response by examining choices.
+	for _, choice := range event.Response.Choices {
+		if choice.Message.Role == model.RoleTool {
+			return true
+		}
+	}
+
+	return false
 }
 
 func intPtr(i int) *int {

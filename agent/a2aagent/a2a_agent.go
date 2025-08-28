@@ -28,38 +28,40 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+var defaultStreamingChannelSize = 1024
+var defaultNonStreamingChannelSize = 10
+
 const (
 	// AgentCardWellKnownPath is the standard path for agent card discovery
 	AgentCardWellKnownPath = "/.well-known/agent.json"
-	// A2AMetadataPrefix is the prefix for A2A-specific metadata
-	A2AMetadataPrefix = "a2a:"
 	// defaultFetchTimeout is the default timeout for fetching agent card
 	defaultFetchTimeout = 30 * time.Second
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
-	name        string
-	description string
+	// options
+	name                 string
+	description          string
+	agentCard            *server.AgentCard      // Agent card and resolution state
+	agentURL             string                 // URL of the remote A2A agent
+	eventConverter       A2AEventConverter      // Custom A2A event converters
+	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
+	extraA2AOptions      []client.Option        // Additional A2A client options
+	streamingBufSize     int                    // Buffer size for streaming responses
+	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
 
-	// Agent card and resolution state
-	agentCard *server.AgentCard
-	agentURL  string
-
-	// HTTP client configuration
 	httpClient *http.Client
-
-	// A2A client
-	a2aClient *client.A2AClient
+	a2aClient  *client.A2AClient
 }
 
 // New creates a new A2AAgent.
-//
-// The agent can be configured with:
-// - A *server.AgentCard object
-// - A URL string to A2A endpoint
 func New(opts ...Option) (*A2AAgent, error) {
-	agent := &A2AAgent{}
+	agent := &A2AAgent{
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: &defaultEventA2AConverter{},
+		streamingBufSize:    defaultStreamingChannelSize,
+	}
 
 	for _, opt := range opts {
 		opt(agent)
@@ -77,12 +79,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 		return nil, fmt.Errorf("agent card not set")
 	}
 
-	a2aClientOpts := []client.Option{}
-	if agent.httpClient != nil {
-		a2aClientOpts = append(a2aClientOpts, client.WithHTTPClient(agent.httpClient))
-	}
-	// Initialize A2A client
-	a2aClient, err := client.NewA2AClient(agent.agentCard.URL, a2aClientOpts...)
+	a2aClient, err := client.NewA2AClient(agent.agentCard.URL, agent.extraA2AOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agent.agentCard.URL, err)
 	}
@@ -140,97 +137,6 @@ func (r *A2AAgent) resolveAgentCardFromURL() (*server.AgentCard, error) {
 	return &agentCard, nil
 }
 
-// buildA2AParts converts event response to A2A parts
-func (r *A2AAgent) buildA2AParts(ev *event.Event) []protocol.Part {
-	var parts []protocol.Part
-
-	if ev.Response == nil || len(ev.Response.Choices) == 0 {
-		return parts
-	}
-
-	// Extract content from the first choice
-	for _, choice := range ev.Response.Choices {
-		var content string
-
-		// Get content from either delta or message
-		if choice.Delta.Content != "" {
-			content = choice.Delta.Content
-		} else if choice.Message.Content != "" {
-			content = choice.Message.Content
-		}
-
-		if content != "" {
-			parts = append(parts, protocol.NewTextPart(content))
-		}
-	}
-	return parts
-}
-
-// buildA2AMessage constructs A2A message from session events
-func (r *A2AAgent) buildA2AMessage(
-	_ context.Context,
-	invocation *agent.Invocation,
-) (*protocol.Message, error) {
-	var parts []protocol.Part
-
-	parts = append(parts, protocol.NewTextPart(invocation.Message.Content))
-	// Get recent events that are not from this agent
-	events := invocation.Session.Events
-	for i := len(events) - 1; i >= 0; i-- {
-		ev := &events[i]
-		if ev.Author == r.name {
-			// Stop when we encounter our own message
-			break
-		}
-
-		// Convert event content to A2A parts
-		eventParts := r.buildA2AParts(ev)
-		parts = append(eventParts, parts...) // Prepend to maintain order
-	}
-
-	if len(parts) == 0 {
-		// If no content, create an empty text part
-		parts = append(parts, protocol.NewTextPart(""))
-	}
-
-	message := protocol.NewMessage(protocol.MessageRoleUser, parts)
-	return &message, nil
-}
-
-// buildRespEvent converts A2A response to tRPC event
-func (r *A2AAgent) buildRespEvent(response *protocol.Message, invocation *agent.Invocation) *event.Event {
-	if response == nil {
-		return &event.Event{
-			Author:       r.name,
-			InvocationID: invocation.InvocationID,
-			Response: &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		}
-	}
-
-	// Extract text content from A2A response
-	var content string
-	for _, part := range response.Parts {
-		if textPart, ok := part.(*protocol.TextPart); ok {
-			content += textPart.Text
-		}
-	}
-
-	// Create response event
-	ev := &event.Event{
-		Author:       r.name,
-		InvocationID: invocation.InvocationID,
-		Response: &model.Response{
-			Choices:   []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: content}}},
-			Done:      true,
-			Timestamp: time.Now(),
-			Created:   time.Now().Unix(),
-		},
-	}
-
-	return ev
-}
-
 // sendErrorEvent sends an error event to the event channel
 func (r *A2AAgent) sendErrorEvent(eventChan chan<- *event.Event, invocation *agent.Invocation, errorMessage string) {
 	eventChan <- &event.Event{
@@ -249,13 +155,126 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	if r.a2aClient == nil {
 		return nil, fmt.Errorf("A2A client not initialized")
 	}
+	useStreaming := r.shouldUseStreaming()
+	if useStreaming {
+		return r.runStreaming(ctx, invocation)
+	}
+	return r.runNonStreaming(ctx, invocation)
+}
 
-	eventChan := make(chan *event.Event, 1)
+// shouldUseStreaming determines whether to use streaming protocol
+func (r *A2AAgent) shouldUseStreaming() bool {
+	// Check if agent card supports streaming
+	if r.agentCard != nil && r.agentCard.Capabilities.Streaming != nil {
+		return *r.agentCard.Capabilities.Streaming
+	}
+
+	// Default to non-streaming if capabilities are not specified
+	return false
+}
+
+// buildA2AMessage constructs A2A message from session events
+func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) (*protocol.Message, error) {
+	if r.a2aMessageConverter == nil {
+		return nil, fmt.Errorf("a2a message converter not set")
+	}
+	message, err := r.a2aMessageConverter.ConvertToA2AMessage(isStream, r.name, invocation)
+	if err != nil || message == nil {
+		return nil, fmt.Errorf("custom A2A converter failed, msg:%v, err:%w", message, err)
+	}
+	return message, nil
+}
+
+// runStreaming handles streaming A2A communication
+func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	if r.eventConverter == nil {
+		return nil, fmt.Errorf("event converter not set")
+	}
+	eventChan := make(chan *event.Event, r.streamingBufSize)
+	go func() {
+		defer close(eventChan)
+
+		a2aMessage, err := r.buildA2AMessage(invocation, true)
+		if err != nil {
+			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
+			return
+		}
+		params := protocol.SendMessageParams{
+			Message: *a2aMessage,
+		}
+		streamChan, err := r.a2aClient.StreamMessage(ctx, params)
+		if err != nil {
+			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
+			return
+		}
+
+		var aggregatedContent string
+		for streamEvent := range streamChan {
+			select {
+			case <-ctx.Done():
+				r.sendErrorEvent(eventChan, invocation, "context cancelled")
+				return
+			default:
+			}
+
+			event, err := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
+			if err != nil {
+				r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
+				return
+			}
+
+			// Aggregate content from delta
+			if event.Response != nil && len(event.Response.Choices) > 0 {
+				if r.streamingRespHandler != nil {
+					content, err := r.streamingRespHandler(event.Response)
+					if err != nil {
+						r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
+						return
+					}
+					if content != "" {
+						aggregatedContent += content
+					}
+				} else if event.Response.Choices[0].Delta.Content != "" {
+					aggregatedContent += event.Response.Choices[0].Delta.Content
+				}
+			}
+
+			if event != nil {
+				eventChan <- event
+			}
+		}
+
+		// Send final event with aggregated content
+		finalEvent := &event.Event{
+			Author:       r.name,
+			InvocationID: invocation.InvocationID,
+			Timestamp:    time.Now(),
+			Response: &model.Response{
+				Done:      true,
+				IsPartial: false,
+				Timestamp: time.Now(),
+				Created:   time.Now().Unix(),
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: aggregatedContent,
+					},
+				}},
+			},
+		}
+		eventChan <- finalEvent
+	}()
+	return eventChan, nil
+}
+
+// runNonStreaming handles non-streaming A2A communication
+func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
 	go func() {
 		defer close(eventChan)
 
 		// Construct A2A message from session
-		a2aMessage, err := r.buildA2AMessage(ctx, invocation)
+		a2aMessage, err := r.buildA2AMessage(invocation, false)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
 			return
@@ -264,37 +283,24 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
 		}
-
 		result, err := r.a2aClient.SendMessage(ctx, params)
 		if err != nil {
 			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A request failed to %s: %v", r.agentCard.URL, err))
 			return
 		}
 
-		// Convert response to event - result should have the message
-		var responseMsg *protocol.Message
-		switch v := result.Result.(type) {
-		case *protocol.Message:
-			responseMsg = v
-		case *protocol.Task:
-			// For tasks, we might want to handle them differently
-			// For now, create a simple message indicating task was created
-			responseMsg = &protocol.Message{
-				Role:  protocol.MessageRoleAgent,
-				Parts: []protocol.Part{protocol.NewTextPart(fmt.Sprintf("Task created: %s", v.ID))},
-			}
-		default:
-			// Handle unknown response types
-			responseMsg = &protocol.Message{
-				Role:  protocol.MessageRoleAgent,
-				Parts: []protocol.Part{protocol.NewTextPart("Received unknown response type")},
-			}
+		// Try custom event converters first
+		msgResult := protocol.MessageResult{Result: result.Result}
+		event, err := r.eventConverter.ConvertToEvent(msgResult, r.name, invocation)
+		if err != nil {
+			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
+			return
 		}
 
-		event := r.buildRespEvent(responseMsg, invocation)
-		eventChan <- event
+		if event != nil {
+			eventChan <- event
+		}
 	}()
-
 	return eventChan, nil
 }
 
