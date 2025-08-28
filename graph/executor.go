@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sync"
 	"time"
@@ -102,20 +103,21 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 
 // Task represents a task to be executed in a step.
 type Task struct {
-	NodeID   string
-	Input    any
-	Writes   []channelWriteEntry
-	Triggers []string
-	TaskID   string
-	TaskPath []string
+	NodeID   string              // NodeID is the ID of the node to execute.
+	Input    any                 // Input is the input of the task.
+	Writes   []channelWriteEntry // Writes is the writes of the task.
+	Triggers []string            // Triggers is the triggers of the task.
+	TaskID   string              // TaskID is the ID of the task.
+	TaskPath []string            // TaskPath is the path of the task.
+	Overlay  State               // Overlay is the overlay state of the task.
 }
 
 // Step represents a single step in execution.
 type Step struct {
-	StepNumber      int
-	Tasks           []*Task
-	State           State
-	UpdatedChannels map[string]bool
+	StepNumber      int             // StepNumber is the number of the step.
+	Tasks           []*Task         // Tasks is the tasks of the step.
+	State           State           // State is the state of the step.
+	UpdatedChannels map[string]bool // UpdatedChannels is the updated channels of the step.
 }
 
 // Execute executes the graph with the given initial state using Pregel-style BSP execution.
@@ -194,9 +196,15 @@ func (e *Executor) executeGraph(
 		}
 	}
 	// Emit completion event.
+	// Create a copy of the final state to avoid concurrent access issues
+	finalStateCopy := make(State)
+	execCtx.stateMutex.RLock()
+	maps.Copy(finalStateCopy, execCtx.State)
+	execCtx.stateMutex.RUnlock()
+
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
-		WithCompletionEventFinalState(execCtx.State),
+		WithCompletionEventFinalState(finalStateCopy),
 		WithCompletionEventTotalSteps(e.maxSteps),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
@@ -205,11 +213,15 @@ func (e *Executor) executeGraph(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
+	// Serialize final state under write lock to avoid concurrent map mutations (including nested maps).
+	execCtx.stateMutex.Lock()
 	for key, value := range execCtx.State {
 		if jsonData, err := json.Marshal(value); err == nil {
 			completionEvent.StateDelta[key] = jsonData
 		}
 	}
+	execCtx.stateMutex.Unlock()
+
 	select {
 	case eventChan <- completionEvent:
 	default:
@@ -268,6 +280,17 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 	select {
 	case execCtx.EventChan <- planEvent:
 	default:
+	}
+
+	// If there are pending tasks produced by prior fan-out, schedule them first.
+	execCtx.tasksMutex.Lock()
+	if len(execCtx.pendingTasks) > 0 {
+		tasks = append(tasks, execCtx.pendingTasks...)
+		execCtx.pendingTasks = nil
+	}
+	execCtx.tasksMutex.Unlock()
+	if len(tasks) > 0 {
+		return tasks, nil
 	}
 
 	// Check if this is the first step (entry point).
@@ -339,6 +362,26 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 		Triggers: node.triggers,
 		TaskID:   fmt.Sprintf("%s-%d", nodeID, step),
 		TaskPath: []string{nodeID},
+	}
+}
+
+// createTaskWithOverlay creates a task for a node with an overlay state applied at execution time.
+func (e *Executor) createTaskWithOverlay(nodeID string, overlay State, step int) *Task {
+	if nodeID == End {
+		return nil
+	}
+	node, exists := e.graph.Node(nodeID)
+	if !exists {
+		return nil
+	}
+	return &Task{
+		NodeID:   nodeID,
+		Input:    nil,
+		Writes:   node.writers,
+		Triggers: node.triggers,
+		TaskID:   fmt.Sprintf("%s-%d", nodeID, step),
+		TaskPath: []string{nodeID},
+		Overlay:  overlay,
 	}
 }
 
@@ -424,8 +467,10 @@ func (e *Executor) executeSingleTask(
 	// Get state copy for callbacks.
 	execCtx.stateMutex.RLock()
 	stateCopy := make(State, len(execCtx.State))
-	for k, v := range execCtx.State {
-		stateCopy[k] = v
+	maps.Copy(stateCopy, execCtx.State)
+	// Make overlay visible to callbacks for this task.
+	if t.Overlay != nil && e.graph.Schema() != nil {
+		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
 	}
 	// Add execution context to state so nodes can access event channel.
 	stateCopy[StateKeyExecContext] = execCtx
@@ -458,7 +503,7 @@ func (e *Executor) executeSingleTask(
 	}
 
 	// Execute the node function.
-	result, err := e.executeNodeFunction(ctx, execCtx, t.NodeID)
+	result, err := e.executeNodeFunction(ctx, execCtx, t)
 	if err != nil {
 		// Run on node error callbacks.
 		if nodeCallbacks != nil {
@@ -573,8 +618,9 @@ func (e *Executor) emitNodeStartEvent(
 
 // executeNodeFunction executes the actual node function.
 func (e *Executor) executeNodeFunction(
-	ctx context.Context, execCtx *ExecutionContext, nodeID string,
+	ctx context.Context, execCtx *ExecutionContext, t *Task,
 ) (any, error) {
+	nodeID := t.NodeID
 	node, exists := e.graph.Node(nodeID)
 	if !exists {
 		return nil, fmt.Errorf("node %s not found", nodeID)
@@ -582,8 +628,10 @@ func (e *Executor) executeNodeFunction(
 	// Execute the node with read lock on state.
 	execCtx.stateMutex.RLock()
 	stateCopy := make(State, len(execCtx.State))
-	for k, v := range execCtx.State {
-		stateCopy[k] = v
+	maps.Copy(stateCopy, execCtx.State)
+	// Apply overlay if present to form the isolated input view.
+	if t.Overlay != nil && e.graph.Schema() != nil {
+		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
 	}
 	// Add execution context to state so nodes can access event channel.
 	stateCopy[StateKeyExecContext] = execCtx
@@ -626,30 +674,70 @@ func (e *Executor) handleNodeResult(
 		return nil
 	}
 
-	// Update state with node result if it's a State.
-	if stateResult, ok := result.(State); ok {
-		e.updateStateFromResult(execCtx, stateResult)
-	} else if cmdResult, ok := result.(*Command); ok && cmdResult != nil {
-		if err := e.handleCommandResult(ctx, execCtx, cmdResult); err != nil {
-			return err
+	// Handle node result by concrete type.
+	fanOut := false
+	switch v := result.(type) {
+	case State: // State update.
+		e.updateStateFromResult(execCtx, v)
+	case *Command: // Single command.
+		if v != nil {
+			if err := e.handleCommandResult(ctx, execCtx, v); err != nil {
+				return err
+			}
 		}
+	case []Command: // Fan-out commands.
+		// Fan-out: enqueue tasks with overlays.
+		fanOut = true
+		e.enqueueCommands(execCtx, t, v)
 	}
 
-	// Process channel writes.
-	if len(t.Writes) > 0 {
+	// Process channel writes, unless this is a fan-out case to avoid double trigger.
+	if !fanOut && len(t.Writes) > 0 {
 		e.processChannelWrites(execCtx, t.Writes)
 	}
 
 	return nil
 }
 
+// enqueueCommands enqueues a set of commands as pending tasks for subsequent steps.
+func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []Command) {
+	if len(cmds) == 0 {
+		return
+	}
+	nextStep := 0
+	// TaskID embeds step when created; since we don't track current step here,
+	// we set 0 and let uniqueness be per node list; this is acceptable for now.
+	// If needed, we can carry step into handleNodeResult params later.
+	newTasks := make([]*Task, 0, len(cmds))
+	for _, c := range cmds {
+		target := c.GoTo
+		if target == "" {
+			target = t.NodeID
+		}
+		newTasks = append(newTasks, e.createTaskWithOverlay(target, c.Update, nextStep))
+	}
+	execCtx.tasksMutex.Lock()
+	execCtx.pendingTasks = append(execCtx.pendingTasks, newTasks...)
+	execCtx.tasksMutex.Unlock()
+}
+
 // updateStateFromResult updates the execution context state from a State result.
 func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult State) {
 	execCtx.stateMutex.Lock()
-	for key, value := range stateResult {
-		execCtx.State[key] = value
+	defer execCtx.stateMutex.Unlock()
+
+	// Special handling for message-related state to preserve GraphAgent functionality.
+	// Check if this is a message state update that should use direct assignment.
+	if _, hasMessages := stateResult[StateKeyMessages]; hasMessages {
+		// For message state, use direct assignment to preserve GraphAgent's message management.
+		maps.Copy(execCtx.State, stateResult)
+	} else if e.graph != nil && e.graph.Schema() != nil {
+		// For non-message state, use schema-based updates for proper reducer handling.
+		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)
+	} else {
+		// Fallback to direct assignment if no schema available.
+		maps.Copy(execCtx.State, stateResult)
 	}
-	execCtx.stateMutex.Unlock()
 }
 
 // handleCommandResult handles a Command result from node execution.
@@ -787,12 +875,13 @@ func (e *Executor) emitStateUpdateEvent(execCtx *ExecutionContext) {
 
 	execCtx.stateMutex.RLock()
 	stateKeys := extractStateKeys(execCtx.State)
+	stateLen := len(execCtx.State)
 	execCtx.stateMutex.RUnlock()
 
 	stateEvent := NewStateUpdateEvent(
 		WithStateEventInvocationID(execCtx.InvocationID),
 		WithStateEventUpdatedKeys(stateKeys),
-		WithStateEventStateSize(len(execCtx.State)),
+		WithStateEventStateSize(stateLen),
 	)
 	select {
 	case execCtx.EventChan <- stateEvent:
@@ -833,7 +922,11 @@ func (e *Executor) processConditionalEdges(
 	}
 
 	// Evaluate the conditional function.
-	result, err := condEdge.Condition(ctx, execCtx.State)
+	execCtx.stateMutex.RLock()
+	stateCopy := make(State, len(execCtx.State))
+	maps.Copy(stateCopy, execCtx.State)
+	execCtx.stateMutex.RUnlock()
+	result, err := condEdge.Condition(ctx, stateCopy)
 	if err != nil {
 		return fmt.Errorf("conditional edge evaluation failed for node %s: %w", nodeID, err)
 	}
