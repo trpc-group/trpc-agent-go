@@ -465,7 +465,9 @@ func main() {
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("你是一个数学助手"),
-        llmagent.WithTools([]tool.Tool{calculatorTool}))
+        llmagent.WithTools([]tool.Tool{calculatorTool}),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
+    )
     
     // 3. 创建 Runner 并执行
     r := runner.NewRunner("math-app", agent)

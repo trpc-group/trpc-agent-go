@@ -466,7 +466,9 @@ func main() {
     agent := llmagent.New("calculator-assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("You are a math assistant."),
-        llmagent.WithTools([]tool.Tool{calculatorTool}))
+        llmagent.WithTools([]tool.Tool{calculatorTool}),
+        llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
+    )
     
     // 3. Create Runner and execute.
     r := runner.NewRunner("math-app", agent)
