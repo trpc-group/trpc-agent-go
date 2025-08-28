@@ -31,6 +31,7 @@ import (
 	"github.com/tencentyun/cos-go-sdk-v5"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
 )
 
 // Service is a Tencent Cloud Object Storage implementation of the artifact service.
@@ -106,7 +107,7 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 		version = maxVersion + 1
 	}
 
-	objectName := buildObjectName(sessionInfo, filename, version)
+	objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
 
 	// Upload the artifact data
 	reader := bytes.NewReader(art.Data)
@@ -149,7 +150,7 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 		targetVersion = *version
 	}
 
-	objectName := buildObjectName(sessionInfo, filename, targetVersion)
+	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 
 	// Download the artifact
 	resp, err := s.cosClient.Object.Get(ctx, objectName, nil)
@@ -185,7 +186,7 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 	filenameSet := make(map[string]bool)
 
 	// List session-scoped artifacts
-	sessionPrefix := fmt.Sprintf("%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID)
+	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
 	sessionResult, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
 		Prefix: sessionPrefix,
 	})
@@ -204,7 +205,7 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 	}
 
 	// List user-namespaced artifacts
-	userPrefix := fmt.Sprintf("%s/%s/user/", sessionInfo.AppName, sessionInfo.UserID)
+	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
 	userResult, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
 		Prefix: userPrefix,
 	})
@@ -242,7 +243,7 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 
 	// Delete all versions
 	for _, version := range versions {
-		objectName := buildObjectName(sessionInfo, filename, version)
+		objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
 		_, err := s.cosClient.Object.Delete(ctx, objectName)
 		if err != nil && !cos.IsNotFoundError(err) {
 			return fmt.Errorf("failed to delete artifact version %d: %w", version, err)
@@ -254,7 +255,7 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 
 // ListVersions lists all versions of an artifact from TCOS.
 func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
-	prefix := buildObjectNamePrefix(sessionInfo, filename)
+	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
 
 	result, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
 		Prefix: prefix,
@@ -277,25 +278,4 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 		}
 	}
 	return versions, nil
-}
-
-// buildObjectName constructs the object name in COS.
-func buildObjectName(sessionInfo artifact.SessionInfo, filename string, version int) string {
-	if fileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s/%d", sessionInfo.AppName, sessionInfo.UserID, filename, version)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s/%d", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename, version)
-}
-
-// buildObjectNamePrefix constructs the object name prefix for listing versions.
-func buildObjectNamePrefix(sessionInfo artifact.SessionInfo, filename string) string {
-	if fileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s/", sessionInfo.AppName, sessionInfo.UserID, filename)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
-}
-
-// fileHasUserNamespace checks if the filename has a user namespace.
-func fileHasUserNamespace(filename string) bool {
-	return strings.HasPrefix(filename, "user:")
 }

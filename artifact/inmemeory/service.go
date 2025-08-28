@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
 )
 
 // Service is an in-memory implementation of the artifact service.
@@ -40,7 +41,7 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+	path := iartifact.BuildArtifactPath(sessionInfo, filename)
 	if s.artifacts[path] == nil {
 		s.artifacts[path] = make([]*artifact.Artifact, 0)
 	}
@@ -56,7 +57,7 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+	path := iartifact.BuildArtifactPath(sessionInfo, filename)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
 		return nil, nil
@@ -81,8 +82,8 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	sessionPrefix := fmt.Sprintf("%s/%s/%s/", sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID)
-	usernamespacePrefix := fmt.Sprintf("%s/%s/user/", sessionInfo.AppName, sessionInfo.UserID)
+	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
+	usernamespacePrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
 
 	var filenames []string
 	for path := range s.artifacts {
@@ -104,7 +105,7 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+	path := iartifact.BuildArtifactPath(sessionInfo, filename)
 	if _, exists := s.artifacts[path]; !exists {
 		// Artifact doesn't exist, but this is not an error in the Python implementation
 		return nil
@@ -119,7 +120,7 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	path := s.artifactPath(sessionInfo.AppName, sessionInfo.UserID, sessionInfo.SessionID, filename)
+	path := iartifact.BuildArtifactPath(sessionInfo, filename)
 	versions, exists := s.artifacts[path]
 	if !exists || len(versions) == 0 {
 		return []int{}, nil
@@ -131,17 +132,4 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 	}
 
 	return result, nil
-}
-
-// fileHasUserNamespace checks if the filename has a user namespace.
-func (s *Service) fileHasUserNamespace(filename string) bool {
-	return strings.HasPrefix(filename, "user:")
-}
-
-// artifactPath constructs the artifact path.
-func (s *Service) artifactPath(appName, userID, sessionID, filename string) string {
-	if s.fileHasUserNamespace(filename) {
-		return fmt.Sprintf("%s/%s/user/%s", appName, userID, filename)
-	}
-	return fmt.Sprintf("%s/%s/%s/%s", appName, userID, sessionID, filename)
 }
