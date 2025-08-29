@@ -1,12 +1,12 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.
-// All rights reserved.
+// Copyright (C) 2025 Tencent.  All rights reserved.
 //
-// If you have downloaded a copy of the tRPC source code from Tencent,
-// please note that tRPC source code is licensed under the Apache 2.0 License.
-// A copy of the Apache 2.0 License is included in this file.
+// trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
+
 // Package main provides a standalone CLI demo showcasing how to wire the
 // trpc-agent-go orchestration layer with an LLM agent that exposes two simple tools:
 // a calculator and a time query. It starts an HTTP server compatible with ADK Web UI

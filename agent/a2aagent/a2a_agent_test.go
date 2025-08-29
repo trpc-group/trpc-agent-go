@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package a2aagent
 
 import (
@@ -194,8 +203,8 @@ func TestA2AAgent_Tools(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name:  "returns empty tools",
-			agent: &A2AAgent{},
+			name:      "returns empty tools",
+			agent:     &A2AAgent{},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, tools []tool.Tool) {
 				if len(tools) != 0 {
@@ -224,8 +233,8 @@ func TestA2AAgent_SubAgents(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name:  "returns empty sub agents",
-			agent: &A2AAgent{},
+			name:      "returns empty sub agents",
+			agent:     &A2AAgent{},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, subAgents []agent.Agent) {
 				if len(subAgents) != 0 {
@@ -303,8 +312,8 @@ func TestA2AAgent_GetAgentCard(t *testing.T) {
 			},
 		},
 		{
-			name:  "returns nil when no card set",
-			agent: &A2AAgent{},
+			name:      "returns nil when no card set",
+			agent:     &A2AAgent{},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, agentCard *server.AgentCard) {
 				if agentCard != nil {
@@ -377,8 +386,8 @@ func TestA2AAgent_shouldUseStreaming(t *testing.T) {
 			},
 		},
 		{
-			name:  "returns false when no agent card",
-			agent: &A2AAgent{},
+			name:      "returns false when no agent card",
+			agent:     &A2AAgent{},
 			setupFunc: func(tc *testCase) {},
 			validateFunc: func(t *testing.T, useStreaming bool) {
 				if useStreaming {
