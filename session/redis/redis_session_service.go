@@ -613,7 +613,7 @@ func (s *Service) addTruncationNoticeIfNeeded(events []event.Event) []event.Even
 
 	// Check if first event has choices and if the first choice is not from "user" role
 	if firstEvent.Response != nil && len(firstEvent.Response.Choices) > 0 {
-		if firstEvent.Response.Choices[0].Message.Role != model.RoleUser {
+		if firstEvent.Response.Choices[0].Message.Role == model.RoleAssistant {
 			shouldAddTruncationNotice = true
 		}
 	}
