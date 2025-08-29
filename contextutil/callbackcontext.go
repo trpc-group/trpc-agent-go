@@ -1,3 +1,4 @@
+// Package contextutil provides utilities for working with context.Context.
 package contextutil
 
 import (
