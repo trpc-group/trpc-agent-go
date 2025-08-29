@@ -13,6 +13,7 @@ package runner
 import (
 	"context"
 	"time"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 
 	"github.com/google/uuid"
 
@@ -40,6 +41,13 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
+// WithArtifactService sets the artifact service to use.
+func WithArtifactService(service artifact.Service) Option {
+	return func(opts *Options) {
+		opts.artifactService = service
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -53,14 +61,16 @@ type Runner interface {
 
 // runner runs agents.
 type runner struct {
-	appName        string
-	agent          agent.Agent
-	sessionService session.Service
+	appName         string
+	agent           agent.Agent
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService session.Service
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // NewRunner creates a new Runner.
@@ -152,6 +162,7 @@ func (r *runner) Run(
 		Message:           message,
 		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
+		ArtifactService:   r.artifactService,
 	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
