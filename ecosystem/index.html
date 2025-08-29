@@ -1021,29 +1021,14 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Contribution Guidance">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-core-common-component-contribution" class="md-nav__link">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribution-guidance_1" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Core Common Component Contribution
+      Contribution Guidance
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-ecosystem-component-contribution-open-source-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Ecosystem Component Contribution (Open Source Dependencies)
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1250,29 +1235,14 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Contribution Guidance">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-core-common-component-contribution" class="md-nav__link">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contribution-guidance_1" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Core Common Component Contribution
+      Contribution Guidance
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-ecosystem-component-contribution-open-source-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Ecosystem Component Contribution (Open Source Dependencies)
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1319,15 +1289,7 @@
 
 <h1 id="trpc-agent-go-ecosystem-development-guide">tRPC-Agent-Go Ecosystem Development Guide</h1>
 <p>This document analyzes the modules in the tRPC-Agent-Go framework that need ecosystem development, explains the interfaces that need to be implemented, and provides contribution guidance.</p>
-<p>Note: Community-built components are divided into three contribution paths based on dependencies:</p>
-<ol>
-<li>
-<p><strong>Core Common Components</strong>: If they are core components that can be used by everyone, contribute directly to the corresponding directory under the GitHub open source repository, such as <code>model/somemodel</code>, <code>tools/sometools</code>.</p>
-</li>
-<li>
-<p><strong>Ecosystem Components (Open Source Dependencies)</strong>: If they depend on public open source components, contribute to the unified ecosystem directory under the GitHub repository, such as <code>trpc-agent-go/ecosystem/model/somemodel</code>, <code>trpc-agent-go/ecosystem/tool/sometool</code>.</p>
-</li>
-</ol>
+<p>Note: All community-built components are contributed directly to the corresponding directory under the GitHub open source repository, such as <code>model/somemodel</code>, <code>tool/sometool</code>, <code>agent/someagent</code>, etc.</p>
 <p>When contributing, create a reasonably named subfolder under the corresponding contribution module directory, then implement the corresponding module interface, and provide rich test cases and example samples.</p>
 <h2 id="ecosystem-development-module-analysis">Ecosystem Development Module Analysis</h2>
 <h3 id="1-agent-ecosystem">1. Agent Ecosystem</h3>
@@ -1487,8 +1449,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/agent/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/agent/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/agent/</code></li>
 </ul>
 <h3 id="2-model-ecosystem">2. Model Ecosystem</h3>
 <p><strong>Goal:</strong> Support more model providers</p>
@@ -1628,8 +1589,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/model/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/model/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/model/</code></li>
 </ul>
 <h3 id="3-tool-ecosystem">3. Tool Ecosystem</h3>
 <p><strong>Goal:</strong> Integrate more third-party tools</p>
@@ -1925,8 +1885,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/tool/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/tool/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/tool/</code></li>
 </ul>
 <h3 id="4-knowledge-base-ecosystem">4. Knowledge Base Ecosystem</h3>
 <p><strong>Goal:</strong> Integrate mature RAG components</p>
@@ -2079,8 +2038,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/knowledge/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/knowledge/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/knowledge/</code></li>
 </ul>
 <h3 id="5-session-ecosystem">5. Session Ecosystem</h3>
 <p><strong>Goal:</strong> Support multiple session storage backends, manage user session state and events</p>
@@ -2304,8 +2262,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/session/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/session/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/session/</code></li>
 </ul>
 <h3 id="6-memory-ecosystem">6. Memory Ecosystem</h3>
 <p><strong>Goal:</strong> Support multiple memory storage backends, manage user long-term memory and personalized information</p>
@@ -2576,7 +2533,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>For quick implementation, you can directly integrate with existing Memory platforms/services (such as mem0). Recommendations:</p>
 <ul>
-<li>Provide implementation in <code>memory/ecosystem/mem0/</code>, following the <code>memory.Service</code> interface.</li>
+<li>Provide implementation in <code>memory/mem0/</code>, following the <code>memory.Service</code> interface.</li>
 <li>Reuse existing <code>memory/tool</code> tools (<code>memory_add</code>, <code>memory_search</code>, <code>memory_load</code>, etc.), expose through <code>Tools()</code>.</li>
 <li>Map topics and search according to target service capabilities, maintain lightweight local indexes when necessary to enhance query experience.</li>
 <li>Optional: Reuse <code>storage</code> module client management for unified authentication, connection and reuse.</li>
@@ -2711,8 +2668,7 @@
 <p><strong>Contribution Method:</strong></p>
 <ul>
 <li>Create components under the corresponding directory (create a subdirectory with the corresponding component name)</li>
-<li><strong>Core Common Components</strong>: Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/memory/</code></li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: Contribute to <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/memory/</code></li>
+<li>Contribute directly to <code>https://github.com/trpc-group/trpc-agent-go/memory/</code></li>
 </ul>
 <h3 id="7-observability-ecosystem">7. Observability Ecosystem</h3>
 <p><strong>Goal:</strong> Provide unified observability capabilities based on OpenTelemetry standards, covering Logging, Metrics, Tracing, facilitating ecosystem expansion and replacement.</p>
@@ -2899,7 +2855,7 @@
 <p>Contribution directions:</p>
 <ul>
 <li>Exporter ecosystem: encapsulate Zipkin, Jaeger (direct push) and other startup methods.</li>
-<li>Span conventions: agree on common Span names/attribute keys, provide helpers (can be placed in <code>telemetry/ecosystem/</code>).</li>
+<li>Span conventions: agree on common Span names/attribute keys, provide helpers (can be placed in <code>telemetry/</code>).</li>
 </ul>
 <h3 id="8-api-service-ecosystem">8. API Service Ecosystem</h3>
 <p><strong>Goal:</strong> Provide unified, extensible API service encapsulation for frontend Chat interfaces (such as ADK Web, AG-UI, Agent UI), covering session management, conversation sending, streaming transmission, tool calls, observability and authentication capabilities, and align with various UI protocols for plug-and-play.</p>
@@ -2933,7 +2889,7 @@
 <li>Authentication (API Key, JWT, Cookie session) and CORS.</li>
 </ul>
 </li>
-<li>Recommend providing implementation in <code>server/ecosystem/agui/</code>, reuse common model and event mapping tools, complete protocol layer adaptation in Handler.</li>
+<li>Recommend providing implementation in <code>server/agui/</code>, reuse common model and event mapping tools, complete protocol layer adaptation in Handler.</li>
 <li><strong>Agent UI (agno)</strong>: Reference <code>https://docs.agno.com/agent-ui/introduction</code>.</li>
 <li>Focus: SSE/WebSocket streaming, Tool call streaming UI feedback, session/artifact persistence.</li>
 </ul>
@@ -3053,8 +3009,8 @@
 <p><strong>Ecosystem Directions and Contribution Standards:</strong></p>
 <ul>
 <li><strong>Target UI/Protocols</strong>:</li>
-<li><strong>AG-UI</strong>: Provide HTTP + SSE adaptation in <code>server/ecosystem/agui/</code>, with examples and <code>openapi.json</code>.</li>
-<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/ecosystem/agentui/</code>.</li>
+<li><strong>AG-UI</strong>: Provide HTTP + SSE adaptation in <code>server/agui/</code>, with examples and <code>openapi.json</code>.</li>
+<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/agentui/</code>.</li>
 <li><strong>WebSocket/Bidi Streaming</strong>: Align with ADK <code>run_live</code>, provide real-time audio/video channels (depends on model-side support).</li>
 <li><strong>Implementation Requirements</strong>:</li>
 <li>Clear event Schema, complete mapping, ensure tool calls/responses have good experience in UI.</li>
@@ -3148,7 +3104,7 @@
 <p><strong>Combination and Usage:</strong> Inject Planner when creating <code>agent/llmagent</code>, or select different Planner strategies at <code>runner</code> layer as needed, combine with <code>Tool</code> and <code>Session</code> management for end-to-end implementation.</p>
 <p><strong>Contribution Suggestions:</strong></p>
 <ul>
-<li>Provide implementation and README, test cases, examples in <code>planner/ecosystem/&lt;name&gt;/</code>.</li>
+<li>Provide implementation and README, test cases, examples in <code>planner/&lt;name&gt;/</code>.</li>
 <li>Combine with <code>docs/overall-introduction.md</code>'s Observability and <code>server/debug</code> endpoints to provide end-to-end examples for frontend UI demonstration.</li>
 <li>Follow goimports and error message style, add periods at end of comments, code line breaks around 80 columns.</li>
 </ul>
@@ -3254,18 +3210,18 @@
 </span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="nx">memory</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;User likes coffee&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;preferences&quot;</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="contribution-guidance">Contribution Guidance</h2>
-<h3 id="1-core-common-component-contribution">1. Core Common Component Contribution</h3>
+<h2 id="contribution-guidance_1">Contribution Guidance</h2>
 <p><strong>Suitable Components:</strong></p>
 <ul>
-<li>Core components that can be used by everyone</li>
-<li>Framework basic functionality extensions</li>
-<li>Core implementations of standard protocols</li>
-<li>General components that don't depend on specific third-party services</li>
+<li>Various third-party service and tool integrations</li>
+<li>Open source component adapters</li>
+<li>Standard protocol support</li>
+<li>Framework functionality extensions</li>
 </ul>
 <p><strong>Contribution Process:</strong></p>
 <ol>
 <li>Fork <code>https://github.com/trpc-group/trpc-agent-go</code></li>
-<li>Create components under the corresponding module root directory (such as <code>model/somemodel</code>, <code>tool/sometool</code>)</li>
+<li>Create components under the corresponding module root directory (such as <code>model/somemodel</code>, <code>tool/sometool</code>, <code>agent/someagent</code>)</li>
 <li>Implement corresponding interfaces</li>
 <li>Write tests and documentation</li>
 <li>Submit Pull Request</li>
@@ -3283,35 +3239,6 @@
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a>├── README.md
 </span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a>└── gemini_test.go
 </span></code></pre></div></td></tr></table></div>
-<h3 id="2-ecosystem-component-contribution-open-source-dependencies">2. Ecosystem Component Contribution (Open Source Dependencies)</h3>
-<p><strong>Suitable Components:</strong></p>
-<ul>
-<li>Integrations that depend on public open source components</li>
-<li>Third-party service adapters</li>
-<li>Open source tool and framework adapters</li>
-<li>Standard protocol support</li>
-</ul>
-<p><strong>Contribution Process:</strong></p>
-<ol>
-<li>Fork <code>https://github.com/trpc-group/trpc-agent-go</code></li>
-<li>Create components under the corresponding module in the <code>ecosystem/</code> directory (such as <code>ecosystem/model/somemodel</code>, <code>ecosystem/tool/sometool</code>)</li>
-<li>Implement corresponding interfaces</li>
-<li>Write tests and documentation</li>
-<li>Submit Pull Request</li>
-</ol>
-<p><strong>Directory Structure Example:</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span>
-<span class="normal"><a href="#__codelineno-18-3">3</a></span>
-<span class="normal"><a href="#__codelineno-18-4">4</a></span>
-<span class="normal"><a href="#__codelineno-18-5">5</a></span>
-<span class="normal"><a href="#__codelineno-18-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>ecosystem/agent/langchain/
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>├── adapter.go
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>├── config.go
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a>├── examples/
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a>├── README.md
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a>└── langchain_test.go
-</span></code></pre></div></td></tr></table></div>
 <h2 id="summary">Summary</h2>
 <p>Ecosystem development is an important direction for tRPC-Agent-Go development. By implementing standard interfaces, various third-party services and tools can be easily integrated to expand the framework's capabilities.</p>
 <p><strong>Key Contribution Points:</strong></p>
@@ -3323,8 +3250,7 @@
 </ul>
 <p><strong>Determining Contribution Location:</strong></p>
 <ul>
-<li><strong>Core Common Components</strong>: If they are core components that can be used by everyone, contribute directly to the corresponding module directory on GitHub</li>
-<li><strong>Ecosystem Components (Open Source Dependencies)</strong>: If they depend on public open source components, contribute to the ecosystem directory on GitHub</li>
+<li>All components are contributed directly to the corresponding module directory on GitHub</li>
 </ul>
 <p><strong>Storage, Session, Memory Component Characteristics:</strong></p>
 <ul>
@@ -3355,7 +3281,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 26, 2025 09:28:07 UTC">2025-08-26 09:28:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 29, 2025 09:27:15 UTC">2025-08-29 09:27:15</span>
   </span>
 
     

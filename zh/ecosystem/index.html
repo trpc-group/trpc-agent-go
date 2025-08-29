@@ -1021,34 +1021,19 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="贡献指导">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. 核心通用组件贡献
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. 生态组件贡献（开源依赖）
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      贡献指导
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
     <span class="md-ellipsis">
       总结
     </span>
@@ -1250,34 +1235,19 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="贡献指导">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. 核心通用组件贡献
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. 生态组件贡献（开源依赖）
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      贡献指导
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
     <span class="md-ellipsis">
       总结
     </span>
@@ -1319,15 +1289,7 @@
 
 <h1 id="trpc-agent-go">tRPC-Agent-Go 生态建设指南</h1>
 <p>本文档分析 tRPC-Agent-Go 框架中需要生态建设的模块，说明需要实现的接口，并提供贡献指导。</p>
-<p>注意：共建组件根据依赖情况分为三种贡献路径：</p>
-<ol>
-<li>
-<p><strong>核心通用组件</strong>：如果是比较核心都能用得到的组件，直接贡献到 GitHub 开源仓库的对应目录下，比如 <code>model/somemodel</code>、<code>tools/sometools</code>。</p>
-</li>
-<li>
-<p><strong>生态组件（开源依赖）</strong>：如果依赖公开开源组件，贡献到 GitHub 仓库统一的 ecosystem 目录下，比如 <code>trpc-agent-go/ecosystem/model/somemodel</code>、<code>trpc-agent-go/ecosystem/tool/sometool</code>。</p>
-</li>
-</ol>
+<p>注意：所有共建组件都直接贡献到 GitHub 开源仓库的对应目录下，比如 <code>model/somemodel</code>、<code>tool/sometool</code>、<code>agent/someagent</code> 等。</p>
 <p>贡献时在对应的贡献模块目录下新建合理命名的子文件夹，然后实现对应模块接口，并提供丰富的测试用例以及 example 示例。</p>
 <h2 id="_1">生态建设模块分析</h2>
 <h3 id="1-agent">1. Agent 生态化</h3>
@@ -1487,8 +1449,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/agent/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/agent/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/agent/</code></li>
 </ul>
 <h3 id="2-model">2. 模型（Model）生态化</h3>
 <p><strong>目标：</strong> 支持更多模型提供商</p>
@@ -1628,8 +1589,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/model/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/model/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/model/</code></li>
 </ul>
 <h3 id="3-tool">3. 工具（Tool）生态化</h3>
 <p><strong>目标：</strong> 集成更多第三方工具</p>
@@ -1925,8 +1885,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/tool/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/tool/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/tool/</code></li>
 </ul>
 <h3 id="4-knowledge">4. 知识库（Knowledge）生态化</h3>
 <p><strong>目标：</strong> 集成成熟的 RAG 组件</p>
@@ -2079,8 +2038,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/knowledge/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/knowledge/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/knowledge/</code></li>
 </ul>
 <h3 id="5-session">5. Session 生态化</h3>
 <p><strong>目标：</strong> 支持多种会话存储后端，管理用户会话状态和事件</p>
@@ -2298,8 +2256,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/session/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/session/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/session/</code></li>
 </ul>
 <h3 id="6-memory">6. Memory 生态化</h3>
 <p><strong>目标：</strong> 支持多种记忆存储后端，管理用户长期记忆和个性化信息</p>
@@ -2564,7 +2521,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>为便于快速落地，可直接对接现有 Memory 平台/服务（如 mem0）。建议：</p>
 <ul>
-<li>在 <code>memory/ecosystem/mem0/</code> 提供实现，遵循 <code>memory.Service</code> 接口。</li>
+<li>在 <code>memory/mem0/</code> 提供实现，遵循 <code>memory.Service</code> 接口。</li>
 <li>复用现有 <code>memory/tool</code> 工具（<code>memory_add</code>、<code>memory_search</code>、
   <code>memory_load</code> 等），通过 <code>Tools()</code> 暴露。</li>
 <li>主题（topics）与检索（search）按目标服务能力做映射，必要时在本地
@@ -2701,8 +2658,7 @@
 <p><strong>贡献方式：</strong></p>
 <ul>
 <li>在对应目录下创建组件（新建一个对应组件名称的子目录）</li>
-<li><strong>核心通用组件</strong>：直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/memory/</code></li>
-<li><strong>生态组件（开源依赖）</strong>：贡献到 <code>https://github.com/trpc-group/trpc-agent-go/ecosystem/memory/</code></li>
+<li>直接贡献到 <code>https://github.com/trpc-group/trpc-agent-go/memory/</code></li>
 </ul>
 <h3 id="7-observability">7. 可观测（Observability）生态化</h3>
 <p><strong>目标：</strong> 基于 OpenTelemetry 标准提供统一的可观测能力，覆盖 Logging、Metrics、Tracing，便于生态扩展与替换。</p>
@@ -2898,7 +2854,7 @@
 <ul>
 <li>导出器生态：封装 Zipkin、Jaeger（直接推送）等启动方法。</li>
 <li>Span 规范：约定常见 Span 名称/属性键，提供 helper（可放在
-  <code>telemetry/ecosystem/</code>）。</li>
+  <code>telemetry/</code>）。</li>
 </ul>
 <h3 id="8-api">8. API 服务生态化</h3>
 <p><strong>目标：</strong> 面向前端 Chat 界面（如 ADK Web、AG-UI、Agent UI）提供统一、
@@ -2936,7 +2892,7 @@
 <li>鉴权（API Key、JWT、Cookie 会话）与 CORS。</li>
 </ul>
 </li>
-<li>建议在 <code>server/ecosystem/agui/</code> 提供实现，复用通用的模型与事件
+<li>建议在 <code>server/agui/</code> 提供实现，复用通用的模型与事件
     映射工具，在 Handler 中完成协议层适配。</li>
 <li><strong>Agent UI（agno）</strong>：参考 <code>https://docs.agno.com/agent-ui/introduction</code>。</li>
 <li>重点：SSE/WebSocket 流、Tool 调用流式 UI 反馈、会话/工件持久化。</li>
@@ -3060,10 +3016,10 @@
 <p><strong>生态化方向与贡献规范：</strong></p>
 <ul>
 <li><strong>目标 UI/协议</strong>：</li>
-<li><strong>AG-UI</strong>：在 <code>server/ecosystem/agui/</code> 提供 HTTP + SSE 适配，附带示例
-    与 <code>openapi.json</code>。</li>
-<li><strong>Agent UI（agno）</strong>：在 <code>server/ecosystem/agentui/</code> 提供 HTTP + SSE /
-    WebSocket 适配。</li>
+<li><strong>AG-UI</strong>：在 <code>server/agui/</code> 提供 HTTP + SSE 适配，附带示例
+与 <code>openapi.json</code>。</li>
+<li><strong>Agent UI（agno）</strong>：在 <code>server/agentui/</code> 提供 HTTP + SSE /
+WebSocket 适配。</li>
 <li><strong>WebSocket/Bidi Streaming</strong>：对标 ADK <code>run_live</code>，提供实时音视频
     通道（依赖模型侧支持）。</li>
 <li><strong>落地要求：</strong></li>
@@ -3162,7 +3118,7 @@
 层按需选择不同 Planner 策略，结合 <code>Tool</code> 与 <code>Session</code> 管理实现端到端。</p>
 <p><strong>贡献建议：</strong></p>
 <ul>
-<li>在 <code>planner/ecosystem/&lt;name&gt;/</code> 提供实现与 README、测试用例、示例。</li>
+<li>在 <code>planner/&lt;name&gt;/</code> 提供实现与 README、测试用例、示例。</li>
 <li>结合 <code>docs/overall-introduction.md</code> 的 Observability 与 <code>server/debug</code>
   端点提供端到端示例，便于前端 UI 演示。</li>
 <li>遵循 goimports 与错误消息风格，注释句末加句号，代码换行约 80 列。</li>
@@ -3269,18 +3225,18 @@
 </span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="nx">memory</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryService</span><span class="p">.</span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;用户喜欢咖啡&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;preferences&quot;</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="_3">贡献指导</h2>
-<h3 id="1">1. 核心通用组件贡献</h3>
+<h2 id="_4">贡献指导</h2>
 <p><strong>适合的组件：</strong></p>
 <ul>
-<li>比较核心都能用得到的组件</li>
-<li>框架的基础功能扩展</li>
-<li>标准协议的核心实现</li>
-<li>不依赖特定第三方服务的通用组件</li>
+<li>各种第三方服务和工具的集成</li>
+<li>开源组件适配器</li>
+<li>标准协议支持</li>
+<li>框架功能扩展</li>
 </ul>
 <p><strong>贡献流程：</strong></p>
 <ol>
 <li>Fork <code>https://github.com/trpc-group/trpc-agent-go</code></li>
-<li>在对应模块的根目录下创建组件（如 <code>model/somemodel</code>、<code>tool/sometool</code>）</li>
+<li>在对应模块的根目录下创建组件（如 <code>model/somemodel</code>、<code>tool/sometool</code>、<code>agent/someagent</code>）</li>
 <li>实现相应的接口</li>
 <li>编写测试和文档</li>
 <li>提交 Pull Request</li>
@@ -3298,36 +3254,7 @@
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a>├── README.md
 </span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a>└── gemini_test.go
 </span></code></pre></div></td></tr></table></div>
-<h3 id="2">2. 生态组件贡献（开源依赖）</h3>
-<p><strong>适合的组件：</strong></p>
-<ul>
-<li>依赖公开开源组件的集成</li>
-<li>第三方服务适配器</li>
-<li>开源工具和框架适配</li>
-<li>标准协议支持</li>
-</ul>
-<p><strong>贡献流程：</strong></p>
-<ol>
-<li>Fork <code>https://github.com/trpc-group/trpc-agent-go</code></li>
-<li>在 <code>ecosystem/</code> 目录下对应模块创建组件（如 <code>ecosystem/model/somemodel</code>、<code>ecosystem/tool/sometool</code>）</li>
-<li>实现相应的接口</li>
-<li>编写测试和文档</li>
-<li>提交 Pull Request</li>
-</ol>
-<p><strong>目录结构示例：</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span>
-<span class="normal"><a href="#__codelineno-18-3">3</a></span>
-<span class="normal"><a href="#__codelineno-18-4">4</a></span>
-<span class="normal"><a href="#__codelineno-18-5">5</a></span>
-<span class="normal"><a href="#__codelineno-18-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>ecosystem/agent/langchain/
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>├── adapter.go
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>├── config.go
-</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a>├── examples/
-</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a>├── README.md
-</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a>└── langchain_test.go
-</span></code></pre></div></td></tr></table></div>
-<h2 id="_4">总结</h2>
+<h2 id="_5">总结</h2>
 <p>生态建设是 tRPC-Agent-Go 发展的重要方向。通过实现标准接口，可以轻松集成各种第三方服务和工具，扩展框架的能力。</p>
 <p><strong>贡献要点：</strong></p>
 <ul>
@@ -3370,7 +3297,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年8月26日 09:28:07 UTC">2025-08-26 09:28:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年8月29日 09:27:15 UTC">2025-08-29 09:27:15</span>
   </span>
 
     
