@@ -2,11 +2,7 @@
 
 This document analyzes the modules in the tRPC-Agent-Go framework that need ecosystem development, explains the interfaces that need to be implemented, and provides contribution guidance.
 
-Note: Community-built components are divided into three contribution paths based on dependencies:
-
-1. **Core Common Components**: If they are core components that can be used by everyone, contribute directly to the corresponding directory under the GitHub open source repository, such as `model/somemodel`, `tools/sometools`.
-
-2. **Ecosystem Components (Open Source Dependencies)**: If they depend on public open source components, contribute to the unified ecosystem directory under the GitHub repository, such as `trpc-agent-go/ecosystem/model/somemodel`, `trpc-agent-go/ecosystem/tool/sometool`.
+Note: All community-built components are contributed directly to the corresponding directory under the GitHub open source repository, such as `model/somemodel`, `tool/sometool`, `agent/someagent`, etc.
 
 When contributing, create a reasonably named subfolder under the corresponding contribution module directory, then implement the corresponding module interface, and provide rich test cases and example samples.
 
@@ -109,8 +105,7 @@ func (a *LangChainAdapter) FindSubAgent(name string) agent.Agent {
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/agent/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/agent/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/agent/`
 
 ### 2. Model Ecosystem
 
@@ -200,8 +195,7 @@ func (g *GeminiModel) Info() model.Info {
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/model/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/model/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/model/`
 
 ### 3. Tool Ecosystem
 
@@ -383,8 +377,7 @@ func (a *APIToolSet) Close() error {
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/tool/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/tool/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/tool/`
 
 ### 4. Knowledge Base Ecosystem
 
@@ -481,8 +474,7 @@ func (w *WeaviateKnowledge) buildQuery(req *knowledge.SearchRequest) *weaviate.Q
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/knowledge/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/knowledge/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/knowledge/`
 
 ### 5. Session Ecosystem
 
@@ -616,8 +608,7 @@ func (p *PostgreSQLService) unmarshalState(data []byte) session.StateMap {
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/session/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/session/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/session/`
 
 ### 6. Memory Ecosystem
 
@@ -770,7 +761,7 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 
 For quick implementation, you can directly integrate with existing Memory platforms/services (such as mem0). Recommendations:
 
-- Provide implementation in `memory/ecosystem/mem0/`, following the `memory.Service` interface.
+- Provide implementation in `memory/mem0/`, following the `memory.Service` interface.
 - Reuse existing `memory/tool` tools (`memory_add`, `memory_search`, `memory_load`, etc.), expose through `Tools()`.
 - Map topics and search according to target service capabilities, maintain lightweight local indexes when necessary to enhance query experience.
 - Optional: Reuse `storage` module client management for unified authentication, connection and reuse.
@@ -853,8 +844,7 @@ Implementation points:
 **Contribution Method:**
 
 - Create components under the corresponding directory (create a subdirectory with the corresponding component name)
-- **Core Common Components**: Contribute directly to `https://github.com/trpc-group/trpc-agent-go/memory/`
-- **Ecosystem Components (Open Source Dependencies)**: Contribute to `https://github.com/trpc-group/trpc-agent-go/ecosystem/memory/`
+- Contribute directly to `https://github.com/trpc-group/trpc-agent-go/memory/`
 
 ### 7. Observability Ecosystem
 
@@ -993,7 +983,7 @@ func main() {
 Contribution directions:
 
 - Exporter ecosystem: encapsulate Zipkin, Jaeger (direct push) and other startup methods.
-- Span conventions: agree on common Span names/attribute keys, provide helpers (can be placed in `telemetry/ecosystem/`).
+- Span conventions: agree on common Span names/attribute keys, provide helpers (can be placed in `telemetry/`).
 
 ### 8. API Service Ecosystem
 
@@ -1025,7 +1015,7 @@ Contribution directions:
     - State/usage metadata, error expression alignment.
     - Rich media support (InlineData) for files/images and server-side storage integration.
     - Authentication (API Key, JWT, Cookie session) and CORS.
-  - Recommend providing implementation in `server/ecosystem/agui/`, reuse common model and event mapping tools, complete protocol layer adaptation in Handler.
+  - Recommend providing implementation in `server/agui/`, reuse common model and event mapping tools, complete protocol layer adaptation in Handler.
 - **Agent UI (agno)**: Reference `https://docs.agno.com/agent-ui/introduction`.
   - Focus: SSE/WebSocket streaming, Tool call streaming UI feedback, session/artifact persistence.
 
@@ -1106,8 +1096,8 @@ func (s *Server) routes() {
 **Ecosystem Directions and Contribution Standards:**
 
 - **Target UI/Protocols**:
-  - **AG-UI**: Provide HTTP + SSE adaptation in `server/ecosystem/agui/`, with examples and `openapi.json`.
-  - **Agent UI (agno)**: Provide HTTP + SSE / WebSocket adaptation in `server/ecosystem/agentui/`.
+  - **AG-UI**: Provide HTTP + SSE adaptation in `server/agui/`, with examples and `openapi.json`.
+- **Agent UI (agno)**: Provide HTTP + SSE / WebSocket adaptation in `server/agentui/`.
   - **WebSocket/Bidi Streaming**: Align with ADK `run_live`, provide real-time audio/video channels (depends on model-side support).
 - **Implementation Requirements**:
   - Clear event Schema, complete mapping, ensure tool calls/responses have good experience in UI.
@@ -1179,7 +1169,7 @@ func (p *Planner) ProcessPlanningResponse(ctx context.Context, inv *agent.Invoca
 
 **Contribution Suggestions:**
 
-- Provide implementation and README, test cases, examples in `planner/ecosystem/<name>/`.
+- Provide implementation and README, test cases, examples in `planner/<name>/`.
 - Combine with `docs/overall-introduction.md`'s Observability and `server/debug` endpoints to provide end-to-end examples for frontend UI demonstration.
 - Follow goimports and error message style, add periods at end of comments, code line breaks around 80 columns.
 
@@ -1259,19 +1249,19 @@ memory, err := memoryService.AddMemory(ctx, userKey, "User likes coffee", []stri
 
 ## Contribution Guidance
 
-### 1. Core Common Component Contribution
+## Contribution Guidance
 
 **Suitable Components:**
 
-- Core components that can be used by everyone
-- Framework basic functionality extensions
-- Core implementations of standard protocols
-- General components that don't depend on specific third-party services
+- Various third-party service and tool integrations
+- Open source component adapters
+- Standard protocol support
+- Framework functionality extensions
 
 **Contribution Process:**
 
 1. Fork `https://github.com/trpc-group/trpc-agent-go`
-2. Create components under the corresponding module root directory (such as `model/somemodel`, `tool/sometool`)
+2. Create components under the corresponding module root directory (such as `model/somemodel`, `tool/sometool`, `agent/someagent`)
 3. Implement corresponding interfaces
 4. Write tests and documentation
 5. Submit Pull Request
@@ -1287,34 +1277,6 @@ model/gemini/
 └── gemini_test.go
 ```
 
-### 2. Ecosystem Component Contribution (Open Source Dependencies)
-
-**Suitable Components:**
-
-- Integrations that depend on public open source components
-- Third-party service adapters
-- Open source tool and framework adapters
-- Standard protocol support
-
-**Contribution Process:**
-
-1. Fork `https://github.com/trpc-group/trpc-agent-go`
-2. Create components under the corresponding module in the `ecosystem/` directory (such as `ecosystem/model/somemodel`, `ecosystem/tool/sometool`)
-3. Implement corresponding interfaces
-4. Write tests and documentation
-5. Submit Pull Request
-
-**Directory Structure Example:**
-
-```
-ecosystem/agent/langchain/
-├── adapter.go
-├── config.go
-├── examples/
-├── README.md
-└── langchain_test.go
-```
-
 ## Summary
 
 Ecosystem development is an important direction for tRPC-Agent-Go development. By implementing standard interfaces, various third-party services and tools can be easily integrated to expand the framework's capabilities.
@@ -1328,8 +1290,7 @@ Ecosystem development is an important direction for tRPC-Agent-Go development. B
 
 **Determining Contribution Location:**
 
-- **Core Common Components**: If they are core components that can be used by everyone, contribute directly to the corresponding module directory on GitHub
-- **Ecosystem Components (Open Source Dependencies)**: If they depend on public open source components, contribute to the ecosystem directory on GitHub
+- All components are contributed directly to the corresponding module directory on GitHub
 
 **Storage, Session, Memory Component Characteristics:**
 
