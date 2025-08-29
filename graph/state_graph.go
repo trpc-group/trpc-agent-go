@@ -367,6 +367,8 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			EventChan:      eventChan,
 			InvocationID:   invocationID,
 			SessionID:      sessionID,
+			NodeID:         nodeID,             // Pass nodeID for parallel execution support
+			NodeResultKey:  nodeID + "_result", // Pass configurable result key
 			Span:           span,
 			NodeID:         nodeID,
 		})
@@ -780,6 +782,8 @@ type modelExecutionConfig struct {
 	EventChan      chan<- *event.Event
 	InvocationID   string
 	SessionID      string
+	NodeID         string // Add NodeID for parallel execution support
+	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
@@ -824,10 +828,21 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		Content:   finalResponse.Choices[0].Message.Content,
 		ToolCalls: toolCalls,
 	}
-	return State{
-		StateKeyMessages:     []model.Message{newMessage}, // The new message will be merged by the executor.
+	// Create state with node-specific result storage for parallel execution.
+	resultState := State{
+		StateKeyMessages:     []model.Message{newMessage},
 		StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
-	}, nil
+	}
+	// If NodeID is provided, store result in node-specific key for parallel execution.
+	if config.NodeID != "" {
+		// Use configurable result key pattern, default to NodeID + "_result" if not specified.
+		nodeResultKey := config.NodeResultKey
+		if nodeResultKey == "" {
+			nodeResultKey = config.NodeID + "_result"
+		}
+		resultState[nodeResultKey] = finalResponse.Choices[0].Message.Content
+	}
+	return resultState, nil
 }
 
 // extractToolCallsFromState extracts and validates tool calls from the state.
