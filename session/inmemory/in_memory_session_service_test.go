@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -834,3 +835,174 @@ func TestAppIsolation(t *testing.T) {
 		assert.Equal(t, "app2", app2Sessions[0].AppName)
 	}
 }
+
+func TestAddTruncationNoticeIfNeeded(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        func() *session.Session
+		expectNotice bool
+	}{
+		{
+			name: "empty_events",
+			setup: func() *session.Session {
+				return &session.Session{Events: []event.Event{}}
+			},
+			expectNotice: false,
+		},
+		{
+			name: "first_event_from_user",
+			setup: func() *session.Session {
+				evt := event.New("test", "user")
+				evt.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser}}},
+				}
+				return &session.Session{Events: []event.Event{*evt}}
+			},
+			expectNotice: false,
+		},
+		{
+			name: "first_event_from_assistant",
+			setup: func() *session.Session {
+				evt := event.New("test", "assistant")
+				evt.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant}}},
+				}
+				return &session.Session{Events: []event.Event{*evt}}
+			},
+			expectNotice: true,
+		},
+		{
+			name: "no_response_or_choices",
+			setup: func() *session.Session {
+				evt := event.New("test", "user")
+				return &session.Session{Events: []event.Event{*evt}}
+			},
+			expectNotice: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewSessionService()
+			sess := tt.setup()
+			originalCount := len(sess.Events)
+
+			service.addTruncationNoticeIfNeeded(sess)
+
+			if tt.expectNotice {
+				assert.Len(t, sess.Events, originalCount+1)
+				assert.Equal(t, "user", sess.Events[0].Author)
+				assert.Equal(t, "Session history truncated, ignore this message", 
+					sess.Events[0].Response.Choices[0].Message.Content)
+			} else {
+				assert.Len(t, sess.Events, originalCount)
+			}
+		})
+	}
+}
+
+func TestUpdateSessionState(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func() (*session.Session, *event.Event)
+		validate func(t *testing.T, sess *session.Session, originalEventCount int)
+	}{
+		{
+			name: "update session with normal event",
+			setup: func() (*session.Session, *event.Event) {
+				sess := &session.Session{
+					ID:      "test-session",
+					AppName: "test-app",
+					UserID:  "test-user",
+					Events:  []event.Event{},
+					State:   make(session.StateMap),
+				}
+				evt := event.New("test-invocation", "user")
+				evt.StateDelta = session.StateMap{
+					"key1": []byte("value1"),
+					"key2": []byte("value2"),
+				}
+				return sess, evt
+			},
+			validate: func(t *testing.T, sess *session.Session, originalEventCount int) {
+				assert.Len(t, sess.Events, originalEventCount+1, "Event should be appended")
+				assert.Equal(t, []byte("value1"), sess.State["key1"], "State should be updated from delta")
+				assert.Equal(t, []byte("value2"), sess.State["key2"], "State should be updated from delta")
+				assert.True(t, sess.UpdatedAt.After(time.Time{}), "UpdatedAt should be set")
+			},
+		},
+		{
+			name: "update session with event limit exceeded triggers truncation notice",
+			setup: func() (*session.Session, *event.Event) {
+				// Create session with events at limit
+				events := make([]event.Event, defaultSessionEventLimit)
+				for i := 0; i < defaultSessionEventLimit; i++ {
+					evt := event.New(fmt.Sprintf("invocation-%d", i), "user")
+					evt.Response = &model.Response{
+						Choices: []model.Choice{
+							{
+								Index: 0,
+								Message: model.Message{
+									Role:    model.RoleUser,
+									Content: fmt.Sprintf("Message %d", i),
+								},
+							},
+						},
+					}
+					events[i] = *evt
+				}
+
+				sess := &session.Session{
+					ID:      "test-session",
+					AppName: "test-app",
+					UserID:  "test-user",
+					Events:  events,
+					State:   make(session.StateMap),
+				}
+
+				// New event that will trigger truncation
+				newEvent := event.New("new-invocation", "user")
+				return sess, newEvent
+			},
+			validate: func(t *testing.T, sess *session.Session, originalEventCount int) {
+				// Should have exactly the event limit
+				assert.Len(t, sess.Events, defaultSessionEventLimit, "Should maintain event limit")
+				// Events should be truncated from the beginning, keeping the most recent ones
+			},
+		},
+		{
+			name: "update session state with nil state map",
+			setup: func() (*session.Session, *event.Event) {
+				sess := &session.Session{
+					ID:      "test-session",
+					AppName: "test-app",
+					UserID:  "test-user",
+					Events:  []event.Event{},
+					State:   nil, // nil state
+				}
+				evt := event.New("test-invocation", "user")
+				evt.StateDelta = session.StateMap{
+					"key1": []byte("value1"),
+				}
+				return sess, evt
+			},
+			validate: func(t *testing.T, sess *session.Session, originalEventCount int) {
+				assert.NotNil(t, sess.State, "State should be initialized")
+				assert.Equal(t, []byte("value1"), sess.State["key1"], "State should be updated from delta")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewSessionService()
+			sess, evt := tt.setup()
+			originalEventCount := len(sess.Events)
+
+			service.updateSessionState(sess, evt)
+
+			tt.validate(t, sess, originalEventCount)
+		})
+	}
+}
+

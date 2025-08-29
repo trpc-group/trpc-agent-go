@@ -1060,3 +1060,192 @@ func TestService_UserStateTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestService_AddTruncationNoticeIfNeeded(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        func() []event.Event
+		expectNotice bool
+	}{
+		{
+			name: "empty_events",
+			setup: func() []event.Event {
+				return []event.Event{}
+			},
+			expectNotice: false,
+		},
+		{
+			name: "first_event_from_user",
+			setup: func() []event.Event {
+				evt := event.New("test", "user")
+				evt.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser}}},
+				}
+				return []event.Event{*evt}
+			},
+			expectNotice: false,
+		},
+		{
+			name: "first_event_from_assistant",
+			setup: func() []event.Event {
+				evt := event.New("test", "assistant")
+				evt.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant}}},
+				}
+				return []event.Event{*evt}
+			},
+			expectNotice: true,
+		},
+		{
+			name: "no_response_or_choices",
+			setup: func() []event.Event {
+				evt := event.New("test", "user")
+				return []event.Event{*evt}
+			},
+			expectNotice: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			service, err := NewService(WithRedisClientURL(redisURL))
+			require.NoError(t, err)
+			defer service.Close()
+
+			events := tt.setup()
+			originalCount := len(events)
+			result := service.addTruncationNoticeIfNeeded(events)
+
+			if tt.expectNotice {
+				assert.Len(t, result, originalCount+1)
+				assert.Equal(t, "user", result[0].Author)
+				assert.Equal(t, "Session history truncated, ignore this message", 
+					result[0].Response.Choices[0].Message.Content)
+			} else {
+				assert.Len(t, result, originalCount)
+			}
+		})
+	}
+}
+
+func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
+	// Test that the truncation notice is properly integrated when getting sessions with limited events
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Create a session
+	sessionKey := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add multiple events, with the first few from assistant
+	baseTime := time.Now()
+	events := []*event.Event{
+		{
+			ID:        "event1",
+			Timestamp: baseTime.Add(-5 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event2",
+			Timestamp: baseTime.Add(-4 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "User message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event3",
+			Timestamp: baseTime.Add(-3 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 2",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event4",
+			Timestamp: baseTime.Add(-2 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "User message 2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, evt := range events {
+		err = service.AppendEvent(context.Background(), sess, evt, session.WithEventTime(evt.Timestamp))
+		require.NoError(t, err)
+	}
+
+	// Test getting session with limited events that start with assistant message
+	// This should trigger truncation notice addition
+	retrievedSess, err := service.GetSession(context.Background(), sessionKey, session.WithEventNum(2))
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Should have 3 events: 1 truncation notice + 2 requested events
+	assert.Len(t, retrievedSess.Events, 3, "Should have truncation notice plus 2 requested events")
+
+	// First event should be the truncation notice
+	firstEvent := retrievedSess.Events[0]
+	assert.Equal(t, "user", firstEvent.Author, "First event should be truncation notice from user")
+	assert.Equal(t, "Session history truncated, ignore this message", firstEvent.Response.Choices[0].Message.Content)
+
+	// Next events should be the last 2 original events (event3 and event4)
+	assert.Equal(t, "event3", retrievedSess.Events[1].ID, "Second event should be event3")
+	assert.Equal(t, "event4", retrievedSess.Events[2].ID, "Third event should be event4")
+
+	// Test getting session with limited events that start with user message
+	// This should NOT trigger truncation notice addition
+	retrievedSess2, err := service.GetSession(context.Background(), sessionKey, session.WithEventNum(1))
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess2)
+
+	// Should have only 1 event (the last one), no truncation notice
+	assert.Len(t, retrievedSess2.Events, 1, "Should have only 1 event without truncation notice")
+	assert.Equal(t, "event4", retrievedSess2.Events[0].ID, "Should be the last event")
+	assert.Equal(t, model.RoleUser, retrievedSess2.Events[0].Response.Choices[0].Message.Role, "Should be from user role")
+}
