@@ -52,9 +52,10 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 	// Create a mock response event.
 	responseEvent := &event.Event{
 		Response: &model.Response{
-			ID:    "test-response",
-			Model: "test-model",
-			Done:  true,
+			ID:        "test-response",
+			Model:     "test-model",
+			Done:      true,
+			IsPartial: false,
 			Choices: []model.Choice{
 				{
 					Index: 0,
@@ -191,7 +192,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	ctx := context.Background()
 	userID := "test-user"
 	sessionID := "test-session"
-	emptyMessage := model.Message{} // Empty message
+	emptyMessage := model.NewUserMessage("") // Empty message
 
 	// Run the agent with empty message.
 	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage)
@@ -214,9 +215,16 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Should only have agent response, no user message since it was empty.
-	assert.Len(t, sess.Events, 2)
-	assert.Equal(t, "test-agent", sess.Events[0].Author)
+	// Should have truncation notice + agent response + runner done = 3 events
+	// (truncation notice is added because first actual event is from assistant, not user)
+	assert.Len(t, sess.Events, 3)
+
+	// First event should be the truncation notice (added automatically)
+	assert.Equal(t, "user", sess.Events[0].Author)
+	assert.Contains(t, sess.Events[0].Response.Choices[0].Message.Content, "Session history truncated")
+
+	// Second event should be the agent response
+	assert.Equal(t, "test-agent", sess.Events[1].Author)
 }
 
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
