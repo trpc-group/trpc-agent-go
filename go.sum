@@ -351,5 +351,5 @@ honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWh
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 trpc.group/trpc-go/trpc-a2a-go v0.2.2 h1:+KSxwAvZ3W2iWJR1HVAmgYlQyD4tOKfluFSEJ0bydgs=
 trpc.group/trpc-go/trpc-a2a-go v0.2.2/go.mod h1:lu052zH/pTlTBwWMU/E3UckR0U9ajL1NlhiRkIF9R6A=
-trpc.group/trpc-go/trpc-mcp-go v0.0.3 h1:+3zUuOtTeQsPBiEYVO8/hlOW4nvG2TfMqh8FERmsC6A=
-trpc.group/trpc-go/trpc-mcp-go v0.0.3/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=
+trpc.group/trpc-go/trpc-mcp-go v0.0.4 h1:ppRZxLe3tUNGcC64JBahGv/QqLbkYwkMQU8kDpZDbeE=
+trpc.group/trpc-go/trpc-mcp-go v0.0.4/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=

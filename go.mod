@@ -33,7 +33,7 @@ require (
 	google.golang.org/genai v1.15.0
 	google.golang.org/grpc v1.73.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.2
-	trpc.group/trpc-go/trpc-mcp-go v0.0.3
+	trpc.group/trpc-go/trpc-mcp-go v0.0.4
 )
 
 require (
