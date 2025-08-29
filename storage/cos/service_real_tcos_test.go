@@ -5,10 +5,11 @@ import (
 	"os"
 	"strconv"
 	"testing"
-	"trpc.group/trpc-go/trpc-agent-go/storage/cos"
 
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/storage/cos"
 )
 
 func TestArtifact_SessionScope(t *testing.T) {
