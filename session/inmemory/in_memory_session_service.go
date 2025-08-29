@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -259,7 +260,7 @@ func (s *SessionService) GetSession(
 	copiedSess := copySession(sess)
 
 	// apply filtering options if provided
-	applyGetSessionOptions(copiedSess, opt)
+	s.applyGetSessionOptions(copiedSess, opt)
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
 	if appState == nil {
@@ -296,12 +297,12 @@ func (s *SessionService) ListSessions(
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
 		// Check if session is expired
-		s := getValidSession(sWithTTL)
-		if s == nil {
+		sess := getValidSession(sWithTTL)
+		if sess == nil {
 			continue // Skip expired sessions
 		}
-		copiedSess := copySession(s)
-		applyGetSessionOptions(copiedSess, opt)
+		copiedSess := copySession(sess)
+		s.applyGetSessionOptions(copiedSess, opt)
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])
 		if appState == nil {
@@ -642,21 +643,64 @@ func (s *SessionService) Close() error {
 	return nil
 }
 
-func (s *SessionService) updateSessionState(sess *session.Session, event *event.Event) {
-	sess.Events = append(sess.Events, *event)
+func (s *SessionService) updateSessionState(sess *session.Session, e *event.Event) {
+	sess.Events = append(sess.Events, *e)
 	if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 		sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
+
+		// Add truncation notice if needed
+		s.addTruncationNoticeIfNeeded(sess)
 	}
 	sess.UpdatedAt = time.Now()
 
 	// Apply state delta if present.
-	if len(event.StateDelta) > 0 {
+	if len(e.StateDelta) > 0 {
 		if sess.State == nil {
 			sess.State = make(session.StateMap)
 		}
-		for key, value := range event.StateDelta {
+		for key, value := range e.StateDelta {
 			sess.State[key] = value
 		}
+	}
+}
+
+// addTruncationNoticeIfNeeded adds a truncation notice if the first event is not from user
+func (s *SessionService) addTruncationNoticeIfNeeded(sess *session.Session) {
+	if len(sess.Events) == 0 {
+		return
+	}
+
+	firstEvent := &sess.Events[0]
+	shouldAddTruncationNotice := false
+
+	// Check if first event has choices and if the first choice is not from "user" role
+	if firstEvent.Response != nil && len(firstEvent.Response.Choices) > 0 {
+		if firstEvent.Response.Choices[0].Message.Role != model.RoleUser {
+			shouldAddTruncationNotice = true
+		}
+	}
+	// Note: If the event has no choices, we don't add truncation notice
+
+	// If first choice is not from user role, prepend truncation notice
+	if shouldAddTruncationNotice {
+		truncationEvent := &event.Event{
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "Session history truncated, ignore this message",
+						},
+					},
+				},
+			},
+			Author:    "user",
+			ID:        uuid.New().String(),
+			Timestamp: sess.Events[0].Timestamp.Add(-time.Microsecond),
+		}
+
+		sess.Events = append([]event.Event{*truncationEvent}, sess.Events...)
 	}
 }
 
@@ -685,7 +729,7 @@ func copySession(sess *session.Session) *session.Session {
 }
 
 // applyGetSessionOptions applies filtering options to the session.
-func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
+func (s *SessionService) applyGetSessionOptions(sess *session.Session, opts *session.Options) {
 	if opts.EventNum > 0 && len(sess.Events) > opts.EventNum {
 		sess.Events = sess.Events[len(sess.Events)-opts.EventNum:]
 	}
@@ -700,6 +744,9 @@ func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
 		}
 		sess.Events = filteredEvents
 	}
+
+	// Add truncation notice if needed
+	s.addTruncationNoticeIfNeeded(sess)
 }
 
 // mergeState merges app-level and user-level state into the session state.
