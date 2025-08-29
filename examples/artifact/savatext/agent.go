@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	inmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemeory"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -29,8 +30,13 @@ func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) 
 		Data:     []byte(query.Query),
 		MimeType: "text/plain",
 	}
+	callbackCtx, err := contextutil.NewCallbackContext(ctx)
+	if err != nil {
+		log.Errorf("Failed to create callback context: %v", err)
+		return logQueryOutput{}, err
+	}
 
-	_, err := agent.SaveArtifact(ctx, "query", a)
+	_, err = callbackCtx.SaveArtifact("query", a)
 	if err != nil {
 		log.Errorf("Failed to save artifact: %v", err)
 	}

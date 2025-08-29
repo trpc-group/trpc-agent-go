@@ -86,9 +86,10 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		options.sessionService = inmemory.NewSessionService()
 	}
 	return &runner{
-		appName:        appName,
-		agent:          agent,
-		sessionService: options.sessionService,
+		appName:         appName,
+		agent:           agent,
+		sessionService:  options.sessionService,
+		artifactService: options.artifactService,
 	}
 }
 
