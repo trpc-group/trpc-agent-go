@@ -100,14 +100,8 @@ func NewService(bucketURL string, opts ...Option) *Service {
 	var httpClient *http.Client
 	if options.httpClient != nil {
 		httpClient = options.httpClient
-		// If user provided their own client but no timeout was explicitly set,
-		// and the client doesn't have a timeout, set our default timeout
-		if httpClient.Timeout == 0 && options.timeout > 0 {
-			// Create a copy to avoid modifying the user's client
-			httpClient = &http.Client{
-				Timeout:   options.timeout,
-				Transport: httpClient.Transport,
-			}
+		if options.timeout > 0 {
+			httpClient.Timeout = options.timeout
 		}
 	} else {
 		// Create default HTTP client with COS authentication
