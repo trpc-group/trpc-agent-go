@@ -64,9 +64,10 @@ const defaultTimeout = 60 * time.Second
 
 // NewService creates a new TCOS artifact service with optional configurations.
 //
-// Authentication credentials can be provided in two ways:
+// Authentication credentials can be provided in multiple ways:
 // 1. Set environment variables COS_SECRETID and COS_SECRETKEY (recommended)
 // 2. Use WithSecretID() and WithSecretKey() options
+// 3. Use WithClient() to provide a pre-configured COS client directly
 //
 // Example usage:
 //
@@ -80,6 +81,10 @@ const defaultTimeout = 60 * time.Second
 //	    cos.WithSecretKey("your-secret-key"),
 //	    cos.WithTimeout(30*time.Second),
 //	)
+//
+//	// Using a pre-configured COS client
+//	cosClient := cos.NewClient(baseURL, httpClient)
+//	service := cos.NewService("", cos.WithClient(cosClient))
 func NewService(bucketURL string, opts ...Option) *Service {
 	// Set default options
 	options := &options{
@@ -91,6 +96,13 @@ func NewService(bucketURL string, opts ...Option) *Service {
 	// Apply provided options
 	for _, opt := range opts {
 		opt(options)
+	}
+
+	// If a COS client is directly provided, use it
+	if options.cosClient != nil {
+		return &Service{
+			cosClient: options.cosClient,
+		}
 	}
 
 	u, _ := url.Parse(bucketURL)
@@ -309,9 +321,4 @@ func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.Session
 		}
 	}
 	return versions, nil
-}
-
-// setCosClient sets the COS client for the service for testing purposes.
-func (s *Service) setCosClient(cosClient *cos.Client) {
-	s.cosClient = cosClient
 }

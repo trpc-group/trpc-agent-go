@@ -12,6 +12,8 @@ package cos
 import (
 	"net/http"
 	"time"
+
+	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
 // Option defines a function type for configuring the TCOS service.
@@ -19,10 +21,20 @@ type Option func(*options)
 
 // options holds the configuration options for the TCOS service.
 type options struct {
+	cosClient  *cos.Client
 	httpClient *http.Client
-	timeout    time.Duration
-	secretID   string
-	secretKey  string
+
+	timeout   time.Duration
+	secretID  string
+	secretKey string
+}
+
+// WithClient sets the COS client directly.
+// This option takes precedence over all other options when provided.
+func WithClient(client *cos.Client) Option {
+	return func(o *options) {
+		o.cosClient = client
+	}
 }
 
 // WithHTTPClient sets the HTTP client to use for COS requests.

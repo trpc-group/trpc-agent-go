@@ -179,15 +179,12 @@ func createMockService() (*Service, *MockTransport) {
 		Transport: mockTransport,
 	}
 
-	// Create service with dummy bucket URL since we'll replace the client
-	service := NewService("https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com")
-
 	// Create a mock COS client with the mock transport
 	mockBucketURL, _ := url.Parse("https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com")
 	mockCosClient := cos.NewClient(&cos.BaseURL{BucketURL: mockBucketURL}, mockClient)
 
-	// Inject the mock COS client for testing
-	service.setCosClient(mockCosClient)
+	// Use WithClient option to inject the mock COS client
+	service := NewService("", WithClient(mockCosClient))
 
 	return service, mockTransport
 }
@@ -513,6 +510,15 @@ func TestNewServiceWithOptions(t *testing.T) {
 				WithHTTPClient(&http.Client{}),
 			},
 		},
+		{
+			name:      "with pre-configured COS client",
+			bucketURL: "", // bucketURL is ignored when using WithClient
+			options: []Option{
+				WithClient(cos.NewClient(&cos.BaseURL{
+					BucketURL: mustParseURL(t, "https://test-bucket-1234567890.cos.ap-guangzhou.myqcloud.com"),
+				}, &http.Client{})),
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -522,4 +528,14 @@ func TestNewServiceWithOptions(t *testing.T) {
 			assert.NotNil(t, service.cosClient)
 		})
 	}
+}
+
+// mustParseURL is a helper function for testing
+func mustParseURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
