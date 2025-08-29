@@ -2,11 +2,7 @@
 
 本文档分析 tRPC-Agent-Go 框架中需要生态建设的模块，说明需要实现的接口，并提供贡献指导。
 
-注意：共建组件根据依赖情况分为三种贡献路径：
-
-1. **核心通用组件**：如果是比较核心都能用得到的组件，直接贡献到 GitHub 开源仓库的对应目录下，比如 `model/somemodel`、`tools/sometools`。
-
-2. **生态组件（开源依赖）**：如果依赖公开开源组件，贡献到 GitHub 仓库统一的 ecosystem 目录下，比如 `trpc-agent-go/ecosystem/model/somemodel`、`trpc-agent-go/ecosystem/tool/sometool`。
+注意：所有共建组件都直接贡献到 GitHub 开源仓库的对应目录下，比如 `model/somemodel`、`tool/sometool`、`agent/someagent` 等。
 
 贡献时在对应的贡献模块目录下新建合理命名的子文件夹，然后实现对应模块接口，并提供丰富的测试用例以及 example 示例。
 
@@ -109,8 +105,7 @@ func (a *LangChainAdapter) FindSubAgent(name string) agent.Agent {
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/agent/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/agent/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/agent/`
 
 ### 2. 模型（Model）生态化
 
@@ -200,8 +195,7 @@ func (g *GeminiModel) Info() model.Info {
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/model/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/model/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/model/`
 
 ### 3. 工具（Tool）生态化
 
@@ -383,8 +377,7 @@ func (a *APIToolSet) Close() error {
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/tool/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/tool/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/tool/`
 
 ### 4. 知识库（Knowledge）生态化
 
@@ -481,8 +474,7 @@ func (w *WeaviateKnowledge) buildQuery(req *knowledge.SearchRequest) *weaviate.Q
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/knowledge/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/knowledge/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/knowledge/`
 
 ### 5. Session 生态化
 
@@ -613,8 +605,7 @@ func (p *PostgreSQLService) unmarshalState(data []byte) session.StateMap {
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/session/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/session/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/session/`
 
 ### 6. Memory 生态化
 
@@ -764,7 +755,7 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 
 为便于快速落地，可直接对接现有 Memory 平台/服务（如 mem0）。建议：
 
-- 在 `memory/ecosystem/mem0/` 提供实现，遵循 `memory.Service` 接口。
+- 在 `memory/mem0/` 提供实现，遵循 `memory.Service` 接口。
 - 复用现有 `memory/tool` 工具（`memory_add`、`memory_search`、
   `memory_load` 等），通过 `Tools()` 暴露。
 - 主题（topics）与检索（search）按目标服务能力做映射，必要时在本地
@@ -849,8 +840,7 @@ func (s *Service) SearchMemories(ctx context.Context, key memory.UserKey, q stri
 **贡献方式：**
 
 - 在对应目录下创建组件（新建一个对应组件名称的子目录）
-- **核心通用组件**：直接贡献到 `https://github.com/trpc-group/trpc-agent-go/memory/`
-- **生态组件（开源依赖）**：贡献到 `https://github.com/trpc-group/trpc-agent-go/ecosystem/memory/`
+- 直接贡献到 `https://github.com/trpc-group/trpc-agent-go/memory/`
 
 ### 7. 可观测（Observability）生态化
 
@@ -998,7 +988,7 @@ func main() {
 
 - 导出器生态：封装 Zipkin、Jaeger（直接推送）等启动方法。
 - Span 规范：约定常见 Span 名称/属性键，提供 helper（可放在
-  `telemetry/ecosystem/`）。
+  `telemetry/`）。
 
 ### 8. API 服务生态化
 
@@ -1034,7 +1024,7 @@ func main() {
     - 状态/用量元数据、错误表达对齐。
     - 文件/图片等富媒体承载（InlineData）与服务端存储对接。
     - 鉴权（API Key、JWT、Cookie 会话）与 CORS。
-  - 建议在 `server/ecosystem/agui/` 提供实现，复用通用的模型与事件
+  - 建议在 `server/agui/` 提供实现，复用通用的模型与事件
     映射工具，在 Handler 中完成协议层适配。
 - **Agent UI（agno）**：参考 `https://docs.agno.com/agent-ui/introduction`。
   - 重点：SSE/WebSocket 流、Tool 调用流式 UI 反馈、会话/工件持久化。
@@ -1119,10 +1109,10 @@ func (s *Server) routes() {
 **生态化方向与贡献规范：**
 
 - **目标 UI/协议**：
-  - **AG-UI**：在 `server/ecosystem/agui/` 提供 HTTP + SSE 适配，附带示例
-    与 `openapi.json`。
-  - **Agent UI（agno）**：在 `server/ecosystem/agentui/` 提供 HTTP + SSE /
-    WebSocket 适配。
+  - **AG-UI**：在 `server/agui/` 提供 HTTP + SSE 适配，附带示例
+与 `openapi.json`。
+- **Agent UI（agno）**：在 `server/agentui/` 提供 HTTP + SSE /
+WebSocket 适配。
   - **WebSocket/Bidi Streaming**：对标 ADK `run_live`，提供实时音视频
     通道（依赖模型侧支持）。
 - **落地要求：**
@@ -1200,7 +1190,7 @@ func (p *Planner) ProcessPlanningResponse(ctx context.Context, inv *agent.Invoca
 
 **贡献建议：**
 
-- 在 `planner/ecosystem/<name>/` 提供实现与 README、测试用例、示例。
+- 在 `planner/<name>/` 提供实现与 README、测试用例、示例。
 - 结合 `docs/overall-introduction.md` 的 Observability 与 `server/debug`
   端点提供端到端示例，便于前端 UI 演示。
 - 遵循 goimports 与错误消息风格，注释句末加句号，代码换行约 80 列。
@@ -1281,19 +1271,19 @@ memory, err := memoryService.AddMemory(ctx, userKey, "用户喜欢咖啡", []str
 
 ## 贡献指导
 
-### 1. 核心通用组件贡献
+## 贡献指导
 
 **适合的组件：**
 
-- 比较核心都能用得到的组件
-- 框架的基础功能扩展
-- 标准协议的核心实现
-- 不依赖特定第三方服务的通用组件
+- 各种第三方服务和工具的集成
+- 开源组件适配器
+- 标准协议支持
+- 框架功能扩展
 
 **贡献流程：**
 
 1. Fork `https://github.com/trpc-group/trpc-agent-go`
-2. 在对应模块的根目录下创建组件（如 `model/somemodel`、`tool/sometool`）
+2. 在对应模块的根目录下创建组件（如 `model/somemodel`、`tool/sometool`、`agent/someagent`）
 3. 实现相应的接口
 4. 编写测试和文档
 5. 提交 Pull Request
@@ -1307,34 +1297,6 @@ model/gemini/
 ├── examples/
 ├── README.md
 └── gemini_test.go
-```
-
-### 2. 生态组件贡献（开源依赖）
-
-**适合的组件：**
-
-- 依赖公开开源组件的集成
-- 第三方服务适配器
-- 开源工具和框架适配
-- 标准协议支持
-
-**贡献流程：**
-
-1. Fork `https://github.com/trpc-group/trpc-agent-go`
-2. 在 `ecosystem/` 目录下对应模块创建组件（如 `ecosystem/model/somemodel`、`ecosystem/tool/sometool`）
-3. 实现相应的接口
-4. 编写测试和文档
-5. 提交 Pull Request
-
-**目录结构示例：**
-
-```
-ecosystem/agent/langchain/
-├── adapter.go
-├── config.go
-├── examples/
-├── README.md
-└── langchain_test.go
 ```
 
 ## 总结
