@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -763,14 +763,16 @@ func TestStateMerging(t *testing.T) {
 
 	// Setup app and user state
 	app := service.getOrCreateAppSessions(appName)
-	app.appState["config"] = []byte("production")
-	app.appState["version"] = []byte("1.0.0")
+	app.appState.data["config"] = []byte("production")
+	app.appState.data["version"] = []byte("1.0.0")
 
 	if app.userState[userID] == nil {
-		app.userState[userID] = make(session.StateMap)
+		app.userState[userID] = &stateWithTTL{
+			data: make(session.StateMap),
+		}
 	}
-	app.userState[userID]["preference"] = []byte("dark_mode")
-	app.userState[userID]["language"] = []byte("zh-CN")
+	app.userState[userID].data["preference"] = []byte("dark_mode")
+	app.userState[userID].data["language"] = []byte("zh-CN")
 
 	// Create session
 	sessionState := session.StateMap{"context": []byte("chat")}

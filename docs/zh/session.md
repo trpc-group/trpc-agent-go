@@ -261,6 +261,46 @@ sessionService := inmemory.NewSessionService(
 )
 ```
 
+#### 内存存储配置选项
+
+- **`WithSessionEventLimit(limit int)`**：设置每个会话存储的最大事件数量。默认值为 1000，超过限制时淘汰老的事件。
+- **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件列表的 TTL。默认值为 0（不过期），如果设置为 0，会话将不会自动过期。
+- **`WithAppStateTTL(ttl time.Duration)`**：设置应用级状态的 TTL。默认值为 0（不过期），如果未设置，应用状态将不会自动过期。
+- **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期），如果未设置，用户状态将不会自动过期。
+- **`WithCleanupInterval(interval time.Duration)`**：设置过期数据自动清理的间隔。默认值为 0（自动确定），如果设置为 0，将根据 TTL 配置自动确定清理间隔。如果配置了任何 TTL，默认清理间隔为 5 分钟。
+
+**完整配置示例：**
+
+```go
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSessionEventLimit(500),
+    inmemory.WithSessionTTL(30*time.Minute),
+    inmemory.WithAppStateTTL(24*time.Hour),
+    inmemory.WithUserStateTTL(7*24*time.Hour),
+    inmemory.WithCleanupInterval(10*time.Minute),
+)
+
+// 配置效果说明：
+// - 每个会话最多存储 500 个事件，超出时自动淘汰最老的事件
+// - 会话数据在 30 分钟无活动后自动过期
+// - 应用级状态在 24 小时后过期
+// - 用户级状态在 7 天后过期  
+// - 每 10 分钟执行一次清理操作，移除过期数据
+```
+
+**默认配置示例：**
+
+```go
+// 使用默认配置创建内存会话服务
+sessionService := inmemory.NewSessionService()
+
+// 默认配置效果说明：
+// - 每个会话最多存储 1000 个事件（默认值）
+// - 所有数据永不过期（TTL 为 0）
+// - 不执行自动清理（CleanupInterval 为 0）
+// - 适用于开发环境或短期运行的应用
+```
+
 ### Redis 存储
 
 适用于生产环境和分布式应用：
@@ -278,6 +318,48 @@ sessionService, err := redis.NewService(
 sessionService, err := redis.NewService(
     redis.WithInstanceName("my-redis-instance"),
 )
+```
+
+#### Redis 存储配置选项
+
+- **`WithSessionEventLimit(limit int)`**：设置每个会话存储的最大事件数量。默认值为 1000，超过限制时淘汰老的事件。
+- **`WithRedisClientURL(url string)`**：通过 URL 创建 Redis 客户端。格式：`redis://[username:password@]host:port[/database]`。
+- **`WithRedisInstance(instanceName string)`**：使用预配置的 Redis 实例。注意：`WithRedisClientURL` 的优先级高于 `WithRedisInstance`。
+- **`WithExtraOptions(extraOptions ...interface{})`**：为 Redis 会话服务设置额外选项。此选项主要用于自定义 Redis 客户端构建器，将传递给构建器。
+- **`WithSessionTTL(ttl time.Duration)`**：设置会话状态和事件列表的 TTL。默认值为 0（不过期），如果设置为 0，会话将不会过期。
+- **`WithAppStateTTL(ttl time.Duration)`**：设置应用级状态的 TTL。默认值为 0（不过期），如果未设置，应用状态将不会过期。
+- **`WithUserStateTTL(ttl time.Duration)`**：设置用户级状态的 TTL。默认值为 0（不过期），如果未设置，用户状态将不会过期。
+
+**完整配置示例：**
+
+```go
+sessionService, err := redis.NewService(
+    redis.WithRedisClientURL("redis://localhost:6379/0"),
+    redis.WithSessionEventLimit(1000),
+    redis.WithSessionTTL(30*time.Minute),
+    redis.WithAppStateTTL(24*time.Hour),
+    redis.WithUserStateTTL(7*24*time.Hour),
+)
+
+// 配置效果说明：
+// - 连接到本地 Redis 服务器的 0 号数据库
+// - 每个会话最多存储 1000 个事件，超出时自动淘汰最老的事件
+// - 会话数据在 30 分钟无活动后自动过期
+// - 应用级状态在 24 小时后过期
+// - 用户级状态在 7 天后过期
+// - 利用 Redis 的 TTL 机制自动清理过期数据，无需手动清理
+
+**默认配置示例：**
+
+```go
+// 使用默认配置创建 Redis 会话服务（需要预配置 Redis 实例）
+sessionService, err := redis.NewService()
+
+// 默认配置效果说明：
+// - 每个会话最多存储 1000 个事件（默认值）
+// - 所有数据永不过期（TTL 为 0）
+// - 需要通过 storage.RegisterRedisInstance 预先注册 Redis 实例
+// - 适用于需要持久化但不需要自动过期的场景
 ```
 
 #### 配置复用
