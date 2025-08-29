@@ -13,6 +13,8 @@ import (
 	"context"
 	"reflect"
 
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -63,6 +65,9 @@ type Invocation struct {
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the Go type to unmarshal the final JSON into.
 	StructuredOutputType reflect.Type
+
+	// ArtifactService is the service for managing artifacts.
+	ArtifactService artifact.Service
 }
 
 type invocationKey struct{}
