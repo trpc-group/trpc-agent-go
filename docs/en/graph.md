@@ -118,6 +118,10 @@ The Graph package provides some built-in state keys, mainly for internal system 
 - `StateKeyUserInput`: User input (automatically set by GraphAgent, from Runner messages)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
 - `StateKeyMessages`: Message history (used by LLM nodes, automatically updated by LLM nodes)
+- `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
+  node's final textual response. Use `StateKeyLastResponse` for the final
+  serial output; when multiple parallel nodes converge, read each node's
+  output from `StateKeyNodeResponses`.
 - `StateKeyMetadata`: Metadata (general metadata storage available to users)
 
 **System Internal Keys** (users should not use directly):
@@ -383,6 +387,7 @@ schema := graph.MessagesStateSchema()
 // - messages: Conversation history (StateKeyMessages).
 // - user_input: User input (StateKeyUserInput).
 // - last_response: Last response (StateKeyLastResponse).
+// - node_responses: Map of nodeID -> response (StateKeyNodeResponses).
 // - metadata: Metadata (StateKeyMetadata).
 ```
 
@@ -425,6 +430,21 @@ userInput := state[graph.StateKeyUserInput].(string)
 // Set final output (system will read this value).
 return graph.State{
     graph.StateKeyLastResponse: "Processing complete",
+}, nil
+
+// Read per-node responses when multiple nodes (e.g., parallel LLM nodes)
+// produce outputs. Values are stored as a map[nodeID]any and merged across
+// steps. Use LastResponse for the final serial output; use NodeResponses for
+// converged parallel outputs.
+responses, _ := state[graph.StateKeyNodeResponses].(map[string]any)
+news := responses["news"].(string)
+dialog := responses["dialog"].(string)
+
+// Use them separately or combine into the final output.
+return graph.State{
+    "news_output":  news,
+    "dialog_output": dialog,
+    graph.StateKeyLastResponse: news + "\n" + dialog,
 }, nil
 
 // Store metadata.
