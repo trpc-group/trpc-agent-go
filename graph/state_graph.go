@@ -639,6 +639,9 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Update state with the agent's response.
 		stateUpdate := State{}
 		stateUpdate[StateKeyLastResponse] = lastResponse
+		stateUpdate[StateKeyNodeResponses] = map[string]any{
+			nodeID: lastResponse,
+		}
 		return stateUpdate, nil
 	}
 }
@@ -827,6 +830,9 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	return State{
 		StateKeyMessages:     []model.Message{newMessage}, // The new message will be merged by the executor.
 		StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
+		StateKeyNodeResponses: map[string]any{
+			config.NodeID: finalResponse.Choices[0].Message.Content,
+		},
 	}, nil
 }
 
@@ -1054,6 +1060,11 @@ func MessagesStateSchema() *StateSchema {
 	schema.AddField(StateKeyLastResponse, StateField{
 		Type:    reflect.TypeOf(""),
 		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyNodeResponses, StateField{
+		Type:    reflect.TypeOf(map[string]any{}),
+		Reducer: MergeReducer,
+		Default: func() any { return map[string]any{} },
 	})
 	schema.AddField(StateKeyMetadata, StateField{
 		Type:    reflect.TypeOf(map[string]any{}),
