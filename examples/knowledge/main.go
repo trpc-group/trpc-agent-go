@@ -15,10 +15,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -40,6 +41,7 @@ import (
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -113,8 +115,44 @@ func main() {
 		vectorStore:  *vectorStore,
 	}
 
-	if err := chat.run(); err != nil {
-		log.Fatalf("Chat failed: %v", err)
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run chat in a goroutine
+	done := make(chan error, 1)
+	go func() {
+		done <- chat.run()
+	}()
+
+	// Wait for either completion or signal
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Fatalf("Chat failed: %v", err)
+		}
+		// Normal completion, perform cleanup
+		cleanupSources(chat)
+	case sig := <-sigChan:
+		log.Infof("Received signal %v, performing cleanup...", sig)
+		// Signal received, perform cleanup
+		cleanupSources(chat)
+		log.Infof("Cleanup completed, exiting...")
+		os.Exit(0)
+	}
+}
+
+// cleanupSources removes loaded sources if configured to do so
+func cleanupSources(chat *knowledgeChat) {
+	if *removeDataAfterLoad && *loadData && chat.kb != nil {
+		sourceIDs := []string{fileLLMSourceID, fileGolangSourceID, urlSourceID, dirSourceID, autoSourceID}
+		for _, sourceID := range sourceIDs {
+			deleted, err := chat.kb.RemoveSource(context.Background(), sourceID)
+			if err != nil {
+				log.Errorf("Remove source failed: %v", err)
+			}
+			log.Infof("Removed %d documents from source %s", deleted, sourceID)
+		}
 	}
 }
 
@@ -167,6 +205,7 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
+		llmagent.WithKnowledgeFilter(map[string]interface{}{"tag": "llm"}),
 	)
 
 	// Create session service.
@@ -216,6 +255,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
+			vectortcvector.WithCollection("examplegolang"),
+			vectortcvector.WithFilterFields([]string{"tag"}),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -267,16 +308,28 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./data/llm.md",
 			},
 			filesource.WithName("Large Language Model"),
-			filesource.WithMetadataValue("type", "documentation"),
+			filesource.WithMetadataValue("type", "llm"),
+			filesource.WithSourceID(fileLLMSourceID),
+			filesource.WithMetadataValue("tag", "llm"),
 		),
-
+		filesource.New(
+			[]string{
+				"./data/golang.md",
+			},
+			filesource.WithName("Golang"),
+			filesource.WithMetadataValue("type", "golang"),
+			filesource.WithSourceID(fileGolangSourceID),
+			filesource.WithMetadataValue("tag", "golang"),
+		),
 		dirsource.New(
 			[]string{
 				"./dir",
 			},
 			dirsource.WithName("Data Directory"),
+			dirsource.WithMetadataValue("type", "transformer"),
+			dirsource.WithMetadataValue("tag", "llm"),
+			dirsource.WithSourceID(dirSourceID),
 		),
-
 		// URL source for web content.
 		urlsource.New(
 			[]string{
@@ -285,8 +338,9 @@ func (c *knowledgeChat) createSources() []source.Source {
 			urlsource.WithName("Byte-pair encoding"),
 			urlsource.WithMetadataValue("topic", "Byte-pair encoding"),
 			urlsource.WithMetadataValue("source", "official"),
+			urlsource.WithMetadataValue("tag", "llm"),
+			urlsource.WithSourceID(urlSourceID),
 		),
-
 		// Auto source that can handle mixed inputs.
 		autosource.New(
 			[]string{
@@ -297,6 +351,8 @@ func (c *knowledgeChat) createSources() []source.Source {
 			autosource.WithName("Mixed Content Source"),
 			autosource.WithMetadataValue("topic", "Cloud Computing"),
 			autosource.WithMetadataValue("type", "mixed"),
+			autosource.WithMetadataValue("tag", "llm"),
+			autosource.WithSourceID(autoSourceID),
 		),
 	}
 	return sources
@@ -325,16 +381,8 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(sources),
 	)
-	// Decide whether to load the knowledge base.
-	load := *loadData
-	if strings.ToLower(*vectorStore) == "inmemory" && !load {
-		// In-memory store is non-persistent, so force loading.
-		fmt.Println("ℹ️  In-memory store is non-persistent; forcing data load.")
-		load = true
-	}
-
-	// Optionally load the knowledge base.
-	if load {
+	// Load the knowledge base.
+	if *loadData {
 		if err := c.kb.Load(
 			ctx,
 			knowledge.WithShowProgress(false),  // The default is true.

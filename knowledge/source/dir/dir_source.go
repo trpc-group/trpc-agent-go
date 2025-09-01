@@ -62,9 +62,9 @@ func New(dirPaths []string, opts ...Option) *Source {
 	return s
 }
 
-// initializeReaders initializes all available readers.
+// initializeReaders sets up readers for different file types.
 func (s *Source) initializeReaders() {
-	// Use the internal source helper to get readers with appropriate configuration.
+	// Use the common reader initialization with chunk configuration.
 	if s.chunkSize > 0 || s.chunkOverlap > 0 {
 		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
 	} else {

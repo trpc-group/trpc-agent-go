@@ -32,8 +32,8 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.4
-	trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.3
+	trpc.group/trpc-go/trpc-mcp-go v0.0.2
 )
 
 require (
