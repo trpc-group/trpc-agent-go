@@ -147,7 +147,13 @@ func (e *Executor) Execute(
 	go func() {
 		defer close(eventChan)
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
-			// Emit error event.
+			// Check if this is an interrupt error
+			if IsInterrupt(err) {
+				// For interrupt errors, we don't emit an error event
+				// The interrupt will be handled by the caller
+				return
+			}
+			// Emit error event for other errors.
 			errorEvent := NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
 				WithPregelEventStepNumber(-1),
@@ -176,6 +182,18 @@ func (e *Executor) executeGraph(
 	// Initialize state with schema defaults.
 	execState := e.initializeState(initialState)
 
+	// Check if we're resuming from an interrupt.
+	if cmd, ok := initialState["__command__"].(*Command); ok {
+		// Apply resume values if present.
+		if cmd.Resume != nil {
+			execState["__resume__"] = cmd.Resume
+		}
+		if cmd.ResumeMap != nil {
+			execState["__resume_map__"] = cmd.ResumeMap
+		}
+		delete(execState, "__command__")
+	}
+
 	// Create execution context.
 	execCtx := &ExecutionContext{
 		Graph:        e.graph,
@@ -195,15 +213,26 @@ func (e *Executor) executeGraph(
 
 		checkpointConfig = CreateCheckpointConfig(threadID, "", "")
 
-		// Try to resume from existing checkpoint if available.
-		if resumedState, err := e.resumeFromCheckpoint(ctx, checkpointConfig); err == nil && resumedState != nil {
-			execState = resumedState
-			execCtx.State = resumedState
-			// Re-initialize channels with resumed state.
-			e.initializeChannels(resumedState)
+		// Try to resume from existing checkpoint if available and rebuild frontier.
+		if tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig); err == nil && tuple != nil && tuple.Checkpoint != nil {
+			// Restore state.
+			restored := make(State)
+			for k, v := range tuple.Checkpoint.ChannelValues {
+				restored[k] = v
+			}
+			execState = restored
+			execCtx.State = restored
+			execCtx.resumed = true
+			// Re-init channels and replay pending writes to trigger correct nodes.
+			e.initializeChannels(restored)
+			e.applyPendingWrites(execCtx, tuple.PendingWrites)
+			// Use storage-provided config if present (e.g., resolved checkpoint_id).
+			if tuple.Config != nil {
+				checkpointConfig = tuple.Config
+			}
 		} else {
-			// Create initial checkpoint.
-			if err := e.createCheckpoint(ctx, checkpointConfig, execState, CheckpointSourceInput, -1); err != nil {
+			// Create initial checkpoint and persist empty pending writes.
+			if err := e.createCheckpointAndSave(ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx); err != nil {
 				log.Warnf("Failed to create initial checkpoint: %v", err)
 			}
 		}
@@ -212,7 +241,15 @@ func (e *Executor) executeGraph(
 	// BSP execution loop.
 	for step := 0; step < e.maxSteps; step++ {
 		// Plan phase: determine which nodes to execute.
-		tasks, err := e.planStep(execCtx, step)
+		var tasks []*Task
+		var err error
+		if step == 0 && execCtx.resumed {
+			// If resumed, plan purely based on channel triggers to continue from the
+			// restored frontier rather than the entry point.
+			tasks = e.planBasedOnChannelTriggers(execCtx, step)
+		} else {
+			tasks, err = e.planStep(execCtx, step)
+		}
 		if err != nil {
 			return fmt.Errorf("planning failed at step %d: %w", step, err)
 		}
@@ -222,6 +259,10 @@ func (e *Executor) executeGraph(
 		}
 		// Execute phase: run all tasks concurrently.
 		if err := e.executeStep(ctx, execCtx, tasks, step); err != nil {
+			// Check if this is an interrupt that should be handled.
+			if interrupt, ok := GetInterrupt(err); ok {
+				return e.handleInterrupt(ctx, execCtx, interrupt, step, checkpointConfig)
+			}
 			return fmt.Errorf("execution failed at step %d: %w", step, err)
 		}
 		// Update phase: process channel updates.
@@ -231,7 +272,7 @@ func (e *Executor) executeGraph(
 
 		// Create checkpoint after each step if checkpoint saver is available.
 		if e.checkpointSaver != nil && checkpointConfig != nil {
-			if err := e.createCheckpoint(ctx, checkpointConfig, execCtx.State, CheckpointSourceLoop, step); err != nil {
+			if err := e.createCheckpointAndSave(ctx, &checkpointConfig, execCtx.State, CheckpointSourceLoop, step, execCtx); err != nil {
 				log.Warnf("Failed to create checkpoint at step %d: %v", step, err)
 			}
 		}
@@ -300,6 +341,62 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 	}
 
 	return nil
+}
+
+// createCheckpointAndSave creates a checkpoint and persists any pending writes
+// associated with the current step, updating the provided config with the
+// returned value from saver.Put (which may include the new checkpoint_id).
+func (e *Executor) createCheckpointAndSave(
+	ctx context.Context,
+	config *map[string]any,
+	state State,
+	source string,
+	step int,
+	execCtx *ExecutionContext,
+) error {
+	if e.checkpointSaver == nil {
+		return nil
+	}
+	// First, create and persist the checkpoint.
+	if err := e.createCheckpoint(ctx, *config, state, source, step); err != nil {
+		return err
+	}
+	// Fetch the latest tuple to get the assigned checkpoint_id and persist writes.
+	tuple, err := e.checkpointSaver.GetTuple(ctx, *config)
+	if err != nil || tuple == nil || tuple.Checkpoint == nil {
+		return err
+	}
+	// Update external config to include checkpoint_id for subsequent writes.
+	*config = CreateCheckpointConfig(GetThreadID(tuple.Config), tuple.Checkpoint.ID, GetNamespace(tuple.Config))
+	// Persist pending writes for this checkpoint.
+	execCtx.pendingMu.Lock()
+	if len(execCtx.pendingWrites) > 0 {
+		_ = e.checkpointSaver.PutWrites(ctx, PutWritesRequest{
+			Config:   *config,
+			Writes:   execCtx.pendingWrites,
+			TaskID:   "",
+			TaskPath: "",
+		})
+		// Clear after persisting.
+		execCtx.pendingWrites = nil
+	}
+	execCtx.pendingMu.Unlock()
+	return nil
+}
+
+// applyPendingWrites replays pending writes into channels to rebuild frontier.
+func (e *Executor) applyPendingWrites(execCtx *ExecutionContext, writes []PendingWrite) {
+	if len(writes) == 0 {
+		return
+	}
+	for _, w := range writes {
+		ch, _ := e.graph.getChannel(w.Channel)
+		if ch != nil {
+			ch.Update([]any{w.Value})
+			// Emit channel update event to mirror live execution behavior.
+			e.emitChannelUpdateEvent(execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
+		}
+	}
 }
 
 // resumeFromCheckpoint resumes execution from a specific checkpoint.
@@ -569,6 +666,17 @@ func (e *Executor) executeSingleTask(
 	// Execute the node function.
 	result, err := e.executeNodeFunction(ctx, execCtx, t.NodeID)
 	if err != nil {
+		// Check if this is an interrupt error
+		if IsInterrupt(err) {
+			// For interrupt errors, we need to set the node ID and task ID
+			if interrupt, ok := GetInterrupt(err); ok {
+				interrupt.NodeID = t.NodeID
+				interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
+				interrupt.Step = step
+			}
+			return err // Return interrupt error directly without wrapping
+		}
+
 		// Run on node error callbacks.
 		if nodeCallbacks != nil {
 			nodeCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
@@ -805,6 +913,13 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 
 			// Emit channel update event.
 			e.emitChannelUpdateEvent(execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
+			// Accumulate into pendingWrites to be saved with the next checkpoint.
+			execCtx.pendingMu.Lock()
+			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
+				Channel: write.Channel,
+				Value:   write.Value,
+			})
+			execCtx.pendingMu.Unlock()
 		}
 	}
 }
@@ -978,4 +1093,81 @@ func (e *Executor) processConditionalResult(
 		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
 	}
 	return nil
+}
+
+// handleInterrupt handles an interrupt during graph execution.
+func (e *Executor) handleInterrupt(
+	ctx context.Context,
+	execCtx *ExecutionContext,
+	interrupt *GraphInterrupt,
+	step int,
+	checkpointConfig map[string]any,
+) error {
+	// Create an interrupt checkpoint with the current state.
+	if e.checkpointSaver != nil && checkpointConfig != nil {
+		// Set interrupt state in the checkpoint.
+		checkpoint := e.createCheckpointFromState(execCtx.State, step)
+		checkpoint.SetInterruptState(
+			interrupt.NodeID,
+			interrupt.TaskID,
+			interrupt.Value,
+			step,
+			interrupt.Path,
+		)
+
+		// Create metadata for the interrupt checkpoint.
+		metadata := NewCheckpointMetadata(CheckpointSourceInterrupt, step)
+		metadata.IsResuming = false
+
+		// Store the interrupt checkpoint.
+		req := PutRequest{
+			Config:      checkpointConfig,
+			Checkpoint:  checkpoint,
+			Metadata:    metadata,
+			NewVersions: checkpoint.ChannelVersions,
+		}
+		_, err := e.checkpointSaver.Put(ctx, req)
+		if err != nil {
+			log.Warnf("Failed to store interrupt checkpoint: %v", err)
+		}
+	}
+
+	// Emit interrupt event.
+	interruptEvent := NewPregelInterruptEvent(
+		WithPregelEventInvocationID(execCtx.InvocationID),
+		WithPregelEventStepNumber(step),
+		WithPregelEventNodeID(interrupt.NodeID),
+		WithPregelEventInterruptValue(interrupt.Value),
+	)
+	select {
+	case execCtx.EventChan <- interruptEvent:
+	default:
+	}
+
+	// Return the interrupt error to propagate it to the caller.
+	return interrupt
+}
+
+// createCheckpointFromState creates a checkpoint from the current execution state.
+func (e *Executor) createCheckpointFromState(state State, step int) *Checkpoint {
+	// Convert state to channel values.
+	channelValues := make(map[string]any)
+	for k, v := range state {
+		channelValues[k] = v
+	}
+
+	// Create channel versions (simple incrementing integers for now).
+	channelVersions := make(map[string]any)
+	for k := range state {
+		channelVersions[k] = DefaultChannelVersion
+	}
+
+	// Create versions seen (simplified for now).
+	versionsSeen := make(map[string]map[string]any)
+
+	// Create checkpoint.
+	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
+	checkpoint.UpdatedChannels = e.getUpdatedChannels()
+
+	return checkpoint
 }

@@ -250,6 +250,10 @@ type PregelStepMetadata struct {
 	Duration time.Duration `json:"duration,omitempty"`
 	// Error is the error message if step failed.
 	Error string `json:"error,omitempty"`
+	// NodeID is the ID of the node where interrupt occurred.
+	NodeID string `json:"nodeID,omitempty"`
+	// InterruptValue is the value passed to interrupt().
+	InterruptValue any `json:"interruptValue,omitempty"`
 }
 
 // ChannelUpdateMetadata contains metadata about channel updates.
@@ -684,6 +688,8 @@ type PregelEventOptions struct {
 	StartTime       time.Time
 	EndTime         time.Time
 	Error           string
+	NodeID          string
+	InterruptValue  any
 }
 
 // PregelEventOption is a function that configures Pregel event options.
@@ -749,6 +755,20 @@ func WithPregelEventEndTime(endTime time.Time) PregelEventOption {
 func WithPregelEventError(errMsg string) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithPregelEventNodeID sets the node ID for Pregel events.
+func WithPregelEventNodeID(nodeID string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.NodeID = nodeID
+	}
+}
+
+// WithPregelEventInterruptValue sets the interrupt value for Pregel events.
+func WithPregelEventInterruptValue(value any) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.InterruptValue = value
 	}
 }
 
@@ -1042,6 +1062,26 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 		EndTime:    options.EndTime,
 		Duration:   options.EndTime.Sub(options.StartTime),
 		Error:      options.Error,
+	}
+	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
+		WithPregelMetadata(metadata))
+}
+
+// NewPregelInterruptEvent creates a new Pregel interrupt event.
+func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
+	options := &PregelEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := PregelStepMetadata{
+		StepNumber:     options.StepNumber,
+		Phase:          options.Phase,
+		StartTime:      options.StartTime,
+		EndTime:        options.EndTime,
+		Duration:       options.EndTime.Sub(options.StartTime),
+		NodeID:         options.NodeID,
+		InterruptValue: options.InterruptValue,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))

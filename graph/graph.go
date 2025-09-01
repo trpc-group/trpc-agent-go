@@ -224,13 +224,18 @@ type ExecutionContext struct {
 	EventChan    chan<- *event.Event
 	InvocationID string
 
-	stateMutex sync.RWMutex
+	stateMutex    sync.RWMutex
+	pendingWrites []PendingWrite
+	pendingMu     sync.Mutex
+	resumed       bool
 }
 
 // Command represents a command that combines state updates with routing.
 type Command struct {
-	Update State
-	GoTo   string
+	Update    State
+	GoTo      string
+	Resume    any
+	ResumeMap map[string]any
 }
 
 // addNode adds a node to the graph.

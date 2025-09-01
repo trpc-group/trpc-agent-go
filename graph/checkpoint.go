@@ -19,7 +19,7 @@ import (
 
 const (
 	// CheckpointVersion is the current version of the checkpoint format.
-	CheckpointVersion = 1
+	CheckpointVersion = 2
 
 	// CheckpointSourceInput indicates the checkpoint was created from input.
 	CheckpointSourceInput = "input"
@@ -29,6 +29,8 @@ const (
 	CheckpointSourceUpdate = "update"
 	// CheckpointSourceFork indicates the checkpoint was created as a copy.
 	CheckpointSourceFork = "fork"
+	// CheckpointSourceInterrupt indicates the checkpoint was created from an interrupt.
+	CheckpointSourceInterrupt = "interrupt"
 
 	// DefaultCheckpointNamespace is the default namespace for checkpoints.
 	DefaultCheckpointNamespace = ""
@@ -36,6 +38,14 @@ const (
 	DefaultChannelVersion = 1
 	// DefaultMaxCheckpointsPerThread is the default maximum number of checkpoints per thread.
 	DefaultMaxCheckpointsPerThread = 100
+)
+
+// Special channel names for interrupt and resume functionality.
+const (
+	InterruptChannel = "__interrupt__"
+	ResumeChannel    = "__resume__"
+	ErrorChannel     = "__error__"
+	ScheduledChannel = "__scheduled__"
 )
 
 // Checkpoint represents a snapshot of graph state at a specific point in time.
@@ -54,6 +64,36 @@ type Checkpoint struct {
 	VersionsSeen map[string]map[string]any `json:"versions_seen"`
 	// UpdatedChannels lists channels updated in this checkpoint.
 	UpdatedChannels []string `json:"updated_channels,omitempty"`
+	// PendingSends contains messages that haven't been sent yet.
+	PendingSends []PendingSend `json:"pending_sends,omitempty"`
+	// InterruptState contains information about the current interrupt state.
+	InterruptState *InterruptState `json:"interrupt_state,omitempty"`
+}
+
+// InterruptState represents the state of an interrupted execution.
+type InterruptState struct {
+	// NodeID is the ID of the node where execution was interrupted.
+	NodeID string `json:"node_id"`
+	// TaskID is the ID of the task that was interrupted.
+	TaskID string `json:"task_id"`
+	// InterruptValue is the value that was passed to interrupt().
+	InterruptValue any `json:"interrupt_value"`
+	// ResumeValues contains values to resume execution with.
+	ResumeValues []any `json:"resume_values,omitempty"`
+	// Step is the step number when the interrupt occurred.
+	Step int `json:"step"`
+	// Path is the execution path to the interrupted node.
+	Path []string `json:"path,omitempty"`
+}
+
+// PendingSend represents a message that hasn't been sent yet.
+type PendingSend struct {
+	// Channel is the channel to send to.
+	Channel string `json:"channel"`
+	// Value is the value to send.
+	Value any `json:"value"`
+	// TaskID is the ID of the task that created this send.
+	TaskID string `json:"task_id,omitempty"`
 }
 
 // CheckpointMetadata contains metadata about a checkpoint.
@@ -66,6 +106,8 @@ type CheckpointMetadata struct {
 	Parents map[string]string `json:"parents"`
 	// Additional metadata fields.
 	Extra map[string]any `json:"extra,omitempty"`
+	// IsResuming indicates if this checkpoint is being resumed from.
+	IsResuming bool `json:"is_resuming,omitempty"`
 }
 
 // CheckpointTuple wraps a checkpoint with its configuration and metadata.
@@ -84,6 +126,8 @@ type CheckpointTuple struct {
 
 // PendingWrite represents a write operation that hasn't been committed.
 type PendingWrite struct {
+	// TaskID is the ID of the task that created this write.
+	TaskID string `json:"task_id"`
 	// Channel is the channel being written to.
 	Channel string `json:"channel"`
 	// Value is the value being written.
@@ -142,6 +186,8 @@ type CheckpointConfig struct {
 	CheckpointID string
 	// Namespace is the checkpoint namespace.
 	Namespace string
+	// ResumeMap maps task namespaces to resume values.
+	ResumeMap map[string]any
 	// Extra contains additional configuration fields.
 	Extra map[string]any
 }
@@ -166,6 +212,7 @@ func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any,
 		ChannelVersions: channelVersions,
 		VersionsSeen:    versionsSeen,
 		UpdatedChannels: make([]string, 0),
+		PendingSends:    make([]PendingSend, 0),
 	}
 }
 
@@ -184,6 +231,7 @@ func NewCheckpointConfig(threadID string) *CheckpointConfig {
 	return &CheckpointConfig{
 		ThreadID:  threadID,
 		Namespace: DefaultCheckpointNamespace,
+		ResumeMap: make(map[string]any),
 		Extra:     make(map[string]any),
 	}
 }
@@ -197,6 +245,12 @@ func (c *CheckpointConfig) WithCheckpointID(checkpointID string) *CheckpointConf
 // WithNamespace sets the namespace.
 func (c *CheckpointConfig) WithNamespace(namespace string) *CheckpointConfig {
 	c.Namespace = namespace
+	return c
+}
+
+// WithResumeMap sets the resume map.
+func (c *CheckpointConfig) WithResumeMap(resumeMap map[string]any) *CheckpointConfig {
+	c.ResumeMap = resumeMap
 	return c
 }
 
@@ -223,6 +277,10 @@ func (c *CheckpointConfig) ToMap() map[string]any {
 
 	if c.Namespace != "" {
 		config["configurable"].(map[string]any)["checkpoint_ns"] = c.Namespace
+	}
+
+	if len(c.ResumeMap) > 0 {
+		config["configurable"].(map[string]any)["resume_map"] = c.ResumeMap
 	}
 
 	// Add extra fields.
@@ -321,6 +379,27 @@ func (c *Checkpoint) Copy() *Checkpoint {
 	updatedChannels := make([]string, len(c.UpdatedChannels))
 	copy(updatedChannels, c.UpdatedChannels)
 
+	// Deep copy pending sends.
+	pendingSends := make([]PendingSend, len(c.PendingSends))
+	copy(pendingSends, c.PendingSends)
+
+	// Deep copy interrupt state.
+	var interruptState *InterruptState
+	if c.InterruptState != nil {
+		interruptState = &InterruptState{
+			NodeID:         c.InterruptState.NodeID,
+			TaskID:         c.InterruptState.TaskID,
+			InterruptValue: c.InterruptState.InterruptValue,
+			Step:           c.InterruptState.Step,
+			Path:           make([]string, len(c.InterruptState.Path)),
+		}
+		copy(interruptState.Path, c.InterruptState.Path)
+		if c.InterruptState.ResumeValues != nil {
+			interruptState.ResumeValues = make([]any, len(c.InterruptState.ResumeValues))
+			copy(interruptState.ResumeValues, c.InterruptState.ResumeValues)
+		}
+	}
+
 	return &Checkpoint{
 		Version:         c.Version,
 		ID:              uuid.New().String(), // Generate new ID for copy
@@ -329,6 +408,8 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		ChannelVersions: channelVersions,
 		VersionsSeen:    versionsSeen,
 		UpdatedChannels: updatedChannels,
+		PendingSends:    pendingSends,
+		InterruptState:  interruptState,
 	}
 }
 
@@ -369,6 +450,19 @@ func GetNamespace(config map[string]any) string {
 		}
 	}
 	return DefaultCheckpointNamespace
+}
+
+// GetResumeMap extracts resume map from configuration.
+func GetResumeMap(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	if configurable, ok := config["configurable"].(map[string]any); ok {
+		if resumeMap, ok := configurable["resume_map"].(map[string]any); ok {
+			return resumeMap
+		}
+	}
+	return nil
 }
 
 // CreateCheckpointConfig creates a checkpoint configuration (legacy function).
@@ -479,4 +573,51 @@ func (cm *CheckpointManager) DeleteThread(ctx context.Context, threadID string) 
 		return fmt.Errorf("checkpoint saver is not configured")
 	}
 	return cm.saver.DeleteThread(ctx, threadID)
+}
+
+// IsInterrupted checks if a checkpoint represents an interrupted execution.
+func (c *Checkpoint) IsInterrupted() bool {
+	return c.InterruptState != nil && c.InterruptState.NodeID != ""
+}
+
+// GetInterruptValue returns the interrupt value if the checkpoint is interrupted.
+func (c *Checkpoint) GetInterruptValue() any {
+	if c.IsInterrupted() {
+		return c.InterruptState.InterruptValue
+	}
+	return nil
+}
+
+// GetResumeValues returns the resume values for the interrupted execution.
+func (c *Checkpoint) GetResumeValues() []any {
+	if c.IsInterrupted() && c.InterruptState.ResumeValues != nil {
+		return c.InterruptState.ResumeValues
+	}
+	return nil
+}
+
+// AddResumeValue adds a resume value to the checkpoint.
+func (c *Checkpoint) AddResumeValue(value any) {
+	if c.InterruptState == nil {
+		c.InterruptState = &InterruptState{}
+	}
+	c.InterruptState.ResumeValues = append(c.InterruptState.ResumeValues, value)
+}
+
+// SetInterruptState sets the interrupt state for the checkpoint.
+func (c *Checkpoint) SetInterruptState(nodeID, taskID string, interruptValue any, step int, path []string) {
+	c.InterruptState = &InterruptState{
+		NodeID:         nodeID,
+		TaskID:         taskID,
+		InterruptValue: interruptValue,
+		Step:           step,
+		Path:           make([]string, len(path)),
+		ResumeValues:   make([]any, 0),
+	}
+	copy(c.InterruptState.Path, path)
+}
+
+// ClearInterruptState clears the interrupt state.
+func (c *Checkpoint) ClearInterruptState() {
+	c.InterruptState = nil
 }
