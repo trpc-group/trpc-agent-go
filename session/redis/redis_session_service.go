@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/model"
+	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -377,12 +377,9 @@ func (s *Service) AppendEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-	opt := applyOptions(opts...)
-	sess.Events = append(sess.Events, *event)
-	sess.UpdatedAt = time.Now()
-	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
-		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
-	}
+	// update user session with the given event
+	isession.UpdateUserSession(sess, event, opts...)
+
 	if err := s.addEvent(ctx, key, event); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
@@ -471,7 +468,7 @@ func (s *Service) getSession(
 	if len(events) == 0 {
 		events = make([][]event.Event, 1)
 	}
-	return mergeState(appState, userState, &session.Session{
+	sess := &session.Session{
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
@@ -479,7 +476,11 @@ func (s *Service) getSession(
 		Events:    events[0],
 		UpdatedAt: sessState.UpdatedAt,
 		CreatedAt: sessState.CreatedAt,
-	}), nil
+	}
+
+	// filter events to ensure they start with RoleUser
+	isession.EnsureEventStartWithUser(sess)
+	return mergeState(appState, userState, sess), nil
 }
 
 func (s *Service) listSessions(
@@ -546,6 +547,9 @@ func (s *Service) listSessions(
 			UpdatedAt: sessState.UpdatedAt,
 			CreatedAt: sessState.CreatedAt,
 		}
+
+		// filter events to ensure they start with RoleUser
+		isession.EnsureEventStartWithUser(sess)
 		sessList = append(sessList, mergeState(appState, userState, sess))
 	}
 	return sessList, nil
@@ -591,58 +595,9 @@ func (s *Service) getEventsList(
 				events[i], events[j] = events[j], events[i]
 			}
 		}
-
-		// Add truncation notice if needed
-		if len(events) > 0 {
-			events = s.addTruncationNoticeIfNeeded(events)
-		}
-
 		sessEventsList = append(sessEventsList, events)
 	}
 	return sessEventsList, nil
-}
-
-// addTruncationNoticeIfNeeded adds a truncation notice if the first event is not from user
-func (s *Service) addTruncationNoticeIfNeeded(events []event.Event) []event.Event {
-	if len(events) == 0 {
-		return events
-	}
-
-	firstEvent := &events[0]
-	shouldAddTruncationNotice := false
-
-	// Check if first event has choices and if the first choice is not from "user" role
-	if firstEvent.Response != nil && len(firstEvent.Response.Choices) > 0 {
-		if firstEvent.Response.Choices[0].Message.Role == model.RoleAssistant {
-			shouldAddTruncationNotice = true
-		}
-	}
-	// Note: If the event has no choices, we don't add truncation notice
-
-	// If first choice is not from user role, prepend truncation notice
-	if shouldAddTruncationNotice {
-		truncationEvent := event.Event{
-			Response: &model.Response{
-				Choices: []model.Choice{
-					{
-						Index: 0,
-						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "Session history truncated, ignore this message",
-						},
-					},
-				},
-			},
-			Author:    "user",
-			ID:        uuid.New().String(),
-			Timestamp: events[0].Timestamp.Add(-time.Microsecond), // Slightly before first event
-		}
-
-		// Prepend truncation event
-		return append([]event.Event{truncationEvent}, events...)
-	}
-
-	return events
 }
 
 func processStateCmd(cmd *redis.MapStringStringCmd) (session.StateMap, error) {
@@ -724,6 +679,10 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	}
 
 	sessState.UpdatedAt = time.Now()
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
+	isession.ApplyEventStateDeltaMap(sessState.State, event)
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("marshal session state failed: %w", err)

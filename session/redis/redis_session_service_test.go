@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -39,6 +40,28 @@ func buildRedisClient(t *testing.T, redisURL string) *redis.Client {
 	opts, err := redis.ParseURL(redisURL)
 	require.NoError(t, err)
 	return redis.NewClient(opts)
+}
+
+// createTestEvent creates a test event with the given parameters
+func createTestEvent(id, author, content string, timestamp time.Time, done bool) *event.Event {
+	return &event.Event{
+		ID:        id,
+		Timestamp: timestamp,
+		Response: &model.Response{
+			Object: fmt.Sprintf("message_%s", id),
+			Done:   done,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+		InvocationID: fmt.Sprintf("inv_%s", id),
+		Author:       author,
+	}
 }
 
 func TestService_CreateSession(t *testing.T) {
@@ -162,16 +185,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			name: "single_event_updates_time",
 			setupEvents: func() []*event.Event {
 				return []*event.Event{
-					{
-						Response: &model.Response{
-							Object: "test_message",
-							Done:   false,
-						},
-						InvocationID: "invocation123",
-						Author:       "test-agent",
-						ID:           "event123",
-						Timestamp:    time.Now(),
-					},
+					createTestEvent("event123", "test-agent", "Test message for append event test", time.Now(), false),
 				}
 			},
 			validate: func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event) {
@@ -187,16 +201,13 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			setupEvents: func() []*event.Event {
 				events := make([]*event.Event, 3)
 				for i := 0; i < 3; i++ {
-					events[i] = &event.Event{
-						Response: &model.Response{
-							Object: "test_message",
-							Done:   false,
-						},
-						InvocationID: "invocation123",
-						Author:       "test-agent",
-						ID:           fmt.Sprintf("event%d", i),
-						Timestamp:    time.Now().Add(time.Duration(i) * time.Millisecond),
-					}
+					events[i] = createTestEvent(
+						fmt.Sprintf("event%d", i),
+						"test-agent",
+						fmt.Sprintf("Test message %d", i),
+						time.Now().Add(time.Duration(i)*time.Millisecond),
+						false,
+					)
 				}
 				return events
 			},
@@ -216,16 +227,8 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			setupEvents: func() []*event.Event {
 				baseTime := time.Now()
 				return []*event.Event{
-					{
-						Response:     &model.Response{Object: "message1", Done: false},
-						InvocationID: "inv1", Author: "agent1", ID: "event1",
-						Timestamp: baseTime.Add(-2 * time.Hour),
-					},
-					{
-						Response:     &model.Response{Object: "message2", Done: true},
-						InvocationID: "inv2", Author: "agent2", ID: "event2",
-						Timestamp: baseTime.Add(-1 * time.Hour),
-					},
+					createTestEvent("event1", "agent1", "Test message 1", baseTime.Add(-2*time.Hour), false),
+					createTestEvent("event2", "agent2", "Test message 2", baseTime.Add(-1*time.Hour), true),
 				}
 			},
 			validate: func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event) {
@@ -307,13 +310,7 @@ func TestService_AppendEvent_ErrorCases(t *testing.T) {
 					// Missing SessionID
 				}
 			},
-			event: &event.Event{
-				Response:     &model.Response{Object: "test", Done: false},
-				InvocationID: "inv123",
-				Author:       "agent",
-				ID:           "event123",
-				Timestamp:    time.Now(),
-			},
+			event:         createTestEvent("event123", "agent", "Test error case message", time.Now(), false),
 			expectedError: "sessionID is required",
 		},
 		{
@@ -326,13 +323,7 @@ func TestService_AppendEvent_ErrorCases(t *testing.T) {
 					ID:      "nonexistent",
 				}
 			},
-			event: &event.Event{
-				Response:     &model.Response{Object: "test", Done: false},
-				InvocationID: "inv123",
-				Author:       "agent",
-				ID:           "event123",
-				Timestamp:    time.Now(),
-			},
+			event:         createTestEvent("event123", "agent", "Test error case message", time.Now(), false),
 			expectedError: "redis: nil",
 		},
 	}
@@ -367,10 +358,10 @@ func TestService_GetSession(t *testing.T) {
 		require.NoError(t, err)
 
 		events := []*event.Event{
-			{ID: "event1", Timestamp: baseTime.Add(-4 * time.Hour)},
-			{ID: "event2", Timestamp: baseTime.Add(-3 * time.Hour)},
-			{ID: "event3", Timestamp: baseTime.Add(-2 * time.Hour)},
-			{ID: "event4", Timestamp: baseTime.Add(-1 * time.Hour)},
+			createTestEvent("event1", "test-author", "Test message from event1", baseTime.Add(-4*time.Hour), false),
+			createTestEvent("event2", "test-author", "Test message from event2", baseTime.Add(-3*time.Hour), false),
+			createTestEvent("event3", "test-author", "Test message from event3", baseTime.Add(-2*time.Hour), false),
+			createTestEvent("event4", "test-author", "Test message from event4", baseTime.Add(-1*time.Hour), false),
 		}
 		for _, evt := range events {
 			err := service.AppendEvent(ctx, sess1, evt, session.WithEventTime(evt.Timestamp))
@@ -516,13 +507,7 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 			name: "single_event_order",
 			setupEvents: func() []*event.Event {
 				return []*event.Event{
-					{
-						ID:           "event1",
-						Timestamp:    time.Now(),
-						Response:     &model.Response{Object: "message1", Done: false},
-						InvocationID: "inv1",
-						Author:       "agent1",
-					},
+					createTestEvent("event1", "agent1", "Test message 1", time.Now(), false),
 				}
 			},
 			expectedOrder: []string{"event1"},
@@ -533,27 +518,9 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 			setupEvents: func() []*event.Event {
 				baseTime := time.Now()
 				return []*event.Event{
-					{
-						ID:           "event1",
-						Timestamp:    baseTime.Add(-3 * time.Hour),
-						Response:     &model.Response{Object: "message1", Done: false},
-						InvocationID: "inv1",
-						Author:       "agent1",
-					},
-					{
-						ID:           "event2",
-						Timestamp:    baseTime.Add(-2 * time.Hour),
-						Response:     &model.Response{Object: "message2", Done: false},
-						InvocationID: "inv2",
-						Author:       "agent2",
-					},
-					{
-						ID:           "event3",
-						Timestamp:    baseTime.Add(-1 * time.Hour),
-						Response:     &model.Response{Object: "message3", Done: true},
-						InvocationID: "inv3",
-						Author:       "agent3",
-					},
+					createTestEvent("event1", "agent1", "Test message 1", baseTime.Add(-3*time.Hour), false),
+					createTestEvent("event2", "agent2", "Test message 2", baseTime.Add(-2*time.Hour), false),
+					createTestEvent("event3", "agent3", "Test message 3", baseTime.Add(-1*time.Hour), true),
 				}
 			},
 			expectedOrder: []string{"event1", "event2", "event3"},
@@ -565,27 +532,9 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 				baseTime := time.Now()
 				// Add events in non-chronological order
 				return []*event.Event{
-					{
-						ID:           "event_newest",
-						Timestamp:    baseTime.Add(-1 * time.Hour),
-						Response:     &model.Response{Object: "newest", Done: false},
-						InvocationID: "inv_newest",
-						Author:       "agent_newest",
-					},
-					{
-						ID:           "event_oldest",
-						Timestamp:    baseTime.Add(-5 * time.Hour),
-						Response:     &model.Response{Object: "oldest", Done: false},
-						InvocationID: "inv_oldest",
-						Author:       "agent_oldest",
-					},
-					{
-						ID:           "event_middle",
-						Timestamp:    baseTime.Add(-3 * time.Hour),
-						Response:     &model.Response{Object: "middle", Done: true},
-						InvocationID: "inv_middle",
-						Author:       "agent_middle",
-					},
+					createTestEvent("event_newest", "agent_newest", "Test newest message", baseTime.Add(-1*time.Hour), false),
+					createTestEvent("event_oldest", "agent_oldest", "Test oldest message", baseTime.Add(-5*time.Hour), false),
+					createTestEvent("event_middle", "agent_middle", "Test middle message", baseTime.Add(-3*time.Hour), true),
 				}
 			},
 			expectedOrder: []string{"event_oldest", "event_middle", "event_newest"},
@@ -596,20 +545,8 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 			setupEvents: func() []*event.Event {
 				sameTime := time.Now().Add(-2 * time.Hour)
 				return []*event.Event{
-					{
-						ID:           "event_a",
-						Timestamp:    sameTime,
-						Response:     &model.Response{Object: "messageA", Done: false},
-						InvocationID: "inv_a",
-						Author:       "agent_a",
-					},
-					{
-						ID:           "event_b",
-						Timestamp:    sameTime,
-						Response:     &model.Response{Object: "messageB", Done: true},
-						InvocationID: "inv_b",
-						Author:       "agent_b",
-					},
+					createTestEvent("event_a", "agent_a", "Test message A", sameTime, false),
+					createTestEvent("event_b", "agent_b", "Test message B", sameTime, true),
 				}
 			},
 			expectedOrder: []string{"event_a", "event_b"},
@@ -621,13 +558,13 @@ func TestService_AppendEvent_EventOrder(t *testing.T) {
 				baseTime := time.Now()
 				events := make([]*event.Event, 10)
 				for i := 0; i < 10; i++ {
-					events[i] = &event.Event{
-						ID:           fmt.Sprintf("event_%02d", i),
-						Timestamp:    baseTime.Add(time.Duration(-10+i) * time.Hour),
-						Response:     &model.Response{Object: fmt.Sprintf("message%d", i), Done: i%2 == 0},
-						InvocationID: fmt.Sprintf("inv_%d", i),
-						Author:       fmt.Sprintf("agent_%d", i),
-					}
+					events[i] = createTestEvent(
+						fmt.Sprintf("event_%02d", i),
+						fmt.Sprintf("agent_%d", i),
+						fmt.Sprintf("Test message %d", i),
+						baseTime.Add(time.Duration(-10+i)*time.Hour),
+						i%2 == 0,
+					)
 				}
 				return events
 			},
@@ -708,10 +645,7 @@ func TestService_Atomicity(t *testing.T) {
 		{
 			name: "append_event_atomicity",
 			setup: func(t *testing.T, service *Service, sessionKey session.Key) error {
-				testEvent := &event.Event{
-					Response:     &model.Response{Object: "test", Done: false},
-					InvocationID: "inv123", Author: "agent", ID: "event123", Timestamp: time.Now(),
-				}
+				testEvent := createTestEvent("event123", "agent", "Test atomicity event", time.Now(), false)
 				return service.addEvent(context.Background(), sessionKey, testEvent)
 			},
 			validate: func(t *testing.T, client *redis.Client, service *Service, sessionKey session.Key, err error) {
@@ -745,10 +679,7 @@ func TestService_Atomicity(t *testing.T) {
 		{
 			name: "delete_session_atomicity",
 			setup: func(t *testing.T, service *Service, sessionKey session.Key) error {
-				testEvent := &event.Event{
-					Response:     &model.Response{Object: "test", Done: false},
-					InvocationID: "inv123", Author: "agent", ID: "event123", Timestamp: time.Now(),
-				}
+				testEvent := createTestEvent("event123", "agent", "Test atomicity event", time.Now(), false)
 				sess, err := service.GetSession(context.Background(), sessionKey)
 				require.NoError(t, err)
 				err = service.AppendEvent(context.Background(), sess, testEvent)
@@ -822,6 +753,16 @@ func TestService_SessionTTL(t *testing.T) {
 
 				// Add an event to create the event list
 				testEvent := event.New("test-invocation", "test-author")
+				testEvent.Response = &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "Test message for TTL test",
+							},
+						},
+					},
+				}
 				err = service.AppendEvent(context.Background(), sess, testEvent)
 				require.NoError(t, err)
 
@@ -854,6 +795,16 @@ func TestService_SessionTTL(t *testing.T) {
 
 				// Add an event to create the event list
 				testEvent := event.New("test-invocation", "test-author")
+				testEvent.Response = &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "Test message for TTL test",
+							},
+						},
+					},
+				}
 				err = service.AppendEvent(context.Background(), sess, testEvent)
 				require.NoError(t, err)
 
@@ -1061,78 +1012,132 @@ func TestService_UserStateTTL(t *testing.T) {
 	}
 }
 
-func TestService_AddTruncationNoticeIfNeeded(t *testing.T) {
+func TestEnsureEventStartWithUser(t *testing.T) {
 	tests := []struct {
-		name         string
-		setup        func() []event.Event
-		expectNotice bool
+		name           string
+		setupEvents    func() []event.Event
+		expectedLength int
+		expectFirst    bool // true if first event should be from user
 	}{
 		{
 			name: "empty_events",
-			setup: func() []event.Event {
+			setupEvents: func() []event.Event {
 				return []event.Event{}
 			},
-			expectNotice: false,
+			expectedLength: 0,
+			expectFirst:    false,
 		},
 		{
-			name: "first_event_from_user",
-			setup: func() []event.Event {
-				evt := event.New("test", "user")
-				evt.Response = &model.Response{
-					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser}}},
+			name: "events_already_start_with_user",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "user")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message 1"}}},
 				}
-				return []event.Event{*evt}
-			},
-			expectNotice: false,
-		},
-		{
-			name: "first_event_from_assistant",
-			setup: func() []event.Event {
-				evt := event.New("test", "assistant")
-				evt.Response = &model.Response{
-					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant}}},
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message"}}},
 				}
-				return []event.Event{*evt}
+				return []event.Event{*evt1, *evt2}
 			},
-			expectNotice: true,
+			expectedLength: 2,
+			expectFirst:    true,
 		},
 		{
-			name: "no_response_or_choices",
-			setup: func() []event.Event {
-				evt := event.New("test", "user")
-				return []event.Event{*evt}
+			name: "events_start_with_assistant_then_user",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "assistant")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 1"}}},
+				}
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 2"}}},
+				}
+				evt3 := event.New("test3", "user")
+				evt3.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				evt4 := event.New("test4", "assistant")
+				evt4.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 3"}}},
+				}
+				return []event.Event{*evt1, *evt2, *evt3, *evt4}
 			},
-			expectNotice: false,
+			expectedLength: 2, // Should keep events from index 2 onwards
+			expectFirst:    true,
+		},
+		{
+			name: "all_events_from_assistant",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "assistant")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 1"}}},
+				}
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 2"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 0, // Should clear all events
+			expectFirst:    false,
+		},
+		{
+			name: "events_with_no_response",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "unknown")
+				// No response set
+				evt2 := event.New("test2", "user")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 1, // Should keep from first user event
+			expectFirst:    true,
+		},
+		{
+			name: "events_with_empty_choices",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "unknown")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{}, // Empty choices
+				}
+				evt2 := event.New("test2", "user")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 1, // Should keep from first user event
+			expectFirst:    true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			redisURL, cleanup := setupTestRedis(t)
-			defer cleanup()
+			sess := &session.Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "test-user",
+				Events:  tt.setupEvents(),
+			}
 
-			service, err := NewService(WithRedisClientURL(redisURL))
-			require.NoError(t, err)
-			defer service.Close()
+			isession.EnsureEventStartWithUser(sess)
 
-			events := tt.setup()
-			originalCount := len(events)
-			result := service.addTruncationNoticeIfNeeded(events)
+			assert.Equal(t, tt.expectedLength, len(sess.Events), "Event length should match expected")
 
-			if tt.expectNotice {
-				assert.Len(t, result, originalCount+1)
-				assert.Equal(t, "user", result[0].Author)
-				assert.Equal(t, "Session history truncated, ignore this message", 
-					result[0].Response.Choices[0].Message.Content)
-			} else {
-				assert.Len(t, result, originalCount)
+			if tt.expectFirst && len(sess.Events) > 0 {
+				assert.NotNil(t, sess.Events[0].Response, "First event should have response")
+				assert.Greater(t, len(sess.Events[0].Response.Choices), 0, "First event should have choices")
+				assert.Equal(t, model.RoleUser, sess.Events[0].Response.Choices[0].Message.Role, "First event should be from user")
 			}
 		})
 	}
 }
 
-func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
-	// Test that the truncation notice is properly integrated when getting sessions with limited events
+func TestGetSession_EventFiltering_Integration(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
@@ -1150,7 +1155,7 @@ func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
 	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
 	require.NoError(t, err)
 
-	// Add multiple events, with the first few from assistant
+	// Add events starting with assistant messages
 	baseTime := time.Now()
 	events := []*event.Event{
 		{
@@ -1176,8 +1181,8 @@ func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
 					{
 						Index: 0,
 						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "User message 1",
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 2",
 						},
 					},
 				},
@@ -1191,8 +1196,8 @@ func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
 					{
 						Index: 0,
 						Message: model.Message{
-							Role:    model.RoleAssistant,
-							Content: "Assistant message 2",
+							Role:    model.RoleUser,
+							Content: "User message 1",
 						},
 					},
 				},
@@ -1206,8 +1211,8 @@ func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
 					{
 						Index: 0,
 						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "User message 2",
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 3",
 						},
 					},
 				},
@@ -1215,37 +1220,101 @@ func TestService_AddTruncationNoticeIfNeeded_Integration(t *testing.T) {
 		},
 	}
 
+	// Add events to session
 	for _, evt := range events {
-		err = service.AppendEvent(context.Background(), sess, evt, session.WithEventTime(evt.Timestamp))
+		err := service.AppendEvent(context.Background(), sess, evt)
 		require.NoError(t, err)
 	}
 
-	// Test getting session with limited events that start with assistant message
-	// This should trigger truncation notice addition
-	retrievedSess, err := service.GetSession(context.Background(), sessionKey, session.WithEventNum(2))
+	// Test GetSession - should only return events starting from first user message
+	retrievedSess, err := service.GetSession(context.Background(), sessionKey)
 	require.NoError(t, err)
 	require.NotNil(t, retrievedSess)
 
-	// Should have 3 events: 1 truncation notice + 2 requested events
-	assert.Len(t, retrievedSess.Events, 3, "Should have truncation notice plus 2 requested events")
+	// Should have 2 events (from event3 onwards)
+	assert.Equal(t, 2, len(retrievedSess.Events), "Should filter out assistant events before first user event")
+	assert.Equal(t, "event3", retrievedSess.Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, retrievedSess.Events[0].Response.Choices[0].Message.Role)
+	assert.Equal(t, "event4", retrievedSess.Events[1].ID, "Second event should be the subsequent assistant event")
 
-	// First event should be the truncation notice
-	firstEvent := retrievedSess.Events[0]
-	assert.Equal(t, "user", firstEvent.Author, "First event should be truncation notice from user")
-	assert.Equal(t, "Session history truncated, ignore this message", firstEvent.Response.Choices[0].Message.Content)
-
-	// Next events should be the last 2 original events (event3 and event4)
-	assert.Equal(t, "event3", retrievedSess.Events[1].ID, "Second event should be event3")
-	assert.Equal(t, "event4", retrievedSess.Events[2].ID, "Third event should be event4")
-
-	// Test getting session with limited events that start with user message
-	// This should NOT trigger truncation notice addition
-	retrievedSess2, err := service.GetSession(context.Background(), sessionKey, session.WithEventNum(1))
+	// Test ListSessions - should apply same filtering
+	sessionList, err := service.ListSessions(context.Background(), session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, retrievedSess2)
+	require.Len(t, sessionList, 1)
 
-	// Should have only 1 event (the last one), no truncation notice
-	assert.Len(t, retrievedSess2.Events, 1, "Should have only 1 event without truncation notice")
-	assert.Equal(t, "event4", retrievedSess2.Events[0].ID, "Should be the last event")
-	assert.Equal(t, model.RoleUser, retrievedSess2.Events[0].Response.Choices[0].Message.Role, "Should be from user role")
+	// Should have same filtering as GetSession
+	assert.Equal(t, 2, len(sessionList[0].Events), "ListSessions should also filter events")
+	assert.Equal(t, "event3", sessionList[0].Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, sessionList[0].Events[0].Response.Choices[0].Message.Role)
+}
+
+func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Create a session
+	sessionKey := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add only assistant events
+	baseTime := time.Now()
+	events := []*event.Event{
+		{
+			ID:        "event1",
+			Timestamp: baseTime.Add(-3 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event2",
+			Timestamp: baseTime.Add(-2 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Add events to session
+	for _, evt := range events {
+		err := service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Test GetSession - should return empty events
+	retrievedSess, err := service.GetSession(context.Background(), sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Should have no events since all are from assistant
+	assert.Equal(t, 0, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
 }
