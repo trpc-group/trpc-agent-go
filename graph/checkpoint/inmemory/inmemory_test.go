@@ -54,7 +54,16 @@ func TestInMemoryCheckpointSaver(t *testing.T) {
 	require.NotNil(t, retrieved)
 
 	assert.NotEmpty(t, retrieved.ID)
-	assert.Equal(t, checkpoint.ChannelValues, retrieved.ChannelValues)
+	// Note: JSON serialization converts int to float64, so we need to compare values individually
+	assert.Equal(t, len(checkpoint.ChannelValues), len(retrieved.ChannelValues))
+	for key, expectedValue := range checkpoint.ChannelValues {
+		actualValue, exists := retrieved.ChannelValues[key]
+		assert.True(t, exists, "Key %s should exist", key)
+		// Convert both to float64 for comparison since JSON unmarshaling converts int to float64
+		expectedFloat := float64(expectedValue.(int))
+		actualFloat := actualValue.(float64)
+		assert.Equal(t, expectedFloat, actualFloat)
+	}
 
 	// Test retrieving tuple.
 	tuple, err := saver.GetTuple(ctx, updatedConfig)

@@ -370,7 +370,6 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 			NodeID:         nodeID,             // Pass nodeID for parallel execution support
 			NodeResultKey:  nodeID + "_result", // Pass configurable result key
 			Span:           span,
-			NodeID:         nodeID,
 		})
 
 		// Emit model execution complete event.
@@ -785,8 +784,6 @@ type modelExecutionConfig struct {
 	NodeID         string // Add NodeID for parallel execution support
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
-	// NodeID, when provided, is used as the event author.
-	NodeID string
 }
 
 // executeModelWithEvents executes the model with event processing.

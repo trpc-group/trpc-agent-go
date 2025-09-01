@@ -11,6 +11,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -150,6 +151,15 @@ type PutWritesRequest struct {
 	TaskPath string
 }
 
+// PutFullRequest contains all data needed to atomically store a checkpoint with its writes.
+type PutFullRequest struct {
+	Config        map[string]any
+	Checkpoint    *Checkpoint
+	Metadata      *CheckpointMetadata
+	NewVersions   map[string]any
+	PendingWrites []PendingWrite
+}
+
 // CheckpointSaver defines the interface for checkpoint storage implementations.
 type CheckpointSaver interface {
 	// Get retrieves a checkpoint by configuration.
@@ -162,6 +172,8 @@ type CheckpointSaver interface {
 	Put(ctx context.Context, req PutRequest) (map[string]any, error)
 	// PutWrites stores intermediate writes linked to a checkpoint.
 	PutWrites(ctx context.Context, req PutWritesRequest) error
+	// PutFull atomically stores a checkpoint with its pending writes in a single transaction.
+	PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error)
 	// DeleteThread removes all checkpoints for a thread.
 	DeleteThread(ctx context.Context, threadID string) error
 	// Close releases resources held by the saver.
@@ -319,44 +331,6 @@ func (f *CheckpointFilter) WithMetadata(key string, value any) *CheckpointFilter
 	return f
 }
 
-// deepCopyMap performs a deep copy of a map[string]any.
-func deepCopyMap(src map[string]any) map[string]any {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		switch val := v.(type) {
-		case map[string]any:
-			dst[k] = deepCopyMap(val)
-		case []any:
-			dst[k] = deepCopySlice(val)
-		default:
-			dst[k] = v
-		}
-	}
-	return dst
-}
-
-// deepCopySlice performs a deep copy of a []any.
-func deepCopySlice(src []any) []any {
-	if src == nil {
-		return nil
-	}
-	dst := make([]any, len(src))
-	for i, v := range src {
-		switch val := v.(type) {
-		case map[string]any:
-			dst[i] = deepCopyMap(val)
-		case []any:
-			dst[i] = deepCopySlice(val)
-		default:
-			dst[i] = v
-		}
-	}
-	return dst
-}
-
 // Copy creates a deep copy of the checkpoint.
 func (c *Checkpoint) Copy() *Checkpoint {
 	if c == nil {
@@ -376,12 +350,17 @@ func (c *Checkpoint) Copy() *Checkpoint {
 	}
 
 	// Deep copy updated channels.
-	updatedChannels := make([]string, len(c.UpdatedChannels))
-	copy(updatedChannels, c.UpdatedChannels)
+	updatedChannels := deepCopyStringSlice(c.UpdatedChannels)
 
 	// Deep copy pending sends.
 	pendingSends := make([]PendingSend, len(c.PendingSends))
-	copy(pendingSends, c.PendingSends)
+	for i, send := range c.PendingSends {
+		pendingSends[i] = PendingSend{
+			Channel: send.Channel,
+			Value:   deepCopy(send.Value),
+			TaskID:  send.TaskID,
+		}
+	}
 
 	// Deep copy interrupt state.
 	var interruptState *InterruptState
@@ -620,4 +599,89 @@ func (c *Checkpoint) SetInterruptState(nodeID, taskID string, interruptValue any
 // ClearInterruptState clears the interrupt state.
 func (c *Checkpoint) ClearInterruptState() {
 	c.InterruptState = nil
+}
+
+// deepCopy performs a deep copy using JSON marshaling/unmarshaling for safety.
+func deepCopy(src any) any {
+	if src == nil {
+		return nil
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(src)
+	if err != nil {
+		// If marshaling fails, return the original value
+		return src
+	}
+
+	// Unmarshal to a generic map
+	var result any
+	if err := json.Unmarshal(data, &result); err != nil {
+		// If unmarshaling fails, return the original value
+		return src
+	}
+
+	return result
+}
+
+// deepCopyMap performs a deep copy of a map[string]any.
+func deepCopyMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+
+	result := deepCopy(src)
+	if mapResult, ok := result.(map[string]any); ok {
+		return mapResult
+	}
+
+	// Fallback: create a new map and copy values
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = deepCopy(v)
+	}
+	return dst
+}
+
+// deepCopySlice performs a deep copy of a []any.
+func deepCopySlice(src []any) []any {
+	if src == nil {
+		return nil
+	}
+
+	result := deepCopy(src)
+	if sliceResult, ok := result.([]any); ok {
+		return sliceResult
+	}
+
+	// Fallback: create a new slice and copy values
+	dst := make([]any, len(src))
+	for i, v := range src {
+		dst[i] = deepCopy(v)
+	}
+	return dst
+}
+
+// deepCopyStringMap performs a deep copy of a map[string]string.
+func deepCopyStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// deepCopyStringSlice performs a deep copy of a []string.
+func deepCopyStringSlice(src []string) []string {
+	if src == nil {
+		return nil
+	}
+
+	dst := make([]string, len(src))
+	copy(dst, src)
+	return dst
 }

@@ -12,6 +12,7 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -163,8 +164,17 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 		// Apply before filter.
 		if filter != nil && filter.Before != nil {
 			beforeID := graph.GetCheckpointID(filter.Before)
-			if beforeID != "" && checkpointID >= beforeID {
-				continue
+			if beforeID != "" {
+				// Get the timestamp of the before checkpoint to compare
+				if beforeTuple, exists := checkpoints[beforeID]; exists {
+					if tuple.Checkpoint.Timestamp.After(beforeTuple.Checkpoint.Timestamp) ||
+						tuple.Checkpoint.Timestamp.Equal(beforeTuple.Checkpoint.Timestamp) {
+						continue
+					}
+				} else {
+					// If before checkpoint doesn't exist, skip all
+					continue
+				}
 			}
 		}
 
@@ -207,6 +217,11 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 			break
 		}
 	}
+
+	// Sort results by timestamp (newest first).
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Checkpoint.Timestamp.After(results[j].Checkpoint.Timestamp)
+	})
 
 	return results, nil
 }
@@ -285,6 +300,68 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 	s.writes[threadID][namespace][checkpointID] = writes
 
 	return nil
+}
+
+// PutFull atomically stores a checkpoint with its pending writes in a single transaction.
+func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	threadID := graph.GetThreadID(req.Config)
+	namespace := graph.GetNamespace(req.Config)
+
+	if threadID == "" {
+		return nil, fmt.Errorf("thread_id is required")
+	}
+
+	if req.Checkpoint == nil {
+		return nil, fmt.Errorf("checkpoint cannot be nil")
+	}
+
+	// Initialize storage structure if needed.
+	if s.storage[threadID] == nil {
+		s.storage[threadID] = make(map[string]map[string]*graph.CheckpointTuple)
+	}
+	if s.storage[threadID][namespace] == nil {
+		s.storage[threadID][namespace] = make(map[string]*graph.CheckpointTuple)
+	}
+
+	// Initialize writes structure if needed.
+	if s.writes[threadID] == nil {
+		s.writes[threadID] = make(map[string]map[string][]graph.PendingWrite)
+	}
+	if s.writes[threadID][namespace] == nil {
+		s.writes[threadID][namespace] = make(map[string][]graph.PendingWrite)
+	}
+
+	// Create checkpoint tuple.
+	tuple := &graph.CheckpointTuple{
+		Config:     req.Config,
+		Checkpoint: req.Checkpoint.Copy(), // Store a copy to avoid external modification
+		Metadata:   req.Metadata,
+	}
+
+	// Set parent config if there's a parent checkpoint ID.
+	if parentID := graph.GetCheckpointID(req.Config); parentID != "" {
+		tuple.ParentConfig = graph.CreateCheckpointConfig(threadID, parentID, namespace)
+	}
+
+	// Store the checkpoint.
+	s.storage[threadID][namespace][req.Checkpoint.ID] = tuple
+
+	// Store the writes atomically (make a copy to avoid external modification).
+	if len(req.PendingWrites) > 0 {
+		writes := make([]graph.PendingWrite, len(req.PendingWrites))
+		copy(writes, req.PendingWrites)
+		s.writes[threadID][namespace][req.Checkpoint.ID] = writes
+	}
+
+	// Clean up old checkpoints if we exceed the limit.
+	s.cleanupOldCheckpoints(threadID, namespace)
+
+	// Return updated config with the new checkpoint ID.
+	updatedConfig := graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, namespace)
+	return updatedConfig, nil
 }
 
 // DeleteThread removes all checkpoints for a thread.

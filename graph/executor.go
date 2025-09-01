@@ -34,7 +34,7 @@ const (
 var (
 	defaultChannelBufferSize = 256
 	defaultMaxSteps          = 100
-	defaultStepTimeout       = 30 * time.Second
+	defaultStepTimeout       = 5 * time.Minute
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
@@ -55,7 +55,7 @@ type ExecutorOptions struct {
 	ChannelBufferSize int
 	// MaxSteps is the maximum number of steps for graph execution.
 	MaxSteps int
-	// StepTimeout is the timeout for each step (default: 30s).
+	// StepTimeout is the timeout for each step (default: 5m).
 	StepTimeout time.Duration
 	// CheckpointSaver is the checkpoint saver for persisting graph state.
 	CheckpointSaver CheckpointSaver
@@ -240,6 +240,15 @@ func (e *Executor) executeGraph(
 
 	// BSP execution loop.
 	for step := 0; step < e.maxSteps; step++ {
+		// Create step context with timeout
+		var stepCancel context.CancelFunc
+		if e.stepTimeout > 0 {
+			ctx, stepCancel = context.WithTimeout(ctx, e.stepTimeout)
+		} else {
+			ctx, stepCancel = context.WithCancel(ctx)
+		}
+		defer stepCancel()
+
 		// Plan phase: determine which nodes to execute.
 		var tasks []*Task
 		var err error
@@ -352,8 +361,8 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 }
 
 // createCheckpointAndSave creates a checkpoint and persists any pending writes
-// associated with the current step, updating the provided config with the
-// returned value from saver.Put (which may include the new checkpoint_id).
+// associated with the current step atomically, updating the provided config with the
+// returned value from saver.PutFull (which may include the new checkpoint_id).
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
 	config *map[string]any,
@@ -365,30 +374,41 @@ func (e *Executor) createCheckpointAndSave(
 	if e.checkpointSaver == nil {
 		return nil
 	}
-	// First, create and persist the checkpoint.
-	if err := e.createCheckpoint(ctx, *config, state, source, step); err != nil {
-		return err
+
+	// Create checkpoint object
+	checkpoint := e.createCheckpointFromState(state, step)
+	if checkpoint == nil {
+		return fmt.Errorf("failed to create checkpoint")
 	}
-	// Fetch the latest tuple to get the assigned checkpoint_id and persist writes.
-	tuple, err := e.checkpointSaver.GetTuple(ctx, *config)
-	if err != nil || tuple == nil || tuple.Checkpoint == nil {
-		return err
+
+	// Create metadata
+	metadata := &CheckpointMetadata{
+		Source: source,
+		Step:   step,
+		Extra:  make(map[string]any),
 	}
-	// Update external config to include checkpoint_id for subsequent writes.
-	*config = CreateCheckpointConfig(GetThreadID(tuple.Config), tuple.Checkpoint.ID, GetNamespace(tuple.Config))
-	// Persist pending writes for this checkpoint.
+
+	// Get pending writes atomically
 	execCtx.pendingMu.Lock()
-	if len(execCtx.pendingWrites) > 0 {
-		_ = e.checkpointSaver.PutWrites(ctx, PutWritesRequest{
-			Config:   *config,
-			Writes:   execCtx.pendingWrites,
-			TaskID:   "",
-			TaskPath: "",
-		})
-		// Clear after persisting.
-		execCtx.pendingWrites = nil
-	}
+	pendingWrites := make([]PendingWrite, len(execCtx.pendingWrites))
+	copy(pendingWrites, execCtx.pendingWrites)
+	execCtx.pendingWrites = nil // Clear after copying
 	execCtx.pendingMu.Unlock()
+
+	// Use PutFull for atomic storage
+	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
+		Config:        *config,
+		Checkpoint:    checkpoint,
+		Metadata:      metadata,
+		NewVersions:   make(map[string]any), // TODO: implement version tracking
+		PendingWrites: pendingWrites,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
+	}
+
+	// Update external config with the new checkpoint_id
+	*config = updatedConfig
 	return nil
 }
 
@@ -627,6 +647,21 @@ func (e *Executor) executeSingleTask(
 	t *Task,
 	step int,
 ) error {
+	// Create node context with timeout
+	var nodeCtx context.Context
+	var nodeCancel context.CancelFunc
+	if e.stepTimeout > 0 {
+		// Use a fraction of step timeout for individual nodes
+		nodeTimeout := e.stepTimeout / 2
+		if nodeTimeout < time.Second {
+			nodeTimeout = time.Second
+		}
+		nodeCtx, nodeCancel = context.WithTimeout(ctx, nodeTimeout)
+	} else {
+		nodeCtx, nodeCancel = context.WithCancel(ctx)
+	}
+	defer nodeCancel()
+
 	// Get node type and emit start event.
 	nodeType := e.getNodeType(t.NodeID)
 	execStartTime := time.Now()
@@ -690,7 +725,7 @@ func (e *Executor) executeSingleTask(
 	}
 
 	// Execute the node function.
-	result, err := e.executeNodeFunction(ctx, execCtx, t.NodeID)
+	result, err := e.executeNodeFunction(nodeCtx, execCtx, t.NodeID)
 	if err != nil {
 		// Check if this is an interrupt error
 		if IsInterrupt(err) {

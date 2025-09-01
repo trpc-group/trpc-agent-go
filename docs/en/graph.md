@@ -40,6 +40,8 @@ This design allows GraphAgent to flexibly integrate into complex multi-Agent sys
 - **Tool nodes**: Support function calls and external tool integration
 - **Streaming execution**: Support real-time event streams and progress tracking
 - **Concurrency safety**: Thread-safe graph execution
+- **Interrupt and Resume**: Support for human-in-the-loop workflows with checkpoint-based state persistence
+- **Atomic checkpointing**: Atomic storage of checkpoints with pending writes for reliable recovery
 
 ## Core Concepts
 
@@ -438,7 +440,99 @@ return graph.State{
 
 ## Advanced Features
 
-### 1. Custom Reducer
+### 1. Interrupt and Resume
+
+The Graph package supports human-in-the-loop workflows through interrupt and resume functionality. This allows workflows to pause execution, wait for external input, and then resume from the exact point where they were interrupted.
+
+#### Basic Usage
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// Create a node that can interrupt execution
+b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
+    // Use the Suspend helper for clean interrupt/resume handling
+    prompt := map[string]any{
+        "message": "Please approve this action (yes/no):",
+        "data":    s["some_data"],
+    }
+    
+    // Suspend execution and wait for user input
+    resumeValue, err := graph.Suspend(ctx, s, "approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Process the resume value
+    approved := false
+    if resumeStr, ok := resumeValue.(string); ok {
+        approved = resumeStr == "yes"
+    }
+    
+    return graph.State{
+        "approved": approved,
+    }, nil
+})
+```
+
+#### Resume from Interrupt
+
+```go
+// Resume execution with user input
+cmd := &graph.Command{
+    ResumeMap: map[string]any{
+        "approval": "yes", // Resume value for the "approval" key
+    },
+}
+
+state := graph.State{
+    "__command__": cmd,
+}
+
+// Execute with resume command
+events, err := exec.Execute(ctx, state, inv)
+```
+
+#### Resume Helper Functions
+
+```go
+// Type-safe resume value extraction
+if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
+    // Use the resume value
+}
+
+// Resume with default value
+value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// Check if resume value exists
+if graph.HasResumeValue(state, "approval") {
+    // Handle resume case
+}
+
+// Clear resume values
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+#### Checkpoint Management
+
+```go
+// Create checkpoint manager
+manager := graph.NewCheckpointManager(saver)
+
+// List checkpoints
+checkpoints, err := manager.List(ctx, threadID, &graph.CheckpointFilter{
+    Limit: 10,
+})
+
+// Get specific checkpoint
+checkpoint, err := manager.Get(ctx, threadID, checkpointID)
+```
+
+### 2. Custom Reducer
 
 Reducer defines how to merge state updates:
 

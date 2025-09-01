@@ -40,6 +40,8 @@ GraphAgent 实现了 `agent.Agent` 接口，可以：
 - **工具节点**：支持函数调用和外部工具集成
 - **流式执行**：支持实时事件流和进度跟踪
 - **并发安全**：线程安全的图执行
+- **中断和恢复**：支持人机交互工作流，基于检查点的状态持久化
+- **原子检查点**：原子存储检查点和待写入数据，确保可靠的恢复
 
 ## 核心概念
 
@@ -1262,3 +1264,119 @@ eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
 这种模式使得 Graph 包特别适合构建企业级的 AI 工作流应用，提供了良好的可扩展性、可维护性和用户体验。
+
+## 高级特性
+
+### 1. 中断和恢复
+
+Graph 包支持人机交互工作流，通过中断和恢复功能，工作流可以在执行过程中暂停，等待外部输入，然后从精确的中断点恢复执行。
+
+#### 基本用法
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// 创建一个可以中断执行的节点
+b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
+    // 使用 Suspend 辅助函数进行清晰的中断/恢复处理
+    prompt := map[string]any{
+        "message": "请批准此操作 (yes/no):",
+        "data":    s["some_data"],
+    }
+    
+    // 暂停执行并等待用户输入
+    resumeValue, err := graph.Suspend(ctx, s, "approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    // 处理恢复值
+    approved := false
+    if resumeStr, ok := resumeValue.(string); ok {
+        approved = resumeStr == "yes"
+    }
+    
+    return graph.State{
+        "approved": approved,
+    }, nil
+})
+```
+
+#### 从中断恢复
+
+```go
+// 使用用户输入恢复执行
+cmd := &graph.Command{
+    ResumeMap: map[string]any{
+        "approval": "yes", // "approval" 键的恢复值
+    },
+}
+
+state := graph.State{
+    "__command__": cmd,
+}
+
+// 使用恢复命令执行
+events, err := exec.Execute(ctx, state, inv)
+```
+
+#### 恢复辅助函数
+
+```go
+// 类型安全的恢复值提取
+if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
+    // 使用恢复值
+}
+
+// 使用默认值恢复
+value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// 检查恢复值是否存在
+if graph.HasResumeValue(state, "approval") {
+    // 处理恢复情况
+}
+
+// 清除恢复值
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+#### 检查点管理
+
+```go
+// 创建检查点管理器
+manager := graph.NewCheckpointManager(saver)
+
+// 列出检查点
+checkpoints, err := manager.List(ctx, threadID, &graph.CheckpointFilter{
+    Limit: 10,
+})
+
+// 获取特定检查点
+checkpoint, err := manager.Get(ctx, threadID, checkpointID)
+```
+
+### 2. 原子检查点存储
+
+Graph 包提供了原子检查点存储功能，确保检查点和待写入数据的原子性保存，避免数据不一致问题。
+
+#### 特性
+
+- **原子性保存**: 使用 `PutFull` 方法原子保存检查点和待写入数据
+- **深度拷贝**: 安全的深拷贝实现，支持所有数据类型
+- **排序和过滤**: 检查点列表支持时间戳排序和条件过滤
+- **超时控制**: 支持步骤级和节点级超时控制
+
+#### 使用示例
+
+```go
+// 创建执行器时启用检查点
+saver := inmemory.NewSaver()
+exec, err := graph.NewExecutor(g, graph.WithCheckpointSaver(saver))
+
+// 执行器会自动使用原子保存
+// 无需额外配置，所有检查点操作都是原子的
+```

@@ -135,25 +135,30 @@ func buildInterruptGraph() (*graph.Graph, error) {
 
 	// Node 2: Request user approval (interrupt point)
 	b.AddNode("request_approval", func(ctx context.Context, s graph.State) (any, error) {
-		// Check if we have resume value (resume case)
-		if resumeValue, ok := s["__resume__"].(string); ok && resumeValue != "" {
-			approved := strings.ToLower(resumeValue) == "yes" || strings.ToLower(resumeValue) == "y"
-			return graph.State{
-				stateKeyApproved: approved,
-				stateKeyMsgs: append(getStrs(s, stateKeyMsgs),
-					fmt.Sprintf("user approved: %t", approved)),
-			}, nil
-		}
-
-		// Interrupt to request user input
+		// Use the new Suspend helper for cleaner interrupt/resume handling
 		interruptValue := map[string]any{
 			"message":  "Please approve the current state (yes/no):",
 			"counter":  getInt(s, stateKeyCounter),
 			"messages": getStrs(s, stateKeyMsgs),
 		}
 
-		// This will interrupt the execution
-		return nil, graph.Interrupt(interruptValue)
+		// Suspend execution and wait for user input
+		resumeValue, err := graph.Suspend(ctx, s, "approval", interruptValue)
+		if err != nil {
+			return nil, err
+		}
+
+		// Process the resume value
+		approved := false
+		if resumeStr, ok := resumeValue.(string); ok {
+			approved = strings.ToLower(resumeStr) == "yes" || strings.ToLower(resumeStr) == "y"
+		}
+
+		return graph.State{
+			stateKeyApproved: approved,
+			stateKeyMsgs: append(getStrs(s, stateKeyMsgs),
+				fmt.Sprintf("user approved: %t", approved)),
+		}, nil
 	})
 
 	// Node 3: Process approval
@@ -259,9 +264,11 @@ func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string
 func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, threadID, userInput string) error {
 	fmt.Printf("⏪ Resuming from interrupt with input: %s\n", userInput)
 
-	// Create resume command
+	// Create resume command with ResumeMap for better key-based resume
 	cmd := &graph.Command{
-		Resume: userInput,
+		ResumeMap: map[string]any{
+			"approval": userInput,
+		},
 	}
 
 	// Resume from the latest checkpoint
