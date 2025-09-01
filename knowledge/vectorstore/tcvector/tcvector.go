@@ -406,6 +406,16 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]int
 	return resp.AffectedCount, nil
 }
 
+// FlushAll flushes all documents from the vector store.
+func (vs *VectorStore) FlushAll(ctx context.Context) error {
+	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{
+		Filter: tcvectordb.NewFilter(""),
+	}); err != nil {
+		return fmt.Errorf("tcvectordb flush all documents: %w", err)
+	}
+	return nil
+}
+
 // Search performs similarity search and returns the most similar documents.
 // Automatically chooses the appropriate search method based on query parameters.
 // Tencent VectorDB not support hybrid search of structure filter and vector/sparse vector.

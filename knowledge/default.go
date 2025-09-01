@@ -105,6 +105,7 @@ type loadConfig struct {
 	showStats        bool
 	srcParallelism   int
 	docParallelism   int
+	recreate         bool
 }
 
 // WithShowProgress enables or disables progress logging during load.
@@ -145,6 +146,13 @@ func WithSourceConcurrency(n int) LoadOption {
 func WithDocConcurrency(n int) LoadOption {
 	return func(lc *loadConfig) {
 		lc.docParallelism = n
+	}
+}
+
+// WithRecreate recreates the vector store before loading documents, be careful to use this option.
+func WithRecreate(recreate bool) LoadOption {
+	return func(lc *loadConfig) {
+		lc.recreate = recreate
 	}
 }
 
@@ -193,6 +201,11 @@ func (dk *BuiltinKnowledge) loadSource(
 	}
 
 	config := dk.buildLoadConfig(len(sources), opts...)
+	if config.recreate {
+		if err := dk.vectorStore.FlushAll(ctx); err != nil {
+			return fmt.Errorf("failed to flush vector store: %w", err)
+		}
+	}
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
 		if _, err := dk.loadConcurrent(ctx, config, sources); err != nil {
 			return err
@@ -419,46 +432,6 @@ func (dk *BuiltinKnowledge) processDocuments(
 	return nil
 }
 
-// UpdateDocument updates an existing document in the knowledge base.
-func (dk *BuiltinKnowledge) UpdateDocument(
-	ctx context.Context,
-	documentID string,
-	newDocument *document.Document,
-) error {
-	if dk.vectorStore == nil {
-		return fmt.Errorf("vector store not configured")
-	}
-
-	if documentID == "" {
-		return fmt.Errorf("documentID cannot be empty")
-	}
-
-	if newDocument == nil {
-		return fmt.Errorf("newDocument cannot be nil")
-	}
-
-	// Ensure the document ID matches
-	if newDocument.ID != documentID {
-		return fmt.Errorf("document ID mismatch: expected %s, got %s", documentID, newDocument.ID)
-	}
-
-	// Generate new embedding for the updated document
-	if dk.embedder == nil {
-		return fmt.Errorf("embedder not configured")
-	}
-
-	embedding, err := dk.embedder.GetEmbedding(ctx, newDocument.Content)
-	if err != nil {
-		return fmt.Errorf("failed to generate embedding for document %s: %w", documentID, err)
-	}
-
-	// Update the document in vector store
-	if err := dk.vectorStore.Update(ctx, newDocument, embedding); err != nil {
-		return fmt.Errorf("failed to update document %s in vector store: %w", documentID, err)
-	}
-	return nil
-}
-
 // buildLoadConfig creates a load configuration with defaults and applies the given options.
 func (dk *BuiltinKnowledge) buildLoadConfig(sourceCount int, opts ...LoadOption) *loadConfig {
 	// Apply load options with defaults.
@@ -498,6 +471,33 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 		if err := dk.vectorStore.Add(ctx, doc, embedding); err != nil {
 			return fmt.Errorf("failed to store embedding: %w", err)
 		}
+	}
+	return nil
+}
+
+// RemoveDocumentByFilter by filters
+func (dk *BuiltinKnowledge) RemoveDocumentByFilter(ctx context.Context, filters map[string]interface{}) error {
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
+	}
+	if len(filters) == 0 {
+		return fmt.Errorf("filters cannot be empty")
+	}
+	_, err := dk.vectorStore.DeleteByFilter(ctx, filters)
+	if err != nil {
+		return fmt.Errorf("failed to remove documents: %w", err)
+	}
+	return nil
+}
+
+// AddSources adds sources to the knowledge base.
+func (dk *BuiltinKnowledge) AddSources(ctx context.Context, source []source.Source, opts ...LoadOption) error {
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
+	}
+	dk.sources = append(dk.sources, source...)
+	if err := dk.loadSource(ctx, source, opts...); err != nil {
+		return fmt.Errorf("failed to update document: %w", err)
 	}
 	return nil
 }

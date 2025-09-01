@@ -33,6 +33,10 @@ type VectorStore interface {
 	// DeleteByFilter deletes documents based on filter criteria.
 	DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error)
 
+	// FlushAll flushes all documents from the vector store.
+	// This operation is irreversible and will delete all documents from the vector store.
+	FlushAll(ctx context.Context) error
+
 	// Search performs similarity search and returns the most similar documents.
 	Search(ctx context.Context, query *SearchQuery) (*SearchResult, error)
 
