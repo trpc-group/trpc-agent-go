@@ -15,7 +15,7 @@ import (
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/contextutil"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -267,7 +267,7 @@ func NewLoadTool(service memory.Service) tool.CallableTool {
 // This function looks for these values in the agent invocation context.
 func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 	// Try to get from agent invocation context.
-	invocation, ok := contextutil.InvocationFromContext(ctx)
+	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
 		return "", "", errors.New("no invocation context found")
 	}

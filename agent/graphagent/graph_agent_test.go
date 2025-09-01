@@ -19,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -454,7 +453,7 @@ func TestGraphAgent_InvocationContextAccess(t *testing.T) {
 	stateGraph := graph.NewStateGraph(nil)
 	stateGraph.AddNode("test-node", func(ctx context.Context, state graph.State) (any, error) {
 		// Verify that invocation is accessible from context.
-		invocation, ok := contextutil.InvocationFromContext(ctx)
+		invocation, ok := agent.InvocationFromContext(ctx)
 		if !ok || invocation == nil {
 			return nil, fmt.Errorf("invocation not found in context")
 		}
@@ -483,7 +482,7 @@ func TestGraphAgent_InvocationContextAccess(t *testing.T) {
 	}
 
 	// Create context with invocation (simulating what runner does).
-	ctx := contextutil.NewInvocationContext(context.Background(), invocation)
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
 
 	// Run the agent.
 	eventCh, err := graphAgent.Run(ctx, invocation)

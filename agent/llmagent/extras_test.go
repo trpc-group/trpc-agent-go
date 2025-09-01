@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -305,7 +304,7 @@ func TestLLMAgent_WithMemory(t *testing.T) {
 					AgentName: "test-agent",
 					Session:   mockSession,
 				}
-				ctx := contextutil.NewInvocationContext(context.Background(), mockInvocation)
+				ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
 
 				result, err := callableTool.Call(ctx, []byte(`{"memory": "test memory", "topics": ["test"]}`))
 				if err != nil {

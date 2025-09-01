@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -84,7 +83,7 @@ func (c *multiTurnChatWithCallbacks) createBeforeModelCallback() model.BeforeMod
 			userMsg,
 		)
 		// You can get the invocation from the context.
-		if inv, ok := contextutil.InvocationFromContext(ctx); ok && inv != nil {
+		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 			fmt.Printf("🔵 BeforeModelCallback: ✅ Invocation present in ctx (agent=%s, id=%s)\n", inv.AgentName, inv.InvocationID)
 		} else {
 			fmt.Printf("🔵 BeforeModelCallback: ❌ Invocation NOT found in ctx\n")
@@ -126,7 +125,7 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
 		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
 
-		if inv, ok := contextutil.InvocationFromContext(ctx); ok && inv != nil {
+		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 			fmt.Printf("🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=%s, id=%s)\n", inv.AgentName, inv.InvocationID)
 		} else {
 			fmt.Printf("🟠 BeforeToolCallback: ❌ Invocation NOT found in ctx\n")

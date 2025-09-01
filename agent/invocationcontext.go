@@ -1,9 +1,7 @@
-package contextutil
+package agent
 
 import (
 	"context"
-
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
 // InvocationContext carries the invocation information.
@@ -13,14 +11,14 @@ type InvocationContext struct {
 type invocationKey struct{}
 
 // NewInvocationContext creates a new InvocationContext.
-func NewInvocationContext(ctx context.Context, invocation *agent.Invocation) *InvocationContext {
+func NewInvocationContext(ctx context.Context, invocation *Invocation) *InvocationContext {
 	return &InvocationContext{
 		Context: context.WithValue(ctx, invocationKey{}, invocation),
 	}
 }
 
 // InvocationFromContext returns the invocation from the context.
-func InvocationFromContext(ctx context.Context) (*agent.Invocation, bool) {
-	invocation, ok := ctx.Value(invocationKey{}).(*agent.Invocation)
+func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
+	invocation, ok := ctx.Value(invocationKey{}).(*Invocation)
 	return invocation, ok
 }

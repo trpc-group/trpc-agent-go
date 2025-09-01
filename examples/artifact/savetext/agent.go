@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	inmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemeory"
-	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -38,7 +38,7 @@ func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) 
 		Data:     []byte(query.Query),
 		MimeType: "text/plain",
 	}
-	toolCtx, err := contextutil.NewToolContext(ctx)
+	toolCtx, err := agent.NewToolContext(ctx)
 	if err != nil {
 		log.Errorf("Failed to create tool context: %v", err)
 		return logQueryOutput{}, err

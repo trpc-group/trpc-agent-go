@@ -7,7 +7,7 @@
 //
 //
 
-package contextutil
+package agent
 
 import (
 	"context"
@@ -15,7 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -40,7 +39,7 @@ func TestNewToolContext(t *testing.T) {
 		},
 		{
 			name: "context with valid invocation",
-			ctx: NewInvocationContext(context.Background(), &agent.Invocation{
+			ctx: NewInvocationContext(context.Background(), &Invocation{
 				AgentName: "test-agent",
 				Session: &session.Session{
 					AppName: "test-app",

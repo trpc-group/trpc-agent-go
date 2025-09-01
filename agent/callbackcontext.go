@@ -8,14 +8,13 @@
 //
 
 // Package contextutil provides utilities for working with context.Context.
-package contextutil
+package agent
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
@@ -24,7 +23,7 @@ import (
 // like artifact management.
 type CallbackContext struct {
 	context.Context
-	invocation *agent.Invocation
+	invocation *Invocation
 }
 
 // NewCallbackContext creates a CallbackContext from a standard context.
