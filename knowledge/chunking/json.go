@@ -58,6 +58,14 @@ func NewJSONChunking(opts ...JSONOption) *JSONChunking {
 
 // Chunk splits a JSON document into smaller chunks while preserving structure.
 func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
+	if doc == nil {
+		return nil, ErrNilDocument
+	}
+
+	if doc.IsEmpty() {
+		return nil, ErrEmptyDocument
+	}
+
 	// Parse JSON content.
 	var jsonData interface{}
 	if err := json.Unmarshal([]byte(doc.Content), &jsonData); err != nil {
