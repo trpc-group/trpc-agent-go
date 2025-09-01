@@ -43,7 +43,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tencentyun/cos-go-sdk-v5"
+	cos "github.com/tencentyun/cos-go-sdk-v5"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	iartifact "trpc.group/trpc-go/trpc-agent-go/internal/artifact"
@@ -85,7 +85,7 @@ const defaultTimeout = 60 * time.Second
 //	// Using a pre-configured COS client
 //	cosClient := cos.NewClient(baseURL, httpClient)
 //	service := cos.NewService("", cos.WithClient(cosClient))
-func NewService(bucketURL string, opts ...Option) *Service {
+func NewService(bucketURL string, opts ...Option) (*Service, error) {
 	// Set default options
 	options := &options{
 		timeout:   defaultTimeout,
@@ -102,7 +102,7 @@ func NewService(bucketURL string, opts ...Option) *Service {
 	if options.cosClient != nil {
 		return &Service{
 			cosClient: options.cosClient,
-		}
+		}, nil
 	}
 
 	u, _ := url.Parse(bucketURL)
@@ -128,7 +128,7 @@ func NewService(bucketURL string, opts ...Option) *Service {
 
 	return &Service{
 		cosClient: cos.NewClient(b, httpClient),
-	}
+	}, nil
 }
 
 // SaveArtifact saves an artifact to Tencent Cloud Object Storage.

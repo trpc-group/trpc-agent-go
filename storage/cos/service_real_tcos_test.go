@@ -15,7 +15,8 @@ import (
 func TestArtifact_SessionScope(t *testing.T) {
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
 	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_SECRETID, COS_SECRETKEY and COS_BUCKET_URL")
-	s := cos.NewService(os.Getenv("COS_BUCKET_URL"))
+	s, err := cos.NewService(os.Getenv("COS_BUCKET_URL"))
+	require.NoError(t, err)
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user1",
@@ -86,7 +87,8 @@ func TestArtifact_SessionScope(t *testing.T) {
 func TestArtifact_UserScope(t *testing.T) {
 	t.Skip("Skipping TCOS integration test, need to set up environment variables COS_BUCKET_URL, COS_SECRETID and COS_SECRETKEY")
 	// Save-ListVersions-Load-ListKeys-Delete-ListVersions-Load-ListKeys
-	s := cos.NewService(os.Getenv("COS_BUCKET_URL"))
+	s, err := cos.NewService(os.Getenv("COS_BUCKET_URL"))
+	require.NoError(t, err)
 	sessionInfo := artifact.SessionInfo{
 		AppName:   "testapp",
 		UserID:    "user2",
