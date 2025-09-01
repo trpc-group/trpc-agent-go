@@ -143,14 +143,14 @@ func NewKnowledgeSearchToolWithAgenticFilter(kb knowledge.Knowledge, filter map[
 
 func getFinalFilter(
 	agentFilter map[string]interface{},
-	toolFilter map[string]interface{},
+	runnerFilter map[string]interface{},
 	invocationFilter map[string]interface{},
 ) map[string]interface{} {
 	filter := make(map[string]interface{})
 	for k, v := range agentFilter {
 		filter[k] = v
 	}
-	for k, v := range toolFilter {
+	for k, v := range runnerFilter {
 		filter[k] = v
 	}
 	for k, v := range invocationFilter {

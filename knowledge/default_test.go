@@ -186,6 +186,7 @@ func (*stubVectorStore) Delete(ctx context.Context, id string) error { return ni
 func (*stubVectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
 	return 0, nil
 }
+func (*stubVectorStore) FlushAll(ctx context.Context) error { return nil }
 func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	return nil, nil
 }

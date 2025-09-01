@@ -157,6 +157,15 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]int
 	return len(deletedIDs), nil
 }
 
+// FlushAll flushes all documents from the vector store.
+func (vs *VectorStore) FlushAll(ctx context.Context) error {
+	vs.mutex.Lock()
+	defer vs.mutex.Unlock()
+	vs.documents = make(map[string]*document.Document)
+	vs.embeddings = make(map[string][]float64)
+	return nil
+}
+
 // Search implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {

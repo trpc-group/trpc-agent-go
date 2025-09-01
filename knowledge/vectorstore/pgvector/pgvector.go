@@ -94,8 +94,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	// Build connection string
-	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		option.host, option.port, option.user, option.password, option.database, option.sslMode)
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s", option.host, option.port, option.user, option.password, option.database, option.sslMode)
 
 	pool, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
@@ -293,6 +292,14 @@ func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]int
 
 	rowsAffected := int(result.RowsAffected())
 	return rowsAffected, nil
+}
+
+// FlushAll flushes all documents from the vector store.
+func (vs *VectorStore) FlushAll(ctx context.Context) error {
+	if _, err := vs.pool.Exec(ctx, "TRUNCATE TABLE "+vs.option.table); err != nil {
+		return fmt.Errorf("pgvector flush all documents: %w", err)
+	}
+	return nil
 }
 
 // Search performs similarity search and returns the most similar documents.
