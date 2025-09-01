@@ -9,7 +9,6 @@ import (
 // InvocationContext carries the invocation information.
 type InvocationContext struct {
 	context.Context
-	*agent.Invocation
 }
 type invocationKey struct{}
 
