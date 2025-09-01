@@ -30,7 +30,7 @@ type CallbackContext struct {
 // NewCallbackContext creates a CallbackContext from a standard context.
 // Returns an error if no invocation is found in the context.
 func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
-	invocation, ok := agent.InvocationFromContext(ctx)
+	invocation, ok := InvocationFromContext(ctx)
 	if !ok || invocation == nil {
 		return nil, errors.New("invocation not found in context")
 	}

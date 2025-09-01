@@ -12,12 +12,12 @@ package runner
 
 import (
 	"context"
-	"time"
-
 	"github.com/google/uuid"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -169,7 +169,7 @@ func (r *runner) Run(
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
-	ctx = agent.NewContextWithInvocation(ctx, invocation)
+	ctx = contextutil.NewInvocationContext(ctx, invocation)
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)

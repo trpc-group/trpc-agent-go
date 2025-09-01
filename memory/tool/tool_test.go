@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,7 +143,7 @@ func createMockContext(appName, userID string) context.Context {
 		Session:   mockSession,
 	}
 
-	return agent.NewContextWithInvocation(context.Background(), mockInvocation)
+	return contextutil.NewInvocationContext(context.Background(), mockInvocation)
 }
 
 func TestMemoryTool_AddMemory(t *testing.T) {

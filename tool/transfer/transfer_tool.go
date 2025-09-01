@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -144,7 +145,7 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	}
 
 	// Get invocation from context.
-	invocation, ok := agent.InvocationFromContext(ctx)
+	invocation, ok := contextutil.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
 		return Response{
 			Success:      false,

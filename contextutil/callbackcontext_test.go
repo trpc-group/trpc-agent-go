@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 )
 
@@ -32,13 +33,13 @@ func TestNewCallbackContext(t *testing.T) {
 		},
 		{
 			name:        "context with nil invocation",
-			ctx:         agent.NewContextWithInvocation(context.Background(), nil),
+			ctx:         NewInvocationContext(context.Background(), nil),
 			expectError: true,
 			errorMsg:    "invocation not found in context",
 		},
 		{
 			name: "context with valid invocation",
-			ctx: agent.NewContextWithInvocation(context.Background(), &agent.Invocation{
+			ctx: NewInvocationContext(context.Background(), &agent.Invocation{
 				AgentName: "test-agent",
 			}),
 			expectError: false,

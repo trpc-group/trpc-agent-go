@@ -16,7 +16,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -282,7 +284,7 @@ func (m *invocationVerificationAgent) Run(ctx context.Context, invocation *agent
 	eventCh := make(chan *event.Event, 1)
 
 	// Verify that invocation is present in context.
-	ctxInvocation, ok := agent.InvocationFromContext(ctx)
+	ctxInvocation, ok := contextutil.InvocationFromContext(ctx)
 	if !ok || ctxInvocation == nil {
 		// Create error event if invocation is not in context.
 		errorEvent := &event.Event{

@@ -10,7 +10,6 @@
 package agent
 
 import (
-	"context"
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -68,19 +67,6 @@ type Invocation struct {
 
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
-}
-
-type invocationKey struct{}
-
-// NewContextWithInvocation creates a new context with the invocation.
-func NewContextWithInvocation(ctx context.Context, invocation *Invocation) context.Context {
-	return context.WithValue(ctx, invocationKey{}, invocation)
-}
-
-// InvocationFromContext returns the invocation from the context.
-func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
-	invocation, ok := ctx.Value(invocationKey{}).(*Invocation)
-	return invocation, ok
 }
 
 // RunOption is a function that configures a RunOptions.

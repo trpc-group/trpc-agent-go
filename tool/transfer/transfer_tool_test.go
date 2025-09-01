@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/contextutil"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -84,7 +85,7 @@ func TestTransferTool_Success(t *testing.T) {
 	request := Request{AgentName: "calculator"}
 	requestBytes, _ := json.Marshal(request)
 
-	ctx := agent.NewContextWithInvocation(context.Background(), &agent.Invocation{
+	ctx := contextutil.NewInvocationContext(context.Background(), &agent.Invocation{
 		InvocationID: "test-invocation-id",
 	})
 	result, err := tool.Call(ctx, requestBytes)
@@ -112,7 +113,7 @@ func TestTransferTool_AgentNotFound(t *testing.T) {
 	request := Request{AgentName: "nonexistent"}
 	requestBytes, _ := json.Marshal(request)
 
-	ctx := agent.NewContextWithInvocation(context.Background(), &agent.Invocation{
+	ctx := contextutil.NewInvocationContext(context.Background(), &agent.Invocation{
 		InvocationID: "test-invocation-id",
 	})
 	result, err := tool.Call(ctx, requestBytes)
@@ -142,7 +143,7 @@ func TestTransferTool_NoSubAgents(t *testing.T) {
 	request := Request{AgentName: "any-agent"}
 	requestBytes, _ := json.Marshal(request)
 
-	ctx := agent.NewContextWithInvocation(context.Background(), &agent.Invocation{
+	ctx := contextutil.NewInvocationContext(context.Background(), &agent.Invocation{
 		InvocationID: "test-invocation-id",
 	})
 	result, err := tool.Call(ctx, requestBytes)
