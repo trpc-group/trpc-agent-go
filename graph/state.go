@@ -23,6 +23,8 @@ const (
 	StateKeyUserInput = "user_input"
 	// StateKeyLastResponse is the key of the last response.
 	StateKeyLastResponse = "last_response"
+	// StateKeyNodeResponses is the key of the node responses.
+	StateKeyNodeResponses = "node_responses"
 	// StateKeySession is the key of the session.
 	StateKeySession = "session"
 	// StateKeyMessages is the key of the messages.

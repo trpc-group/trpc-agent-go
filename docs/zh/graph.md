@@ -118,6 +118,10 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 - `StateKeyUserInput`：用户输入（由 GraphAgent 自动设置，来自 Runner 的消息）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
 - `StateKeyMessages`：消息历史（用于 LLM 节点，由 LLM 节点自动更新）
+- `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
+  节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
+  出；当多个并行节点在某处汇合时，应从 `StateKeyNodeResponses` 中按节
+  点读取各自的输出。
 - `StateKeyMetadata`：元数据（用户可用的通用元数据存储）
 
 **系统内部键**（用户不应直接使用）：
@@ -383,6 +387,7 @@ schema := graph.MessagesStateSchema()
 // - messages: 对话历史（StateKeyMessages）
 // - user_input: 用户输入（StateKeyUserInput）
 // - last_response: 最后响应（StateKeyLastResponse）
+// - node_responses: 节点响应映射（StateKeyNodeResponses）
 // - metadata: 元数据（StateKeyMetadata）
 ```
 
@@ -425,6 +430,20 @@ userInput := state[graph.StateKeyUserInput].(string)
 // 设置最终输出（系统会读取此值）
 return graph.State{
     graph.StateKeyLastResponse: "处理完成",
+}, nil
+
+// 当多个节点（例如并行的 LLM 节点）同时产出结果时，使用按节点响应。
+// 该值是 map[nodeID]any，会在执行过程中合并。串行路径使用
+// LastResponse；并行节点汇合时使用 NodeResponses。
+responses, _ := state[graph.StateKeyNodeResponses].(map[string]any)
+news := responses["news"].(string)
+dialog := responses["dialog"].(string)
+
+// 分别使用或组合成最终输出。
+return graph.State{
+    "news_output":   news,
+    "dialog_output": dialog,
+    graph.StateKeyLastResponse: news + "\n" + dialog,
 }, nil
 
 // 存储元数据
