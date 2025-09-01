@@ -38,13 +38,13 @@ func logQuery(ctx context.Context, query logQueryInput) (logQueryOutput, error) 
 		Data:     []byte(query.Query),
 		MimeType: "text/plain",
 	}
-	callbackCtx, err := contextutil.NewCallbackContext(ctx)
+	toolCtx, err := contextutil.NewToolContext(ctx)
 	if err != nil {
-		log.Errorf("Failed to create callback context: %v", err)
+		log.Errorf("Failed to create tool context: %v", err)
 		return logQueryOutput{}, err
 	}
 
-	_, err = callbackCtx.SaveArtifact("query", a)
+	_, err = toolCtx.SaveArtifact("query", a)
 	if err != nil {
 		log.Errorf("Failed to save artifact: %v", err)
 	}

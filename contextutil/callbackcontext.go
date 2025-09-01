@@ -23,7 +23,7 @@ import (
 // Similar to ADK Python's callback_context, this provides access to session-scoped operations
 // like artifact management.
 type CallbackContext struct {
-	ctx        context.Context
+	context.Context
 	invocation *agent.Invocation
 }
 
@@ -35,14 +35,9 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 		return nil, errors.New("invocation not found in context")
 	}
 	return &CallbackContext{
-		ctx:        ctx,
+		Context:    ctx,
 		invocation: invocation,
 	}, nil
-}
-
-// Context returns the underlying context.
-func (cc *CallbackContext) Context() context.Context {
-	return cc.ctx
 }
 
 // SaveArtifact saves an artifact and records it for the current session.
@@ -58,7 +53,7 @@ func (cc *CallbackContext) SaveArtifact(filename string, artifact *artifact.Arti
 	if err != nil {
 		return 0, err
 	}
-	return service.SaveArtifact(cc.ctx, sessionInfo, filename, artifact)
+	return service.SaveArtifact(cc.Context, sessionInfo, filename, artifact)
 }
 
 // LoadArtifact loads an artifact attached to the current session.
@@ -74,7 +69,7 @@ func (cc *CallbackContext) LoadArtifact(filename string, version *int) (*artifac
 	if err != nil {
 		return nil, err
 	}
-	return service.LoadArtifact(cc.ctx, sessionInfo, filename, version)
+	return service.LoadArtifact(cc.Context, sessionInfo, filename, version)
 }
 
 // ListArtifacts lists the filenames of the artifacts attached to the current session.
@@ -86,7 +81,7 @@ func (cc *CallbackContext) ListArtifacts() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return service.ListArtifactKeys(cc.ctx, sessionInfo)
+	return service.ListArtifactKeys(cc.Context, sessionInfo)
 }
 
 // DeleteArtifact deletes an artifact from the current session.
@@ -101,7 +96,7 @@ func (cc *CallbackContext) DeleteArtifact(filename string) error {
 	if err != nil {
 		return err
 	}
-	return service.DeleteArtifact(cc.ctx, sessionInfo, filename)
+	return service.DeleteArtifact(cc.Context, sessionInfo, filename)
 }
 
 // ListArtifactVersions lists all versions of an artifact.
@@ -116,7 +111,7 @@ func (cc *CallbackContext) ListArtifactVersions(filename string) ([]int, error) 
 	if err != nil {
 		return nil, err
 	}
-	return service.ListVersions(cc.ctx, sessionInfo, filename)
+	return service.ListVersions(cc.Context, sessionInfo, filename)
 }
 
 // getArtifactServiceAndSessionInfo extracts common logic for getting artifact service and session information.

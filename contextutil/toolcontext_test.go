@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-//
+
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -15,9 +15,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestNewCallbackContext(t *testing.T) {
+func TestNewToolContext(t *testing.T) {
 	tests := []struct {
 		name        string
 		ctx         context.Context
@@ -40,6 +41,11 @@ func TestNewCallbackContext(t *testing.T) {
 			name: "context with valid invocation",
 			ctx: agent.NewContextWithInvocation(context.Background(), &agent.Invocation{
 				AgentName: "test-agent",
+				Session: &session.Session{
+					AppName: "test-app",
+					UserID:  "test-user",
+					ID:      "test-session",
+				},
 			}),
 			expectError: false,
 		},
@@ -47,16 +53,18 @@ func TestNewCallbackContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cc, err := NewCallbackContext(tt.ctx)
+			tc, err := NewToolContext(tt.ctx)
 
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorMsg)
-				assert.Nil(t, cc)
+				assert.Nil(t, tc)
 			} else {
 				assert.NoError(t, err)
-				assert.NotNil(t, cc)
-				assert.Equal(t, tt.ctx, cc.Context)
+				assert.NotNil(t, tc)
+				assert.NotNil(t, tc.CallbackContext)
+				// Verify that the underlying context is preserved
+				assert.Equal(t, tt.ctx, tc.CallbackContext.Context)
 			}
 		})
 	}
