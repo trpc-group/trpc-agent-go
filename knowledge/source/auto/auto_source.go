@@ -179,7 +179,6 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 		filesource.WithChunkSize(s.chunkSize),
 		filesource.WithChunkOverlap(s.chunkOverlap),
 	)
-
 	// Copy metadata.
 	for k, v := range s.metadata {
 		fileSource.SetMetadata(k, v)
@@ -190,7 +189,24 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 // processAsText processes the input as text content.
 func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
-	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	docs, err := s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+
+	// Add metadata for each document
+	for _, doc := range docs {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]interface{})
+		}
+		// Copy existing metadata
+		for k, v := range s.metadata {
+			doc.Metadata[k] = v
+		}
+		doc.Metadata[source.MetaSource] = source.TypeAuto
+	}
+
+	return docs, nil
 }
 
 // SetMetadata sets metadata for this source.

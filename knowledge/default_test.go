@@ -46,6 +46,10 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 	return docs, nil
 }
 
+func (m *mockSource) SourceID() string {
+	return "test"
+}
+
 func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
 	// Create a knowledge instance with mock sources.
 	kb := New(
@@ -178,6 +182,9 @@ func (*stubVectorStore) Update(ctx context.Context, doc *document.Document, emb 
 	return nil
 }
 func (*stubVectorStore) Delete(ctx context.Context, id string) error { return nil }
+func (*stubVectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
+	return 0, nil
+}
 func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	return nil, nil
 }
