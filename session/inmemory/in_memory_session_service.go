@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -231,7 +232,6 @@ func (s *SessionService) GetSession(
 	if err := key.CheckSessionKey(); err != nil {
 		return nil, err
 	}
-	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -259,7 +259,10 @@ func (s *SessionService) GetSession(
 	copiedSess := copySession(sess)
 
 	// apply filtering options if provided
-	applyGetSessionOptions(copiedSess, opt)
+	isession.ApplyEventFiltering(copiedSess, opts...)
+	// filter events to ensure they start with RoleUser
+	isession.EnsureEventStartWithUser(copiedSess)
+
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
 	if appState == nil {
@@ -280,7 +283,6 @@ func (s *SessionService) ListSessions(
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	opt := applyOptions(opts...)
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -301,7 +303,10 @@ func (s *SessionService) ListSessions(
 			continue // Skip expired sessions
 		}
 		copiedSess := copySession(s)
-		applyGetSessionOptions(copiedSess, opt)
+		isession.ApplyEventFiltering(copiedSess, opts...)
+		// filter events to ensure they start with RoleUser
+		isession.EnsureEventStartWithUser(copiedSess)
+
 		appState := getValidState(app.appState)
 		userState := getValidState(app.userState[userKey.UserID])
 		if appState == nil {
@@ -531,7 +536,7 @@ func (s *SessionService) AppendEvent(
 	event *event.Event,
 	opts ...session.Option,
 ) error {
-	s.updateSessionState(sess, event)
+	isession.UpdateUserSession(sess, event, opts...)
 	key := session.Key{
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
@@ -566,7 +571,9 @@ func (s *SessionService) AppendEvent(
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
 
-	s.updateSessionState(storedSession, event)
+	// update stored session with the given event
+	s.updateStoredSession(storedSession, event)
+
 	// Update the session in the wrapper and refresh TTL
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
@@ -642,22 +649,15 @@ func (s *SessionService) Close() error {
 	return nil
 }
 
-func (s *SessionService) updateSessionState(sess *session.Session, event *event.Event) {
-	sess.Events = append(sess.Events, *event)
+// updateStoredSession updates the stored session with the given event.
+func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
+	sess.Events = append(sess.Events, *e)
 	if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 		sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
 	}
 	sess.UpdatedAt = time.Now()
-
-	// Apply state delta if present.
-	if len(event.StateDelta) > 0 {
-		if sess.State == nil {
-			sess.State = make(session.StateMap)
-		}
-		for key, value := range event.StateDelta {
-			sess.State[key] = value
-		}
-	}
+	// merge event state delta to session state
+	isession.ApplyEventStateDelta(sess, e)
 }
 
 // copySession creates a  copy of a session.
@@ -684,24 +684,6 @@ func copySession(sess *session.Session) *session.Session {
 	return copiedSess
 }
 
-// applyGetSessionOptions applies filtering options to the session.
-func applyGetSessionOptions(sess *session.Session, opts *session.Options) {
-	if opts.EventNum > 0 && len(sess.Events) > opts.EventNum {
-		sess.Events = sess.Events[len(sess.Events)-opts.EventNum:]
-	}
-
-	if !opts.EventTime.IsZero() {
-		var filteredEvents []event.Event
-		for _, e := range sess.Events {
-			// Include events that are after or equal to the specified time
-			if e.Timestamp.After(opts.EventTime) || e.Timestamp.Equal(opts.EventTime) {
-				filteredEvents = append(filteredEvents, e)
-			}
-		}
-		sess.Events = filteredEvents
-	}
-}
-
 // mergeState merges app-level and user-level state into the session state.
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
 	for k, v := range appState {
@@ -711,12 +693,4 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
-}
-
-func applyOptions(opts ...session.Option) *session.Options {
-	opt := &session.Options{}
-	for _, o := range opts {
-		o(opt)
-	}
-	return opt
 }

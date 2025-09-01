@@ -191,7 +191,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	ctx := context.Background()
 	userID := "test-user"
 	sessionID := "test-session"
-	emptyMessage := model.Message{} // Empty message
+	emptyMessage := model.NewUserMessage("") // Empty message
 
 	// Run the agent with empty message.
 	eventCh, err := runner.Run(ctx, userID, sessionID, emptyMessage)
@@ -214,9 +214,8 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	// Should only have agent response, no user message since it was empty.
-	assert.Len(t, sess.Events, 2)
-	assert.Equal(t, "test-agent", sess.Events[0].Author)
+	// Should have no events, user message was empty and not added to session, and session service filtered event start with user.
+	assert.Len(t, sess.Events, 0)
 }
 
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.

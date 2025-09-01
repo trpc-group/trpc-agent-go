@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -194,6 +196,17 @@ func TestGetSession(t *testing.T) {
 		for _, e := range events {
 			evt := event.New("test-invocation", e.author)
 			evt.Timestamp = baseTime.Add(e.offset)
+			// Add Response field to make events valid for filtering
+			evt.Response = &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleUser, // All test events are from user for simplicity
+							Content: fmt.Sprintf("Test message from %s", e.author),
+						},
+					},
+				},
+			}
 			err := service.AppendEvent(ctx, &session.Session{
 				AppName: "app1",
 				UserID:  "user1",
@@ -341,6 +354,17 @@ func TestListSessions(t *testing.T) {
 			if withEvents {
 				for i := 0; i < 3; i++ {
 					evt := event.New("test-invocation", fmt.Sprintf("author_%s_%d", data.sessID, i))
+					// Add Response field to make events valid for filtering
+					evt.Response = &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleUser, // All test events are from user for simplicity
+									Content: fmt.Sprintf("Test message from author_%s_%d", data.sessID, i),
+								},
+							},
+						},
+					}
 					err := service.AppendEvent(ctx, &session.Session{
 						AppName: data.appName,
 						UserID:  data.userID,
@@ -833,4 +857,303 @@ func TestAppIsolation(t *testing.T) {
 	if len(app2Sessions) > 0 {
 		assert.Equal(t, "app2", app2Sessions[0].AppName)
 	}
+}
+
+func TestEnsureEventStartWithUser(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupEvents    func() []event.Event
+		expectedLength int
+		expectFirst    bool // true if first event should be from user
+	}{
+		{
+			name: "empty_events",
+			setupEvents: func() []event.Event {
+				return []event.Event{}
+			},
+			expectedLength: 0,
+			expectFirst:    false,
+		},
+		{
+			name: "events_already_start_with_user",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "user")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message 1"}}},
+				}
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 2,
+			expectFirst:    true,
+		},
+		{
+			name: "events_start_with_assistant_then_user",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "assistant")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 1"}}},
+				}
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 2"}}},
+				}
+				evt3 := event.New("test3", "user")
+				evt3.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				evt4 := event.New("test4", "assistant")
+				evt4.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 3"}}},
+				}
+				return []event.Event{*evt1, *evt2, *evt3, *evt4}
+			},
+			expectedLength: 2, // Should keep events from index 2 onwards
+			expectFirst:    true,
+		},
+		{
+			name: "all_events_from_assistant",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "assistant")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 1"}}},
+				}
+				evt2 := event.New("test2", "assistant")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "Assistant message 2"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 0, // Should clear all events
+			expectFirst:    false,
+		},
+		{
+			name: "events_with_no_response",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "unknown")
+				// No response set
+				evt2 := event.New("test2", "user")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 1, // Should keep from first user event
+			expectFirst:    true,
+		},
+		{
+			name: "events_with_empty_choices",
+			setupEvents: func() []event.Event {
+				evt1 := event.New("test1", "unknown")
+				evt1.Response = &model.Response{
+					Choices: []model.Choice{}, // Empty choices
+				}
+				evt2 := event.New("test2", "user")
+				evt2.Response = &model.Response{
+					Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "User message"}}},
+				}
+				return []event.Event{*evt1, *evt2}
+			},
+			expectedLength: 1, // Should keep from first user event
+			expectFirst:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &session.Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "test-user",
+				Events:  tt.setupEvents(),
+			}
+
+			isession.EnsureEventStartWithUser(sess)
+
+			assert.Equal(t, tt.expectedLength, len(sess.Events), "Event length should match expected")
+
+			if tt.expectFirst && len(sess.Events) > 0 {
+				assert.NotNil(t, sess.Events[0].Response, "First event should have response")
+				assert.Greater(t, len(sess.Events[0].Response.Choices), 0, "First event should have choices")
+				assert.Equal(t, model.RoleUser, sess.Events[0].Response.Choices[0].Message.Role, "First event should be from user")
+			}
+		})
+	}
+}
+
+func TestGetSession_EventFiltering_Integration(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	// Create a session
+	sessionKey := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add events starting with assistant messages
+	baseTime := time.Now()
+	events := []*event.Event{
+		{
+			ID:        "event1",
+			Timestamp: baseTime.Add(-5 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event2",
+			Timestamp: baseTime.Add(-4 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 2",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event3",
+			Timestamp: baseTime.Add(-3 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "User message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event4",
+			Timestamp: baseTime.Add(-2 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 3",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Add events to session
+	for _, evt := range events {
+		err := service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Test GetSession - should only return events starting from first user message
+	retrievedSess, err := service.GetSession(context.Background(), sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Should have 2 events (from event3 onwards)
+	assert.Equal(t, 2, len(retrievedSess.Events), "Should filter out assistant events before first user event")
+	assert.Equal(t, "event3", retrievedSess.Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, retrievedSess.Events[0].Response.Choices[0].Message.Role)
+	assert.Equal(t, "event4", retrievedSess.Events[1].ID, "Second event should be the subsequent assistant event")
+
+	// Test ListSessions - should apply same filtering
+	sessionList, err := service.ListSessions(context.Background(), session.UserKey{
+		AppName: "testapp",
+		UserID:  "user123",
+	})
+	require.NoError(t, err)
+	require.Len(t, sessionList, 1)
+
+	// Should have same filtering as GetSession
+	assert.Equal(t, 2, len(sessionList[0].Events), "ListSessions should also filter events")
+	assert.Equal(t, "event3", sessionList[0].Events[0].ID, "First event should be the user event")
+	assert.Equal(t, model.RoleUser, sessionList[0].Events[0].Response.Choices[0].Message.Role)
+}
+
+func TestGetSession_AllAssistantEvents_Integration(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	// Create a session
+	sessionKey := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session456",
+	}
+
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Add only assistant events
+	baseTime := time.Now()
+	events := []*event.Event{
+		{
+			ID:        "event1",
+			Timestamp: baseTime.Add(-3 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 1",
+						},
+					},
+				},
+			},
+		},
+		{
+			ID:        "event2",
+			Timestamp: baseTime.Add(-2 * time.Hour),
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "Assistant message 2",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Add events to session
+	for _, evt := range events {
+		err := service.AppendEvent(context.Background(), sess, evt)
+		require.NoError(t, err)
+	}
+
+	// Test GetSession - should return empty events
+	retrievedSess, err := service.GetSession(context.Background(), sessionKey)
+	require.NoError(t, err)
+	require.NotNil(t, retrievedSess)
+
+	// Should have no events since all are from assistant
+	assert.Equal(t, 0, len(retrievedSess.Events), "Should filter out all assistant events when no user events exist")
 }
