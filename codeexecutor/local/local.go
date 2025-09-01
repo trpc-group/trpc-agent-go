@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 // Package local provides a CodeExecutor that executes code blocks in the local environment.
 // It supports Python and Bash scripts, executing them in the current local command line.
 package local

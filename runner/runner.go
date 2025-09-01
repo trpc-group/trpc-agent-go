@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -153,6 +153,11 @@ func (r *runner) Run(
 		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
 	}
+
+	// Ensure the invocation can be accessed by downstream components (e.g., tools)
+	// by embedding it into the context. This is necessary for tools like
+	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
+	ctx = agent.NewContextWithInvocation(ctx, invocation)
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)

@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -79,6 +79,7 @@ const (
 	NodeTypeFunction NodeType = "function"
 	NodeTypeLLM      NodeType = "llm"
 	NodeTypeTool     NodeType = "tool"
+	NodeTypeAgent    NodeType = "agent"
 	NodeTypeJoin     NodeType = "join"
 	NodeTypeRouter   NodeType = "router"
 )
@@ -404,6 +405,14 @@ func NewGraphEvent(invocationID, author, objectType string, opts ...EventOption)
 	return e
 }
 
+// formatNodeAuthor returns nodeID if non-empty; otherwise returns fallback.
+func formatNodeAuthor(nodeID, fallbackAuthor string) string {
+	if nodeID != "" {
+		return nodeID
+	}
+	return fallbackAuthor
+}
+
 // NodeEventOptions contains options for creating node events.
 type NodeEventOptions struct {
 	InvocationID string
@@ -434,10 +443,19 @@ type ToolEventOptions struct {
 	Input        string
 	Output       string
 	Error        error
+	// NodeID is optional. When provided, author becomes node-scoped.
+	NodeID string
 }
 
 // ToolEventOption is a function that configures tool event options.
 type ToolEventOption func(*ToolEventOptions)
+
+// WithToolEventNodeID sets the node ID for tool events.
+func WithToolEventNodeID(nodeID string) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.NodeID = nodeID
+	}
+}
 
 // ModelEventOptions contains options for creating model events.
 type ModelEventOptions struct {
@@ -922,7 +940,9 @@ func NewNodeStartEvent(opts ...NodeEventOption) *event.Event {
 		ModelInput: options.ModelInput,
 		StepNumber: options.StepNumber,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeStart,
+	return NewGraphEvent(options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeStart,
 		WithNodeMetadata(metadata))
 }
 
@@ -945,7 +965,9 @@ func NewNodeCompleteEvent(opts ...NodeEventOption) *event.Event {
 		ModelName:  options.ModelName,
 		StepNumber: options.StepNumber,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeComplete,
+	return NewGraphEvent(options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeComplete,
 		WithNodeMetadata(metadata))
 }
 
@@ -966,7 +988,9 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		Error:      options.Error,
 		StepNumber: options.StepNumber,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeError,
+	return NewGraphEvent(options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
 }
 
@@ -994,7 +1018,9 @@ func NewToolExecutionEvent(opts ...ToolEventOption) *event.Event {
 		Error:        errorMsg,
 		InvocationID: options.InvocationID,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeExecution,
+	return NewGraphEvent(options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeExecution,
 		WithToolMetadata(metadata))
 }
 
@@ -1023,7 +1049,9 @@ func NewModelExecutionEvent(opts ...ModelEventOption) *event.Event {
 		InvocationID: options.InvocationID,
 		StepNumber:   options.StepNumber,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphNode, ObjectTypeGraphNodeExecution,
+	return NewGraphEvent(options.InvocationID,
+		formatNodeAuthor(options.NodeID, AuthorGraphNode),
+		ObjectTypeGraphNodeExecution,
 		WithModelMetadata(metadata))
 }
 
