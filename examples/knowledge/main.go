@@ -51,11 +51,12 @@ import (
 
 // command line flags.
 var (
-	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
-	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
-	loadData     = flag.Bool("load", true, "Load data into the vector store on startup")
+	modelName     = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	streaming     = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini")
+	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	agenticFilter = flag.Bool("agentic_filter", true, "Enable agentic filter for knowledge search")
+	loadData      = flag.Bool("load", true, "Load data into the vector store on startup")
 )
 
 // Default values for optional configurations.
@@ -71,9 +72,9 @@ var (
 	// PGVector.
 	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
-	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "postgres")
+	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
 	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vec")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
@@ -95,7 +96,11 @@ func main() {
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Vector Store: %s\n", *vectorStore)
-	fmt.Printf("Available tools: knowledge_search\n")
+	if *agenticFilter {
+		fmt.Printf("Available tools: knowledge_search, knowledge_search_with_filter\n")
+	} else {
+		fmt.Printf("Available tools: knowledge_search\n")
+	}
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -112,6 +117,7 @@ func main() {
 
 // knowledgeChat manages the conversation with knowledge integration.
 type knowledgeChat struct {
+	sources      []source.Source
 	modelName    string
 	embedderType string
 	vectorStore  string
@@ -151,6 +157,9 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		Stream:      *streaming,
 	}
 
+	// get all metadata from sources, it contains keys and values, llm will choose keys values for the filter
+	sourcesMetadata := source.GetAllMetadata(c.sources)
+
 	agentName := "knowledge-assistant"
 	llmAgent := llmagent.New(
 		agentName,
@@ -158,7 +167,10 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
+		llmagent.WithKnowledge(c.kb),
+		// This will automatically add the knowledge_search tool.
+		llmagent.WithEnableKnowledgeAgenticFilter(*agenticFilter),
+		llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata),
 	)
 
 	// Create session service.
@@ -208,6 +220,9 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
+			vectortcvector.WithCollection("homerpan1"),
+			// tcvector need build index for the filter fields
+			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -258,26 +273,42 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./data/llm.md",
 			},
 			filesource.WithName("Large Language Model"),
-			filesource.WithMetadataValue("type", "documentation"),
+			filesource.WithMetadataValue("category", "documentation"),
+			filesource.WithMetadataValue("topic", "machine_learning"),
+			filesource.WithMetadataValue("source_type", "local_file"),
+			filesource.WithMetadataValue("content_type", "llm"),
 		),
-
+		filesource.New(
+			[]string{
+				"./data/golang.md",
+			},
+			filesource.WithName("Golang"),
+			filesource.WithMetadataValue("category", "documentation"),
+			filesource.WithMetadataValue("topic", "programming"),
+			filesource.WithMetadataValue("source_type", "local_file"),
+			filesource.WithMetadataValue("content_type", "golang"),
+		),
 		dirsource.New(
 			[]string{
 				"./dir",
 			},
 			dirsource.WithName("Data Directory"),
+			dirsource.WithMetadataValue("category", "dataset"),
+			dirsource.WithMetadataValue("topic", "machine_learning"),
+			dirsource.WithMetadataValue("source_type", "local_directory"),
+			dirsource.WithMetadataValue("content_type", "transformer"),
 		),
-
 		// URL source for web content.
 		urlsource.New(
 			[]string{
 				"https://en.wikipedia.org/wiki/Byte-pair_encoding",
 			},
 			urlsource.WithName("Byte-pair encoding"),
-			urlsource.WithMetadataValue("topic", "Byte-pair encoding"),
-			urlsource.WithMetadataValue("source", "official"),
+			urlsource.WithMetadataValue("category", "encyclopedia"),
+			urlsource.WithMetadataValue("topic", "natural_language_processing"),
+			urlsource.WithMetadataValue("source_type", "web_url"),
+			urlsource.WithMetadataValue("content_type", "wiki"),
 		),
-
 		// Auto source that can handle mixed inputs.
 		autosource.New(
 			[]string{
@@ -286,8 +317,10 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./README.md",
 			},
 			autosource.WithName("Mixed Content Source"),
-			autosource.WithMetadataValue("topic", "Cloud Computing"),
-			autosource.WithMetadataValue("type", "mixed"),
+			autosource.WithMetadataValue("category", "mixed"),
+			autosource.WithMetadataValue("topic", "technology"),
+			autosource.WithMetadataValue("source_type", "auto_detect"),
+			autosource.WithMetadataValue("content_type", "mixed"),
 		),
 	}
 	return sources
@@ -295,6 +328,9 @@ func (c *knowledgeChat) createSources() []source.Source {
 
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
+	// Create sources.
+	c.sources = c.createSources()
+
 	// Create vector store.
 	vs, err := c.setupVectorDB()
 	if err != nil {
@@ -307,14 +343,11 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		return fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// Create sources.
-	sources := c.createSources()
-
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
 		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
-		knowledge.WithSources(sources),
+		knowledge.WithSources(c.sources),
 	)
 	// Decide whether to load the knowledge base.
 	load := *loadData
@@ -366,11 +399,14 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
 	fmt.Println("   - What is a Large Language Model?")
-	fmt.Println("   - Explain the Transformer architecture.")
-	fmt.Println("   - What is a Mixture-of-Experts (MoE) model?")
+	fmt.Println("   - Tell me about Golang programming language")
 	fmt.Println("   - How does Byte-pair encoding work?")
-	fmt.Println("   - What is an N-gram model?")
 	fmt.Println("   - What is cloud computing?")
+	fmt.Println("   - Show me documentation about machine learning")
+	fmt.Println("   - Find content from wiki sources")
+	fmt.Println("")
+	fmt.Println("🎯 You can also try agentic filtered searches:")
+	fmt.Println("   - Query something about programming and golang related stuff")
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {

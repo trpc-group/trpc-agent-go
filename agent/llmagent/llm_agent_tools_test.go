@@ -31,7 +31,7 @@ type dummyToolSet struct{}
 
 func (d dummyToolSet) Tools(ctx context.Context) []tool.CallableTool {
 	// Wrap the tool to a CallableTool by asserting to the known concrete type.
-	kt := knowledgetool.NewKnowledgeSearchTool(&minimalKnowledge{})
+	kt := knowledgetool.NewKnowledgeSearchTool(&minimalKnowledge{}, nil)
 	type callable interface{ tool.CallableTool }
 	if c, ok := any(kt).(callable); ok {
 		return []tool.CallableTool{c}
@@ -52,7 +52,7 @@ func TestRegisterTools_Combinations(t *testing.T) {
 	kb := &minimalKnowledge{}
 
 	// with tools, toolset and knowledge and nil memory.
-	tools := registerTools(base, sets, kb, nil)
+	tools := registerTools(&Options{Tools: base, ToolSets: sets, Knowledge: kb})
 	if len(tools) < 2 {
 		t.Fatalf("expected aggregated tools from base and toolset")
 	}
