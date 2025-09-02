@@ -161,7 +161,7 @@ func (w *customerSupportWorkflow) startA2AServer() {
 	remoteAgent := w.buildRemoteAgent()
 	server, err := a2a.New(
 		a2a.WithHost(w.a2aHost),
-		a2a.WithAgent(remoteAgent),
+		a2a.WithAgent(remoteAgent, true),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -307,8 +307,8 @@ func (w *customerSupportWorkflow) createCustomerSupportGraph() (*graph.Graph, er
 			graph.WithDescription("Analyzes the customer query to determine type and priority"),
 		).
 		// Technical support using built-in agent node that routes to sub-agent.
-		AddAgentNode(nodeTechnicalSupport, agentTechnicalSupport,
-			graph.WithName("Technical Support"),
+		AddAgentNode(nodeTechnicalSupport,
+			graph.WithName(nodeTechnicalSupport),
 			graph.WithDescription("Routes to A2A technical support agent for specialized assistance"),
 			graph.WithPostNodeCallback(func(
 				ctx context.Context,

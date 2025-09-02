@@ -19,8 +19,11 @@ import (
 
 const (
 	// StateKeyUserInput is the key of the user input.
-	// Typically it remains constant across the graph.
+	// It is consumed once and then cleared after successful LLM execution.
 	StateKeyUserInput = "user_input"
+	// StateKeyOneShotMessages is the key for one-shot messages that override
+	// the current round input completely. It is consumed once and then cleared.
+	StateKeyOneShotMessages = "one_shot_messages"
 	// StateKeyLastResponse is the key of the last response.
 	StateKeyLastResponse = "last_response"
 	// StateKeyNodeResponses is the key of the node responses.
@@ -206,15 +209,33 @@ func MergeReducer(existing, update any) any {
 	return result
 }
 
-// MessageReducer handles message arrays with ID-based updates.
+// MessageReducer handles message arrays with ID-based updates and MessageOp support.
 func MessageReducer(existing, update any) any {
 	if existing == nil {
 		existing = []model.Message{}
 	}
 	existingMsgs, ok1 := existing.([]model.Message)
-	updateMsgs, ok2 := update.([]model.Message)
-	if !ok1 || !ok2 {
+	if !ok1 {
 		return update
 	}
-	return append(existingMsgs, updateMsgs...)
+	switch x := update.(type) {
+	case nil:
+		// no-op
+		return existingMsgs
+	case model.Message:
+		return append(existingMsgs, x)
+	case []model.Message:
+		return append(existingMsgs, x...)
+	case MessageOp:
+		return x.Apply(existingMsgs)
+	case []MessageOp:
+		result := existingMsgs
+		for _, op := range x {
+			result = op.Apply(result)
+		}
+		return result
+	default:
+		// Fallback to default behavior for unsupported types
+		return update
+	}
 }

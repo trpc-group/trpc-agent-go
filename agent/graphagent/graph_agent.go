@@ -170,10 +170,6 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	// Add invocation message to state.
 	if invocation.Message.Content != "" {
 		initialState[graph.StateKeyUserInput] = invocation.Message.Content
-		// Add user message to the messages history in initial state.
-		// This follows LangGraph's pattern where user input is part of the initial messages.
-		userMessage := model.NewUserMessage(invocation.Message.Content)
-		initialState[graph.StateKeyMessages] = []model.Message{userMessage}
 	}
 	// Add session context if available.
 	if invocation.Session != nil {
