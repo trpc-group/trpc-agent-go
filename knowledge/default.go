@@ -242,7 +242,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 			return nil, fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
-		log.Infof("Fetched %d document(s) from source %s (ID: %s)", len(docs), sourceName)
+		log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
 
 		// Per-source statistics.
 		srcStats := newSizeStats(sizeBuckets)
