@@ -115,9 +115,10 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 
 **用户可访问的内置键**：
 
-- `StateKeyUserInput`：用户输入（由 GraphAgent 自动设置，来自 Runner 的消息）
+- `StateKeyUserInput`：用户输入（一次性，消费后清空，由 LLM 节点自动持久化）
+- `StateKeyOneShotMessages`：一次性消息（完整覆盖本轮输入，消费后清空）
 - `StateKeyLastResponse`：最后响应（用于设置最终输出，Executor 会读取此值作为结果）
-- `StateKeyMessages`：消息历史（用于 LLM 节点，由 LLM 节点自动更新）
+- `StateKeyMessages`：消息历史（持久化，支持 append + MessageOp 补丁操作）
 - `StateKeyNodeResponses`：按节点存储的响应映射。键为节点 ID，值为该
   节点的最终文本响应。`StateKeyLastResponse` 用于串行路径上的最终输
   出；当多个并行节点在某处汇合时，应从 `StateKeyNodeResponses` 中按节
@@ -278,6 +279,12 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. 使用 LLM 节点
 
+LLM 节点实现了固定的三段式输入规则，无需配置：
+
+1. **OneShot 优先**：若存在 `one_shot_messages`，以它为本轮输入。
+2. **UserInput 其次**：否则若存在 `user_input`，自动持久化一次。
+3. **历史默认**：否则以持久化历史作为输入。
+
 ```go
 // 创建 LLM 模型
 model := openai.New("gpt-4")
@@ -290,6 +297,60 @@ stateGraph.AddLLMNode("analyze", model,
 3. 评估内容质量
 请提供结构化的分析结果。`,
     nil) // 工具映射
+```
+
+**重要说明**：
+- SystemPrompt 仅用于本次输入，不落持久化状态。
+- 一次性键（`user_input`/`one_shot_messages`）在成功执行后自动清空。
+- 所有状态更新都是原子性的，确保一致性。
+- GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
+  `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
+  进行修改，并能在同一轮生效。
+
+#### 三种输入范式
+
+- OneShot（`StateKeyOneShotMessages`）：
+  - 当该键存在时，本轮仅使用这里提供的 `[]model.Message` 调用模型，
+    通常包含完整的 system prompt 与 user prompt。调用后自动清空。
+  - 适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。
+
+- UserInput（`StateKeyUserInput`）：
+  - 当 `user_input` 非空时，LLM 节点会取持久化历史 `messages`，并将
+    本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
+    `MessageOp`（例如 `AppendMessages`、`ReplaceLastUser`）原子性写入
+    到 `messages`，并自动清空 `user_input` 以避免重复追加。
+  - 适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。
+
+- Messages only（仅 `StateKeyMessages`）：
+  - 多用于工具调用回路。当第一轮经由 `user_input` 发起后，路由到工具
+    节点执行，再回到 LLM 节点时，因为 `user_input` 已被清空，LLM 将走
+  “Messages only” 分支，以历史中的 tool 响应继续推理。
+
+#### 通过 Reducer 与 MessageOp 实现的原子更新
+
+Graph 包的消息状态支持 `MessageOp` 补丁操作（如 `ReplaceLastUser`、
+`AppendMessages` 等），由 `MessageReducer` 实现原子合并。这带来两个
+直接收益：
+
+- 允许在 LLM 节点之前修改 `user_input`，LLM 节点会据此在一次返回中将
+  需要的操作（例如替换最后一条用户消息、追加助手消息）以补丁形式返回，
+  执行器一次性落库，避免竞态与重复。`
+- 兼容传统的直接 `[]Message` 追加用法，同时为复杂更新提供更高的表达力。
+
+示例：在前置节点修改 `user_input`，随后进入 LLM 节点。
+
+```go
+stateGraph.
+    AddNode("prepare_input", func(ctx context.Context, s graph.State) (any, error) {
+        // 清洗/改写用户输入，使其在本轮 LLM 中生效。
+        cleaned := strings.TrimSpace(s[graph.StateKeyUserInput].(string))
+        return graph.State{graph.StateKeyUserInput: cleaned}, nil
+    }).
+    AddLLMNode("ask", modelInstance,
+        "你是一个有帮助的助手。请简洁回答。",
+        nil).
+    SetEntryPoint("prepare_input").
+    SetFinishPoint("ask")
 ```
 
 ### 3. GraphAgent 配置选项
@@ -352,6 +413,12 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
+**工具调用配对机制与二次进入 LLM：**
+- 从 `messages` 尾部向前扫描最近的 `assistant(tool_calls)`；遇到 `user`
+  则停止，确保配对正确。
+- 当工具节点完成后返回到 LLM 节点时，`user_input` 已被清空，LLM 将走
+  “Messages only” 分支，以历史中的 tool 响应继续推理。
+
 ### 6. Runner 配置
 
 Runner 提供了会话管理和执行环境：
@@ -371,6 +438,7 @@ appRunner := runner.NewRunner(
 )
 
 // 使用 Runner 执行工作流
+// Runner 仅设置 StateKeyUserInput，不再预先写入 StateKeyMessages。
 message := model.NewUserMessage("用户输入")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
@@ -573,9 +641,10 @@ const (
 )
 
 // 用户可访问的内置状态键（谨慎使用）
-// StateKeyUserInput    - 用户输入（GraphAgent 自动设置）
+// StateKeyUserInput    - 用户输入（一次性，消费后清空）
+// StateKeyOneShotMessages - 一次性消息（完整覆盖本轮输入）
 // StateKeyLastResponse - 最后响应（Executor 读取作为最终结果）
-// StateKeyMessages     - 消息历史（LLM 节点自动更新）
+// StateKeyMessages     - 消息历史（支持 append + MessageOp 补丁操作）
 // StateKeyMetadata     - 元数据（用户可用的通用存储）
 
 // 系统内部状态键（用户不应直接使用）
@@ -583,6 +652,38 @@ const (
 // StateKeyExecContext  - 执行上下文（Executor 自动设置）
 // StateKeyToolCallbacks - 工具回调（Executor 自动设置）
 // StateKeyModelCallbacks - 模型回调（Executor 自动设置）
+
+// MessageOp 补丁操作
+
+// Graph 包支持通过 MessageOp 接口对消息状态进行原子性补丁操作：
+
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// 替换最后一条用户消息
+replaceOp := graph.ReplaceLastUser{Content: "新的用户输入"}
+
+// 追加消息
+appendOp := graph.AppendMessages{Items: []model.Message{
+    model.NewAssistantMessage("AI 回复"),
+}}
+
+// 清空所有消息（用于重建）
+clearOp := graph.RemoveAllMessages{}
+
+// 组合多个操作（原子性执行）
+ops := []graph.MessageOp{replaceOp, appendOp}
+return graph.State{
+    graph.StateKeyMessages: ops,
+}, nil
+
+// **补丁操作的优势**：
+// - **原子性**：多个操作在单次状态更新中执行
+// - **类型安全**：编译时检查操作类型
+// - **向后兼容**：仍支持传统的 `[]Message` append 操作
+// - **灵活性**：支持复杂的消息状态操作
 
 // 创建状态 Helper
 type StateHelper struct {
