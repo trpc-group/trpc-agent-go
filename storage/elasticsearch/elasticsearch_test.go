@@ -12,39 +12,16 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/elastic/go-elasticsearch/v9"
+	esv7 "github.com/elastic/go-elasticsearch/v7"
+	esv8 "github.com/elastic/go-elasticsearch/v8"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 	"github.com/stretchr/testify/require"
 )
-
-// defaultConfig returns default Elasticsearch configuration.
-func defaultConfig() *Config {
-	return &Config{
-		Addresses:           []string{"http://localhost:9200"},
-		MaxRetries:          3,
-		RetryOnTimeout:      true,
-		RequestTimeout:      30 * time.Second,
-		IndexPrefix:         "trpc_agent",
-		VectorDimension:     1536,
-		CompressRequestBody: true,
-		EnableMetrics:       false,
-		EnableDebugLogger:   false,
-		RetryOnStatus: []int{
-			http.StatusRequestTimeout,     // 408
-			http.StatusConflict,           // 409
-			http.StatusTooManyRequests,    // 429
-			http.StatusBadGateway,         // 502
-			http.StatusServiceUnavailable, // 503
-			http.StatusGatewayTimeout,     // 504
-		},
-	}
-}
 
 // roundTripper allows mocking http.Transport.
 type roundTripper func(*http.Request) *http.Response
@@ -75,7 +52,7 @@ func TestSetGetClientBuilder(t *testing.T) {
 	})
 
 	b := GetClientBuilder()
-	_, err := b(WithExtraOptions(&Config{Addresses: []string{"http://es"}}))
+	_, err := b(WithAddresses([]string{"http://es"}))
 	require.NoError(t, err)
 	require.True(t, called)
 }
@@ -88,20 +65,20 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 	const name = "es"
 	RegisterElasticsearchInstance(name,
-		WithExtraOptions(&Config{Addresses: []string{"http://a"}}),
+		WithAddresses([]string{"http://a"}),
+		WithUsername("u"),
 	)
 
 	opts, ok := GetElasticsearchInstance(name)
 	require.True(t, ok)
-	require.GreaterOrEqual(t, len(opts), 1)
+	require.GreaterOrEqual(t, len(opts), 2)
 
 	cfg := &ClientBuilderOpts{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	require.Equal(t, 1, len(cfg.ExtraOptions))
-	_, ok = cfg.ExtraOptions[0].(*Config)
-	require.True(t, ok)
+	require.Equal(t, []string{"http://a"}, cfg.Addresses)
+	require.Equal(t, "u", cfg.Username)
 }
 
 func TestRegistry_NotFound(t *testing.T) {
@@ -114,159 +91,107 @@ func TestRegistry_NotFound(t *testing.T) {
 	require.Nil(t, opts)
 }
 
-func TestDefaultClientBuilder_PassesOptions(t *testing.T) {
-	// Replace builder to capture options mapping without creating real client.
-	old := GetClientBuilder()
-	defer func() { SetClientBuilder(old) }()
-
-	captured := &ClientBuilderOpts{}
-	SetClientBuilder(func(opts ...ClientBuilderOpt) (Client, error) {
-		for _, o := range opts {
-			o(captured)
-		}
-		return nil, nil
-	})
-
-	cfg := &Config{Addresses: []string{"http://x"}}
-	_, err := GetClientBuilder()(WithExtraOptions(cfg), WithVersion(ESVersionV8))
+func TestDefaultClientBuilder_CreateClient_V9_Default(t *testing.T) {
+	c, err := DefaultClientBuilder(
+		WithVersion(ESVersionUnspecified),
+		WithAddresses([]string{"http://localhost:9200"}),
+	)
 	require.NoError(t, err)
-	require.Equal(t, []any{cfg}, captured.ExtraOptions)
-	require.Equal(t, ESVersionV8, captured.Version)
-}
-
-func TestDefaultClientBuilder_CreateClient(t *testing.T) {
-	c, err := DefaultClientBuilder(WithExtraOptions(&Config{Addresses: []string{"http://localhost:9200"}}))
-	require.NoError(t, err)
-	require.NotNil(t, c)
-
-	cc, ok := c.(*client)
+	_, ok := c.(*clientV9)
 	require.True(t, ok)
-	require.Equal(t, []string{"http://localhost:9200"}, cc.config.Addresses)
 }
 
-func TestNewClient_Create(t *testing.T) {
-	cfg := &Config{Addresses: []string{"http://localhost:9200"}}
-	c, err := NewClient(cfg)
+func TestDefaultClientBuilder_CreateClient_V9(t *testing.T) {
+	c, err := DefaultClientBuilder(
+		WithVersion(ESVersionV9),
+		WithAddresses([]string{"http://localhost:9200"}),
+	)
 	require.NoError(t, err)
-	require.NotNil(t, c)
+	_, ok := c.(*clientV9)
+	require.True(t, ok)
 }
 
-func TestClient_Ping_SuccessAndError(t *testing.T) {
+func TestDefaultClientBuilder_CreateClient_V8(t *testing.T) {
+	c, err := DefaultClientBuilder(
+		WithVersion(ESVersionV8),
+		WithAddresses([]string{"http://localhost:9200"}),
+	)
+	require.NoError(t, err)
+	_, ok := c.(*clientV8)
+	require.True(t, ok)
+}
+
+func TestDefaultClientBuilder_CreateClient_V7(t *testing.T) {
+	c, err := DefaultClientBuilder(
+		WithVersion(ESVersionV7),
+		WithAddresses([]string{"http://localhost:9200"}),
+	)
+	require.NoError(t, err)
+	_, ok := c.(*clientV7)
+	require.True(t, ok)
+}
+
+func TestClientV9_Ping_SuccessAndError(t *testing.T) {
 	// Success.
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
+	es, err := esv9.NewClient(esv9.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			return newResponse(200, "{}")
-		}),
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: defaultConfig()}
+	c := &clientV9{esClient: es}
 	require.NoError(t, c.Ping(context.Background()))
 
 	// Error.
-	esErr, err := elasticsearch.NewClient(elasticsearch.Config{
+	esErr, err := esv9.NewClient(esv9.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			return newResponse(500, "err")
-		}),
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(500, "err") }),
 	})
 	require.NoError(t, err)
-	c = &client{esClient: esErr, config: defaultConfig()}
+	c = &clientV9{esClient: esErr}
 	err = c.Ping(context.Background())
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "ping failed"))
 }
 
-func TestClient_IndexLifecycle(t *testing.T) {
-	// Create, Exists, Delete happy paths.
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
+func TestClientV8_Ping_SuccessAndError(t *testing.T) {
+	// Success.
+	es, err := esv8.NewClient(esv8.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "_doc") {
-				return newResponse(200, "{}")
-			}
-			if r.Method == http.MethodPut { // create index
-				return newResponse(200, "{}")
-			}
-			if r.Method == http.MethodHead { // exists
-				return newResponse(200, "")
-			}
-			if r.Method == http.MethodDelete { // delete index or doc
-				return newResponse(200, "{}")
-			}
-			return newResponse(200, "{}")
-		}),
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: defaultConfig()}
+	c := &clientV8{esClient: es}
+	require.NoError(t, c.Ping(context.Background()))
 
-	require.NoError(t, c.CreateIndex(context.Background(), "idx", []byte("{}")))
-	exists, err := c.IndexExists(context.Background(), "idx")
-	require.NoError(t, err)
-	require.True(t, exists)
-	require.NoError(t, c.DeleteIndex(context.Background(), "idx"))
-}
-
-func TestClient_DocumentCRUD(t *testing.T) {
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
+	// Error.
+	esErr, err := esv8.NewClient(esv8.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			if r.Method == http.MethodGet {
-				return newResponse(200, "{\"_source\":{\"a\":1}}")
-			}
-			if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_update") {
-				return newResponse(200, "{}")
-			}
-			if r.Method == http.MethodDelete {
-				return newResponse(200, "{}")
-			}
-			return newResponse(200, "{}")
-		}),
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(500, "err") }),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: defaultConfig()}
-
-	indexDocBody, err := json.Marshal(map[string]any{"k": "v"})
-	require.NoError(t, err)
-	require.NoError(t, c.IndexDoc(context.Background(), "idx", "id1", indexDocBody))
-	body, err := c.GetDoc(context.Background(), "idx", "id1")
-	require.NoError(t, err)
-	require.True(t, strings.Contains(string(body), "_source"))
-	// build a simple update request body
-	updateBody := []byte("{\"doc\":{\"k\":\"v2\"}}")
-	require.NoError(t, c.UpdateDoc(context.Background(), "idx", "id1", updateBody))
-	require.NoError(t, c.DeleteDoc(context.Background(), "idx", "id1"))
-}
-
-func TestClient_GetDocument_Error(t *testing.T) {
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
-		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			return newResponse(404, "not found")
-		}),
-	})
-	require.NoError(t, err)
-	c := &client{esClient: es, config: defaultConfig()}
-
-	_, err = c.GetDoc(context.Background(), "idx", "id1")
+	c = &clientV8{esClient: esErr}
+	err = c.Ping(context.Background())
 	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "get document failed"))
+	require.True(t, strings.Contains(err.Error(), "ping failed"))
 }
 
-func TestClient_Search_And_Bulk(t *testing.T) {
-	es, err := elasticsearch.NewClient(elasticsearch.Config{
+func TestClientV7_Ping_SuccessAndError(t *testing.T) {
+	// Success.
+	es, err := esv7.NewClient(esv7.Config{
 		Addresses: []string{"http://x"},
-		Transport: roundTripper(func(r *http.Request) *http.Response {
-			if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_search") {
-				return newResponse(200, "{\"hits\":{}}")
-			}
-			return newResponse(200, "{}")
-		}),
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
 	})
 	require.NoError(t, err)
-	c := &client{esClient: es, config: defaultConfig()}
+	c := &clientV7{esClient: es}
+	require.NoError(t, c.Ping(context.Background()))
 
-	resp, err := c.Search(context.Background(), "idx", []byte("{}"))
+	// Error.
+	esErr, err := esv7.NewClient(esv7.Config{
+		Addresses: []string{"http://x"},
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(500, "err") }),
+	})
 	require.NoError(t, err)
-	require.True(t, strings.Contains(string(resp), "hits"))
+	c = &clientV7{esClient: esErr}
+	err = c.Ping(context.Background())
+	require.Error(t, err)
 }

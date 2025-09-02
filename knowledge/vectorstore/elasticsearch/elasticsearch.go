@@ -103,20 +103,18 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	// Create Elasticsearch client configuration.
-	esConfig := &storage.Config{
-		Addresses:              option.addresses,
-		Username:               option.username,
-		Password:               option.password,
-		APIKey:                 option.apiKey,
-		CertificateFingerprint: option.certificateFingerprint,
-		CompressRequestBody:    option.compressRequestBody,
-		EnableMetrics:          option.enableMetrics,
-		EnableDebugLogger:      option.enableDebugLogger,
-		RetryOnStatus:          option.retryOnStatus,
-		MaxRetries:             option.maxRetries,
-	}
-
-	esClient, err := storage.NewClient(esConfig)
+	esClient, err := storage.DefaultClientBuilder(
+		storage.WithAddresses(option.addresses),
+		storage.WithUsername(option.username),
+		storage.WithPassword(option.password),
+		storage.WithAPIKey(option.apiKey),
+		storage.WithCertificateFingerprint(option.certificateFingerprint),
+		storage.WithCompressRequestBody(option.compressRequestBody),
+		storage.WithEnableMetrics(option.enableMetrics),
+		storage.WithEnableDebugLogger(option.enableDebugLogger),
+		storage.WithRetryOnStatus(option.retryOnStatus),
+		storage.WithMaxRetries(option.maxRetries),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch create client: %w", err)
 	}

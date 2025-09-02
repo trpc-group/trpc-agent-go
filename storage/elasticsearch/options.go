@@ -55,8 +55,81 @@ type ClientBuilderOpts struct {
 	// Defaults to ESVersionUnspecified which implies auto or default.
 	Version ESVersion
 
+	// Common SDK config fields across v7/v8/v9.
+
+	// Addresses is the list of Elasticsearch node addresses.
+	Addresses []string
+	// Username is the username for authentication.
+	Username string
+	// Password is the password for authentication.
+	Password string
+	// APIKey is the API key for authentication.
+	APIKey string
+	// CertificateFingerprint is the certificate fingerprint for authentication.
+	CertificateFingerprint string
+	// CompressRequestBody is the flag to enable request body compression.
+	CompressRequestBody bool
+	// EnableMetrics is the flag to enable metrics.
+	EnableMetrics bool
+	// EnableDebugLogger is the flag to enable debug logger.
+	EnableDebugLogger bool
+	// RetryOnStatus is the list of status codes to retry on.
+	RetryOnStatus []int
+	// MaxRetries is the maximum number of retries.
+	MaxRetries int
+
 	// ExtraOptions allows custom builders to accept extra parameters.
 	ExtraOptions []any
+}
+
+// WithAddresses sets node addresses.
+func WithAddresses(addresses []string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.Addresses = addresses }
+}
+
+// WithUsername sets username.
+func WithUsername(username string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.Username = username }
+}
+
+// WithPassword sets password.
+func WithPassword(password string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.Password = password }
+}
+
+// WithAPIKey sets API key.
+func WithAPIKey(apiKey string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.APIKey = apiKey }
+}
+
+// WithCertificateFingerprint sets TLS certificate fingerprint.
+func WithCertificateFingerprint(fp string) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.CertificateFingerprint = fp }
+}
+
+// WithCompressRequestBody toggles request body compression.
+func WithCompressRequestBody(enabled bool) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.CompressRequestBody = enabled }
+}
+
+// WithEnableMetrics toggles transport metrics.
+func WithEnableMetrics(enabled bool) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.EnableMetrics = enabled }
+}
+
+// WithEnableDebugLogger toggles debug logger.
+func WithEnableDebugLogger(enabled bool) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.EnableDebugLogger = enabled }
+}
+
+// WithRetryOnStatus sets HTTP retry status codes.
+func WithRetryOnStatus(codes []int) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.RetryOnStatus = codes }
+}
+
+// WithMaxRetries sets max retries.
+func WithMaxRetries(n int) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.MaxRetries = n }
 }
 
 // WithExtraOptions adds extra, builder-specific options.
@@ -76,6 +149,8 @@ const (
 	ESVersionV7 ESVersion = 7
 	// ESVersionV8 selects Elasticsearch v8.
 	ESVersionV8 ESVersion = 8
+	// ESVersionV9 selects Elasticsearch v9.
+	ESVersionV9 ESVersion = 9
 )
 
 // WithVersion sets the preferred Elasticsearch major version.

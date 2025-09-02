@@ -18,7 +18,7 @@ import (
 // Test that WithExtraOptions accumulates and preserves order.
 func TestOptions_ExtraOptionsOrderAccumulate(t *testing.T) {
 	opts := &ClientBuilderOpts{}
-	first := &Config{Addresses: []string{"http://es1:9200"}}
+	first := map[string]any{"addresses": []string{"http://es1:9200"}}
 	second := "beta"
 	third := 123
 	WithExtraOptions(first)(opts)
@@ -42,7 +42,7 @@ func TestOptions_RegistryAppendBehavior(t *testing.T) {
 
 	const name = "test-append"
 	RegisterElasticsearchInstance(name,
-		WithExtraOptions(&Config{Addresses: []string{"http://a:9200"}}),
+		WithExtraOptions(map[string]any{"addresses": []string{"http://a:9200"}}),
 		WithVersion(ESVersionV8),
 	)
 	RegisterElasticsearchInstance(name,
