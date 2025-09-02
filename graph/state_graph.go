@@ -339,80 +339,226 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 				nodeID = id
 			}
 		}
-		// Build messages from state.
-		messages := buildMessagesFromState(state, instruction)
-
-		// Create request.
-		request := &model.Request{
-			Messages: messages,
-			Tools:    tools,
-			GenerationConfig: model.GenerationConfig{
-				Stream: true,
-			},
-		}
-
-		// Extract model input for event emission.
-		modelInput := extractModelInput(state, instruction)
-
-		// Emit model execution start event.
-		startTime := time.Now()
-		modelName := getModelName(llmModel)
-		emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
-
-		// Execute the model.
-		result, err := executeModelWithEvents(ctx, modelExecutionConfig{
-			ModelCallbacks: modelCallbacks,
-			LLMModel:       llmModel,
-			Request:        request,
-			EventChan:      eventChan,
-			InvocationID:   invocationID,
-			SessionID:      sessionID,
-			Span:           span,
-			NodeID:         nodeID,
-		})
-
-		// Emit model execution complete event.
-		endTime := time.Now()
-		var modelOutput string
-		if err == nil && result != nil {
-			if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
-				modelOutput = finalResponse.Choices[0].Message.Content
-			}
-		}
-		emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
-
+		// Execute the model with three-stage rule.
+		result, err := executeLLM(ctx, state, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
 		}
-
 		return result, nil
 	}
 }
 
-// buildMessagesFromState extracts and builds messages from the state.
+// executeLLM implements the three-stage rule for LLM execution.
+func executeLLM(ctx context.Context, state State, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
+	// Stage 1: Priority to OneShot messages
+	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
+		return executeOneShotStage(ctx, state, v, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	}
+	// Stage 2: Fallback to UserInput
+	if userInput, exists := state[StateKeyUserInput]; exists {
+		if input, ok := userInput.(string); ok && input != "" {
+			return executeUserInputStage(ctx, state, input, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+		}
+	}
+	// Stage 3: Default to History
+	return executeHistoryStage(ctx, state, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+}
+
+// executeOneShotStage handles OneShot messages with atomic updates.
+func executeOneShotStage(ctx context.Context, state State, oneShotMsgs []model.Message, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
+	used := ensureSystemHead(oneShotMsgs, instruction)
+
+	// Create request and execute model.
+	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare atomic update operations.
+	ops := []MessageOp{}
+	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
+		ops = append(ops, ReplaceLastUser{Content: used[len(used)-1].Content})
+	}
+
+	// Extract assistant message from result.
+	asst := extractAssistantMessage(result)
+	if asst != nil {
+		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
+	}
+
+	// Return atomic update: clear OneShot and update messages.
+	return State{
+		StateKeyMessages:        ops,
+		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot
+	}, nil
+}
+
+// executeUserInputStage handles UserInput with atomic updates.
+func executeUserInputStage(ctx context.Context, state State, userInput string, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
+	// Get durable history.
+	var history []model.Message
+	if msgData, exists := state[StateKeyMessages]; exists {
+		if msgs, ok := msgData.([]model.Message); ok {
+			history = msgs
+		}
+	}
+
+	used := ensureSystemHead(history, instruction)
+	ops := []MessageOp{}
+
+	// Check if tail is user and needs replacement.
+	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
+		if used[len(used)-1].Content != userInput {
+			used[len(used)-1] = model.NewUserMessage(userInput)
+			ops = append(ops, ReplaceLastUser{Content: userInput})
+		}
+	} else {
+		// Append new user message.
+		used = append(used, model.NewUserMessage(userInput))
+		ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
+	}
+
+	// Execute model.
+	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract assistant message and append to operations.
+	asst := extractAssistantMessage(result)
+	if asst != nil {
+		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
+	}
+
+	// Return atomic update: clear UserInput and update messages.
+	return State{
+		StateKeyMessages:  ops,
+		StateKeyUserInput: "", // Clear user input
+	}, nil
+}
+
+// executeHistoryStage handles pure history execution.
+func executeHistoryStage(ctx context.Context, state State, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
+	// Get durable history.
+	var history []model.Message
+	if msgData, exists := state[StateKeyMessages]; exists {
+		if msgs, ok := msgData.([]model.Message); ok {
+			history = msgs
+		}
+	}
+
+	used := ensureSystemHead(history, instruction)
+
+	// Execute model.
+	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract assistant message and append to messages.
+	asst := extractAssistantMessage(result)
+	if asst != nil {
+		return State{
+			StateKeyMessages: AppendMessages{Items: []model.Message{*asst}},
+		}, nil
+	}
+
+	return nil, nil
+}
+
+// executeModel executes the model with the given messages.
+func executeModel(ctx context.Context, messages []model.Message, llmModel model.Model, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
+	// Create request.
+	request := &model.Request{
+		Messages: messages,
+		Tools:    tools,
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	// Extract model input for event emission.
+	modelInput := extractModelInput(State{StateKeyMessages: messages}, "")
+
+	// Emit model execution start event.
+	startTime := time.Now()
+	modelName := getModelName(llmModel)
+	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
+
+	// Execute the model.
+	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
+		ModelCallbacks: modelCallbacks,
+		LLMModel:       llmModel,
+		Request:        request,
+		EventChan:      eventChan,
+		InvocationID:   invocationID,
+		SessionID:      sessionID,
+		Span:           span,
+		NodeID:         nodeID,
+	})
+
+	// Emit model execution complete event.
+	endTime := time.Now()
+	var modelOutput string
+	if err == nil && result != nil {
+		if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
+			modelOutput = finalResponse.Choices[0].Message.Content
+		}
+	}
+	emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
+
+	return result, err
+}
+
+// extractAssistantMessage extracts the assistant message from model result.
+func extractAssistantMessage(result any) *model.Message {
+	if result == nil {
+		return nil
+	}
+	if response, ok := result.(*model.Response); ok && len(response.Choices) > 0 {
+		return &response.Choices[0].Message
+	}
+	return nil
+}
+
+// buildMessagesFromState implements the three-stage rule for LLM input:
+// 1. OneShot > 2. UserInput > 3. History
 func buildMessagesFromState(state State, instruction string) []model.Message {
+	// Stage 1: Priority to OneShot messages
+	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
+		return ensureSystemHead(v, instruction)
+	}
+
+	// Stage 2: Fallback to UserInput
 	var messages []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
 		if msgs, ok := msgData.([]model.Message); ok {
 			messages = msgs
 		}
 	}
-	// Add system prompt if provided and not already present.
-	if instruction != "" && (len(messages) == 0 || messages[0].Role != model.RoleSystem) {
-		messages = append([]model.Message{model.NewSystemMessage(instruction)}, messages...)
-	}
-	// Check if the last message is from assistant, and if so, append current user input.
-	// This is required by some APIs that enforce the last message must be from user.
-	if len(messages) > 0 && (messages[len(messages)-1].Role == model.RoleAssistant ||
-		messages[len(messages)-1].Role == model.RoleSystem) {
-		if userInput, exists := state[StateKeyUserInput]; exists {
-			if input, ok := userInput.(string); ok && input != "" {
-				messages = append(messages, model.NewUserMessage(input))
-			}
+
+	if userInput, exists := state[StateKeyUserInput]; exists {
+		if input, ok := userInput.(string); ok && input != "" {
+			messages = append(messages, model.NewUserMessage(input))
 		}
 	}
-	return messages
+
+	return ensureSystemHead(messages, instruction)
+}
+
+// ensureSystemHead ensures system prompt is at the head if provided.
+func ensureSystemHead(in []model.Message, sys string) []model.Message {
+	if sys == "" {
+		return in
+	}
+	if len(in) > 0 && in[0].Role == model.RoleSystem {
+		return in
+	}
+	out := make([]model.Message, 0, len(in)+1)
+	out = append(out, model.NewSystemMessage(sys))
+	out = append(out, in...)
+	return out
 }
 
 // extractExecutionContext extracts execution context from state.
@@ -837,6 +983,8 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 }
 
 // extractToolCallsFromState extracts and validates tool calls from the state.
+// It scans backwards from the end to find the most recent assistant message with tool calls,
+// stopping when it encounters a user message.
 func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCall, error) {
 	var messages []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
@@ -850,13 +998,28 @@ func extractToolCallsFromState(state State, span oteltrace.Span) ([]model.ToolCa
 		return nil, errors.New("no messages in state")
 	}
 
-	lastMessage := messages[len(messages)-1]
-	if lastMessage.Role != model.RoleAssistant {
-		span.SetAttributes(attribute.String("trpc.go.agent.error", "last message is not an assistant message"))
-		return nil, errors.New("last message is not an assistant message")
+	// Scan backwards to find the most recent assistant message with tool calls.
+	// Stop when encountering a user message to ensure proper tool call pairing.
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		switch m.Role {
+		case model.RoleAssistant:
+			if len(m.ToolCalls) > 0 {
+				return m.ToolCalls, nil
+			}
+		case model.RoleUser:
+			// Stop scanning when we encounter a user message.
+			// This ensures we don't process tool calls from previous conversation turns.
+			span.SetAttributes(attribute.String("trpc.go.agent.error", "no assistant message with tool calls found before user message"))
+			return nil, errors.New("no assistant message with tool calls found before user message")
+		default:
+			// Skip system, tool, and other message types.
+			continue
+		}
 	}
 
-	return lastMessage.ToolCalls, nil
+	span.SetAttributes(attribute.String("trpc.go.agent.error", "no assistant message with tool calls found"))
+	return nil, errors.New("no assistant message with tool calls found")
 }
 
 // toolCallsConfig contains configuration for processing tool calls.
