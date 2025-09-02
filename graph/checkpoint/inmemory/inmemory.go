@@ -97,8 +97,8 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 
 		checkpointID = latestTuple.Checkpoint.ID
 		// Update config with the found checkpoint ID.
-		if configurable, ok := config["configurable"].(map[string]any); ok {
-			configurable["checkpoint_id"] = checkpointID
+		if configurable, ok := config[graph.CfgKeyConfigurable].(map[string]any); ok {
+			configurable[graph.CfgKeyCheckpointID] = checkpointID
 		}
 	}
 

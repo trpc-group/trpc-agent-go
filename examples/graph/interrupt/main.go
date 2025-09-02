@@ -273,7 +273,7 @@ func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, us
 
 	// Resume from the latest checkpoint
 	state := graph.State{
-		"__command__": cmd,
+		graph.StateKeyCommand: cmd,
 	}
 
 	inv := &agent.Invocation{InvocationID: threadID}

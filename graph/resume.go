@@ -52,7 +52,7 @@ func ResumeValue[T any](ctx context.Context, state State, key string) (T, bool) 
 	}
 
 	// Check resume map.
-	if resumeMap, exists := state["__resume_map__"]; exists {
+	if resumeMap, exists := state[StateKeyResumeMap]; exists {
 		if resumeMapTyped, ok := resumeMap.(map[string]any); ok {
 			if resumeValue, exists := resumeMapTyped[key]; exists {
 				if typedValue, ok := resumeValue.(T); ok {

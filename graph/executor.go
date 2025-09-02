@@ -556,7 +556,7 @@ func (e *Executor) initializeState(initialState State) State {
 func (e *Executor) initializeChannels(state State, updateChannels bool) {
 	// Create input channels for each state key.
 	for key := range state {
-		channelName := fmt.Sprintf("input:%s", key)
+		channelName := fmt.Sprintf("%s%s", ChannelInputPrefix, key)
 		e.graph.addChannel(channelName, channel.BehaviorLastValue)
 
 		if updateChannels {
