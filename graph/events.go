@@ -51,6 +51,14 @@ const (
 	ObjectTypeGraphChannelUpdate = "graph.channel.update"
 	// ObjectTypeGraphStateUpdate is the object type for state update events.
 	ObjectTypeGraphStateUpdate = "graph.state.update"
+	// ObjectTypeGraphCheckpoint is the object type for checkpoint events.
+	ObjectTypeGraphCheckpoint = "graph.checkpoint"
+	// ObjectTypeGraphCheckpointCreated is the object type for checkpoint creation events.
+	ObjectTypeGraphCheckpointCreated = "graph.checkpoint.created"
+	// ObjectTypeGraphCheckpointCommitted is the object type for checkpoint commit events.
+	ObjectTypeGraphCheckpointCommitted = "graph.checkpoint.committed"
+	// ObjectTypeGraphCheckpointInterrupt is the object type for checkpoint interrupt events.
+	ObjectTypeGraphCheckpointInterrupt = "graph.checkpoint.interrupt"
 )
 
 // Metadata keys for storing event metadata in StateDelta.
@@ -69,6 +77,8 @@ const (
 	MetadataKeyTool = "_tool_metadata"
 	// MetadataKeyModel is the key for model execution metadata.
 	MetadataKeyModel = "_model_metadata"
+	// MetadataKeyCheckpoint is the key for checkpoint metadata.
+	MetadataKeyCheckpoint = "_checkpoint_metadata"
 )
 
 // NodeType represents the type of a graph node.
@@ -1204,4 +1214,137 @@ func extractStateKeys(state State) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// CheckpointEventOptions contains options for creating checkpoint events.
+type CheckpointEventOptions struct {
+	InvocationID   string
+	CheckpointID   string
+	Source         string
+	Step           int
+	Duration       time.Duration
+	Bytes          int64
+	WritesCount    int
+	ResumeReplay   bool
+	InterruptValue any
+}
+
+// CheckpointEventOption is a function that configures checkpoint event options.
+type CheckpointEventOption func(*CheckpointEventOptions)
+
+// WithCheckpointEventInvocationID sets the invocation ID.
+func WithCheckpointEventInvocationID(invocationID string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.InvocationID = invocationID
+	}
+}
+
+// WithCheckpointEventCheckpointID sets the checkpoint ID.
+func WithCheckpointEventCheckpointID(checkpointID string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.CheckpointID = checkpointID
+	}
+}
+
+// WithCheckpointEventSource sets the checkpoint source.
+func WithCheckpointEventSource(source string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Source = source
+	}
+}
+
+// WithCheckpointEventStep sets the step number.
+func WithCheckpointEventStep(step int) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Step = step
+	}
+}
+
+// WithCheckpointEventDuration sets the duration.
+func WithCheckpointEventDuration(duration time.Duration) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Duration = duration
+	}
+}
+
+// WithCheckpointEventBytes sets the bytes written.
+func WithCheckpointEventBytes(bytes int64) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Bytes = bytes
+	}
+}
+
+// WithCheckpointEventWritesCount sets the writes count.
+func WithCheckpointEventWritesCount(count int) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.WritesCount = count
+	}
+}
+
+// WithCheckpointEventResumeReplay sets the resume replay flag.
+func WithCheckpointEventResumeReplay(replay bool) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.ResumeReplay = replay
+	}
+}
+
+// WithCheckpointEventInterruptValue sets the interrupt value.
+func WithCheckpointEventInterruptValue(value any) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.InterruptValue = value
+	}
+}
+
+// NewCheckpointCreatedEvent creates a new checkpoint created event.
+func NewCheckpointCreatedEvent(opts ...CheckpointEventOption) *event.Event {
+	options := &CheckpointEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := map[string]any{
+		"checkpoint_id": options.CheckpointID,
+		"source":        options.Source,
+		"step":          options.Step,
+		"duration":      options.Duration,
+		"bytes":         options.Bytes,
+		"writes_count":  options.WritesCount,
+	}
+
+	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCreated)
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		e.StateDelta[MetadataKeyCheckpoint] = jsonData
+	}
+
+	return e
+}
+
+// NewCheckpointCommittedEvent creates a new checkpoint committed event.
+func NewCheckpointCommittedEvent(opts ...CheckpointEventOption) *event.Event {
+	options := &CheckpointEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := map[string]any{
+		"checkpoint_id": options.CheckpointID,
+		"source":        options.Source,
+		"step":          options.Step,
+		"duration":      options.Duration,
+		"bytes":         options.Bytes,
+		"writes_count":  options.WritesCount,
+	}
+
+	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCommitted)
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		e.StateDelta[MetadataKeyCheckpoint] = jsonData
+	}
+
+	return e
 }

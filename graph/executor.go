@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -395,12 +396,25 @@ func (e *Executor) createCheckpointAndSave(
 	execCtx.pendingWrites = nil // Clear after copying
 	execCtx.pendingMu.Unlock()
 
+	// Track new versions for channels that were updated
+	newVersions := make(map[string]any)
+	channels := e.graph.getAllChannels()
+	for channelName, channel := range channels {
+		if channel.IsAvailable() {
+			newVersions[channelName] = channel.Version
+		}
+	}
+
+	// Set next nodes and channels for recovery
+	checkpoint.NextNodes = e.getNextNodes(execCtx.State)
+	checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+
 	// Use PutFull for atomic storage
 	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
 		Config:        *config,
 		Checkpoint:    checkpoint,
 		Metadata:      metadata,
-		NewVersions:   make(map[string]any), // TODO: implement version tracking
+		NewVersions:   newVersions,
 		PendingWrites: pendingWrites,
 	})
 	if err != nil {
@@ -417,7 +431,15 @@ func (e *Executor) applyPendingWrites(execCtx *ExecutionContext, writes []Pendin
 	if len(writes) == 0 {
 		return
 	}
-	for _, w := range writes {
+
+	// Sort writes by sequence number for deterministic replay
+	sortedWrites := make([]PendingWrite, len(writes))
+	copy(sortedWrites, writes)
+	sort.Slice(sortedWrites, func(i, j int) bool {
+		return sortedWrites[i].Sequence < sortedWrites[j].Sequence
+	})
+
+	for _, w := range sortedWrites {
 		ch, _ := e.graph.getChannel(w.Channel)
 		if ch != nil {
 			ch.Update([]any{w.Value})
@@ -1012,8 +1034,10 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 			// Accumulate into pendingWrites to be saved with the next checkpoint.
 			execCtx.pendingMu.Lock()
 			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
-				Channel: write.Channel,
-				Value:   write.Value,
+				Channel:  write.Channel,
+				Value:    write.Value,
+				TaskID:   execCtx.InvocationID,  // Use invocation ID as task ID for now
+				Sequence: time.Now().UnixNano(), // Use timestamp as sequence for deterministic replay
 			})
 			execCtx.pendingMu.Unlock()
 		}
@@ -1266,4 +1290,45 @@ func (e *Executor) createCheckpointFromState(state State, step int) *Checkpoint 
 	checkpoint.UpdatedChannels = e.getUpdatedChannels()
 
 	return checkpoint
+}
+
+// getNextNodes determines which nodes should be executed next based on the current state.
+func (e *Executor) getNextNodes(state State) []string {
+	var nextNodes []string
+
+	// Check for nodes that are ready to execute based on channel triggers
+	triggerToNodes := e.graph.getTriggerToNodes()
+	for channelName, nodeIDs := range triggerToNodes {
+		channel, _ := e.graph.getChannel(channelName)
+		if channel != nil && channel.IsAvailable() {
+			nextNodes = append(nextNodes, nodeIDs...)
+		}
+	}
+
+	// Remove duplicates
+	seen := make(map[string]bool)
+	var uniqueNodes []string
+	for _, nodeID := range nextNodes {
+		if !seen[nodeID] {
+			seen[nodeID] = true
+			uniqueNodes = append(uniqueNodes, nodeID)
+		}
+	}
+
+	return uniqueNodes
+}
+
+// getNextChannels determines which channels should be triggered next.
+func (e *Executor) getNextChannels(state State) []string {
+	var nextChannels []string
+
+	// Get all channels that are available
+	channels := e.graph.getAllChannels()
+	for channelName, channel := range channels {
+		if channel.IsAvailable() {
+			nextChannels = append(nextChannels, channelName)
+		}
+	}
+
+	return nextChannels
 }

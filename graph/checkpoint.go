@@ -69,6 +69,10 @@ type Checkpoint struct {
 	PendingSends []PendingSend `json:"pending_sends,omitempty"`
 	// InterruptState contains information about the current interrupt state.
 	InterruptState *InterruptState `json:"interrupt_state,omitempty"`
+	// NextNodes contains the next nodes to execute (alternative to pendingWrites).
+	NextNodes []string `json:"next_nodes,omitempty"`
+	// NextChannels contains the next channels to trigger (alternative to pendingWrites).
+	NextChannels []string `json:"next_channels,omitempty"`
 }
 
 // InterruptState represents the state of an interrupted execution.
@@ -133,6 +137,8 @@ type PendingWrite struct {
 	Channel string `json:"channel"`
 	// Value is the value being written.
 	Value any `json:"value"`
+	// Sequence is the global sequence number for deterministic replay.
+	Sequence int64 `json:"sequence"`
 }
 
 // PutRequest contains all data needed to store a checkpoint.
@@ -225,6 +231,8 @@ func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any,
 		VersionsSeen:    versionsSeen,
 		UpdatedChannels: make([]string, 0),
 		PendingSends:    make([]PendingSend, 0),
+		NextNodes:       make([]string, 0),
+		NextChannels:    make([]string, 0),
 	}
 }
 
@@ -240,9 +248,19 @@ func NewCheckpointMetadata(source string, step int) *CheckpointMetadata {
 
 // NewCheckpointConfig creates a new checkpoint configuration.
 func NewCheckpointConfig(threadID string) *CheckpointConfig {
+	if threadID == "" {
+		panic("thread_id cannot be empty")
+	}
+
+	// Generate a default namespace if not provided
+	namespace := DefaultCheckpointNamespace
+	if namespace == "" {
+		namespace = fmt.Sprintf("default:%s:%d", threadID, time.Now().Unix())
+	}
+
 	return &CheckpointConfig{
 		ThreadID:  threadID,
-		Namespace: DefaultCheckpointNamespace,
+		Namespace: namespace,
 		ResumeMap: make(map[string]any),
 		Extra:     make(map[string]any),
 	}
@@ -379,6 +397,10 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		}
 	}
 
+	// Deep copy next nodes and channels.
+	nextNodes := deepCopyStringSlice(c.NextNodes)
+	nextChannels := deepCopyStringSlice(c.NextChannels)
+
 	return &Checkpoint{
 		Version:         c.Version,
 		ID:              uuid.New().String(), // Generate new ID for copy
@@ -389,6 +411,8 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		UpdatedChannels: updatedChannels,
 		PendingSends:    pendingSends,
 		InterruptState:  interruptState,
+		NextNodes:       nextNodes,
+		NextChannels:    nextChannels,
 	}
 }
 
@@ -446,13 +470,19 @@ func GetResumeMap(config map[string]any) map[string]any {
 
 // CreateCheckpointConfig creates a checkpoint configuration (legacy function).
 func CreateCheckpointConfig(threadID string, checkpointID string, namespace string) map[string]any {
+	if threadID == "" {
+		panic("thread_id cannot be empty")
+	}
+	if namespace == "" {
+		// Use a default namespace pattern: svc:env:graph
+		namespace = fmt.Sprintf("default:%s:%d", threadID, time.Now().Unix())
+	}
+
 	config := NewCheckpointConfig(threadID)
 	if checkpointID != "" {
 		config.WithCheckpointID(checkpointID)
 	}
-	if namespace != "" {
-		config.WithNamespace(namespace)
-	}
+	config.WithNamespace(namespace)
 	return config.ToMap()
 }
 

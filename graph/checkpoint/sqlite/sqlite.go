@@ -331,6 +331,84 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 	return nil
 }
 
+// PutFull atomically stores a checkpoint with its pending writes in a single transaction.
+func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[string]any, error) {
+	threadID := graph.GetThreadID(req.Config)
+	checkpointNS := graph.GetNamespace(req.Config)
+	if threadID == "" {
+		return nil, errors.New("thread_id is required")
+	}
+	if req.Checkpoint == nil {
+		return nil, errors.New("checkpoint cannot be nil")
+	}
+
+	// Start transaction
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Marshal checkpoint and metadata
+	checkpointJSON, err := json.Marshal(req.Checkpoint)
+	if err != nil {
+		return nil, fmt.Errorf("marshal checkpoint: %w", err)
+	}
+	metadataJSON, err := json.Marshal(req.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata: %w", err)
+	}
+
+	// Insert checkpoint
+	parentID := graph.GetCheckpointID(req.Config)
+	_, err = tx.ExecContext(
+		ctx,
+		sqliteInsertCheckpoint,
+		threadID,
+		checkpointNS,
+		req.Checkpoint.ID,
+		parentID,
+		req.Checkpoint.Timestamp.UnixNano(),
+		checkpointJSON,
+		metadataJSON,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert checkpoint: %w", err)
+	}
+
+	// Insert pending writes with sequence numbers
+	for idx, w := range req.PendingWrites {
+		valueJSON, err := json.Marshal(w.Value)
+		if err != nil {
+			return nil, fmt.Errorf("marshal write value: %w", err)
+		}
+		_, err = tx.ExecContext(
+			ctx,
+			sqliteInsertWrite,
+			threadID,
+			checkpointNS,
+			req.Checkpoint.ID,
+			w.TaskID,
+			idx, // Use index as sequence number
+			w.Channel,
+			valueJSON,
+			"", // task_path
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert write: %w", err)
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	// Return updated config with the new checkpoint ID
+	updatedConfig := graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, checkpointNS)
+	return updatedConfig, nil
+}
+
 // DeleteThread deletes all checkpoints and writes for the thread.
 func (s *Saver) DeleteThread(ctx context.Context, threadID string) error {
 	if threadID == "" {
