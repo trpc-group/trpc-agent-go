@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// Interrupt represents an interrupt in graph execution that can be resumed.
-type Interrupt struct {
+// InterruptError represents an interrupt in graph execution that can be resumed.
+type InterruptError struct {
 	// Value is the value that was passed to interrupt().
 	Value any
 	// NodeID is the ID of the node where the interrupt occurred.
@@ -31,7 +31,7 @@ type Interrupt struct {
 }
 
 // Error returns the error message for the interrupt.
-func (g *Interrupt) Error() string {
+func (g *InterruptError) Error() string {
 	return fmt.Sprintf("graph interrupted at node %s (step %d): %v", g.NodeID, g.Step, g.Value)
 }
 
@@ -71,23 +71,23 @@ func (c *ResumeCommand) AddResumeValue(taskID string, value any) *ResumeCommand 
 	return c
 }
 
-// NewInterrupt creates a new GraphInterrupt with the given value.
-func NewInterrupt(value any) *Interrupt {
-	return &Interrupt{
+// NewInterruptError creates a new InterruptError with the given value.
+func NewInterruptError(value any) *InterruptError {
+	return &InterruptError{
 		Value:     value,
 		Timestamp: time.Now().UTC(),
 	}
 }
 
-// IsInterrupt checks if an error is a GraphInterrupt.
-func IsInterrupt(err error) bool {
-	_, ok := err.(*Interrupt)
+// IsInterruptError checks if an error is a InterruptError.
+func IsInterruptError(err error) bool {
+	_, ok := err.(*InterruptError)
 	return ok
 }
 
-// GetInterrupt extracts GraphInterrupt from an error.
-func GetInterrupt(err error) (*Interrupt, bool) {
-	if interrupt, ok := err.(*Interrupt); ok {
+// GetInterruptError extracts InterruptError from an error.
+func GetInterruptError(err error) (*InterruptError, bool) {
+	if interrupt, ok := err.(*InterruptError); ok {
 		return interrupt, true
 	}
 	return nil, false

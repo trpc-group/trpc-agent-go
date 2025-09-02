@@ -528,14 +528,14 @@ import (
 
 // Create a node that can interrupt execution
 b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
-    // Use the Suspend helper for clean interrupt/resume handling
+    // Use the Interrupt helper for clean interrupt/resume handling
     prompt := map[string]any{
         "message": "Please approve this action (yes/no):",
         "data":    s["some_data"],
     }
     
-    // Suspend execution and wait for user input
-    resumeValue, err := graph.Suspend(ctx, s, "approval", prompt)
+    // Interrupt execution and wait for user input
+    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
     if err != nil {
         return nil, err
     }

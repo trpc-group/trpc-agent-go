@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -84,11 +84,11 @@ func main() {
 		if *userInputFlag == "" {
 			log.Fatalf("user input required for resume mode")
 		}
-		if err := resumeFromInterrupt(ctx, exec, manager, threadID, *userInputFlag); err != nil {
+		if err := resumeFromInterrupt(ctx, exec, threadID, *userInputFlag); err != nil {
 			log.Fatalf("resume failed: %v", err)
 		}
 	case "demo":
-		if err := demoInterruptResume(ctx, exec, manager, saver, threadID); err != nil {
+		if err := demoInterruptResume(ctx, exec, manager, threadID); err != nil {
 			log.Fatalf("demo failed: %v", err)
 		}
 	default:
@@ -135,15 +135,15 @@ func buildInterruptGraph() (*graph.Graph, error) {
 
 	// Node 2: Request user approval (interrupt point)
 	b.AddNode("request_approval", func(ctx context.Context, s graph.State) (any, error) {
-		// Use the new Suspend helper for cleaner interrupt/resume handling
+		// Use the new Interrupt helper for cleaner interrupt/resume handling
 		interruptValue := map[string]any{
 			"message":  "Please approve the current state (yes/no):",
 			"counter":  getInt(s, stateKeyCounter),
 			"messages": getStrs(s, stateKeyMsgs),
 		}
 
-		// Suspend execution and wait for user input
-		resumeValue, err := graph.Suspend(ctx, s, "approval", interruptValue)
+		// Interrupt execution and wait for user input
+		resumeValue, err := graph.Interrupt(ctx, s, "approval", interruptValue)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +204,7 @@ func runNormalExecution(ctx context.Context, exec *graph.Executor, threadID stri
 	inv := &agent.Invocation{InvocationID: threadID}
 	events, err := exec.Execute(ctx, state, inv)
 	if err != nil {
-		if graph.IsInterrupt(err) {
+		if graph.IsInterruptError(err) {
 			fmt.Printf("⚠️  Execution interrupted: %v\n", err)
 			return nil
 		}
@@ -241,7 +241,7 @@ func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string
 					fmt.Printf("📋 Metadata: %s\n", string(metadata))
 					// Check if this contains interrupt information
 					if strings.Contains(string(metadata), "interrupt") {
-						fmt.Printf("⚠️ 检测到中断事件！\n")
+						fmt.Printf("⚠️  Detected interrupt event!\n")
 						interrupted = true
 					}
 				}
@@ -250,7 +250,7 @@ func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string
 	}
 
 	if interrupted {
-		fmt.Printf("💾 执行被中断，检查点已保存\n")
+		fmt.Printf("💾 Execution interrupted, checkpoint saved\n")
 		return nil
 	}
 
@@ -261,7 +261,7 @@ func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string
 	return nil
 }
 
-func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, threadID, userInput string) error {
+func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, userInput string) error {
 	fmt.Printf("⏪ Resuming from interrupt with input: %s\n", userInput)
 
 	// Create resume command with ResumeMap for better key-based resume
@@ -292,7 +292,7 @@ func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, manager *gra
 	return nil
 }
 
-func demoInterruptResume(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, saver graph.CheckpointSaver, threadID string) error {
+func demoInterruptResume(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, threadID string) error {
 	fmt.Println("🎬 Demo: interrupt -> resume -> complete")
 
 	// Step 1: Run until interrupt
@@ -303,7 +303,7 @@ func demoInterruptResume(ctx context.Context, exec *graph.Executor, manager *gra
 
 	// Step 2: Resume with "yes"
 	fmt.Println("\n2️⃣  Resuming with 'yes'...")
-	if err := resumeFromInterrupt(ctx, exec, manager, threadID, "yes"); err != nil {
+	if err := resumeFromInterrupt(ctx, exec, threadID, "yes"); err != nil {
 		return err
 	}
 

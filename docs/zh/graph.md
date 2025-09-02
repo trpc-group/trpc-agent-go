@@ -1416,14 +1416,14 @@ import (
 
 // 创建一个可以中断执行的节点
 b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
-    // 使用 Suspend 辅助函数进行清晰的中断/恢复处理
+    // 使用 Interrupt 辅助函数进行清晰的中断/恢复处理
     prompt := map[string]any{
         "message": "请批准此操作 (yes/no):",
         "data":    s["some_data"],
     }
     
     // 暂停执行并等待用户输入
-    resumeValue, err := graph.Suspend(ctx, s, "approval", prompt)
+    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
     if err != nil {
         return nil, err
     }

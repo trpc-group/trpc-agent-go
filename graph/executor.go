@@ -170,7 +170,7 @@ func (e *Executor) Execute(
 		defer close(eventChan)
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error
-			if IsInterrupt(err) {
+			if IsInterruptError(err) {
 				// For interrupt errors, we don't emit an error event
 				// The interrupt will be handled by the caller
 				return
@@ -294,7 +294,7 @@ func (e *Executor) executeGraph(
 		// Execute phase: run all tasks concurrently.
 		if err := e.executeStep(ctx, execCtx, tasks, step); err != nil {
 			// Check if this is an interrupt that should be handled.
-			if interrupt, ok := GetInterrupt(err); ok {
+			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
 				return e.handleInterrupt(ctx, execCtx, interrupt, step, checkpointConfig)
 			}
@@ -895,9 +895,9 @@ func (e *Executor) executeSingleTask(
 	result, err := e.executeNodeFunction(nodeCtx, execCtx, t.NodeID)
 	if err != nil {
 		// Check if this is an interrupt error
-		if IsInterrupt(err) {
+		if IsInterruptError(err) {
 			// For interrupt errors, we need to set the node ID and task ID
-			if interrupt, ok := GetInterrupt(err); ok {
+			if interrupt, ok := GetInterruptError(err); ok {
 				interrupt.NodeID = t.NodeID
 				interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
 				interrupt.Step = step
@@ -1375,7 +1375,7 @@ func (e *Executor) processConditionalResult(
 func (e *Executor) handleInterrupt(
 	ctx context.Context,
 	execCtx *ExecutionContext,
-	interrupt *Interrupt,
+	interrupt *InterruptError,
 	step int,
 	checkpointConfig map[string]any,
 ) error {
