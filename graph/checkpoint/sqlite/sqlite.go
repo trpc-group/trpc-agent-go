@@ -198,8 +198,36 @@ func (s *Saver) List(
 	if threadID == "" {
 		return nil, errors.New("thread_id is required")
 	}
-	// Query checkpoints ordered by timestamp descending (newest first)
-	rows, err := s.db.QueryContext(ctx, "SELECT checkpoint_id, ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? ORDER BY ts DESC", threadID, checkpointNS)
+	// Query beforeTs if Before filter is specified
+	var beforeTs *int64
+	if filter != nil && filter.Before != nil {
+		beforeID := graph.GetCheckpointID(filter.Before)
+		if beforeID != "" {
+			row := s.db.QueryRowContext(ctx,
+				"SELECT ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
+				threadID, checkpointNS, beforeID)
+			var ts int64
+			if err := row.Scan(&ts); err == nil {
+				beforeTs = &ts
+			}
+		}
+	}
+
+	// Build query with proper filtering and ordering
+	q := "SELECT checkpoint_id, ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=?"
+	args := []any{threadID, checkpointNS}
+	if beforeTs != nil {
+		q += " AND ts < ?"
+		args = append(args, *beforeTs)
+	}
+	q += " ORDER BY ts DESC"
+	if filter != nil && filter.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, filter.Limit)
+	}
+
+	// Execute the optimized query
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("select checkpoints: %w", err)
 	}
@@ -210,22 +238,6 @@ func (s *Saver) List(
 		var ts int64
 		if err := rows.Scan(&checkpointID, &ts); err != nil {
 			return nil, fmt.Errorf("scan checkpoint: %w", err)
-		}
-		// Apply before filter if specified.
-		if filter != nil && filter.Before != nil {
-			beforeID := graph.GetCheckpointID(filter.Before)
-			if beforeID != "" {
-				// Get timestamp of the before checkpoint for proper time-based filtering
-				var beforeTs int64
-				beforeRow := s.db.QueryRowContext(ctx,
-					"SELECT ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
-					threadID, checkpointNS, beforeID)
-				if err := beforeRow.Scan(&beforeTs); err == nil {
-					if ts >= beforeTs {
-						continue
-					}
-				}
-			}
 		}
 		// Get full tuple for this checkpoint.
 		cfg := graph.CreateCheckpointConfig(threadID, checkpointID, checkpointNS)

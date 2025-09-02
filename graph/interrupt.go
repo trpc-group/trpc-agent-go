@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// GraphInterrupt represents an interrupt in graph execution that can be resumed.
-type GraphInterrupt struct {
+// Interrupt represents an interrupt in graph execution that can be resumed.
+type Interrupt struct {
 	// Value is the value that was passed to interrupt().
 	Value any
 	// NodeID is the ID of the node where the interrupt occurred.
@@ -31,7 +31,7 @@ type GraphInterrupt struct {
 }
 
 // Error returns the error message for the interrupt.
-func (g *GraphInterrupt) Error() string {
+func (g *Interrupt) Error() string {
 	return fmt.Sprintf("graph interrupted at node %s (step %d): %v", g.NodeID, g.Step, g.Value)
 }
 
@@ -71,9 +71,9 @@ func (c *ResumeCommand) AddResumeValue(taskID string, value any) *ResumeCommand 
 	return c
 }
 
-// Interrupt creates a new GraphInterrupt with the given value.
-func Interrupt(value any) *GraphInterrupt {
-	return &GraphInterrupt{
+// NewInterrupt creates a new GraphInterrupt with the given value.
+func NewInterrupt(value any) *Interrupt {
+	return &Interrupt{
 		Value:     value,
 		Timestamp: time.Now().UTC(),
 	}
@@ -81,13 +81,13 @@ func Interrupt(value any) *GraphInterrupt {
 
 // IsInterrupt checks if an error is a GraphInterrupt.
 func IsInterrupt(err error) bool {
-	_, ok := err.(*GraphInterrupt)
+	_, ok := err.(*Interrupt)
 	return ok
 }
 
 // GetInterrupt extracts GraphInterrupt from an error.
-func GetInterrupt(err error) (*GraphInterrupt, bool) {
-	if interrupt, ok := err.(*GraphInterrupt); ok {
+func GetInterrupt(err error) (*Interrupt, bool) {
+	if interrupt, ok := err.(*Interrupt); ok {
 		return interrupt, true
 	}
 	return nil, false

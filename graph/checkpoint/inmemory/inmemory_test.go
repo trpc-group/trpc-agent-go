@@ -11,6 +11,7 @@ package inmemory
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,9 +60,21 @@ func TestInMemoryCheckpointSaver(t *testing.T) {
 	for key, expectedValue := range checkpoint.ChannelValues {
 		actualValue, exists := retrieved.ChannelValues[key]
 		assert.True(t, exists, "Key %s should exist", key)
-		// Convert both to float64 for comparison since JSON unmarshaling converts int to float64
+		// Handle both float64 and json.Number types for comparison
 		expectedFloat := float64(expectedValue.(int))
-		actualFloat := actualValue.(float64)
+		var actualFloat float64
+		switch v := actualValue.(type) {
+		case float64:
+			actualFloat = v
+		case json.Number:
+			if f, err := v.Float64(); err == nil {
+				actualFloat = f
+			} else {
+				t.Fatalf("Failed to convert json.Number to float64: %v", err)
+			}
+		default:
+			t.Fatalf("Unexpected type for actualValue: %T", actualValue)
+		}
 		assert.Equal(t, expectedFloat, actualFloat)
 	}
 

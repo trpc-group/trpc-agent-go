@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -584,6 +585,111 @@ func (cm *CheckpointManager) DeleteThread(ctx context.Context, threadID string) 
 	return cm.saver.DeleteThread(ctx, threadID)
 }
 
+// Latest returns the most recent checkpoint for a thread and namespace.
+func (cm *CheckpointManager) Latest(ctx context.Context, threadID, namespace string) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	config := CreateCheckpointConfig(threadID, "", namespace)
+	checkpoints, err := cm.saver.List(ctx, config, &CheckpointFilter{Limit: 1})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+
+	if len(checkpoints) == 0 {
+		return nil, nil
+	}
+
+	return checkpoints[0], nil
+}
+
+// Goto jumps to a specific checkpoint by ID.
+func (cm *CheckpointManager) Goto(ctx context.Context, threadID, namespace, checkpointID string) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	config := CreateCheckpointConfig(threadID, checkpointID, namespace)
+	return cm.saver.GetTuple(ctx, config)
+}
+
+// BranchFrom creates a new checkpoint branch from an existing one.
+func (cm *CheckpointManager) BranchFrom(
+	ctx context.Context,
+	threadID, namespace, checkpointID, newNamespace string,
+) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the source checkpoint
+	sourceConfig := CreateCheckpointConfig(threadID, checkpointID, namespace)
+	sourceTuple, err := cm.saver.GetTuple(ctx, sourceConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
+	}
+
+	if sourceTuple == nil {
+		return nil, fmt.Errorf("source checkpoint not found")
+	}
+
+	// Create a new checkpoint in the new namespace
+	newConfig := CreateCheckpointConfig(threadID, "", newNamespace)
+	newCheckpoint := sourceTuple.Checkpoint.Copy()
+	newCheckpoint.ID = uuid.New().String()
+	newCheckpoint.Timestamp = time.Now().UTC()
+
+	// Store the new checkpoint
+	req := PutFullRequest{
+		Config:        newConfig,
+		Checkpoint:    newCheckpoint,
+		Metadata:      NewCheckpointMetadata(CheckpointSourceFork, 0),
+		NewVersions:   newCheckpoint.ChannelVersions,
+		PendingWrites: []PendingWrite{},
+	}
+
+	updatedConfig, err := cm.saver.PutFull(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create branch checkpoint: %w", err)
+	}
+
+	// Return the new checkpoint tuple
+	return &CheckpointTuple{
+		Config:     updatedConfig,
+		Checkpoint: newCheckpoint,
+		Metadata:   NewCheckpointMetadata(CheckpointSourceFork, 0),
+	}, nil
+}
+
+// ResumeFromLatest resumes execution from the latest checkpoint with a resume command.
+func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, threadID, namespace string, cmd *Command) (State, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the latest checkpoint
+	latest, err := cm.Latest(ctx, threadID, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest checkpoint: %w", err)
+	}
+
+	if latest == nil {
+		return nil, fmt.Errorf("no checkpoint found for thread %s in namespace %s", threadID, namespace)
+	}
+
+	// Convert channel values back to state
+	state := make(State)
+	for k, v := range latest.Checkpoint.ChannelValues {
+		state[k] = v
+	}
+	// Add the resume command
+	if cmd != nil {
+		state["__command__"] = cmd
+	}
+	return state, nil
+}
+
 // IsInterrupted checks if a checkpoint represents an interrupted execution.
 func (c *Checkpoint) IsInterrupted() bool {
 	return c.InterruptState != nil && c.InterruptState.NodeID != ""
@@ -644,13 +750,14 @@ func deepCopy(src any) any {
 		return src
 	}
 
-	// Unmarshal to a generic map
+	// Unmarshal to a generic map with number preservation
 	var result any
-	if err := json.Unmarshal(data, &result); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber() // Preserve number types as json.Number
+	if err := decoder.Decode(&result); err != nil {
 		// If unmarshaling fails, return the original value
 		return src
 	}
-
 	return result
 }
 

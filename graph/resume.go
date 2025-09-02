@@ -34,7 +34,7 @@ func Suspend(ctx context.Context, state State, key string, prompt any) (any, err
 	}
 
 	// Not resuming, so suspend with the prompt
-	return nil, Interrupt(prompt)
+	return nil, NewInterrupt(prompt)
 }
 
 // ResumeValue extracts a resume value from the state with type safety.
