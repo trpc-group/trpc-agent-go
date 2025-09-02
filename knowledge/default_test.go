@@ -241,10 +241,7 @@ func TestGetAllMetadata(t *testing.T) {
 
 	kb := New(WithSources([]source.Source{source1, source2}))
 
-	allMetadata, err := kb.GetAllMetadata(context.Background())
-	if err != nil {
-		t.Fatalf("GetAllMetadata returned error: %v", err)
-	}
+	allMetadata := source.GetAllMetadata(source1, source2)
 
 	// Verify category (both sources have ["test", "demo"] - should be 1 unique array)
 	categories := allMetadata["category"]
@@ -278,10 +275,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 
 	kb := New(WithSources([]source.Source{source1, source2}))
 
-	allMetadataKeys, err := kb.GetAllMetadataKeys(context.Background())
-	if err != nil {
-		t.Fatalf("GetAllMetadataKeys returned error: %v", err)
-	}
+	allMetadataKeys := kb.GetAllMetadataWithoutValues()
 
 	// Verify that we get all expected keys
 	expectedKeys := map[string]bool{
@@ -296,8 +290,8 @@ func TestGetAllMetadataKeys(t *testing.T) {
 	}
 
 	for _, key := range allMetadataKeys {
-		if !expectedKeys[key] {
-			t.Errorf("Unexpected key: %s", key)
+		if !expectedKeys[fmt.Sprintf("%v", key)] {
+			t.Errorf("Unexpected key: %v", key)
 		}
 	}
 }
