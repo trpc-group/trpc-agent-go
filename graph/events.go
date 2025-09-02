@@ -1174,6 +1174,10 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 
 	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphExecution)
 	e.Response.Done = true
+	// Always initialize StateDelta to a non-nil map to ensure consumers can rely on it.
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
 	if finalResponse != "" {
 		e.Response.Choices = []model.Choice{
 			{
@@ -1187,9 +1191,6 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	}
 
 	// Add completion metadata to StateDelta
-	if e.StateDelta == nil {
-		e.StateDelta = make(map[string][]byte)
-	}
 	completionMetadata := CompletionMetadata{
 		TotalSteps:     options.TotalSteps,
 		TotalDuration:  options.TotalDuration,
@@ -1198,7 +1199,19 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	if jsonData, err := json.Marshal(completionMetadata); err == nil {
 		e.StateDelta[MetadataKeyCompletion] = jsonData
 	}
-
+	// Also include a serialized snapshot of the final state itself so downstream
+	// consumers (including tests) can reconstruct state without additional logic.
+	if options.FinalState != nil {
+		for key, value := range options.FinalState {
+			if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
+				key == MetadataKeyState || key == MetadataKeyCompletion {
+				continue
+			}
+			if jsonData, err := json.Marshal(value); err == nil {
+				e.StateDelta[key] = jsonData
+			}
+		}
+	}
 	return e
 }
 

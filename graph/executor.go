@@ -341,10 +341,8 @@ func (e *Executor) executeGraph(
 			completionEvent.StateDelta[key] = jsonData
 		}
 	}
-	select {
-	case eventChan <- completionEvent:
-	default:
-	}
+	// Always deliver completion event to consumers.
+	eventChan <- completionEvent
 	return nil
 }
 
