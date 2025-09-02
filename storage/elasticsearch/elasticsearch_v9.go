@@ -37,13 +37,12 @@ func newClientV9(o *ClientBuilderOpts) (Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch: create v9 client: %w", err)
 	}
-	return &clientV9{esClient: cli, config: &cfg}, nil
+	return &clientV9{esClient: cli}, nil
 }
 
 // client implements the Client interface.
 type clientV9 struct {
 	esClient *elasticsearch.Client
-	config   *elasticsearch.Config
 }
 
 // Ping checks if Elasticsearch is available.

@@ -37,13 +37,12 @@ func newClientV8(o *ClientBuilderOpts) (Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch: create v8 client: %w", err)
 	}
-	return &clientV8{esClient: cli, config: &cfg}, nil
+	return &clientV8{esClient: cli}, nil
 }
 
 // clientV8 implements the Client interface for v8 SDK.
 type clientV8 struct {
 	esClient *esv8.Client
-	config   *esv8.Config
 }
 
 // Ping checks if Elasticsearch is available.

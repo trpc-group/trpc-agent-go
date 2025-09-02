@@ -13,6 +13,10 @@ package elasticsearch
 import (
 	"context"
 	"fmt"
+
+	esv7 "github.com/elastic/go-elasticsearch/v7"
+	esv8 "github.com/elastic/go-elasticsearch/v8"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 )
 
 // Client defines the minimal interface for Elasticsearch operations.
@@ -54,5 +58,20 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 		return newClientV9(o)
 	default:
 		return nil, fmt.Errorf("elasticsearch: unknown version %d", o.Version)
+	}
+}
+
+// NewClient wraps a specific go-elasticsearch client (*v7/*v8/*v9) and returns
+// a storage-level Client adapter.
+func NewClient(client any) (Client, error) {
+	switch cli := client.(type) {
+	case *esv7.Client:
+		return &clientV7{esClient: cli}, nil
+	case *esv8.Client:
+		return &clientV8{esClient: cli}, nil
+	case *esv9.Client:
+		return &clientV9{esClient: cli}, nil
+	default:
+		return nil, fmt.Errorf("elasticsearch: unsupported client type %T", client)
 	}
 }

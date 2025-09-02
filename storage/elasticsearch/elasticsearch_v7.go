@@ -37,13 +37,12 @@ func newClientV7(o *ClientBuilderOpts) (Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch: create v7 client: %w", err)
 	}
-	return &clientV7{esClient: cli, config: &cfg}, nil
+	return &clientV7{esClient: cli}, nil
 }
 
 // clientV7 implements the Client interface for v7 SDK.
 type clientV7 struct {
 	esClient *esv7.Client
-	config   *esv7.Config
 }
 
 // Ping checks if Elasticsearch is available.

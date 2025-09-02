@@ -544,3 +544,34 @@ func TestClientV7_CRUDAndSearch(t *testing.T) {
 	_, err = c.GetDoc(ctx, "idx", "1")
 	require.Error(t, err)
 }
+
+func TestNewClient_WrapsSupportedClients(t *testing.T) {
+	// v9
+	es9, err := esv9.NewClient(esv9.Config{Addresses: []string{"http://mock"}, Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	require.NoError(t, err)
+	c, err := NewClient(es9)
+	require.NoError(t, err)
+	_, ok := c.(*clientV9)
+	require.True(t, ok)
+
+	// v8
+	es8, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	require.NoError(t, err)
+	c, err = NewClient(es8)
+	require.NoError(t, err)
+	_, ok = c.(*clientV8)
+	require.True(t, ok)
+
+	// v7
+	es7, err := esv7.NewClient(esv7.Config{Addresses: []string{"http://mock"}, Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	require.NoError(t, err)
+	c, err = NewClient(es7)
+	require.NoError(t, err)
+	_, ok = c.(*clientV7)
+	require.True(t, ok)
+}
+
+func TestNewClient_UnsupportedType(t *testing.T) {
+	_, err := NewClient(123)
+	require.Error(t, err)
+}
