@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
@@ -210,9 +211,8 @@ func runNormalExecution(ctx context.Context, exec *graph.Executor, threadID stri
 		}
 		return fmt.Errorf("execute failed: %w", err)
 	}
-	for range events {
-	}
-	fmt.Printf("✅ Normal execution completed\n")
+	n := consumeAllEvents(events)
+	fmt.Printf("✅ Normal execution completed (%d events)\n", n)
 	return nil
 }
 
@@ -281,14 +281,8 @@ func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, us
 	if err != nil {
 		return fmt.Errorf("resume failed: %w", err)
 	}
-
-	// Process events
-	for event := range events {
-		// Just consume events for now
-		_ = event
-	}
-
-	fmt.Printf("✅ Resume completed\n")
+	n := consumeAllEvents(events)
+	fmt.Printf("✅ Resume completed (%d events)\n", n)
 	return nil
 }
 
@@ -368,4 +362,13 @@ func getKeys(m map[string][]byte) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// consumeAllEvents drains the event channel and returns the number of events.
+func consumeAllEvents(ch <-chan *event.Event) int {
+	count := 0
+	for range ch {
+		count++
+	}
+	return count
 }

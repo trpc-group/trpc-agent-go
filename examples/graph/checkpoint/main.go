@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
@@ -191,9 +192,8 @@ func runSteps(ctx context.Context, exec *graph.Executor, threadID string, steps 
 		if err != nil {
 			return fmt.Errorf("execute failed: %w", err)
 		}
-		for range events {
-		}
-		fmt.Printf("✅ Run %d completed\n", i+1)
+		n := consumeAllEvents(events)
+		fmt.Printf("✅ Run %d completed (%d events)\n", i+1, n)
 	}
 	return nil
 }
@@ -205,9 +205,8 @@ func resumeLatest(ctx context.Context, exec *graph.Executor, threadID string) er
 	if err != nil {
 		return fmt.Errorf("resume failed: %w", err)
 	}
-	for range events {
-	}
-	fmt.Printf("✅ Resume completed\n")
+	n := consumeAllEvents(events)
+	fmt.Printf("✅ Resume completed (%d events)\n", n)
 	return nil
 }
 
@@ -223,9 +222,8 @@ func resumeSpecific(ctx context.Context, exec *graph.Executor, manager *graph.Ch
 	if err != nil {
 		return fmt.Errorf("execute failed: %w", err)
 	}
-	for range events {
-	}
-	fmt.Printf("✅ Resume from %s completed\n", checkpointID)
+	n := consumeAllEvents(events)
+	fmt.Printf("✅ Resume from %s completed (%d events)\n", checkpointID, n)
 	return nil
 }
 
@@ -345,4 +343,13 @@ func getStrs(s graph.State, key string) []string {
 		return v
 	}
 	return []string{}
+}
+
+// consumeAllEvents drains the event channel and returns the number of events.
+func consumeAllEvents(ch <-chan *event.Event) int {
+	count := 0
+	for range ch {
+		count++
+	}
+	return count
 }
