@@ -125,8 +125,8 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 
 		switch n := node.(type) {
 		case *ast.Heading:
-			// Save previous section if it has content.
-			if currentContent.Len() > 0 {
+			// Save previous section if it exists
+			if currentSection.Level > 0 {
 				currentSection.Content = strings.TrimSpace(currentContent.String())
 				currentSection.End = position
 				sections = append(sections, currentSection)
@@ -201,6 +201,23 @@ func (m *MarkdownChunking) parseMarkdownSections(content string) []markdownSecti
 		currentSection.Content = strings.TrimSpace(currentContent.String())
 		currentSection.End = len(content)
 		sections = append(sections, currentSection)
+	} else if currentSection.Level > 0 {
+		// Handle case where we have headers but no content
+		currentSection.Content = ""
+		currentSection.End = len(content)
+		sections = append(sections, currentSection)
+	}
+
+	// If no sections found, treat entire content as one section
+	if len(sections) == 0 {
+		sections = append(sections, markdownSection{
+			Level:   0,
+			Title:   "",
+			Content: content,
+			Start:   0,
+			End:     len(content),
+			Type:    "content",
+		})
 	}
 
 	return sections
@@ -234,13 +251,12 @@ func (m *MarkdownChunking) createChunksFromSections(
 	chunkNumber := 1
 
 	for _, section := range sections {
+		// For headers without content, still create a chunk with just the header
+		chunkContent := m.formatSection(section)
+
 		// If section is small enough, create a single chunk.
-		if len(section.Content) <= m.chunkSize {
-			chunkContent := m.formatSection(section)
+		if encoding.RuneCount(section.Content) <= m.chunkSize {
 			chunk := createChunk(originalDoc, chunkContent, chunkNumber)
-			chunk.Metadata["markdown_level"] = section.Level
-			chunk.Metadata["markdown_title"] = section.Title
-			chunk.Metadata["markdown_type"] = section.Type
 			chunks = append(chunks, chunk)
 			chunkNumber++
 			continue
@@ -284,45 +300,73 @@ func (m *MarkdownChunking) splitLargeSection(
 	content := section.Content
 	chunkNumber := startChunkNumber
 
-	// Split by paragraphs first.
+	// Try to split by paragraphs first for better readability
 	paragraphs := strings.Split(content, "\n\n")
 
-	var currentChunk strings.Builder
-	currentSize := 0
+	// If we have multiple paragraphs, try to group them intelligently
+	if len(paragraphs) > 1 {
+		var currentChunk strings.Builder
+		currentSize := 0
 
-	for _, paragraph := range paragraphs {
-		paragraphSize := encoding.RuneCount(paragraph)
+		for _, paragraph := range paragraphs {
+			paragraphSize := encoding.RuneCount(paragraph)
 
-		// If adding this paragraph would exceed chunk size, create a new chunk.
-		if currentSize+paragraphSize > m.chunkSize && currentSize > 0 {
+			// If adding this paragraph would exceed chunk size, create a new chunk
+			if currentSize+paragraphSize > m.chunkSize && currentSize > 0 {
+				chunkContent := m.formatSectionWithHeader(section, currentChunk.String())
+				chunk := createChunk(originalDoc, chunkContent, chunkNumber)
+				chunks = append(chunks, chunk)
+
+				chunkNumber++
+				currentChunk.Reset()
+				currentSize = 0
+			}
+
+			// If single paragraph is too large, split it with fixed-size chunking
+			if paragraphSize > m.chunkSize {
+				// Save current chunk if it has content
+				if currentChunk.Len() > 0 {
+					chunkContent := m.formatSectionWithHeader(section, currentChunk.String())
+					chunk := createChunk(originalDoc, chunkContent, chunkNumber)
+					chunks = append(chunks, chunk)
+					chunkNumber++
+					currentChunk.Reset()
+					currentSize = 0
+				}
+
+				// Split the large paragraph into fixed-size chunks
+				paraChunks := encoding.SafeSplitBySize(paragraph, m.chunkSize)
+				for _, paraChunk := range paraChunks {
+					chunkContent := m.formatSectionWithHeader(section, paraChunk)
+					chunk := createChunk(originalDoc, chunkContent, chunkNumber)
+					chunks = append(chunks, chunk)
+					chunkNumber++
+				}
+			} else {
+				// Add paragraph to current chunk
+				if currentChunk.Len() > 0 {
+					currentChunk.WriteString("\n\n")
+				}
+				currentChunk.WriteString(paragraph)
+				currentSize += paragraphSize
+			}
+		}
+
+		// Add the last chunk if there's content
+		if currentChunk.Len() > 0 {
 			chunkContent := m.formatSectionWithHeader(section, currentChunk.String())
 			chunk := createChunk(originalDoc, chunkContent, chunkNumber)
-			chunk.Metadata["markdown_level"] = section.Level
-			chunk.Metadata["markdown_title"] = section.Title
-			chunk.Metadata["markdown_type"] = section.Type
 			chunks = append(chunks, chunk)
-
+		}
+	} else {
+		// Single "paragraph" or no paragraph structure - use fixed-size chunking
+		textChunks := encoding.SafeSplitBySize(content, m.chunkSize)
+		for _, chunkText := range textChunks {
+			chunkContent := m.formatSectionWithHeader(section, chunkText)
+			chunk := createChunk(originalDoc, chunkContent, chunkNumber)
+			chunks = append(chunks, chunk)
 			chunkNumber++
-			currentChunk.Reset()
-			currentSize = 0
 		}
-
-		// Add paragraph to current chunk.
-		if currentChunk.Len() > 0 {
-			currentChunk.WriteString("\n\n")
-		}
-		currentChunk.WriteString(paragraph)
-		currentSize += paragraphSize
-	}
-
-	// Add the last chunk if there's content.
-	if currentChunk.Len() > 0 {
-		chunkContent := m.formatSectionWithHeader(section, currentChunk.String())
-		chunk := createChunk(originalDoc, chunkContent, chunkNumber)
-		chunk.Metadata["markdown_level"] = section.Level
-		chunk.Metadata["markdown_title"] = section.Title
-		chunk.Metadata["markdown_type"] = section.Type
-		chunks = append(chunks, chunk)
 	}
 
 	return chunks
