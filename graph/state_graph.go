@@ -175,7 +175,7 @@ func (sg *StateGraph) AddLLMNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools)
+	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id))
 	// Add LLM node type option
 	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
 	sg.AddNode(id, llmNodeFunc, llmOpts...)
@@ -323,24 +323,36 @@ func (sg *StateGraph) MustCompile() *Graph {
 	return graph
 }
 
+// LLMNodeFuncOption is a function that configures the LLM node function.
+type LLMNodeFuncOption func(*llmRunner)
+
+// WithLLMNodeID sets the node ID for the LLM node function.
+func WithLLMNodeID(nodeID string) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.nodeID = nodeID
+	}
+}
+
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
-func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]tool.Tool) NodeFunc {
+func NewLLMNodeFunc(
+	llmModel model.Model,
+	instruction string,
+	tools map[string]tool.Tool,
+	opts ...LLMNodeFuncOption,
+) NodeFunc {
+	runner := &llmRunner{
+		llmModel:    llmModel,
+		instruction: instruction,
+		tools:       tools,
+	}
+	for _, opt := range opts {
+		opt(runner)
+	}
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
 		defer span.End()
-		// Extract execution context and model information.
-		invocationID, sessionID, eventChan := extractExecutionContext(state)
-		modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
-		// Extract current node ID from state.
-		var nodeID string
-		if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
-			if id, ok := nodeIDData.(string); ok {
-				nodeID = id
-			}
-		}
-		// Execute the model with three-stage rule.
-		result, err := executeLLM(ctx, state, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+		result, err := runner.execute(ctx, state, span)
 		if err != nil {
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run model: %w", err)
@@ -349,147 +361,148 @@ func NewLLMNodeFunc(llmModel model.Model, instruction string, tools map[string]t
 	}
 }
 
-// executeLLM implements the three-stage rule for LLM execution.
-func executeLLM(ctx context.Context, state State, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
-	// Stage 1: Priority to OneShot messages
-	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
-		return executeOneShotStage(ctx, state, v, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
-	}
-	// Stage 2: Fallback to UserInput
-	if userInput, exists := state[StateKeyUserInput]; exists {
-		if input, ok := userInput.(string); ok && input != "" {
-			return executeUserInputStage(ctx, state, input, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
-		}
-	}
-	// Stage 3: Default to History
-	return executeHistoryStage(ctx, state, llmModel, instruction, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+// llmRunner encapsulates LLM execution dependencies to avoid long parameter
+// lists.
+type llmRunner struct {
+	llmModel    model.Model
+	instruction string
+	tools       map[string]tool.Tool
+	nodeID      string
 }
 
-// executeOneShotStage handles OneShot messages with atomic updates.
-func executeOneShotStage(ctx context.Context, state State, oneShotMsgs []model.Message, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
-	used := ensureSystemHead(oneShotMsgs, instruction)
+// execute implements the three-stage rule for LLM execution.
+func (r *llmRunner) execute(ctx context.Context, state State, span oteltrace.Span) (any, error) {
+	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
+		return r.executeOneShotStage(ctx, state, v, span)
+	}
+	if userInput, exists := state[StateKeyUserInput]; exists {
+		if input, ok := userInput.(string); ok && input != "" {
+			return r.executeUserInputStage(ctx, state, input, span)
+		}
+	}
+	return r.executeHistoryStage(ctx, state, span)
+}
 
-	// Create request and execute model.
-	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+func (r *llmRunner) executeOneShotStage(
+	ctx context.Context,
+	state State,
+	oneShotMsgs []model.Message,
+	span oteltrace.Span,
+) (any, error) {
+	used := ensureSystemHead(oneShotMsgs, r.instruction)
+	result, err := r.executeModel(ctx, state, used, span)
 	if err != nil {
 		return nil, err
 	}
-
-	// Prepare atomic update operations.
-	ops := []MessageOp{}
+	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		ops = append(ops, ReplaceLastUser{Content: used[len(used)-1].Content})
 	}
-
-	// Extract assistant message from result.
 	asst := extractAssistantMessage(result)
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
-
-	// Return atomic update: clear OneShot and update messages.
 	return State{
 		StateKeyMessages:        ops,
-		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot
+		StateKeyOneShotMessages: []model.Message(nil), // Clear one-shot messages after execution.
+		StateKeyLastResponse:    asst.Content,
+		StateKeyNodeResponses: map[string]any{
+			r.nodeID: asst.Content,
+		},
 	}, nil
 }
 
-// executeUserInputStage handles UserInput with atomic updates.
-func executeUserInputStage(ctx context.Context, state State, userInput string, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
-	// Get durable history.
+func (r *llmRunner) executeUserInputStage(
+	ctx context.Context, state State, userInput string, span oteltrace.Span,
+) (any, error) {
 	var history []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
 		if msgs, ok := msgData.([]model.Message); ok {
 			history = msgs
 		}
 	}
-
-	used := ensureSystemHead(history, instruction)
-	ops := []MessageOp{}
-
-	// Check if tail is user and needs replacement.
+	used := ensureSystemHead(history, r.instruction)
+	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
 			used[len(used)-1] = model.NewUserMessage(userInput)
 			ops = append(ops, ReplaceLastUser{Content: userInput})
 		}
 	} else {
-		// Append new user message.
 		used = append(used, model.NewUserMessage(userInput))
 		ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
 	}
-
-	// Execute model.
-	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	result, err := r.executeModel(ctx, state, used, span)
 	if err != nil {
 		return nil, err
 	}
-
-	// Extract assistant message and append to operations.
 	asst := extractAssistantMessage(result)
 	if asst != nil {
 		ops = append(ops, AppendMessages{Items: []model.Message{*asst}})
 	}
-
-	// Return atomic update: clear UserInput and update messages.
 	return State{
-		StateKeyMessages:  ops,
-		StateKeyUserInput: "", // Clear user input
+		StateKeyMessages:     ops,
+		StateKeyUserInput:    "", // Clear user input after execution.
+		StateKeyLastResponse: asst.Content,
+		StateKeyNodeResponses: map[string]any{
+			r.nodeID: asst.Content,
+		},
 	}, nil
 }
 
-// executeHistoryStage handles pure history execution.
-func executeHistoryStage(ctx context.Context, state State, llmModel model.Model, instruction string, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
-	// Get durable history.
+func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span oteltrace.Span) (any, error) {
 	var history []model.Message
 	if msgData, exists := state[StateKeyMessages]; exists {
 		if msgs, ok := msgData.([]model.Message); ok {
 			history = msgs
 		}
 	}
-
-	used := ensureSystemHead(history, instruction)
-
-	// Execute model.
-	result, err := executeModel(ctx, used, llmModel, tools, modelCallbacks, eventChan, invocationID, sessionID, nodeID, span)
+	used := ensureSystemHead(history, r.instruction)
+	result, err := r.executeModel(ctx, state, used, span)
 	if err != nil {
 		return nil, err
 	}
-
-	// Extract assistant message and append to messages.
 	asst := extractAssistantMessage(result)
 	if asst != nil {
 		return State{
-			StateKeyMessages: AppendMessages{Items: []model.Message{*asst}},
+			StateKeyMessages:     AppendMessages{Items: []model.Message{*asst}},
+			StateKeyLastResponse: asst.Content,
+			StateKeyNodeResponses: map[string]any{
+				r.nodeID: asst.Content,
+			},
 		}, nil
 	}
-
 	return nil, nil
 }
 
-// executeModel executes the model with the given messages.
-func executeModel(ctx context.Context, messages []model.Message, llmModel model.Model, tools map[string]tool.Tool, modelCallbacks *model.Callbacks, eventChan chan<- *event.Event, invocationID, sessionID, nodeID string, span oteltrace.Span) (any, error) {
-	// Create request.
+func (r *llmRunner) executeModel(
+	ctx context.Context,
+	state State,
+	messages []model.Message,
+	span oteltrace.Span,
+) (any, error) {
 	request := &model.Request{
 		Messages: messages,
-		Tools:    tools,
+		Tools:    r.tools,
 		GenerationConfig: model.GenerationConfig{
 			Stream: true,
 		},
 	}
-
-	// Extract model input for event emission.
+	invocationID, sessionID, eventChan := extractExecutionContext(state)
+	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
+	var nodeID string
+	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
+		if id, ok := nodeIDData.(string); ok {
+			nodeID = id
+		}
+	}
 	modelInput := extractModelInput(State{StateKeyMessages: messages}, "")
-
-	// Emit model execution start event.
 	startTime := time.Now()
-	modelName := getModelName(llmModel)
+	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
-
-	// Execute the model.
 	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
 		ModelCallbacks: modelCallbacks,
-		LLMModel:       llmModel,
+		LLMModel:       r.llmModel,
 		Request:        request,
 		EventChan:      eventChan,
 		InvocationID:   invocationID,
@@ -497,8 +510,6 @@ func executeModel(ctx context.Context, messages []model.Message, llmModel model.
 		Span:           span,
 		NodeID:         nodeID,
 	})
-
-	// Emit model execution complete event.
 	endTime := time.Now()
 	var modelOutput string
 	if err == nil && result != nil {
@@ -507,7 +518,6 @@ func executeModel(ctx context.Context, messages []model.Message, llmModel model.
 		}
 	}
 	emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
-
 	return result, err
 }
 
@@ -520,31 +530,6 @@ func extractAssistantMessage(result any) *model.Message {
 		return &response.Choices[0].Message
 	}
 	return nil
-}
-
-// buildMessagesFromState implements the three-stage rule for LLM input:
-// 1. OneShot > 2. UserInput > 3. History
-func buildMessagesFromState(state State, instruction string) []model.Message {
-	// Stage 1: Priority to OneShot messages
-	if v, ok := state[StateKeyOneShotMessages].([]model.Message); ok && len(v) > 0 {
-		return ensureSystemHead(v, instruction)
-	}
-
-	// Stage 2: Fallback to UserInput
-	var messages []model.Message
-	if msgData, exists := state[StateKeyMessages]; exists {
-		if msgs, ok := msgData.([]model.Message); ok {
-			messages = msgs
-		}
-	}
-
-	if userInput, exists := state[StateKeyUserInput]; exists {
-		if input, ok := userInput.(string); ok && input != "" {
-			messages = append(messages, model.NewUserMessage(input))
-		}
-	}
-
-	return ensureSystemHead(messages, instruction)
 }
 
 // ensureSystemHead ensures system prompt is at the head if provided.
@@ -750,7 +735,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()
-			emitAgentErrorEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime, err)
+			emitAgentErrorEvent(eventChan, invocationID, nodeID, startTime, endTime, err)
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
@@ -781,13 +766,14 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 		// Emit agent execution complete event.
 		endTime := time.Now()
-		emitAgentCompleteEvent(eventChan, invocationID, agentName, nodeID, startTime, endTime)
+		emitAgentCompleteEvent(eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with the agent's response.
 		stateUpdate := State{}
 		stateUpdate[StateKeyLastResponse] = lastResponse
 		stateUpdate[StateKeyNodeResponses] = map[string]any{
 			nodeID: lastResponse,
 		}
+		stateUpdate[StateKeyUserInput] = "" // Clear user input after execution.
 		return stateUpdate, nil
 	}
 }
@@ -968,18 +954,10 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", "no response received from model"))
 		return nil, errors.New("no response received from model")
 	}
-	newMessage := model.Message{
-		Role:      model.RoleAssistant,
-		Content:   finalResponse.Choices[0].Message.Content,
-		ToolCalls: toolCalls,
+	if len(finalResponse.Choices[0].Message.ToolCalls) < len(toolCalls) {
+		finalResponse.Choices[0].Message.ToolCalls = toolCalls
 	}
-	return State{
-		StateKeyMessages:     []model.Message{newMessage}, // The new message will be merged by the executor.
-		StateKeyLastResponse: finalResponse.Choices[0].Message.Content,
-		StateKeyNodeResponses: map[string]any{
-			config.NodeID: finalResponse.Choices[0].Message.Content,
-		},
-	}, nil
+	return finalResponse, nil
 }
 
 // extractToolCallsFromState extracts and validates tool calls from the state.
@@ -1298,7 +1276,7 @@ func emitAgentStartEvent(
 // emitAgentCompleteEvent emits an agent execution complete event.
 func emitAgentCompleteEvent(
 	eventChan chan<- *event.Event,
-	invocationID, agentName, nodeID string,
+	invocationID, nodeID string,
 	startTime, endTime time.Time,
 ) {
 	if eventChan == nil {
@@ -1322,7 +1300,7 @@ func emitAgentCompleteEvent(
 // emitAgentErrorEvent emits an agent execution error event.
 func emitAgentErrorEvent(
 	eventChan chan<- *event.Event,
-	invocationID, agentName, nodeID string,
+	invocationID, nodeID string,
 	startTime, endTime time.Time,
 	err error,
 ) {
