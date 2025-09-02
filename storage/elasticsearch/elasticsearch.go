@@ -93,24 +93,13 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 		opt(o)
 	}
 
-	cfg := &Config{
-		Addresses:              o.Addresses,
-		Username:               o.Username,
-		Password:               o.Password,
-		APIKey:                 o.APIKey,
-		CertificateFingerprint: o.CertificateFingerprint,
-		CompressRequestBody:    o.CompressRequestBody,
-		EnableMetrics:          o.EnableMetrics,
-		EnableDebugLogger:      o.EnableDebugLogger,
-		RetryOnStatus:          o.RetryOnStatus,
-		MaxRetries:             o.MaxRetries,
-		RetryOnTimeout:         o.RetryOnTimeout,
-		RequestTimeout:         o.RequestTimeout,
-		IndexPrefix:            o.IndexPrefix,
-		VectorDimension:        o.VectorDimension,
+	// Expect a *Config passed via ExtraOptions[0].
+	for _, ex := range o.ExtraOptions {
+		if cfg, ok := ex.(*Config); ok {
+			return NewClient(cfg)
+		}
 	}
-
-	return NewClient(cfg)
+	return nil, fmt.Errorf("elasticsearch: missing *Config in ExtraOptions for DefaultClientBuilder")
 }
 
 // NewClient creates a new Elasticsearch client.

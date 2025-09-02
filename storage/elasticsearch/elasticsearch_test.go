@@ -75,7 +75,7 @@ func TestSetGetClientBuilder(t *testing.T) {
 	})
 
 	b := GetClientBuilder()
-	_, err := b(WithAddresses([]string{"http://es"}))
+	_, err := b(WithExtraOptions(&Config{Addresses: []string{"http://es"}}))
 	require.NoError(t, err)
 	require.True(t, called)
 }
@@ -88,20 +88,20 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 	const name = "es"
 	RegisterElasticsearchInstance(name,
-		WithAddresses([]string{"http://a"}),
-		WithUsername("u"),
+		WithExtraOptions(&Config{Addresses: []string{"http://a"}}),
 	)
 
 	opts, ok := GetElasticsearchInstance(name)
 	require.True(t, ok)
-	require.GreaterOrEqual(t, len(opts), 2)
+	require.GreaterOrEqual(t, len(opts), 1)
 
 	cfg := &ClientBuilderOpts{}
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	require.Equal(t, []string{"http://a"}, cfg.Addresses)
-	require.Equal(t, "u", cfg.Username)
+	require.Equal(t, 1, len(cfg.ExtraOptions))
+	_, ok = cfg.ExtraOptions[0].(*Config)
+	require.True(t, ok)
 }
 
 func TestRegistry_NotFound(t *testing.T) {
@@ -127,74 +127,21 @@ func TestDefaultClientBuilder_PassesOptions(t *testing.T) {
 		return nil, nil
 	})
 
-	_, err := GetClientBuilder()(
-		WithAddresses([]string{"http://x"}),
-		WithUsername("name"),
-		WithPassword("pwd"),
-		WithAPIKey("api"),
-		WithCertificateFingerprint("fp"),
-		WithCompressRequestBody(true),
-		WithEnableMetrics(true),
-		WithEnableDebugLogger(true),
-		WithRetryOnStatus([]int{429, 503}),
-		WithMaxRetries(5),
-		WithRetryOnTimeout(true),
-		WithRequestTimeout(defaultConfig().RequestTimeout),
-		WithIndexPrefix("pfx"),
-		WithVectorDimension(42),
-	)
+	cfg := &Config{Addresses: []string{"http://x"}}
+	_, err := GetClientBuilder()(WithExtraOptions(cfg), WithVersion(ESVersionV8))
 	require.NoError(t, err)
-	require.Equal(t, []string{"http://x"}, captured.Addresses)
-	require.Equal(t, "name", captured.Username)
-	require.Equal(t, "pwd", captured.Password)
-	require.Equal(t, "api", captured.APIKey)
-	require.Equal(t, "fp", captured.CertificateFingerprint)
-	require.True(t, captured.CompressRequestBody)
-	require.True(t, captured.EnableMetrics)
-	require.True(t, captured.EnableDebugLogger)
-	require.Equal(t, []int{429, 503}, captured.RetryOnStatus)
-	require.Equal(t, 5, captured.MaxRetries)
-	require.True(t, captured.RetryOnTimeout)
-	require.Equal(t, "pfx", captured.IndexPrefix)
-	require.Equal(t, 42, captured.VectorDimension)
+	require.Equal(t, []any{cfg}, captured.ExtraOptions)
+	require.Equal(t, ESVersionV8, captured.Version)
 }
 
 func TestDefaultClientBuilder_CreateClient(t *testing.T) {
-	c, err := DefaultClientBuilder(
-		WithAddresses([]string{"http://localhost:9200"}),
-		WithUsername("u"),
-		WithPassword("p"),
-		WithAPIKey("ak"),
-		WithCertificateFingerprint("fp"),
-		WithCompressRequestBody(true),
-		WithEnableMetrics(true),
-		WithEnableDebugLogger(true),
-		WithRetryOnStatus([]int{502}),
-		WithMaxRetries(4),
-		WithRetryOnTimeout(true),
-		WithRequestTimeout(5*time.Second),
-		WithIndexPrefix("px"),
-		WithVectorDimension(64),
-	)
+	c, err := DefaultClientBuilder(WithExtraOptions(&Config{Addresses: []string{"http://localhost:9200"}}))
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
 	cc, ok := c.(*client)
 	require.True(t, ok)
 	require.Equal(t, []string{"http://localhost:9200"}, cc.config.Addresses)
-	require.Equal(t, "u", cc.config.Username)
-	require.Equal(t, "p", cc.config.Password)
-	require.Equal(t, "ak", cc.config.APIKey)
-	require.Equal(t, "fp", cc.config.CertificateFingerprint)
-	require.True(t, cc.config.CompressRequestBody)
-	require.True(t, cc.config.EnableMetrics)
-	require.True(t, cc.config.EnableDebugLogger)
-	require.Equal(t, []int{502}, cc.config.RetryOnStatus)
-	require.Equal(t, 4, cc.config.MaxRetries)
-	require.True(t, cc.config.RetryOnTimeout)
-	require.Equal(t, 5*time.Second, cc.config.RequestTimeout)
-	require.Equal(t, "px", cc.config.IndexPrefix)
-	require.Equal(t, 64, cc.config.VectorDimension)
 }
 
 func TestNewClient_Create(t *testing.T) {
