@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -50,16 +51,19 @@ func generateImage(ctx context.Context, input generateImageInput) (generateImage
 	}
 	var output generateImageOutput
 
-	for i, img := range images {
+	for _, img := range images {
 		output.Result += fmt.Sprintf("Image has been generated at the URL %s.", img.url)
 		a := &artifact.Artifact{
 			MimeType: img.mimeType,
 			URL:      img.url,
 			Data:     img.content,
 		}
-		_, err = toolCtx.SaveArtifact(fmt.Sprintf("image_%d", i), a)
+		imageID := generateRandomID()
+		_, err = toolCtx.SaveArtifact(imageID, a)
 		if err != nil {
 			output.Result += fmt.Sprintf("Failed to save image(%s) to artifact, err: %v\n", img.url, err)
+		} else {
+			output.Result += fmt.Sprintf(" Saved as artifact with ID: %s\n", imageID)
 		}
 	}
 	return output, nil
@@ -316,4 +320,23 @@ func intPtr(i int) *int {
 // floatPtr returns a pointer to the given float
 func floatPtr(f float64) *float64 {
 	return &f
+}
+
+// generateRandomID generates a random ID for artifacts
+func generateRandomID() string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	const length = 8
+
+	b := make([]byte, length)
+	_, err := rand.Read(b)
+	if err != nil {
+		// Fallback to timestamp-based ID if random generation fails
+		return fmt.Sprintf("img_%d", time.Now().UnixNano())
+	}
+
+	for i := range b {
+		b[i] = charset[b[i]%byte(len(charset))]
+	}
+
+	return string(b)
 }
