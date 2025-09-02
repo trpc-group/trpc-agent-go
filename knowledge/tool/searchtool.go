@@ -43,10 +43,13 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]interface{
 			return nil, errors.New("query cannot be empty")
 		}
 		invocation, ok := agent.InvocationFromContext(ctx)
+		var runnerFilter map[string]interface{}
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
+		} else {
+			runnerFilter = invocation.RunOptions.KnowledgeFilter
 		}
-		finalFilter := getFinalFilter(filter, invocation.RunOptions.KnowledgeFilter, nil)
+		finalFilter := getFinalFilter(filter, runnerFilter, nil)
 		log.Infof("knowledge search tool: final filter: %v", finalFilter)
 
 		// Create search request - for tools, we don't have conversation history yet.
@@ -107,8 +110,11 @@ func NewAgenticFilterSearchTool(
 		}
 
 		invocation, ok := agent.InvocationFromContext(ctx)
+		var runnerFilter map[string]interface{}
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
+		} else {
+			runnerFilter = invocation.RunOptions.KnowledgeFilter
 		}
 
 		// Convert request filters to map[string]interface{}
@@ -116,7 +122,7 @@ func NewAgenticFilterSearchTool(
 		for _, f := range req.Filters {
 			requestFilter[f.Key] = f.Value
 		}
-		finalFilter := getFinalFilter(filter, invocation.RunOptions.KnowledgeFilter, requestFilter)
+		finalFilter := getFinalFilter(filter, runnerFilter, requestFilter)
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
@@ -151,13 +157,13 @@ func getFinalFilter(
 	invocationFilter map[string]interface{},
 ) map[string]interface{} {
 	filter := make(map[string]interface{})
-	for k, v := range agentFilter {
+	for k, v := range invocationFilter {
 		filter[k] = v
 	}
 	for k, v := range runnerFilter {
 		filter[k] = v
 	}
-	for k, v := range invocationFilter {
+	for k, v := range agentFilter {
 		filter[k] = v
 	}
 	return filter

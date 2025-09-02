@@ -30,10 +30,6 @@ type VectorStore interface {
 	// Delete removes a document and its embedding.
 	Delete(ctx context.Context, id string) error
 
-	// // FlushAll flushes all documents from the vector store.
-	// // ATTENTION! This operation is irreversible and will delete all documents from the vector store.
-	// FlushAll(ctx context.Context) error
-
 	// Search performs similarity search and returns the most similar documents.
 	Search(ctx context.Context, query *SearchQuery) (*SearchResult, error)
 
