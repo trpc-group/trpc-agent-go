@@ -161,7 +161,7 @@ func (w *customerSupportWorkflow) startA2AServer() {
 	remoteAgent := w.buildRemoteAgent()
 	server, err := a2a.New(
 		a2a.WithHost(w.a2aHost),
-		a2a.WithAgent(remoteAgent, false),
+		a2a.WithAgent(remoteAgent, true),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
