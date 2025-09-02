@@ -281,9 +281,9 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 LLM 节点实现了固定的三段式输入规则，无需配置：
 
-1. **OneShot 优先**：若存在 `one_shot_messages`，以它为本轮输入
-2. **UserInput 其次**：否则若存在 `user_input`，自动持久化一次
-3. **历史默认**：否则以持久化历史作为输入
+1. **OneShot 优先**：若存在 `one_shot_messages`，以它为本轮输入。
+2. **UserInput 其次**：否则若存在 `user_input`，自动持久化一次。
+3. **历史默认**：否则以持久化历史作为输入。
 
 ```go
 // 创建 LLM 模型
@@ -300,9 +300,58 @@ stateGraph.AddLLMNode("analyze", model,
 ```
 
 **重要说明**：
-- SystemPrompt 仅用于本次输入，不落持久化状态
-- 一次性键（`user_input`/`one_shot_messages`）在成功执行后自动清空
-- 所有状态更新都是原子性的，确保一致性
+- SystemPrompt 仅用于本次输入，不落持久化状态。
+- 一次性键（`user_input`/`one_shot_messages`）在成功执行后自动清空。
+- 所有状态更新都是原子性的，确保一致性。
+- GraphAgent/Runner 仅设置 `user_input`，不再预先把用户消息写入
+  `messages`。这样可以允许在 LLM 节点之前的任意节点对 `user_input`
+  进行修改，并能在同一轮生效。
+
+#### 三种输入范式
+
+- OneShot（`StateKeyOneShotMessages`）：
+  - 当该键存在时，本轮仅使用这里提供的 `[]model.Message` 调用模型，
+    通常包含完整的 system prompt 与 user prompt。调用后自动清空。
+  - 适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。
+
+- UserInput（`StateKeyUserInput`）：
+  - 当 `user_input` 非空时，LLM 节点会取持久化历史 `messages`，并将
+    本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
+    `MessageOp`（例如 `AppendMessages`、`ReplaceLastUser`）原子性写入
+    到 `messages`，并自动清空 `user_input` 以避免重复追加。
+  - 适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。
+
+- Messages only（仅 `StateKeyMessages`）：
+  - 多用于工具调用回路。当第一轮经由 `user_input` 发起后，路由到工具
+    节点执行，再回到 LLM 节点时，因为 `user_input` 已被清空，LLM 将走
+  “Messages only” 分支，以历史中的 tool 响应继续推理。
+
+#### 通过 Reducer 与 MessageOp 实现的原子更新
+
+Graph 包的消息状态支持 `MessageOp` 补丁操作（如 `ReplaceLastUser`、
+`AppendMessages` 等），由 `MessageReducer` 实现原子合并。这带来两个
+直接收益：
+
+- 允许在 LLM 节点之前修改 `user_input`，LLM 节点会据此在一次返回中将
+  需要的操作（例如替换最后一条用户消息、追加助手消息）以补丁形式返回，
+  执行器一次性落库，避免竞态与重复。`
+- 兼容传统的直接 `[]Message` 追加用法，同时为复杂更新提供更高的表达力。
+
+示例：在前置节点修改 `user_input`，随后进入 LLM 节点。
+
+```go
+stateGraph.
+    AddNode("prepare_input", func(ctx context.Context, s graph.State) (any, error) {
+        // 清洗/改写用户输入，使其在本轮 LLM 中生效。
+        cleaned := strings.TrimSpace(s[graph.StateKeyUserInput].(string))
+        return graph.State{graph.StateKeyUserInput: cleaned}, nil
+    }).
+    AddLLMNode("ask", modelInstance,
+        "你是一个有帮助的助手。请简洁回答。",
+        nil).
+    SetEntryPoint("prepare_input").
+    SetFinishPoint("ask")
+```
 
 ### 3. GraphAgent 配置选项
 
@@ -364,10 +413,11 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
-**工具调用配对机制**：
-- 从 `messages` 尾部**向前扫描最近的 `assistant(tool_calls)`**
-- 遇到 `user` 消息即停止扫描，确保工具响应与调用正确配对
-- 支持在工具调用之间插入日志或其他消息，不影响配对逻辑
+**工具调用配对机制与二次进入 LLM：**
+- 从 `messages` 尾部向前扫描最近的 `assistant(tool_calls)`；遇到 `user`
+  则停止，确保配对正确。
+- 当工具节点完成后返回到 LLM 节点时，`user_input` 已被清空，LLM 将走
+  “Messages only” 分支，以历史中的 tool 响应继续推理。
 
 ### 6. Runner 配置
 
@@ -388,6 +438,7 @@ appRunner := runner.NewRunner(
 )
 
 // 使用 Runner 执行工作流
+// Runner 仅设置 StateKeyUserInput，不再预先写入 StateKeyMessages。
 message := model.NewUserMessage("用户输入")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```

@@ -115,9 +115,10 @@ The Graph package provides some built-in state keys, mainly for internal system 
 
 **User-accessible Built-in Keys**:
 
-- `StateKeyUserInput`: User input (automatically set by GraphAgent, from Runner messages)
+- `StateKeyUserInput`: User input (one-shot, cleared after consumption, persisted by LLM nodes)
+- `StateKeyOneShotMessages`: One-shot messages (complete override for current round, cleared after consumption)
 - `StateKeyLastResponse`: Last response (used to set final output, Executor reads this value as result)
-- `StateKeyMessages`: Message history (used by LLM nodes, automatically updated by LLM nodes)
+- `StateKeyMessages`: Message history (durable, supports append + MessageOp patch operations)
 - `StateKeyNodeResponses`: Per-node responses map. Key is node ID, value is the
   node's final textual response. Use `StateKeyLastResponse` for the final
   serial output; when multiple parallel nodes converge, read each node's
@@ -278,6 +279,12 @@ func processNodeFunc(ctx context.Context, state graph.State) (any, error) {
 
 ### 2. Using LLM Nodes
 
+LLM nodes implement a fixed three-stage input rule without extra configuration:
+
+1. OneShot first: If `one_shot_messages` exists, use it as the input for this round.
+2. UserInput next: Otherwise, if `user_input` exists, persist once to history.
+3. History default: Otherwise, use durable `messages` as input.
+
 ```go
 // Create LLM model.
 model := openai.New("gpt-4")
@@ -290,6 +297,48 @@ stateGraph.AddLLMNode("analyze", model,
 3. Evaluate content quality
 Please provide structured analysis results.`,
     nil) // Tool mapping.
+```
+
+Important notes:
+- System prompt is only used for this round and is not persisted to state.
+- One-shot keys (`user_input` / `one_shot_messages`) are automatically cleared after successful execution.
+- All state updates are atomic.
+- GraphAgent/Runner only sets `user_input` and no longer pre-populates `messages` with a user message. This allows any pre-LLM node to modify `user_input` and have it take effect in the same round.
+
+#### Three input paradigms
+
+- OneShot (`StateKeyOneShotMessages`):
+  - When present, only the provided `[]model.Message` is used for this round, typically including a full system prompt and user prompt. Automatically cleared afterwards.
+  - Use case: a dedicated pre-node constructs the full prompt and must fully override input.
+
+- UserInput (`StateKeyUserInput`):
+  - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
+  - Use case: conversational flows where pre-nodes may adjust user input.
+
+- Messages only (just `StateKeyMessages`):
+  - Common in tool-call loops. After the first round via `user_input`, routing to tools and back to LLM, since `user_input` is cleared, the LLM uses only `messages` (history). The tail is often a `tool` response, enabling the model to continue reasoning based on tool outputs.
+
+#### Atomic updates with Reducer and MessageOp
+
+The Graph package supports `MessageOp` patch operations (e.g., `ReplaceLastUser`,
+`AppendMessages`) on message state via `MessageReducer` to achieve atomic merges. Benefits:
+
+- Pre-LLM nodes can modify `user_input`. The LLM node returns a single state delta with the needed patch operations (replace last user message, append assistant message) for one-shot, race-free persistence.
+- Backwards compatible with appending `[]Message`, while providing more expressive updates for complex cases.
+
+Example: modify `user_input` in a pre-node before entering the LLM node.
+
+```go
+stateGraph.
+    AddNode("prepare_input", func(ctx context.Context, s graph.State) (any, error) {
+        cleaned := strings.TrimSpace(s[graph.StateKeyUserInput].(string))
+        return graph.State{graph.StateKeyUserInput: cleaned}, nil
+    }).
+    AddLLMNode("ask", modelInstance,
+        "You are a helpful assistant. Answer concisely.",
+        nil).
+    SetEntryPoint("prepare_input").
+    SetFinishPoint("ask")
 ```
 
 ### 3. GraphAgent Configuration Options
@@ -352,6 +401,10 @@ stateGraph.AddToolsNode("tools", tools)
 stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
+Tool-call pairing and second entry into LLM:
+- Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.
+- When returning from tools to the LLM node, since `user_input` is cleared, the LLM follows the “Messages only” branch and continues based on the tool response in history.
+
 ### 6. Runner Configuration
 
 Runner provides session management and execution environment:
@@ -371,6 +424,7 @@ appRunner := runner.NewRunner(
 )
 
 // Use Runner to execute workflow.
+// Runner only sets StateKeyUserInput; it no longer pre-populates StateKeyMessages.
 message := model.NewUserMessage("User input")
 eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```

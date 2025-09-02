@@ -218,28 +218,22 @@ func MessageReducer(existing, update any) any {
 	if !ok1 {
 		return update
 	}
-
 	switch x := update.(type) {
 	case nil:
 		// no-op
 		return existingMsgs
-
 	case model.Message:
 		return append(existingMsgs, x)
-
 	case []model.Message:
 		return append(existingMsgs, x...)
-
 	case MessageOp:
 		return x.Apply(existingMsgs)
-
 	case []MessageOp:
 		result := existingMsgs
 		for _, op := range x {
 			result = op.Apply(result)
 		}
 		return result
-
 	default:
 		// Fallback to default behavior for unsupported types
 		return update
