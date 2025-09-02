@@ -273,27 +273,6 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// DeleteByFilter delete documents by filter
-func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
-	if len(filter) == 0 {
-		return 0, fmt.Errorf("pgvector: filter is required for DeleteByFilter")
-	}
-
-	// Build delete query with filter conditions
-	qb := newDeleteQueryBuilder(vs.option.table)
-	qb.addMetadataFilter(filter)
-
-	// Execute the delete query directly
-	deleteSQL, deleteArgs := qb.buildDeleteQuery()
-	result, err := vs.pool.Exec(ctx, deleteSQL, deleteArgs...)
-	if err != nil {
-		return 0, fmt.Errorf("pgvector delete documents: %w", err)
-	}
-
-	rowsAffected := int(result.RowsAffected())
-	return rowsAffected, nil
-}
-
 // FlushAll flushes all documents from the vector store.
 func (vs *VectorStore) FlushAll(ctx context.Context) error {
 	if _, err := vs.pool.Exec(ctx, "TRUNCATE TABLE "+vs.option.table); err != nil {

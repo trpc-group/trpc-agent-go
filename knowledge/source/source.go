@@ -24,24 +24,26 @@ const (
 	TypeURL  = "url"
 )
 
+const metaPrefix = "trpc_agent_go"
+
 // Metadata keys
 const (
-	MetaSource        = "source"
-	MetaFilePath      = "file_path"
-	MetaFileName      = "file_name"
-	MetaFileExt       = "file_ext"
-	MetaFileSize      = "file_size"
-	MetaFileMode      = "file_mode"
-	MetaModifiedAt    = "modified_at"
-	MetaContentLength = "content_length"
-	MetaFileCount     = "file_count"
-	MetaFilePaths     = "file_paths"
-	MetaURL           = "url"
-	MetaURLHost       = "url_host"
-	MetaURLPath       = "url_path"
-	MetaURLScheme     = "url_scheme"
-	MetaInputCount    = "input_count"
-	MetaInputs        = "inputs"
+	MetaSource        = metaPrefix + "source"
+	MetaFilePath      = metaPrefix + "file_path"
+	MetaFileName      = metaPrefix + "file_name"
+	MetaFileExt       = metaPrefix + "file_ext"
+	MetaFileSize      = metaPrefix + "file_size"
+	MetaFileMode      = metaPrefix + "file_mode"
+	MetaModifiedAt    = metaPrefix + "modified_at"
+	MetaContentLength = metaPrefix + "content_length"
+	MetaFileCount     = metaPrefix + "file_count"
+	MetaFilePaths     = metaPrefix + "file_paths"
+	MetaURL           = metaPrefix + "url"
+	MetaURLHost       = metaPrefix + "url_host"
+	MetaURLPath       = metaPrefix + "url_path"
+	MetaURLScheme     = metaPrefix + "url_scheme"
+	MetaInputCount    = metaPrefix + "input_count"
+	MetaInputs        = metaPrefix + "inputs"
 )
 
 // Source represents a knowledge source that can provide documents.
@@ -55,4 +57,7 @@ type Source interface {
 
 	// Type returns the type of this source (e.g., "file", "url", "dir").
 	Type() string
+
+	// GetMetadata returns the metadata associated with this source.
+	GetMetadata() map[string]interface{}
 }

@@ -320,6 +320,8 @@ type Options struct {
 	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
 	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
 	EnableKnowledgeAgenticFilter bool
+	// KnowledgeAgenticFilter is the knowledge agentic filter for the knowledge search tool.
+	AgenticFilterInfo map[string][]interface{}
 	// Memory is the memory service for the agent.
 	// If provided, the memory tools will be automatically added.
 	Memory memory.Service
@@ -535,21 +537,14 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	return requestProcessors
 }
 
-func registerTools(
-	tools []tool.Tool,
-	toolSets []tool.ToolSet,
-	memory memory.Service,
-	kb knowledge.Knowledge,
-	knowledgeFilter map[string]interface{},
-	knowledgeAgentFilter bool,
-) []tool.Tool {
+func registerTools(options *Options) []tool.Tool {
 	// Start with direct tools.
-	allTools := make([]tool.Tool, 0, len(tools))
-	allTools = append(allTools, tools...)
+	allTools := make([]tool.Tool, 0, len(options.Tools))
+	allTools = append(allTools, options.Tools...)
 
 	// Add tools from each toolset.
 	ctx := context.Background()
-	for _, toolSet := range toolSets {
+	for _, toolSet := range options.ToolSets {
 		setTools := toolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
@@ -557,17 +552,18 @@ func registerTools(
 	}
 
 	// Add knowledge search tool if knowledge base is provided.
-	if kb != nil {
-		if knowledgeAgentFilter {
-			allTools = append(allTools, knowledgetool.NewKnowledgeSearchToolWithAgenticFilter(kb, knowledgeFilter))
+	if options.Knowledge != nil {
+		if options.EnableKnowledgeAgenticFilter {
+			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo)
+			allTools = append(allTools, agentticKnowledge)
 		} else {
-			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb, knowledgeFilter))
+			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(options.Knowledge, options.KnowledgeFilter))
 		}
 	}
 
 	// Add memory tool if memory service is provided.
-	if memory != nil {
-		allTools = append(allTools, memory.Tools()...)
+	if options.Memory != nil {
+		allTools = append(allTools, options.Memory.Tools()...)
 	}
 
 	return allTools
