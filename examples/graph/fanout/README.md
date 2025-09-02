@@ -1,12 +1,12 @@
 # Parallel Fan-out Graph Example
 
-This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]Command` results that execute the same target node in parallel with different parameters, similar to LangGraph's "Send" functionality.
+This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]*Command` results that execute the same target node in parallel with different parameters, similar to LangGraph's "Send" functionality.
 
 ## Overview
 
 The parallel fan-out workflow demonstrates dynamic task distribution:
 
-1. **Fan-out Node** - Returns `[]Command` to create multiple parallel tasks
+1. **Fan-out Node** - Returns `[]*Command` to create multiple parallel tasks
 2. **Parallel Execution** - Multiple tasks execute the same worker node simultaneously
 3. **Parameter Isolation** - Each task has isolated `Overlay` state parameters
 4. **Result Merging** - Results from parallel tasks are merged using `StateSchema` reducers
@@ -81,7 +81,7 @@ Each `Command` contains:
 
 ### **Execution Flow**
 
-1. **Fan-out Node** returns `[]Command`
+1. **Fan-out Node** returns `[]*Command`
 2. **Executor** creates multiple `Task` objects with `Overlay` states
 3. **Parallel Execution** of tasks targeting the same worker node
 4. **State Merging** using `StateSchema.ApplyUpdate` and reducers

@@ -9,7 +9,7 @@
 
 // Package main demonstrates parallel fan-out execution using the graph package.
 // This example shows how to build and execute graphs with parallel task distribution,
-// LLM nodes, and function nodes using []Command for dynamic fan-out.
+// LLM nodes, and function nodes using []*Command for dynamic fan-out.
 package main
 
 import (
@@ -165,7 +165,7 @@ You MUST use the tool - this is not optional.`,
 			tools).
 		AddToolsNode("tools", tools).
 
-		// Add fan-out node that returns []Command.
+		// Add fan-out node that returns []*Command.
 		AddNode("create_fanout", w.createFanoutTasks).
 
 		// Add LLM worker node for processing individual tasks.

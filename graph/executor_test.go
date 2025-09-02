@@ -903,7 +903,7 @@ func (m *IssueClassificationMockModel) Info() model.Info {
 	}
 }
 
-// TestParallelFanOutWithCommands verifies that a node returning []Command
+// TestParallelFanOutWithCommands verifies that a node returning []*Command
 // fan-outs into multiple tasks that execute in parallel with isolated overlays
 // and that their results are merged back into the global State via reducers.
 func TestParallelFanOutWithCommands(t *testing.T) {
@@ -920,7 +920,7 @@ func TestParallelFanOutWithCommands(t *testing.T) {
 
 	// Fan-out node: returns two commands to the same worker with different overlays.
 	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
-		cmds := []Command{
+		cmds := []*Command{
 			{Update: State{"param": "A"}, GoTo: "worker"},
 			{Update: State{"param": "B"}, GoTo: "worker"},
 		}

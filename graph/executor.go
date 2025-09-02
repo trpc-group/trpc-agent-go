@@ -688,7 +688,7 @@ func (e *Executor) handleNodeResult(
 				return err
 			}
 		}
-	case []Command: // Fan-out commands.
+	case []*Command: // Fan-out commands.
 		// Fan-out: enqueue tasks with overlays.
 		fanOut = true
 		e.enqueueCommands(execCtx, t, v)
@@ -703,7 +703,7 @@ func (e *Executor) handleNodeResult(
 }
 
 // enqueueCommands enqueues a set of commands as pending tasks for subsequent steps.
-func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []Command) {
+func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []*Command) {
 	if len(cmds) == 0 {
 		return
 	}
