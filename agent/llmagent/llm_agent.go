@@ -273,6 +273,13 @@ func WithKnowledgeFilter(filter map[string]interface{}) Option {
 	}
 }
 
+// WithKnowledgeAgenticFilterInfo sets the knowledge agentic filter info for the knowledge base.
+func WithKnowledgeAgenticFilterInfo(filter map[string][]interface{}) Option {
+	return func(opts *Options) {
+		opts.AgenticFilterInfo = filter
+	}
+}
+
 // WithEnableKnowledgeAgenticFilter sets whether enable llm generate filter for the knowledge base.
 func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
 	return func(opts *Options) {
@@ -439,14 +446,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(
-		options.Tools,
-		options.ToolSets,
-		options.Memory,
-		options.Knowledge,
-		options.KnowledgeFilter,
-		options.EnableKnowledgeAgenticFilter,
-	)
+	tools := registerTools(&options)
 
 	return &LLMAgent{
 		name:                 name,
@@ -554,10 +554,14 @@ func registerTools(options *Options) []tool.Tool {
 	// Add knowledge search tool if knowledge base is provided.
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
-			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo)
+			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
+				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+			)
 			allTools = append(allTools, agentticKnowledge)
 		} else {
-			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(options.Knowledge, options.KnowledgeFilter))
+			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
+				options.Knowledge, options.KnowledgeFilter,
+			))
 		}
 	}
 

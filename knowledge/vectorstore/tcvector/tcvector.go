@@ -383,15 +383,15 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// FlushAll flushes all documents from the vector store.
-func (vs *VectorStore) FlushAll(ctx context.Context) error {
-	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{
-		Filter: tcvectordb.NewFilter(""),
-	}); err != nil {
-		return fmt.Errorf("tcvectordb flush all documents: %w", err)
-	}
-	return nil
-}
+// // FlushAll flushes all documents from the vector store.
+// func (vs *VectorStore) FlushAll(ctx context.Context) error {
+// 	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{
+// 		Filter: tcvectordb.NewFilter(""),
+// 	}); err != nil {
+// 		return fmt.Errorf("tcvectordb flush all documents: %w", err)
+// 	}
+// 	return nil
+// }
 
 // Search performs similarity search and returns the most similar documents.
 // Automatically chooses the appropriate search method based on query parameters.

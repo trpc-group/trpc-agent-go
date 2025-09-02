@@ -76,9 +76,9 @@ var (
 	// PGVector.
 	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
-	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "postgres")
+	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
 	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vec")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
@@ -99,12 +99,15 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Vector Store: %s", *vectorStore)
+	fmt.Printf("Vector Store: %s\n", *vectorStore)
 	if *vectorStore == "elasticsearch" {
 		fmt.Printf(" (Version: %s)", *esVersion)
 	}
-	fmt.Printf("\n")
-	fmt.Printf("Available tools: knowledge_search\n")
+	if *agenticFilter {
+		fmt.Printf("Available tools: knowledge_search, knowledge_search_with_filter\n")
+	} else {
+		fmt.Printf("Available tools: knowledge_search\n")
+	}
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -121,6 +124,7 @@ func main() {
 
 // knowledgeChat manages the conversation with knowledge integration.
 type knowledgeChat struct {
+	sources      []source.Source
 	modelName    string
 	embedderType string
 	vectorStore  string
@@ -153,18 +157,15 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		return fmt.Errorf("failed to setup knowledge base: %w", err)
 	}
 
-	// get all metadata from sources, it contains keys and values, llm will choose keys values for the filter
-	allMetadata := c.kb.GetAllMetadata()
-
-	// get all metadata keys and llm generate the filtered values
-	// allMetada := c.kb.GetAllMetadataKeys()
-
 	// Create LLM agent with knowledge.
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(2000),
 		Temperature: floatPtr(0.7),
 		Stream:      *streaming,
 	}
+
+	// get all metadata from sources, it contains keys and values, llm will choose keys values for the filter
+	sourcesMetadata := source.GetAllMetadata(c.sources)
 
 	agentName := "knowledge-assistant"
 	llmAgent := llmagent.New(
@@ -173,9 +174,10 @@ func (c *knowledgeChat) setup(ctx context.Context) error {
 		llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
 		llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithKnowledge(c.kb), // This will automatically add the knowledge_search tool.
+		llmagent.WithKnowledge(c.kb),
+		// This will automatically add the knowledge_search tool.
 		llmagent.WithEnableKnowledgeAgenticFilter(*agenticFilter),
-		llmagent.WithKnowledgeAgenticFilterInfo(allMetadata),
+		llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata),
 	)
 
 	// Create session service.
@@ -225,8 +227,9 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
-			vectortcvector.WithCollection("examplegolang"),
-			vectortcvector.WithFilterFields([]string{"tag"}),
+			vectortcvector.WithCollection("homerpan1"),
+			// tcvector need build index for the filter fields
+			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -278,27 +281,30 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./data/llm.md",
 			},
 			filesource.WithName("Large Language Model"),
-			filesource.WithMetadataValue("type", "llm"),
-			filesource.WithMetadataValue("source", "nonofficial"),
-			filesource.WithMetadataValue("tag", "llm"),
+			filesource.WithMetadataValue("category", "documentation"),
+			filesource.WithMetadataValue("topic", "machine_learning"),
+			filesource.WithMetadataValue("source_type", "local_file"),
+			filesource.WithMetadataValue("content_type", "llm"),
 		),
 		filesource.New(
 			[]string{
 				"./data/golang.md",
 			},
 			filesource.WithName("Golang"),
-			filesource.WithMetadataValue("type", "golang"),
-			filesource.WithMetadataValue("source", "nonofficial"),
-			filesource.WithMetadataValue("tag", "golang"),
+			filesource.WithMetadataValue("category", "documentation"),
+			filesource.WithMetadataValue("topic", "programming"),
+			filesource.WithMetadataValue("source_type", "local_file"),
+			filesource.WithMetadataValue("content_type", "golang"),
 		),
 		dirsource.New(
 			[]string{
 				"./dir",
 			},
 			dirsource.WithName("Data Directory"),
-			dirsource.WithMetadataValue("type", "transformer"),
-			dirsource.WithMetadataValue("source", "official"),
-			dirsource.WithMetadataValue("tag", "llm"),
+			dirsource.WithMetadataValue("category", "dataset"),
+			dirsource.WithMetadataValue("topic", "machine_learning"),
+			dirsource.WithMetadataValue("source_type", "local_directory"),
+			dirsource.WithMetadataValue("content_type", "transformer"),
 		),
 		// URL source for web content.
 		urlsource.New(
@@ -306,10 +312,10 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"https://en.wikipedia.org/wiki/Byte-pair_encoding",
 			},
 			urlsource.WithName("Byte-pair encoding"),
-			urlsource.WithMetadataValue("topic", "Byte-pair encoding"),
-			urlsource.WithMetadataValue("type", "iwiki"),
-			urlsource.WithMetadataValue("source", "nonofficial"),
-			urlsource.WithMetadataValue("tag", "llm"),
+			urlsource.WithMetadataValue("category", "encyclopedia"),
+			urlsource.WithMetadataValue("topic", "natural_language_processing"),
+			urlsource.WithMetadataValue("source_type", "web_url"),
+			urlsource.WithMetadataValue("content_type", "wiki"),
 		),
 		// Auto source that can handle mixed inputs.
 		autosource.New(
@@ -319,10 +325,10 @@ func (c *knowledgeChat) createSources() []source.Source {
 				"./README.md",
 			},
 			autosource.WithName("Mixed Content Source"),
-			autosource.WithMetadataValue("topic", "Cloud Computing"),
-			autosource.WithMetadataValue("type", "mixed"),
-			autosource.WithMetadataValue("source", "official"),
-			autosource.WithMetadataValue("tag", "llm"),
+			autosource.WithMetadataValue("category", "mixed"),
+			autosource.WithMetadataValue("topic", "technology"),
+			autosource.WithMetadataValue("source_type", "auto_detect"),
+			autosource.WithMetadataValue("content_type", "mixed"),
 		),
 	}
 	return sources
@@ -330,6 +336,9 @@ func (c *knowledgeChat) createSources() []source.Source {
 
 // setupKnowledgeBase creates a built-in knowledge base with sample documents.
 func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
+	// Create sources.
+	c.sources = c.createSources()
+
 	// Create vector store.
 	vs, err := c.setupVectorDB()
 	if err != nil {
@@ -342,25 +351,32 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		return fmt.Errorf("failed to create embedder: %w", err)
 	}
 
-	// Create sources.
-	sources := c.createSources()
-
 	// Create built-in knowledge base with all components.
 	c.kb = knowledge.New(
 		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
-		knowledge.WithSources(sources),
+		knowledge.WithSources(c.sources),
 	)
-	// Load the knowledge base.
-	if err := c.kb.Load(
-		ctx,
-		knowledge.WithShowProgress(false),  // The default is true.
-		knowledge.WithProgressStepSize(10), // The default is 10.
-		knowledge.WithShowStats(false),     // The default is true.
-		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
-		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
-	); err != nil {
-		return fmt.Errorf("failed to load knowledge base: %w", err)
+	// Decide whether to load the knowledge base.
+	load := *loadData
+	if strings.ToLower(*vectorStore) == "inmemory" && !load {
+		// In-memory store is non-persistent, so force loading.
+		fmt.Println("ℹ️  In-memory store is non-persistent; forcing data load.")
+		load = true
+	}
+
+	// Optionally load the knowledge base.
+	if load {
+		if err := c.kb.Load(
+			ctx,
+			knowledge.WithShowProgress(false),  // The default is true.
+			knowledge.WithProgressStepSize(10), // The default is 10.
+			knowledge.WithShowStats(false),     // The default is true.
+			knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+			knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
+		); err != nil {
+			return fmt.Errorf("failed to load knowledge base: %w", err)
+		}
 	}
 	return nil
 }
@@ -391,11 +407,14 @@ func (c *knowledgeChat) startChat(ctx context.Context) error {
 	fmt.Println()
 	fmt.Println("🔍 Try asking questions like:")
 	fmt.Println("   - What is a Large Language Model?")
-	fmt.Println("   - Explain the Transformer architecture.")
-	fmt.Println("   - What is a Mixture-of-Experts (MoE) model?")
+	fmt.Println("   - Tell me about Golang programming language")
 	fmt.Println("   - How does Byte-pair encoding work?")
-	fmt.Println("   - What is an N-gram model?")
 	fmt.Println("   - What is cloud computing?")
+	fmt.Println("   - Show me documentation about machine learning")
+	fmt.Println("   - Find content from wiki sources")
+	fmt.Println("")
+	fmt.Println("🎯 You can also try agentic filtered searches:")
+	fmt.Println("   - Query something about programming and golang related stuff")
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {

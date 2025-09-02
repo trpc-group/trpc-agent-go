@@ -40,11 +40,6 @@ var Default Logger = zap.New(
 	zap.AddCallerSkip(1),
 ).Sugar()
 
-<<<<<<< HEAD
-=======
-var zapLevel = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-
->>>>>>> 998bcdb (remove data manager)
 // SetLevel sets the log level to the specified level.
 // Valid levels are: "debug", "info", "warn", "error", "fatal"
 func SetLevel(level string) {

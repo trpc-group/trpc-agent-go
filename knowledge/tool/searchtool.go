@@ -169,32 +169,35 @@ func generateAgenticFilterPrompt(agenticFilterInfo map[string][]interface{}) str
 	}
 
 	// Build list of valid filter keys
-	validFilters := make([]string, 0, len(agenticFilterInfo))
+	keys := make([]string, 0, len(agenticFilterInfo))
 	for k := range agenticFilterInfo {
-		validFilters = append(validFilters, k)
+		keys = append(keys, k)
 	}
-	validFiltersStr := fmt.Sprintf("%v", validFilters)
+	keysStr := fmt.Sprintf("%v", keys)
 
 	prompt := "You are a helpful assistant that can search for relevant information in the knowledge base. "
-	prompt += fmt.Sprintf("The knowledge base contains documents with these metadata filters: %s.\n", validFiltersStr)
-	prompt += "Always use filters when the user query indicates specific metadata.\n\n"
+	prompt += fmt.Sprintf("Available filters: %s. Always use filters when the user query indicates specific metadata.\n\n", keysStr)
+
+	prompt += "Usage Rules:\n"
+	prompt += "- Explicit key=value pairs: Use directly (e.g., 'protocol=trpc-go' -> [{'key': 'protocol', 'value': 'trpc-go'}])\n"
+	prompt += "- Key only queries: Choose from available values if provided; generate appropriate value if empty\n"
+	prompt += "- Multiple filters: Combine in filters parameter array\n"
+	prompt += "- Fallback strategy: If filtered search returns no results, retry without filters\n"
+	prompt += "- Exception: For explicit key=value queries, do not use fallback (must respect user's specific requirement)\n\n"
 
 	prompt += "Examples:\n"
-	prompt += "1. If the user asks about tRPC services like \"show me documents about tRPC gateway\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'service_type', 'value': 'gateway'}].\n"
-	prompt += "2. If the user asks about specific protocols like \"find tRPC-Go documentation\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'protocol', 'value': 'trpc-go'}].\n"
-	prompt += "3. If the user asks about API documentation like \"show me all RPC interface docs\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'doc_type', 'value': 'api_doc'}].\n\n"
-
-	prompt += "General Guidelines:\n"
-	prompt += "- Always analyze the user query to identify relevant metadata.\n"
-	prompt += "- Use the most specific filter(s) possible to narrow down results.\n"
-	prompt += "- If multiple filters are relevant, combine them in the filters parameter (e.g., [{'key': 'protocol', 'value': 'trpc-go'}, {'key': 'service_type', 'value': 'gateway'}]).\n"
-	prompt += fmt.Sprintf("- Ensure the filter keys match the valid metadata filters: %s.\n", validFiltersStr)
-	prompt += "- You can use the knowledge_search_with_filter tool to search the knowledge base and get the most relevant documents.\n"
-	prompt += "- Make sure to pass the filters as an array of objects with 'key' and 'value' fields. FOLLOW THIS STRUCTURE STRICTLY.\n\n"
+	prompt += "1. \"show me tRPC gateway documentation\" -> [{'key': 'service_type', 'value': 'gateway'}] + fallback if needed\n"
+	prompt += "2. \"find protocol=trpc-go docs\" -> [{'key': 'protocol', 'value': 'trpc-go'}] (no fallback, explicit requirement)\n"
+	prompt += "3. \"what are the protocol options?\" -> choose appropriate protocol value from available options + fallback\n"
+	prompt += "4. \"service_type=api and protocol=trpc-go\" -> [{'key': 'service_type', 'value': 'api'}, {'key': 'protocol', 'value': 'trpc-go'}]\n\n"
 
 	prompt += "Available filter values for each key:\n"
 	for k, v := range agenticFilterInfo {
-		prompt += fmt.Sprintf("- %s: %v\n", k, v)
+		if len(v) == 0 {
+			prompt += fmt.Sprintf("- %s: [] (generate appropriate value based on context)\n", k)
+		} else {
+			prompt += fmt.Sprintf("- %s: %v (choose from these options)\n", k, v)
+		}
 	}
 
 	return prompt

@@ -200,13 +200,7 @@ func (dk *BuiltinKnowledge) loadSource(
 	if dk.vectorStore == nil {
 		return fmt.Errorf("vector store not configured")
 	}
-
 	config := dk.buildLoadConfig(len(sources), opts...)
-	if config.recreate {
-		if err := dk.vectorStore.FlushAll(ctx); err != nil {
-			return fmt.Errorf("failed to flush vector store: %w", err)
-		}
-	}
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
 		if _, err := dk.loadConcurrent(ctx, config, sources); err != nil {
 			return err
@@ -474,47 +468,6 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 		}
 	}
 	return nil
-}
-
-// GetAllMetadata returns all metadata collected from sources with deduplication.
-func (dk *BuiltinKnowledge) GetAllMetadata() map[string][]interface{} {
-	// Use temporary map for deduplication
-	tempMetadataMap := make(map[string]map[string]struct{})
-	allMetadata := make(map[string][]interface{})
-
-	// Iterate through all sources to collect metadata
-	for _, src := range dk.sources {
-		metadata := src.GetMetadata()
-		for key, value := range metadata {
-			// Initialize key in temporary map
-			if _, exists := tempMetadataMap[key]; !exists {
-				tempMetadataMap[key] = make(map[string]struct{})
-				allMetadata[key] = make([]interface{}, 0)
-			}
-
-			// Create a unique key that includes type information to avoid conflicts
-			valueKey := fmt.Sprintf("%T:%v", value, value)
-			if _, exists := tempMetadataMap[key][valueKey]; !exists {
-				allMetadata[key] = append(allMetadata[key], value)
-				tempMetadataMap[key][valueKey] = struct{}{}
-			}
-		}
-	}
-	return allMetadata
-}
-
-// GetAllMetadataKeys returns all metadata keys with their string values collected from sources with deduplication.
-func (dk *BuiltinKnowledge) GetAllMetadataKeys() map[string][]interface{} {
-	allMetadata := dk.GetAllMetadata()
-	result := make(map[string][]interface{})
-	tempMetadataMap := make(map[string]struct{})
-	for key := range allMetadata {
-		if _, exists := tempMetadataMap[key]; !exists {
-			tempMetadataMap[key] = struct{}{}
-			result[key] = []interface{}{}
-		}
-	}
-	return result
 }
 
 // Search implements the Knowledge interface.
