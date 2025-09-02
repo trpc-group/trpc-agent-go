@@ -13,7 +13,6 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,44 +78,6 @@ type Client interface {
 	DeleteDoc(ctx context.Context, indexName, id string) error
 	// Search executes a query and returns the raw response body.
 	Search(ctx context.Context, indexName string, body []byte) ([]byte, error)
-}
-
-// BulkDocument represents a document for bulk operations.
-type BulkDocument struct {
-	// ID is the document identifier.
-	ID string
-	// Document is the document payload to index or update.
-	Document any
-	// Action is the bulk action, one of: index, update, delete.
-	Action string
-}
-
-// Bulk action constants.
-const (
-	// BulkActionIndex represents the index action.
-	BulkActionIndex = "index"
-	// BulkActionUpdate represents the update action.
-	BulkActionUpdate = "update"
-	// BulkActionDelete represents the delete action.
-	BulkActionDelete = "delete"
-)
-
-// updateRequest wraps a partial update request body.
-type updateRequest struct {
-	Doc any `json:"doc"`
-}
-
-// bulkMeta represents a bulk API metadata line.
-type bulkMeta struct {
-	Index  *bulkTarget `json:"index,omitempty"`
-	Update *bulkTarget `json:"update,omitempty"`
-	Delete *bulkTarget `json:"delete,omitempty"`
-}
-
-// bulkTarget represents the target index and id for bulk operations.
-type bulkTarget struct {
-	Index string `json:"_index"`
-	ID    string `json:"_id"`
 }
 
 // client implements the Client interface.
@@ -327,55 +288,4 @@ func (c *client) Search(ctx context.Context, indexName string, body []byte) ([]b
 		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(bodyBytes))
 	}
 	return bodyBytes, nil
-}
-
-// BulkIndex performs bulk indexing operations.
-func (c *client) BulkIndex(ctx context.Context, indexName string, documents []BulkDocument) error {
-	if len(documents) == 0 {
-		return nil
-	}
-
-	var bulkBody []byte
-	for _, doc := range documents {
-		meta := bulkMeta{}
-		target := &bulkTarget{Index: indexName, ID: doc.ID}
-		switch doc.Action {
-		case BulkActionIndex:
-			meta.Index = target
-		case BulkActionUpdate:
-			meta.Update = target
-		case BulkActionDelete:
-			meta.Delete = target
-		default:
-			meta.Index = target
-		}
-		actionBytes, err := json.Marshal(meta)
-		if err != nil {
-			return err
-		}
-		bulkBody = append(bulkBody, actionBytes...)
-		bulkBody = append(bulkBody, '\n')
-
-		if doc.Action != BulkActionDelete {
-			docBytes, err := json.Marshal(doc.Document)
-			if err != nil {
-				return err
-			}
-			bulkBody = append(bulkBody, docBytes...)
-			bulkBody = append(bulkBody, '\n')
-		}
-	}
-
-	res, err := c.esClient.Bulk(
-		bytes.NewReader(bulkBody),
-		c.esClient.Bulk.WithContext(ctx),
-	)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch bulk failed: %s", res.Status())
-	}
-	return nil
 }

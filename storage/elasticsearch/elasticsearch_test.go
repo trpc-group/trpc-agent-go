@@ -285,8 +285,8 @@ func TestClient_DocumentCRUD(t *testing.T) {
 	body, err := c.GetDoc(context.Background(), "idx", "id1")
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(body), "_source"))
-	updateBody, err := json.Marshal(updateRequest{Doc: map[string]any{"k": "v2"}})
-	require.NoError(t, err)
+	// build a simple update request body
+	updateBody := []byte("{\"doc\":{\"k\":\"v2\"}}")
 	require.NoError(t, c.UpdateDoc(context.Background(), "idx", "id1", updateBody))
 	require.NoError(t, c.DeleteDoc(context.Background(), "idx", "id1"))
 }
@@ -313,9 +313,6 @@ func TestClient_Search_And_Bulk(t *testing.T) {
 			if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_search") {
 				return newResponse(200, "{\"hits\":{}}")
 			}
-			if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_bulk") {
-				return newResponse(200, "{}")
-			}
 			return newResponse(200, "{}")
 		}),
 	})
@@ -325,11 +322,4 @@ func TestClient_Search_And_Bulk(t *testing.T) {
 	resp, err := c.Search(context.Background(), "idx", []byte("{}"))
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(resp), "hits"))
-
-	docs := []BulkDocument{
-		{ID: "1", Document: map[string]any{"a": 1}, Action: BulkActionIndex},
-		{ID: "2", Document: map[string]any{"a": 2}, Action: BulkActionUpdate},
-		{ID: "3", Action: BulkActionDelete},
-	}
-	require.NoError(t, c.BulkIndex(context.Background(), "idx", docs))
 }
