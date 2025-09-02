@@ -34,6 +34,25 @@ state[graph.StateKeyOneShotMessages] = []model.Message{
 }
 ```
 
+### Run the executable example
+
+```bash
+go run . -model deepseek-chat -sys "You are a creative storyteller." -input "Tell me a story about a robot learning to paint."
+```
+
+You can omit `-input` to type the prompt interactively.
+
+### What you will see
+
+- Streaming assistant output.
+- A final verification line:
+
+```
+🔍 Verification: one_shot_messages cleared after execution.
+```
+
+This confirms OneShot messages are consumed in this round and then cleared.
+
 ## Expected Behavior
 
 - **Priority**: OneShot > UserInput > History

@@ -8,9 +8,9 @@
 //
 //
 
-// Package main demonstrates a one-shot user input workflow using the graph
-// package with GraphAgent and Runner. It shows how user input is consumed
-// exactly once, then cleared from state by the LLM node execution.
+// Package main demonstrates the OneShot override pattern using the graph
+// package with GraphAgent and Runner. It sets one_shot_messages for a single
+// round to completely control the model input, then verifies it is cleared.
 package main
 
 import (
@@ -36,24 +36,26 @@ import (
 
 const (
 	defaultModelName = "deepseek-chat"
-	appName          = "userinputonce"
+	appName          = "oneshot-override"
 )
 
 var (
 	modelName = flag.String("model", defaultModelName,
 		"Name of the model to use")
 	inputFlag = flag.String("input", "",
-		"User input to process. If empty, read from stdin once")
+		"User input to place in one_shot_messages. If empty, read stdin")
+	sysFlag = flag.String("sys", "You are a domain expert. Use clear steps.",
+		"System prompt to place in one_shot_messages")
 )
 
 func main() {
 	flag.Parse()
-	fmt.Printf("🚀 One-shot User Input Example\n")
+	fmt.Printf("🚀 OneShot Override Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Println(strings.Repeat("=", 50))
 
-	content := *inputFlag
-	if strings.TrimSpace(content) == "" {
+	content := strings.TrimSpace(*inputFlag)
+	if content == "" {
 		var err error
 		content, err = readSingleLine()
 		if err != nil {
@@ -61,13 +63,13 @@ func main() {
 		}
 	}
 
-	if err := runOnce(content); err != nil {
+	if err := runOnce(content, *sysFlag); err != nil {
 		log.Fatalf("run failed: %v", err)
 	}
 }
 
 func readSingleLine() (string, error) {
-	fmt.Print("💬 Enter your prompt: ")
+	fmt.Print("💬 Enter your prompt (for OneShot): ")
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
@@ -78,22 +80,30 @@ func readSingleLine() (string, error) {
 	return strings.TrimSpace(scanner.Text()), nil
 }
 
-func runOnce(content string) error {
+func runOnce(userText string, sysText string) error {
 	ctx := context.Background()
 
-	// Build graph with a single LLM node. After execution, user input is
-	// cleared by the LLM node per graph/state_graph.go behavior.
 	schema := graph.MessagesStateSchema()
 	modelInstance := openai.New(*modelName)
 
 	stateGraph := graph.NewStateGraph(schema)
 	stateGraph.
+		AddNode("set_oneshot", func(ctx context.Context, state graph.State) (any, error) {
+			// Create one_shot_messages with system + user for this round.
+			return graph.State{
+				graph.StateKeyOneShotMessages: []model.Message{
+					model.NewSystemMessage(sysText),
+					model.NewUserMessage(userText),
+				},
+			}, nil
+		}).
 		AddLLMNode("ask", modelInstance,
-			"You are a helpful assistant. Answer concisely.",
+			"Answer the user's question. Be concise.",
 			map[string]tool.Tool{}).
-		AddNode("verify", verifyCleared).
-		SetEntryPoint("ask").
+		AddNode("verify", verifyOneShotCleared).
+		SetEntryPoint("set_oneshot").
 		SetFinishPoint("verify")
+	stateGraph.AddEdge("set_oneshot", "ask")
 	stateGraph.AddEdge("ask", "verify")
 
 	compiled, err := stateGraph.Compile()
@@ -101,10 +111,8 @@ func runOnce(content string) error {
 		return fmt.Errorf("failed to compile graph: %w", err)
 	}
 
-	// Create agent and runner.
-	gagent, err := graphagent.New("one-shot-agent", compiled,
-		graphagent.WithDescription(
-			"Agent that consumes user input once and clears it."),
+	gagent, err := graphagent.New("oneshot-agent", compiled,
+		graphagent.WithDescription("Agent using OneShot override for one round."),
 		graphagent.WithInitialState(graph.State{}),
 	)
 	if err != nil {
@@ -119,22 +127,21 @@ func runOnce(content string) error {
 	)
 
 	userID := "user"
-	sessionID := fmt.Sprintf("once-%d", time.Now().Unix())
+	sessionID := fmt.Sprintf("oneshot-%d", time.Now().Unix())
+	// Pass an empty user message; content is provided via OneShot.
+	msg := model.NewUserMessage("")
 
-	// Create user message and run once.
-	message := model.NewUserMessage(content)
-	eventChan, err := r.Run(
+	ch, err := r.Run(
 		ctx,
 		userID,
 		sessionID,
-		message,
+		msg,
 		agent.WithRuntimeState(map[string]any{"user_id": userID}),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
-
-	return processEvents(eventChan)
+	return processEvents(ch)
 }
 
 func processEvents(eventChan <-chan *event.Event) error {
@@ -144,7 +151,6 @@ func processEvents(eventChan <-chan *event.Event) error {
 			fmt.Printf("❌ Error: %s\n", ev.Error.Message)
 			continue
 		}
-		// Print streaming tokens from model.
 		if len(ev.Choices) > 0 {
 			ch := ev.Choices[0]
 			if ch.Delta.Content != "" {
@@ -159,11 +165,10 @@ func processEvents(eventChan <-chan *event.Event) error {
 				started = false
 			}
 		}
-		// When finished, show final response if present.
 		if ev.Done && ev.Response != nil && len(ev.Response.Choices) > 0 {
 			content := ev.Response.Choices[0].Message.Content
 			if content != "" {
-				fmt.Printf("\n✅ Completed: %s\n", truncate(content, 120))
+				fmt.Printf("\n✅ Completed: %s\n", truncate(content, 10))
 			}
 		}
 	}
@@ -180,19 +185,17 @@ func truncate(s string, max int) string {
 	return s[:max-3] + "..."
 }
 
-// verifyCleared is a function node that logs whether user_input has been
-// cleared after the LLM node. This demonstrates the one-shot behavior in a
-// concrete way without inspecting internal state directly.
-func verifyCleared(ctx context.Context, state graph.State) (any, error) {
-	var userInput string
-	if v, ok := state[graph.StateKeyUserInput].(string); ok {
-		userInput = v
+// verifyOneShotCleared confirms that one_shot_messages is cleared after the
+// LLM node and prints a short note to the console.
+func verifyOneShotCleared(ctx context.Context, state graph.State) (any, error) {
+	var remaining int
+	if v, ok := state[graph.StateKeyOneShotMessages].([]model.Message); ok {
+		remaining = len(v)
 	}
-	if userInput == "" {
-		fmt.Println("🔍 Verification: user_input is cleared (" +
-			"LLM consumed it once).")
+	if remaining == 0 {
+		fmt.Println("🔍 Verification: one_shot_messages cleared after execution.")
 	} else {
-		fmt.Println("🔍 Verification: user_input is NOT cleared.")
+		fmt.Printf("🔍 Verification: one_shot_messages NOT cleared (len=%d).\n", remaining)
 	}
 	return nil, nil
 }
