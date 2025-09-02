@@ -93,10 +93,14 @@ type KnowledgeFilter struct {
 	Value string `json:"value" jsonschema:"description=The value of the filter"`
 }
 
-// NewKnowledgeSearchToolWithAgenticFilter creates a function tool for knowledge search using
+// NewAgenticFilterSearchTool creates a function tool for knowledge search using
 // the Knowledge interface with filter.
 // This tool allows agents to search for relevant information in the knowledge base.
-func NewKnowledgeSearchToolWithAgenticFilter(kb knowledge.Knowledge, filter map[string]interface{}) tool.Tool {
+func NewAgenticFilterSearchTool(
+	kb knowledge.Knowledge,
+	filter map[string]interface{},
+	agenticFilterInfo map[string][]interface{},
+) tool.Tool {
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequestWithFilter) (*KnowledgeSearchResponse, error) {
 		if req.Query == "" {
 			return nil, errors.New("query cannot be empty")
@@ -133,11 +137,11 @@ func NewKnowledgeSearchToolWithAgenticFilter(kb knowledge.Knowledge, filter map[
 		}, nil
 	}
 
+	description := generateAgenticFilterPrompt(agenticFilterInfo)
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName("knowledge_search_with_filter"),
-		function.WithDescription("Search for relevant information in the knowledge base. "+
-			"Use this tool to find context and facts to help answer user questions."),
+		function.WithDescription(description),
 	)
 }
 
@@ -157,4 +161,41 @@ func getFinalFilter(
 		filter[k] = v
 	}
 	return filter
+}
+
+func generateAgenticFilterPrompt(agenticFilterInfo map[string][]interface{}) string {
+	if len(agenticFilterInfo) == 0 {
+		return "You are a helpful assistant that can search for relevant information in the knowledge base."
+	}
+
+	// Build list of valid filter keys
+	validFilters := make([]string, 0, len(agenticFilterInfo))
+	for k := range agenticFilterInfo {
+		validFilters = append(validFilters, k)
+	}
+	validFiltersStr := fmt.Sprintf("%v", validFilters)
+
+	prompt := "You are a helpful assistant that can search for relevant information in the knowledge base. "
+	prompt += fmt.Sprintf("The knowledge base contains documents with these metadata filters: %s.\n", validFiltersStr)
+	prompt += "Always use filters when the user query indicates specific metadata.\n\n"
+
+	prompt += "Examples:\n"
+	prompt += "1. If the user asks about tRPC services like \"show me documents about tRPC gateway\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'service_type', 'value': 'gateway'}].\n"
+	prompt += "2. If the user asks about specific protocols like \"find tRPC-Go documentation\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'protocol', 'value': 'trpc-go'}].\n"
+	prompt += "3. If the user asks about API documentation like \"show me all RPC interface docs\", you MUST use the knowledge_search_with_filter tool with the filters parameter set to [{'key': 'doc_type', 'value': 'api_doc'}].\n\n"
+
+	prompt += "General Guidelines:\n"
+	prompt += "- Always analyze the user query to identify relevant metadata.\n"
+	prompt += "- Use the most specific filter(s) possible to narrow down results.\n"
+	prompt += "- If multiple filters are relevant, combine them in the filters parameter (e.g., [{'key': 'protocol', 'value': 'trpc-go'}, {'key': 'service_type', 'value': 'gateway'}]).\n"
+	prompt += fmt.Sprintf("- Ensure the filter keys match the valid metadata filters: %s.\n", validFiltersStr)
+	prompt += "- You can use the knowledge_search_with_filter tool to search the knowledge base and get the most relevant documents.\n"
+	prompt += "- Make sure to pass the filters as an array of objects with 'key' and 'value' fields. FOLLOW THIS STRUCTURE STRICTLY.\n\n"
+
+	prompt += "Available filter values for each key:\n"
+	for k, v := range agenticFilterInfo {
+		prompt += fmt.Sprintf("- %s: %v\n", k, v)
+	}
+
+	return prompt
 }

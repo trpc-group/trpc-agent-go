@@ -209,9 +209,11 @@ func (a *ChainAgent) executeSubAgents(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
+	fmt.Println("subagents execute", len(a.subAgents))
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
+		fmt.Println("subagent execute", subAgent.Info().Name)
 
 		// Reset invocation information in context
 		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)

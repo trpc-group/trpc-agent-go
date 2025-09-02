@@ -383,29 +383,6 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// DeleteByFilter delete documents by filter
-func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
-	if filter == nil {
-		return 0, fmt.Errorf("tcvectordb filter is required")
-	}
-	tcvectorFilter := tcvectordb.NewFilter("")
-	for k, v := range filter {
-		cond := fmt.Sprintf(`%s = "%v"`, k, v)
-		tcvectorFilter = tcvectorFilter.And(cond)
-	}
-	deleteReq := tcvectordb.DeleteDocumentParams{
-		Filter: tcvectorFilter,
-	}
-	resp, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, deleteReq)
-	if err != nil {
-		return 0, fmt.Errorf("tcvectordb delete document: %w", err)
-	}
-	if resp == nil {
-		return 0, fmt.Errorf("tcvectordb delete document: response is nil")
-	}
-	return resp.AffectedCount, nil
-}
-
 // FlushAll flushes all documents from the vector store.
 func (vs *VectorStore) FlushAll(ctx context.Context) error {
 	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{

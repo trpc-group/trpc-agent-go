@@ -150,6 +150,7 @@ func WithDocConcurrency(n int) LoadOption {
 }
 
 // WithRecreate recreates the vector store before loading documents, be careful to use this option.
+// ATTENTION! This option will delete all documents from the vector store and recreate it.
 func WithRecreate(recreate bool) LoadOption {
 	return func(lc *loadConfig) {
 		lc.recreate = recreate
@@ -475,31 +476,45 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 	return nil
 }
 
-// RemoveDocumentByFilter by filters
-func (dk *BuiltinKnowledge) RemoveDocumentByFilter(ctx context.Context, filters map[string]interface{}) error {
-	if dk.vectorStore == nil {
-		return fmt.Errorf("vector store not configured")
+// GetAllMetadata returns all metadata collected from sources with deduplication.
+func (dk *BuiltinKnowledge) GetAllMetadata() map[string][]interface{} {
+	// Use temporary map for deduplication
+	tempMetadataMap := make(map[string]map[string]struct{})
+	allMetadata := make(map[string][]interface{})
+
+	// Iterate through all sources to collect metadata
+	for _, src := range dk.sources {
+		metadata := src.GetMetadata()
+		for key, value := range metadata {
+			// Initialize key in temporary map
+			if _, exists := tempMetadataMap[key]; !exists {
+				tempMetadataMap[key] = make(map[string]struct{})
+				allMetadata[key] = make([]interface{}, 0)
+			}
+
+			// Create a unique key that includes type information to avoid conflicts
+			valueKey := fmt.Sprintf("%T:%v", value, value)
+			if _, exists := tempMetadataMap[key][valueKey]; !exists {
+				allMetadata[key] = append(allMetadata[key], value)
+				tempMetadataMap[key][valueKey] = struct{}{}
+			}
+		}
 	}
-	if len(filters) == 0 {
-		return fmt.Errorf("filters cannot be empty")
-	}
-	_, err := dk.vectorStore.DeleteByFilter(ctx, filters)
-	if err != nil {
-		return fmt.Errorf("failed to remove documents: %w", err)
-	}
-	return nil
+	return allMetadata
 }
 
-// AddSources adds sources to the knowledge base.
-func (dk *BuiltinKnowledge) AddSources(ctx context.Context, source []source.Source, opts ...LoadOption) error {
-	if dk.vectorStore == nil {
-		return fmt.Errorf("vector store not configured")
+// GetAllMetadataKeys returns all metadata keys with their string values collected from sources with deduplication.
+func (dk *BuiltinKnowledge) GetAllMetadataKeys() map[string][]interface{} {
+	allMetadata := dk.GetAllMetadata()
+	result := make(map[string][]interface{})
+	tempMetadataMap := make(map[string]struct{})
+	for key := range allMetadata {
+		if _, exists := tempMetadataMap[key]; !exists {
+			tempMetadataMap[key] = struct{}{}
+			result[key] = []interface{}{}
+		}
 	}
-	dk.sources = append(dk.sources, source...)
-	if err := dk.loadSource(ctx, source, opts...); err != nil {
-		return fmt.Errorf("failed to update document: %w", err)
-	}
-	return nil
+	return result
 }
 
 // Search implements the Knowledge interface.
