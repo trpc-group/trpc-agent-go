@@ -103,7 +103,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	// Create Elasticsearch client configuration.
-	esClient, err := storage.DefaultClientBuilder(
+	esClient, err := storage.GetClientBuilder()(
 		storage.WithAddresses(option.addresses),
 		storage.WithUsername(option.username),
 		storage.WithPassword(option.password),
