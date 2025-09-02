@@ -15,48 +15,83 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test that WithExtraOptions accumulates and preserves order.
-func TestOptions_ExtraOptionsOrderAccumulate(t *testing.T) {
-	opts := &ClientBuilderOpts{}
-	first := map[string]any{"addresses": []string{"http://es1:9200"}}
-	second := "beta"
-	third := 123
-	WithExtraOptions(first)(opts)
-	WithExtraOptions(second, third)(opts)
+func TestOptions_Setters_Table(t *testing.T) {
+	t.Run("basic setters", func(t *testing.T) {
+		opts := &ClientBuilderOpts{}
 
-	require.Equal(t, []any{first, second, third}, opts.ExtraOptions)
+		WithAddresses([]string{"http://a:9200", "http://b:9200"})(opts)
+		WithUsername("user")(opts)
+		WithPassword("pass")(opts)
+		WithAPIKey("apikey")(opts)
+		WithCertificateFingerprint("fp")(opts)
+		WithCompressRequestBody(true)(opts)
+		WithEnableMetrics(true)(opts)
+		WithEnableDebugLogger(true)(opts)
+		WithRetryOnStatus([]int{500, 429})(opts)
+		WithMaxRetries(5)(opts)
+		WithVersion(ESVersionV8)(opts)
+
+		require.Equal(t, []string{"http://a:9200", "http://b:9200"}, opts.Addresses)
+		require.Equal(t, "user", opts.Username)
+		require.Equal(t, "pass", opts.Password)
+		require.Equal(t, "apikey", opts.APIKey)
+		require.Equal(t, "fp", opts.CertificateFingerprint)
+		require.True(t, opts.CompressRequestBody)
+		require.True(t, opts.EnableMetrics)
+		require.True(t, opts.EnableDebugLogger)
+		require.Equal(t, []int{500, 429}, opts.RetryOnStatus)
+		require.Equal(t, 5, opts.MaxRetries)
+		require.Equal(t, ESVersionV8, opts.Version)
+	})
+
+	t.Run("extra options accumulate in order", func(t *testing.T) {
+		opts := &ClientBuilderOpts{}
+		first := map[string]any{"k": 1}
+		second := "x"
+		third := 3
+
+		WithExtraOptions(first)(opts)
+		WithExtraOptions(second, third)(opts)
+
+		require.Equal(t, []any{first, second, third}, opts.ExtraOptions)
+	})
 }
 
-func TestOptions_WithVersion_SetsField(t *testing.T) {
-	opts := &ClientBuilderOpts{}
-	WithVersion(ESVersionV7)(opts)
-	require.Equal(t, ESVersionV7, opts.Version)
-}
-
-// Test that RegisterElasticsearchInstance appends options, not overwrites.
-func TestOptions_RegistryAppendBehavior(t *testing.T) {
+func TestOptions_Registry_AppendAndGet(t *testing.T) {
 	// Isolate global state.
 	old := esRegistry
 	esRegistry = make(map[string][]ClientBuilderOpt)
 	defer func() { esRegistry = old }()
 
-	const name = "test-append"
+	const name = "cluster-a"
 	RegisterElasticsearchInstance(name,
-		WithExtraOptions(map[string]any{"addresses": []string{"http://a:9200"}}),
-		WithVersion(ESVersionV8),
+		WithAddresses([]string{"http://a:9200"}),
+		WithUsername("u1"),
 	)
 	RegisterElasticsearchInstance(name,
-		WithExtraOptions("x"),
+		WithRetryOnStatus([]int{500}),
 	)
 
 	opts, ok := GetElasticsearchInstance(name)
 	require.True(t, ok)
-	require.GreaterOrEqual(t, len(opts), 2)
+	require.GreaterOrEqual(t, len(opts), 3)
 
 	applied := &ClientBuilderOpts{}
 	for _, opt := range opts {
 		opt(applied)
 	}
-	require.Len(t, applied.ExtraOptions, 2)
-	require.Equal(t, ESVersionV8, applied.Version)
+	// Validate all applied fields.
+	require.Equal(t, []string{"http://a:9200"}, applied.Addresses)
+	require.Equal(t, "u1", applied.Username)
+	require.Equal(t, []int{500}, applied.RetryOnStatus)
+}
+
+func TestOptions_Registry_NotFound(t *testing.T) {
+	old := esRegistry
+	esRegistry = make(map[string][]ClientBuilderOpt)
+	defer func() { esRegistry = old }()
+
+	opts, ok := GetElasticsearchInstance("missing")
+	require.False(t, ok)
+	require.Nil(t, opts)
 }
