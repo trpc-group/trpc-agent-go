@@ -60,32 +60,25 @@ type Config struct {
 	VectorDimension int
 }
 
-// Client defines the interface for Elasticsearch operations.
+// Client defines the minimal interface for Elasticsearch operations.
+// Use []byte payloads to decouple from SDK typed APIs.
 type Client interface {
-	// Ping checks if Elasticsearch is available.
-	Ping(ctx context.Context) error
-	// CreateIndex creates an index with the provided mapping.
-	CreateIndex(ctx context.Context, indexName string, mapping map[string]any) error
+	// CreateIndex creates an index with the provided body.
+	CreateIndex(ctx context.Context, indexName string, body []byte) error
 	// DeleteIndex deletes the specified index.
 	DeleteIndex(ctx context.Context, indexName string) error
 	// IndexExists returns whether the specified index exists.
 	IndexExists(ctx context.Context, indexName string) (bool, error)
-	// IndexDocument indexes a document with the given identifier.
-	IndexDocument(ctx context.Context, indexName, id string, document any) error
-	// GetDocument retrieves a document by identifier and returns the raw body.
-	GetDocument(ctx context.Context, indexName, id string) ([]byte, error)
-	// UpdateDocument applies a partial update to the document by identifier.
-	UpdateDocument(ctx context.Context, indexName, id string, document any) error
-	// DeleteDocument deletes a document by identifier.
-	DeleteDocument(ctx context.Context, indexName, id string) error
+	// IndexDoc indexes a document with the given identifier.
+	IndexDoc(ctx context.Context, indexName, id string, body []byte) error
+	// GetDoc retrieves a document by identifier and returns the raw body.
+	GetDoc(ctx context.Context, indexName, id string) ([]byte, error)
+	// UpdateDoc applies a partial update to the document by identifier.
+	UpdateDoc(ctx context.Context, indexName, id string, body []byte) error
+	// DeleteDoc deletes a document by identifier.
+	DeleteDoc(ctx context.Context, indexName, id string) error
 	// Search executes a query and returns the raw response body.
-	Search(ctx context.Context, indexName string, query map[string]any) ([]byte, error)
-	// BulkIndex performs bulk operations for indexing, updating, or deleting.
-	BulkIndex(ctx context.Context, indexName string, documents []BulkDocument) error
-	// Close releases resources held by the client.
-	Close() error
-	// GetRawClient exposes the underlying Elasticsearch client.
-	GetRawClient() *elasticsearch.Client
+	Search(ctx context.Context, indexName string, body []byte) ([]byte, error)
 }
 
 // BulkDocument represents a document for bulk operations.
@@ -195,16 +188,12 @@ func (c *client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// CreateIndex creates an index with mapping.
-func (c *client) CreateIndex(ctx context.Context, indexName string, mapping map[string]any) error {
-	mappingBytes, err := json.Marshal(mapping)
-	if err != nil {
-		return err
-	}
+// CreateIndex creates an index with the provided body.
+func (c *client) CreateIndex(ctx context.Context, indexName string, body []byte) error {
 	res, err := c.esClient.Indices.Create(
 		indexName,
 		c.esClient.Indices.Create.WithContext(ctx),
-		c.esClient.Indices.Create.WithBody(bytes.NewReader(mappingBytes)),
+		c.esClient.Indices.Create.WithBody(bytes.NewReader(body)),
 	)
 	if err != nil {
 		return err
@@ -246,14 +235,10 @@ func (c *client) IndexExists(ctx context.Context, indexName string) (bool, error
 }
 
 // IndexDocument indexes a document.
-func (c *client) IndexDocument(ctx context.Context, indexName, id string, document any) error {
-	documentBytes, err := json.Marshal(document)
-	if err != nil {
-		return err
-	}
+func (c *client) IndexDoc(ctx context.Context, indexName, id string, body []byte) error {
 	res, err := c.esClient.Index(
 		indexName,
-		bytes.NewReader(documentBytes),
+		bytes.NewReader(body),
 		c.esClient.Index.WithContext(ctx),
 		c.esClient.Index.WithDocumentID(id),
 	)
@@ -268,7 +253,7 @@ func (c *client) IndexDocument(ctx context.Context, indexName, id string, docume
 }
 
 // GetDocument retrieves a document by ID.
-func (c *client) GetDocument(ctx context.Context, indexName, id string) ([]byte, error) {
+func (c *client) GetDoc(ctx context.Context, indexName, id string) ([]byte, error) {
 	res, err := c.esClient.Get(
 		indexName,
 		id,
@@ -288,17 +273,12 @@ func (c *client) GetDocument(ctx context.Context, indexName, id string) ([]byte,
 	return body, nil
 }
 
-// UpdateDocument updates a document.
-func (c *client) UpdateDocument(ctx context.Context, indexName, id string, document any) error {
-	updateBody := updateRequest{Doc: document}
-	updateBytes, err := json.Marshal(updateBody)
-	if err != nil {
-		return err
-	}
+// UpdateDoc updates a document.
+func (c *client) UpdateDoc(ctx context.Context, indexName, id string, body []byte) error {
 	res, err := c.esClient.Update(
 		indexName,
 		id,
-		bytes.NewReader(updateBytes),
+		bytes.NewReader(body),
 		c.esClient.Update.WithContext(ctx),
 	)
 	if err != nil {
@@ -311,8 +291,8 @@ func (c *client) UpdateDocument(ctx context.Context, indexName, id string, docum
 	return nil
 }
 
-// DeleteDocument deletes a document.
-func (c *client) DeleteDocument(ctx context.Context, indexName, id string) error {
+// DeleteDoc deletes a document.
+func (c *client) DeleteDoc(ctx context.Context, indexName, id string) error {
 	res, err := c.esClient.Delete(
 		indexName,
 		id,
@@ -329,28 +309,24 @@ func (c *client) DeleteDocument(ctx context.Context, indexName, id string) error
 }
 
 // Search performs a search query.
-func (c *client) Search(ctx context.Context, indexName string, query map[string]any) ([]byte, error) {
-	queryBytes, err := json.Marshal(query)
-	if err != nil {
-		return nil, err
-	}
+func (c *client) Search(ctx context.Context, indexName string, body []byte) ([]byte, error) {
 	res, err := c.esClient.Search(
 		c.esClient.Search.WithContext(ctx),
 		c.esClient.Search.WithIndex(indexName),
-		c.esClient.Search.WithBody(bytes.NewReader(queryBytes)),
+		c.esClient.Search.WithBody(bytes.NewReader(body)),
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
-	body, err := io.ReadAll(res.Body)
+	bodyBytes, err := io.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
 	}
 	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(body))
+		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(bodyBytes))
 	}
-	return body, nil
+	return bodyBytes, nil
 }
 
 // BulkIndex performs bulk indexing operations.
@@ -403,9 +379,3 @@ func (c *client) BulkIndex(ctx context.Context, indexName string, documents []Bu
 	}
 	return nil
 }
-
-// Close closes the client connection.
-func (c *client) Close() error { return nil }
-
-// GetRawClient returns the underlying Elasticsearch client.
-func (c *client) GetRawClient() *elasticsearch.Client { return c.esClient }

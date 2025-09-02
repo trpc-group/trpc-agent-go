@@ -12,6 +12,7 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -252,7 +253,7 @@ func TestClient_IndexLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	c := &client{esClient: es, config: defaultConfig()}
 
-	require.NoError(t, c.CreateIndex(context.Background(), "idx", map[string]any{"m": 1}))
+	require.NoError(t, c.CreateIndex(context.Background(), "idx", []byte("{}")))
 	exists, err := c.IndexExists(context.Background(), "idx")
 	require.NoError(t, err)
 	require.True(t, exists)
@@ -278,12 +279,16 @@ func TestClient_DocumentCRUD(t *testing.T) {
 	require.NoError(t, err)
 	c := &client{esClient: es, config: defaultConfig()}
 
-	require.NoError(t, c.IndexDocument(context.Background(), "idx", "id1", map[string]any{"k": "v"}))
-	body, err := c.GetDocument(context.Background(), "idx", "id1")
+	indexDocBody, err := json.Marshal(map[string]any{"k": "v"})
+	require.NoError(t, err)
+	require.NoError(t, c.IndexDoc(context.Background(), "idx", "id1", indexDocBody))
+	body, err := c.GetDoc(context.Background(), "idx", "id1")
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(body), "_source"))
-	require.NoError(t, c.UpdateDocument(context.Background(), "idx", "id1", map[string]any{"k": "v2"}))
-	require.NoError(t, c.DeleteDocument(context.Background(), "idx", "id1"))
+	updateBody, err := json.Marshal(updateRequest{Doc: map[string]any{"k": "v2"}})
+	require.NoError(t, err)
+	require.NoError(t, c.UpdateDoc(context.Background(), "idx", "id1", updateBody))
+	require.NoError(t, c.DeleteDoc(context.Background(), "idx", "id1"))
 }
 
 func TestClient_GetDocument_Error(t *testing.T) {
@@ -296,7 +301,7 @@ func TestClient_GetDocument_Error(t *testing.T) {
 	require.NoError(t, err)
 	c := &client{esClient: es, config: defaultConfig()}
 
-	_, err = c.GetDocument(context.Background(), "idx", "id1")
+	_, err = c.GetDoc(context.Background(), "idx", "id1")
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "get document failed"))
 }
@@ -317,7 +322,7 @@ func TestClient_Search_And_Bulk(t *testing.T) {
 	require.NoError(t, err)
 	c := &client{esClient: es, config: defaultConfig()}
 
-	resp, err := c.Search(context.Background(), "idx", map[string]any{"q": 1})
+	resp, err := c.Search(context.Background(), "idx", []byte("{}"))
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(resp), "hits"))
 
