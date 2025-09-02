@@ -63,11 +63,11 @@ const (
 		"WHERE thread_id = ? AND checkpoint_ns = ? ORDER BY ts ASC"
 
 	sqliteInsertWrite = "INSERT OR REPLACE INTO checkpoint_writes (" +
-		"thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, value_json, task_path) " +
-		"VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+		"thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, value_json, task_path, seq) " +
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
-	sqliteSelectWrites = "SELECT task_id, idx, channel, value_json, task_path FROM checkpoint_writes " +
-		"WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+	sqliteSelectWrites = "SELECT task_id, idx, channel, value_json, task_path, seq FROM checkpoint_writes " +
+		"WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY seq"
 
 	sqliteDeleteThreadCkpts  = "DELETE FROM checkpoints WHERE thread_id = ?"
 	sqliteDeleteThreadWrites = "DELETE FROM checkpoint_writes WHERE thread_id = ?"
@@ -198,7 +198,8 @@ func (s *Saver) List(
 	if threadID == "" {
 		return nil, errors.New("thread_id is required")
 	}
-	rows, err := s.db.QueryContext(ctx, sqliteSelectIDsAsc, threadID, checkpointNS)
+	// Query checkpoints ordered by timestamp descending (newest first)
+	rows, err := s.db.QueryContext(ctx, "SELECT checkpoint_id, ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? ORDER BY ts DESC", threadID, checkpointNS)
 	if err != nil {
 		return nil, fmt.Errorf("select checkpoints: %w", err)
 	}
@@ -213,8 +214,17 @@ func (s *Saver) List(
 		// Apply before filter if specified.
 		if filter != nil && filter.Before != nil {
 			beforeID := graph.GetCheckpointID(filter.Before)
-			if beforeID != "" && checkpointID >= beforeID {
-				continue
+			if beforeID != "" {
+				// Get timestamp of the before checkpoint for proper time-based filtering
+				var beforeTs int64
+				beforeRow := s.db.QueryRowContext(ctx,
+					"SELECT ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
+					threadID, checkpointNS, beforeID)
+				if err := beforeRow.Scan(&beforeTs); err == nil {
+					if ts >= beforeTs {
+						continue
+					}
+				}
 			}
 		}
 		// Get full tuple for this checkpoint.
@@ -382,6 +392,13 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		if err != nil {
 			return nil, fmt.Errorf("marshal write value: %w", err)
 		}
+
+		// Use Sequence if available, otherwise fallback to timestamp
+		seq := w.Sequence
+		if seq == 0 {
+			seq = time.Now().UnixNano()
+		}
+
 		_, err = tx.ExecContext(
 			ctx,
 			sqliteInsertWrite,
@@ -393,6 +410,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 			w.Channel,
 			valueJSON,
 			"", // task_path
+			seq,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert write: %w", err)
@@ -453,14 +471,20 @@ func (s *Saver) loadWrites(
 		var channel string
 		var valueJSON []byte
 		var taskPath string
-		if err := rows.Scan(&taskID, &idx, &channel, &valueJSON, &taskPath); err != nil {
+		var seq int64
+		if err := rows.Scan(&taskID, &idx, &channel, &valueJSON, &taskPath, &seq); err != nil {
 			return nil, fmt.Errorf("scan write: %w", err)
 		}
 		var value any
 		if err := json.Unmarshal(valueJSON, &value); err != nil {
 			return nil, fmt.Errorf("unmarshal write: %w", err)
 		}
-		writes = append(writes, graph.PendingWrite{Channel: channel, Value: value})
+		writes = append(writes, graph.PendingWrite{
+			Channel:  channel,
+			Value:    value,
+			TaskID:   taskID,
+			Sequence: seq,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iter writes: %w", err)

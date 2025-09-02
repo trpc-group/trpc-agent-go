@@ -405,6 +405,9 @@ func (e *Executor) createCheckpointAndSave(
 		}
 	}
 
+	// Set channel versions in checkpoint for version semantics
+	checkpoint.ChannelVersions = newVersions
+
 	// Set next nodes and channels for recovery
 	checkpoint.NextNodes = e.getNextNodes(execCtx.State)
 	checkpoint.NextChannels = e.getNextChannels(execCtx.State)
@@ -468,6 +471,28 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 	state := make(State)
 	for k, v := range tuple.Checkpoint.ChannelValues {
 		state[k] = v
+	}
+
+	// Initialize channels with the restored state
+	e.initializeChannels(state)
+
+	// Apply pending writes if available, otherwise use NextChannels as fallback
+	if len(tuple.PendingWrites) > 0 {
+		// Create a temporary execution context for replay
+		tempExecCtx := &ExecutionContext{
+			State:        state,
+			EventChan:    make(chan *event.Event, 100),
+			InvocationID: "resume-replay",
+		}
+		e.applyPendingWrites(tempExecCtx, tuple.PendingWrites)
+	} else if len(tuple.Checkpoint.NextChannels) > 0 {
+		// Fallback: use NextChannels to trigger frontier when no pending writes
+		for _, chName := range tuple.Checkpoint.NextChannels {
+			if ch, ok := e.graph.getChannel(chName); ok && ch != nil {
+				// Use a marker value to trigger the channel
+				ch.Update([]any{"resume-trigger"})
+			}
+		}
 	}
 
 	return state, nil
@@ -1036,8 +1061,8 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
 				Channel:  write.Channel,
 				Value:    write.Value,
-				TaskID:   execCtx.InvocationID,  // Use invocation ID as task ID for now
-				Sequence: time.Now().UnixNano(), // Use timestamp as sequence for deterministic replay
+				TaskID:   execCtx.InvocationID, // Use invocation ID as task ID for now
+				Sequence: execCtx.seq.Add(1),   // Use atomic increment for deterministic replay
 			})
 			execCtx.pendingMu.Unlock()
 		}
@@ -1239,14 +1264,19 @@ func (e *Executor) handleInterrupt(
 		metadata := NewCheckpointMetadata(CheckpointSourceInterrupt, step)
 		metadata.IsResuming = false
 
-		// Store the interrupt checkpoint.
-		req := PutRequest{
-			Config:      checkpointConfig,
-			Checkpoint:  checkpoint,
-			Metadata:    metadata,
-			NewVersions: checkpoint.ChannelVersions,
+		// Set next nodes and channels for recovery
+		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+
+		// Store the interrupt checkpoint using PutFull for consistency
+		req := PutFullRequest{
+			Config:        checkpointConfig,
+			Checkpoint:    checkpoint,
+			Metadata:      metadata,
+			NewVersions:   checkpoint.ChannelVersions,
+			PendingWrites: []PendingWrite{}, // Empty for interrupt checkpoints
 		}
-		_, err := e.checkpointSaver.Put(ctx, req)
+		_, err := e.checkpointSaver.PutFull(ctx, req)
 		if err != nil {
 			log.Warnf("Failed to store interrupt checkpoint: %v", err)
 		}

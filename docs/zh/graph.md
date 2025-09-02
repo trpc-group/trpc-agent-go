@@ -1359,6 +1359,8 @@ checkpoints, err := manager.List(ctx, threadID, &graph.CheckpointFilter{
 checkpoint, err := manager.Get(ctx, threadID, checkpointID)
 ```
 
+> **⚠️ 生产环境重要提示**: 强烈建议在生产环境中显式指定 `namespace`，使用稳定的业务标识符（如 `svc:prod:graphX`），而不是依赖自动生成的 `default:{thread_id}:{timestamp}` 模式。这样可以确保审计追踪的一致性和业务逻辑的清晰性。
+
 ### 2. 原子检查点存储
 
 Graph 包提供了原子检查点存储功能，确保检查点和待写入数据的原子性保存，避免数据不一致问题。

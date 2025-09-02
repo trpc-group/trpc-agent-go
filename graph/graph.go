@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
@@ -231,6 +232,7 @@ type ExecutionContext struct {
 	pendingWrites []PendingWrite
 	pendingMu     sync.Mutex
 	resumed       bool
+	seq           atomic.Int64 // Atomic sequence counter for deterministic replay
 }
 
 // Command represents a command that combines state updates with routing.
