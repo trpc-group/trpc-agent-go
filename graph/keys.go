@@ -26,3 +26,12 @@ const (
 const (
 	ChannelInputPrefix = "input:"
 )
+
+// Event metadata keys (used in checkpoint events).
+const (
+	EventKeySource      = "source"
+	EventKeyStep        = "step"
+	EventKeyDuration    = "duration"
+	EventKeyBytes       = "bytes"
+	EventKeyWritesCount = "writes_count"
+)

@@ -297,21 +297,21 @@ func (c *CheckpointConfig) WithExtra(key string, value any) *CheckpointConfig {
 // ToMap converts the config to a map for backward compatibility.
 func (c *CheckpointConfig) ToMap() map[string]any {
 	config := map[string]any{
-		"configurable": map[string]any{
-			"thread_id": c.ThreadID,
+		CfgKeyConfigurable: map[string]any{
+			CfgKeyThreadID: c.ThreadID,
 		},
 	}
 
 	if c.CheckpointID != "" {
-		config["configurable"].(map[string]any)["checkpoint_id"] = c.CheckpointID
+		config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointID] = c.CheckpointID
 	}
 
 	if c.Namespace != "" {
-		config["configurable"].(map[string]any)["checkpoint_ns"] = c.Namespace
+		config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = c.Namespace
 	}
 
 	if len(c.ResumeMap) > 0 {
-		config["configurable"].(map[string]any)["resume_map"] = c.ResumeMap
+		config[CfgKeyConfigurable].(map[string]any)[CfgKeyResumeMap] = c.ResumeMap
 	}
 
 	// Add extra fields.
@@ -422,8 +422,8 @@ func GetCheckpointID(config map[string]any) string {
 	if config == nil {
 		return ""
 	}
-	if configurable, ok := config["configurable"].(map[string]any); ok {
-		if checkpointID, ok := configurable["checkpoint_id"].(string); ok {
+	if configurable, ok := config[CfgKeyConfigurable].(map[string]any); ok {
+		if checkpointID, ok := configurable[CfgKeyCheckpointID].(string); ok {
 			return checkpointID
 		}
 	}
@@ -435,8 +435,8 @@ func GetThreadID(config map[string]any) string {
 	if config == nil {
 		return ""
 	}
-	if configurable, ok := config["configurable"].(map[string]any); ok {
-		if threadID, ok := configurable["thread_id"].(string); ok {
+	if configurable, ok := config[CfgKeyConfigurable].(map[string]any); ok {
+		if threadID, ok := configurable[CfgKeyThreadID].(string); ok {
 			return threadID
 		}
 	}
@@ -448,8 +448,8 @@ func GetNamespace(config map[string]any) string {
 	if config == nil {
 		return DefaultCheckpointNamespace
 	}
-	if configurable, ok := config["configurable"].(map[string]any); ok {
-		if namespace, ok := configurable["checkpoint_ns"].(string); ok {
+	if configurable, ok := config[CfgKeyConfigurable].(map[string]any); ok {
+		if namespace, ok := configurable[CfgKeyCheckpointNS].(string); ok {
 			return namespace
 		}
 	}
@@ -461,8 +461,8 @@ func GetResumeMap(config map[string]any) map[string]any {
 	if config == nil {
 		return nil
 	}
-	if configurable, ok := config["configurable"].(map[string]any); ok {
-		if resumeMap, ok := configurable["resume_map"].(map[string]any); ok {
+	if configurable, ok := config[CfgKeyConfigurable].(map[string]any); ok {
+		if resumeMap, ok := configurable[CfgKeyResumeMap].(map[string]any); ok {
 			return resumeMap
 		}
 	}
@@ -685,7 +685,7 @@ func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, threadID, nam
 	}
 	// Add the resume command
 	if cmd != nil {
-		state["__command__"] = cmd
+		state[StateKeyCommand] = cmd
 	}
 	return state, nil
 }

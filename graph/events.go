@@ -1316,12 +1316,12 @@ func NewCheckpointCreatedEvent(opts ...CheckpointEventOption) *event.Event {
 	}
 
 	metadata := map[string]any{
-		"checkpoint_id": options.CheckpointID,
-		"source":        options.Source,
-		"step":          options.Step,
-		"duration":      options.Duration,
-		"bytes":         options.Bytes,
-		"writes_count":  options.WritesCount,
+		CfgKeyCheckpointID:  options.CheckpointID,
+		EventKeySource:      options.Source,
+		EventKeyStep:        options.Step,
+		EventKeyDuration:    options.Duration,
+		EventKeyBytes:       options.Bytes,
+		EventKeyWritesCount: options.WritesCount,
 	}
 
 	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCreated)
@@ -1343,12 +1343,12 @@ func NewCheckpointCommittedEvent(opts ...CheckpointEventOption) *event.Event {
 	}
 
 	metadata := map[string]any{
-		"checkpoint_id": options.CheckpointID,
-		"source":        options.Source,
-		"step":          options.Step,
-		"duration":      options.Duration,
-		"bytes":         options.Bytes,
-		"writes_count":  options.WritesCount,
+		CfgKeyCheckpointID:  options.CheckpointID,
+		EventKeySource:      options.Source,
+		EventKeyStep:        options.Step,
+		EventKeyDuration:    options.Duration,
+		EventKeyBytes:       options.Bytes,
+		EventKeyWritesCount: options.WritesCount,
 	}
 
 	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCommitted)

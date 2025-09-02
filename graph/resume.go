@@ -24,7 +24,7 @@ func Interrupt(ctx context.Context, state State, key string, prompt any) (any, e
 	}
 
 	// Check if we have a resume map with the specific key.
-	if resumeMap, exists := state["__resume_map__"]; exists {
+	if resumeMap, exists := state[StateKeyResumeMap]; exists {
 		if resumeMapTyped, ok := resumeMap.(map[string]any); ok {
 			if resumeValue, exists := resumeMapTyped[key]; exists {
 				// Clear the specific key to avoid reusing it.
@@ -83,7 +83,7 @@ func HasResumeValue(state State, key string) bool {
 	}
 
 	// Check resume map.
-	if resumeMap, exists := state["__resume_map__"]; exists {
+	if resumeMap, exists := state[StateKeyResumeMap]; exists {
 		if resumeMapTyped, ok := resumeMap.(map[string]any); ok {
 			if _, exists := resumeMapTyped[key]; exists {
 				return true
@@ -97,7 +97,7 @@ func HasResumeValue(state State, key string) bool {
 // ClearResumeValue clears a specific resume value from the state.
 func ClearResumeValue(state State, key string) {
 	// Clear from resume map.
-	if resumeMap, exists := state["__resume_map__"]; exists {
+	if resumeMap, exists := state[StateKeyResumeMap]; exists {
 		if resumeMapTyped, ok := resumeMap.(map[string]any); ok {
 			delete(resumeMapTyped, key)
 		}
@@ -107,5 +107,5 @@ func ClearResumeValue(state State, key string) {
 // ClearAllResumeValues clears all resume values from the state.
 func ClearAllResumeValues(state State) {
 	delete(state, ResumeChannel)
-	delete(state, "__resume_map__")
+	delete(state, StateKeyResumeMap)
 }

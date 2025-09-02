@@ -205,15 +205,15 @@ func (e *Executor) executeGraph(
 	execState := e.initializeState(initialState)
 
 	// Check if we're resuming from an interrupt.
-	if cmd, ok := initialState["__command__"].(*Command); ok {
+	if cmd, ok := initialState[StateKeyCommand].(*Command); ok {
 		// Apply resume values if present.
 		if cmd.Resume != nil {
-			execState["__resume__"] = cmd.Resume
+			execState[ResumeChannel] = cmd.Resume
 		}
 		if cmd.ResumeMap != nil {
-			execState["__resume_map__"] = cmd.ResumeMap
+			execState[StateKeyResumeMap] = cmd.ResumeMap
 		}
-		delete(execState, "__command__")
+		delete(execState, StateKeyCommand)
 	}
 
 	// Create execution context.
