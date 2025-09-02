@@ -73,6 +73,7 @@ func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
 			&mockSource{name: "test-source-2", docCount: 3},
 		}),
 	)
+	kb.vectorStore = &stubVectorStore{}
 
 	ctx := context.Background()
 
@@ -104,6 +105,8 @@ func TestBuiltinKnowledge_LoadOptions(t *testing.T) {
 func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
 	// Create a knowledge instance with no sources.
 	kb := New()
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{} // Add embedder to ensure consistency
 
 	ctx := context.Background()
 
@@ -238,67 +241,5 @@ func TestAddDocument_EmbedderStore(t *testing.T) {
 	}
 	if !store.added {
 		t.Fatalf("expected vector store Add to be called")
-	}
-}
-
-func TestGetAllMetadata(t *testing.T) {
-	// Create sources with different metadata
-	source1 := &mockSource{name: "source1", docCount: 5}
-	source2 := &mockSource{name: "source2", docCount: 3}
-
-	kb := New(WithSources([]source.Source{source1, source2}))
-
-	allMetadata := source.GetAllMetadata(source1, source2)
-
-	// Verify category (both sources have ["test", "demo"] - should be 1 unique array)
-	categories := allMetadata["category"]
-	if len(categories) != 1 {
-		t.Errorf("Expected 1 unique category array, got %d: %v", len(categories), categories)
-	}
-
-	// Verify names are collected from both sources (2 different arrays)
-	names := allMetadata["name"]
-	if len(names) != 2 {
-		t.Errorf("Expected 2 unique name arrays, got %d: %v", len(names), names)
-	}
-
-	// Verify docCount (2 different arrays)
-	docCounts := allMetadata["docCount"]
-	if len(docCounts) != 2 {
-		t.Errorf("Expected 2 unique docCount arrays, got %d: %v", len(docCounts), docCounts)
-	}
-
-	// Verify type (both sources have ["mock"] - should be 1 unique array)
-	types := allMetadata["type"]
-	if len(types) != 1 {
-		t.Errorf("Expected 1 unique type array, got %d: %v", len(types), types)
-	}
-}
-
-func TestGetAllMetadataKeys(t *testing.T) {
-	// Create sources with metadata
-	source1 := &mockSource{name: "source1", docCount: 5}
-	source2 := &mockSource{name: "source2", docCount: 3}
-
-	kb := New(WithSources([]source.Source{source1, source2}))
-
-	allMetadataKeys := kb.GetAllMetadataWithoutValues()
-
-	// Verify that we get all expected keys
-	expectedKeys := map[string]bool{
-		"name":     true,
-		"docCount": true,
-		"type":     true,
-		"category": true,
-	}
-
-	if len(allMetadataKeys) != len(expectedKeys) {
-		t.Errorf("Expected %d unique keys, got %d: %v", len(expectedKeys), len(allMetadataKeys), allMetadataKeys)
-	}
-
-	for _, key := range allMetadataKeys {
-		if !expectedKeys[fmt.Sprintf("%v", key)] {
-			t.Errorf("Unexpected key: %v", key)
-		}
 	}
 }

@@ -383,16 +383,6 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// // FlushAll flushes all documents from the vector store.
-// func (vs *VectorStore) FlushAll(ctx context.Context) error {
-// 	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, tcvectordb.DeleteDocumentParams{
-// 		Filter: tcvectordb.NewFilter(""),
-// 	}); err != nil {
-// 		return fmt.Errorf("tcvectordb flush all documents: %w", err)
-// 	}
-// 	return nil
-// }
-
 // Search performs similarity search and returns the most similar documents.
 // Automatically chooses the appropriate search method based on query parameters.
 // Tencent VectorDB not support hybrid search of structure filter and vector/sparse vector.
@@ -404,9 +394,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
-		} else {
-			return vs.searchByFilter(ctx, query)
 		}
+		return vs.searchByFilter(ctx, query)
 	}
 
 	// default is hybrid search

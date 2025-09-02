@@ -137,34 +137,6 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// // DeleteByFilter deletes documents based on filter criteria.
-// func (vs *VectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
-// 	if filter == nil {
-// 		return 0, fmt.Errorf("filter cannot be nil")
-// 	}
-// 	vs.mutex.Lock()
-// 	defer vs.mutex.Unlock()
-// 	var deletedIDs []string
-// 	for docID := range vs.documents {
-// 		if vs.matchesFilterByMetadata(docID, filter) {
-// 			delete(vs.documents, docID)
-// 			delete(vs.embeddings, docID)
-// 			deletedIDs = append(deletedIDs, docID)
-// 		}
-// 	}
-// 	log.Infof("Deleted %d documents by filter, doc list: %v", len(deletedIDs), deletedIDs)
-// 	return len(deletedIDs), nil
-// }
-
-// // FlushAll flushes all documents from the vector store.
-// func (vs *VectorStore) FlushAll(ctx context.Context) error {
-// 	vs.mutex.Lock()
-// 	defer vs.mutex.Unlock()
-// 	vs.documents = make(map[string]*document.Document)
-// 	vs.embeddings = make(map[string][]float64)
-// 	return nil
-// }
-
 // Search implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
@@ -286,32 +258,13 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 
 	// Check metadata filter
 	if len(filter.Metadata) > 0 {
-		return vs.matchesMetadata(doc, filter.Metadata)
-	}
-
-	return true
-}
-
-// matchesFilterByMetadata checks if a document matches the given metadata filter criteria.
-func (vs *VectorStore) matchesFilterByMetadata(docID string, filter map[string]interface{}) bool {
-	doc, exists := vs.documents[docID]
-	if !exists {
-		return false
-	}
-
-	return vs.matchesMetadata(doc, filter)
-}
-
-// matchesMetadata is a helper function that checks if a document's metadata matches the given filter.
-func (vs *VectorStore) matchesMetadata(doc *document.Document, filter map[string]interface{}) bool {
-	if doc.Metadata == nil {
-		return false
-	}
-
-	// Check all filter conditions
-	for key, value := range filter {
-		if docValue, exists := doc.Metadata[key]; !exists || docValue != value {
+		if doc.Metadata == nil {
 			return false
+		}
+		for key, value := range filter.Metadata {
+			if docValue, exists := doc.Metadata[key]; !exists || docValue != value {
+				return false
+			}
 		}
 	}
 

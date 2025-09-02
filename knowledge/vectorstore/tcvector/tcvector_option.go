@@ -152,7 +152,6 @@ func WithTCVectorInstance(name string) Option {
 }
 
 // WithFilterIndexFields sets the filter fields for the vector database. It will build index for the filter fields.
-// Only support string type temporally.
 func WithFilterIndexFields(fields []string) Option {
 	return func(o *options) {
 		o.filterFields = append(o.filterFields, fields...)
