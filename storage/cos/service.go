@@ -35,9 +35,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,7 +54,7 @@ import (
 //   - For regular session-scoped files:
 //     {app_name}/{user_id}/{session_id}/{filename}/{version}
 type Service struct {
-	cosClient *cos.Client
+	cosClient client
 }
 
 const defaultTimeout = 60 * time.Second
@@ -86,48 +83,16 @@ const defaultTimeout = 60 * time.Second
 //	cosClient := cos.NewClient(baseURL, httpClient)
 //	service := cos.NewService("", cos.WithClient(cosClient))
 func NewService(bucketURL string, opts ...Option) (*Service, error) {
-	// Set default options
-	options := &options{
-		timeout:   defaultTimeout,
-		secretID:  os.Getenv("COS_SECRETID"),
-		secretKey: os.Getenv("COS_SECRETKEY"),
+	c, err := globalBuilder("", bucketURL, opts...)
+	if err != nil {
+		return nil, err
 	}
-
-	// Apply provided options
-	for _, opt := range opts {
-		opt(options)
+	cli, ok := c.(client)
+	if !ok {
+		return nil, fmt.Errorf("client builder returned invalid type: expected client interface, got %T", c)
 	}
-
-	// If a COS client is directly provided, use it
-	if options.cosClient != nil {
-		return &Service{
-			cosClient: options.cosClient,
-		}, nil
-	}
-
-	u, _ := url.Parse(bucketURL)
-	b := &cos.BaseURL{BucketURL: u}
-
-	// Use provided HTTP client or create a default one
-	var httpClient *http.Client
-	if options.httpClient != nil {
-		httpClient = options.httpClient
-		if options.timeout > 0 {
-			httpClient.Timeout = options.timeout
-		}
-	} else {
-		// Create default HTTP client with COS authentication
-		httpClient = &http.Client{
-			Timeout: options.timeout,
-			Transport: &cos.AuthorizationTransport{
-				SecretID:  options.secretID,
-				SecretKey: options.secretKey,
-			},
-		}
-	}
-
 	return &Service{
-		cosClient: cos.NewClient(b, httpClient),
+		cosClient: cli,
 	}, nil
 }
 
@@ -154,13 +119,7 @@ func (s *Service) SaveArtifact(ctx context.Context, sessionInfo artifact.Session
 
 	// Upload the artifact data
 	reader := bytes.NewReader(art.Data)
-	opt := &cos.ObjectPutOptions{
-		ObjectPutHeaderOptions: &cos.ObjectPutHeaderOptions{
-			ContentType: art.MimeType,
-		},
-	}
-
-	_, err = s.cosClient.Object.Put(ctx, objectName, reader, opt)
+	err = s.cosClient.PutObject(ctx, objectName, reader, art.MimeType)
 	if err != nil {
 		return 0, fmt.Errorf("failed to upload artifact: %w", err)
 	}
@@ -196,23 +155,23 @@ func (s *Service) LoadArtifact(ctx context.Context, sessionInfo artifact.Session
 	objectName := iartifact.BuildObjectName(sessionInfo, filename, targetVersion)
 
 	// Download the artifact
-	resp, err := s.cosClient.Object.Get(ctx, objectName, nil)
+	respBody, respHeader, err := s.cosClient.GetObject(ctx, objectName)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
 			return nil, nil // Artifact not found
 		}
 		return nil, fmt.Errorf("failed to download artifact: %w", err)
 	}
-	defer resp.Body.Close()
+	defer respBody.Close()
 
 	// Read the data
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(respBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read artifact data: %w", err)
 	}
 
 	// Get content type from response headers
-	contentType := resp.Header.Get("Content-Type")
+	contentType := respHeader.Get("Content-Type")
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -230,9 +189,7 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 
 	// List session-scoped artifacts
 	sessionPrefix := iartifact.BuildSessionPrefix(sessionInfo)
-	sessionResult, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
-		Prefix: sessionPrefix,
-	})
+	sessionResult, err := s.cosClient.GetBucket(ctx, sessionPrefix)
 	if err != nil && !cos.IsNotFoundError(err) {
 		return nil, fmt.Errorf("failed to list session artifacts: %w", err)
 	}
@@ -249,9 +206,7 @@ func (s *Service) ListArtifactKeys(ctx context.Context, sessionInfo artifact.Ses
 
 	// List user-namespaced artifacts
 	userPrefix := iartifact.BuildUserNamespacePrefix(sessionInfo)
-	userResult, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
-		Prefix: userPrefix,
-	})
+	userResult, err := s.cosClient.GetBucket(ctx, userPrefix)
 	if err != nil && !cos.IsNotFoundError(err) {
 		return nil, fmt.Errorf("failed to list user artifacts: %w", err)
 	}
@@ -287,7 +242,7 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 	// Delete all versions
 	for _, version := range versions {
 		objectName := iartifact.BuildObjectName(sessionInfo, filename, version)
-		_, err := s.cosClient.Object.Delete(ctx, objectName)
+		err := s.cosClient.DeleteObject(ctx, objectName)
 		if err != nil && !cos.IsNotFoundError(err) {
 			return fmt.Errorf("failed to delete artifact version %d: %w", version, err)
 		}
@@ -299,10 +254,7 @@ func (s *Service) DeleteArtifact(ctx context.Context, sessionInfo artifact.Sessi
 // ListVersions lists all versions of an artifact from TCOS.
 func (s *Service) ListVersions(ctx context.Context, sessionInfo artifact.SessionInfo, filename string) ([]int, error) {
 	prefix := iartifact.BuildObjectNamePrefix(sessionInfo, filename)
-
-	result, _, err := s.cosClient.Bucket.Get(ctx, &cos.BucketGetOptions{
-		Prefix: prefix,
-	})
+	result, err := s.cosClient.GetBucket(ctx, prefix)
 	if err != nil {
 		if cos.IsNotFoundError(err) {
 			return []int{}, nil // No versions found
