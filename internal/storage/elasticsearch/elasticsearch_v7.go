@@ -17,32 +17,9 @@ import (
 	"net/http"
 
 	esv7 "github.com/elastic/go-elasticsearch/v7"
-
-	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 )
 
-var _ ielasticsearch.Client = (*clientV7)(nil)
-
-// newClientV7 builds a v7 client from generic builder options.
-func newClientV7(o *ClientBuilderOpts) (ielasticsearch.Client, error) {
-	cfg := esv7.Config{
-		Addresses:              o.Addresses,
-		Username:               o.Username,
-		Password:               o.Password,
-		APIKey:                 o.APIKey,
-		CertificateFingerprint: o.CertificateFingerprint,
-		CompressRequestBody:    o.CompressRequestBody,
-		EnableMetrics:          o.EnableMetrics,
-		EnableDebugLogger:      o.EnableDebugLogger,
-		RetryOnStatus:          o.RetryOnStatus,
-		MaxRetries:             o.MaxRetries,
-	}
-	cli, err := esv7.NewClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: create v7 client: %w", err)
-	}
-	return &clientV7{esClient: cli}, nil
-}
+var _ Client = (*clientV7)(nil)
 
 // clientV7 implements the ielasticsearch.Client interface for v7 SDK.
 type clientV7 struct {

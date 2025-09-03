@@ -17,32 +17,9 @@ import (
 	"net/http"
 
 	esv8 "github.com/elastic/go-elasticsearch/v8"
-
-	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 )
 
-var _ ielasticsearch.Client = (*clientV8)(nil)
-
-// newClientV8 builds a v8 client from generic builder options.
-func newClientV8(o *ClientBuilderOpts) (ielasticsearch.Client, error) {
-	cfg := esv8.Config{
-		Addresses:              o.Addresses,
-		Username:               o.Username,
-		Password:               o.Password,
-		APIKey:                 o.APIKey,
-		CertificateFingerprint: o.CertificateFingerprint,
-		CompressRequestBody:    o.CompressRequestBody,
-		EnableMetrics:          o.EnableMetrics,
-		EnableDebugLogger:      o.EnableDebugLogger,
-		RetryOnStatus:          o.RetryOnStatus,
-		MaxRetries:             o.MaxRetries,
-	}
-	cli, err := esv8.NewClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: create v8 client: %w", err)
-	}
-	return &clientV8{esClient: cli}, nil
-}
+var _ Client = (*clientV8)(nil)
 
 // clientV8 implements the ielasticsearch.Client interface for v8 SDK.
 type clientV8 struct {

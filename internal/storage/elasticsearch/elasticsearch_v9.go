@@ -16,37 +16,14 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/elastic/go-elasticsearch/v9"
-
-	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 )
 
-var _ ielasticsearch.Client = (*clientV9)(nil)
-
-// newClientV9 builds a v9 client from generic builder options.
-func newClientV9(o *ClientBuilderOpts) (ielasticsearch.Client, error) {
-	cfg := elasticsearch.Config{
-		Addresses:              o.Addresses,
-		Username:               o.Username,
-		Password:               o.Password,
-		APIKey:                 o.APIKey,
-		CertificateFingerprint: o.CertificateFingerprint,
-		CompressRequestBody:    o.CompressRequestBody,
-		EnableMetrics:          o.EnableMetrics,
-		EnableDebugLogger:      o.EnableDebugLogger,
-		RetryOnStatus:          o.RetryOnStatus,
-		MaxRetries:             o.MaxRetries,
-	}
-	cli, err := elasticsearch.NewClient(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("elasticsearch: create v9 client: %w", err)
-	}
-	return &clientV9{esClient: cli}, nil
-}
+var _ Client = (*clientV9)(nil)
 
 // client implements the ielasticsearch.Client interface.
 type clientV9 struct {
-	esClient *elasticsearch.Client
+	esClient *esv9.Client
 }
 
 // Ping checks if Elasticsearch is available.

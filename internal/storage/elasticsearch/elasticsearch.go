@@ -12,6 +12,11 @@ package elasticsearch
 
 import (
 	"context"
+	"fmt"
+
+	esv7 "github.com/elastic/go-elasticsearch/v7"
+	esv8 "github.com/elastic/go-elasticsearch/v8"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 )
 
 // Client defines the minimal interface for Elasticsearch operations.
@@ -35,4 +40,19 @@ type Client interface {
 	DeleteDoc(ctx context.Context, indexName, id string) error
 	// Search executes a query and returns the raw response body.
 	Search(ctx context.Context, indexName string, body []byte) ([]byte, error)
+}
+
+// NewClient creates a new Elasticsearch client from the given client,
+// which is a generic client from the Elasticsearch SDK.
+func NewClient(client any) (Client, error) {
+	switch client := client.(type) {
+	case *esv7.Client:
+		return &clientV7{esClient: client}, nil
+	case *esv8.Client:
+		return &clientV8{esClient: client}, nil
+	case *esv9.Client:
+		return &clientV9{esClient: client}, nil
+	default:
+		return nil, fmt.Errorf("elasticsearch client is not supported, type: %T", client)
+	}
 }

@@ -121,9 +121,11 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, fmt.Errorf("elasticsearch create client: %w", err)
 	}
 
-	client, ok := esClient.(istorage.Client)
-	if !ok {
-		return nil, fmt.Errorf("elasticsearch client is not an istorage.Client, type: %T", esClient)
+	// Wrap the generic Elasticsearch SDK client with our storage interface.
+	// This creates a client that implements istorage.Client from the raw SDK client.
+	client, err := istorage.NewClient(esClient)
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch new client: %w", err)
 	}
 
 	vs := &VectorStore{

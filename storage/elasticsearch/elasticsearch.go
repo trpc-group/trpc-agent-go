@@ -37,17 +37,56 @@ func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (any, error) {
 	}
 }
 
-// NewClient wraps a specific go-elasticsearch client (*v7/*v8/*v9) and returns
-// a storage-level Client adapter.
-func NewClient(client any) (any, error) {
-	switch cli := client.(type) {
-	case *esv7.Client:
-		return &clientV7{esClient: cli}, nil
-	case *esv8.Client:
-		return &clientV8{esClient: cli}, nil
-	case *esv9.Client:
-		return &clientV9{esClient: cli}, nil
-	default:
-		return nil, fmt.Errorf("elasticsearch: unsupported client type %T", client)
+// newClientV7 builds a v7 client from generic builder options.
+func newClientV7(o *ClientBuilderOpts) (*esv7.Client, error) {
+	cfg := esv7.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
 	}
+	cli, err := esv7.NewClient(cfg)
+	return cli, err
+}
+
+// newClientV8 builds a v8 client from generic builder options.
+func newClientV8(o *ClientBuilderOpts) (*esv8.Client, error) {
+	cfg := esv8.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
+	}
+	cli, err := esv8.NewClient(cfg)
+	return cli, err
+}
+
+// newClientV9 builds a v9 client from generic builder options.
+func newClientV9(o *ClientBuilderOpts) (*esv9.Client, error) {
+	cfg := esv9.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
+	}
+	cli, err := esv9.NewClient(cfg)
+	return cli, err
 }
