@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -126,6 +126,7 @@ const (
 	stateKeyWordCount       = "word_count"
 	stateKeyComplexityLevel = "complexity_level"
 	stateKeyProcessingStage = "processing_stage"
+	stateKeyOriginalText    = "original_text"
 )
 
 // createDocumentProcessingGraph creates a document processing workflow graph.
@@ -417,15 +418,16 @@ func (w *documentWorkflow) preprocessDocument(ctx context.Context, state graph.S
 	return graph.State{
 		stateKeyDocumentLength:  len(input),
 		stateKeyWordCount:       len(strings.Fields(input)),
-		graph.StateKeyUserInput: input,
+		stateKeyOriginalText:    input,
 		stateKeyProcessingStage: "preprocessing",
 	}, nil
 }
 
 func (w *documentWorkflow) routeComplexity(ctx context.Context, state graph.State) (any, error) {
-	// This is just a pass-through node; actual routing happens via conditional edges.
 	return graph.State{
 		stateKeyProcessingStage: "complexity_routing",
+		// Set the user input to the original text.
+		graph.StateKeyUserInput: fmt.Sprintf("The original text is: `%s`", state[stateKeyOriginalText].(string)),
 	}, nil
 }
 

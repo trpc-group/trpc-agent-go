@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -73,6 +73,9 @@ type Node struct {
 	Description string
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
+
+	// Per-node callbacks for fine-grained control
+	callbacks *NodeCallbacks
 
 	// Pregel-style extensions
 	triggers []string            // Channels that trigger this node
