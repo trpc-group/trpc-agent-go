@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
 
 func TestOptionSettersOverrideValues(t *testing.T) {
@@ -33,6 +35,7 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	WithMaxResults(5)(&opt)
 	WithVectorDimension(123)(&opt)
 	WithEnableTSVector(false)(&opt)
+	WithVersion(string(elasticsearch.ESVersionV8))(&opt)
 
 	assert.Equal(t, []string{"http://example:9200"}, opt.addresses)
 	assert.Equal(t, "user", opt.username)
@@ -49,4 +52,5 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	assert.Equal(t, 5, opt.maxResults)
 	assert.Equal(t, 123, opt.vectorDimension)
 	assert.False(t, opt.enableTSVector)
+	assert.Equal(t, elasticsearch.ESVersionV8, opt.version)
 }

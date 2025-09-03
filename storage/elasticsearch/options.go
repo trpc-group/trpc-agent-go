@@ -10,8 +10,6 @@
 // Package elasticsearch provides Elasticsearch client interface, implementation and options.
 package elasticsearch
 
-import "time"
-
 // Registry and builder alignment to match other storage modules.
 
 func init() {
@@ -33,7 +31,9 @@ func SetClientBuilder(builder clientBuilder) {
 }
 
 // GetClientBuilder gets the global Elasticsearch client builder.
-func GetClientBuilder() clientBuilder { return globalBuilder }
+func GetClientBuilder() clientBuilder {
+	return globalBuilder
+}
 
 // RegisterElasticsearchInstance registers a named Elasticsearch instance options.
 func RegisterElasticsearchInstance(name string, opts ...ClientBuilderOpt) {
@@ -53,107 +53,85 @@ type ClientBuilderOpt func(*ClientBuilderOpts)
 
 // ClientBuilderOpts is the options for the Elasticsearch client builder.
 type ClientBuilderOpts struct {
-	// Addresses is a list of Elasticsearch node addresses.
+	// Version allows selecting the target Elasticsearch major version.
+	// Defaults to ESVersionUnspecified which implies auto or default.
+	Version ESVersion
+
+	// Common SDK config fields across v7/v8/v9.
+
+	// Addresses is the list of Elasticsearch node addresses.
 	Addresses []string
 	// Username is the username for authentication.
 	Username string
 	// Password is the password for authentication.
 	Password string
-	// APIKey is the API key used for authentication.
+	// APIKey is the API key for authentication.
 	APIKey string
-	// CertificateFingerprint is the TLS certificate fingerprint.
+	// CertificateFingerprint is the certificate fingerprint for authentication.
 	CertificateFingerprint string
-	// CompressRequestBody enables HTTP request body compression.
+	// CompressRequestBody is the flag to enable request body compression.
 	CompressRequestBody bool
-	// EnableMetrics enables transport metrics collection.
+	// EnableMetrics is the flag to enable metrics.
 	EnableMetrics bool
-	// EnableDebugLogger enables a debug logger for the transport.
+	// EnableDebugLogger is the flag to enable debug logger.
 	EnableDebugLogger bool
-	// RetryOnStatus is a list of HTTP status codes to retry on.
+	// RetryOnStatus is the list of status codes to retry on.
 	RetryOnStatus []int
 	// MaxRetries is the maximum number of retries.
 	MaxRetries int
-	// RetryOnTimeout enables retry when a request times out.
-	RetryOnTimeout bool
-	// RequestTimeout is the per request timeout duration.
-	RequestTimeout time.Duration
-	// IndexPrefix is the prefix used for indices.
-	IndexPrefix string
-	// VectorDimension is the embedding vector dimension.
-	VectorDimension int
 
 	// ExtraOptions allows custom builders to accept extra parameters.
 	ExtraOptions []any
 }
 
-// WithAddresses sets Elasticsearch node addresses.
+// WithAddresses sets node addresses.
 func WithAddresses(addresses []string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.Addresses = addresses }
+	return func(o *ClientBuilderOpts) { o.Addresses = addresses }
 }
 
-// WithUsername sets the username.
+// WithUsername sets username.
 func WithUsername(username string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.Username = username }
+	return func(o *ClientBuilderOpts) { o.Username = username }
 }
 
-// WithPassword sets the password.
+// WithPassword sets password.
 func WithPassword(password string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.Password = password }
+	return func(o *ClientBuilderOpts) { o.Password = password }
 }
 
-// WithAPIKey sets the API key.
+// WithAPIKey sets API key.
 func WithAPIKey(apiKey string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.APIKey = apiKey }
+	return func(o *ClientBuilderOpts) { o.APIKey = apiKey }
 }
 
-// WithCertificateFingerprint sets the certificate fingerprint.
+// WithCertificateFingerprint sets TLS certificate fingerprint.
 func WithCertificateFingerprint(fp string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.CertificateFingerprint = fp }
+	return func(o *ClientBuilderOpts) { o.CertificateFingerprint = fp }
 }
 
-// WithCompressRequestBody enables request compression.
+// WithCompressRequestBody toggles request body compression.
 func WithCompressRequestBody(enabled bool) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.CompressRequestBody = enabled }
+	return func(o *ClientBuilderOpts) { o.CompressRequestBody = enabled }
 }
 
-// WithEnableMetrics enables metrics collection.
+// WithEnableMetrics toggles transport metrics.
 func WithEnableMetrics(enabled bool) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.EnableMetrics = enabled }
+	return func(o *ClientBuilderOpts) { o.EnableMetrics = enabled }
 }
 
-// WithEnableDebugLogger enables debug logger.
+// WithEnableDebugLogger toggles debug logger.
 func WithEnableDebugLogger(enabled bool) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.EnableDebugLogger = enabled }
+	return func(o *ClientBuilderOpts) { o.EnableDebugLogger = enabled }
 }
 
-// WithRetryOnStatus sets HTTP status codes to retry on.
-func WithRetryOnStatus(statusCodes []int) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.RetryOnStatus = statusCodes }
+// WithRetryOnStatus sets HTTP retry status codes.
+func WithRetryOnStatus(codes []int) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.RetryOnStatus = codes }
 }
 
 // WithMaxRetries sets max retries.
-func WithMaxRetries(maxRetries int) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.MaxRetries = maxRetries }
-}
-
-// WithRetryOnTimeout enables retry on timeout.
-func WithRetryOnTimeout(enabled bool) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.RetryOnTimeout = enabled }
-}
-
-// WithRequestTimeout sets request timeout.
-func WithRequestTimeout(timeout time.Duration) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.RequestTimeout = timeout }
-}
-
-// WithIndexPrefix sets index prefix.
-func WithIndexPrefix(prefix string) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.IndexPrefix = prefix }
-}
-
-// WithVectorDimension sets vector dimension.
-func WithVectorDimension(d int) ClientBuilderOpt {
-	return func(opts *ClientBuilderOpts) { opts.VectorDimension = d }
+func WithMaxRetries(n int) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.MaxRetries = n }
 }
 
 // WithExtraOptions adds extra, builder-specific options.
@@ -161,4 +139,23 @@ func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
 	}
+}
+
+// ESVersion represents the Elasticsearch major version.
+type ESVersion string
+
+const (
+	// ESVersionUnspecified means no explicit version preference.
+	ESVersionUnspecified ESVersion = "0"
+	// ESVersionV7 selects Elasticsearch v7.
+	ESVersionV7 ESVersion = "v7"
+	// ESVersionV8 selects Elasticsearch v8.
+	ESVersionV8 ESVersion = "v8"
+	// ESVersionV9 selects Elasticsearch v9.
+	ESVersionV9 ESVersion = "v9"
+)
+
+// WithVersion sets the preferred Elasticsearch major version.
+func WithVersion(v ESVersion) ClientBuilderOpt {
+	return func(o *ClientBuilderOpts) { o.Version = v }
 }
