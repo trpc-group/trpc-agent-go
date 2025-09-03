@@ -31,7 +31,9 @@ func SetClientBuilder(builder clientBuilder) {
 }
 
 // GetClientBuilder gets the global Elasticsearch client builder.
-func GetClientBuilder() clientBuilder { return globalBuilder }
+func GetClientBuilder() clientBuilder {
+	return globalBuilder
+}
 
 // RegisterElasticsearchInstance registers a named Elasticsearch instance options.
 func RegisterElasticsearchInstance(name string, opts ...ClientBuilderOpt) {

@@ -95,3 +95,28 @@ func TestOptions_Registry_NotFound(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, opts)
 }
+
+func TestGlobalBuilder_SetAndGet(t *testing.T) {
+	// Isolate global state.
+	old := globalBuilder
+	defer func() { globalBuilder = old }()
+
+	// Test initial state - should be DefaultClientBuilder.
+	builder := GetClientBuilder()
+	require.NotNil(t, builder)
+
+	// Test setting custom builder.
+	customBuilder := func(opts ...ClientBuilderOpt) (Client, error) {
+		return &clientV9{}, nil
+	}
+	SetClientBuilder(customBuilder)
+
+	// Test getting the set builder.
+	retrieved := GetClientBuilder()
+	require.NotNil(t, retrieved)
+
+	// Test building with custom builder.
+	client, err := retrieved(WithVersion(ESVersionV9))
+	require.NoError(t, err)
+	require.NotNil(t, client)
+}

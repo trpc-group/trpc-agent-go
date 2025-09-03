@@ -66,6 +66,11 @@ func TestDefaultClientBuilder_VersionSelection(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = c.(*clientV7)
 	require.True(t, ok)
+
+	// unknown
+	_, err = DefaultClientBuilder(WithVersion(ESVersion(-1)))
+	require.Error(t, err)
+	require.Equal(t, "elasticsearch: unknown version -1", err.Error())
 }
 
 func TestNewClient_WrapsSupportedAndUnsupported(t *testing.T) {
