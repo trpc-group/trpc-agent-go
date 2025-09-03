@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tencentyun/cos-go-sdk-v5"
+	cos "github.com/tencentyun/cos-go-sdk-v5"
 )
 
 // Option defines a function type for configuring the TCOS service.
