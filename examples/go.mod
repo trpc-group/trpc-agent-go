@@ -24,10 +24,10 @@ require (
 	trpc.group/trpc-go/trpc-a2a-go v0.2.2
 	trpc.group/trpc-go/trpc-agent-go v0.0.4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.3
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.4
 	trpc.group/trpc-go/trpc-mcp-go v0.0.4
 )
 
@@ -120,6 +120,6 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.4 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9 // indirect
 )

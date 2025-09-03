@@ -12,7 +12,7 @@ require (
 	github.com/redis/go-redis/v9 v9.11.0
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.0.4
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.4
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3
 )
 
 require (
