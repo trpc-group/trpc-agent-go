@@ -114,6 +114,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		storage.WithEnableDebugLogger(option.enableDebugLogger),
 		storage.WithRetryOnStatus(option.retryOnStatus),
 		storage.WithMaxRetries(option.maxRetries),
+		storage.WithVersion(option.version),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch create client: %w", err)
