@@ -55,6 +55,7 @@ var (
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
 	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
+	esVersion    = flag.String("es-version", "v9", "Elasticsearch version: v7, v8, v9 (only used when vectorstore=elasticsearch)")
 	loadData     = flag.Bool("load", true, "Load data into the vector store on startup")
 )
 
@@ -94,7 +95,11 @@ func main() {
 
 	fmt.Printf("🧠 Knowledge-Enhanced Chat Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Vector Store: %s\n", *vectorStore)
+	fmt.Printf("Vector Store: %s", *vectorStore)
+	if *vectorStore == "elasticsearch" {
+		fmt.Printf(" (Version: %s)", *esVersion)
+	}
+	fmt.Printf("\n")
 	fmt.Printf("Available tools: knowledge_search\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -227,6 +232,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorelasticsearch.WithAPIKey(elasticsearchAPIKey),
 			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
 			vectorelasticsearch.WithMaxRetries(3),
+			vectorelasticsearch.WithVersion(*esVersion),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
