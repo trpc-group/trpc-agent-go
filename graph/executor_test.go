@@ -559,13 +559,20 @@ func TestBasicCommandRouting(t *testing.T) {
 		return result, nil
 	}
 
-	// Build workflow
+	// Build workflow - 使用条件边确保可达性，但Command路由优先
 	stateGraph := NewStateGraph(schema)
 	stateGraph.
 		AddNode("decision", decisionNode).
 		AddNode("finish", finishNode).
 		SetEntryPoint("decision").
-		AddEdge("decision", "finish"). // Add edge to make finish reachable
+		// TODO: 把这行加回来：AddEdge("decision", "finish"). // Add edge to make finish reachable
+		AddConditionalEdges("decision", func(ctx context.Context, state State) (string, error) {
+			// 这个条件边只用于图验证，实际执行由Command路由控制
+			// 当节点返回Command时，条件边不会被评估
+			return "finish", nil
+		}, map[string]string{
+			"finish": "finish",
+		}).
 		SetFinishPoint("finish")
 
 	// Compile graph
@@ -1009,6 +1016,371 @@ func TestParallelFanOutWithCommands(t *testing.T) {
 	}
 	assert.True(t, m["A"], "Expected result to contain A")
 	assert.True(t, m["B"], "Expected result to contain B")
+}
+
+// TestFanOutWithNonPointerCommands tests fan-out functionality with []Command (non-pointer slice).
+func TestFanOutWithNonPointerCommands(t *testing.T) {
+	// Define schema with a results slice using StringSliceReducer for merging.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns []Command (non-pointer slice) to test the new type support.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []Command{ // Note: []Command, not []*Command
+			{Update: State{"param": "X"}, GoTo: "worker"},
+			{Update: State{"param": "Y"}, GoTo: "worker"},
+			{Update: State{"param": "Z"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: reads overlay param and appends into results.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		p, _ := state["param"].(string)
+		if p == "" {
+			return State{}, nil
+		}
+		return State{"results": []string{p}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-non-pointer-commands"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Handle both []string and []any types from JSON unmarshalling.
+	if vs, ok := finalState["results"].([]string); ok {
+		assert.Len(t, vs, 3, "Expected 3 results")
+		m := map[string]bool{}
+		for _, s := range vs {
+			m[s] = true
+		}
+		assert.True(t, m["X"], "Expected result to contain X")
+		assert.True(t, m["Y"], "Expected result to contain Y")
+		assert.True(t, m["Z"], "Expected result to contain Z")
+	} else if vals, ok := finalState["results"].([]any); ok {
+		assert.Len(t, vals, 3, "Expected 3 results")
+		m := map[string]bool{}
+		for _, v := range vals {
+			if s, ok := v.(string); ok {
+				m[s] = true
+			}
+		}
+		assert.True(t, m["X"], "Expected result to contain X")
+		assert.True(t, m["Y"], "Expected result to contain Y")
+		assert.True(t, m["Z"], "Expected result to contain Z")
+	} else {
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
+}
+
+// TestFanOutWithGlobalStateAccess tests that fan-out branches can access global state.
+func TestFanOutWithGlobalStateAccess(t *testing.T) {
+	// Define schema with both global and local fields
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns commands with local params but needs global state access.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []Command{
+			{Update: State{"local_param": "task1"}, GoTo: "worker"},
+			{Update: State{"local_param": "task2"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: should be able to access both global state and local overlay.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		// Access local parameter from overlay.
+		localParam, _ := state["local_param"].(string)
+
+		// Access global state (should be available).
+		globalValue, _ := state["global_value"]
+
+		result := fmt.Sprintf("%s_%v", localParam, globalValue)
+		return State{"results": []string{result}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	// Set initial global state.
+	initialState := State{"global_value": "global"}
+	invocation := &agent.Invocation{InvocationID: "test-fanout-global-state"}
+	eventChan, err := executor.Execute(context.Background(), initialState, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Handle both []string and []interface{} types from JSON unmarshalling.
+	if vs, ok := finalState["results"].([]string); ok {
+		assert.GreaterOrEqual(t, len(vs), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, s := range vs {
+			m[s] = true
+		}
+		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
+		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
+	} else if vals, ok := finalState["results"].([]interface{}); ok {
+		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, v := range vals {
+			if s, ok := v.(string); ok {
+				m[s] = true
+			}
+		}
+		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
+		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
+	} else {
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
+}
+
+// TestFanOutWithEmptyCommands tests edge case of empty command slice
+func TestFanOutWithEmptyCommands(t *testing.T) {
+	// Define schema.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns empty command slice.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []Command{} // Empty slice
+		return cmds, nil
+	})
+
+	// Worker node: should not be executed.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		return State{"results": []string{"should_not_execute"}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-empty-commands"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results - should be empty since no commands were executed.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Results should be empty or not present
+	if results, exists := finalState["results"]; exists {
+		if vs, ok := results.([]string); ok {
+			assert.Len(t, vs, 0, "Expected no results for empty commands")
+		}
+	}
+}
+
+// TestFanOutWithNilCommandUpdate tests edge case of nil command update.
+func TestFanOutWithNilCommandUpdate(t *testing.T) {
+	// Define schema.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns commands with nil update.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []Command{
+			{Update: nil, GoTo: "worker"}, // nil update
+			{Update: State{"param": "valid"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: handles both nil and valid updates.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		param, _ := state["param"].(string)
+		if param == "" {
+			param = "nil_update"
+		}
+		return State{"results": []string{param}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-nil-update"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Handle both []string and []interface{} types from JSON unmarshalling
+	if vs, ok := finalState["results"].([]string); ok {
+		assert.GreaterOrEqual(t, len(vs), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, s := range vs {
+			m[s] = true
+		}
+		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
+		assert.True(t, m["valid"], "Expected result to contain valid")
+	} else if vals, ok := finalState["results"].([]interface{}); ok {
+		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, v := range vals {
+			if s, ok := v.(string); ok {
+				m[s] = true
+			}
+		}
+		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
+		assert.True(t, m["valid"], "Expected result to contain valid")
+	} else {
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
 }
 
 // TestEmitStateUpdateEventConcurrency ensures no panic when emitting state

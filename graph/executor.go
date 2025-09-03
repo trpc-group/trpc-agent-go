@@ -676,19 +676,38 @@ func (e *Executor) executeNodeFunction(
 	if !exists {
 		return nil, fmt.Errorf("node %s not found", nodeID)
 	}
+
 	// Execute the node with read lock on state.
 	execCtx.stateMutex.RLock()
-	stateCopy := make(State, len(execCtx.State))
-	maps.Copy(stateCopy, execCtx.State)
-	// Apply overlay if present to form the isolated input view.
-	if t.Overlay != nil && e.graph.Schema() != nil {
-		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+
+	// Determine the state to use for this task.
+	var stateCopy State
+	if t.Input != nil {
+		// Use the task's input state (for fan-out branches).
+		if inputState, ok := t.Input.(State); ok {
+			stateCopy = make(State, len(inputState))
+			maps.Copy(stateCopy, inputState)
+		} else {
+			// Fallback to global state if Input is not State type.
+			stateCopy = make(State, len(execCtx.State))
+			maps.Copy(stateCopy, execCtx.State)
+		}
+	} else {
+		// Use the global execution state.
+		stateCopy = make(State, len(execCtx.State))
+		maps.Copy(stateCopy, execCtx.State)
+		// Apply overlay if present to form the isolated input view.
+		if t.Overlay != nil && e.graph.Schema() != nil {
+			stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+		}
 	}
+
 	// Add execution context to state so nodes can access event channel.
 	stateCopy[StateKeyExecContext] = execCtx
 	// Add current node ID to state so nodes can access it.
 	stateCopy[StateKeyCurrentNodeID] = nodeID
 	execCtx.stateMutex.RUnlock()
+
 	return node.Function(ctx, stateCopy)
 }
 
@@ -740,6 +759,16 @@ func (e *Executor) handleNodeResult(
 		// Fan-out: enqueue tasks with overlays.
 		fanOut = true
 		e.enqueueCommands(execCtx, t, v)
+	case []Command: // Fan-out commands (non-pointer slice).
+		// Convert to pointer slice for enqueueCommands.
+		cmdPtrs := make([]*Command, len(v))
+		for i := range v {
+			cmdPtrs[i] = &v[i]
+		}
+		// Fan-out: enqueue tasks with overlays.
+		fanOut = true
+		e.enqueueCommands(execCtx, t, cmdPtrs)
+	default:
 	}
 
 	// Process channel writes, unless this is a fan-out case to avoid double trigger.
@@ -760,13 +789,40 @@ func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []*C
 	// we set 0 and let uniqueness be per node list; this is acceptable for now.
 	// If needed, we can carry step into handleNodeResult params later.
 	newTasks := make([]*Task, 0, len(cmds))
+
+	// Get a copy of the current global state to merge with each command
+	execCtx.stateMutex.RLock()
+	globalState := make(State, len(execCtx.State))
+	maps.Copy(globalState, execCtx.State)
+	execCtx.stateMutex.RUnlock()
+
 	for _, c := range cmds {
 		target := c.GoTo
 		if target == "" {
 			target = t.NodeID
 		}
-		newTasks = append(newTasks, e.createTaskWithOverlay(target, c.Update, nextStep))
+
+		// Merge global state with command-specific overlay
+		mergedState := make(State)
+		maps.Copy(mergedState, globalState)
+		if c.Update != nil {
+			maps.Copy(mergedState, c.Update)
+		}
+
+		// Create task with merged state instead of just overlay
+		newTask := &Task{
+			NodeID:   target,
+			Input:    mergedState, // Use merged state instead of nil.
+			Writes:   t.Writes,    // Copy writes from source task.
+			Triggers: t.Triggers,  // Copy triggers from source task.
+			TaskID:   fmt.Sprintf("%s-%d", target, nextStep),
+			TaskPath: append([]string{}, t.TaskPath...),
+			Overlay:  nil, // No overlay needed since we have merged state.
+		}
+
+		newTasks = append(newTasks, newTask)
 	}
+
 	execCtx.tasksMutex.Lock()
 	execCtx.pendingTasks = append(execCtx.pendingTasks, newTasks...)
 	execCtx.tasksMutex.Unlock()
