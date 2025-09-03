@@ -53,10 +53,14 @@ func (w *fanoutWorkflow) onAfterNode(
 	w.updateLastHistory(state, executionTime, nodeErr)
 	w.maybeWarnSlow(callbackCtx.NodeName, executionTime)
 
-	// Append result for process_task when success.
+	// Append result for process_task when success and expected fields exist.
 	if nodeErr == nil && callbackCtx.NodeID == "process_task" {
-		msg := w.buildTaskResultString(state)
-		return graph.State{"results": []string{msg}}, nil
+		if _, taskOK := state["task_id"].(string); taskOK {
+			if _, priorityOK := state["priority"].(string); priorityOK {
+				msg := w.buildTaskResultString(state)
+				return graph.State{"results": []string{msg}}, nil
+			}
+		}
 	}
 
 	// Enrich state result with execution metadata if applicable.

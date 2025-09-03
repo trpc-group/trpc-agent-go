@@ -1,12 +1,12 @@
 # Parallel Fan-out Graph Example
 
-This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]*Command` results that execute the same target node in parallel with different parameters, similar to LangGraph's "Send" functionality.
+This example demonstrates **parallel fan-out execution** using the `trpc-agent-go` library. It shows how a single node can return multiple `[]*graph.Command` results that execute the same target node in parallel with different parameters, similar to LangGraph's "Send" functionality.
 
 ## Overview
 
 The parallel fan-out workflow demonstrates dynamic task distribution:
 
-1. **Fan-out Node** - Returns `[]*Command` to create multiple parallel tasks
+1. **Fan-out Node** - Returns `[]*graph.Command` to create multiple parallel tasks
 2. **Parallel Execution** - Multiple tasks execute the same worker node simultaneously
 3. **Parameter Isolation** - Each task has isolated `Overlay` state parameters
 4. **Result Merging** - Results from parallel tasks are merged using `StateSchema` reducers
@@ -20,16 +20,16 @@ The example demonstrates how to create multiple parallel tasks dynamically:
 
 ```go
 // Fan-out node returns multiple commands
-cmds := []graph.Command{
-    {
+cmds := []*graph.Command{
+    &graph.Command{
         Update: graph.State{"param": "task-A", "priority": "high"},
         GoTo:   "worker",
     },
-    {
+    &graph.Command{
         Update: graph.State{"param": "task-B", "priority": "medium"},
         GoTo:   "worker",
     },
-    {
+    &graph.Command{
         Update: graph.State{"param": "task-C", "priority": "low"},
         GoTo:   "worker",
     },
@@ -75,13 +75,12 @@ execution.
 
 Each `Command` contains:
 
-- **`Update`**: `Overlay` state with task-specific parameters
+- **`Update`**: `Overlay` state with task-specific parameters (includes `priority` in this example)
 - **`GoTo`**: Target node identifier
-- **`Priority`**: Optional task priority for ordering
 
 ### **Execution Flow**
 
-1. **Fan-out Node** returns `[]*Command`
+1. **Fan-out Node** returns `[]*graph.Command`
 2. **Executor** creates multiple `Task` objects with `Overlay` states
 3. **Parallel Execution** of tasks targeting the same worker node
 4. **State Merging** using `StateSchema.ApplyUpdate` and reducers
@@ -90,7 +89,7 @@ Each `Command` contains:
 ### **State Schema with Reducers**
 
 ```go
-schema := graph.NewStateSchema().
+schema := graph.MessagesStateSchema().
     AddField("results", graph.StateField{
         Type:    reflect.TypeOf([]string{}),
         Reducer: graph.StringSliceReducer,  // Merges string slices
@@ -115,6 +114,7 @@ cd trpc-agent-go/examples/graph/fanout
 # Run the fan-out example
 go run main.go
 
+# Default model is "deepseek-chat"; override with -model to change
 # (Optional) Specify model
 go run main.go -model gpt-4o-mini
 ```

@@ -249,12 +249,12 @@ func (w *fanoutWorkflow) createFanoutTasks(ctx context.Context, state graph.Stat
 	fmt.Printf("📋 Creating %d parallel tasks...\n", numTasks)
 
 	// Generate commands for parallel execution.
-	cmds := make([]graph.Command, numTasks)
+	cmds := make([]*graph.Command, numTasks)
 	for i := 0; i < numTasks; i++ {
 		taskID := fmt.Sprintf("task-%c", 'A'+i)
 		priority := []string{"high", "medium", "low"}[i%3]
 
-		cmds[i] = graph.Command{
+		cmds[i] = &graph.Command{
 			Update: graph.State{
 				"task_id":    taskID,
 				"priority":   priority,

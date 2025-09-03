@@ -120,6 +120,52 @@ type Step struct {
 	UpdatedChannels map[string]bool // UpdatedChannels is the updated channels of the step.
 }
 
+// deepCopyAny performs a deep copy of common JSON-serializable Go types to
+// avoid sharing mutable references (maps/slices) across goroutines.
+func deepCopyAny(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		copied := make(map[string]any, len(v))
+		for k, vv := range v {
+			copied[k] = deepCopyAny(vv)
+		}
+		return copied
+	case []any:
+		copied := make([]any, len(v))
+		for i := range v {
+			copied[i] = deepCopyAny(v[i])
+		}
+		return copied
+	case []string:
+		copied := make([]string, len(v))
+		copy(copied, v)
+		return copied
+	case []int:
+		copied := make([]int, len(v))
+		copy(copied, v)
+		return copied
+	case []float64:
+		copied := make([]float64, len(v))
+		copy(copied, v)
+		return copied
+	case time.Time:
+		return v
+	default:
+		// For other scalar or struct types, rely on value semantics
+		// or JSON marshaler to handle safely.
+		return v
+	}
+}
+
+// deepCopyState clones the State, recursively copying nested maps/slices.
+func deepCopyState(s State) State {
+	out := make(State, len(s))
+	for k, v := range s {
+		out[k] = deepCopyAny(v)
+	}
+	return out
+}
+
 // Execute executes the graph with the given initial state using Pregel-style BSP execution.
 func (e *Executor) Execute(
 	ctx context.Context,
@@ -213,11 +259,10 @@ func (e *Executor) executeGraph(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
-	// Snapshot the state under read lock to avoid concurrent map iteration
-	// while other goroutines may still append metadata.
+	// Snapshot the state under read lock and deep-copy nested maps/slices to
+	// avoid concurrent iteration/write during JSON marshaling.
 	execCtx.stateMutex.RLock()
-	stateSnapshot := make(State, len(execCtx.State))
-	maps.Copy(stateSnapshot, execCtx.State)
+	stateSnapshot := deepCopyState(execCtx.State)
 	execCtx.stateMutex.RUnlock()
 	for key, value := range stateSnapshot {
 		if jsonData, err := json.Marshal(value); err == nil {
@@ -475,13 +520,22 @@ func (e *Executor) executeSingleTask(
 		SessionID:          e.getSessionID(execCtx),
 	}
 
-	// Get state copy for callbacks.
+	// Get state copy for callbacks using same logic as node execution, so
+	// callbacks observe the exact per-task input (including fan-out input).
 	execCtx.stateMutex.RLock()
-	stateCopy := make(State, len(execCtx.State))
-	maps.Copy(stateCopy, execCtx.State)
-	// Make overlay visible to callbacks for this task.
-	if t.Overlay != nil && e.graph.Schema() != nil {
-		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+	var stateCopy State
+	if t.Input != nil {
+		if inputState, ok := t.Input.(State); ok {
+			stateCopy = make(State, len(inputState))
+			maps.Copy(stateCopy, inputState)
+		}
+	}
+	if stateCopy == nil {
+		stateCopy = make(State, len(execCtx.State))
+		maps.Copy(stateCopy, execCtx.State)
+		if t.Overlay != nil && e.graph.Schema() != nil {
+			stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+		}
 	}
 	// Add execution context to state so nodes can access event channel.
 	stateCopy[StateKeyExecContext] = execCtx
@@ -765,15 +819,6 @@ func (e *Executor) handleNodeResult(
 		// Fan-out: enqueue tasks with overlays.
 		fanOut = true
 		e.enqueueCommands(execCtx, t, v)
-	case []Command: // Fan-out commands (non-pointer slice).
-		// Convert to pointer slice for enqueueCommands.
-		cmdPtrs := make([]*Command, len(v))
-		for i := range v {
-			cmdPtrs[i] = &v[i]
-		}
-		// Fan-out: enqueue tasks with overlays.
-		fanOut = true
-		e.enqueueCommands(execCtx, t, cmdPtrs)
 	default:
 	}
 
