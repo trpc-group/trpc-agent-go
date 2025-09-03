@@ -11,6 +11,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
@@ -42,6 +43,8 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
+	github.com/elastic/go-elasticsearch/v7 v7.17.10 // indirect
+	github.com/elastic/go-elasticsearch/v8 v8.19.0 // indirect
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
 	github.com/getkin/kin-openapi v0.132.0 // indirect
 	github.com/go-ego/gse v0.80.3 // indirect
@@ -120,6 +123,7 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.3 // indirect
 )

@@ -4,7 +4,8 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 
 ## Features
 
-- **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), or tcvector storage backends
+- **Multiple Vector Store Support**: Choose between in-memory, pgvector (PostgreSQL), tcvector, or Elasticsearch storage backends
+- **Elasticsearch Version Support**: Multi-version compatibility (v7, v8, v9) with automatic version selection
 - **Multiple Embedder Support**: OpenAI and Gemini embedder options
 - **Rich Knowledge Sources**: Supports file, directory, URL, and auto-detection sources
 - **Interactive Chat Interface**: Features knowledge search with multi-turn conversation support
@@ -63,11 +64,14 @@ go run main.go -vectorstore=pgvector
 # Use TcVector
 go run main.go -vectorstore=tcvector
 
-# Use Elasticsearch
+# Use Elasticsearch, default version v9
 go run main.go -vectorstore=elasticsearch
 
+# Use Elasticsearch with specific version (v7, v8, v9)
+go run main.go -vectorstore=elasticsearch -es-version=v8
+
 # Use Elasticsearch (or other persistent storage) and skip loading with -load=false
-go run main.go -vectorstore=elasticsearch -load=false
+go run main.go -vectorstore=elasticsearch -es-version=v7 -load=false
 
 # Specify a different model
 go run main.go -model="gpt-4o-mini" -vectorstore=pgvector
@@ -126,9 +130,13 @@ go run main.go -streaming=false
 
 ### Elasticsearch
 
-- Use case: Persistent search with hybrid vector + keyword retrieval.
-- Setup: Requires a running Elasticsearch cluster.
-- Environment Variables:
+- **Use case**: Persistent search with hybrid vector + keyword retrieval, supports multiple versions (v7, v8, v9).
+- **Setup**: Requires a running Elasticsearch cluster.
+- **Version Support**:
+  - **v7**: Compatible with Elasticsearch 7.x clusters
+  - **v8**: Compatible with Elasticsearch 8.x clusters
+  - **v9**: Compatible with Elasticsearch 9.x clusters (default)
+- **Environment Variables**:
   ```bash
   export ELASTICSEARCH_HOSTS="http://localhost:9200"
   export ELASTICSEARCH_USERNAME=""            # Optional
@@ -136,9 +144,21 @@ go run main.go -streaming=false
   export ELASTICSEARCH_API_KEY=""             # Optional
   export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
   ```
-  Start a local single-node via Docker:
+- **Start local Elasticsearch clusters via Docker**:
+
   ```bash
-  docker run -d --name elasticsearch -p 9200:9200 \
+  # Elasticsearch v7
+  docker run -d --name elasticsearch-v7 -p 9200:9200 \
+    -e discovery.type=single-node -e xpack.security.enabled=false \
+    docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+
+  # Elasticsearch v8
+  docker run -d --name elasticsearch-v8 -p 9200:9200 \
+    -e discovery.type=single-node -e xpack.security.enabled=false \
+    docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+
+  # Elasticsearch v9 (default)
+  docker run -d --name elasticsearch-v9 -p 9200:9200 \
     -e discovery.type=single-node -e xpack.security.enabled=false \
     docker.elastic.co/elasticsearch/elasticsearch:9.1.0
   ```
@@ -193,6 +213,7 @@ export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini em
 -streaming bool     Enable streaming mode for responses (default: true)
 -embedder string    Embedder type: openai, gemini (default: "openai")
 -vectorstore string Vector store type: inmemory, pgvector, tcvector, elasticsearch (default: "inmemory")
+-es-version string Elasticsearch version: v7, v8, v9 (default: "v9", only used when vectorstore=elasticsearch)
 -load bool         Load data into the vector store on startup (default: true)
 ```
 

@@ -5,6 +5,8 @@ go 1.24.1
 toolchain go1.24.4
 
 require (
+	github.com/elastic/go-elasticsearch/v7 v7.17.10
+	github.com/elastic/go-elasticsearch/v8 v8.19.0
 	github.com/elastic/go-elasticsearch/v9 v9.1.0
 	github.com/stretchr/testify v1.10.0
 )

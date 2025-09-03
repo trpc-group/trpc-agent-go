@@ -10,7 +10,11 @@
 // Package elasticsearch contains option definitions for the Elasticsearch vector store.
 package elasticsearch
 
-import "net/http"
+import (
+	"net/http"
+
+	"trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
+)
 
 // options holds Elasticsearch vectorstore configuration.
 type options struct {
@@ -44,6 +48,8 @@ type options struct {
 	vectorDimension int
 	// enableTSVector enables text search vector capabilities.
 	enableTSVector bool
+	// version is the Elasticsearch version to use (v7, v8, v9).
+	version elasticsearch.ESVersion
 }
 
 // defaultOptions returns default configuration.
@@ -60,6 +66,7 @@ var defaultOptions = options{
 	maxResults:      defaultMaxResults,
 	vectorDimension: defaultVectorDimension,
 	enableTSVector:  true,
+	version:         elasticsearch.ESVersionV9, // Default to latest version.
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -167,5 +174,12 @@ func WithVectorDimension(dimension int) Option {
 func WithEnableTSVector(enable bool) Option {
 	return func(o *options) {
 		o.enableTSVector = enable
+	}
+}
+
+// WithVersion sets the Elasticsearch version to use (v7, v8, v9).
+func WithVersion(version string) Option {
+	return func(o *options) {
+		o.version = elasticsearch.ESVersion(version)
 	}
 }

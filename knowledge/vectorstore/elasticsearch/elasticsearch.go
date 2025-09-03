@@ -11,16 +11,12 @@
 package elasticsearch
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"time"
 
-	"github.com/elastic/go-elasticsearch/v9"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/core/search"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/core/update"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
@@ -30,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
@@ -86,7 +83,7 @@ type indexCreateBody struct {
 
 // VectorStore implements vectorstore.VectorStore interface using Elasticsearch.
 type VectorStore struct {
-	client *elasticsearch.Client
+	client storage.Client
 	option options
 }
 
@@ -106,20 +103,19 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	// Create Elasticsearch client configuration.
-	esConfig := elasticsearch.Config{
-		Addresses:              option.addresses,
-		Username:               option.username,
-		Password:               option.password,
-		APIKey:                 option.apiKey,
-		CertificateFingerprint: option.certificateFingerprint,
-		CompressRequestBody:    option.compressRequestBody,
-		EnableMetrics:          option.enableMetrics,
-		EnableDebugLogger:      option.enableDebugLogger,
-		RetryOnStatus:          option.retryOnStatus,
-		MaxRetries:             option.maxRetries,
-	}
-
-	esClient, err := elasticsearch.NewClient(esConfig)
+	esClient, err := storage.GetClientBuilder()(
+		storage.WithAddresses(option.addresses),
+		storage.WithUsername(option.username),
+		storage.WithPassword(option.password),
+		storage.WithAPIKey(option.apiKey),
+		storage.WithCertificateFingerprint(option.certificateFingerprint),
+		storage.WithCompressRequestBody(option.compressRequestBody),
+		storage.WithEnableMetrics(option.enableMetrics),
+		storage.WithEnableDebugLogger(option.enableDebugLogger),
+		storage.WithRetryOnStatus(option.retryOnStatus),
+		storage.WithMaxRetries(option.maxRetries),
+		storage.WithVersion(option.version),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch create client: %w", err)
 	}
@@ -198,16 +194,11 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 
 // indexExists checks if an index exists.
 func (vs *VectorStore) indexExists(ctx context.Context, indexName string) (bool, error) {
-	res, err := vs.client.Indices.Exists(
-		[]string{indexName},
-		vs.client.Indices.Exists.WithContext(ctx),
-	)
+	ok, err := vs.client.IndexExists(ctx, indexName)
 	if err != nil {
 		return false, fmt.Errorf("elasticsearch index exists: %w", err)
 	}
-	defer res.Body.Close()
-
-	return res.StatusCode == http.StatusOK, nil
+	return ok, nil
 }
 
 // createIndex creates an index with mapping.
@@ -216,19 +207,8 @@ func (vs *VectorStore) createIndex(ctx context.Context, indexName string, body *
 	if err != nil {
 		return fmt.Errorf("elasticsearch marshal index create body: %w", err)
 	}
-
-	res, err := vs.client.Indices.Create(
-		indexName,
-		vs.client.Indices.Create.WithContext(ctx),
-		vs.client.Indices.Create.WithBody(bytes.NewReader(mappingBytes)),
-	)
-	if err != nil {
+	if err := vs.client.CreateIndex(ctx, indexName, mappingBytes); err != nil {
 		return fmt.Errorf("elasticsearch create index: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch failed to create index: %s", res.Status())
 	}
 	return nil
 }
@@ -268,20 +248,8 @@ func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, 
 	if err != nil {
 		return fmt.Errorf("elasticsearch marshal index document: %w", err)
 	}
-
-	res, err := vs.client.Index(
-		indexName,
-		bytes.NewReader(documentBytes),
-		vs.client.Index.WithContext(ctx),
-		vs.client.Index.WithDocumentID(id),
-	)
-	if err != nil {
+	if err := vs.client.IndexDoc(ctx, indexName, id, documentBytes); err != nil {
 		return fmt.Errorf("elasticsearch index document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch failed to index document: %s", res.Status())
 	}
 	return nil
 }
@@ -337,23 +305,9 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 
 // getDocument retrieves a document by ID.
 func (vs *VectorStore) getDocument(ctx context.Context, indexName, id string) ([]byte, error) {
-	res, err := vs.client.Get(
-		indexName,
-		id,
-		vs.client.Get.WithContext(ctx),
-	)
+	body, err := vs.client.GetDoc(ctx, indexName, id)
 	if err != nil {
-		return nil, fmt.Errorf("elasticsearch marshal update document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch failed to get document: %s", res.Status())
-	}
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("elasticsearch get document: %w", err)
 	}
 	return body, nil
 }
@@ -405,19 +359,8 @@ func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string,
 		return fmt.Errorf("elasticsearch marshal update request: %w", err)
 	}
 
-	res, err := vs.client.Update(
-		indexName,
-		id,
-		bytes.NewReader(updateBytes),
-		vs.client.Update.WithContext(ctx),
-	)
-	if err != nil {
+	if err := vs.client.UpdateDoc(ctx, indexName, id, updateBytes); err != nil {
 		return fmt.Errorf("elasticsearch update document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch failed to update document: %s", res.Status())
 	}
 	return nil
 }
@@ -433,18 +376,8 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 
 // deleteDocument deletes a document.
 func (vs *VectorStore) deleteDocument(ctx context.Context, indexName, id string) error {
-	res, err := vs.client.Delete(
-		indexName,
-		id,
-		vs.client.Delete.WithContext(ctx),
-	)
-	if err != nil {
+	if err := vs.client.DeleteDoc(ctx, indexName, id); err != nil {
 		return fmt.Errorf("elasticsearch delete document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch failed to delete document: %s", res.Status())
 	}
 	return nil
 }
@@ -508,24 +441,9 @@ func (vs *VectorStore) search(ctx context.Context, indexName string, query *type
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch marshal search query: %w", err)
 	}
-
-	res, err := vs.client.Search(
-		vs.client.Search.WithContext(ctx),
-		vs.client.Search.WithIndex(indexName),
-		vs.client.Search.WithBody(bytes.NewReader(queryBytes)),
-	)
+	body, err := vs.client.Search(ctx, indexName, queryBytes)
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch search: %w", err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("elasticsearch read search response: %w", err)
-	}
-
-	if res.IsError() {
-		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(body))
 	}
 	return body, nil
 }
