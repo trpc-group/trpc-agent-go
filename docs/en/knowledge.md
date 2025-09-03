@@ -205,6 +205,7 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 
 // In-memory implementation, can be used for testing.
@@ -246,6 +247,29 @@ kb := knowledge.New(
 )
 ```
 
+#### Elasticsearch
+
+```go
+// Create Elasticsearch vector store with multi-version support (v7, v8, v9)
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // Version options: "v7", "v8", "v9" (default "v9")
+    vectorelasticsearch.WithVersion("v9"),
+)
+if err != nil {
+    // Handle error.
+}
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+)
+```
+
 ### Embedder
 
 Embedder is responsible for converting text to vector representations and is a core component of the Knowledge system. Currently, the framework mainly supports OpenAI embedding models:
@@ -270,6 +294,7 @@ kb := knowledge.New(
 
 - OpenAI embedding models (text-embedding-3-small, etc.)
 - Other OpenAI API compatible embedding services
+- Gemini embedding model (via `knowledge/embedder/gemini`)
 
 > **Note**:
 >
@@ -354,6 +379,12 @@ err := kb.Load(ctx,
     knowledge.WithDocConcurrency(64),      // Document-level concurrency.
 )
 ```
+
+> Note on performance and rate limits:
+>
+> - Higher concurrency increases embedder API request rates (OpenAI/Gemini) and may hit rate limits.
+> - Tune `WithSourceConcurrency()` and `WithDocConcurrency()` based on throughput, cost, and limits.
+> - Defaults are balanced for most scenarios; increase for speed, decrease to avoid throttling.
 
 ## Advanced Features
 
@@ -606,17 +637,24 @@ export OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
 # Google Gemini API configuration (when using Gemini embedder).
 export GOOGLE_API_KEY="your-google-api-key"
 
-# PostgreSQL + pgvector configuration.
+# PostgreSQL + pgvector configuration (required when using -vectorstore=pgvector)
 export PGVECTOR_HOST="127.0.0.1"
 export PGVECTOR_PORT="5432"
 export PGVECTOR_USER="postgres"
 export PGVECTOR_PASSWORD="your-password"
 export PGVECTOR_DATABASE="vectordb"
 
-# TcVector configuration.
+# TcVector configuration (required when using -vectorstore=tcvector)
 export TCVECTOR_URL="https://your-tcvector-endpoint"
 export TCVECTOR_USERNAME="your-username"
 export TCVECTOR_PASSWORD="your-password"
+
+# Elasticsearch configuration (required when using -vectorstore=elasticsearch)
+export ELASTICSEARCH_HOSTS="http://localhost:9200"
+export ELASTICSEARCH_USERNAME=""
+export ELASTICSEARCH_PASSWORD=""
+export ELASTICSEARCH_API_KEY=""
+export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
 ```
 
 ### Command Line Parameters
@@ -626,10 +664,12 @@ export TCVECTOR_PASSWORD="your-password"
 go run main.go -embedder openai -vectorstore inmemory
 go run main.go -embedder gemini -vectorstore pgvector
 go run main.go -embedder openai -vectorstore tcvector
+go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
 
 # Parameter description:
 # -embedder: Select embedder type (openai, gemini), default is openai.
-# -vectorstore: Select vector store type (inmemory, pgvector, tcvector), default is inmemory.
+# -vectorstore: Select vector store type (inmemory, pgvector, tcvector, elasticsearch), default is inmemory.
+# -es-version: Elasticsearch version (v7, v8, v9), only when vectorstore=elasticsearch.
 ```
 
 ## Troubleshooting
