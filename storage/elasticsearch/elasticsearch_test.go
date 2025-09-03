@@ -20,6 +20,8 @@ import (
 	esv8 "github.com/elastic/go-elasticsearch/v8"
 	esv9 "github.com/elastic/go-elasticsearch/v9"
 	"github.com/stretchr/testify/require"
+
+	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 )
 
 // roundTripper allows mocking http.Transport.
@@ -42,7 +44,7 @@ func newResponse(status int, body string) *http.Response {
 
 func TestDefaultClientBuilder_VersionSelection(t *testing.T) {
 	// Default (unspecified) -> v9
-	c, err := DefaultClientBuilder(
+	c, err := defaultClientBuilder(
 		WithVersion(ESVersionUnspecified),
 	)
 	require.NoError(t, err)
@@ -50,25 +52,25 @@ func TestDefaultClientBuilder_VersionSelection(t *testing.T) {
 	require.True(t, ok)
 
 	// Explicit v9
-	c, err = DefaultClientBuilder(WithVersion(ESVersionV9))
+	c, err = defaultClientBuilder(WithVersion(ESVersionV9))
 	require.NoError(t, err)
 	_, ok = c.(*clientV9)
 	require.True(t, ok)
 
 	// v8
-	c, err = DefaultClientBuilder(WithVersion(ESVersionV8))
+	c, err = defaultClientBuilder(WithVersion(ESVersionV8))
 	require.NoError(t, err)
 	_, ok = c.(*clientV8)
 	require.True(t, ok)
 
 	// v7
-	c, err = DefaultClientBuilder(WithVersion(ESVersionV7))
+	c, err = defaultClientBuilder(WithVersion(ESVersionV7))
 	require.NoError(t, err)
 	_, ok = c.(*clientV7)
 	require.True(t, ok)
 
 	// unknown
-	_, err = DefaultClientBuilder(WithVersion(ESVersion("unknown")))
+	_, err = defaultClientBuilder(WithVersion(ESVersion("unknown")))
 	require.Error(t, err)
 	require.Equal(t, "elasticsearch: unknown version unknown", err.Error())
 }
@@ -124,7 +126,7 @@ func TestPing_SuccessAndError_Table(t *testing.T) {
 }
 
 // newClientForVersion constructs an adapter client using NewClient and a mocked transport.
-func newClientForVersion(t *testing.T, version string, rt roundTripper) Client {
+func newClientForVersion(t *testing.T, version string, rt roundTripper) ielasticsearch.Client {
 	t.Helper()
 	switch version {
 	case "v7":
@@ -132,19 +134,25 @@ func newClientForVersion(t *testing.T, version string, rt roundTripper) Client {
 		require.NoError(t, err)
 		c, err := NewClient(es)
 		require.NoError(t, err)
-		return c
+		cli, ok := c.(ielasticsearch.Client)
+		require.True(t, ok)
+		return cli
 	case "v8":
 		es, err := esv8.NewClient(esv8.Config{Transport: rt})
 		require.NoError(t, err)
 		c, err := NewClient(es)
 		require.NoError(t, err)
-		return c
+		cli, ok := c.(ielasticsearch.Client)
+		require.True(t, ok)
+		return cli
 	case "v9":
 		es, err := esv9.NewClient(esv9.Config{Transport: rt})
 		require.NoError(t, err)
 		c, err := NewClient(es)
 		require.NoError(t, err)
-		return c
+		cli, ok := c.(ielasticsearch.Client)
+		require.True(t, ok)
+		return cli
 	default:
 		require.FailNow(t, "unsupported version", version)
 		return nil

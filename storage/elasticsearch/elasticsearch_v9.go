@@ -17,10 +17,14 @@ import (
 	"net/http"
 
 	"github.com/elastic/go-elasticsearch/v9"
+
+	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 )
 
+var _ ielasticsearch.Client = (*clientV9)(nil)
+
 // newClientV9 builds a v9 client from generic builder options.
-func newClientV9(o *ClientBuilderOpts) (Client, error) {
+func newClientV9(o *ClientBuilderOpts) (ielasticsearch.Client, error) {
 	cfg := elasticsearch.Config{
 		Addresses:              o.Addresses,
 		Username:               o.Username,
@@ -40,7 +44,7 @@ func newClientV9(o *ClientBuilderOpts) (Client, error) {
 	return &clientV9{esClient: cli}, nil
 }
 
-// client implements the Client interface.
+// client implements the ielasticsearch.Client interface.
 type clientV9 struct {
 	esClient *elasticsearch.Client
 }

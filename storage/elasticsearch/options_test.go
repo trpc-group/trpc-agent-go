@@ -106,7 +106,7 @@ func TestGlobalBuilder_SetAndGet(t *testing.T) {
 	require.NotNil(t, builder)
 
 	// Test setting custom builder.
-	customBuilder := func(opts ...ClientBuilderOpt) (Client, error) {
+	customBuilder := func(opts ...ClientBuilderOpt) (any, error) {
 		return &clientV9{}, nil
 	}
 	SetClientBuilder(customBuilder)
