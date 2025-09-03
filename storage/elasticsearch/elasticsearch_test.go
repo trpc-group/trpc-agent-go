@@ -68,14 +68,16 @@ func TestDefaultClientBuilder_VersionSelection(t *testing.T) {
 	require.True(t, ok)
 
 	// unknown
-	_, err = DefaultClientBuilder(WithVersion(ESVersion(-1)))
+	_, err = DefaultClientBuilder(WithVersion(ESVersion("unknown")))
 	require.Error(t, err)
-	require.Equal(t, "elasticsearch: unknown version -1", err.Error())
+	require.Equal(t, "elasticsearch: unknown version unknown", err.Error())
 }
 
 func TestNewClient_WrapsSupportedAndUnsupported(t *testing.T) {
 	// v9
-	es9, err := esv9.NewClient(esv9.Config{Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	es9, err := esv9.NewClient(esv9.Config{
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
+	})
 	require.NoError(t, err)
 	c, err := NewClient(es9)
 	require.NoError(t, err)
@@ -83,7 +85,9 @@ func TestNewClient_WrapsSupportedAndUnsupported(t *testing.T) {
 	require.True(t, ok)
 
 	// v8
-	es8, err := esv8.NewClient(esv8.Config{Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	es8, err := esv8.NewClient(esv8.Config{
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
+	})
 	require.NoError(t, err)
 	c, err = NewClient(es8)
 	require.NoError(t, err)
@@ -91,7 +95,9 @@ func TestNewClient_WrapsSupportedAndUnsupported(t *testing.T) {
 	require.True(t, ok)
 
 	// v7
-	es7, err := esv7.NewClient(esv7.Config{Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") })})
+	es7, err := esv7.NewClient(esv7.Config{
+		Transport: roundTripper(func(r *http.Request) *http.Response { return newResponse(200, "{}") }),
+	})
 	require.NoError(t, err)
 	c, err = NewClient(es7)
 	require.NoError(t, err)

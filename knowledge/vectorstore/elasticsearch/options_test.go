@@ -35,7 +35,7 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	WithMaxResults(5)(&opt)
 	WithVectorDimension(123)(&opt)
 	WithEnableTSVector(false)(&opt)
-	WithVersion(elasticsearch.ESVersionV8)(&opt)
+	WithVersion(string(elasticsearch.ESVersionV8))(&opt)
 
 	assert.Equal(t, []string{"http://example:9200"}, opt.addresses)
 	assert.Equal(t, "user", opt.username)

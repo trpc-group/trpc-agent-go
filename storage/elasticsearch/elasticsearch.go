@@ -57,7 +57,7 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 	case ESVersionV9, ESVersionUnspecified:
 		return newClientV9(o)
 	default:
-		return nil, fmt.Errorf("elasticsearch: unknown version %d", o.Version)
+		return nil, fmt.Errorf("elasticsearch: unknown version %s", o.Version)
 	}
 }
 

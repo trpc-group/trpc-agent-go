@@ -142,17 +142,17 @@ func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
 }
 
 // ESVersion represents the Elasticsearch major version.
-type ESVersion int
+type ESVersion string
 
 const (
 	// ESVersionUnspecified means no explicit version preference.
-	ESVersionUnspecified ESVersion = 0
+	ESVersionUnspecified ESVersion = "0"
 	// ESVersionV7 selects Elasticsearch v7.
-	ESVersionV7 ESVersion = 7
+	ESVersionV7 ESVersion = "v7"
 	// ESVersionV8 selects Elasticsearch v8.
-	ESVersionV8 ESVersion = 8
+	ESVersionV8 ESVersion = "v8"
 	// ESVersionV9 selects Elasticsearch v9.
-	ESVersionV9 ESVersion = 9
+	ESVersionV9 ESVersion = "v9"
 )
 
 // WithVersion sets the preferred Elasticsearch major version.

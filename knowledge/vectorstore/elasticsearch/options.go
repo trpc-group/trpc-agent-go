@@ -178,8 +178,8 @@ func WithEnableTSVector(enable bool) Option {
 }
 
 // WithVersion sets the Elasticsearch version to use (v7, v8, v9).
-func WithVersion(version elasticsearch.ESVersion) Option {
+func WithVersion(version string) Option {
 	return func(o *options) {
-		o.version = version
+		o.version = elasticsearch.ESVersion(version)
 	}
 }
