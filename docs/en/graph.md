@@ -598,12 +598,12 @@ graph.ClearAllResumeValues(state)
 manager := graph.NewCheckpointManager(saver)
 
 // List checkpoints
-checkpoints, err := manager.List(ctx, threadID, &graph.CheckpointFilter{
+checkpoints, err := manager.List(ctx, lineageID, &graph.CheckpointFilter{
     Limit: 10,
 })
 
 // Get specific checkpoint
-checkpoint, err := manager.Get(ctx, threadID, checkpointID)
+checkpoint, err := manager.Get(ctx, lineageID, checkpointID)
 ```
 
 ### 2. Custom Reducer

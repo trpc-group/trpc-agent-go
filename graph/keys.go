@@ -3,7 +3,7 @@ package graph
 // Config map keys (used under config["configurable"])
 const (
 	CfgKeyConfigurable = "configurable"
-	CfgKeyThreadID     = "thread_id"
+	CfgKeyLineageID    = "lineage_id"
 	CfgKeyCheckpointID = "checkpoint_id"
 	CfgKeyCheckpointNS = "checkpoint_ns"
 	CfgKeyResumeMap    = "resume_map"

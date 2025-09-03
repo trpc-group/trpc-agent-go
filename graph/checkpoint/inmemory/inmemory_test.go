@@ -24,8 +24,8 @@ func TestInMemoryCheckpointSaver(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
@@ -92,8 +92,8 @@ func TestInMemoryCheckpointSaverList(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create multiple checkpoints.
 	for i := 0; i < 3; i++ {
@@ -130,8 +130,8 @@ func TestInMemoryCheckpointSaverWrites(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint first.
 	checkpoint := graph.NewCheckpoint(
@@ -177,12 +177,12 @@ func TestInMemoryCheckpointSaverWrites(t *testing.T) {
 	assert.Equal(t, "hello", tuple.PendingWrites[1].Value)
 }
 
-func TestInMemoryCheckpointSaverDeleteThread(t *testing.T) {
+func TestInMemoryCheckpointSaverDeleteLineage(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
@@ -206,8 +206,8 @@ func TestInMemoryCheckpointSaverDeleteThread(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, retrieved)
 
-	// Delete thread.
-	err = saver.DeleteThread(ctx, threadID)
+	// Delete lineage.
+	err = saver.DeleteLineage(ctx, lineageID)
 	require.NoError(t, err)
 
 	// Verify checkpoint is gone.
@@ -217,11 +217,11 @@ func TestInMemoryCheckpointSaverDeleteThread(t *testing.T) {
 }
 
 func TestInMemoryCheckpointSaverMaxCheckpoints(t *testing.T) {
-	saver := NewSaver().WithMaxCheckpointsPerThread(2)
+	saver := NewSaver().WithMaxCheckpointsPerLineage(2)
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create 3 checkpoints (exceeds limit of 2).
 	for i := 0; i < 3; i++ {
@@ -252,8 +252,8 @@ func TestInMemoryCheckpointSaverConcurrentAccess(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Test concurrent writes.
 	done := make(chan bool, 10)
@@ -294,8 +294,8 @@ func TestInMemoryCheckpointSaverClose(t *testing.T) {
 	saver := NewSaver()
 	ctx := context.Background()
 
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(

@@ -89,7 +89,7 @@ func demoCheckpointOperations(saver graph.CheckpointSaver) {
 	fmt.Println("\n📝 Demonstrating checkpoint operations...")
 
 	// Create config.
-	config := graph.CreateCheckpointConfig("demo_thread", "", "demo:prod:workflow")
+	config := graph.CreateCheckpointConfig("demo_lineage", "", "demo:prod:workflow")
 
 	// Create checkpoint.
 	checkpoint := graph.NewCheckpoint(nil, nil, nil)
@@ -155,11 +155,11 @@ func demoPaginationAndFiltering(saver graph.CheckpointSaver) {
 	fmt.Println("\n📄 Demonstrating pagination and filtering...")
 
 	// Create multiple checkpoints for pagination demo.
-	threadID := "pagination_demo"
+	lineageID := "pagination_demo"
 	namespace := "demo:test:pagination"
 
 	for i := 1; i <= 15; i++ {
-		config := graph.CreateCheckpointConfig(threadID, "", namespace)
+		config := graph.CreateCheckpointConfig(lineageID, "", namespace)
 		checkpoint := graph.NewCheckpoint(nil, nil, nil)
 		checkpoint.ChannelValues = map[string]any{
 			"step":      i,
@@ -186,7 +186,7 @@ func demoPaginationAndFiltering(saver graph.CheckpointSaver) {
 	fmt.Printf("  ✅ Created 15 checkpoints\n")
 
 	// Demonstrate pagination query.
-	baseConfig := graph.CreateCheckpointConfig(threadID, "", namespace)
+	baseConfig := graph.CreateCheckpointConfig(lineageID, "", namespace)
 
 	// First page: get the first 5.
 	fmt.Println("\n  📖 First page (first 5):")

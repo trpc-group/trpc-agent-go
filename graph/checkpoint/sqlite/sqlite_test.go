@@ -52,8 +52,8 @@ func TestSQLiteCheckpointSaver(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
@@ -104,8 +104,8 @@ func TestSQLiteCheckpointSaverList(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create multiple checkpoints.
 	for i := 0; i < 3; i++ {
@@ -147,8 +147,8 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint first.
 	checkpoint := graph.NewCheckpoint(
@@ -194,7 +194,7 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 	assert.Equal(t, "hello", tuple.PendingWrites[1].Value)
 }
 
-func TestSQLiteCheckpointSaverDeleteThread(t *testing.T) {
+func TestSQLiteCheckpointSaverDeleteLineage(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -203,8 +203,8 @@ func TestSQLiteCheckpointSaverDeleteThread(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
@@ -228,8 +228,8 @@ func TestSQLiteCheckpointSaverDeleteThread(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, retrieved)
 
-	// Delete thread.
-	err = saver.DeleteThread(ctx, threadID)
+	// Delete lineage.
+	err = saver.DeleteLineage(ctx, lineageID)
 	require.NoError(t, err)
 
 	// Verify checkpoint is gone.
@@ -247,8 +247,8 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create multiple checkpoints.
 	var checkpointIDs []string
@@ -292,8 +292,8 @@ func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
 	defer saver.Close()
 
 	ctx := context.Background()
-	threadID := "test-thread"
-	config := graph.CreateCheckpointConfig(threadID, "", "")
+	lineageID := "test-lineage"
+	config := graph.CreateCheckpointConfig(lineageID, "", "")
 
 	// Create checkpoints with different metadata.
 	for i := 0; i < 3; i++ {

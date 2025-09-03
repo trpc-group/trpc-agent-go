@@ -27,20 +27,20 @@ import (
 )
 
 const (
-	defaultThreadPrefix = "interrupt-demo"
-	defaultNamespace    = ""
-	defaultMode         = "run" // Modes: run, interrupt, resume, demo.
-	stateKeyCounter     = "counter"
-	stateKeyMsgs        = "messages"
-	stateKeyUserInput   = "user_input"
-	stateKeyApproved    = "approved"
+	defaultLineagePrefix = "interrupt-demo"
+	defaultNamespace     = ""
+	defaultMode          = "run" // Modes: run, interrupt, resume, demo.
+	stateKeyCounter      = "counter"
+	stateKeyMsgs         = "messages"
+	stateKeyUserInput    = "user_input"
+	stateKeyApproved     = "approved"
 )
 
 var (
 	modeFlag = flag.String("mode", defaultMode,
 		"Mode: run|interrupt|resume|demo")
-	threadFlag = flag.String("thread", "",
-		"Thread ID for checkpointing (default: auto)")
+	lineageFlag = flag.String("lineage", "",
+		"Lineage ID for checkpointing (default: auto)")
 	userInputFlag = flag.String("input", "",
 		"User input for resume mode")
 )
@@ -48,13 +48,13 @@ var (
 func main() {
 	flag.Parse()
 
-	threadID := *threadFlag
-	if threadID == "" {
-		threadID = fmt.Sprintf("%s-%d", defaultThreadPrefix, time.Now().Unix())
+	lineageID := *lineageFlag
+	if lineageID == "" {
+		lineageID = fmt.Sprintf("%s-%d", defaultLineagePrefix, time.Now().Unix())
 	}
 
 	fmt.Printf("🔄 Interrupt & Resume Demo\n")
-	fmt.Printf("Thread: %s\n", threadID)
+	fmt.Printf("Lineage: %s\n", lineageID)
 	fmt.Println(strings.Repeat("=", 50))
 
 	ctx := context.Background()
@@ -74,22 +74,22 @@ func main() {
 
 	switch strings.ToLower(strings.TrimSpace(*modeFlag)) {
 	case "run":
-		if err := runNormalExecution(ctx, exec, threadID); err != nil {
+		if err := runNormalExecution(ctx, exec, lineageID); err != nil {
 			log.Fatalf("run failed: %v", err)
 		}
 	case "interrupt":
-		if err := runWithInterrupt(ctx, exec, threadID); err != nil {
+		if err := runWithInterrupt(ctx, exec, lineageID); err != nil {
 			log.Fatalf("interrupt failed: %v", err)
 		}
 	case "resume":
 		if *userInputFlag == "" {
 			log.Fatalf("user input required for resume mode")
 		}
-		if err := resumeFromInterrupt(ctx, exec, threadID, *userInputFlag); err != nil {
+		if err := resumeFromInterrupt(ctx, exec, lineageID, *userInputFlag); err != nil {
 			log.Fatalf("resume failed: %v", err)
 		}
 	case "demo":
-		if err := demoInterruptResume(ctx, exec, manager, threadID); err != nil {
+		if err := demoInterruptResume(ctx, exec, manager, lineageID); err != nil {
 			log.Fatalf("demo failed: %v", err)
 		}
 	default:
@@ -196,13 +196,13 @@ func buildInterruptGraph() (*graph.Graph, error) {
 	return b.Compile()
 }
 
-func runNormalExecution(ctx context.Context, exec *graph.Executor, threadID string) error {
+func runNormalExecution(ctx context.Context, exec *graph.Executor, lineageID string) error {
 	fmt.Printf("▶️  Running normal execution...\n")
 	state := graph.State{
 		stateKeyCounter: 0,
 		stateKeyMsgs:    []string{"start"},
 	}
-	inv := &agent.Invocation{InvocationID: threadID}
+	inv := &agent.Invocation{InvocationID: lineageID}
 	events, err := exec.Execute(ctx, state, inv)
 	if err != nil {
 		if graph.IsInterruptError(err) {
@@ -216,13 +216,13 @@ func runNormalExecution(ctx context.Context, exec *graph.Executor, threadID stri
 	return nil
 }
 
-func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string) error {
+func runWithInterrupt(ctx context.Context, exec *graph.Executor, lineageID string) error {
 	fmt.Printf("🔄 Running with interrupt...\n")
 	state := graph.State{
 		stateKeyCounter: 0,
 		stateKeyMsgs:    []string{"start"},
 	}
-	inv := &agent.Invocation{InvocationID: threadID}
+	inv := &agent.Invocation{InvocationID: lineageID}
 	events, err := exec.Execute(ctx, state, inv)
 	if err != nil {
 		return fmt.Errorf("execute failed: %w", err)
@@ -261,7 +261,7 @@ func runWithInterrupt(ctx context.Context, exec *graph.Executor, threadID string
 	return nil
 }
 
-func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, userInput string) error {
+func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, lineageID, userInput string) error {
 	fmt.Printf("⏪ Resuming from interrupt with input: %s\n", userInput)
 
 	// Create resume command with ResumeMap for better key-based resume
@@ -276,7 +276,7 @@ func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, us
 		graph.StateKeyCommand: cmd,
 	}
 
-	inv := &agent.Invocation{InvocationID: threadID}
+	inv := &agent.Invocation{InvocationID: lineageID}
 	events, err := exec.Execute(ctx, state, inv)
 	if err != nil {
 		return fmt.Errorf("resume failed: %w", err)
@@ -286,24 +286,24 @@ func resumeFromInterrupt(ctx context.Context, exec *graph.Executor, threadID, us
 	return nil
 }
 
-func demoInterruptResume(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, threadID string) error {
+func demoInterruptResume(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, lineageID string) error {
 	fmt.Println("🎬 Demo: interrupt -> resume -> complete")
 
 	// Step 1: Run until interrupt
 	fmt.Println("\n1️⃣  Running until interrupt...")
-	if err := runWithInterrupt(ctx, exec, threadID); err != nil {
+	if err := runWithInterrupt(ctx, exec, lineageID); err != nil {
 		return err
 	}
 
 	// Step 2: Resume with "yes"
 	fmt.Println("\n2️⃣  Resuming with 'yes'...")
-	if err := resumeFromInterrupt(ctx, exec, threadID, "yes"); err != nil {
+	if err := resumeFromInterrupt(ctx, exec, lineageID, "yes"); err != nil {
 		return err
 	}
 
 	// Step 3: List checkpoints
 	fmt.Println("\n3️⃣  Listing checkpoints...")
-	cfg := graph.CreateCheckpointConfig(threadID, "", defaultNamespace)
+	cfg := graph.CreateCheckpointConfig(lineageID, "", defaultNamespace)
 	filter := &graph.CheckpointFilter{Limit: 10}
 	items, err := manager.ListCheckpoints(ctx, cfg, filter)
 	if err != nil {

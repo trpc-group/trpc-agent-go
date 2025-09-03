@@ -10,7 +10,7 @@
 // Package main demonstrates checkpointing features using the graph package.
 // It shows how to run a graph with checkpointing enabled, list checkpoints,
 // resume from the latest or a specific checkpoint, create manual checkpoints,
-// filter checkpoints, and delete a thread.
+// filter checkpoints, and delete a lineage.
 package main
 
 import (
@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	defaultThreadPrefix = "checkpoint-demo"
-	defaultNamespace    = ""
-	defaultMode         = "run" // Modes: run, list, resume, goto,
+	defaultLineagePrefix = "checkpoint-demo"
+	defaultNamespace     = ""
+	defaultMode          = "run" // Modes: run, list, resume, goto,
 	// manual, filter, delete, demo.
 	defaultSteps    = 3
 	stateKeyCounter = "counter"
@@ -43,8 +43,8 @@ const (
 var (
 	modeFlag = flag.String("mode", defaultMode,
 		"Mode: run|list|resume|goto|manual|filter|delete|demo")
-	threadFlag = flag.String("thread", "",
-		"Thread ID for checkpointing (default: auto)")
+	lineageFlag = flag.String("lineage", "",
+		"Lineage ID for checkpointing (default: auto)")
 	stepsFlag = flag.Int("steps", defaultSteps,
 		"Steps to execute in run/demo modes")
 	ckptIDFlag = flag.String("checkpoint", "",
@@ -57,13 +57,13 @@ var (
 func main() {
 	flag.Parse()
 
-	threadID := *threadFlag
-	if threadID == "" {
-		threadID = fmt.Sprintf("%s-%d", defaultThreadPrefix, time.Now().Unix())
+	lineageID := *lineageFlag
+	if lineageID == "" {
+		lineageID = fmt.Sprintf("%s-%d", defaultLineagePrefix, time.Now().Unix())
 	}
 
 	fmt.Printf("🔐 Checkpoint Demo\n")
-	fmt.Printf("Thread: %s\n", threadID)
+	fmt.Printf("Lineage: %s\n", lineageID)
 	fmt.Println(strings.Repeat("=", 50))
 
 	ctx := context.Background()
@@ -83,26 +83,26 @@ func main() {
 
 	switch strings.ToLower(strings.TrimSpace(*modeFlag)) {
 	case "run":
-		if err := runSteps(ctx, exec, threadID, *stepsFlag); err != nil {
+		if err := runSteps(ctx, exec, lineageID, *stepsFlag); err != nil {
 			log.Fatalf("run failed: %v", err)
 		}
 	case "list":
-		if err := listCheckpoints(ctx, manager, threadID, *limitFlag, nil); err != nil {
+		if err := listCheckpoints(ctx, manager, lineageID, *limitFlag, nil); err != nil {
 			log.Fatalf("list failed: %v", err)
 		}
 	case "resume":
-		if err := resumeLatest(ctx, exec, threadID); err != nil {
+		if err := resumeLatest(ctx, exec, lineageID); err != nil {
 			log.Fatalf("resume failed: %v", err)
 		}
 	case "goto":
 		if *ckptIDFlag == "" {
 			log.Fatalf("checkpoint ID required for goto mode")
 		}
-		if err := resumeSpecific(ctx, exec, manager, threadID, *ckptIDFlag); err != nil {
+		if err := resumeSpecific(ctx, exec, manager, lineageID, *ckptIDFlag); err != nil {
 			log.Fatalf("goto failed: %v", err)
 		}
 	case "manual":
-		if err := createManualCheckpoint(ctx, saver, threadID, *categoryFlag); err != nil {
+		if err := createManualCheckpoint(ctx, saver, lineageID, *categoryFlag); err != nil {
 			log.Fatalf("manual failed: %v", err)
 		}
 	case "filter":
@@ -110,16 +110,16 @@ func main() {
 		if *categoryFlag != "" {
 			filter["category"] = *categoryFlag
 		}
-		if err := listCheckpoints(ctx, manager, threadID, *limitFlag, filter); err != nil {
+		if err := listCheckpoints(ctx, manager, lineageID, *limitFlag, filter); err != nil {
 			log.Fatalf("filter failed: %v", err)
 		}
 	case "delete":
-		if err := manager.DeleteThread(ctx, threadID); err != nil {
+		if err := manager.DeleteLineage(ctx, lineageID); err != nil {
 			log.Fatalf("delete failed: %v", err)
 		}
-		fmt.Printf("🧹 Deleted thread %s\n", threadID)
+		fmt.Printf("🧹 Deleted lineage %s\n", lineageID)
 	case "demo":
-		if err := demoAll(ctx, exec, manager, saver, threadID, *stepsFlag); err != nil {
+		if err := demoAll(ctx, exec, manager, saver, lineageID, *stepsFlag); err != nil {
 			log.Fatalf("demo failed: %v", err)
 		}
 	default:
@@ -177,7 +177,7 @@ func buildGraph() (*graph.Graph, error) {
 	return b.Compile()
 }
 
-func runSteps(ctx context.Context, exec *graph.Executor, threadID string, steps int) error {
+func runSteps(ctx context.Context, exec *graph.Executor, lineageID string, steps int) error {
 	if steps <= 0 {
 		return errors.New("steps must be > 0")
 	}
@@ -187,7 +187,7 @@ func runSteps(ctx context.Context, exec *graph.Executor, threadID string, steps 
 		stateKeyMsgs:    []string{"start"},
 	}
 	for i := 0; i < steps; i++ {
-		inv := &agent.Invocation{InvocationID: threadID}
+		inv := &agent.Invocation{InvocationID: lineageID}
 		events, err := exec.Execute(ctx, state, inv)
 		if err != nil {
 			return fmt.Errorf("execute failed: %w", err)
@@ -198,9 +198,9 @@ func runSteps(ctx context.Context, exec *graph.Executor, threadID string, steps 
 	return nil
 }
 
-func resumeLatest(ctx context.Context, exec *graph.Executor, threadID string) error {
+func resumeLatest(ctx context.Context, exec *graph.Executor, lineageID string) error {
 	fmt.Printf("⏪ Resuming from latest checkpoint...\n")
-	inv := &agent.Invocation{InvocationID: threadID}
+	inv := &agent.Invocation{InvocationID: lineageID}
 	events, err := exec.Execute(ctx, graph.State{}, inv)
 	if err != nil {
 		return fmt.Errorf("resume failed: %w", err)
@@ -210,14 +210,14 @@ func resumeLatest(ctx context.Context, exec *graph.Executor, threadID string) er
 	return nil
 }
 
-func resumeSpecific(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, threadID, checkpointID string) error {
+func resumeSpecific(ctx context.Context, exec *graph.Executor, manager *graph.CheckpointManager, lineageID, checkpointID string) error {
 	fmt.Printf("🎯 Resuming from checkpoint: %s\n", checkpointID)
-	cfg := graph.CreateCheckpointConfig(threadID, checkpointID, defaultNamespace)
+	cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, defaultNamespace)
 	st, err := manager.ResumeFromCheckpoint(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("load checkpoint failed: %w", err)
 	}
-	inv := &agent.Invocation{InvocationID: threadID}
+	inv := &agent.Invocation{InvocationID: lineageID}
 	events, err := exec.Execute(ctx, st, inv)
 	if err != nil {
 		return fmt.Errorf("execute failed: %w", err)
@@ -227,9 +227,9 @@ func resumeSpecific(ctx context.Context, exec *graph.Executor, manager *graph.Ch
 	return nil
 }
 
-func createManualCheckpoint(ctx context.Context, saver graph.CheckpointSaver, threadID, category string) error {
+func createManualCheckpoint(ctx context.Context, saver graph.CheckpointSaver, lineageID, category string) error {
 	fmt.Printf("✍️  Creating manual checkpoint...\n")
-	cfg := graph.CreateCheckpointConfig(threadID, "", defaultNamespace)
+	cfg := graph.CreateCheckpointConfig(lineageID, "", defaultNamespace)
 	state := graph.State{
 		stateKeyCounter: 100,
 		stateKeyMsgs:    []string{"manual"},
@@ -265,9 +265,9 @@ func createManualCheckpoint(ctx context.Context, saver graph.CheckpointSaver, th
 	return nil
 }
 
-func listCheckpoints(ctx context.Context, manager *graph.CheckpointManager, threadID string, limit int, metadata map[string]any) error {
+func listCheckpoints(ctx context.Context, manager *graph.CheckpointManager, lineageID string, limit int, metadata map[string]any) error {
 	fmt.Printf("📜 Listing checkpoints (limit=%d)\n", limit)
-	cfg := graph.CreateCheckpointConfig(threadID, "", defaultNamespace)
+	cfg := graph.CreateCheckpointConfig(lineageID, "", defaultNamespace)
 	var filter *graph.CheckpointFilter
 	if limit > 0 || len(metadata) > 0 {
 		filter = &graph.CheckpointFilter{Limit: limit, Metadata: metadata}
@@ -300,30 +300,30 @@ func demoAll(
 	exec *graph.Executor,
 	manager *graph.CheckpointManager,
 	saver graph.CheckpointSaver,
-	threadID string,
+	lineageID string,
 	steps int,
 ) error {
 	fmt.Println("▶️  Demo: run -> list -> resume -> manual -> filter -> delete")
-	if err := runSteps(ctx, exec, threadID, steps); err != nil {
+	if err := runSteps(ctx, exec, lineageID, steps); err != nil {
 		return err
 	}
-	if err := listCheckpoints(ctx, manager, threadID, 0, nil); err != nil {
+	if err := listCheckpoints(ctx, manager, lineageID, 0, nil); err != nil {
 		return err
 	}
-	if err := resumeLatest(ctx, exec, threadID); err != nil {
+	if err := resumeLatest(ctx, exec, lineageID); err != nil {
 		return err
 	}
-	if err := createManualCheckpoint(ctx, saver, threadID, "category_demo"); err != nil {
+	if err := createManualCheckpoint(ctx, saver, lineageID, "category_demo"); err != nil {
 		return err
 	}
-	if err := listCheckpoints(ctx, manager, threadID, 10,
+	if err := listCheckpoints(ctx, manager, lineageID, 10,
 		map[string]any{"category": "category_demo"}); err != nil {
 		return err
 	}
-	if err := manager.DeleteThread(ctx, threadID); err != nil {
+	if err := manager.DeleteLineage(ctx, lineageID); err != nil {
 		return err
 	}
-	fmt.Printf("🧹 Deleted thread %s\n", threadID)
+	fmt.Printf("🧹 Deleted lineage %s\n", lineageID)
 	return nil
 }
 

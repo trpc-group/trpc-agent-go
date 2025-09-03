@@ -81,14 +81,14 @@ go run main.go
 
 ```sql
 CREATE TABLE checkpoints (
-    thread_id TEXT NOT NULL,
+    lineage_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL,
     checkpoint_id TEXT NOT NULL,
     parent_checkpoint_id TEXT,
     ts INTEGER NOT NULL,
     checkpoint_json TEXT NOT NULL,
     metadata_json TEXT NOT NULL,
-    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+    PRIMARY KEY (lineage_id, checkpoint_ns, checkpoint_id)
 );
 ```
 
@@ -96,7 +96,7 @@ CREATE TABLE checkpoints (
 
 ```sql
 CREATE TABLE checkpoint_writes (
-    thread_id TEXT NOT NULL,
+    lineage_id TEXT NOT NULL,
     checkpoint_ns TEXT NOT NULL,
     checkpoint_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
@@ -105,15 +105,15 @@ CREATE TABLE checkpoint_writes (
     value_json TEXT NOT NULL,
     task_path TEXT NOT NULL,
     seq INTEGER NOT NULL,
-    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+    PRIMARY KEY (lineage_id, checkpoint_ns, checkpoint_id, task_id, idx)
 );
 ```
 
 ### Indexes
 
 ```sql
-CREATE INDEX idx_checkpoints_ts ON checkpoints(thread_id, checkpoint_ns, ts);
-CREATE INDEX idx_writes_seq ON checkpoint_writes(thread_id, checkpoint_ns, checkpoint_id, seq);
+CREATE INDEX idx_checkpoints_ts ON checkpoints(lineage_id, checkpoint_ns, ts);
+CREATE INDEX idx_writes_seq ON checkpoint_writes(lineage_id, checkpoint_ns, checkpoint_id, seq);
 ```
 
 ## Key features

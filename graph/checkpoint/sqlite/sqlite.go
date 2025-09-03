@@ -26,18 +26,18 @@ const (
 	sqliteTableWrites      = "checkpoint_writes"
 
 	sqliteCreateCheckpoints = "CREATE TABLE IF NOT EXISTS checkpoints (" +
-		"thread_id TEXT NOT NULL, " +
+		"lineage_id TEXT NOT NULL, " +
 		"checkpoint_ns TEXT NOT NULL, " +
 		"checkpoint_id TEXT NOT NULL, " +
 		"parent_checkpoint_id TEXT, " +
 		"ts INTEGER NOT NULL, " +
 		"checkpoint_json BLOB NOT NULL, " +
 		"metadata_json BLOB NOT NULL, " +
-		"PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)" +
+		"PRIMARY KEY (lineage_id, checkpoint_ns, checkpoint_id)" +
 		")"
 
 	sqliteCreateWrites = "CREATE TABLE IF NOT EXISTS checkpoint_writes (" +
-		"thread_id TEXT NOT NULL, " +
+		"lineage_id TEXT NOT NULL, " +
 		"checkpoint_ns TEXT NOT NULL, " +
 		"checkpoint_id TEXT NOT NULL, " +
 		"task_id TEXT NOT NULL, " +
@@ -45,32 +45,32 @@ const (
 		"channel TEXT NOT NULL, " +
 		"value_json BLOB NOT NULL, " +
 		"task_path TEXT, " +
-		"PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)" +
+		"PRIMARY KEY (lineage_id, checkpoint_ns, checkpoint_id, task_id, idx)" +
 		")"
 
 	sqliteInsertCheckpoint = "INSERT OR REPLACE INTO checkpoints (" +
-		"thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, ts, " +
+		"lineage_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, ts, " +
 		"checkpoint_json, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
 
 	sqliteSelectLatest = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id " +
-		"FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? " +
+		"FROM checkpoints WHERE lineage_id = ? AND checkpoint_ns = ? " +
 		"ORDER BY ts DESC LIMIT 1"
 
 	sqliteSelectByID = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id " +
-		"FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? LIMIT 1"
+		"FROM checkpoints WHERE lineage_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? LIMIT 1"
 
 	sqliteSelectIDsAsc = "SELECT checkpoint_id, ts FROM checkpoints " +
-		"WHERE thread_id = ? AND checkpoint_ns = ? ORDER BY ts ASC"
+		"WHERE lineage_id = ? AND checkpoint_ns = ? ORDER BY ts ASC"
 
 	sqliteInsertWrite = "INSERT OR REPLACE INTO checkpoint_writes (" +
-		"thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, value_json, task_path, seq) " +
+		"lineage_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, value_json, task_path, seq) " +
 		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 	sqliteSelectWrites = "SELECT task_id, idx, channel, value_json, task_path, seq FROM checkpoint_writes " +
-		"WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY seq"
+		"WHERE lineage_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY seq"
 
-	sqliteDeleteThreadCkpts  = "DELETE FROM checkpoints WHERE thread_id = ?"
-	sqliteDeleteThreadWrites = "DELETE FROM checkpoint_writes WHERE thread_id = ?"
+	sqliteDeleteLineageCkpts  = "DELETE FROM checkpoints WHERE lineage_id = ?"
+	sqliteDeleteLineageWrites = "DELETE FROM checkpoint_writes WHERE lineage_id = ?"
 )
 
 // Saver is a SQLite-backed implementation of CheckpointSaver.
@@ -110,15 +110,15 @@ func (s *Saver) Get(ctx context.Context, config map[string]any) (*graph.Checkpoi
 
 // GetTuple returns the checkpoint tuple for the given config.
 func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.CheckpointTuple, error) {
-	threadID := graph.GetThreadID(config)
+	lineageID := graph.GetLineageID(config)
 	checkpointNS := graph.GetNamespace(config)
 	checkpointID := graph.GetCheckpointID(config)
-	if threadID == "" {
-		return nil, errors.New("thread_id is required")
+	if lineageID == "" {
+		return nil, errors.New("lineage_id is required")
 	}
 	var row *sql.Row
 	if checkpointID == "" {
-		row = s.db.QueryRowContext(ctx, sqliteSelectLatest, threadID, checkpointNS)
+		row = s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
 		var checkpointJSON, metadataJSON []byte
 		var parentID, foundID string
 		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID, &foundID); err != nil {
@@ -135,14 +135,14 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		if err := json.Unmarshal(metadataJSON, &meta); err != nil {
 			return nil, fmt.Errorf("unmarshal metadata: %w", err)
 		}
-		cfg := graph.CreateCheckpointConfig(threadID, foundID, checkpointNS)
-		writes, err := s.loadWrites(ctx, threadID, checkpointNS, foundID)
+		cfg := graph.CreateCheckpointConfig(lineageID, foundID, checkpointNS)
+		writes, err := s.loadWrites(ctx, lineageID, checkpointNS, foundID)
 		if err != nil {
 			return nil, err
 		}
 		var parentCfg map[string]any
 		if parentID != "" {
-			parentCfg = graph.CreateCheckpointConfig(threadID, parentID, checkpointNS)
+			parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
 		}
 		return &graph.CheckpointTuple{
 			Config:        cfg,
@@ -152,7 +152,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 			PendingWrites: writes,
 		}, nil
 	}
-	row = s.db.QueryRowContext(ctx, sqliteSelectByID, threadID, checkpointNS, checkpointID)
+	row = s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
 	var checkpointJSON, metadataJSON []byte
 	var parentID string
 	if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID); err != nil {
@@ -169,14 +169,14 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	if err := json.Unmarshal(metadataJSON, &meta); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
-	cfg := graph.CreateCheckpointConfig(threadID, checkpointID, checkpointNS)
-	writes, err := s.loadWrites(ctx, threadID, checkpointNS, checkpointID)
+	cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
+	writes, err := s.loadWrites(ctx, lineageID, checkpointNS, checkpointID)
 	if err != nil {
 		return nil, err
 	}
 	var parentCfg map[string]any
 	if parentID != "" {
-		parentCfg = graph.CreateCheckpointConfig(threadID, parentID, checkpointNS)
+		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
 	}
 	return &graph.CheckpointTuple{
 		Config:        cfg,
@@ -187,16 +187,16 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	}, nil
 }
 
-// List returns checkpoints for the thread/namespace, with optional filters.
+// List returns checkpoints for the lineage/namespace, with optional filters.
 func (s *Saver) List(
 	ctx context.Context,
 	config map[string]any,
 	filter *graph.CheckpointFilter,
 ) ([]*graph.CheckpointTuple, error) {
-	threadID := graph.GetThreadID(config)
+	lineageID := graph.GetLineageID(config)
 	checkpointNS := graph.GetNamespace(config)
-	if threadID == "" {
-		return nil, errors.New("thread_id is required")
+	if lineageID == "" {
+		return nil, errors.New("lineage_id is required")
 	}
 	// Query beforeTs if Before filter is specified
 	var beforeTs *int64
@@ -204,8 +204,8 @@ func (s *Saver) List(
 		beforeID := graph.GetCheckpointID(filter.Before)
 		if beforeID != "" {
 			row := s.db.QueryRowContext(ctx,
-				"SELECT ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
-				threadID, checkpointNS, beforeID)
+				"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
+				lineageID, checkpointNS, beforeID)
 			var ts int64
 			if err := row.Scan(&ts); err == nil {
 				beforeTs = &ts
@@ -214,8 +214,8 @@ func (s *Saver) List(
 	}
 
 	// Build query with proper filtering and ordering
-	q := "SELECT checkpoint_id, ts FROM checkpoints WHERE thread_id=? AND checkpoint_ns=?"
-	args := []any{threadID, checkpointNS}
+	q := "SELECT checkpoint_id, ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=?"
+	args := []any{lineageID, checkpointNS}
 	if beforeTs != nil {
 		q += " AND ts < ?"
 		args = append(args, *beforeTs)
@@ -240,7 +240,7 @@ func (s *Saver) List(
 			return nil, fmt.Errorf("scan checkpoint: %w", err)
 		}
 		// Get full tuple for this checkpoint.
-		cfg := graph.CreateCheckpointConfig(threadID, checkpointID, checkpointNS)
+		cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
 		tuple, err := s.GetTuple(ctx, cfg)
 		if err != nil {
 			return nil, err
@@ -282,10 +282,10 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	if req.Checkpoint == nil {
 		return nil, errors.New("checkpoint cannot be nil")
 	}
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	checkpointNS := graph.GetNamespace(req.Config)
-	if threadID == "" {
-		return nil, errors.New("thread_id is required")
+	if lineageID == "" {
+		return nil, errors.New("lineage_id is required")
 	}
 	parentID := graph.GetCheckpointID(req.Config)
 	checkpointJSON, err := json.Marshal(req.Checkpoint)
@@ -307,7 +307,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	_, err = s.db.ExecContext(
 		ctx,
 		sqliteInsertCheckpoint,
-		threadID,
+		lineageID,
 		checkpointNS,
 		req.Checkpoint.ID,
 		parentID,
@@ -318,16 +318,16 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	if err != nil {
 		return nil, fmt.Errorf("insert checkpoint: %w", err)
 	}
-	return graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, checkpointNS), nil
+	return graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, checkpointNS), nil
 }
 
 // PutWrites stores write entries for a checkpoint.
 func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error {
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	checkpointNS := graph.GetNamespace(req.Config)
 	checkpointID := graph.GetCheckpointID(req.Config)
-	if threadID == "" || checkpointID == "" {
-		return errors.New("thread_id and checkpoint_id are required")
+	if lineageID == "" || checkpointID == "" {
+		return errors.New("lineage_id and checkpoint_id are required")
 	}
 	for idx, w := range req.Writes {
 		valueJSON, err := json.Marshal(w.Value)
@@ -337,7 +337,7 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 		_, err = s.db.ExecContext(
 			ctx,
 			sqliteInsertWrite,
-			threadID,
+			lineageID,
 			checkpointNS,
 			checkpointID,
 			req.TaskID,
@@ -355,10 +355,10 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 
 // PutFull atomically stores a checkpoint with its pending writes in a single transaction.
 func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[string]any, error) {
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	checkpointNS := graph.GetNamespace(req.Config)
-	if threadID == "" {
-		return nil, errors.New("thread_id is required")
+	if lineageID == "" {
+		return nil, errors.New("lineage_id is required")
 	}
 	if req.Checkpoint == nil {
 		return nil, errors.New("checkpoint cannot be nil")
@@ -386,7 +386,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	_, err = tx.ExecContext(
 		ctx,
 		sqliteInsertCheckpoint,
-		threadID,
+		lineageID,
 		checkpointNS,
 		req.Checkpoint.ID,
 		parentID,
@@ -414,7 +414,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		_, err = tx.ExecContext(
 			ctx,
 			sqliteInsertWrite,
-			threadID,
+			lineageID,
 			checkpointNS,
 			req.Checkpoint.ID,
 			w.TaskID,
@@ -435,19 +435,19 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	}
 
 	// Return updated config with the new checkpoint ID
-	updatedConfig := graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, checkpointNS)
+	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, checkpointNS)
 	return updatedConfig, nil
 }
 
-// DeleteThread deletes all checkpoints and writes for the thread.
-func (s *Saver) DeleteThread(ctx context.Context, threadID string) error {
-	if threadID == "" {
-		return errors.New("thread_id is required")
+// DeleteLineage deletes all checkpoints and writes for the lineage.
+func (s *Saver) DeleteLineage(ctx context.Context, lineageID string) error {
+	if lineageID == "" {
+		return errors.New("lineage_id is required")
 	}
-	if _, err := s.db.ExecContext(ctx, sqliteDeleteThreadCkpts, threadID); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqliteDeleteLineageCkpts, lineageID); err != nil {
 		return fmt.Errorf("delete checkpoints: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, sqliteDeleteThreadWrites, threadID); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqliteDeleteLineageWrites, lineageID); err != nil {
 		return fmt.Errorf("delete writes: %w", err)
 	}
 	return nil
@@ -463,12 +463,12 @@ func (s *Saver) Close() error {
 
 func (s *Saver) loadWrites(
 	ctx context.Context,
-	threadID, checkpointNS, checkpointID string,
+	lineageID, checkpointNS, checkpointID string,
 ) ([]graph.PendingWrite, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		sqliteSelectWrites,
-		threadID,
+		lineageID,
 		checkpointNS,
 		checkpointID,
 	)

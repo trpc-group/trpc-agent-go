@@ -227,13 +227,13 @@ func (e *Executor) executeGraph(
 	// Initialize checkpoint configuration if checkpoint saver is available.
 	var checkpointConfig map[string]any
 	if e.checkpointSaver != nil {
-		// Extract thread ID from invocation or generate one.
-		threadID := invocation.InvocationID
-		if threadID == "" {
-			threadID = fmt.Sprintf("thread_%d", time.Now().UnixNano())
+		// Extract lineage ID from invocation or generate one.
+		lineageID := invocation.InvocationID
+		if lineageID == "" {
+			lineageID = fmt.Sprintf("lineage_%d", time.Now().UnixNano())
 		}
 
-		checkpointConfig = CreateCheckpointConfig(threadID, "", "")
+		checkpointConfig = CreateCheckpointConfig(lineageID, "", "")
 
 		// Try to resume from existing checkpoint if available and rebuild frontier.
 		if tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig); err == nil && tuple != nil && tuple.Checkpoint != nil {

@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
-
+//
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 //
@@ -23,10 +23,10 @@ import (
 // This is suitable for testing and debugging but not for production use.
 type Saver struct {
 	mu      sync.RWMutex
-	storage map[string]map[string]map[string]*graph.CheckpointTuple // threadID -> namespace -> checkpointID -> tuple
-	writes  map[string]map[string]map[string][]graph.PendingWrite   // threadID -> namespace -> checkpointID -> writes
-	// maxCheckpointsPerThread limits the number of checkpoints per thread.
-	maxCheckpointsPerThread int
+	storage map[string]map[string]map[string]*graph.CheckpointTuple // lineageID -> namespace -> checkpointID -> tuple
+	writes  map[string]map[string]map[string][]graph.PendingWrite   // lineageID -> namespace -> checkpointID -> writes
+	// maxCheckpointsPerLineage limits the number of checkpoints per lineage.
+	maxCheckpointsPerLineage int
 }
 
 // NewSaver creates a new in-memory checkpoint saver.
@@ -34,13 +34,13 @@ func NewSaver() *Saver {
 	return &Saver{
 		storage:                 make(map[string]map[string]map[string]*graph.CheckpointTuple),
 		writes:                  make(map[string]map[string]map[string][]graph.PendingWrite),
-		maxCheckpointsPerThread: graph.DefaultMaxCheckpointsPerThread,
+		maxCheckpointsPerLineage: graph.DefaultMaxCheckpointsPerLineage,
 	}
 }
 
-// WithMaxCheckpointsPerThread sets the maximum number of checkpoints per thread.
-func (s *Saver) WithMaxCheckpointsPerThread(max int) *Saver {
-	s.maxCheckpointsPerThread = max
+// WithMaxCheckpointsPerLineage sets the maximum number of checkpoints per lineage.
+func (s *Saver) WithMaxCheckpointsPerLineage(max int) *Saver {
+	s.maxCheckpointsPerLineage = max
 	return s
 }
 
@@ -61,17 +61,17 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	threadID := graph.GetThreadID(config)
+	lineageID := graph.GetLineageID(config)
 	namespace := graph.GetNamespace(config)
 	checkpointID := graph.GetCheckpointID(config)
 
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
+	if lineageID == "" {
+		return nil, fmt.Errorf("lineage_id is required")
 	}
 
 	// Get the latest checkpoint if no specific ID is provided.
 	if checkpointID == "" {
-		namespaces, exists := s.storage[threadID]
+		namespaces, exists := s.storage[lineageID]
 		if !exists {
 			return nil, nil
 		}
@@ -103,7 +103,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	}
 
 	// Retrieve the specific checkpoint.
-	namespaces, exists := s.storage[threadID]
+	namespaces, exists := s.storage[lineageID]
 	if !exists {
 		return nil, nil
 	}
@@ -127,7 +127,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	}
 
 	// Add pending writes if they exist.
-	if writes, exists := s.writes[threadID][namespace][checkpointID]; exists {
+	if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
 		result.PendingWrites = make([]graph.PendingWrite, len(writes))
 		copy(result.PendingWrites, writes)
 	}
@@ -140,16 +140,16 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	threadID := graph.GetThreadID(config)
+	lineageID := graph.GetLineageID(config)
 	namespace := graph.GetNamespace(config)
 
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
+	if lineageID == "" {
+		return nil, fmt.Errorf("lineage_id is required")
 	}
 
 	var results []*graph.CheckpointTuple
 
-	namespaces, exists := s.storage[threadID]
+	namespaces, exists := s.storage[lineageID]
 	if !exists {
 		return results, nil
 	}
@@ -205,7 +205,7 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 		}
 
 		// Add pending writes.
-		if writes, exists := s.writes[threadID][namespace][checkpointID]; exists {
+		if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
 			result.PendingWrites = make([]graph.PendingWrite, len(writes))
 			copy(result.PendingWrites, writes)
 		}
@@ -231,11 +231,11 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	namespace := graph.GetNamespace(req.Config)
 
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
+	if lineageID == "" {
+		return nil, fmt.Errorf("lineage_id is required")
 	}
 
 	if req.Checkpoint == nil {
@@ -243,11 +243,11 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	}
 
 	// Initialize storage structure if needed.
-	if s.storage[threadID] == nil {
-		s.storage[threadID] = make(map[string]map[string]*graph.CheckpointTuple)
+	if s.storage[lineageID] == nil {
+		s.storage[lineageID] = make(map[string]map[string]*graph.CheckpointTuple)
 	}
-	if s.storage[threadID][namespace] == nil {
-		s.storage[threadID][namespace] = make(map[string]*graph.CheckpointTuple)
+	if s.storage[lineageID][namespace] == nil {
+		s.storage[lineageID][namespace] = make(map[string]*graph.CheckpointTuple)
 	}
 
 	// Create checkpoint tuple.
@@ -259,17 +259,17 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 
 	// Set parent config if there's a parent checkpoint ID.
 	if parentID := graph.GetCheckpointID(req.Config); parentID != "" {
-		tuple.ParentConfig = graph.CreateCheckpointConfig(threadID, parentID, namespace)
+		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
 	}
 
 	// Store the checkpoint.
-	s.storage[threadID][namespace][req.Checkpoint.ID] = tuple
+	s.storage[lineageID][namespace][req.Checkpoint.ID] = tuple
 
 	// Clean up old checkpoints if we exceed the limit.
-	s.cleanupOldCheckpoints(threadID, namespace)
+	s.cleanupOldCheckpoints(lineageID, namespace)
 
 	// Return updated config with the new checkpoint ID.
-	updatedConfig := graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, namespace)
+	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
 	return updatedConfig, nil
 }
 
@@ -278,26 +278,26 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	namespace := graph.GetNamespace(req.Config)
 	checkpointID := graph.GetCheckpointID(req.Config)
 
-	if threadID == "" || checkpointID == "" {
-		return fmt.Errorf("thread_id and checkpoint_id are required")
+	if lineageID == "" || checkpointID == "" {
+		return fmt.Errorf("lineage_id and checkpoint_id are required")
 	}
 
 	// Initialize writes structure if needed.
-	if s.writes[threadID] == nil {
-		s.writes[threadID] = make(map[string]map[string][]graph.PendingWrite)
+	if s.writes[lineageID] == nil {
+		s.writes[lineageID] = make(map[string]map[string][]graph.PendingWrite)
 	}
-	if s.writes[threadID][namespace] == nil {
-		s.writes[threadID][namespace] = make(map[string][]graph.PendingWrite)
+	if s.writes[lineageID][namespace] == nil {
+		s.writes[lineageID][namespace] = make(map[string][]graph.PendingWrite)
 	}
 
 	// Store the writes (make a copy to avoid external modification).
 	writes := make([]graph.PendingWrite, len(req.Writes))
 	copy(writes, req.Writes)
-	s.writes[threadID][namespace][checkpointID] = writes
+	s.writes[lineageID][namespace][checkpointID] = writes
 
 	return nil
 }
@@ -307,11 +307,11 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	threadID := graph.GetThreadID(req.Config)
+	lineageID := graph.GetLineageID(req.Config)
 	namespace := graph.GetNamespace(req.Config)
 
-	if threadID == "" {
-		return nil, fmt.Errorf("thread_id is required")
+	if lineageID == "" {
+		return nil, fmt.Errorf("lineage_id is required")
 	}
 
 	if req.Checkpoint == nil {
@@ -319,19 +319,19 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	}
 
 	// Initialize storage structure if needed.
-	if s.storage[threadID] == nil {
-		s.storage[threadID] = make(map[string]map[string]*graph.CheckpointTuple)
+	if s.storage[lineageID] == nil {
+		s.storage[lineageID] = make(map[string]map[string]*graph.CheckpointTuple)
 	}
-	if s.storage[threadID][namespace] == nil {
-		s.storage[threadID][namespace] = make(map[string]*graph.CheckpointTuple)
+	if s.storage[lineageID][namespace] == nil {
+		s.storage[lineageID][namespace] = make(map[string]*graph.CheckpointTuple)
 	}
 
 	// Initialize writes structure if needed.
-	if s.writes[threadID] == nil {
-		s.writes[threadID] = make(map[string]map[string][]graph.PendingWrite)
+	if s.writes[lineageID] == nil {
+		s.writes[lineageID] = make(map[string]map[string][]graph.PendingWrite)
 	}
-	if s.writes[threadID][namespace] == nil {
-		s.writes[threadID][namespace] = make(map[string][]graph.PendingWrite)
+	if s.writes[lineageID][namespace] == nil {
+		s.writes[lineageID][namespace] = make(map[string][]graph.PendingWrite)
 	}
 
 	// Create checkpoint tuple.
@@ -343,34 +343,34 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 
 	// Set parent config if there's a parent checkpoint ID.
 	if parentID := graph.GetCheckpointID(req.Config); parentID != "" {
-		tuple.ParentConfig = graph.CreateCheckpointConfig(threadID, parentID, namespace)
+		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
 	}
 
 	// Store the checkpoint.
-	s.storage[threadID][namespace][req.Checkpoint.ID] = tuple
+	s.storage[lineageID][namespace][req.Checkpoint.ID] = tuple
 
 	// Store the writes atomically (make a copy to avoid external modification).
 	if len(req.PendingWrites) > 0 {
 		writes := make([]graph.PendingWrite, len(req.PendingWrites))
 		copy(writes, req.PendingWrites)
-		s.writes[threadID][namespace][req.Checkpoint.ID] = writes
+		s.writes[lineageID][namespace][req.Checkpoint.ID] = writes
 	}
 
 	// Clean up old checkpoints if we exceed the limit.
-	s.cleanupOldCheckpoints(threadID, namespace)
+	s.cleanupOldCheckpoints(lineageID, namespace)
 
 	// Return updated config with the new checkpoint ID.
-	updatedConfig := graph.CreateCheckpointConfig(threadID, req.Checkpoint.ID, namespace)
+	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
 	return updatedConfig, nil
 }
 
-// DeleteThread removes all checkpoints for a thread.
-func (s *Saver) DeleteThread(ctx context.Context, threadID string) error {
+// DeleteLineage removes all checkpoints for a lineage.
+func (s *Saver) DeleteLineage(ctx context.Context, lineageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.storage, threadID)
-	delete(s.writes, threadID)
+	delete(s.storage, lineageID)
+	delete(s.writes, lineageID)
 
 	return nil
 }
@@ -388,9 +388,9 @@ func (s *Saver) Close() error {
 }
 
 // cleanupOldCheckpoints removes old checkpoints to stay within the limit.
-func (s *Saver) cleanupOldCheckpoints(threadID, namespace string) {
-	checkpoints := s.storage[threadID][namespace]
-	if len(checkpoints) <= s.maxCheckpointsPerThread {
+func (s *Saver) cleanupOldCheckpoints(lineageID, namespace string) {
+	checkpoints := s.storage[lineageID][namespace]
+	if len(checkpoints) <= s.maxCheckpointsPerLineage {
 		return
 	}
 
@@ -420,10 +420,10 @@ func (s *Saver) cleanupOldCheckpoints(threadID, namespace string) {
 	}
 
 	// Remove oldest checkpoints.
-	toRemove := len(checkpointInfos) - s.maxCheckpointsPerThread
+	toRemove := len(checkpointInfos) - s.maxCheckpointsPerLineage
 	for i := 0; i < toRemove; i++ {
 		delete(checkpoints, checkpointInfos[i].id)
 		// Also remove associated writes.
-		delete(s.writes[threadID][namespace], checkpointInfos[i].id)
+		delete(s.writes[lineageID][namespace], checkpointInfos[i].id)
 	}
 }

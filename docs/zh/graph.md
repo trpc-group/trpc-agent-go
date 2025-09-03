@@ -1486,15 +1486,15 @@ graph.ClearAllResumeValues(state)
 manager := graph.NewCheckpointManager(saver)
 
 // 列出检查点
-checkpoints, err := manager.List(ctx, threadID, &graph.CheckpointFilter{
+checkpoints, err := manager.List(ctx, lineageID, &graph.CheckpointFilter{
     Limit: 10,
 })
 
 // 获取特定检查点
-checkpoint, err := manager.Get(ctx, threadID, checkpointID)
+checkpoint, err := manager.Get(ctx, lineageID, checkpointID)
 ```
 
-> **⚠️ 生产环境重要提示**: 强烈建议在生产环境中显式指定 `namespace`，使用稳定的业务标识符（如 `svc:prod:graphX`），而不是依赖自动生成的 `default:{thread_id}:{timestamp}` 模式。这样可以确保审计追踪的一致性和业务逻辑的清晰性。
+> **⚠️ 生产环境重要提示**: 强烈建议在生产环境中显式指定 `namespace`，使用稳定的业务标识符（如 `svc:prod:graphX`），而不是依赖自动生成的 `default:{lineage_id}:{timestamp}` 模式。这样可以确保审计追踪的一致性和业务逻辑的清晰性。
 
 > **⚠️ 类型安全提示**: 检查点使用 JSON 深拷贝进行状态持久化，数值类型会被转换为 `float64`。在业务代码中处理状态时，建议使用类型断言或类型转换函数，避免直接断言为 `int`/`int64` 等类型。
 

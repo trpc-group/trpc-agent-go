@@ -38,8 +38,8 @@ const (
 	DefaultCheckpointNamespace = ""
 	// DefaultChannelVersion is the default version for channels.
 	DefaultChannelVersion = 1
-	// DefaultMaxCheckpointsPerThread is the default maximum number of checkpoints per thread.
-	DefaultMaxCheckpointsPerThread = 100
+	// DefaultMaxCheckpointsPerLineage is the default maximum number of checkpoints per lineage.
+	DefaultMaxCheckpointsPerLineage = 100
 )
 
 // Special channel names for interrupt and resume functionality.
@@ -181,8 +181,8 @@ type CheckpointSaver interface {
 	PutWrites(ctx context.Context, req PutWritesRequest) error
 	// PutFull atomically stores a checkpoint with its pending writes in a single transaction.
 	PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error)
-	// DeleteThread removes all checkpoints for a thread.
-	DeleteThread(ctx context.Context, threadID string) error
+	// DeleteLineage removes all checkpoints for a lineage.
+	DeleteLineage(ctx context.Context, lineageID string) error
 	// Close releases resources held by the saver.
 	Close() error
 }
@@ -199,8 +199,8 @@ type CheckpointFilter struct {
 
 // CheckpointConfig provides a structured way to handle checkpoint configuration.
 type CheckpointConfig struct {
-	// ThreadID is the unique identifier for the conversation thread.
-	ThreadID string
+	// LineageID is the unique identifier for the conversation lineage.
+	LineageID string
 	// CheckpointID is the specific checkpoint to retrieve.
 	CheckpointID string
 	// Namespace is the checkpoint namespace.
@@ -248,19 +248,19 @@ func NewCheckpointMetadata(source string, step int) *CheckpointMetadata {
 }
 
 // NewCheckpointConfig creates a new checkpoint configuration.
-func NewCheckpointConfig(threadID string) *CheckpointConfig {
-	if threadID == "" {
-		panic("thread_id cannot be empty")
+func NewCheckpointConfig(lineageID string) *CheckpointConfig {
+	if lineageID == "" {
+		panic("lineage_id cannot be empty")
 	}
 
 	// Generate a default namespace if not provided
 	namespace := DefaultCheckpointNamespace
 	if namespace == "" {
-		namespace = fmt.Sprintf("default:%s:%d", threadID, time.Now().Unix())
+		namespace = fmt.Sprintf("default:%s:%d", lineageID, time.Now().Unix())
 	}
 
 	return &CheckpointConfig{
-		ThreadID:  threadID,
+		LineageID: lineageID,
 		Namespace: namespace,
 		ResumeMap: make(map[string]any),
 		Extra:     make(map[string]any),
@@ -298,7 +298,7 @@ func (c *CheckpointConfig) WithExtra(key string, value any) *CheckpointConfig {
 func (c *CheckpointConfig) ToMap() map[string]any {
 	config := map[string]any{
 		CfgKeyConfigurable: map[string]any{
-			CfgKeyThreadID: c.ThreadID,
+			CfgKeyLineageID: c.LineageID,
 		},
 	}
 
@@ -430,14 +430,14 @@ func GetCheckpointID(config map[string]any) string {
 	return ""
 }
 
-// GetThreadID extracts thread ID from configuration.
-func GetThreadID(config map[string]any) string {
+// GetLineageID extracts lineage ID from configuration.
+func GetLineageID(config map[string]any) string {
 	if config == nil {
 		return ""
 	}
 	if configurable, ok := config[CfgKeyConfigurable].(map[string]any); ok {
-		if threadID, ok := configurable[CfgKeyThreadID].(string); ok {
-			return threadID
+		if lineageID, ok := configurable[CfgKeyLineageID].(string); ok {
+			return lineageID
 		}
 	}
 	return ""
@@ -470,16 +470,16 @@ func GetResumeMap(config map[string]any) map[string]any {
 }
 
 // CreateCheckpointConfig creates a checkpoint configuration (legacy function).
-func CreateCheckpointConfig(threadID string, checkpointID string, namespace string) map[string]any {
-	if threadID == "" {
-		panic("thread_id cannot be empty")
+func CreateCheckpointConfig(lineageID string, checkpointID string, namespace string) map[string]any {
+	if lineageID == "" {
+		panic("lineage_id cannot be empty")
 	}
 	if namespace == "" {
 		// Use a default namespace pattern: svc:env:graph
-		namespace = fmt.Sprintf("default:%s:%d", threadID, time.Now().Unix())
+		namespace = fmt.Sprintf("default:%s:%d", lineageID, time.Now().Unix())
 	}
 
-	config := NewCheckpointConfig(threadID)
+	config := NewCheckpointConfig(lineageID)
 	if checkpointID != "" {
 		config.WithCheckpointID(checkpointID)
 	}
@@ -569,7 +569,7 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config ma
 	return state, nil
 }
 
-// ListCheckpoints lists checkpoints for a thread.
+// ListCheckpoints lists checkpoints for a lineage.
 func (cm *CheckpointManager) ListCheckpoints(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
@@ -577,21 +577,21 @@ func (cm *CheckpointManager) ListCheckpoints(ctx context.Context, config map[str
 	return cm.saver.List(ctx, config, filter)
 }
 
-// DeleteThread removes all checkpoints for a thread.
-func (cm *CheckpointManager) DeleteThread(ctx context.Context, threadID string) error {
+// DeleteLineage removes all checkpoints for a lineage.
+func (cm *CheckpointManager) DeleteLineage(ctx context.Context, lineageID string) error {
 	if cm.saver == nil {
 		return fmt.Errorf("checkpoint saver is not configured")
 	}
-	return cm.saver.DeleteThread(ctx, threadID)
+	return cm.saver.DeleteLineage(ctx, lineageID)
 }
 
-// Latest returns the most recent checkpoint for a thread and namespace.
-func (cm *CheckpointManager) Latest(ctx context.Context, threadID, namespace string) (*CheckpointTuple, error) {
+// Latest returns the most recent checkpoint for a lineage and namespace.
+func (cm *CheckpointManager) Latest(ctx context.Context, lineageID, namespace string) (*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	config := CreateCheckpointConfig(threadID, "", namespace)
+	config := CreateCheckpointConfig(lineageID, "", namespace)
 	checkpoints, err := cm.saver.List(ctx, config, &CheckpointFilter{Limit: 1})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
@@ -605,26 +605,26 @@ func (cm *CheckpointManager) Latest(ctx context.Context, threadID, namespace str
 }
 
 // Goto jumps to a specific checkpoint by ID.
-func (cm *CheckpointManager) Goto(ctx context.Context, threadID, namespace, checkpointID string) (*CheckpointTuple, error) {
+func (cm *CheckpointManager) Goto(ctx context.Context, lineageID, namespace, checkpointID string) (*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	config := CreateCheckpointConfig(threadID, checkpointID, namespace)
+	config := CreateCheckpointConfig(lineageID, checkpointID, namespace)
 	return cm.saver.GetTuple(ctx, config)
 }
 
 // BranchFrom creates a new checkpoint branch from an existing one.
 func (cm *CheckpointManager) BranchFrom(
 	ctx context.Context,
-	threadID, namespace, checkpointID, newNamespace string,
+	lineageID, namespace, checkpointID, newNamespace string,
 ) (*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
 	// Get the source checkpoint
-	sourceConfig := CreateCheckpointConfig(threadID, checkpointID, namespace)
+	sourceConfig := CreateCheckpointConfig(lineageID, checkpointID, namespace)
 	sourceTuple, err := cm.saver.GetTuple(ctx, sourceConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
@@ -635,7 +635,7 @@ func (cm *CheckpointManager) BranchFrom(
 	}
 
 	// Create a new checkpoint in the new namespace
-	newConfig := CreateCheckpointConfig(threadID, "", newNamespace)
+	newConfig := CreateCheckpointConfig(lineageID, "", newNamespace)
 	newCheckpoint := sourceTuple.Checkpoint.Copy()
 	newCheckpoint.ID = uuid.New().String()
 	newCheckpoint.Timestamp = time.Now().UTC()
@@ -663,19 +663,19 @@ func (cm *CheckpointManager) BranchFrom(
 }
 
 // ResumeFromLatest resumes execution from the latest checkpoint with a resume command.
-func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, threadID, namespace string, cmd *Command) (State, error) {
+func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, lineageID, namespace string, cmd *Command) (State, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
 	// Get the latest checkpoint
-	latest, err := cm.Latest(ctx, threadID, namespace)
+	latest, err := cm.Latest(ctx, lineageID, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest checkpoint: %w", err)
 	}
 
 	if latest == nil {
-		return nil, fmt.Errorf("no checkpoint found for thread %s in namespace %s", threadID, namespace)
+		return nil, fmt.Errorf("no checkpoint found for lineage %s in namespace %s", lineageID, namespace)
 	}
 
 	// Convert channel values back to state

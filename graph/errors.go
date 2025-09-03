@@ -13,8 +13,8 @@ import "errors"
 
 // Errors.
 var (
-	ErrThreadIDRequired                = errors.New("thread_id is required")
-	ErrThreadIDEmpty                   = errors.New("thread_id cannot be empty")
-	ErrThreadIDAndCheckpointIDRequired = errors.New("thread_id and checkpoint_id are required")
-	ErrCheckpointNotFound              = errors.New("checkpoint not found")
+	ErrLineageIDRequired                = errors.New("lineage_id is required")
+	ErrLineageIDEmpty                   = errors.New("lineage_id cannot be empty")
+	ErrLineageIDAndCheckpointIDRequired = errors.New("lineage_id and checkpoint_id are required")
+	ErrCheckpointNotFound               = errors.New("checkpoint not found")
 )
