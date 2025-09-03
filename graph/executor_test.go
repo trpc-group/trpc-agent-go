@@ -565,14 +565,7 @@ func TestBasicCommandRouting(t *testing.T) {
 		AddNode("decision", decisionNode).
 		AddNode("finish", finishNode).
 		SetEntryPoint("decision").
-		// TODO: 把这行加回来：AddEdge("decision", "finish"). // Add edge to make finish reachable
-		AddConditionalEdges("decision", func(ctx context.Context, state State) (string, error) {
-			// 这个条件边只用于图验证，实际执行由Command路由控制
-			// 当节点返回Command时，条件边不会被评估
-			return "finish", nil
-		}, map[string]string{
-			"finish": "finish",
-		}).
+		AddEdge("decision", "finish"). // Add edge to make finish reachable
 		SetFinishPoint("finish")
 
 	// Compile graph
