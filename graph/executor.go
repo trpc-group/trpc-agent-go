@@ -754,6 +754,12 @@ func (e *Executor) handleNodeResult(
 			if err := e.handleCommandResult(ctx, execCtx, v); err != nil {
 				return err
 			}
+			// If the command explicitly routes via GoTo, avoid also writing to
+			// channels from static edges for this task to prevent double-triggering
+			// the downstream node (once via GoTo, once via edge writes).
+			if v.GoTo != "" {
+				fanOut = true
+			}
 		}
 	case []*Command: // Fan-out commands.
 		// Fan-out: enqueue tasks with overlays.
