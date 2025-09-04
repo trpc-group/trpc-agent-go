@@ -16,6 +16,8 @@ import (
 	esv7 "github.com/elastic/go-elasticsearch/v7"
 	esv8 "github.com/elastic/go-elasticsearch/v8"
 	esv9 "github.com/elastic/go-elasticsearch/v9"
+
+	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch/internal/elasticsearch"
 )
 
 // defaultClientBuilder selects implementation by Version and builds a client.
@@ -89,4 +91,29 @@ func newClientV9(o *ClientBuilderOpts) (*esv9.Client, error) {
 	}
 	cli, err := esv9.NewClient(cfg)
 	return cli, err
+}
+
+// Client is the Elasticsearch client interface.
+type Client = ielasticsearch.Client
+
+// WrapSDKClient wraps a generic Elasticsearch SDK client with our storage interface.
+//
+// WARNING: This function is for INTERNAL USE ONLY!
+// Do NOT call this function directly from external packages.
+// This is an internal implementation detail that may change without notice.
+// Use the public API provided by the parent storage/elasticsearch package instead.
+//
+// This function is only exported to allow access from other internal packages
+// within the same module (knowledge/vectorstore/elasticsearch, etc.).
+func WrapSDKClient(client any) (Client, error) {
+	switch client := client.(type) {
+	case *esv7.Client:
+		return ielasticsearch.NewClientV7(client), nil
+	case *esv8.Client:
+		return ielasticsearch.NewClientV8(client), nil
+	case *esv9.Client:
+		return ielasticsearch.NewClientV9(client), nil
+	default:
+		return nil, fmt.Errorf("elasticsearch client is not supported, type: %T", client)
+	}
 }

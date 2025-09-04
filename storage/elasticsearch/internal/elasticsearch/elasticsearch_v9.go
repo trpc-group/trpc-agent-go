@@ -16,18 +16,23 @@ import (
 	"io"
 	"net/http"
 
-	esv8 "github.com/elastic/go-elasticsearch/v8"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 )
 
-var _ Client = (*clientV8)(nil)
+var _ Client = (*clientV9)(nil)
 
-// clientV8 implements the ielasticsearch.Client interface for v8 SDK.
-type clientV8 struct {
-	esClient *esv8.Client
+// NewClientV9 creates a new clientV9.
+func NewClientV9(esClient *esv9.Client) Client {
+	return &clientV9{esClient: esClient}
+}
+
+// client implements the ielasticsearch.Client interface.
+type clientV9 struct {
+	esClient *esv9.Client
 }
 
 // Ping checks if Elasticsearch is available.
-func (c *clientV8) Ping(ctx context.Context) error {
+func (c *clientV9) Ping(ctx context.Context) error {
 	res, err := c.esClient.Ping(c.esClient.Ping.WithContext(ctx))
 	if err != nil {
 		return err
@@ -40,7 +45,7 @@ func (c *clientV8) Ping(ctx context.Context) error {
 }
 
 // CreateIndex creates an index with the provided body.
-func (c *clientV8) CreateIndex(ctx context.Context, indexName string, body []byte) error {
+func (c *clientV9) CreateIndex(ctx context.Context, indexName string, body []byte) error {
 	res, err := c.esClient.Indices.Create(
 		indexName,
 		c.esClient.Indices.Create.WithContext(ctx),
@@ -56,8 +61,8 @@ func (c *clientV8) CreateIndex(ctx context.Context, indexName string, body []byt
 	return nil
 }
 
-// DeleteIndex deletes the specified index.
-func (c *clientV8) DeleteIndex(ctx context.Context, indexName string) error {
+// DeleteIndex deletes an index.
+func (c *clientV9) DeleteIndex(ctx context.Context, indexName string) error {
 	res, err := c.esClient.Indices.Delete(
 		[]string{indexName},
 		c.esClient.Indices.Delete.WithContext(ctx),
@@ -72,8 +77,8 @@ func (c *clientV8) DeleteIndex(ctx context.Context, indexName string) error {
 	return nil
 }
 
-// IndexExists returns whether the specified index exists.
-func (c *clientV8) IndexExists(ctx context.Context, indexName string) (bool, error) {
+// IndexExists checks if an index exists.
+func (c *clientV9) IndexExists(ctx context.Context, indexName string) (bool, error) {
 	res, err := c.esClient.Indices.Exists(
 		[]string{indexName},
 		c.esClient.Indices.Exists.WithContext(ctx),
@@ -85,8 +90,8 @@ func (c *clientV8) IndexExists(ctx context.Context, indexName string) (bool, err
 	return res.StatusCode == http.StatusOK, nil
 }
 
-// IndexDoc indexes a document with the given identifier.
-func (c *clientV8) IndexDoc(ctx context.Context, indexName, id string, body []byte) error {
+// IndexDocument indexes a document.
+func (c *clientV9) IndexDoc(ctx context.Context, indexName, id string, body []byte) error {
 	res, err := c.esClient.Index(
 		indexName,
 		bytes.NewReader(body),
@@ -103,8 +108,8 @@ func (c *clientV8) IndexDoc(ctx context.Context, indexName, id string, body []by
 	return nil
 }
 
-// GetDoc retrieves a document by identifier and returns the raw body.
-func (c *clientV8) GetDoc(ctx context.Context, indexName, id string) ([]byte, error) {
+// GetDocument retrieves a document by ID.
+func (c *clientV9) GetDoc(ctx context.Context, indexName, id string) ([]byte, error) {
 	res, err := c.esClient.Get(
 		indexName,
 		id,
@@ -124,8 +129,8 @@ func (c *clientV8) GetDoc(ctx context.Context, indexName, id string) ([]byte, er
 	return body, nil
 }
 
-// UpdateDoc applies a partial update to the document by identifier.
-func (c *clientV8) UpdateDoc(ctx context.Context, indexName, id string, body []byte) error {
+// UpdateDoc updates a document.
+func (c *clientV9) UpdateDoc(ctx context.Context, indexName, id string, body []byte) error {
 	res, err := c.esClient.Update(
 		indexName,
 		id,
@@ -142,8 +147,8 @@ func (c *clientV8) UpdateDoc(ctx context.Context, indexName, id string, body []b
 	return nil
 }
 
-// DeleteDoc deletes a document by identifier.
-func (c *clientV8) DeleteDoc(ctx context.Context, indexName, id string) error {
+// DeleteDoc deletes a document.
+func (c *clientV9) DeleteDoc(ctx context.Context, indexName, id string) error {
 	res, err := c.esClient.Delete(
 		indexName,
 		id,
@@ -159,8 +164,8 @@ func (c *clientV8) DeleteDoc(ctx context.Context, indexName, id string) error {
 	return nil
 }
 
-// Search executes a query and returns the raw response body.
-func (c *clientV8) Search(ctx context.Context, indexName string, body []byte) ([]byte, error) {
+// Search performs a search query.
+func (c *clientV9) Search(ctx context.Context, indexName string, body []byte) ([]byte, error) {
 	res, err := c.esClient.Search(
 		c.esClient.Search.WithContext(ctx),
 		c.esClient.Search.WithIndex(indexName),

@@ -10,6 +10,7 @@
 package elasticsearch
 
 import (
+	"fmt"
 	"testing"
 
 	esv7 "github.com/elastic/go-elasticsearch/v7"
@@ -49,4 +50,76 @@ func TestDefaultClientBuilder_VersionSelection(t *testing.T) {
 	_, err = defaultClientBuilder(WithVersion(ESVersion("unknown")))
 	require.Error(t, err)
 	require.Equal(t, "elasticsearch: unknown version unknown", err.Error())
+}
+
+func TestWrapSDKClient(t *testing.T) {
+	tests := []struct {
+		name     string
+		client   any
+		wantErr  bool
+		errMsg   string
+		wantType string
+	}{
+		{
+			name:     "v7 client",
+			client:   &esv7.Client{},
+			wantErr:  false,
+			wantType: "*elasticsearch.clientV7",
+		},
+		{
+			name:     "v8 client",
+			client:   &esv8.Client{},
+			wantErr:  false,
+			wantType: "*elasticsearch.clientV8",
+		},
+		{
+			name:     "v9 client",
+			client:   &esv9.Client{},
+			wantErr:  false,
+			wantType: "*elasticsearch.clientV9",
+		},
+		{
+			name:    "nil client",
+			client:  nil,
+			wantErr: true,
+			errMsg:  "elasticsearch client is not supported, type: <nil>",
+		},
+		{
+			name:    "unsupported string type",
+			client:  "invalid",
+			wantErr: true,
+			errMsg:  "elasticsearch client is not supported, type: string",
+		},
+		{
+			name:    "unsupported integer type",
+			client:  123,
+			wantErr: true,
+			errMsg:  "elasticsearch client is not supported, type: int",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := WrapSDKClient(tt.client)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errMsg != "" {
+					require.Equal(t, tt.errMsg, err.Error())
+				}
+				require.Nil(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			gotType := getTypeName(got)
+			require.Equal(t, tt.wantType, gotType)
+		})
+	}
+}
+
+// getTypeName returns the type name of the given client implementation.
+func getTypeName(client any) string {
+	return fmt.Sprintf("%T", client)
 }

@@ -21,6 +21,11 @@ import (
 
 var _ Client = (*clientV7)(nil)
 
+// NewClientV7 creates a new clientV7.
+func NewClientV7(esClient *esv7.Client) Client {
+	return &clientV7{esClient: esClient}
+}
+
 // clientV7 implements the ielasticsearch.Client interface for v7 SDK.
 type clientV7 struct {
 	esClient *esv7.Client
