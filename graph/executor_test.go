@@ -559,13 +559,12 @@ func TestBasicCommandRouting(t *testing.T) {
 		return result, nil
 	}
 
-	// Build workflow - 使用条件边确保可达性，但Command路由优先
+	// Build workflow
 	stateGraph := NewStateGraph(schema)
 	stateGraph.
 		AddNode("decision", decisionNode).
 		AddNode("finish", finishNode).
 		SetEntryPoint("decision").
-		AddEdge("decision", "finish"). // Add edge to make finish reachable
 		SetFinishPoint("finish")
 
 	// Compile graph
