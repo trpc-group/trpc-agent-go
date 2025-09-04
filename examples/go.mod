@@ -53,7 +53,7 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.1 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/golang/glog v1.2.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad // indirect
@@ -92,7 +92,7 @@ require (
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
-	github.com/tencentyun/cos-go-sdk-v5 v0.7.66 // indirect
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.69 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

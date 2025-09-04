@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -40,6 +41,13 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
+// WithArtifactService sets the artifact service to use.
+func WithArtifactService(service artifact.Service) Option {
+	return func(opts *Options) {
+		opts.artifactService = service
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -53,14 +61,16 @@ type Runner interface {
 
 // runner runs agents.
 type runner struct {
-	appName        string
-	agent          agent.Agent
-	sessionService session.Service
+	appName         string
+	agent           agent.Agent
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService session.Service
+	sessionService  session.Service
+	artifactService artifact.Service
 }
 
 // NewRunner creates a new Runner.
@@ -76,9 +86,10 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		options.sessionService = inmemory.NewSessionService()
 	}
 	return &runner{
-		appName:        appName,
-		agent:          agent,
-		sessionService: options.sessionService,
+		appName:         appName,
+		agent:           agent,
+		sessionService:  options.sessionService,
+		artifactService: options.artifactService,
 	}
 }
 
@@ -152,12 +163,13 @@ func (r *runner) Run(
 		Message:           message,
 		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
+		ArtifactService:   r.artifactService,
 	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
-	ctx = agent.NewContextWithInvocation(ctx, invocation)
+	ctx = agent.NewInvocationContext(ctx, invocation)
 
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)

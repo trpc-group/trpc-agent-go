@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -303,7 +304,7 @@ func TestLLMAgent_WithMemory(t *testing.T) {
 					AgentName: "test-agent",
 					Session:   mockSession,
 				}
-				ctx := agent.NewContextWithInvocation(context.Background(), mockInvocation)
+				ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
 
 				result, err := callableTool.Call(ctx, []byte(`{"memory": "test memory", "topics": ["test"]}`))
 				if err != nil {
