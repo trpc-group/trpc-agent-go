@@ -22,40 +22,7 @@ Langfuse is an observability platform designed for LLM applications and supports
 
 Refer to the Langfuse self-hosting guide for local or cloud deployment. For a quick start, see the Docker Compose deployment guide.
 
-#### 2. Configure OpenTelemetry Export to Langfuse
-
-Langfuse supports receiving Trace data via the `/api/public/otel` (OTLP) endpoint. The HTTP/protobuf protocol is recommended.
-
-**Environment variable configuration example:**
-
-```bash
-# EU data region.
-OTEL_EXPORTER_OTLP_ENDPOINT="https://cloud.langfuse.com/api/public/otel"
-# US data region.
-# OTEL_EXPORTER_OTLP_ENDPOINT="https://us.cloud.langfuse.com/api/public/otel"
-# Local deployment (>= v3.22.0).
-# OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:3000/api/public/otel"
-
-# Set Basic Auth authentication.
-OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic ${AUTH_STRING}"
-```
-
-`AUTH_STRING` is the base64 encoding of `public_key:secret_key`, which can be generated using the following command:
-
-```bash
-echo -n "pk-lf-xxxx:sk-lf-xxxx" | base64
-# On GNU systems, add -w 0 to avoid line breaks.
-```
-
-To specify the endpoint for traces only, set:
-
-```bash
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:3000/api/public/otel/v1/traces"
-```
-
-> Note: Langfuse supports HTTP/protobuf only, gRPC is not supported.
-
-#### 3. Go Code Integration Example
+#### 2. Go Code Integration Example
 
 ```go
 import (
@@ -68,13 +35,13 @@ import (
 )
 
 func main() {
-    // https://langfuse.com/integrations/native/opentelemetry.
+    // https://langfuse.com/integrations/native/opentelemetry
     langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "sk-*")
-	langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "pk-*")
-	langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
+    langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "pk-*")
+    langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
     otelEndpointPath := "/api/public/otel/v1/traces"
 
-    // Start tracing.
+    // Start tracing
     clean, err := atrace.Start(
         context.Background(),
         atrace.WithEndpointURL(langFuseHost+otelEndpointPath),
@@ -100,7 +67,7 @@ func encodeAuth(pk, sk string) string {
 }
 ```
 
-See the complete example at examples/telemetry/langfuse.
+See the complete example at [examples/telemetry/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse).
 
 Run the example:
 
@@ -109,6 +76,36 @@ go run .
 ```
 
 You can view tracing data in the Langfuse console.
+
+##### Integration Code Description
+Langfuse supports receiving Trace data via the `/api/public/otel` (OTLP) endpoint, supporting HTTP/protobuf only, not gRPC.
+The above code integrates with Langfuse by setting `OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
+
+```bash
+# EU data region
+OTEL_EXPORTER_OTLP_ENDPOINT="https://cloud.langfuse.com/api/public/otel"
+# US data region
+# OTEL_EXPORTER_OTLP_ENDPOINT="https://us.cloud.langfuse.com/api/public/otel"
+# Local deployment (>= v3.22.0)
+# OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:3000/api/public/otel"
+
+# Set Basic Auth authentication
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic ${AUTH_STRING}"
+```
+
+`AUTH_STRING` is the base64 encoding of `public_key:secret_key`, which can be generated using the following command:
+
+```bash
+echo -n "pk-lf-xxxx:sk-lf-xxxx" | base64
+# On GNU systems, add -w 0 to avoid line breaks
+```
+
+To specify the endpoint for traces only, set:
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:3000/api/public/otel/v1/traces"
+```
+
 
 ### Jaeger, Prometheus, and Other Open-Source Monitoring Platforms
 
