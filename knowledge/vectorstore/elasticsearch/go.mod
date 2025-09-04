@@ -4,9 +4,10 @@ go 1.24.1
 
 toolchain go1.24.4
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../../
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../../storage/elasticsearch
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../../../
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../../storage/elasticsearch
+)
 
 require (
 	github.com/elastic/go-elasticsearch/v9 v9.1.0

@@ -19,11 +19,12 @@ import (
 	"strings"
 	"testing"
 
-	esv8 "github.com/elastic/go-elasticsearch/v8"
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientV8_CRUD(t *testing.T) {
+func TestClientV9_CRUD(t *testing.T) {
+	// In-memory state to mimic ES index + docs.
 	indexCreated := false
 	docs := make(map[string]map[string]any)
 
@@ -36,29 +37,34 @@ func TestClientV8_CRUD(t *testing.T) {
 		p := r.URL.Path
 		_, last := path.Split(p)
 
+		// HEAD /{index}
 		if r.Method == http.MethodHead && !strings.Contains(p, "_doc") && !strings.Contains(p, "_search") {
 			if indexCreated {
 				return ok(http.StatusOK, "")
 			}
 			return ok(http.StatusNotFound, "")
 		}
+		// PUT /{index}
 		if r.Method == http.MethodPut && !strings.Contains(p, "_doc") && !strings.Contains(p, "_search") {
 			indexCreated = true
 			return ok(http.StatusOK, `{}`)
 		}
+		// POST/PUT /{index}/_doc/{id}
 		if (r.Method == http.MethodPost || r.Method == http.MethodPut) && strings.Contains(p, "/_doc/") && !strings.Contains(p, "_update") {
 			var m map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&m)
 			docs[last] = m
 			return ok(http.StatusOK, `{}`)
 		}
+		// GET /{index}/_doc/{id}
 		if r.Method == http.MethodGet && strings.Contains(p, "/_doc/") {
 			if d, present := docs[last]; present {
-				body, _ := json.Marshal(d)
-				return ok(http.StatusOK, `{"found":true,"_source":`+string(body)+`}`)
+				b, _ := json.Marshal(d)
+				return ok(http.StatusOK, `{"found":true,"_source":`+string(b)+`}`)
 			}
 			return ok(http.StatusNotFound, `{"found":false}`)
 		}
+		// POST /{index}/_update/{id}
 		if r.Method == http.MethodPost && strings.Contains(p, "_update") {
 			var upd struct {
 				Doc map[string]any `json:"doc"`
@@ -72,25 +78,29 @@ func TestClientV8_CRUD(t *testing.T) {
 			}
 			return ok(http.StatusOK, `{}`)
 		}
+		// DELETE /{index}/_doc/{id}
 		if r.Method == http.MethodDelete && strings.Contains(p, "/_doc/") {
 			delete(docs, last)
 			return ok(http.StatusOK, `{}`)
 		}
+		// DELETE /{index}
 		if r.Method == http.MethodDelete && !strings.Contains(p, "_doc") && !strings.Contains(p, "_search") {
 			indexCreated = false
 			return ok(http.StatusOK, `{}`)
 		}
+		// POST /{index}/_search
 		if r.Method == http.MethodPost && strings.Contains(p, "_search") {
 			return ok(http.StatusOK, `{"hits":{"hits":[]}}`)
 		}
 		return ok(http.StatusOK, `{}`)
 	})
 
-	es, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	es, err := esv9.NewClient(esv9.Config{Addresses: []string{"http://mock"}, Transport: rt})
 	require.NoError(t, err)
-	c := &clientV8{esClient: es}
+	c := &clientV9{esClient: es}
 
 	ctx := context.Background()
+	// Index lifecycle.
 	exists, err := c.IndexExists(ctx, "idx")
 	require.NoError(t, err)
 	require.False(t, exists)
@@ -99,7 +109,8 @@ func TestClientV8_CRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, exists)
 
-	require.NoError(t, c.IndexDoc(ctx, "idx", "1", []byte(`{"id":"1"}`)))
+	// CRUD.
+	require.NoError(t, c.IndexDoc(ctx, "idx", "1", []byte(`{"id":"1","name":"n"}`)))
 	b, err := c.GetDoc(ctx, "idx", "1")
 	require.NoError(t, err)
 	require.Contains(t, string(b), "\"found\":true")
@@ -109,8 +120,31 @@ func TestClientV8_CRUD(t *testing.T) {
 	require.NoError(t, c.DeleteDoc(ctx, "idx", "1"))
 	_, err = c.GetDoc(ctx, "idx", "1")
 	require.Error(t, err)
+	// DeleteIndex and verify HEAD returns 404 next
 	require.NoError(t, c.DeleteIndex(ctx, "idx"))
 	exists, err = c.IndexExists(ctx, "idx")
 	require.NoError(t, err)
 	require.False(t, exists)
+}
+
+func TestClientV9_Ping(t *testing.T) {
+	rt := roundTripper(func(r *http.Request) *http.Response {
+		ok := func(code int, body string) *http.Response {
+			resp := &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		}
+		// HEAD /
+		if r.Method == http.MethodHead && r.URL.Path == "/" {
+			return ok(http.StatusOK, "")
+		}
+		return ok(http.StatusOK, `{}`)
+	})
+
+	es, err := esv9.NewClient(esv9.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	require.NoError(t, err)
+	c := &clientV9{esClient: es}
+
+	ctx := context.Background()
+	require.NoError(t, c.Ping(ctx))
 }
