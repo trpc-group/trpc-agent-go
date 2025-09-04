@@ -6,7 +6,6 @@ toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
-	trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch => ../internal/storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
@@ -19,11 +18,11 @@ replace (
 
 require (
 	github.com/openai/openai-go v1.12.0
-	go.opentelemetry.io/otel v1.37.0
-	go.opentelemetry.io/otel/metric v1.37.0
-	go.opentelemetry.io/otel/trace v1.37.0
+	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel/metric v1.38.0
+	go.opentelemetry.io/otel/trace v1.38.0
 	go.uber.org/zap v1.27.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.2
+	trpc.group/trpc-go/trpc-a2a-go v0.2.3
 	trpc.group/trpc-go/trpc-agent-go v0.0.4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.3
@@ -124,7 +123,6 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.3 // indirect
