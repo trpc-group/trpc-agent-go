@@ -2,11 +2,14 @@ module trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch
 
 go 1.24.1
 
+replace trpc.group/trpc-go/trpc-agent-go => ../../
+
 require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10
 	github.com/elastic/go-elasticsearch/v8 v8.19.0
 	github.com/elastic/go-elasticsearch/v9 v9.1.0
 	github.com/stretchr/testify v1.10.0
+	trpc.group/trpc-go/trpc-agent-go v0.0.0
 )
 
 require (
@@ -18,7 +21,6 @@ require (
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

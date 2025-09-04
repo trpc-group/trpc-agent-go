@@ -17,7 +17,8 @@ import (
 	esv8 "github.com/elastic/go-elasticsearch/v8"
 	esv9 "github.com/elastic/go-elasticsearch/v9"
 
-	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch/internal/elasticsearch"
+	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
+	istorage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch/internal/elasticsearch"
 )
 
 // defaultClientBuilder selects implementation by Version and builds a client.
@@ -93,9 +94,6 @@ func newClientV9(o *ClientBuilderOpts) (*esv9.Client, error) {
 	return cli, err
 }
 
-// Client is the Elasticsearch client interface.
-type Client = ielasticsearch.Client
-
 // WrapSDKClient wraps a generic Elasticsearch SDK client with our storage interface.
 //
 // WARNING: This function is for INTERNAL USE ONLY!
@@ -105,14 +103,14 @@ type Client = ielasticsearch.Client
 //
 // This function is only exported to allow access from other internal packages
 // within the same module (knowledge/vectorstore/elasticsearch, etc.).
-func WrapSDKClient(client any) (Client, error) {
+func WrapSDKClient(client any) (ielasticsearch.Client, error) {
 	switch client := client.(type) {
 	case *esv7.Client:
-		return ielasticsearch.NewClientV7(client), nil
+		return istorage.NewClientV7(client), nil
 	case *esv8.Client:
-		return ielasticsearch.NewClientV8(client), nil
+		return istorage.NewClientV8(client), nil
 	case *esv9.Client:
-		return ielasticsearch.NewClientV9(client), nil
+		return istorage.NewClientV9(client), nil
 	default:
 		return nil, fmt.Errorf("elasticsearch client is not supported, type: %T", client)
 	}
