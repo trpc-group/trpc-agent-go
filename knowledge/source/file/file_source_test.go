@@ -92,6 +92,10 @@ func (stubReader) ReadFromURL(url string) ([]*document.Document, error) {
 
 func (stubReader) Name() string { return "stub" }
 
+func (stubReader) SupportedExtensions() []string {
+	return []string{".txt"}
+}
+
 // TestProcessFile_Directory ensures an error is returned when a directory path
 // is passed to processFile.
 func TestProcessFile_Directory(t *testing.T) {
