@@ -47,6 +47,7 @@ const (
 		"channel TEXT NOT NULL, " +
 		"value_json BLOB NOT NULL, " +
 		"task_path TEXT, " +
+		"seq INTEGER NOT NULL, " +
 		"PRIMARY KEY (lineage_id, checkpoint_ns, checkpoint_id, task_id, idx)" +
 		")"
 
@@ -289,7 +290,8 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	if lineageID == "" {
 		return nil, errors.New("lineage_id is required")
 	}
-	parentID := graph.GetCheckpointID(req.Config)
+	// Use the ParentCheckpointID from the checkpoint itself, not from config.
+	parentID := req.Checkpoint.ParentCheckpointID
 	checkpointJSON, err := json.Marshal(req.Checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("marshal checkpoint: %w", err)
@@ -384,7 +386,8 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	}
 
 	// Insert checkpoint
-	parentID := graph.GetCheckpointID(req.Config)
+	// Use the ParentCheckpointID from the checkpoint itself, not from config.
+	parentID := req.Checkpoint.ParentCheckpointID
 	_, err = tx.ExecContext(
 		ctx,
 		sqliteInsertCheckpoint,

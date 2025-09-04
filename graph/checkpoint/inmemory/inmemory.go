@@ -76,18 +76,32 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 			return nil, nil
 		}
 
-		checkpoints, exists := namespaces[namespace]
-		if !exists || len(checkpoints) == 0 {
-			return nil, nil
-		}
-
-		// Find the latest checkpoint by timestamp (more reliable than UUID comparison).
+		// Find the latest checkpoint across all namespaces if namespace is empty
 		var latestTuple *graph.CheckpointTuple
 		var latestTime time.Time
-		for _, tuple := range checkpoints {
-			if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
-				latestTime = tuple.Checkpoint.Timestamp
-				latestTuple = tuple
+		
+		if namespace == "" {
+			// Search across all namespaces for the latest checkpoint
+			for _, nsCheckpoints := range namespaces {
+				for _, tuple := range nsCheckpoints {
+					if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
+						latestTime = tuple.Checkpoint.Timestamp
+						latestTuple = tuple
+					}
+				}
+			}
+		} else {
+			// Search in specific namespace
+			checkpoints, exists := namespaces[namespace]
+			if !exists || len(checkpoints) == 0 {
+				return nil, nil
+			}
+			
+			for _, tuple := range checkpoints {
+				if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
+					latestTime = tuple.Checkpoint.Timestamp
+					latestTuple = tuple
+				}
 			}
 		}
 
@@ -95,27 +109,59 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 			return nil, nil
 		}
 
-		checkpointID = latestTuple.Checkpoint.ID
 		// Update config with the found checkpoint ID.
+		checkpointID = latestTuple.Checkpoint.ID
 		if configurable, ok := config[graph.CfgKeyConfigurable].(map[string]any); ok {
 			configurable[graph.CfgKeyCheckpointID] = checkpointID
 		}
+
+		// Create a copy to avoid concurrent modification issues.
+		result := &graph.CheckpointTuple{
+			Config:       latestTuple.Config,
+			Checkpoint:   latestTuple.Checkpoint.Copy(),
+			Metadata:     latestTuple.Metadata,
+			ParentConfig: latestTuple.ParentConfig,
+		}
+
+		// Add pending writes if they exist.
+		if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
+			result.PendingWrites = make([]graph.PendingWrite, len(writes))
+			copy(result.PendingWrites, writes)
+		}
+		return result, nil
 	}
 
-	// Retrieve the specific checkpoint.
+	// Retrieve the specific checkpoint by ID.
 	namespaces, exists := s.storage[lineageID]
 	if !exists {
 		return nil, nil
 	}
 
-	checkpoints, exists := namespaces[namespace]
-	if !exists {
-		return nil, nil
-	}
+	// If namespace is empty, search across all namespaces for the checkpoint ID
+	var tuple *graph.CheckpointTuple
+	if namespace == "" {
+		// Search for checkpoint ID across all namespaces
+		for _, nsCheckpoints := range namespaces {
+			if t, exists := nsCheckpoints[checkpointID]; exists {
+				tuple = t
+				break
+			}
+		}
+		if tuple == nil {
+			return nil, nil
+		}
+	} else {
+		// Search in specific namespace
+		checkpoints, exists := namespaces[namespace]
+		if !exists {
+			return nil, nil
+		}
 
-	tuple, exists := checkpoints[checkpointID]
-	if !exists {
-		return nil, nil
+		t, exists := checkpoints[checkpointID]
+		if !exists {
+			return nil, nil
+		}
+		tuple = t
 	}
 
 	// Create a copy to avoid concurrent modification issues.
@@ -154,31 +200,49 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 		return results, nil
 	}
 
-	checkpoints, exists := namespaces[namespace]
-	if !exists {
-		return results, nil
-	}
-
-	// Apply filters and collect results.
-	for checkpointID, tuple := range checkpoints {
-		if !s.passesFilters(checkpointID, tuple, checkpoints, filter) {
-			continue
+	// If namespace is empty, search across all namespaces (cross-namespace search like GetTuple)
+	if namespace == "" {
+		// Search across all namespaces
+		for ns, checkpoints := range namespaces {
+			for checkpointID, tuple := range checkpoints {
+				if !s.passesFilters(checkpointID, tuple, checkpoints, filter) {
+					continue
+				}
+				result := s.createCheckpointResult(tuple, lineageID, ns, checkpointID)
+				results = append(results, result)
+				// Apply limit.
+				if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
+					break
+				}
+			}
+			// Break early if limit is reached
+			if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
+				break
+			}
 		}
-
-		result := s.createCheckpointResult(tuple, lineageID, namespace, checkpointID)
-		results = append(results, result)
-
-		// Apply limit.
-		if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
-			break
+	} else {
+		// Search in specific namespace
+		checkpoints, exists := namespaces[namespace]
+		if !exists {
+			return results, nil
+		}
+		// Apply filters and collect results.
+		for checkpointID, tuple := range checkpoints {
+			if !s.passesFilters(checkpointID, tuple, checkpoints, filter) {
+				continue
+			}
+			result := s.createCheckpointResult(tuple, lineageID, namespace, checkpointID)
+			results = append(results, result)
+			// Apply limit.
+			if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
+				break
+			}
 		}
 	}
-
 	// Sort results by timestamp (newest first).
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Checkpoint.Timestamp.After(results[j].Checkpoint.Timestamp)
 	})
-
 	return results, nil
 }
 
@@ -206,15 +270,20 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 		s.storage[lineageID][namespace] = make(map[string]*graph.CheckpointTuple)
 	}
 
-	// Create checkpoint tuple.
+	// Create updated config with THIS checkpoint's ID.
+	// This ensures proper parent-child relationships when resuming.
+	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
+	
+	// Create checkpoint tuple with the updated config.
 	tuple := &graph.CheckpointTuple{
-		Config:     req.Config,
+		Config:     updatedConfig,
 		Checkpoint: req.Checkpoint.Copy(), // Store a copy to avoid external modification
 		Metadata:   req.Metadata,
 	}
 
 	// Set parent config if there's a parent checkpoint ID.
-	if parentID := graph.GetCheckpointID(req.Config); parentID != "" {
+	// Use the ParentCheckpointID from the checkpoint itself.
+	if parentID := req.Checkpoint.ParentCheckpointID; parentID != "" {
 		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
 	}
 
@@ -224,8 +293,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	// Clean up old checkpoints if we exceed the limit.
 	s.cleanupOldCheckpoints(lineageID, namespace)
 
-	// Return updated config with the new checkpoint ID.
-	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
+	// Return the updated config.
 	return updatedConfig, nil
 }
 
@@ -290,15 +358,20 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		s.writes[lineageID][namespace] = make(map[string][]graph.PendingWrite)
 	}
 
-	// Create checkpoint tuple.
+	// Create updated config with THIS checkpoint's ID.
+	// This ensures proper parent-child relationships when resuming.
+	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
+	
+	// Create checkpoint tuple with the updated config.
 	tuple := &graph.CheckpointTuple{
-		Config:     req.Config,
+		Config:     updatedConfig,
 		Checkpoint: req.Checkpoint.Copy(), // Store a copy to avoid external modification
 		Metadata:   req.Metadata,
 	}
 
 	// Set parent config if there's a parent checkpoint ID.
-	if parentID := graph.GetCheckpointID(req.Config); parentID != "" {
+	// Use the ParentCheckpointID from the checkpoint itself.
+	if parentID := req.Checkpoint.ParentCheckpointID; parentID != "" {
 		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
 	}
 
@@ -315,8 +388,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	// Clean up old checkpoints if we exceed the limit.
 	s.cleanupOldCheckpoints(lineageID, namespace)
 
-	// Return updated config with the new checkpoint ID.
-	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
+	// Return the updated config.
 	return updatedConfig, nil
 }
 

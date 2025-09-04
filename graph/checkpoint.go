@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,6 +66,8 @@ type Checkpoint struct {
 	ChannelVersions map[string]any `json:"channel_versions"`
 	// VersionsSeen tracks which versions each node has seen.
 	VersionsSeen map[string]map[string]any `json:"versions_seen"`
+	// ParentCheckpointID is the ID of the parent checkpoint (for branching).
+	ParentCheckpointID string `json:"parent_checkpoint_id,omitempty"`
 	// UpdatedChannels lists channels updated in this checkpoint.
 	UpdatedChannels []string `json:"updated_channels,omitempty"`
 	// PendingSends contains messages that haven't been sent yet.
@@ -187,6 +191,24 @@ type CheckpointSaver interface {
 	Close() error
 }
 
+// CheckpointTree represents the tree structure of checkpoints in a lineage.
+type CheckpointTree struct {
+	// Root is the root node of the tree.
+	Root *CheckpointNode `json:"root"`
+	// Branches maps checkpoint IDs to their nodes for quick access.
+	Branches map[string]*CheckpointNode `json:"branches"`
+}
+
+// CheckpointNode represents a node in the checkpoint tree.
+type CheckpointNode struct {
+	// Checkpoint is the checkpoint tuple at this node.
+	Checkpoint *CheckpointTuple `json:"checkpoint"`
+	// Children are the child nodes (forks from this checkpoint).
+	Children []*CheckpointNode `json:"children"`
+	// Parent is the parent node (null for root).
+	Parent *CheckpointNode `json:"-"` // Avoid circular JSON
+}
+
 // CheckpointFilter defines filtering criteria for listing checkpoints.
 type CheckpointFilter struct {
 	// Before limits results to checkpoints created before this config.
@@ -212,7 +234,11 @@ type CheckpointConfig struct {
 }
 
 // NewCheckpoint creates a new checkpoint with the given data.
-func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any, versionsSeen map[string]map[string]any) *Checkpoint {
+func NewCheckpoint(
+	channelValues map[string]any,
+	channelVersions map[string]any,
+	versionsSeen map[string]map[string]any,
+) *Checkpoint {
 	if channelValues == nil {
 		channelValues = make(map[string]any)
 	}
@@ -222,7 +248,6 @@ func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any,
 	if versionsSeen == nil {
 		versionsSeen = make(map[string]map[string]any)
 	}
-
 	return &Checkpoint{
 		Version:         CheckpointVersion,
 		ID:              uuid.New().String(),
@@ -230,10 +255,6 @@ func NewCheckpoint(channelValues map[string]any, channelVersions map[string]any,
 		ChannelValues:   channelValues,
 		ChannelVersions: channelVersions,
 		VersionsSeen:    versionsSeen,
-		UpdatedChannels: make([]string, 0),
-		PendingSends:    make([]PendingSend, 0),
-		NextNodes:       make([]string, 0),
-		NextChannels:    make([]string, 0),
 	}
 }
 
@@ -253,11 +274,8 @@ func NewCheckpointConfig(lineageID string) *CheckpointConfig {
 		panic("lineage_id cannot be empty")
 	}
 
-	// Generate a default namespace if not provided
+	// Use default empty namespace to align with LangGraph's design
 	namespace := DefaultCheckpointNamespace
-	if namespace == "" {
-		namespace = fmt.Sprintf("default:%s:%d", lineageID, time.Now().Unix())
-	}
 
 	return &CheckpointConfig{
 		LineageID: lineageID,
@@ -306,18 +324,15 @@ func (c *CheckpointConfig) ToMap() map[string]any {
 		config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointID] = c.CheckpointID
 	}
 
-	if c.Namespace != "" {
-		config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = c.Namespace
-	}
+	// Always include namespace to ensure consistency (even if empty)
+	config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = c.Namespace
 
 	if len(c.ResumeMap) > 0 {
 		config[CfgKeyConfigurable].(map[string]any)[CfgKeyResumeMap] = c.ResumeMap
 	}
 
 	// Add extra fields.
-	for k, v := range c.Extra {
-		config[k] = v
-	}
+	maps.Copy(config, c.Extra)
 
 	return config
 }
@@ -403,18 +418,36 @@ func (c *Checkpoint) Copy() *Checkpoint {
 	nextChannels := deepCopyStringSlice(c.NextChannels)
 
 	return &Checkpoint{
-		Version:         c.Version,
-		ID:              uuid.New().String(), // Generate new ID for copy
-		Timestamp:       c.Timestamp,
-		ChannelValues:   channelValues,
-		ChannelVersions: channelVersions,
-		VersionsSeen:    versionsSeen,
-		UpdatedChannels: updatedChannels,
-		PendingSends:    pendingSends,
+		Version:            c.Version,
+		ID:                 c.ID, // Preserve original ID for true copy
+		Timestamp:          c.Timestamp,
+		ChannelValues:      channelValues,
+		ChannelVersions:    channelVersions,
+		VersionsSeen:       versionsSeen,
+		ParentCheckpointID: c.ParentCheckpointID,
+		UpdatedChannels:    updatedChannels,
+		PendingSends:       pendingSends,
 		InterruptState:  interruptState,
 		NextNodes:       nextNodes,
 		NextChannels:    nextChannels,
 	}
+}
+
+// Fork creates a copy of the checkpoint with a new ID and sets parent relationship.
+// This is used for branching and creating new checkpoints based on existing ones.
+func (c *Checkpoint) Fork() *Checkpoint {
+	if c == nil {
+		return nil
+	}
+	// Create a true copy first.
+	forked := c.Copy()
+	// Set the parent to the current checkpoint's ID.
+	forked.ParentCheckpointID = c.ID
+	// Generate a new ID for the forked checkpoint.
+	forked.ID = uuid.New().String()
+	// Update timestamp to current time.
+	forked.Timestamp = time.Now().UTC()
+	return forked
 }
 
 // GetCheckpointID extracts checkpoint ID from configuration.
@@ -474,9 +507,9 @@ func CreateCheckpointConfig(lineageID string, checkpointID string, namespace str
 	if lineageID == "" {
 		panic("lineage_id cannot be empty")
 	}
+	// Use default empty namespace to align with LangGraph's design
 	if namespace == "" {
-		// Use a default namespace pattern: svc:env:graph
-		namespace = fmt.Sprintf("default:%s:%d", lineageID, time.Now().Unix())
+		namespace = DefaultCheckpointNamespace
 	}
 
 	config := NewCheckpointConfig(lineageID)
@@ -500,16 +533,16 @@ func NewCheckpointManager(saver CheckpointSaver) *CheckpointManager {
 }
 
 // CreateCheckpoint creates a new checkpoint from the current state.
-func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[string]any, state State, source string, step int) (*Checkpoint, error) {
+func (cm *CheckpointManager) CreateCheckpoint(
+	ctx context.Context, config map[string]any, state State, source string, step int,
+) (*Checkpoint, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
 	// Convert state to channel values.
 	channelValues := make(map[string]any)
-	for k, v := range state {
-		channelValues[k] = v
-	}
+	maps.Copy(channelValues, state)
 
 	// Create channel versions (simple incrementing integers for now).
 	channelVersions := make(map[string]any)
@@ -542,7 +575,9 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, config map[st
 }
 
 // ResumeFromCheckpoint resumes execution from a specific checkpoint.
-func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config map[string]any) (State, error) {
+func (cm *CheckpointManager) ResumeFromCheckpoint(
+	ctx context.Context, config map[string]any,
+) (State, error) {
 	if cm.saver == nil {
 		return nil, nil
 	}
@@ -562,15 +597,15 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(ctx context.Context, config ma
 
 	// Convert channel values back to state.
 	state := make(State)
-	for k, v := range tuple.Checkpoint.ChannelValues {
-		state[k] = v
-	}
+	maps.Copy(state, tuple.Checkpoint.ChannelValues)
 
 	return state, nil
 }
 
 // ListCheckpoints lists checkpoints for a lineage.
-func (cm *CheckpointManager) ListCheckpoints(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+func (cm *CheckpointManager) ListCheckpoints(
+	ctx context.Context, config map[string]any, filter *CheckpointFilter,
+) ([]*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
@@ -586,7 +621,9 @@ func (cm *CheckpointManager) DeleteLineage(ctx context.Context, lineageID string
 }
 
 // Latest returns the most recent checkpoint for a lineage and namespace.
-func (cm *CheckpointManager) Latest(ctx context.Context, lineageID, namespace string) (*CheckpointTuple, error) {
+func (cm *CheckpointManager) Latest(
+	ctx context.Context, lineageID, namespace string,
+) (*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
@@ -604,8 +641,30 @@ func (cm *CheckpointManager) Latest(ctx context.Context, lineageID, namespace st
 	return checkpoints[0], nil
 }
 
+// Get retrieves a checkpoint by configuration.
+func (cm *CheckpointManager) Get(
+	ctx context.Context, config map[string]any,
+) (*Checkpoint, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+	return cm.saver.Get(ctx, config)
+}
+
+// GetTuple retrieves a checkpoint tuple by configuration.
+func (cm *CheckpointManager) GetTuple(
+	ctx context.Context, config map[string]any,
+) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+	return cm.saver.GetTuple(ctx, config)
+}
+
 // Goto jumps to a specific checkpoint by ID.
-func (cm *CheckpointManager) Goto(ctx context.Context, lineageID, namespace, checkpointID string) (*CheckpointTuple, error) {
+func (cm *CheckpointManager) Goto(
+	ctx context.Context, lineageID, namespace, checkpointID string,
+) (*CheckpointTuple, error) {
 	if cm.saver == nil {
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
@@ -614,7 +673,17 @@ func (cm *CheckpointManager) Goto(ctx context.Context, lineageID, namespace, che
 	return cm.saver.GetTuple(ctx, config)
 }
 
-// BranchFrom creates a new checkpoint branch from an existing one.
+// Put stores a checkpoint.
+func (cm *CheckpointManager) Put(
+	ctx context.Context, req PutRequest,
+) (map[string]any, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+	return cm.saver.Put(ctx, req)
+}
+
+// BranchFrom creates a new checkpoint branch from an existing one within the same lineage.
 func (cm *CheckpointManager) BranchFrom(
 	ctx context.Context,
 	lineageID, namespace, checkpointID, newNamespace string,
@@ -636,8 +705,7 @@ func (cm *CheckpointManager) BranchFrom(
 
 	// Create a new checkpoint in the new namespace
 	newConfig := CreateCheckpointConfig(lineageID, "", newNamespace)
-	newCheckpoint := sourceTuple.Checkpoint.Copy()
-	newCheckpoint.ID = uuid.New().String()
+	newCheckpoint := sourceTuple.Checkpoint.Fork() // Fork creates a new ID
 	newCheckpoint.Timestamp = time.Now().UTC()
 
 	// Store the new checkpoint
@@ -662,6 +730,92 @@ func (cm *CheckpointManager) BranchFrom(
 	}, nil
 }
 
+// BranchToNewLineage creates a new checkpoint in a different lineage from an existing checkpoint.
+func (cm *CheckpointManager) BranchToNewLineage(
+	ctx context.Context,
+	sourceLineageID, sourceNamespace, sourceCheckpointID string,
+	newLineageID, newNamespace string,
+) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the source checkpoint
+	// If namespace is empty and we're getting latest, we need to search across all namespaces
+	var sourceCheckpoint *Checkpoint
+	var err error
+	if sourceCheckpointID == "" {
+		// When getting latest without a specific checkpoint ID, search all namespaces if namespace is empty
+		searchConfig := map[string]any{
+			"configurable": map[string]any{
+				"lineage_id": sourceLineageID,
+			},
+		}
+		if sourceNamespace != "" {
+			searchConfig["configurable"].(map[string]any)["checkpoint_ns"] = sourceNamespace
+		}
+
+		tuple, err := cm.saver.GetTuple(ctx, searchConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get latest checkpoint: %w", err)
+		}
+		if tuple == nil || tuple.Checkpoint == nil {
+			return nil, fmt.Errorf("no checkpoints found in source lineage")
+		}
+		sourceCheckpoint = tuple.Checkpoint
+	} else {
+		// When we have a specific checkpoint ID but potentially empty namespace,
+		// we need to handle this specially
+		searchConfig := map[string]any{
+			CfgKeyConfigurable: map[string]any{
+				CfgKeyLineageID:    sourceLineageID,
+				CfgKeyCheckpointID: sourceCheckpointID,
+			},
+		}
+		if sourceNamespace != "" {
+			searchConfig[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = sourceNamespace
+		}
+		sourceCheckpoint, err = cm.saver.Get(ctx, searchConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
+		}
+		if sourceCheckpoint == nil {
+			return nil, fmt.Errorf("source checkpoint not found")
+		}
+	}
+
+	// Create a new checkpoint in the new lineage
+	newConfig := CreateCheckpointConfig(newLineageID, "", newNamespace)
+	newCheckpoint := sourceCheckpoint.Fork() // Fork creates a new ID
+	newCheckpoint.Timestamp = time.Now().UTC()
+
+	// Create metadata with source information
+	metadata := NewCheckpointMetadata(CheckpointSourceFork, 0)
+	metadata.Extra["source_lineage"] = sourceLineageID
+	metadata.Extra["source_checkpoint"] = sourceCheckpointID
+	metadata.Extra["source_namespace"] = sourceNamespace
+
+	// Store the new checkpoint
+	req := PutRequest{
+		Config:      newConfig,
+		Checkpoint:  newCheckpoint,
+		Metadata:    metadata,
+		NewVersions: newCheckpoint.ChannelVersions,
+	}
+
+	updatedConfig, err := cm.saver.Put(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create branch checkpoint in new lineage: %w", err)
+	}
+
+	// Return the new checkpoint tuple
+	return &CheckpointTuple{
+		Config:     updatedConfig,
+		Checkpoint: newCheckpoint,
+		Metadata:   metadata,
+	}, nil
+}
+
 // ResumeFromLatest resumes execution from the latest checkpoint with a resume command.
 func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, lineageID, namespace string, cmd *Command) (State, error) {
 	if cm.saver == nil {
@@ -680,9 +834,7 @@ func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, lineageID, na
 
 	// Convert channel values back to state
 	state := make(State)
-	for k, v := range latest.Checkpoint.ChannelValues {
-		state[k] = v
-	}
+	maps.Copy(state, latest.Checkpoint.ChannelValues)
 	// Add the resume command
 	if cmd != nil {
 		state[StateKeyCommand] = cmd
@@ -737,6 +889,159 @@ func (c *Checkpoint) ClearInterruptState() {
 	c.InterruptState = nil
 }
 
+// GetCheckpointTree builds the tree structure of checkpoints in a lineage.
+func (cm *CheckpointManager) GetCheckpointTree(
+	ctx context.Context, lineageID string,
+) (*CheckpointTree, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get all checkpoints for the lineage.
+	config := CreateCheckpointConfig(lineageID, "", "")
+	allCheckpoints, err := cm.saver.List(ctx, config, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+
+	if len(allCheckpoints) == 0 {
+		return &CheckpointTree{
+			Root:     nil,
+			Branches: make(map[string]*CheckpointNode),
+		}, nil
+	}
+
+	// Build the tree structure.
+	nodes := make(map[string]*CheckpointNode)
+	var rootNodes []*CheckpointNode
+
+	// First pass: create all nodes.
+	for _, tuple := range allCheckpoints {
+		node := &CheckpointNode{
+			Checkpoint: tuple,
+			Children:   []*CheckpointNode{},
+		}
+		nodes[tuple.Checkpoint.ID] = node
+	}
+
+	// Second pass: establish parent-child relationships.
+	for _, tuple := range allCheckpoints {
+		node := nodes[tuple.Checkpoint.ID]
+		parentID := tuple.Checkpoint.ParentCheckpointID
+		
+		if parentID != "" {
+			if parent, exists := nodes[parentID]; exists {
+				parent.Children = append(parent.Children, node)
+				node.Parent = parent
+			} else {
+				// Parent not found, treat as root.
+				rootNodes = append(rootNodes, node)
+			}
+		} else {
+			// No parent, this is a root node.
+			rootNodes = append(rootNodes, node)
+		}
+	}
+
+	// Sort children by timestamp for consistent ordering.
+	for _, node := range nodes {
+		sort.Slice(node.Children, func(i, j int) bool {
+			return node.Children[i].Checkpoint.Checkpoint.Timestamp.Before(
+				node.Children[j].Checkpoint.Checkpoint.Timestamp,
+			)
+		})
+	}
+
+	// Find the primary root (oldest without parent).
+	var root *CheckpointNode
+	if len(rootNodes) > 0 {
+		root = rootNodes[0]
+		for _, node := range rootNodes[1:] {
+			if node.Checkpoint.Checkpoint.Timestamp.Before(root.Checkpoint.Checkpoint.Timestamp) {
+				root = node
+			}
+		}
+	}
+
+	return &CheckpointTree{
+		Root:     root,
+		Branches: nodes,
+	}, nil
+}
+
+// ListChildren returns the direct children of a checkpoint.
+func (cm *CheckpointManager) ListChildren(
+	ctx context.Context, config map[string]any,
+) ([]*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the parent checkpoint to find its ID.
+	parentTuple, err := cm.saver.GetTuple(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent checkpoint: %w", err)
+	}
+	if parentTuple == nil {
+		return nil, fmt.Errorf("parent checkpoint not found")
+	}
+
+	// Get all checkpoints in the lineage.
+	lineageID := GetLineageID(config)
+	allConfig := CreateCheckpointConfig(lineageID, "", "")
+	allCheckpoints, err := cm.saver.List(ctx, allConfig, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+
+	// Filter to find children.
+	var children []*CheckpointTuple
+	parentID := parentTuple.Checkpoint.ID
+	for _, tuple := range allCheckpoints {
+		if tuple.Checkpoint.ParentCheckpointID == parentID {
+			children = append(children, tuple)
+		}
+	}
+
+	// Sort by timestamp.
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].Checkpoint.Timestamp.Before(children[j].Checkpoint.Timestamp)
+	})
+
+	return children, nil
+}
+
+// GetParent returns the parent checkpoint of the given checkpoint.
+func (cm *CheckpointManager) GetParent(
+	ctx context.Context, config map[string]any,
+) (*CheckpointTuple, error) {
+	if cm.saver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the current checkpoint.
+	currentTuple, err := cm.saver.GetTuple(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get checkpoint: %w", err)
+	}
+	if currentTuple == nil {
+		return nil, fmt.Errorf("checkpoint not found")
+	}
+
+	// Check if it has a parent.
+	parentID := currentTuple.Checkpoint.ParentCheckpointID
+	if parentID == "" {
+		return nil, nil // No parent
+	}
+
+	// Get the parent checkpoint.
+	lineageID := GetLineageID(config)
+	namespace := GetNamespace(config)
+	parentConfig := CreateCheckpointConfig(lineageID, parentID, namespace)
+	
+	return cm.saver.GetTuple(ctx, parentConfig)
+}
+
 // deepCopy performs a deep copy using JSON marshaling/unmarshaling for safety.
 func deepCopy(src any) any {
 	if src == nil {
@@ -776,38 +1081,6 @@ func deepCopyMap(src map[string]any) map[string]any {
 	dst := make(map[string]any, len(src))
 	for k, v := range src {
 		dst[k] = deepCopy(v)
-	}
-	return dst
-}
-
-// deepCopySlice performs a deep copy of a []any.
-func deepCopySlice(src []any) []any {
-	if src == nil {
-		return nil
-	}
-
-	result := deepCopy(src)
-	if sliceResult, ok := result.([]any); ok {
-		return sliceResult
-	}
-
-	// Fallback: create a new slice and copy values
-	dst := make([]any, len(src))
-	for i, v := range src {
-		dst[i] = deepCopy(v)
-	}
-	return dst
-}
-
-// deepCopyStringMap performs a deep copy of a map[string]string.
-func deepCopyStringMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-
-	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
 	}
 	return dst
 }

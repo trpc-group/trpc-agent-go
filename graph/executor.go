@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +36,7 @@ const (
 var (
 	defaultChannelBufferSize = 256
 	defaultMaxSteps          = 100
-	defaultStepTimeout       = 5 * time.Minute
+	defaultStepTimeout       = time.Duration(0) // No timeout by default, users can set if needed
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
@@ -46,7 +47,10 @@ type Executor struct {
 	stepTimeout       time.Duration
 	nodeTimeout       time.Duration
 	checkpointSaver   CheckpointSaver
+	checkpointManager *CheckpointManager
 	lastCheckpoint    *Checkpoint
+	pendingWrites     []PendingWrite
+	nextNodesToExecute []string  // Nodes to execute when resuming from checkpoint
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -114,23 +118,29 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	// Calculate node timeout: use provided value or default to stepTimeout/2 with minimum 1s
+	// Calculate node timeout: use provided value or derive from step timeout if step timeout is set
 	nodeTimeout := options.NodeTimeout
-	if nodeTimeout == 0 {
+	if nodeTimeout == 0 && options.StepTimeout > 0 {
+		// Only derive from step timeout if step timeout is explicitly set
 		nodeTimeout = options.StepTimeout / 2
 		if nodeTimeout < time.Second {
 			nodeTimeout = time.Second
 		}
 	}
 
-	return &Executor{
+	executor := &Executor{
 		graph:             graph,
 		channelBufferSize: options.ChannelBufferSize,
 		maxSteps:          options.MaxSteps,
 		stepTimeout:       options.StepTimeout,
 		nodeTimeout:       nodeTimeout,
 		checkpointSaver:   options.CheckpointSaver,
-	}, nil
+	}
+	// Create checkpoint manager if saver is provided.
+	if options.CheckpointSaver != nil {
+		executor.checkpointManager = NewCheckpointManager(options.CheckpointSaver)
+	}
+	return executor, nil
 }
 
 // Task represents a task to be executed in a step.
@@ -198,11 +208,155 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
-	// Initialize channels with state keys.
-	e.initializeChannels(initialState, true)
+	var execState State
+	var checkpointConfig map[string]any
+	var resumed bool
+	var resumedStep int
+	// Check for checkpoint saver and try to resume from checkpoint first.
+	if e.checkpointSaver != nil {
+		log.Debug("🔧 Executor: checkpoint saver is available, initializing checkpoint config")
+		// Extract lineage ID from state first, then invocation, or generate one.
+		var lineageID string
+		if id, ok := initialState["lineage_id"].(string); ok && id != "" {
+			lineageID = id
+			log.Debugf("🔧 Executor: found lineage_id in state: %s", lineageID)
+		} else if invocation.InvocationID != "" {
+			lineageID = invocation.InvocationID
+			log.Debugf("🔧 Executor: using invocation ID as lineage_id: %s", lineageID)
+		} else {
+			lineageID = fmt.Sprintf("lineage_%d", time.Now().UnixNano())
+			log.Debugf("🔧 Executor: generated new lineage_id: %s", lineageID)
+		}
+		// Also check for namespace and checkpoint_id in state.
+		var namespace, checkpointID string
+		if ns, ok := initialState["checkpoint_ns"].(string); ok {
+			namespace = ns
+			log.Debugf("🔧 Executor: found checkpoint_ns in state: %s", namespace)
+		} else {
+			log.Debug("🔧 Executor: no checkpoint_ns found in state")
+		}
+		if id, ok := initialState["checkpoint_id"].(string); ok {
+			checkpointID = id
+			log.Debugf("🔧 Executor: found checkpoint_id in state: %s", checkpointID)
+		} else {
+			log.Debug("🔧 Executor: no checkpoint_id found in state")
+		}
 
-	// Initialize state with schema defaults.
-	execState := e.initializeState(initialState)
+		checkpointConfig = CreateCheckpointConfig(lineageID, checkpointID, namespace)
+		log.Debugf("🔧 Executor: created checkpoint config: lineage=%s, checkpoint_id=%s, namespace=%s", lineageID, checkpointID, namespace)
+
+		// Try to resume from existing checkpoint if available.
+		if tuple, err := e.checkpointSaver.GetTuple(
+			ctx, checkpointConfig,
+		); err == nil && tuple != nil && tuple.Checkpoint != nil {
+			log.Debug("🔧 Executor: resuming from checkpoint")
+			log.Debugf("🔧 Executor: checkpoint ID=%s, timestamp=%v", tuple.Checkpoint.ID, tuple.Checkpoint.Timestamp)
+			log.Debugf("🔧 Executor: original checkpoint ChannelValues=%v", tuple.Checkpoint.ChannelValues)
+			// Restore state from checkpoint.
+			restored := make(State)
+			for k, v := range tuple.Checkpoint.ChannelValues {
+				log.Debugf("🔧 Executor: restoring key='%s', value=%v (type: %T)", k, v, v)
+				restored[k] = v
+			}
+			log.Debugf("🔧 Executor: restored state after copy: %v", restored)
+
+			// Convert restored values to proper types based on schema.
+			if e.graph.Schema() != nil {
+				log.Debugf("🔧 Executor: converting restored values to proper types based on schema")
+				for key, value := range restored {
+					if field, exists := e.graph.Schema().Fields[key]; exists {
+						converted := e.restoreCheckpointValueWithSchema(value, field)
+						if reflect.TypeOf(converted) != reflect.TypeOf(value) {
+							log.Debugf("🔧 Executor: converted key='%s' from %T to %T", key, value, converted)
+							restored[key] = converted
+						}
+					}
+				}
+			}
+			// Add any missing schema defaults for fields not in checkpoint.
+			if e.graph.Schema() != nil {
+				log.Debugf("🔧 Executor: applying schema defaults for missing fields")
+				for key, field := range e.graph.Schema().Fields {
+					if _, exists := restored[key]; !exists {
+						// Use default function if available, otherwise provide zero value.
+						if field.Default != nil {
+							defaultVal := field.Default()
+							log.Debugf("🔧 Executor: adding schema default for key='%s', value=%v", key, defaultVal)
+							restored[key] = defaultVal
+						} else {
+							zeroVal := reflect.Zero(field.Type).Interface()
+							log.Debugf("🔧 Executor: adding zero value for key='%s', value=%v", key, zeroVal)
+							restored[key] = zeroVal
+						}
+					}
+				}
+			}
+			// Merge any pre-populated values from initialState that might have been
+			// added by the caller (e.g., checkpoint example pre-populating counter values)
+			for key, value := range initialState {
+				// Only add values from initialState if they're not internal framework keys
+				// and not already in the restored state from checkpoint
+				if _, exists := restored[key]; !exists && !strings.HasPrefix(key, "_") {
+					log.Debugf("🔧 Executor: merging initialState key='%s', value=%v (type: %T) into restored state", key, value, value)
+					restored[key] = value
+				}
+			}
+			log.Debugf("🔧 Executor: final restored state before assignment to execState: %v", restored)
+			execState = restored
+			resumed = true
+			// Record the step from the checkpoint metadata.
+			if tuple.Metadata != nil {
+				resumedStep = tuple.Metadata.Step
+				log.Debugf("🔧 Executor: resuming from step %d", resumedStep)
+			}
+			// Record last checkpoint for version-based planning.
+			e.lastCheckpoint = tuple.Checkpoint
+			// Initialize channels with restored state.
+			e.initializeChannels(restored, true)
+			// Use storage-provided config if present (e.g., resolved checkpoint_id).
+			if tuple.Config != nil {
+				checkpointConfig = tuple.Config
+				log.Debugf("🔧 Executor: using tuple.Config with checkpoint_id: %s", GetCheckpointID(tuple.Config))
+			} else {
+				log.Debugf("🔧 Executor: tuple.Config is nil")
+			}
+			// Store pending writes for later application.
+			e.pendingWrites = tuple.PendingWrites
+			
+			// Log checkpoint details for debugging
+			log.Infof("🔧 Executor: Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
+				len(e.pendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels)
+			
+			// Handle NextNodes for checkpoints that need to trigger execution
+			// This is important for initial checkpoints (step -1) that have the entry point set
+			if len(tuple.Checkpoint.NextNodes) > 0 {
+				// Check if NextNodes contains actual node IDs (not __end__)
+				hasExecutableNodes := false
+				for _, nodeID := range tuple.Checkpoint.NextNodes {
+					if nodeID != End && nodeID != "" {
+						hasExecutableNodes = true
+						break
+					}
+				}
+				
+				if hasExecutableNodes && len(e.pendingWrites) == 0 {
+					log.Infof("🔧 Executor: checkpoint has executable NextNodes: %v, adding to state for planning", tuple.Checkpoint.NextNodes)
+					restored["__next_nodes__"] = tuple.Checkpoint.NextNodes
+					execState = restored
+				}
+			}
+		} else {
+			log.Debug("🔧 Executor: no checkpoint found, starting fresh")
+			// No checkpoint, initialize state with defaults.
+			execState = e.initializeState(initialState)
+			// Initialize channels with initial state.
+			e.initializeChannels(execState, true)
+		}
+	} else {
+		// No checkpoint saver, initialize normally.
+		execState = e.initializeState(initialState)
+		e.initializeChannels(execState, true)
+	}
 
 	// Check if we're resuming from an interrupt.
 	if cmd, ok := initialState[StateKeyCommand].(*Command); ok {
@@ -217,69 +371,81 @@ func (e *Executor) executeGraph(
 	}
 
 	// Create execution context.
+	log.Debugf("🔧 Executor: creating ExecutionContext with resumed=%v", resumed)
+	execStateKeys := make([]string, 0, len(execState))
+	for k := range execState {
+		execStateKeys = append(execStateKeys, k)
+	}
+	log.Debugf("🔧 Executor: execState being assigned to ExecutionContext has %d keys: %v", len(execState), execStateKeys)
+
+	// Log key values we care about
+	if counterVal, exists := execState["counter"]; exists {
+		log.Debugf("🔧 Executor: execState contains counter=%v (type: %T)", counterVal, counterVal)
+	} else {
+		log.Debugf("🔧 Executor: execState does NOT contain counter key")
+	}
+
 	execCtx := &ExecutionContext{
 		Graph:        e.graph,
 		State:        execState,
 		EventChan:    eventChan,
 		InvocationID: invocation.InvocationID,
+		resumed:      resumed,
 	}
 
-	// Initialize checkpoint configuration if checkpoint saver is available.
-	var checkpointConfig map[string]any
-	if e.checkpointSaver != nil {
-		// Extract lineage ID from invocation or generate one.
-		lineageID := invocation.InvocationID
-		if lineageID == "" {
-			lineageID = fmt.Sprintf("lineage_%d", time.Now().UnixNano())
-		}
+	log.Debugf("🔧 Executor: ExecutionContext.State has %d keys after creation", len(execCtx.State))
 
-		checkpointConfig = CreateCheckpointConfig(lineageID, "", "")
+	// Apply pending writes if we resumed from checkpoint.
+	if resumed && e.pendingWrites != nil {
+		log.Debugf("🔧 Executor: applying %d pending writes", len(e.pendingWrites))
+		e.applyPendingWrites(execCtx, e.pendingWrites)
+		log.Debugf("🔧 Executor: ExecutionContext.State has %d keys after applying pending writes", len(execCtx.State))
 
-		// Try to resume from existing checkpoint if available and rebuild frontier.
-		if tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig); err == nil && tuple != nil && tuple.Checkpoint != nil {
-			// Restore state.
-			restored := make(State)
-			for k, v := range tuple.Checkpoint.ChannelValues {
-				restored[k] = v
-			}
-			execState = restored
-			execCtx.State = restored
-			execCtx.resumed = true
-			// Record last checkpoint for version-based planning.
-			e.lastCheckpoint = tuple.Checkpoint
-			// Re-init channels and replay pending writes to trigger correct nodes.
-			e.initializeChannels(restored, false)
-			e.applyPendingWrites(execCtx, tuple.PendingWrites)
-			// Use storage-provided config if present (e.g., resolved checkpoint_id).
-			if tuple.Config != nil {
-				checkpointConfig = tuple.Config
-			}
+		// Log state after pending writes
+		if counterVal, exists := execCtx.State["counter"]; exists {
+			log.Debugf("🔧 Executor: execCtx.State contains counter=%v (type: %T) after pending writes", counterVal, counterVal)
 		} else {
-			// Create initial checkpoint and persist empty pending writes.
-			if err := e.createCheckpointAndSave(ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx); err != nil {
-				log.Warnf("Failed to create initial checkpoint: %v", err)
-			}
+			log.Debugf("🔧 Executor: execCtx.State does NOT contain counter key after pending writes")
+		}
+	}
+
+	// Create initial checkpoint if we didn't resume and have a checkpoint saver.
+	if e.checkpointSaver != nil && !resumed {
+		if err := e.createCheckpointAndSave(
+			ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx,
+		); err != nil {
+			log.Warnf("Failed to create initial checkpoint: %v", err)
 		}
 	}
 
 	// BSP execution loop.
-	for step := 0; step < e.maxSteps; step++ {
+	// Start from the appropriate step when resuming.
+	startStep := 0
+	if resumed && resumedStep >= 0 {
+		startStep = resumedStep + 1
+	}
+	for step := startStep; step < e.maxSteps; step++ {
 		// Create step context with timeout
+		var stepCtx context.Context
 		var stepCancel context.CancelFunc
 		if e.stepTimeout > 0 {
-			ctx, stepCancel = context.WithTimeout(ctx, e.stepTimeout)
+			stepCtx, stepCancel = context.WithTimeout(ctx, e.stepTimeout)
 		} else {
-			ctx, stepCancel = context.WithCancel(ctx)
+			stepCtx, stepCancel = context.WithCancel(ctx)
 		}
 
 		// Plan phase: determine which nodes to execute.
 		var tasks []*Task
 		var err error
-		if step == 0 && execCtx.resumed {
-			// If resumed, plan purely based on channel triggers to continue from the
-			// restored frontier rather than the entry point.
+		if step == 0 && execCtx.resumed && resumedStep >= 0 {
+			// If resumed from a non-initial checkpoint, plan purely based on channel 
+			// triggers to continue from the restored frontier rather than the entry point.
+			log.Debugf("🔧 Executor: step=%d, resumed=%v, resumedStep=%d - using channel triggers", step, execCtx.resumed, resumedStep)
 			tasks = e.planBasedOnChannelTriggers(execCtx, step)
 		} else {
+			// For initial execution or when resuming from an initial checkpoint (step -1),
+			// use normal planning which starts from the entry point.
+			log.Debugf("🔧 Executor: step=%d, resumed=%v, resumedStep=%d - using normal planning", step, execCtx.resumed, resumedStep)
 			tasks, err = e.planStep(execCtx, step)
 		}
 		if err != nil {
@@ -292,25 +458,36 @@ func (e *Executor) executeGraph(
 			break
 		}
 		// Execute phase: run all tasks concurrently.
-		if err := e.executeStep(ctx, execCtx, tasks, step); err != nil {
+		if err := e.executeStep(stepCtx, execCtx, tasks, step); err != nil {
 			// Check if this is an interrupt that should be handled.
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
-				return e.handleInterrupt(ctx, execCtx, interrupt, step, checkpointConfig)
+				return e.handleInterrupt(stepCtx, execCtx, interrupt, step, checkpointConfig)
 			}
 			stepCancel()
 			return fmt.Errorf("execution failed at step %d: %w", step, err)
 		}
 		// Update phase: process channel updates.
-		if err := e.updateChannels(ctx, execCtx, step); err != nil {
+		if err := e.updateChannels(stepCtx, execCtx, step); err != nil {
 			stepCancel()
 			return fmt.Errorf("update failed at step %d: %w", step, err)
 		}
 
 		// Create checkpoint after each step if checkpoint saver is available.
+		// Use parent context (ctx) for checkpoint operations, not step context
 		if e.checkpointSaver != nil && checkpointConfig != nil {
+			log.Debugf("🔧 Executor: creating checkpoint at step %d", step)
 			if err := e.createCheckpointAndSave(ctx, &checkpointConfig, execCtx.State, CheckpointSourceLoop, step, execCtx); err != nil {
 				log.Warnf("Failed to create checkpoint at step %d: %v", step, err)
+			} else {
+				log.Debugf("🔧 Executor: successfully created checkpoint at step %d", step)
+			}
+		} else {
+			if e.checkpointSaver == nil {
+				log.Debug("🔧 Executor: checkpoint saver is nil, skipping checkpoint creation")
+			}
+			if checkpointConfig == nil {
+				log.Debug("🔧 Executor: checkpoint config is nil, skipping checkpoint creation")
 			}
 		}
 
@@ -400,14 +577,36 @@ func (e *Executor) createCheckpointAndSave(
 	execCtx *ExecutionContext,
 ) error {
 	if e.checkpointSaver == nil {
+		log.Debug("🔧 Executor: checkpoint saver is nil in createCheckpointAndSave")
 		return nil
 	}
 
+	log.Debugf("🔧 Executor: creating checkpoint from state for step %d, source: %s", step, source)
+
+	// Create a copy of state to avoid concurrent access
+	stateCopy := make(State)
+	execCtx.stateMutex.RLock()
+	for k, v := range state {
+		stateCopy[k] = v
+	}
+	execCtx.stateMutex.RUnlock()
+
 	// Create checkpoint object
-	checkpoint := e.createCheckpointFromState(state, step)
+	checkpoint := e.createCheckpointFromState(stateCopy, step)
 	if checkpoint == nil {
+		log.Error("🔧 Executor: failed to create checkpoint object from state")
 		return fmt.Errorf("failed to create checkpoint")
 	}
+
+	// Set parent checkpoint ID from config if available
+	if parentCheckpointID := GetCheckpointID(*config); parentCheckpointID != "" {
+		checkpoint.ParentCheckpointID = parentCheckpointID
+		log.Debugf("🔧 Executor: set parent checkpoint ID: %s", parentCheckpointID)
+	} else {
+		log.Debugf("🔧 Executor: no parent checkpoint ID found in config")
+	}
+
+	log.Debugf("🔧 Executor: created checkpoint object with ID: %s", checkpoint.ID)
 
 	// Create metadata
 	metadata := &CheckpointMetadata{
@@ -436,10 +635,24 @@ func (e *Executor) createCheckpointAndSave(
 	checkpoint.ChannelVersions = newVersions
 
 	// Set next nodes and channels for recovery
-	checkpoint.NextNodes = e.getNextNodes(execCtx.State)
-	checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+	if source == CheckpointSourceInput && step == -1 {
+		// For initial checkpoints, set the entry point as the next node
+		// This ensures that if someone forks and resumes from this checkpoint,
+		// the workflow will start from the beginning
+		if entryPoint := e.graph.EntryPoint(); entryPoint != "" {
+			checkpoint.NextNodes = []string{entryPoint}
+			log.Infof("🔧 Executor: Initial checkpoint (step -1) - setting NextNodes to entry point: %v", checkpoint.NextNodes)
+		}
+		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+	} else {
+		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		log.Debugf("🔧 Executor: Regular checkpoint (step %d) - NextNodes: %v", step, checkpoint.NextNodes)
+	}
 
 	// Use PutFull for atomic storage
+	log.Infof("🔧 Executor: Saving checkpoint ID=%s, Source=%s, Step=%d, NextNodes=%v, PendingWrites=%d", 
+		checkpoint.ID, source, step, checkpoint.NextNodes, len(pendingWrites))
 	updatedConfig, err := e.checkpointSaver.PutFull(ctx, PutFullRequest{
 		Config:        *config,
 		Checkpoint:    checkpoint,
@@ -448,13 +661,16 @@ func (e *Executor) createCheckpointAndSave(
 		PendingWrites: pendingWrites,
 	})
 	if err != nil {
+		log.Errorf("🔧 Executor: failed to save checkpoint %s: %v", checkpoint.ID, err)
 		return fmt.Errorf("failed to save checkpoint atomically: %w", err)
 	}
+	log.Debugf("🔧 Executor: successfully saved checkpoint %s", checkpoint.ID)
 	// Clear step marks after checkpoint creation
 	e.clearChannelStepMarks()
 
 	// Update external config with the new checkpoint_id
 	*config = updatedConfig
+	log.Debugf("🔧 Executor: updated config with new checkpoint_id: %s", GetCheckpointID(updatedConfig))
 	return nil
 }
 
@@ -479,9 +695,21 @@ func (e *Executor) applyPendingWrites(execCtx *ExecutionContext, writes []Pendin
 	}
 }
 
+// getConfigKeys helper to extract keys from config map for logging
+func getConfigKeys(config map[string]any) []string {
+	var keys []string
+	for k := range config {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // resumeFromCheckpoint resumes execution from a specific checkpoint.
 func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]any) (State, error) {
+	log.Infof("🔧 Executor.resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
+	
 	if e.checkpointSaver == nil {
+		log.Infof("🔧 Executor.resumeFromCheckpoint: no checkpoint saver, returning nil")
 		return nil, nil
 	}
 
@@ -507,6 +735,9 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 	e.initializeChannels(state, false)
 
 	// Apply pending writes if available, otherwise use NextChannels as fallback
+	log.Infof("🔧 Executor.resumeFromCheckpoint: PendingWrites=%d, NextNodes=%v, NextChannels=%v", 
+		len(tuple.PendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels)
+	
 	if len(tuple.PendingWrites) > 0 {
 		// Create a temporary execution context for replay
 		tempExecCtx := &ExecutionContext{
@@ -515,6 +746,14 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 			InvocationID: "resume-replay",
 		}
 		e.applyPendingWrites(tempExecCtx, tuple.PendingWrites)
+		log.Infof("🔧 Executor.resumeFromCheckpoint: Applied %d pending writes", len(tuple.PendingWrites))
+	} else if len(tuple.Checkpoint.NextNodes) > 0 {
+		// Fallback: use NextNodes to trigger execution when no pending writes or channels
+		// This is particularly important for initial checkpoints that have the entry point set
+		log.Infof("🔧 Executor: using NextNodes to trigger execution: %v", tuple.Checkpoint.NextNodes)
+		// Store the nodes in the state so they can be picked up during planning
+		state["__next_nodes__"] = tuple.Checkpoint.NextNodes
+		log.Infof("🔧 Executor: added __next_nodes__ to state, state now has %d keys", len(state))
 	} else if len(tuple.Checkpoint.NextChannels) > 0 {
 		// Fallback: use NextChannels to trigger frontier when no pending writes
 		for _, chName := range tuple.Checkpoint.NextChannels {
@@ -525,7 +764,7 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 		}
 	}
 
-	return tuple.Checkpoint.ChannelValues, nil
+	return state, nil
 }
 
 // initializeState initializes the execution state with schema defaults.
@@ -558,7 +797,6 @@ func (e *Executor) initializeChannels(state State, updateChannels bool) {
 	for key := range state {
 		channelName := fmt.Sprintf("%s%s", ChannelInputPrefix, key)
 		e.graph.addChannel(channelName, channel.BehaviorLastValue)
-
 		if updateChannels {
 			channel, _ := e.graph.getChannel(channelName)
 			if channel != nil {
@@ -586,10 +824,45 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 
 	// Check if this is the first step (entry point).
 	if step == 0 {
+		// Check if we have nodes to execute from a resumed checkpoint stored in state
+		execCtx.stateMutex.RLock()
+		nextNodesValue, hasNextNodes := execCtx.State["__next_nodes__"]
+		stateKeyCount := len(execCtx.State)
+		execCtx.stateMutex.RUnlock()
+		
+		log.Infof("🔧 Executor.planStep: step=0, checking for __next_nodes__, hasNextNodes=%v, stateKeys=%d", hasNextNodes, stateKeyCount)
+		
+		if hasNextNodes {
+			if nextNodes, ok := nextNodesValue.([]string); ok && len(nextNodes) > 0 {
+				log.Infof("🔧 Executor: using __next_nodes__ from state: %v", nextNodes)
+				// Create tasks for the nodes stored in the state
+				for _, nodeID := range nextNodes {
+					execCtx.stateMutex.RLock()
+					stateCopy := make(State, len(execCtx.State))
+					for key, value := range execCtx.State {
+						stateCopy[key] = value
+					}
+					execCtx.stateMutex.RUnlock()
+					
+					task := e.createTask(nodeID, stateCopy, step)
+					if task != nil {
+						tasks = append(tasks, task)
+					}
+				}
+				// Remove the special key from state after using it
+				execCtx.stateMutex.Lock()
+				delete(execCtx.State, "__next_nodes__")
+				execCtx.stateMutex.Unlock()
+				return tasks, nil
+			}
+		}
+		
+		// Otherwise, use the normal entry point
 		entryPoint := e.graph.EntryPoint()
 		if entryPoint == "" {
 			return nil, errors.New("no entry point defined")
 		}
+		log.Debugf("🔧 Executor: planning step 0, entry point: %s", entryPoint)
 
 		// Acquire read lock to safely access state for task creation.
 		execCtx.stateMutex.RLock()
@@ -745,6 +1018,29 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 	node, exists := e.graph.Node(nodeID)
 	if !exists {
 		return nil
+	}
+
+	log.Debugf("🔧 createTask: creating task for nodeID='%s', step=%d", nodeID, step)
+	stateKeys := make([]string, 0, len(state))
+	for k := range state {
+		stateKeys = append(stateKeys, k)
+	}
+	log.Debugf("🔧 createTask: state has %d keys: %v", len(state), stateKeys)
+
+	// Log key state values that we're interested in tracking
+	if counterVal, exists := state["counter"]; exists {
+		log.Debugf("🔧 createTask: state contains counter=%v (type: %T)", counterVal, counterVal)
+	} else {
+		log.Debugf("🔧 createTask: state does NOT contain counter key")
+	}
+
+	if stepCountVal, exists := state["step_count"]; exists {
+		log.Debugf("🔧 createTask: state contains step_count=%v (type: %T)", stepCountVal, stepCountVal)
+	}
+
+	// Special logging for final node to track the counter issue
+	if nodeID == "final" {
+		log.Debugf("🔧 createTask: FINAL NODE - counter=%v, step_count=%v", state["counter"], state["step_count"])
 	}
 
 	return &Task{
@@ -1187,6 +1483,38 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 	}
 }
 
+// restoreCheckpointValueWithSchema restores a checkpoint value to its proper type using schema information.
+func (e *Executor) restoreCheckpointValueWithSchema(value any, field StateField) any {
+	// Skip if already the correct type.
+	if reflect.TypeOf(value) == field.Type {
+		return value
+	}
+	// Approach 1: Use Default as template if available.
+	if field.Default != nil {
+		template := field.Default()
+		if jsonBytes, err := json.Marshal(value); err == nil {
+			// Use a pointer to the template for unmarshaling.
+			templatePtr := reflect.New(reflect.TypeOf(template))
+			templatePtr.Elem().Set(reflect.ValueOf(template))
+
+			if err := json.Unmarshal(jsonBytes, templatePtr.Interface()); err == nil {
+				return templatePtr.Elem().Interface()
+			}
+		}
+	}
+	// Approach 2: Use reflection to create correct type.
+	if field.Type != nil {
+		ptr := reflect.New(field.Type)
+		if jsonBytes, err := json.Marshal(value); err == nil {
+			if err := json.Unmarshal(jsonBytes, ptr.Interface()); err == nil {
+				return ptr.Elem().Interface()
+			}
+		}
+	}
+	// Fallback: return value as-is.
+	return value
+}
+
 // emitChannelUpdateEvent emits a channel update event.
 func (e *Executor) emitChannelUpdateEvent(
 	execCtx *ExecutionContext,
@@ -1450,21 +1778,18 @@ func (e *Executor) createCheckpointFromState(state State, step int) *Checkpoint 
 
 	// Create checkpoint.
 	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
-
 	// Use step-specific channels if step is provided, otherwise fallback to all available
 	if step >= 0 {
 		checkpoint.UpdatedChannels = e.getUpdatedChannelsInStep(step)
 	} else {
 		checkpoint.UpdatedChannels = e.getUpdatedChannels()
 	}
-
 	return checkpoint
 }
 
 // getNextNodes determines which nodes should be executed next based on the current state.
 func (e *Executor) getNextNodes(state State) []string {
 	var nextNodes []string
-
 	// Check for nodes that are ready to execute based on channel triggers
 	triggerToNodes := e.graph.getTriggerToNodes()
 	for channelName, nodeIDs := range triggerToNodes {
@@ -1473,7 +1798,6 @@ func (e *Executor) getNextNodes(state State) []string {
 			nextNodes = append(nextNodes, nodeIDs...)
 		}
 	}
-
 	// Remove duplicates
 	seen := make(map[string]bool)
 	var uniqueNodes []string
@@ -1483,7 +1807,6 @@ func (e *Executor) getNextNodes(state State) []string {
 			uniqueNodes = append(uniqueNodes, nodeID)
 		}
 	}
-
 	return uniqueNodes
 }
 
@@ -1498,7 +1821,6 @@ func (e *Executor) getNextChannels(state State) []string {
 			nextChannels = append(nextChannels, channelName)
 		}
 	}
-
 	return nextChannels
 }
 
@@ -1513,7 +1835,6 @@ func (e *Executor) getNextChannelsInStep(step int) []string {
 			nextChannels = append(nextChannels, channelName)
 		}
 	}
-
 	return nextChannels
 }
 
@@ -1523,4 +1844,72 @@ func (e *Executor) clearChannelStepMarks() {
 	for _, channel := range channels {
 		channel.ClearStepMark()
 	}
+}
+
+// CheckpointManager returns the executor's checkpoint manager.
+// Returns nil if no checkpoint saver was configured.
+func (e *Executor) CheckpointManager() *CheckpointManager {
+	return e.checkpointManager
+}
+
+// Fork creates a new branch from an existing checkpoint within the same lineage.
+// This allows exploring alternative execution paths from any checkpoint.
+func (e *Executor) Fork(ctx context.Context, config map[string]any) (map[string]any, error) {
+	if e.checkpointSaver == nil {
+		return nil, fmt.Errorf("checkpoint saver is not configured")
+	}
+
+	// Get the source checkpoint.
+	log.Infof("🔧 Executor.Fork: Attempting to get checkpoint with config: %v", config)
+	sourceTuple, err := e.checkpointSaver.GetTuple(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
+	}
+	if sourceTuple == nil {
+		return nil, fmt.Errorf("source checkpoint not found")
+	}
+
+	// Fork the checkpoint (creates new ID and sets parent).
+	log.Infof("🔧 Executor.Fork: Retrieved source checkpoint - ID=%s, Step=%d, NextNodes=%v, PendingWrites=%d",
+		sourceTuple.Checkpoint.ID, sourceTuple.Metadata.Step, sourceTuple.Checkpoint.NextNodes, len(sourceTuple.PendingWrites))
+	
+	forkedCheckpoint := sourceTuple.Checkpoint.Fork()
+	
+	log.Infof("🔧 Executor.Fork: Forked checkpoint - ID=%s, NextNodes=%v",
+		forkedCheckpoint.ID, forkedCheckpoint.NextNodes)
+
+	// Create metadata for the fork.
+	metadata := NewCheckpointMetadata(CheckpointSourceFork, sourceTuple.Metadata.Step)
+	metadata.Parents = map[string]string{
+		GetNamespace(config): sourceTuple.Checkpoint.ID,
+	}
+
+	// Save the forked checkpoint with same lineage_id.
+	lineageID := GetLineageID(config)
+	namespace := GetNamespace(config)
+	newConfig := CreateCheckpointConfig(lineageID, "", namespace)
+	
+	// Copy pending writes from the source to ensure resumed execution can continue.
+	// If the source has pending writes, we need to preserve them in the fork.
+	var pendingWrites []PendingWrite
+	if len(sourceTuple.PendingWrites) > 0 {
+		pendingWrites = make([]PendingWrite, len(sourceTuple.PendingWrites))
+		copy(pendingWrites, sourceTuple.PendingWrites)
+	}
+	
+	// Use PutFull to save both checkpoint and pending writes atomically.
+	req := PutFullRequest{
+		Config:        newConfig,
+		Checkpoint:    forkedCheckpoint,
+		Metadata:      metadata,
+		NewVersions:   forkedCheckpoint.ChannelVersions,
+		PendingWrites: pendingWrites,
+	}
+
+	updatedConfig, err := e.checkpointSaver.PutFull(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save forked checkpoint: %w", err)
+	}
+
+	return updatedConfig, nil
 }
