@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -381,7 +382,7 @@ func TestLLMAgent_InvocationContextAccess(t *testing.T) {
 	}
 
 	// Create context with invocation (simulating what runner does).
-	ctx := agent.NewContextWithInvocation(context.Background(), invocation)
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
 
 	// Run the agent.
 	eventCh, err := llmAgent.Run(ctx, invocation)

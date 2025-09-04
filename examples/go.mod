@@ -11,17 +11,18 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis/
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../storage/tcvector
 )
 
 require (
 	github.com/openai/openai-go v1.12.0
-	go.opentelemetry.io/otel v1.37.0
-	go.opentelemetry.io/otel/metric v1.37.0
-	go.opentelemetry.io/otel/trace v1.37.0
+	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel/metric v1.38.0
+	go.opentelemetry.io/otel/trace v1.38.0
 	go.uber.org/zap v1.27.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.2
+	trpc.group/trpc-go/trpc-a2a-go v0.2.3
 	trpc.group/trpc-go/trpc-agent-go v0.0.4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.3
@@ -42,6 +43,8 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
+	github.com/elastic/go-elasticsearch/v7 v7.17.10 // indirect
+	github.com/elastic/go-elasticsearch/v8 v8.19.0 // indirect
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
 	github.com/getkin/kin-openapi v0.132.0 // indirect
 	github.com/go-ego/gse v0.80.3 // indirect
@@ -50,7 +53,7 @@ require (
 	github.com/go-openapi/jsonpointer v0.21.1 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
 	github.com/golang/glog v1.2.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad // indirect
@@ -89,7 +92,7 @@ require (
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
-	github.com/tencentyun/cos-go-sdk-v5 v0.7.66 // indirect
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.69 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -120,6 +123,7 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.3 // indirect
 )
