@@ -12,6 +12,7 @@ package elasticsearch
 import (
 	"testing"
 
+	esv9 "github.com/elastic/go-elasticsearch/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,8 +107,8 @@ func TestGlobalBuilder_SetAndGet(t *testing.T) {
 	require.NotNil(t, builder)
 
 	// Test setting custom builder.
-	customBuilder := func(opts ...ClientBuilderOpt) (Client, error) {
-		return &clientV9{}, nil
+	customBuilder := func(opts ...ClientBuilderOpt) (any, error) {
+		return &esv9.Client{}, nil
 	}
 	SetClientBuilder(customBuilder)
 

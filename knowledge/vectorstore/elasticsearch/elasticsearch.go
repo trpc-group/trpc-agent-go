@@ -23,6 +23,7 @@ import (
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types/enums/densevectorsimilarity"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types/enums/dynamicmapping"
 
+	istorage "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -83,7 +84,7 @@ type indexCreateBody struct {
 
 // VectorStore implements vectorstore.VectorStore interface using Elasticsearch.
 type VectorStore struct {
-	client storage.Client
+	client istorage.Client
 	option options
 }
 
@@ -120,8 +121,15 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, fmt.Errorf("elasticsearch create client: %w", err)
 	}
 
+	// Wrap the generic Elasticsearch SDK client with our storage interface.
+	// This creates a client that implements istorage.Client from the raw SDK client.
+	client, err := storage.WrapSDKClient(esClient)
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch new client: %w", err)
+	}
+
 	vs := &VectorStore{
-		client: esClient,
+		client: client,
 		option: option,
 	}
 

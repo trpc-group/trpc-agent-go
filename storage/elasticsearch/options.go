@@ -19,11 +19,11 @@ func init() {
 // esRegistry stores named Elasticsearch instance builder options.
 var esRegistry map[string][]ClientBuilderOpt
 
-// clientBuilder builds an Elasticsearch Client from builder options.
-type clientBuilder func(builderOpts ...ClientBuilderOpt) (Client, error)
+// clientBuilder builds an Elasticsearch ielasticsearch.Client from builder options.
+type clientBuilder func(builderOpts ...ClientBuilderOpt) (any, error)
 
 // clientBuilder is the function to build the global Elasticsearch client.
-var globalBuilder clientBuilder = DefaultClientBuilder
+var globalBuilder clientBuilder = defaultClientBuilder
 
 // SetClientBuilder sets the global Elasticsearch client builder.
 func SetClientBuilder(builder clientBuilder) {

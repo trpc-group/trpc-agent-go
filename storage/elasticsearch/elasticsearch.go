@@ -11,39 +11,18 @@
 package elasticsearch
 
 import (
-	"context"
 	"fmt"
 
 	esv7 "github.com/elastic/go-elasticsearch/v7"
 	esv8 "github.com/elastic/go-elasticsearch/v8"
 	esv9 "github.com/elastic/go-elasticsearch/v9"
+
+	ielasticsearch "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
+	istorage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch/internal/elasticsearch"
 )
 
-// Client defines the minimal interface for Elasticsearch operations.
-// Use []byte payloads to decouple from SDK typed APIs.
-type Client interface {
-	// Ping checks if Elasticsearch is available.
-	Ping(ctx context.Context) error
-	// CreateIndex creates an index with the provided body.
-	CreateIndex(ctx context.Context, indexName string, body []byte) error
-	// DeleteIndex deletes the specified index.
-	DeleteIndex(ctx context.Context, indexName string) error
-	// IndexExists returns whether the specified index exists.
-	IndexExists(ctx context.Context, indexName string) (bool, error)
-	// IndexDoc indexes a document with the given identifier.
-	IndexDoc(ctx context.Context, indexName, id string, body []byte) error
-	// GetDoc retrieves a document by identifier and returns the raw body.
-	GetDoc(ctx context.Context, indexName, id string) ([]byte, error)
-	// UpdateDoc applies a partial update to the document by identifier.
-	UpdateDoc(ctx context.Context, indexName, id string, body []byte) error
-	// DeleteDoc deletes a document by identifier.
-	DeleteDoc(ctx context.Context, indexName, id string) error
-	// Search executes a query and returns the raw response body.
-	Search(ctx context.Context, indexName string, body []byte) ([]byte, error)
-}
-
-// DefaultClientBuilder selects implementation by Version and builds a client.
-func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
+// defaultClientBuilder selects implementation by Version and builds a client.
+func defaultClientBuilder(builderOpts ...ClientBuilderOpt) (any, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
 		opt(o)
@@ -61,17 +40,78 @@ func DefaultClientBuilder(builderOpts ...ClientBuilderOpt) (Client, error) {
 	}
 }
 
-// NewClient wraps a specific go-elasticsearch client (*v7/*v8/*v9) and returns
-// a storage-level Client adapter.
-func NewClient(client any) (Client, error) {
-	switch cli := client.(type) {
+// newClientV7 builds a v7 client from generic builder options.
+func newClientV7(o *ClientBuilderOpts) (*esv7.Client, error) {
+	cfg := esv7.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
+	}
+	cli, err := esv7.NewClient(cfg)
+	return cli, err
+}
+
+// newClientV8 builds a v8 client from generic builder options.
+func newClientV8(o *ClientBuilderOpts) (*esv8.Client, error) {
+	cfg := esv8.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
+	}
+	cli, err := esv8.NewClient(cfg)
+	return cli, err
+}
+
+// newClientV9 builds a v9 client from generic builder options.
+func newClientV9(o *ClientBuilderOpts) (*esv9.Client, error) {
+	cfg := esv9.Config{
+		Addresses:              o.Addresses,
+		Username:               o.Username,
+		Password:               o.Password,
+		APIKey:                 o.APIKey,
+		CertificateFingerprint: o.CertificateFingerprint,
+		CompressRequestBody:    o.CompressRequestBody,
+		EnableMetrics:          o.EnableMetrics,
+		EnableDebugLogger:      o.EnableDebugLogger,
+		RetryOnStatus:          o.RetryOnStatus,
+		MaxRetries:             o.MaxRetries,
+	}
+	cli, err := esv9.NewClient(cfg)
+	return cli, err
+}
+
+// WrapSDKClient wraps a generic Elasticsearch SDK client with our storage interface.
+//
+// WARNING: This function is for INTERNAL USE ONLY!
+// Do NOT call this function directly from external packages.
+// This is an internal implementation detail that may change without notice.
+// Use the public API provided by the parent storage/elasticsearch package instead.
+//
+// This function is only exported to allow access from other internal packages
+// within the same module (knowledge/vectorstore/elasticsearch, etc.).
+func WrapSDKClient(client any) (ielasticsearch.Client, error) {
+	switch client := client.(type) {
 	case *esv7.Client:
-		return &clientV7{esClient: cli}, nil
+		return istorage.NewClientV7(client), nil
 	case *esv8.Client:
-		return &clientV8{esClient: cli}, nil
+		return istorage.NewClientV8(client), nil
 	case *esv9.Client:
-		return &clientV9{esClient: cli}, nil
+		return istorage.NewClientV9(client), nil
 	default:
-		return nil, fmt.Errorf("elasticsearch: unsupported client type %T", client)
+		return nil, fmt.Errorf("elasticsearch client is not supported, type: %T", client)
 	}
 }
