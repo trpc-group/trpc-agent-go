@@ -80,10 +80,10 @@ const defaultTimeout = 60 * time.Second
 //	)
 //
 //	// Using a pre-configured COS client
-//	cosClient := cos.NewClient(baseURL, httpClient)
-//	service := cos.NewService("", cos.WithClient(cosClient))
-func NewService(bucketURL string, opts ...Option) (*Service, error) {
-	c, err := globalBuilder("", bucketURL, opts...)
+//	cosClient := cos.NewClient("service-name", baseURL, httpClient)
+//	service := cos.NewService("service-name", cos.WithClient(cosClient))
+func NewService(name, bucketURL string, opts ...Option) (*Service, error) {
+	c, err := globalBuilder(name, bucketURL, opts...)
 	if err != nil {
 		return nil, err
 	}
