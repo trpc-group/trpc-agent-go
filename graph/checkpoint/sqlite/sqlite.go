@@ -7,6 +7,8 @@
 //
 //
 
+// Package sqlite provides SQLite-based checkpoint storage implementation
+// for graph execution state persistence and recovery.
 package sqlite
 
 import (

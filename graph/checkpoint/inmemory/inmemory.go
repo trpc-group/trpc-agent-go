@@ -32,8 +32,8 @@ type Saver struct {
 // NewSaver creates a new in-memory checkpoint saver.
 func NewSaver() *Saver {
 	return &Saver{
-		storage:                 make(map[string]map[string]map[string]*graph.CheckpointTuple),
-		writes:                  make(map[string]map[string]map[string][]graph.PendingWrite),
+		storage:                  make(map[string]map[string]map[string]*graph.CheckpointTuple),
+		writes:                   make(map[string]map[string]map[string][]graph.PendingWrite),
 		maxCheckpointsPerLineage: graph.DefaultMaxCheckpointsPerLineage,
 	}
 }
@@ -161,55 +161,11 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 
 	// Apply filters and collect results.
 	for checkpointID, tuple := range checkpoints {
-		// Apply before filter.
-		if filter != nil && filter.Before != nil {
-			beforeID := graph.GetCheckpointID(filter.Before)
-			if beforeID != "" {
-				// Get the timestamp of the before checkpoint to compare
-				if beforeTuple, exists := checkpoints[beforeID]; exists {
-					if tuple.Checkpoint.Timestamp.After(beforeTuple.Checkpoint.Timestamp) ||
-						tuple.Checkpoint.Timestamp.Equal(beforeTuple.Checkpoint.Timestamp) {
-						continue
-					}
-				} else {
-					// If before checkpoint doesn't exist, skip all
-					continue
-				}
-			}
+		if !s.passesFilters(checkpointID, tuple, checkpoints, filter) {
+			continue
 		}
 
-		// Apply metadata filter.
-		if filter != nil && filter.Metadata != nil {
-			matches := true
-			for key, value := range filter.Metadata {
-				if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
-					matches = false
-					break
-				}
-				if tuple.Metadata.Extra[key] != value {
-					matches = false
-					break
-				}
-			}
-			if !matches {
-				continue
-			}
-		}
-
-		// Create a copy to avoid concurrent modification issues.
-		result := &graph.CheckpointTuple{
-			Config:       tuple.Config,
-			Checkpoint:   tuple.Checkpoint.Copy(),
-			Metadata:     tuple.Metadata,
-			ParentConfig: tuple.ParentConfig,
-		}
-
-		// Add pending writes.
-		if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
-			result.PendingWrites = make([]graph.PendingWrite, len(writes))
-			copy(result.PendingWrites, writes)
-		}
-
+		result := s.createCheckpointResult(tuple, lineageID, namespace, checkpointID)
 		results = append(results, result)
 
 		// Apply limit.
@@ -426,4 +382,64 @@ func (s *Saver) cleanupOldCheckpoints(lineageID, namespace string) {
 		// Also remove associated writes.
 		delete(s.writes[lineageID][namespace], checkpointInfos[i].id)
 	}
+}
+
+// passesFilters checks if a checkpoint passes all filter criteria.
+func (s *Saver) passesFilters(checkpointID string, tuple *graph.CheckpointTuple, checkpoints map[string]*graph.CheckpointTuple, filter *graph.CheckpointFilter) bool {
+	if filter == nil {
+		return true
+	}
+	if !s.passesBeforeFilter(tuple, checkpoints, filter.Before) {
+		return false
+	}
+	return s.passesMetadataFilter(tuple, filter.Metadata)
+}
+
+// passesBeforeFilter checks if checkpoint passes the before filter.
+func (s *Saver) passesBeforeFilter(tuple *graph.CheckpointTuple, checkpoints map[string]*graph.CheckpointTuple, before map[string]any) bool {
+	if before == nil {
+		return true
+	}
+	beforeID := graph.GetCheckpointID(before)
+	if beforeID == "" {
+		return true
+	}
+	beforeTuple, exists := checkpoints[beforeID]
+	if !exists {
+		return false
+	}
+	return tuple.Checkpoint.Timestamp.Before(beforeTuple.Checkpoint.Timestamp)
+}
+
+// passesMetadataFilter checks if checkpoint passes the metadata filter.
+func (s *Saver) passesMetadataFilter(tuple *graph.CheckpointTuple, metadata map[string]any) bool {
+	if metadata == nil {
+		return true
+	}
+
+	if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
+		return false
+	}
+
+	for key, value := range metadata {
+		if tuple.Metadata.Extra[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// createCheckpointResult creates a checkpoint result tuple.
+func (s *Saver) createCheckpointResult(tuple *graph.CheckpointTuple, lineageID, namespace, checkpointID string) *graph.CheckpointTuple {
+	result := &graph.CheckpointTuple{
+		Config:       tuple.Config,
+		Checkpoint:   tuple.Checkpoint.Copy(),
+		Metadata:     tuple.Metadata,
+		ParentConfig: tuple.ParentConfig,
+	}
+	if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
+		result.PendingWrites = make([]graph.PendingWrite, len(writes))
+		copy(result.PendingWrites, writes)
+	}
+	return result
 }
