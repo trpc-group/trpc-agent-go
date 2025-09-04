@@ -213,25 +213,25 @@ func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitiv
 
 	// For case-insensitive matching, we need to implement it manually
 	// since doublestar v4.6.1 doesn't support case-insensitive matching.
-	
+
 	// Get all possible files using a broad pattern, then filter manually.
 	allFiles, err := doublestar.Glob(os.DirFS(targetPath), "**")
 	if err != nil {
 		return nil, fmt.Errorf("searching files: %w", err)
 	}
-	
+
 	// Also get directories if the pattern might match them.
 	allDirs, err := doublestar.Glob(os.DirFS(targetPath), "**/")
 	if err != nil {
 		return nil, fmt.Errorf("searching directories: %w", err)
 	}
-	
+
 	// Combine files and directories.
 	allPaths := append(allFiles, allDirs...)
-	
+
 	var matches []string
 	lowerPattern := strings.ToLower(pattern)
-	
+
 	for _, path := range allPaths {
 		lowerPath := strings.ToLower(path)
 		// For directory patterns, we need to add the trailing slash for matching.
@@ -249,7 +249,7 @@ func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitiv
 				testPath += "/"
 			}
 		}
-		
+
 		// Use doublestar.Match for case-insensitive pattern matching.
 		matched, err := doublestar.Match(lowerPattern, testPath)
 		if err != nil {
@@ -259,7 +259,7 @@ func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitiv
 			matches = append(matches, path)
 		}
 	}
-	
+
 	// Remove duplicates.
 	seen := make(map[string]bool)
 	var uniqueMatches []string
@@ -269,6 +269,6 @@ func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitiv
 			uniqueMatches = append(uniqueMatches, match)
 		}
 	}
-	
+
 	return uniqueMatches, nil
 }
