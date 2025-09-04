@@ -205,6 +205,7 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
     vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
     vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 )
 
 // 内存实现，可用于测试
@@ -246,6 +247,29 @@ kb := knowledge.New(
 )
 ```
 
+#### Elasticsearch
+
+```go
+// 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
+    vectorelasticsearch.WithVersion("v9"),
+)
+if err != nil {
+    // 处理 error
+}
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+)
+```
+
 ### Embedder
 
 Embedder 负责将文本转换为向量表示，是 Knowledge 系统的核心组件。目前框架主要支持 OpenAI embedding 模型：
@@ -270,6 +294,7 @@ kb := knowledge.New(
 
 - OpenAI embedding 模型（text-embedding-3-small 等）
 - 其他兼容 OpenAI API 的 embedding 服务
+- Gemini embedding 模型（通过 `knowledge/embedder/gemini`）
 
 > **注意**:
 >
@@ -354,6 +379,12 @@ err := kb.Load(ctx,
     knowledge.WithDocConcurrency(64),      // 文档级并发
 )
 ```
+
+> 关于性能与限流：
+>
+> - 提高并发会增加对 Embedder 服务（OpenAI/Gemini）的调用频率，可能触发限流；
+> - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`；
+> - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调。
 
 ## 高级功能
 
@@ -606,17 +637,24 @@ export OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
 # Google Gemini API 配置（当使用 Gemini embedder 时）
 export GOOGLE_API_KEY="your-google-api-key"
 
-# PostgreSQL + pgvector 配置
+# PostgreSQL + pgvector 配置（当使用 -vectorstore=pgvector 时必填）
 export PGVECTOR_HOST="127.0.0.1"
 export PGVECTOR_PORT="5432"
 export PGVECTOR_USER="postgres"
 export PGVECTOR_PASSWORD="your-password"
 export PGVECTOR_DATABASE="vectordb"
 
-# TcVector 配置
+# TcVector 配置（当使用 -vectorstore=tcvector 时必填）
 export TCVECTOR_URL="https://your-tcvector-endpoint"
 export TCVECTOR_USERNAME="your-username"
 export TCVECTOR_PASSWORD="your-password"
+
+# Elasticsearch 配置（当使用 -vectorstore=elasticsearch 时必填）
+export ELASTICSEARCH_HOSTS="http://localhost:9200"
+export ELASTICSEARCH_USERNAME=""
+export ELASTICSEARCH_PASSWORD=""
+export ELASTICSEARCH_API_KEY=""
+export ELASTICSEARCH_INDEX_NAME="trpc_agent_documents"
 ```
 
 ### 命令行参数
@@ -626,10 +664,12 @@ export TCVECTOR_PASSWORD="your-password"
 go run main.go -embedder openai -vectorstore inmemory
 go run main.go -embedder gemini -vectorstore pgvector
 go run main.go -embedder openai -vectorstore tcvector
+go run main.go -embedder openai -vectorstore elasticsearch -es-version v9
 
 # 参数说明：
 # -embedder: 选择 embedder 类型 (openai, gemini)， 默认为 openai
-# -vectorstore: 选择向量存储类型 (inmemory, pgvector, tcvector)，默认为 inmemory
+# -vectorstore: 选择向量存储类型 (inmemory, pgvector, tcvector, elasticsearch)，默认为 inmemory
+# -es-version: 指定 Elasticsearch 版本 (v7, v8, v9)，仅当 vectorstore=elasticsearch 时有效
 ```
 
 ## 故障排除
@@ -710,4 +750,3 @@ go run main.go -embedder openai -vectorstore tcvector
      - 确认文件存在且后缀受支持（.md/.txt/.pdf/.csv/.json/.docx 等）；
      - 目录源是否需要 `WithRecursive(true)`；
      - 使用 `WithFileExtensions` 做白名单过滤。
-
