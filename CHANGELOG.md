@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **tool**: Support nested object properties in MCP schema conversion for complex data structures. (#262)
 - **agent**: Wrap invocation context in runner for better execution context management. (#268)
 - **llmflow**: Enhance transfer_to_agent tool compatibility for improved agent transfer workflows. (#249)
+- **artifact**: Artifact service with in-memory and cos support (#272) 
 
 ### Bug Fixes
 - **session**: Fix message truncated in session to ensure complete message delivery. (#276)
