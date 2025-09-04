@@ -82,6 +82,10 @@ type Node struct {
 	channels []string            // Channels this node reads from
 	writers  []channelWriteEntry // Channels this node writes to
 	mapper   func(any) any       // Input transformation function
+
+	// Declared destinations for dynamic routing visualization and static checks.
+	// Keys are target node IDs; values are optional labels.
+	destinations map[string]string
 }
 
 // Edge represents an edge in the graph.
@@ -178,42 +182,17 @@ func (g *Graph) validate() error {
 	if _, exists := g.nodes[g.entryPoint]; !exists {
 		return fmt.Errorf("entry point node %s does not exist", g.entryPoint)
 	}
-	// Check that all nodes are reachable from entry point
-	visited := make(map[string]bool)
-	if err := g.dfsValidate(g.entryPoint, visited); err != nil {
-		return err
-	}
-	// Check for unreachable nodes
-	for nodeID := range g.nodes {
-		if !visited[nodeID] {
-			return fmt.Errorf("node %s is not reachable from entry point", nodeID)
+	// Validate declared destinations exist.
+	for _, n := range g.nodes {
+		if n == nil || n.destinations == nil || len(n.destinations) == 0 {
+			continue
 		}
-	}
-	return nil
-}
-
-// dfsValidate performs depth-first search validation.
-func (g *Graph) dfsValidate(nodeID string, visited map[string]bool) error {
-	if visited[nodeID] {
-		return nil // Already visited, cycles are allowed
-	}
-	visited[nodeID] = true
-	// Check regular edges
-	edges := g.edges[nodeID]
-	for _, edge := range edges {
-		if edge.To != End {
-			if err := g.dfsValidate(edge.To, visited); err != nil {
-				return err
+		for to := range n.destinations {
+			if to == End {
+				continue
 			}
-		}
-	}
-	// Check conditional edges
-	if condEdge, exists := g.conditionalEdges[nodeID]; exists {
-		for _, to := range condEdge.PathMap {
-			if to != End {
-				if err := g.dfsValidate(to, visited); err != nil {
-					return err
-				}
+			if _, ok := g.nodes[to]; !ok {
+				return fmt.Errorf("node %s declares destination %s which does not exist", n.ID, to)
 			}
 		}
 	}

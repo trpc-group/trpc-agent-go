@@ -83,6 +83,20 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
+// WithDestinations declares potential dynamic routing targets for a node.
+// This is used for static validation (existence) and visualization only.
+// It does not influence runtime execution.
+func WithDestinations(dests map[string]string) Option {
+	return func(node *Node) {
+		if node.destinations == nil {
+			node.destinations = make(map[string]string)
+		}
+		for k, v := range dests {
+			node.destinations[k] = v
+		}
+	}
+}
+
 // WithPreNodeCallback sets a callback that will be executed before this specific node.
 // This callback is specific to this node and will be executed in addition to any global callbacks.
 func WithPreNodeCallback(callback BeforeNodeCallback) Option {

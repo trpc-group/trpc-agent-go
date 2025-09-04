@@ -94,6 +94,45 @@ func TestAddEdge(t *testing.T) {
 	}
 }
 
+func TestValidate_NoStaticReachabilityRequired(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+
+	// Two nodes with no edge between them; entry set to nodeA only.
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.SetEntryPoint("A")
+	// No edges A->B; should still compile since we don't enforce reachability.
+
+	g, err := sg.Compile()
+	if err != nil || g == nil {
+		t.Fatalf("Expected compile success without reachability enforcement, got err=%v", err)
+	}
+}
+
+func TestValidate_DestinationsExistence(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+
+	// Add nodes
+	sg.AddNode("start", func(ctx context.Context, s State) (any, error) { return s, nil }, WithDestinations(map[string]string{"finish": ""}))
+	sg.AddNode("finish", func(ctx context.Context, s State) (any, error) { return s, nil })
+	sg.SetEntryPoint("start").SetFinishPoint("finish")
+
+	// Should compile: destination 'finish' exists.
+	if _, err := sg.Compile(); err != nil {
+		t.Fatalf("Expected compile success with valid destinations, got err=%v", err)
+	}
+
+	// Now create an invalid destination declaration.
+	sg2 := NewStateGraph(schema)
+	sg2.AddNode("start", func(ctx context.Context, s State) (any, error) { return s, nil }, WithDestinations(map[string]string{"missing": ""}))
+	sg2.SetEntryPoint("start")
+	if _, err := sg2.Compile(); err == nil {
+		t.Fatal("Expected compile error due to missing declared destination, got nil")
+	}
+}
+
 func TestStateSchema(t *testing.T) {
 	schema := NewStateSchema().
 		AddField("counter", StateField{
