@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.0] - 2025-09-03
+
+### Features
+- **storage**: Reimplement Elasticsearch vectorstore architecture with enhanced performance and reliability. (#277)
+- **graph**: Introduce new reducers to enhance graph messages processing for better workflow orchestration. (#280)
+- **graph**: Add node responses keys for improved graph node communication. (#278)
+- **graph**: Support subagent in graph agent node for hierarchical agent execution. (#246)
+- **a2a**: Support streaming protocol for agent-to-agent communication with real-time data transfer. (#248)
+- **agent**: Support structured output for better response formatting and validation. (#233)
+- **model**: Add OpenAI Batch API support for efficient batch processing. (#231)
+- **tool**: Support file tool set for enhanced file operations. (#229)
+- **session**: Add cleaning functionality to the session service for better resource management. (#244)
+- **memory**: Introduce custom instruction builder for memory services with improved configuration. (#241)
+- **tool**: Support nested object properties in MCP schema conversion for complex data structures. (#262)
+- **agent**: Wrap invocation context in runner for better execution context management. (#268)
+- **llmflow**: Enhance transfer_to_agent tool compatibility for improved agent transfer workflows. (#249)
+- **artifact**: Artifact service with in-memory and cos support (#272) 
+
+### Bug Fixes
+- **session**: Fix message truncated in session to ensure complete message delivery. (#276)
+- **session**: Fix Redis session events issues for proper event ordering and delivery. (#238)
+- **chunking**: Fix markdown chunking issue to prevent text corruption during processing. (#281)
+- **examples**: Fix React example implementation and dependencies. (#243)
+- **log**: Fix log.SetLevel not taking effect issue for proper logging level control. (#234)
+- **examples**: Fix version of go.mod in examples and session modules. (#282)
+
+### Examples
+- **examples**: Add retry mechanism examples and documentation for MCP tools with comprehensive usage guides. (#264)
+- **examples**: Refactor callbacks examples and add invocation context usage demonstrations. (#265)
+- **examples**: Move specialized agents to their own file for better organization. (#260)
+
+### Documentation
+- **docs**: Add comprehensive Memory documentation with detailed usage instructions. (#271)
+- **docs**: Add documentation chapter in README and zh-CN README for better accessibility. (#263)
+- **docs**: Add full documentation with comprehensive guides and API references. (#257)
+- **docs**: Update README with new examples and usage instructions. (#259)
+- **docs**: Add streaming output configuration in documentation. (#261)
+- **docs**: Update ecosystem path for better navigation. (#275)
+- **docs**: Building documentation with mkdocs for improved user experience. (#247)
+
+### Enhancements
+- **agent**: Enhance LLMAgent configuration validation in New function for better error handling. (#232)
+- **log**: Enhance error logging for tool call failures with detailed error information. (#242)
+- **graph**: Properly align user, tool, and assistant messages for better conversation flow. (#267)
+- **storage**: Refactor storage and add tests for Redis and TcVector clients with improved reliability. (#235)
+- **memory**: Refactor memory service for clarity and better performance. (#237)
+- **agent**: Refactor for cyclomatic complexity and replace 'interface{}' with 'any' for modern Go practices. (#255)
+- **a2a**: Use agent URL as fallback URL for agent card for improved service discovery. (#251)
+
+### Dependencies
+- **deps**: Bump trpc.group/trpc-go/trpc-mcp-go to v0.0.4 for latest MCP protocol support. (#274)
+
+### Chore
+- **lsc**: Update license and gofmt files for compliance. (#273)
+- **ci**: Allow manual triggering of deployment and update trigger conditions. (#254)
+- **ci**: Upgrade codecov version to v5 for better code coverage reporting. (#230)
+- **test**: Remove duplicated dummy tool implementations for cleaner codebase. (#250)
+
+
 ## [0.0.4] - 2025-08-18
 
 ### Features
