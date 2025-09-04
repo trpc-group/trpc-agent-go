@@ -114,3 +114,25 @@ func TestClientV8_CRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 }
+
+func TestClientV8_Ping(t *testing.T) {
+	rt := roundTripper(func(r *http.Request) *http.Response {
+		ok := func(code int, body string) *http.Response {
+			resp := &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		}
+		// HEAD /
+		if r.Method == http.MethodHead && r.URL.Path == "/" {
+			return ok(http.StatusOK, "")
+		}
+		return ok(http.StatusOK, `{}`)
+	})
+
+	es, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	require.NoError(t, err)
+	c := &clientV8{esClient: es}
+
+	ctx := context.Background()
+	require.NoError(t, c.Ping(ctx))
+}
