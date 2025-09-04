@@ -194,7 +194,7 @@ func createMockService() (*Service, *MockTransport) {
 	mockCosClient := cos.NewClient(&cos.BaseURL{BucketURL: mockBucketURL}, mockClient)
 
 	// Use WithClient option to inject the mock COS client
-	service, _ := NewService("", WithClient(mockCosClient))
+	service, _ := NewService("cos-service", "", WithClient(mockCosClient))
 
 	return service, mockTransport
 }
@@ -533,7 +533,7 @@ func TestNewServiceWithOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, err := NewService(tt.bucketURL, tt.options...)
+			service, err := NewService(tt.name, tt.bucketURL, tt.options...)
 			require.NoError(t, err)
 			assert.NotNil(t, service)
 			assert.NotNil(t, service.cosClient)
