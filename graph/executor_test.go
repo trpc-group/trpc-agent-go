@@ -1011,104 +1011,6 @@ func TestParallelFanOutWithCommands(t *testing.T) {
 	assert.True(t, m["B"], "Expected result to contain B")
 }
 
-// TestFanOutWithNonPointerCommands tests fan-out functionality with []Command (non-pointer slice).
-func TestFanOutWithNonPointerCommands(t *testing.T) {
-	// Define schema with a results slice using StringSliceReducer for merging.
-	schema := NewStateSchema().
-		AddField("results", StateField{
-			Type:    reflect.TypeOf([]string{}),
-			Reducer: StringSliceReducer,
-			Default: func() any { return []string{} },
-		})
-
-	// Build graph.
-	stateGraph := NewStateGraph(schema)
-
-	// Fan-out node: returns []Command (non-pointer slice) to test the new type support.
-	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
-		cmds := []Command{ // Note: []Command, not []*Command
-			{Update: State{"param": "X"}, GoTo: "worker"},
-			{Update: State{"param": "Y"}, GoTo: "worker"},
-			{Update: State{"param": "Z"}, GoTo: "worker"},
-		}
-		return cmds, nil
-	})
-
-	// Worker node: reads overlay param and appends into results.
-	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
-		p, _ := state["param"].(string)
-		if p == "" {
-			return State{}, nil
-		}
-		return State{"results": []string{p}}, nil
-	})
-
-	// Entry is fanout; connect fanout -> worker and finish at worker.
-	stateGraph.SetEntryPoint("fanout")
-	stateGraph.AddEdge("fanout", "worker")
-	stateGraph.SetFinishPoint("worker")
-
-	// Compile and execute.
-	graph, err := stateGraph.Compile()
-	require.NoError(t, err, "Failed to compile graph")
-
-	executor, err := NewExecutor(graph)
-	require.NoError(t, err, "Failed to create executor")
-
-	invocation := &agent.Invocation{InvocationID: "test-fanout-non-pointer-commands"}
-	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
-	require.NoError(t, err, "Failed to execute graph")
-
-	var finalState State
-	for event := range eventChan {
-		if event.Done && event.StateDelta != nil {
-			finalState = make(State)
-			for key, valueBytes := range event.StateDelta {
-				if key == MetadataKeyNode || key == MetadataKeyPregel ||
-					key == MetadataKeyChannel || key == MetadataKeyState ||
-					key == MetadataKeyCompletion {
-					continue
-				}
-				var value any
-				if err := json.Unmarshal(valueBytes, &value); err == nil {
-					finalState[key] = value
-				}
-			}
-		}
-		if event.Done {
-			break
-		}
-	}
-
-	// Verify results.
-	require.NotNil(t, finalState, "No final state received")
-
-	// Handle both []string and []any types from JSON unmarshalling.
-	if vs, ok := finalState["results"].([]string); ok {
-		assert.Len(t, vs, 3, "Expected 3 results")
-		m := map[string]bool{}
-		for _, s := range vs {
-			m[s] = true
-		}
-		assert.True(t, m["X"], "Expected result to contain X")
-		assert.True(t, m["Y"], "Expected result to contain Y")
-		assert.True(t, m["Z"], "Expected result to contain Z")
-	} else if vals, ok := finalState["results"].([]any); ok {
-		assert.Len(t, vals, 3, "Expected 3 results")
-		m := map[string]bool{}
-		for _, v := range vals {
-			if s, ok := v.(string); ok {
-				m[s] = true
-			}
-		}
-		assert.True(t, m["X"], "Expected result to contain X")
-		assert.True(t, m["Y"], "Expected result to contain Y")
-		assert.True(t, m["Z"], "Expected result to contain Z")
-	} else {
-		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
-	}
-}
-
 // TestFanOutWithGlobalStateAccess tests that fan-out branches can access global state.
 func TestFanOutWithGlobalStateAccess(t *testing.T) {
 	// Define schema with both global and local fields
@@ -1124,7 +1026,7 @@ func TestFanOutWithGlobalStateAccess(t *testing.T) {
 
 	// Fan-out node: returns commands with local params but needs global state access.
 	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
-		cmds := []Command{
+		cmds := []*Command{
 			{Update: State{"local_param": "task1"}, GoTo: "worker"},
 			{Update: State{"local_param": "task2"}, GoTo: "worker"},
 		}
@@ -1224,7 +1126,7 @@ func TestFanOutWithEmptyCommands(t *testing.T) {
 
 	// Fan-out node: returns empty command slice.
 	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
-		cmds := []Command{} // Empty slice
+		cmds := []*Command{} // Empty slice
 		return cmds, nil
 	})
 
@@ -1296,7 +1198,7 @@ func TestFanOutWithNilCommandUpdate(t *testing.T) {
 
 	// Fan-out node: returns commands with nil update.
 	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
-		cmds := []Command{
+		cmds := []*Command{
 			{Update: nil, GoTo: "worker"}, // nil update
 			{Update: State{"param": "valid"}, GoTo: "worker"},
 		}
