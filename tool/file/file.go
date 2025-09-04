@@ -196,11 +196,12 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 }
 
 func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitive bool) ([]string, error) {
-	opts := []doublestar.GlobOption{}
+	// Note: Case-insensitive matching is not available in doublestar v4.6.1
+	// which is compatible with Go 1.21. This feature requires a newer version.
 	if !caseSensitive {
-		opts = append(opts, doublestar.WithCaseInsensitive())
+		// Case-insensitive matching not supported in this version
 	}
-	files, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
+	files, err := doublestar.Glob(os.DirFS(targetPath), pattern)
 	if err != nil {
 		return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
 	}
