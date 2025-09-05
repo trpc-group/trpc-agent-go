@@ -1,40 +1,42 @@
-# Interrupt & Resume Example
+# Advanced Interrupt & Resume Example
 
 This example demonstrates comprehensive interrupt and resume functionality
 using the graph package, GraphAgent, and Runner. It showcases how to build
 graph-based agents that can be interrupted at specific points and resumed
-with user input, following a real-world approval workflow pattern.
+with user input, implementing a real-world two-stage approval workflow pattern.
 
 ## Overview
 
 The example implements an interactive command-line application that:
 - Uses **Runner** for orchestration and session management
-- Uses **GraphAgent** for graph-based execution
-- Provides an **interactive CLI** similar to examples/runner
-- Demonstrates **real-world approval workflows**
+- Uses **GraphAgent** for graph-based execution with checkpoint support
+- Provides an **interactive CLI** with comprehensive commands
+- Demonstrates **real-world two-stage approval workflows**
+- Supports **multiple interrupt points** with independent handling
 
 ### Workflow Nodes
 
-1. **increment** - Increments a counter (simulates processing)
-2. **request_approval** - Interrupts and waits for user approval
-3. **process_approval** - Processes the approval decision
-4. **finalize** - Completes the workflow
+1. **increment** - Increments a counter from 0 to 10 (simulates data processing)
+2. **request_approval** - First interrupt point for initial approval
+3. **second_approval** - Second interrupt point for additional verification
+4. **process_approval** - Processes the final approval decision
+5. **finalize** - Completes the workflow with final state
 
 ## Features
 
 ### Core Capabilities
-- **Interactive Command-Line Interface** - User-friendly commands and help
-- **Interrupt Mechanism** - Using `graph.Interrupt()` helper
-- **Resume with User Input** - Via ResumeMap for key-based resume
-- **Checkpoint Management** - List, view, and track checkpoints
-- **Session Persistence** - Maintains state across interrupts
+- **Interactive Command-Line Interface** - Rich CLI with help and command history
+- **Multi-Stage Interrupts** - Sequential interrupt points with independent handling
+- **Dynamic Resume Logic** - Uses TaskID from checkpoint for automatic key mapping
+- **Checkpoint Management** - List, view, tree visualization, and deletion
+- **Session Persistence** - Maintains state across interrupts and resumes
 
 ### Advanced Features
-- **GraphAgent Integration** - Full graph-based agent capabilities
-- **Runner Orchestration** - Professional session and event handling
-- **Multiple Execution Modes** - Normal, interrupt, resume, demo
-- **Detailed Event Tracking** - Node execution visibility
-- **Error Handling** - Robust error recovery and reporting
+- **Checkpoint Tree Visualization** - Visual parent-child checkpoint relationships
+- **Interrupt Status Tracking** - Detailed interrupt context and available actions
+- **Execution History** - Timeline view with interrupt markers
+- **Namespace Support** - Parallel execution branches within lineages
+- **Multiple Storage Backends** - Memory and SQLite support
 
 ## Prerequisites
 
@@ -52,76 +54,129 @@ go run .
 
 ### Command-Line Flags
 
+- `-model` (string): Model to use (default: "deepseek-chat")
+- `-storage` (string): Storage type: "memory" or "sqlite" (default: "memory")
+- `-db` (string): SQLite database path (default: "interrupt-checkpoints.db")
+- `-verbose` (bool): Enable verbose logging (default: false)
 - `-interactive` (bool): Enable interactive CLI mode (default: true)
-- `-lineage` (string): Custom lineage ID (default: auto-generated)
 
 ### Interactive Commands
 
 Once in interactive mode, the following commands are available:
 
+#### Workflow Execution
 | Command | Description | Example |
 |---------|-------------|---------|
-| `run` | Execute workflow normally | `run` |
-| `interrupt` | Run until interrupt point | `interrupt` |
-| `resume <input>` | Resume with user input | `resume yes` |
-| `list` | List all checkpoints | `list` |
-| `demo` | Run complete demonstration | `demo` |
-| `help` | Show command help | `help` |
-| `exit` | Exit the application | `exit` |
+| `run [lineage-id]` | Execute workflow normally (skips interrupts) | `run my-workflow` |
+| `interrupt [lineage-id]` | Run until interrupt point | `interrupt test-flow` |
+| `resume <lineage-id> <input>` | Resume from interrupt | `resume test-flow yes` |
+
+#### Checkpoint Management
+| Command | Description | Example |
+|---------|-------------|---------|
+| `list [lineage-id]` | List all checkpoints | `list test-flow` |
+| `tree [lineage-id]` | Display checkpoint tree | `tree test-flow` |
+| `history [lineage-id]` | Show execution history | `history test-flow` |
+| `latest [lineage-id]` | Show latest checkpoint details | `latest test-flow` |
+| `status [lineage-id]` | Show interrupt status | `status test-flow` |
+| `delete <lineage-id>` | Delete lineage checkpoints | `delete test-flow` |
+
+#### Other Commands
+| Command | Description |
+|---------|-------------|
+| `demo` | Run comprehensive demonstration |
+| `help` | Show all available commands |
+| `exit` or `quit` | Exit the application |
 
 ## Execution Modes
 
 ### 1. Normal Execution (`run`)
-Executes the complete workflow without interrupt handling:
+Executes the complete workflow without interruptions:
 ```
-🔐 Interrupt> run
-▶️  Running normal execution...
-✅ Normal execution completed (11 events)
+🔐 interrupt> run xx
+
+🚀 Running workflow normally (lineage: xx)...
+2025-09-05T12:05:11+08:00  INFO  Saving checkpoint ID=b2b0ecc5, Source=loop, Step=0
+2025-09-05T12:05:11+08:00  INFO  Saving checkpoint ID=d5b1bab3, Source=loop, Step=1
+2025-09-05T12:05:11+08:00  INFO  Saving checkpoint ID=403ccd33, Source=loop, Step=2
+✅ Workflow execution finished
+   Last node: finalize, events: 38, duration: 4.095875ms
 ```
 
-### 2. Interrupt Mode (`interrupt`)
-Runs until the approval point and saves checkpoint:
+### 2. Interrupt Mode with Two-Stage Approval
+
+#### First Interrupt
 ```
-🔐 Interrupt> interrupt
-🔄 Running until interrupt...
+🔐 interrupt> interrupt yy
+
+🔄 Running workflow until interrupt (lineage: yy)...
 ⚡ Executing: increment
 ⚡ Executing: request_approval
 ⚠️  Interrupt detected
 💾 Execution interrupted, checkpoint saved
-   Use 'resume <yes/no>' to continue
+   Use 'resume yy <yes/no>' to continue
 ```
 
-### 3. Resume Mode (`resume`)
-Continue from interrupt with approval decision:
+#### Resume to Second Interrupt
 ```
-🔐 Interrupt> resume yes
-⏪ Resuming with input: yes
-✅ Resume completed (30 events)
+🔐 interrupt> resume yy yes
+
+⏪ Resuming workflow from lineage: yy with input: yes
+2025-09-05T12:05:35+08:00  INFO  Loaded checkpoint - NextNodes=[request_approval]
+⚠️  Workflow interrupted again
+   Use 'resume yy <yes/no>' to continue
 ```
 
-### 4. List Checkpoints (`list`)
-View all saved checkpoints:
+#### Final Resume to Completion
 ```
-🔐 Interrupt> list
-📜 Available Checkpoints:
-----------------------------------------------------------------------
- 1. ID: abc-123-def
-    Step: 1 | Source: interrupt
-    ⚠️  INTERRUPTED at node: request_approval
-----------------------------------------------------------------------
+🔐 interrupt> resume yy yes
+
+⏪ Resuming workflow from lineage: yy with input: yes
+2025-09-05T12:05:46+08:00  INFO  Loaded checkpoint - NextNodes=[second_approval]
+✅ Workflow completed successfully!
+   Total events: 24
 ```
 
-### 5. Demo Mode (`demo`)
-Runs a complete demonstration sequence:
+### 3. Checkpoint Listing
 ```
-🔐 Interrupt> demo
-🎬 Running Complete Demo...
-1️⃣  Running until interrupt...
-2️⃣  Listing checkpoints...
-3️⃣  Resuming with approval...
-4️⃣  Running another cycle with rejection...
-5️⃣  Final checkpoint list...
-✅ Demo completed!
+🔐 interrupt> list yy
+
+📋 Checkpoints for lineage: yy
+--------------------------------------------------------------------------------
+ 1. ID: 7e8ef18f-dea8-4ecd-974e-4fc64d5f7ff4
+    Namespace: 
+    Created: 12:05:37 | Source: interrupt | Step: 3
+    State: counter=10, steps=2, last_node=request_approval
+    🔴 INTERRUPTED at node: second_approval
+    💬 Message: This requires a second approval (yes/no):
+    🔗 Node ID: second_approval
+ 2. ID: 7c97c495-55e1-4f94-bd20-6ce4cf894973
+    Namespace: 
+    Created: 12:05:37 | Source: loop | Step: 2
+    State: counter=10, steps=2, last_node=request_approval
+    ✅ Completed checkpoint
+--------------------------------------------------------------------------------
+```
+
+### 4. Tree Visualization
+```
+🔐 interrupt> tree yy
+
+🌳 Interrupt Checkpoint Tree for lineage: yy
+--------------------------------------------------------------------------------
+Total checkpoints: 8
+Interrupted checkpoints: 2
+Branch points: 7
+
+📍 da75af0a (counter=0, node=, 12:05:58)
+  └─📍 ebeb801c (counter=10, node=increment, 12:05:58)
+    └─🔴 eb961247 (counter=10, node=increment, 12:05:58) [INTERRUPTED]
+      └─📍 7c97c495 (counter=10, node=request_approval, 12:05:58)
+        └─🔴 7e8ef18f (counter=10, node=request_approval, 12:05:58) [INTERRUPTED]
+          └─📍 f7c845ab (counter=10, node=second_approval, 12:05:58)
+            └─📍 2d407492 (counter=10, node=process_approval, 12:05:58)
+              └─📍 abd8354b (counter=10, node=finalize, 12:05:58)
+--------------------------------------------------------------------------------
 ```
 
 ## Implementation Details
@@ -130,122 +185,146 @@ Runs a complete demonstration sequence:
 
 ```
 ┌─────────────────┐
-│     Runner      │  Orchestration layer
+│     Runner      │  Orchestration & Session Management
 └────────┬────────┘
          │
 ┌────────▼────────┐
-│   GraphAgent    │  Graph-based agent
+│   GraphAgent    │  Graph-based Agent with Checkpoint Support
 └────────┬────────┘
          │
 ┌────────▼────────┐
-│  StateGraph     │  Workflow definition
+│  StateGraph     │  Workflow Definition with Interrupt Points
 └────────┬────────┘
          │
 ┌────────▼────────┐
-│  Checkpoints    │  State persistence
+│ CheckpointMgr   │  State Persistence & Tree Management
 └─────────────────┘
 ```
 
 ### State Schema
 
-The workflow maintains four state fields:
+The workflow maintains the following state fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `counter` | int | Incremented value |
-| `messages` | []string | Operation log |
-| `user_input` | string | User's input |
-| `approved` | bool | Approval status |
+| `counter` | int | Value incremented by increment node (0→10) |
+| `messages` | []string | Operation log and execution history |
+| `user_input` | string | User's approval input |
+| `approved` | bool | Approval status for decisions |
+| `step_count` | int | Total execution steps counter |
+| `last_node` | string | Last executed node ID |
 
 ### Interrupt Flow
 
-1. **Interrupt Creation**:
+#### 1. First Interrupt (Request Approval)
 ```go
+// In request_approval node
 interruptValue := map[string]any{
-    "message":  "Please approve the current state (yes/no):",
-    "counter":  currentCounter,
-    "messages": messageHistory,
+    "message":    "Please approve the current state (yes/no):",
+    "counter":    getInt(s, "counter"),
+    "messages":   getStrs(s, "messages"),
+    "step_count": stepCount,
+    "node_id":    nodeRequestApproval,
 }
-resumeValue, err := graph.Interrupt(ctx, s, "approval", interruptValue)
+// Use node ID as interrupt key for consistency with executor
+resumeValue, err := graph.Interrupt(ctx, s, nodeRequestApproval, interruptValue)
 ```
 
-2. **Resume Handling**:
+#### 2. Second Interrupt (Second Approval)
 ```go
-cmd := &graph.Command{
-    ResumeMap: map[string]any{
-        "approval": userInput,
-    },
+// In second_approval node (only if first was approved)
+interruptValue := map[string]any{
+    "message":    "This requires a second approval (yes/no):",
+    "counter":    getInt(s, "counter"),
+    "messages":   getStrs(s, "messages"),
+    "step_count": stepCount,
+    "node_id":    nodeSecondApproval,
+}
+resumeValue, err := graph.Interrupt(ctx, s, nodeSecondApproval, interruptValue)
+```
+
+#### 3. Dynamic Resume Handling
+```go
+// Extract TaskID from checkpoint for automatic key mapping
+latest, err := w.manager.Latest(ctx, lineageID, namespace)
+if err == nil && latest != nil && latest.Checkpoint.IsInterrupted() {
+    // Use the TaskID from the interrupt state as the key
+    taskID := latest.Checkpoint.InterruptState.TaskID
+    cmd.ResumeMap[taskID] = userInput
 }
 ```
 
 ### Real-World Use Cases
 
 This pattern is ideal for:
-- **Approval Workflows** - Budget approvals, deployment gates
-- **Human-in-the-Loop AI** - Manual verification steps
-- **Long-Running Processes** - Pausable data pipelines
-- **Quality Gates** - Manual testing checkpoints
-- **Compliance Workflows** - Regulatory approval requirements
+- **Multi-Stage Approvals** - Financial transactions, deployment pipelines
+- **Quality Gates** - Code review → security review → deployment
+- **Human-in-the-Loop AI** - Initial AI decision → human verification → final check
+- **Compliance Workflows** - Multiple regulatory approval requirements
+- **Long-Running Processes** - Pausable data pipelines with checkpoints
+- **Escalation Workflows** - Manager approval → director approval
 
-## Expected Output
+## Advanced Features
 
-### Complete Session Example
+### Checkpoint Tree Structure
+- Visual parent-child relationships
+- Interrupt markers (🔴) vs normal checkpoints (📍)
+- State tracking at each checkpoint
+- Branch point counting
+
+### Interrupt Status Monitoring
 ```
-🔄 Interrupt & Resume Interactive Demo
-Lineage: interrupt-demo-1234567890
-Session: session-1234567890
-==================================================
-✅ Workflow ready! Type 'help' for commands.
+🔍 Interrupt Status for lineage: test-flow
+------------------------------------------------------------
+🔴 STATUS: INTERRUPTED
+   Node: request_approval
+   Task ID: request_approval
+   Created: 11:53:56
 
-🔐 Interrupt> interrupt
-🔄 Running until interrupt...
-⚡ Executing: increment
-⚡ Executing: request_approval
-⚠️  Interrupt detected
-💾 Execution interrupted, checkpoint saved
-   Use 'resume <yes/no>' to continue
+📋 Context:
+   step_count: 1
+   node_id: request_approval
+   message: Please approve the current state (yes/no):
+   counter: 10
 
-🔐 Interrupt> resume yes
-⏪ Resuming with input: yes
-✅ Resume completed (30 events)
-
-🔐 Interrupt> list
-📜 Available Checkpoints:
-----------------------------------------------------------------------
- 1. ID: checkpoint-123
-    Step: 1 | Source: interrupt
-    ⚠️  INTERRUPTED at node: request_approval
- 2. ID: checkpoint-456
-    Step: 2 | Source: loop
-----------------------------------------------------------------------
+💡 Actions:
+   resume test-flow yes   - Approve and continue
+   resume test-flow no    - Reject and stop
+------------------------------------------------------------
 ```
 
-## Key Differences from Basic Examples
+## Key Implementation Insights
 
-1. **Full Framework Integration** - Uses Runner and GraphAgent
-2. **Interactive CLI** - Professional command-line interface
-3. **Session Management** - Persistent sessions across executions
-4. **Production Patterns** - Error handling, logging, state management
-5. **Real-World Focus** - Practical approval workflow implementation
+1. **TaskID Consistency** - Interrupt keys match node IDs for executor compatibility
+2. **Dynamic Resume** - Resume values mapped based on checkpoint state
+3. **Sequential Interrupts** - Each interrupt handled independently
+4. **State Preservation** - Complete state maintained across interrupts
+5. **Tree Visualization** - Clear parent-child checkpoint relationships
 
 ## Notes
 
-- Uses in-memory checkpoint saver (production should use persistent storage)
-- Lineage IDs enable multiple concurrent workflows
-- Sessions maintain conversation context
-- All commands provide clear feedback and error messages
+- Uses in-memory checkpoint saver by default (use SQLite for persistence)
+- Lineage IDs enable multiple concurrent workflow instances
+- Namespace support allows parallel execution branches
+- All commands provide clear feedback with emojis and formatting
 - The demo mode showcases all features automatically
 
 ## Troubleshooting
 
-### No checkpoints found
-- Ensure you've run `interrupt` before listing
-- Check that lineage ID matches if using custom values
+### Resume fails with "no active interrupt found"
+- Ensure the workflow was interrupted first
+- Check that the lineage ID matches exactly
+- Verify the checkpoint is in interrupted state using `status`
 
-### Resume fails
-- Verify the workflow was interrupted first
-- Ensure input is provided (yes/no)
+### Second interrupt not triggering
+- Confirm first approval was "yes" (rejection skips second approval)
+- Check logs with `-verbose` flag for detailed execution flow
 
-### Execution doesn't interrupt
-- Confirm using `interrupt` command, not `run`
-- Check that the workflow reaches the approval node
+### Tree visualization issues
+- Ensure terminal supports UTF-8 for emoji display
+- Use `list` command as alternative for checkpoint information
+
+### Checkpoint not found
+- Verify lineage ID spelling
+- Check storage backend is accessible
+- Ensure workflow has been run at least once

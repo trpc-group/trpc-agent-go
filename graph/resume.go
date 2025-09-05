@@ -16,9 +16,26 @@ import (
 // Interrupt interrupts execution at the current node and returns the provided
 // prompt value. On resume, it returns the resume value that was provided.
 func Interrupt(ctx context.Context, state State, key string, prompt any) (any, error) {
+	// Track which interrupts have been used in this invocation.
+	// This allows the same resume value to be returned if the node re-executes.
+	usedInterruptsKey := "__used_interrupts__"
+	usedMap, _ := state[usedInterruptsKey].(map[string]any)
+	if usedMap == nil {
+		usedMap = make(map[string]any)
+		state[usedInterruptsKey] = usedMap
+	}
+
+	// Check if we've already used a resume value for this key.
+	if usedValue, exists := usedMap[key]; exists {
+		// Return the same value that was used before.
+		return usedValue, nil
+	}
+
 	// Check if we're resuming.
 	if resumeValue, exists := state[ResumeChannel]; exists {
-		// Clear the resume value to avoid reusing it.
+		// Store the used value and return it.
+		usedMap[key] = resumeValue
+		// Clear the resume value to avoid reusing it for other keys.
 		delete(state, ResumeChannel)
 		return resumeValue, nil
 	}
@@ -27,7 +44,9 @@ func Interrupt(ctx context.Context, state State, key string, prompt any) (any, e
 	if resumeMap, exists := state[StateKeyResumeMap]; exists {
 		if resumeMapTyped, ok := resumeMap.(map[string]any); ok {
 			if resumeValue, exists := resumeMapTyped[key]; exists {
-				// Clear the specific key to avoid reusing it.
+				// Store the used value and return it.
+				usedMap[key] = resumeValue
+				// Clear the specific key to avoid reusing it for other keys.
 				delete(resumeMapTyped, key)
 				return resumeValue, nil
 			}
