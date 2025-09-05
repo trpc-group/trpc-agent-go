@@ -269,3 +269,37 @@ func TestConvertMCPSchema_ArrayWithNestedObjects(t *testing.T) {
 	// Verify required fields
 	require.ElementsMatch(t, []string{"id", "name"}, usersSchema.Items.Required)
 }
+
+func TestNewMCPTool_WithOutputSchema(t *testing.T) {
+	// Test OutputSchema conversion using the same approach as existing schema tests
+	outputSchema := map[string]any{
+		"type":        "object",
+		"description": "Output schema for test tool",
+		"required":    []any{"result", "success"},
+		"properties": map[string]any{
+			"result": map[string]any{
+				"type":        "string",
+				"description": "Operation result",
+			},
+			"success": map[string]any{
+				"type":        "boolean",
+				"description": "Success flag",
+			},
+		},
+	}
+
+	// Test the schema conversion function directly
+	convertedSchema := convertMCPSchemaToSchema(outputSchema)
+
+	// Verify the converted schema
+	require.NotNil(t, convertedSchema)
+	require.Equal(t, "object", convertedSchema.Type)
+	require.Equal(t, "Output schema for test tool", convertedSchema.Description)
+	require.Contains(t, convertedSchema.Properties, "result")
+	require.Contains(t, convertedSchema.Properties, "success")
+	require.Equal(t, "string", convertedSchema.Properties["result"].Type)
+	require.Equal(t, "Operation result", convertedSchema.Properties["result"].Description)
+	require.Equal(t, "boolean", convertedSchema.Properties["success"].Type)
+	require.Equal(t, "Success flag", convertedSchema.Properties["success"].Description)
+	require.ElementsMatch(t, []string{"result", "success"}, convertedSchema.Required)
+}
