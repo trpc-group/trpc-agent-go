@@ -11,7 +11,7 @@ replace trpc.group/trpc-go/trpc-agent-go/storage/tcvector => ../../../storage/tc
 require (
 	github.com/stretchr/testify v1.10.0
 	github.com/tencent/vectordatabase-sdk-go v1.8.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.2
+	trpc.group/trpc-go/trpc-agent-go v0.1.2
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9
 )
 
