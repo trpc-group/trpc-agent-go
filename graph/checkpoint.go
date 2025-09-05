@@ -427,9 +427,9 @@ func (c *Checkpoint) Copy() *Checkpoint {
 		ParentCheckpointID: c.ParentCheckpointID,
 		UpdatedChannels:    updatedChannels,
 		PendingSends:       pendingSends,
-		InterruptState:  interruptState,
-		NextNodes:       nextNodes,
-		NextChannels:    nextChannels,
+		InterruptState:     interruptState,
+		NextNodes:          nextNodes,
+		NextChannels:       nextChannels,
 	}
 }
 
@@ -928,7 +928,7 @@ func (cm *CheckpointManager) GetCheckpointTree(
 	for _, tuple := range allCheckpoints {
 		node := nodes[tuple.Checkpoint.ID]
 		parentID := tuple.Checkpoint.ParentCheckpointID
-		
+
 		if parentID != "" {
 			if parent, exists := nodes[parentID]; exists {
 				parent.Children = append(parent.Children, node)
@@ -1038,7 +1038,7 @@ func (cm *CheckpointManager) GetParent(
 	lineageID := GetLineageID(config)
 	namespace := GetNamespace(config)
 	parentConfig := CreateCheckpointConfig(lineageID, parentID, namespace)
-	
+
 	return cm.saver.GetTuple(ctx, parentConfig)
 }
 

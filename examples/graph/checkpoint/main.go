@@ -768,7 +768,6 @@ func (w *checkpointWorkflow) branchCheckpoint(ctx context.Context, lineageID, ch
 	return nil
 }
 
-
 // showTree displays the checkpoint tree for a lineage.
 func (w *checkpointWorkflow) showTree(ctx context.Context, lineageID string) error {
 	if lineageID == "" {

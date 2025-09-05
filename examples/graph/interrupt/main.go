@@ -57,21 +57,21 @@ const (
 	stateKeyLastNode  = "last_node"
 
 	// Node names.
-	nodeIncrement        = "increment"
-	nodeRequestApproval  = "request_approval"
-	nodeSecondApproval   = "second_approval"
-	nodeProcessApproval  = "process_approval"
-	nodeFinalize         = "finalize"
+	nodeIncrement       = "increment"
+	nodeRequestApproval = "request_approval"
+	nodeSecondApproval  = "second_approval"
+	nodeProcessApproval = "process_approval"
+	nodeFinalize        = "finalize"
 
 	// Messages.
-	msgApprovalRequest    = "Please approve the current state (yes/no):"
-	msgSecondApproval     = "This requires a second approval (yes/no):"
-	msgUserApproved       = "user approved: %t"
-	msgUserRejected       = "user rejected - stopping execution"
-	msgUserApprovedCont   = "user approved - continuing execution"
-	msgExecutionComplete  = "execution completed successfully"
-	msgNodeExecuted       = "Node %s executed at %s"
-	msgWorkflowComplete   = "Workflow completed with counter: %d"
+	msgApprovalRequest   = "Please approve the current state (yes/no):"
+	msgSecondApproval    = "This requires a second approval (yes/no):"
+	msgUserApproved      = "user approved: %t"
+	msgUserRejected      = "user rejected - stopping execution"
+	msgUserApprovedCont  = "user approved - continuing execution"
+	msgExecutionComplete = "execution completed successfully"
+	msgNodeExecuted      = "Node %s executed at %s"
+	msgWorkflowComplete  = "Workflow completed with counter: %d"
 
 	// Commands.
 	cmdRun       = "run"
@@ -294,11 +294,11 @@ func (w *interruptWorkflow) createInterruptGraph() (*graph.Graph, error) {
 		newValue := v + 10 // Increment by 10 to make it more visible
 		newStepCount := stepCount + 1
 		executionTime := time.Now().Format("15:04:05")
-		
+
 		if w.verbose {
 			w.logger.Infof("Increment node: counter %d -> %d, step %d -> %d", v, newValue, stepCount, newStepCount)
 		}
-		
+
 		return graph.State{
 			stateKeyCounter:   newValue,
 			stateKeyStepCount: newStepCount,
@@ -312,13 +312,13 @@ func (w *interruptWorkflow) createInterruptGraph() (*graph.Graph, error) {
 	// Node 2: Request user approval (first interrupt point).
 	b.AddNode(nodeRequestApproval, func(ctx context.Context, s graph.State) (any, error) {
 		stepCount := getInt(s, stateKeyStepCount)
-		
+
 		// Check if we should skip interrupts (for run command).
 		skipInterrupts := false
 		if skip, ok := s["skip_interrupts"].(bool); ok {
 			skipInterrupts = skip
 		}
-		
+
 		var approved bool
 		if !skipInterrupts {
 			// Create interrupt payload with rich context.
@@ -364,7 +364,7 @@ func (w *interruptWorkflow) createInterruptGraph() (*graph.Graph, error) {
 	b.AddNode(nodeSecondApproval, func(ctx context.Context, s graph.State) (any, error) {
 		approved := getBool(s, stateKeyApproved)
 		stepCount := getInt(s, stateKeyStepCount)
-		
+
 		if w.verbose {
 			w.logger.Infof("Second approval node executing: approved=%v, stepCount=%d", approved, stepCount)
 			if resumeMap, ok := s[graph.StateKeyResumeMap].(map[string]any); ok {
@@ -374,7 +374,7 @@ func (w *interruptWorkflow) createInterruptGraph() (*graph.Graph, error) {
 				}
 			}
 		}
-		
+
 		// Skip second approval if first was rejected.
 		if !approved {
 			return graph.State{
@@ -390,7 +390,7 @@ func (w *interruptWorkflow) createInterruptGraph() (*graph.Graph, error) {
 		if skip, ok := s["skip_interrupts"].(bool); ok {
 			skipInterrupts = skip
 		}
-		
+
 		var secondApproved bool
 		if !skipInterrupts {
 			// Create second interrupt for approved workflows.
@@ -682,13 +682,13 @@ func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, w
 			fmt.Printf("❌ Error: %s\n", event.Error.Message)
 			continue
 		}
-		
+
 		// Show node execution progress for interrupt workflows.
 		// Node events have Author=<node-name> and Object="graph.node.start"/"graph.node.complete".
 		if waitForInterrupt && event.Object == "graph.node.start" {
 			fmt.Printf("⚡ Executing: %s\n", event.Author)
 		}
-		
+
 		// Track the last node for completion messages.
 		if event.Object == "graph.node.complete" {
 			lastNode = event.Author
@@ -697,7 +697,7 @@ func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, w
 	}
 
 	duration := time.Since(startTime)
-	
+
 	// Check if an interrupt checkpoint was created by examining actual checkpoints.
 	// This is more reliable than trying to parse event streams.
 	if waitForInterrupt && w.manager != nil {
@@ -716,7 +716,7 @@ func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, w
 			}
 		}
 	}
-	
+
 	if interrupted && waitForInterrupt {
 		fmt.Printf("💾 Execution interrupted, checkpoint saved\n")
 		fmt.Printf("   Use 'resume %s <yes/no>' to continue\n", lineageID)
@@ -770,7 +770,7 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 	cmd := &graph.Command{
 		ResumeMap: make(map[string]any),
 	}
-	
+
 	// Check which interrupt is currently active by looking at the latest checkpoint.
 	// This leverages the ResumeMap design - we only set the resume value for the
 	// specific interrupt that's currently active, not future ones.
@@ -781,7 +781,7 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 	if listErr != nil {
 		return fmt.Errorf("failed to list checkpoints: %w", listErr)
 	}
-	
+
 	// Find the latest interrupted checkpoint
 	var latest *graph.CheckpointTuple
 	for _, cp := range checkpoints {
@@ -790,7 +790,7 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 			break
 		}
 	}
-	
+
 	// Fallback to using Latest() if no interrupted checkpoint found in list
 	if latest == nil {
 		latest, err = w.manager.Latest(ctx, lineageID, w.currentNamespace)
@@ -810,12 +810,12 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 		}
 		return fmt.Errorf("no active interrupt found for lineage: %s (latest checkpoint is not interrupted)", lineageID)
 	}
-	
+
 	// Use the TaskID from the interrupt state as the key.
 	// This automatically handles any interrupt without needing to know specific names.
 	taskID := latest.Checkpoint.InterruptState.TaskID
 	cmd.ResumeMap[taskID] = userInput
-	
+
 	if w.verbose {
 		w.logger.Infof("Setting resume value for TaskID '%s' to '%s'", taskID, userInput)
 	}
@@ -883,7 +883,7 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 		if err == nil && len(checkpoints) > 0 {
 			// Check the latest checkpoint
 			latest := checkpoints[0]
-			
+
 			// If the latest checkpoint is a regular checkpoint (not interrupt),
 			// and it's from a step after the resume, the workflow likely completed or progressed
 			if latest.Metadata.Source != "interrupt" {
@@ -1053,7 +1053,7 @@ func (w *interruptWorkflow) showLatestCheckpoint(ctx context.Context, lineageID 
 		interruptState := latest.Checkpoint.InterruptState
 		fmt.Printf("  Node ID: %s\n", interruptState.NodeID)
 		fmt.Printf("  Task ID: %s\n", interruptState.TaskID)
-		
+
 		if interruptState.InterruptValue != nil {
 			fmt.Printf("  Context:\n")
 			if valueMap, ok := interruptState.InterruptValue.(map[string]any); ok {
@@ -1064,7 +1064,7 @@ func (w *interruptWorkflow) showLatestCheckpoint(ctx context.Context, lineageID 
 				fmt.Printf("    value: %v\n", interruptState.InterruptValue)
 			}
 		}
-		
+
 		fmt.Printf("\n💡 Resume with: resume %s <yes/no>\n", lineageID)
 	}
 
@@ -1141,7 +1141,7 @@ func (w *interruptWorkflow) printCheckpointTreeNode(checkpoint *graph.Checkpoint
 	// Create display info.
 	shortID := checkpoint.Checkpoint.ID[:8]
 	timeStr := time.Now().Format("15:04:05") // Use current time as placeholder
-	
+
 	// Choose icon based on interrupt status.
 	icon := "📍"
 	status := ""
@@ -1151,14 +1151,14 @@ func (w *interruptWorkflow) printCheckpointTreeNode(checkpoint *graph.Checkpoint
 	}
 
 	// Print the connector and node on the same line
-	fmt.Printf("%s%s%s %s (counter=%d, node=%s, %s)%s\n", 
+	fmt.Printf("%s%s%s %s (counter=%d, node=%s, %s)%s\n",
 		prefix, connector, icon, shortID, counter, lastNode, timeStr, status)
 
 	// Print children recursively
 	children := childMap[checkpoint.Checkpoint.ID]
 	for i, child := range children {
 		isLast := i == len(children)-1
-		
+
 		// Determine connector and continuation prefix
 		childConnector := ""
 		childPrefix := prefix
@@ -1169,7 +1169,7 @@ func (w *interruptWorkflow) printCheckpointTreeNode(checkpoint *graph.Checkpoint
 			childConnector = "├─"
 			childPrefix += "│ "
 		}
-		
+
 		// Recursively print child
 		w.printCheckpointTreeNode(child, childPrefix, childConnector, checkpointMap, childMap)
 	}
@@ -1203,24 +1203,24 @@ func (w *interruptWorkflow) showHistory(ctx context.Context, lineageID string) e
 	// Sort by step.
 	sortedItems := make([]*graph.CheckpointTuple, len(items))
 	copy(sortedItems, items)
-	
+
 	fmt.Println(strings.Repeat("=", 80))
 
 	for _, item := range sortedItems {
 		timeStr := time.Now().Format("15:04:05") // Use current time as placeholder
 		fmt.Printf("\n⏰ %s (Step %d)\n", timeStr, item.Metadata.Step)
-		
+
 		// Extract state.
 		if state := w.extractRootState(item.Checkpoint); state != nil {
 			counter := getInt(state, stateKeyCounter)
 			stepCount := getInt(state, stateKeyStepCount)
 			lastNode, _ := state[stateKeyLastNode].(string)
-			
+
 			fmt.Printf("   State: counter=%d, total_steps=%d\n", counter, stepCount)
 			if lastNode != "" {
 				fmt.Printf("   Action: %s executed\n", lastNode)
 			}
-			
+
 			// Show recent messages.
 			if messages, ok := state[stateKeyMessages].([]string); ok && len(messages) > 0 {
 				fmt.Printf("   Message: %s\n", messages[len(messages)-1])
@@ -1282,7 +1282,7 @@ func (w *interruptWorkflow) showInterruptStatus(ctx context.Context, lineageID s
 		fmt.Printf("   Node: %s\n", interruptState.NodeID)
 		fmt.Printf("   Task ID: %s\n", interruptState.TaskID)
 		fmt.Printf("   Created: %s\n", time.Now().Format("15:04:05")) // Use current time as placeholder
-		
+
 		if interruptState.InterruptValue != nil {
 			fmt.Printf("\n📋 Context:\n")
 			if valueMap, ok := interruptState.InterruptValue.(map[string]any); ok {
@@ -1293,11 +1293,11 @@ func (w *interruptWorkflow) showInterruptStatus(ctx context.Context, lineageID s
 				fmt.Printf("   value: %v\n", interruptState.InterruptValue)
 			}
 		}
-		
+
 		fmt.Printf("\n💡 Actions:\n")
 		fmt.Printf("   resume %s yes   - Approve and continue\n", lineageID)
 		fmt.Printf("   resume %s no    - Reject and stop\n", lineageID)
-		
+
 	} else {
 		// No interrupt checkpoint found, get latest checkpoint for completed status.
 		latest, err := w.manager.Latest(ctx, lineageID, w.currentNamespace)
@@ -1308,7 +1308,7 @@ func (w *interruptWorkflow) showInterruptStatus(ctx context.Context, lineageID s
 			fmt.Printf("✅ STATUS: COMPLETED\n")
 			fmt.Printf("   Final Step: %d\n", latest.Metadata.Step)
 			fmt.Printf("   Completed: %s\n", time.Now().Format("15:04:05")) // Use current time as placeholder
-			
+
 			// Show final state.
 			if state := w.extractRootState(latest.Checkpoint); state != nil {
 				counter := getInt(state, stateKeyCounter)
@@ -1327,12 +1327,12 @@ func (w *interruptWorkflow) showInterruptStatus(ctx context.Context, lineageID s
 // deleteLineage deletes all checkpoints for a lineage.
 func (w *interruptWorkflow) deleteLineage(ctx context.Context, lineageID string) error {
 	fmt.Printf("\n🗑️  Deleting all checkpoints for lineage: %s\n", lineageID)
-	
+
 	// For non-interactive usage (like tests), skip confirmation.
 	// In interactive usage, we could add confirmation, but for simplicity
 	// and to make tests work, we'll proceed directly.
 	fmt.Printf("Proceeding with deletion...\n")
-	
+
 	response := "yes" // Auto-confirm for testing purposes
 	if response != "yes" && response != "y" {
 		fmt.Println("❌ Deletion cancelled")
@@ -1351,7 +1351,7 @@ func (w *interruptWorkflow) deleteLineage(ctx context.Context, lineageID string)
 // runDemo runs a comprehensive demonstration of interrupt features.
 func (w *interruptWorkflow) runDemo(ctx context.Context) error {
 	demoLineage := fmt.Sprintf("demo-%d", time.Now().Unix())
-	
+
 	fmt.Printf("\n🎬 Running Advanced Interrupt Demo\n")
 	fmt.Printf("Demo Lineage: %s\n", demoLineage)
 	fmt.Println(strings.Repeat("=", 60))
@@ -1462,7 +1462,6 @@ func (w *interruptWorkflow) showHelp() {
 }
 
 // Helper functions.
-
 
 func getInt(s graph.State, key string) int {
 	if v, ok := s[key]; ok {
