@@ -47,7 +47,6 @@ func TestNewCallbackContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cc, err := NewCallbackContext(tt.ctx)
-
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorMsg)
