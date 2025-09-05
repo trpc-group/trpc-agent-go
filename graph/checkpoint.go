@@ -23,7 +23,7 @@ import (
 
 const (
 	// CheckpointVersion is the current version of the checkpoint format.
-	CheckpointVersion = 2
+	CheckpointVersion = 1
 
 	// CheckpointSourceInput indicates the checkpoint was created from input.
 	CheckpointSourceInput = "input"
@@ -206,7 +206,7 @@ type CheckpointNode struct {
 	// Children are the child nodes (forks from this checkpoint).
 	Children []*CheckpointNode `json:"children"`
 	// Parent is the parent node (null for root).
-	Parent *CheckpointNode `json:"-"` // Avoid circular JSON
+	Parent *CheckpointNode `json:"-"` // Avoid circular JSON.
 }
 
 // CheckpointFilter defines filtering criteria for listing checkpoints.
@@ -274,7 +274,7 @@ func NewCheckpointConfig(lineageID string) *CheckpointConfig {
 		panic("lineage_id cannot be empty")
 	}
 
-	// Use default empty namespace to align with LangGraph's design
+	// Use default empty namespace to align with LangGraph's design.
 	namespace := DefaultCheckpointNamespace
 
 	return &CheckpointConfig{
@@ -324,7 +324,7 @@ func (c *CheckpointConfig) ToMap() map[string]any {
 		config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointID] = c.CheckpointID
 	}
 
-	// Always include namespace to ensure consistency (even if empty)
+	// Always include namespace to ensure consistency (even if empty).
 	config[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = c.Namespace
 
 	if len(c.ResumeMap) > 0 {
@@ -419,7 +419,7 @@ func (c *Checkpoint) Copy() *Checkpoint {
 
 	return &Checkpoint{
 		Version:            c.Version,
-		ID:                 c.ID, // Preserve original ID for true copy
+		ID:                 c.ID, // Preserve original ID for true copy.
 		Timestamp:          c.Timestamp,
 		ChannelValues:      channelValues,
 		ChannelVersions:    channelVersions,
@@ -507,7 +507,7 @@ func CreateCheckpointConfig(lineageID string, checkpointID string, namespace str
 	if lineageID == "" {
 		panic("lineage_id cannot be empty")
 	}
-	// Use default empty namespace to align with LangGraph's design
+	// Use default empty namespace to align with LangGraph's design.
 	if namespace == "" {
 		namespace = DefaultCheckpointNamespace
 	}
@@ -595,7 +595,7 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(
 		return nil, fmt.Errorf("checkpoint data is nil")
 	}
 
-	// Convert channel values back to state.
+	// Convert channel values back to state..
 	state := make(State)
 	maps.Copy(state, tuple.Checkpoint.ChannelValues)
 
@@ -692,7 +692,7 @@ func (cm *CheckpointManager) BranchFrom(
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	// Get the source checkpoint
+	// Get the source checkpoint.
 	sourceConfig := CreateCheckpointConfig(lineageID, checkpointID, namespace)
 	sourceTuple, err := cm.saver.GetTuple(ctx, sourceConfig)
 	if err != nil {
@@ -703,12 +703,12 @@ func (cm *CheckpointManager) BranchFrom(
 		return nil, fmt.Errorf("source checkpoint not found")
 	}
 
-	// Create a new checkpoint in the new namespace
+	// Create a new checkpoint in the new namespace.
 	newConfig := CreateCheckpointConfig(lineageID, "", newNamespace)
-	newCheckpoint := sourceTuple.Checkpoint.Fork() // Fork creates a new ID
+	newCheckpoint := sourceTuple.Checkpoint.Fork() // Fork creates a new ID.
 	newCheckpoint.Timestamp = time.Now().UTC()
 
-	// Store the new checkpoint
+	// Store the new checkpoint.
 	req := PutFullRequest{
 		Config:        newConfig,
 		Checkpoint:    newCheckpoint,
@@ -722,7 +722,7 @@ func (cm *CheckpointManager) BranchFrom(
 		return nil, fmt.Errorf("failed to create branch checkpoint: %w", err)
 	}
 
-	// Return the new checkpoint tuple
+	// Return the new checkpoint tuple.
 	return &CheckpointTuple{
 		Config:     updatedConfig,
 		Checkpoint: newCheckpoint,
@@ -740,19 +740,19 @@ func (cm *CheckpointManager) BranchToNewLineage(
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	// Get the source checkpoint
-	// If namespace is empty and we're getting latest, we need to search across all namespaces
+	// Get the source checkpoint.
+	// If namespace is empty and we're getting latest, we need to search across all namespaces.
 	var sourceCheckpoint *Checkpoint
 	var err error
 	if sourceCheckpointID == "" {
-		// When getting latest without a specific checkpoint ID, search all namespaces if namespace is empty
+		// When getting latest without a specific checkpoint ID, search all namespaces if namespace is empty.
 		searchConfig := map[string]any{
-			"configurable": map[string]any{
-				"lineage_id": sourceLineageID,
+			CfgKeyConfigurable: map[string]any{
+				CfgKeyLineageID: sourceLineageID,
 			},
 		}
 		if sourceNamespace != "" {
-			searchConfig["configurable"].(map[string]any)["checkpoint_ns"] = sourceNamespace
+			searchConfig[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = sourceNamespace
 		}
 
 		tuple, err := cm.saver.GetTuple(ctx, searchConfig)
@@ -765,7 +765,7 @@ func (cm *CheckpointManager) BranchToNewLineage(
 		sourceCheckpoint = tuple.Checkpoint
 	} else {
 		// When we have a specific checkpoint ID but potentially empty namespace,
-		// we need to handle this specially
+		// we need to handle this specially.
 		searchConfig := map[string]any{
 			CfgKeyConfigurable: map[string]any{
 				CfgKeyLineageID:    sourceLineageID,
@@ -784,18 +784,18 @@ func (cm *CheckpointManager) BranchToNewLineage(
 		}
 	}
 
-	// Create a new checkpoint in the new lineage
+	// Create a new checkpoint in the new lineage.
 	newConfig := CreateCheckpointConfig(newLineageID, "", newNamespace)
 	newCheckpoint := sourceCheckpoint.Fork() // Fork creates a new ID
 	newCheckpoint.Timestamp = time.Now().UTC()
 
-	// Create metadata with source information
+	// Create metadata with source information.
 	metadata := NewCheckpointMetadata(CheckpointSourceFork, 0)
 	metadata.Extra["source_lineage"] = sourceLineageID
 	metadata.Extra["source_checkpoint"] = sourceCheckpointID
 	metadata.Extra["source_namespace"] = sourceNamespace
 
-	// Store the new checkpoint
+	// Store the new checkpoint.
 	req := PutRequest{
 		Config:      newConfig,
 		Checkpoint:  newCheckpoint,
@@ -808,7 +808,7 @@ func (cm *CheckpointManager) BranchToNewLineage(
 		return nil, fmt.Errorf("failed to create branch checkpoint in new lineage: %w", err)
 	}
 
-	// Return the new checkpoint tuple
+	// Return the new checkpoint tuple.
 	return &CheckpointTuple{
 		Config:     updatedConfig,
 		Checkpoint: newCheckpoint,
@@ -822,7 +822,7 @@ func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, lineageID, na
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	// Get the latest checkpoint
+	// Get the latest checkpoint.
 	latest, err := cm.Latest(ctx, lineageID, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest checkpoint: %w", err)
@@ -832,10 +832,10 @@ func (cm *CheckpointManager) ResumeFromLatest(ctx context.Context, lineageID, na
 		return nil, fmt.Errorf("no checkpoint found for lineage %s in namespace %s", lineageID, namespace)
 	}
 
-	// Convert channel values back to state
+	// Convert channel values back to state.
 	state := make(State)
 	maps.Copy(state, latest.Checkpoint.ChannelValues)
-	// Add the resume command
+	// Add the resume command.
 	if cmd != nil {
 		state[StateKeyCommand] = cmd
 	}
@@ -1031,7 +1031,7 @@ func (cm *CheckpointManager) GetParent(
 	// Check if it has a parent.
 	parentID := currentTuple.Checkpoint.ParentCheckpointID
 	if parentID == "" {
-		return nil, nil // No parent
+		return nil, nil // No parent.
 	}
 
 	// Get the parent checkpoint.
@@ -1048,19 +1048,19 @@ func deepCopy(src any) any {
 		return nil
 	}
 
-	// Marshal to JSON
+	// Marshal to JSON.
 	data, err := json.Marshal(src)
 	if err != nil {
-		// If marshaling fails, return the original value
+		// If marshaling fails, return the original value.
 		return src
 	}
 
-	// Unmarshal to a generic map with number preservation
+	// Unmarshal to a generic map with number preservation.
 	var result any
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber() // Preserve number types as json.Number
+	decoder.UseNumber() // Preserve number types as json.Number.
 	if err := decoder.Decode(&result); err != nil {
-		// If unmarshaling fails, return the original value
+		// If unmarshaling fails, return the original value.
 		return src
 	}
 	return result
@@ -1077,7 +1077,7 @@ func deepCopyMap(src map[string]any) map[string]any {
 		return mapResult
 	}
 
-	// Fallback: create a new map and copy values
+	// Fallback: create a new map and copy values.
 	dst := make(map[string]any, len(src))
 	for k, v := range src {
 		dst[k] = deepCopy(v)

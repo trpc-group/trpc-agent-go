@@ -664,9 +664,9 @@ func (w *interruptWorkflow) runWorkflow(ctx context.Context, lineageID string, w
 		w.sessionID,
 		message,
 		agent.WithRuntimeState(graph.State{
-			"lineage_id":      lineageID,
-			"namespace":       w.currentNamespace,
-			"skip_interrupts": !waitForInterrupt,
+			graph.CfgKeyLineageID:    lineageID,
+			graph.CfgKeyCheckpointNS: w.currentNamespace,
+			"skip_interrupts":        !waitForInterrupt,
 		}),
 	)
 	if err != nil {
@@ -823,14 +823,14 @@ func (w *interruptWorkflow) resumeWorkflow(ctx context.Context, lineageID, check
 	message := model.NewUserMessage("resume")
 
 	runtimeState := graph.State{
-		graph.StateKeyCommand: cmd,
-		"lineage_id":          lineageID,
-		"namespace":           w.currentNamespace,
+		graph.StateKeyCommand:    cmd,
+		graph.CfgKeyLineageID:    lineageID,
+		graph.CfgKeyCheckpointNS: w.currentNamespace,
 	}
 
 	// Add checkpoint ID if specified.
 	if checkpointID != "" && checkpointID != "auto" {
-		runtimeState["checkpoint_id"] = checkpointID
+		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
 	}
 
 	events, err := w.runner.Run(

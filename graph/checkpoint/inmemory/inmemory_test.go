@@ -564,7 +564,7 @@ func TestInMemoryCheckpointSaverErrorCases(t *testing.T) {
 
 	// Test Get with empty lineage ID.
 	invalidConfig := map[string]any{
-		"configurable": map[string]any{},
+		graph.CfgKeyConfigurable: map[string]any{},
 	}
 	_, err := saver.Get(ctx, invalidConfig)
 	assert.Error(t, err)
@@ -599,8 +599,8 @@ func TestInMemoryCheckpointSaverErrorCases(t *testing.T) {
 	// Test PutWrites with missing checkpoint ID.
 	writeReq := graph.PutWritesRequest{
 		Config: map[string]any{
-			"configurable": map[string]any{
-				"lineage_id": "test-lineage",
+			graph.CfgKeyConfigurable: map[string]any{
+				graph.CfgKeyLineageID: "test-lineage",
 			},
 		},
 		Writes: []graph.PendingWrite{{Channel: "test", Value: 1}},

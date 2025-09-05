@@ -569,8 +569,8 @@ func (w *checkpointWorkflow) runWorkflow(ctx context.Context, lineageID string) 
 	// Pass lineage_id and checkpoint namespace to enable checkpoint saving.
 	sessionID := fmt.Sprintf("session-%s-%d", lineageID, time.Now().Unix())
 	runtimeState := config.ToMap()
-	runtimeState["lineage_id"] = lineageID             // Ensure lineage_id is set
-	runtimeState["checkpoint_ns"] = w.currentNamespace // Set checkpoint namespace
+	runtimeState[graph.CfgKeyLineageID] = lineageID             // Ensure lineage_id is set
+	runtimeState[graph.CfgKeyCheckpointNS] = w.currentNamespace // Set checkpoint namespace
 
 	w.logger.Infof("Executing workflow through runner: session_id=%s, user_id=%s, message=%s",
 		sessionID, defaultUserID, message)
@@ -582,7 +582,7 @@ func (w *checkpointWorkflow) runWorkflow(ctx context.Context, lineageID string) 
 	}
 	fmt.Printf("🔧 DEBUG: Initial runtime state keys: %v\n", runtimeStateKeys)
 	fmt.Printf("🔧 DEBUG: Runtime state values: lineage_id=%s, checkpoint_ns=%s\n",
-		runtimeState["lineage_id"], runtimeState["checkpoint_ns"])
+		runtimeState[graph.CfgKeyLineageID], runtimeState[graph.CfgKeyCheckpointNS])
 	fmt.Printf("🔧 DEBUG: Message content: %v\n", message)
 
 	eventChan, err := w.runner.Run(
@@ -692,15 +692,15 @@ func (w *checkpointWorkflow) resumeWorkflow(
 	// Run with the checkpoint config.
 	sessionID := fmt.Sprintf("session-%s-%d", lineageID, time.Now().Unix())
 	runtimeState := config.ToMap()
-	runtimeState["lineage_id"] = lineageID             // Ensure lineage_id is set
-	runtimeState["checkpoint_ns"] = w.currentNamespace // Set checkpoint namespace
+	runtimeState[graph.CfgKeyLineageID] = lineageID             // Ensure lineage_id is set
+	runtimeState[graph.CfgKeyCheckpointNS] = w.currentNamespace // Set checkpoint namespace
 
 	// Add checkpoint_id directly to runtime state for the executor to find it
 	if checkpointID != "" {
-		runtimeState["checkpoint_id"] = checkpointID
+		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
 	} else {
 		// Use the actual checkpoint ID from the retrieved checkpoint (checkpoint is guaranteed to be non-nil here)
-		runtimeState["checkpoint_id"] = checkpoint.ID
+		runtimeState[graph.CfgKeyCheckpointID] = checkpoint.ID
 	}
 
 	// The framework now handles type restoration automatically using schema information.
