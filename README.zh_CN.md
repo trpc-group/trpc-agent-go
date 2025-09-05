@@ -10,10 +10,96 @@
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-一个用于构建智能**agent 系统**的强大 Go 框架，内置大语言模型（LLM）、分层规划器、memory、telemetry 以及丰富的 **tool** 生态。如果你希望创建能够进行推理、调用工具、与子 agent 协作并保持长期状态的自主或半自主 agent，`tRPC-Agent-Go` 都能满足需求。
+🚀 **一个用于构建智能 agent 系统的强大 Go 框架**，彻底改变您创建 AI 应用的方式。构建能够思考、记忆、协作和行动的自主 agent，前所未有地简单。
+
+✨ **为什么选择 tRPC-Agent-Go？**
+- 🧠 **智能推理**：先进的分层 planner 和多 agent 编排
+- 🧰 **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成  
+- 💾 **持久化 Memory**：长期状态管理和上下文感知
+- 🔗 **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
+- 📊 **生产就绪**：内置 telemetry、tracing 和企业级可靠性
+- ⚡ **高性能**：针对可扩展性和低延迟进行优化
+
+## 🎯 使用场景
+
+**非常适合构建：**
+- 🤖 **客户支持机器人** - 理解上下文并解决复杂查询的智能 agent
+- 📊 **数据分析助手** - 查询数据库、生成报告并提供洞察的 agent  
+- 🔧 **DevOps 自动化** - 智能部署、监控和事件响应系统
+- 💼 **业务流程自动化** - 具有 human-in-the-loop 能力的多步骤工作流
+- 🧠 **研究与知识管理** - 基于 RAG 的文档分析和问答 agent
+
+## 🚀 核心特性
+
+<table>
+<tr>
+<td width="50%">
+
+### 🎪 **多 Agent 编排**
+```go
+// Chain agent 构建复杂工作流
+pipeline := chainagent.New("pipeline",
+    chainagent.WithSubAgents([]agent.Agent{
+        analyzer, processor, reporter,
+    }))
+
+// 或者并行运行
+parallel := parallelagent.New("concurrent",
+    parallelagent.WithSubAgents(tasks))
+```
+
+</td>
+<td width="50%">
+
+### 🧠 **先进的 Memory 系统**
+```go
+// 带搜索的持久化 memory
+memory := memorysvc.NewInMemoryService()
+agent := llmagent.New("assistant",
+    llmagent.WithMemory(memory),
+    llmagent.WithModel(model))
+
+// Agent 在会话间记住上下文
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🛠️ **丰富的 Tool 集成**
+```go
+// 任何函数都可以成为 tool
+calculator := function.NewFunctionTool(
+    calculate,
+    function.WithName("calculator"),
+    function.WithDescription("数学运算"))
+
+// MCP 协议支持
+mcpTool := mcptool.New(serverConn)
+```
+
+</td>
+<td>
+
+### 📈 **生产监控**
+```go
+// OpenTelemetry 集成
+runner := runner.NewRunner("app", agent,
+    runner.WithTelemetry(telemetry.Config{
+        TracingEnabled: true,
+        MetricsEnabled: true,
+    }))
+```
+
+</td>
+</tr>
+</table>
 
 ## 目录
 
+- [使用场景](#-使用场景)
+- [核心特性](#-核心特性)
 - [文档](#文档)
 - [快速开始](#快速开始)
 - [示例](#示例)
@@ -36,31 +122,41 @@
 
 准备好深入了解 tRPC-Agent-Go 了吗？我们的[文档](https://trpc-group.github.io/trpc-agent-go/)涵盖从基础概念到高级技巧的一切，帮助你自信地构建强大的 AI 应用。无论你是 AI agent 新手还是有经验的开发者，都能在其中找到详细指南、实用示例和最佳实践，加速你的开发旅程。
 
-## 快速开始
+## ⚡ 快速开始
 
-### 前置条件
+> 🎬 **实际演示**：*[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]*
 
-1. Go 1.24.1 或更高版本。
-2. 一个 LLM 提供商的密钥（例如 `OPENAI_API_KEY`、`OPENAI_BASE_URL`）。
+### 📋 前置条件
 
-### 运行示例
+- ✅ Go 1.24.1 或更高版本
+- 🔑 LLM 提供商 API 密钥（OpenAI、DeepSeek 等）
+- 💡 5 分钟构建您的第一个智能 agent
 
-使用以下命令配置环境并通过 Runner 启动一个带有 streaming 和 tool 调用的多轮对话会话。
+### 🚀 运行示例
+
+**3 个简单步骤开始：**
 
 ```bash
-# 克隆项目
+# 1️⃣ 克隆和设置
 git clone https://github.com/trpc-group/trpc-agent-go.git
 cd trpc-agent-go
 
-# 运行一个快速示例
-export OPENAI_API_KEY="<your-api-key>"
-export OPENAI_BASE_URL="<your-base-url>"
+# 2️⃣ 配置您的 LLM
+export OPENAI_API_KEY="your-api-key-here"
+export OPENAI_BASE_URL="your-base-url-here"  # 可选
+
+# 3️⃣ 运行您的第一个 agent！🎉
 cd examples/runner
 go run . -model="gpt-4o-mini" -streaming=true
 ```
 
-[examples/runner](examples/runner) 展示了通过 **Runner** 实现的多轮对话，包括会话管理、流式输出以及 tool 调用。
-它包含两个工具：计算器和当前时间工具。可以通过 `-streaming`、`-enable-parallel` 等标志切换行为。
+**您将看到：**
+- 💬 **与您的 AI agent 互动聊天**
+- ⚡ **实时流式**响应  
+- 🧮 **Tool 使用**（计算器 + 时间工具）
+- 🔄 **带 memory 的多轮对话**
+
+试着问问：*"现在几点了？然后计算 15 * 23 + 100"*
 
 ### 基本用法
 
@@ -217,29 +313,20 @@ type calculatorRsp struct {
 
 关于使用详情，请参阅各示例文件夹中的 `README.md`。
 
-## 架构概览
+## 🏗️ 架构概览
 
-```text
-┌─────────────────────┐
-│       Runner        │  orchestrates session, memory, ...
-└─────────┬───────────┘
-          │ invokes
-┌─────────▼───────────┐
-│       Agent         │  implements business logic, integrated with knowledge, code executor, ...
-└─────────┬───────────┘
-          │ sub-agents(LLM, Graph, Multi, A2A agents)
-┌─────────▼───────────┐
-│       Planner       │  decide next action / tool use
-└────────┬────────────┘
-         │ LLM flow
-┌────────▼──────────┐   ┌──────────────┐
-│     Model Call    │──►│    Tools     │ function / agent / MCP
-└────────┬──────────┘   └──────────────┘
-         │ calls
-┌────────▼──────────┐
-│     LLM Model     │  chat-completion, batch, embedding, …
-└───────────────────┘
-```
+架构图 
+
+![architecture](docs/assets/img/component_architecture.png)
+
+### 🔄 **执行流程**
+
+1. **🚀 Runner** 通过会话管理编排整个执行管道
+2. **🤖 Agent** 使用多个专门组件处理请求
+3. **🧠 Planner** 确定最优策略和 tool 选择
+4. **🛠️ Tools** 执行特定任务（API 调用、计算、web 搜索）
+5. **💾 Memory** 维护上下文并从交互中学习
+6. **📚 Knowledge** 为文档理解提供 RAG 能力
 
 关键包：
 
@@ -253,6 +340,10 @@ type calculatorRsp struct {
 | `memory`    | 记录用户长期记忆与个性化信息。                                                                                |
 | `knowledge` | 实现 RAG 知识检索能力。                                                                                       |
 | `planner`   | 提供 agent 的规划与推理能力。                                                                                 |
+- 时序图
+
+![execution](docs/assets/img/timing_diagram.png)
+
 
 ## 使用内置 Agents
 
@@ -296,26 +387,56 @@ for ev := range events { /* ... */ }
 
 组合式 API 允许你将 chain、cycle 或 parallel 进行嵌套，从而在无需底层管线处理的情况下构建复杂工作流。
 
-## 未来规划
 
-- 持久化 memory 适配器（PostgreSQL、Redis）。
-- 更多内置工具（web 搜索、计算器、文件 I/O）。
-- 高级规划器（tree-of-thought、graph 执行）。
-- 提供 gRPC 与 HTTP 服务器以进行远程 agent 调用。
-- 完整的 benchmark 与测试套件。
+## 🤝 贡献
 
-## 贡献
+我们 ❤️ 贡献！加入我们不断壮大的开发者社区，共同构建 AI agent 的未来。
 
-欢迎提交 Pull Request、Issue 和建议！请阅读
-[CONTRIBUTING.md](CONTRIBUTING.md) 并遵循 Go 编码约定。提交前请运行
-`go test ./... && go vet ./...`。
+### 🌟 **贡献方式**
+- 🐛 **报告 bug** 或通过 [Issues](https://github.com/trpc-group/trpc-agent-go/issues) 建议新功能
+- 📖 **改进文档** - 帮助他人更快学习
+- 🔧 **提交 PR** - bug 修复、新功能或示例
+- 💡 **分享您的用例** - 用您的 agent 应用启发他人
 
-## 致谢
+### 🚀 **快速贡献设置**
+```bash
+# Fork 并克隆仓库
+git clone https://github.com/YOUR_USERNAME/trpc-agent-go.git
+cd trpc-agent-go
 
-感谢来自腾讯内部业务（如腾讯元宝、腾讯视频、腾讯新闻、IMA、QQ 音乐等）的支持。业务场景的打磨是对该框架最好的验证。
+# 运行测试确保一切正常
+go test ./...
+go vet ./...
 
-同时感谢优秀的开源框架，如 ADK、Agno、CrewAI、AutoGen 等，它们为 tRPC-Agent-Go 的发展提供了灵感与借鉴。
+# 进行您的更改并提交 PR！🎉
+```
 
-本项目遵循 Apache 2.0 许可证。
+📋 **请阅读** [CONTRIBUTING.md](CONTRIBUTING.md) 了解详细指南和编码标准。
+
+## 🏆 致谢
+
+### 🏢 **企业验证**
+特别感谢腾讯各业务单元，包括**腾讯元宝**、**腾讯视频**、**腾讯新闻**、**IMA** 和 **QQ 音乐**的宝贵支持和生产环境验证推动框架发展
+
+### 🌟 **开源灵感**  
+感谢优秀的开源框架如 **ADK**、**Agno**、**CrewAI**、**AutoGen** 等的启发。站在巨人的肩膀上！🙏
+
+---
+
+## 📜 许可证
+
+遵循 **Apache 2.0 许可证** - 详见 [LICENSE](LICENSE) 文件。
+
+---
+
+<div align="center">
+
+### 🌟 **在 GitHub 上为我们加星** • 🐛 **报告问题** • 💬 **加入讨论**
+
+**由 tRPC-Agent-Go 团队用 ❤️ 构建**
+
+*赋能开发者构建下一代智能应用*
+
+</div>
 
 
