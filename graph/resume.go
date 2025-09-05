@@ -18,11 +18,10 @@ import (
 func Interrupt(ctx context.Context, state State, key string, prompt any) (any, error) {
 	// Track which interrupts have been used in this invocation.
 	// This allows the same resume value to be returned if the node re-executes.
-	usedInterruptsKey := "__used_interrupts__"
-	usedMap, _ := state[usedInterruptsKey].(map[string]any)
+	usedMap, _ := state[StateKeyUsedInterrupts].(map[string]any)
 	if usedMap == nil {
 		usedMap = make(map[string]any)
-		state[usedInterruptsKey] = usedMap
+		state[StateKeyUsedInterrupts] = usedMap
 	}
 
 	// Check if we've already used a resume value for this key.

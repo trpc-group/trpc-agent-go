@@ -341,7 +341,7 @@ func (e *Executor) executeGraph(
 
 				if hasExecutableNodes && len(e.pendingWrites) == 0 {
 					log.Infof("🔧 Executor: checkpoint has executable NextNodes: %v, adding to state for planning", tuple.Checkpoint.NextNodes)
-					restored["__next_nodes__"] = tuple.Checkpoint.NextNodes
+					restored[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
 					execState = restored
 				}
 			}
@@ -753,8 +753,8 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 		// This is particularly important for initial checkpoints that have the entry point set
 		log.Infof("🔧 Executor: using NextNodes to trigger execution: %v", tuple.Checkpoint.NextNodes)
 		// Store the nodes in the state so they can be picked up during planning
-		state["__next_nodes__"] = tuple.Checkpoint.NextNodes
-		log.Infof("🔧 Executor: added __next_nodes__ to state, state now has %d keys", len(state))
+		state[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
+		log.Infof("🔧 Executor: added %s to state, state now has %d keys", StateKeyNextNodes, len(state))
 	} else if len(tuple.Checkpoint.NextChannels) > 0 {
 		// Fallback: use NextChannels to trigger frontier when no pending writes
 		for _, chName := range tuple.Checkpoint.NextChannels {
@@ -826,15 +826,15 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 	// Check if we have nodes to execute from a resumed checkpoint stored in state
 	// This needs to be checked regardless of step number when resuming
 	execCtx.stateMutex.RLock()
-	nextNodesValue, hasNextNodes := execCtx.State["__next_nodes__"]
+	nextNodesValue, hasNextNodes := execCtx.State[StateKeyNextNodes]
 	stateKeyCount := len(execCtx.State)
 	execCtx.stateMutex.RUnlock()
 
 	if hasNextNodes {
-		log.Infof("🔧 Executor.planStep: step=%d, found __next_nodes__ in state, stateKeys=%d", step, stateKeyCount)
+		log.Infof("🔧 Executor.planStep: step=%d, found %s in state, stateKeys=%d", step, StateKeyNextNodes, stateKeyCount)
 
 		if nextNodes, ok := nextNodesValue.([]string); ok && len(nextNodes) > 0 {
-			log.Infof("🔧 Executor: using __next_nodes__ from state: %v", nextNodes)
+			log.Infof("🔧 Executor: using %s from state: %v", StateKeyNextNodes, nextNodes)
 			// Create tasks for the nodes stored in the state
 			for _, nodeID := range nextNodes {
 				execCtx.stateMutex.RLock()
@@ -851,7 +851,7 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 			}
 			// Remove the special key from state after using it
 			execCtx.stateMutex.Lock()
-			delete(execCtx.State, "__next_nodes__")
+			delete(execCtx.State, StateKeyNextNodes)
 			execCtx.stateMutex.Unlock()
 			return tasks, nil
 		}

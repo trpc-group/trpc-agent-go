@@ -11,8 +11,10 @@ const (
 
 // State map keys (stored into execution state)
 const (
-	StateKeyCommand   = "__command__"
-	StateKeyResumeMap = "__resume_map__"
+	StateKeyCommand        = "__command__"
+	StateKeyResumeMap      = "__resume_map__"
+	StateKeyNextNodes      = "__next_nodes__"
+	StateKeyUsedInterrupts = "__used_interrupts__"
 )
 
 // Checkpoint Metadata.Source enumeration values
@@ -34,4 +36,10 @@ const (
 	EventKeyDuration    = "duration"
 	EventKeyBytes       = "bytes"
 	EventKeyWritesCount = "writes_count"
+)
+
+// Common state field names (frequently used in examples and tests).
+const (
+	StateFieldCounter   = "counter"
+	StateFieldStepCount = "step_count"
 )
