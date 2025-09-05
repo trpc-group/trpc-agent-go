@@ -51,6 +51,14 @@ const (
 	ObjectTypeGraphChannelUpdate = "graph.channel.update"
 	// ObjectTypeGraphStateUpdate is the object type for state update events.
 	ObjectTypeGraphStateUpdate = "graph.state.update"
+	// ObjectTypeGraphCheckpoint is the object type for checkpoint events.
+	ObjectTypeGraphCheckpoint = "graph.checkpoint"
+	// ObjectTypeGraphCheckpointCreated is the object type for checkpoint creation events.
+	ObjectTypeGraphCheckpointCreated = "graph.checkpoint.created"
+	// ObjectTypeGraphCheckpointCommitted is the object type for checkpoint commit events.
+	ObjectTypeGraphCheckpointCommitted = "graph.checkpoint.committed"
+	// ObjectTypeGraphCheckpointInterrupt is the object type for checkpoint interrupt events.
+	ObjectTypeGraphCheckpointInterrupt = "graph.checkpoint.interrupt"
 )
 
 // Metadata keys for storing event metadata in StateDelta.
@@ -69,6 +77,8 @@ const (
 	MetadataKeyTool = "_tool_metadata"
 	// MetadataKeyModel is the key for model execution metadata.
 	MetadataKeyModel = "_model_metadata"
+	// MetadataKeyCheckpoint is the key for checkpoint metadata.
+	MetadataKeyCheckpoint = "_checkpoint_metadata"
 )
 
 // NodeType represents the type of a graph node.
@@ -251,6 +261,10 @@ type PregelStepMetadata struct {
 	Duration time.Duration `json:"duration,omitempty"`
 	// Error is the error message if step failed.
 	Error string `json:"error,omitempty"`
+	// NodeID is the ID of the node where interrupt occurred.
+	NodeID string `json:"nodeID,omitempty"`
+	// InterruptValue is the value passed to interrupt().
+	InterruptValue any `json:"interruptValue,omitempty"`
 }
 
 // ChannelUpdateMetadata contains metadata about channel updates.
@@ -702,6 +716,8 @@ type PregelEventOptions struct {
 	StartTime       time.Time
 	EndTime         time.Time
 	Error           string
+	NodeID          string
+	InterruptValue  any
 }
 
 // PregelEventOption is a function that configures Pregel event options.
@@ -767,6 +783,20 @@ func WithPregelEventEndTime(endTime time.Time) PregelEventOption {
 func WithPregelEventError(errMsg string) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithPregelEventNodeID sets the node ID for Pregel events.
+func WithPregelEventNodeID(nodeID string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.NodeID = nodeID
+	}
+}
+
+// WithPregelEventInterruptValue sets the interrupt value for Pregel events.
+func WithPregelEventInterruptValue(value any) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.InterruptValue = value
 	}
 }
 
@@ -1075,6 +1105,26 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 		WithPregelMetadata(metadata))
 }
 
+// NewPregelInterruptEvent creates a new Pregel interrupt event.
+func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
+	options := &PregelEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := PregelStepMetadata{
+		StepNumber:     options.StepNumber,
+		Phase:          options.Phase,
+		StartTime:      options.StartTime,
+		EndTime:        options.EndTime,
+		Duration:       options.EndTime.Sub(options.StartTime),
+		NodeID:         options.NodeID,
+		InterruptValue: options.InterruptValue,
+	}
+	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
+		WithPregelMetadata(metadata))
+}
+
 // NewChannelUpdateEvent creates a new channel update event.
 func NewChannelUpdateEvent(opts ...ChannelEventOption) *event.Event {
 	options := &ChannelEventOptions{}
@@ -1124,6 +1174,10 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 
 	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphExecution)
 	e.Response.Done = true
+	// Always initialize StateDelta to a non-nil map to ensure consumers can rely on it.
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
 	if finalResponse != "" {
 		e.Response.Choices = []model.Choice{
 			{
@@ -1137,9 +1191,6 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	}
 
 	// Add completion metadata to StateDelta
-	if e.StateDelta == nil {
-		e.StateDelta = make(map[string][]byte)
-	}
 	completionMetadata := CompletionMetadata{
 		TotalSteps:     options.TotalSteps,
 		TotalDuration:  options.TotalDuration,
@@ -1148,7 +1199,19 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	if jsonData, err := json.Marshal(completionMetadata); err == nil {
 		e.StateDelta[MetadataKeyCompletion] = jsonData
 	}
-
+	// Also include a serialized snapshot of the final state itself so downstream
+	// consumers (including tests) can reconstruct state without additional logic.
+	if options.FinalState != nil {
+		for key, value := range options.FinalState {
+			if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
+				key == MetadataKeyState || key == MetadataKeyCompletion {
+				continue
+			}
+			if jsonData, err := json.Marshal(value); err == nil {
+				e.StateDelta[key] = jsonData
+			}
+		}
+	}
 	return e
 }
 
@@ -1164,4 +1227,137 @@ func extractStateKeys(state State) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// CheckpointEventOptions contains options for creating checkpoint events.
+type CheckpointEventOptions struct {
+	InvocationID   string
+	CheckpointID   string
+	Source         string
+	Step           int
+	Duration       time.Duration
+	Bytes          int64
+	WritesCount    int
+	ResumeReplay   bool
+	InterruptValue any
+}
+
+// CheckpointEventOption is a function that configures checkpoint event options.
+type CheckpointEventOption func(*CheckpointEventOptions)
+
+// WithCheckpointEventInvocationID sets the invocation ID.
+func WithCheckpointEventInvocationID(invocationID string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.InvocationID = invocationID
+	}
+}
+
+// WithCheckpointEventCheckpointID sets the checkpoint ID.
+func WithCheckpointEventCheckpointID(checkpointID string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.CheckpointID = checkpointID
+	}
+}
+
+// WithCheckpointEventSource sets the checkpoint source.
+func WithCheckpointEventSource(source string) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Source = source
+	}
+}
+
+// WithCheckpointEventStep sets the step number.
+func WithCheckpointEventStep(step int) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Step = step
+	}
+}
+
+// WithCheckpointEventDuration sets the duration.
+func WithCheckpointEventDuration(duration time.Duration) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Duration = duration
+	}
+}
+
+// WithCheckpointEventBytes sets the bytes written.
+func WithCheckpointEventBytes(bytes int64) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.Bytes = bytes
+	}
+}
+
+// WithCheckpointEventWritesCount sets the writes count.
+func WithCheckpointEventWritesCount(count int) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.WritesCount = count
+	}
+}
+
+// WithCheckpointEventResumeReplay sets the resume replay flag.
+func WithCheckpointEventResumeReplay(replay bool) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.ResumeReplay = replay
+	}
+}
+
+// WithCheckpointEventInterruptValue sets the interrupt value.
+func WithCheckpointEventInterruptValue(value any) CheckpointEventOption {
+	return func(opts *CheckpointEventOptions) {
+		opts.InterruptValue = value
+	}
+}
+
+// NewCheckpointCreatedEvent creates a new checkpoint created event.
+func NewCheckpointCreatedEvent(opts ...CheckpointEventOption) *event.Event {
+	options := &CheckpointEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := map[string]any{
+		CfgKeyCheckpointID:  options.CheckpointID,
+		EventKeySource:      options.Source,
+		EventKeyStep:        options.Step,
+		EventKeyDuration:    options.Duration,
+		EventKeyBytes:       options.Bytes,
+		EventKeyWritesCount: options.WritesCount,
+	}
+
+	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCreated)
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		e.StateDelta[MetadataKeyCheckpoint] = jsonData
+	}
+
+	return e
+}
+
+// NewCheckpointCommittedEvent creates a new checkpoint committed event.
+func NewCheckpointCommittedEvent(opts ...CheckpointEventOption) *event.Event {
+	options := &CheckpointEventOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	metadata := map[string]any{
+		CfgKeyCheckpointID:  options.CheckpointID,
+		EventKeySource:      options.Source,
+		EventKeyStep:        options.Step,
+		EventKeyDuration:    options.Duration,
+		EventKeyBytes:       options.Bytes,
+		EventKeyWritesCount: options.WritesCount,
+	}
+
+	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphCheckpointCommitted)
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		e.StateDelta[MetadataKeyCheckpoint] = jsonData
+	}
+
+	return e
 }

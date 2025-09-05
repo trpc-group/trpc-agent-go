@@ -136,9 +136,17 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		require.NoError(t, err, "Failed to execute graph")
 
 		var finalState State
+		var allEvents []string
 		for event := range eventChan {
-			if event.Done && event.StateDelta != nil {
-				finalState = make(State)
+			// Log all events for debugging
+			if event.StateDelta != nil {
+				allEvents = append(allEvents, fmt.Sprintf("Event with %d keys", len(event.StateDelta)))
+			}
+
+			if event.StateDelta != nil {
+				if finalState == nil {
+					finalState = make(State)
+				}
 				for key, valueBytes := range event.StateDelta {
 					if key == MetadataKeyNode || key == MetadataKeyPregel ||
 						key == MetadataKeyChannel || key == MetadataKeyState ||
@@ -179,8 +187,10 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 
 		var finalState State
 		for event := range eventChan {
-			if event.Done && event.StateDelta != nil {
-				finalState = make(State)
+			if event.StateDelta != nil {
+				if finalState == nil {
+					finalState = make(State)
+				}
 				for key, valueBytes := range event.StateDelta {
 					if key == MetadataKeyNode || key == MetadataKeyPregel ||
 						key == MetadataKeyChannel || key == MetadataKeyState ||
@@ -834,8 +844,10 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 
 			var finalState State
 			for event := range eventChan {
-				if event.Done && event.StateDelta != nil {
-					finalState = make(State)
+				if event.StateDelta != nil {
+					if finalState == nil {
+						finalState = make(State)
+					}
 					for key, valueBytes := range event.StateDelta {
 						if key == MetadataKeyNode || key == MetadataKeyPregel ||
 							key == MetadataKeyChannel || key == MetadataKeyState ||

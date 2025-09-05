@@ -89,7 +89,7 @@ func TestChannel_Update_BehaviorLastValue(t *testing.T) {
 	ch := NewChannel("test", BehaviorLastValue)
 
 	// Test empty values
-	result := ch.Update([]any{})
+	result := ch.Update([]any{}, 1)
 	if result {
 		t.Error("Update() should return false for empty values")
 	}
@@ -98,7 +98,7 @@ func TestChannel_Update_BehaviorLastValue(t *testing.T) {
 	}
 
 	// Test single value
-	result = ch.Update([]any{"value1"})
+	result = ch.Update([]any{"value1"}, 1)
 	if !result {
 		t.Error("Update() should return true for valid value")
 	}
@@ -113,7 +113,7 @@ func TestChannel_Update_BehaviorLastValue(t *testing.T) {
 	}
 
 	// Test multiple values (should keep last)
-	result = ch.Update([]any{"value2", "value3"})
+	result = ch.Update([]any{"value2", "value3"}, 2)
 	if !result {
 		t.Error("Update() should return true for valid values")
 	}
@@ -129,7 +129,7 @@ func TestChannel_Update_BehaviorTopic(t *testing.T) {
 	ch := NewChannel("test", BehaviorTopic)
 
 	// Test empty values (BehaviorTopic returns true even for empty values)
-	result := ch.Update([]any{})
+	result := ch.Update([]any{}, 1)
 	if !result {
 		t.Error("Update() should return true for empty values in BehaviorTopic")
 	}
@@ -141,7 +141,7 @@ func TestChannel_Update_BehaviorTopic(t *testing.T) {
 	}
 
 	// Test single value
-	result = ch.Update([]any{"value1"})
+	result = ch.Update([]any{"value1"}, 1)
 	if !result {
 		t.Error("Update() should return true for valid value")
 	}
@@ -151,7 +151,7 @@ func TestChannel_Update_BehaviorTopic(t *testing.T) {
 	}
 
 	// Test multiple values (should accumulate)
-	result = ch.Update([]any{"value2", "value3"})
+	result = ch.Update([]any{"value2", "value3"}, 2)
 	if !result {
 		t.Error("Update() should return true for valid values")
 	}
@@ -168,13 +168,13 @@ func TestChannel_Update_BehaviorEphemeral(t *testing.T) {
 	ch := NewChannel("test", BehaviorEphemeral)
 
 	// Test empty values
-	result := ch.Update([]any{})
+	result := ch.Update([]any{}, 1)
 	if result {
 		t.Error("Update() should return false for empty values")
 	}
 
 	// Test single value
-	result = ch.Update([]any{"value1"})
+	result = ch.Update([]any{"value1"}, 1)
 	if !result {
 		t.Error("Update() should return true for valid value")
 	}
@@ -186,7 +186,7 @@ func TestChannel_Update_BehaviorEphemeral(t *testing.T) {
 	}
 
 	// Test multiple values (should keep first)
-	result = ch.Update([]any{"value2", "value3"})
+	result = ch.Update([]any{"value2", "value3"}, 2)
 	if !result {
 		t.Error("Update() should return true for valid values")
 	}
@@ -199,7 +199,7 @@ func TestChannel_Update_BehaviorBarrier(t *testing.T) {
 	ch := NewChannel("test", BehaviorBarrier)
 
 	// Test empty values (BehaviorBarrier returns true even for empty values)
-	result := ch.Update([]any{})
+	result := ch.Update([]any{}, 1)
 	if !result {
 		t.Error("Update() should return true for empty values in BehaviorBarrier")
 	}
@@ -211,7 +211,7 @@ func TestChannel_Update_BehaviorBarrier(t *testing.T) {
 	}
 
 	// Test string values (should be added to barrier set)
-	result = ch.Update([]any{"sender1", "sender2"})
+	result = ch.Update([]any{"sender1", "sender2"}, 2)
 	if !result {
 		t.Error("Update() should return true for valid values")
 	}
@@ -221,7 +221,7 @@ func TestChannel_Update_BehaviorBarrier(t *testing.T) {
 	}
 
 	// Test non-string values (should be ignored)
-	result = ch.Update([]any{123, "sender3"})
+	result = ch.Update([]any{123, "sender3"}, 2)
 	if !result {
 		t.Error("Update() should return true for valid values")
 	}
@@ -242,7 +242,7 @@ func TestChannel_Get(t *testing.T) {
 			name:        "BehaviorLastValue",
 			channelType: BehaviorLastValue,
 			setup: func(ch *Channel) {
-				ch.Update([]any{"value1", "value2"})
+				ch.Update([]any{"value1", "value2"}, 2)
 			},
 			expected: "value2",
 		},
@@ -250,7 +250,7 @@ func TestChannel_Get(t *testing.T) {
 			name:        "BehaviorTopic",
 			channelType: BehaviorTopic,
 			setup: func(ch *Channel) {
-				ch.Update([]any{"value1", "value2"})
+				ch.Update([]any{"value1", "value2"}, 2)
 			},
 			expected: []any{"value1", "value2"},
 		},
@@ -258,7 +258,7 @@ func TestChannel_Get(t *testing.T) {
 			name:        "BehaviorEphemeral",
 			channelType: BehaviorEphemeral,
 			setup: func(ch *Channel) {
-				ch.Update([]any{"value1", "value2"})
+				ch.Update([]any{"value1", "value2"}, 2)
 			},
 			expected: "value1",
 		},
@@ -266,7 +266,7 @@ func TestChannel_Get(t *testing.T) {
 			name:        "BehaviorBarrier",
 			channelType: BehaviorBarrier,
 			setup: func(ch *Channel) {
-				ch.Update([]any{"sender1", "sender2"})
+				ch.Update([]any{"sender1", "sender2"}, 2)
 			},
 			expected: map[string]bool{"sender1": true, "sender2": true},
 		},
@@ -287,7 +287,7 @@ func TestChannel_Get(t *testing.T) {
 func TestChannel_Consume(t *testing.T) {
 	// Test BehaviorEphemeral
 	ch := NewChannel("test", BehaviorEphemeral)
-	ch.Update([]any{"value1"})
+	ch.Update([]any{"value1"}, 1)
 
 	result := ch.Consume()
 	if !result {
@@ -302,7 +302,7 @@ func TestChannel_Consume(t *testing.T) {
 
 	// Test other types
 	ch2 := NewChannel("test2", BehaviorLastValue)
-	ch2.Update([]any{"value1"})
+	ch2.Update([]any{"value1"}, 1)
 
 	result = ch2.Consume()
 	if result {
@@ -320,7 +320,7 @@ func TestChannel_IsAvailable(t *testing.T) {
 		t.Error("Channel should not be available initially")
 	}
 
-	ch.Update([]any{"value1"})
+	ch.Update([]any{"value1"}, 1)
 	if !ch.IsAvailable() {
 		t.Error("Channel should be available after update")
 	}
@@ -328,7 +328,7 @@ func TestChannel_IsAvailable(t *testing.T) {
 
 func TestChannel_Finish(t *testing.T) {
 	ch := NewChannel("test", BehaviorLastValue)
-	ch.Update([]any{"value1"})
+	ch.Update([]any{"value1"}, 1)
 
 	result := ch.Finish()
 	if !result {
@@ -341,7 +341,7 @@ func TestChannel_Finish(t *testing.T) {
 
 func TestChannel_Acknowledge(t *testing.T) {
 	ch := NewChannel("test", BehaviorLastValue)
-	ch.Update([]any{"value1"})
+	ch.Update([]any{"value1"}, 1)
 
 	ch.Acknowledge()
 	if ch.Available {
@@ -443,7 +443,7 @@ func TestChannel_Concurrency(t *testing.T) {
 	done := make(chan bool, 10)
 	for i := 0; i < 10; i++ {
 		go func(id int) {
-			ch.Update([]any{id})
+			ch.Update([]any{id}, 1)
 			done <- true
 		}(i)
 	}
@@ -485,7 +485,7 @@ func TestManager_Concurrency(t *testing.T) {
 func TestChannel_EdgeCases(t *testing.T) {
 	// Test nil values
 	ch := NewChannel("test", BehaviorLastValue)
-	ch.Update([]any{nil})
+	ch.Update([]any{nil}, 1)
 	if ch.Value != nil {
 		t.Error("Channel should handle nil values")
 	}
@@ -496,7 +496,7 @@ func TestChannel_EdgeCases(t *testing.T) {
 	for i := range largeValues {
 		largeValues[i] = i
 	}
-	ch2.Update(largeValues)
+	ch2.Update(largeValues, 1)
 
 	values := ch2.Get().([]any)
 	if len(values) != 1000 {
@@ -513,13 +513,13 @@ func TestChannel_VersionIncrement(t *testing.T) {
 	}
 
 	// Update should increment version
-	ch.Update([]any{"value1"})
+	ch.Update([]any{"value1"}, 1)
 	if ch.Version != 1 {
 		t.Errorf("Version should be 1 after first update, got %d", ch.Version)
 	}
 
 	// Another update should increment version again
-	ch.Update([]any{"value2"})
+	ch.Update([]any{"value2"}, 1)
 	if ch.Version != 2 {
 		t.Errorf("Version should be 2 after second update, got %d", ch.Version)
 	}
