@@ -6,6 +6,8 @@ toolchain go1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../knowledge/document/reader/pdf
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../knowledge/embedder/gemini
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
@@ -22,14 +24,16 @@ require (
 	go.opentelemetry.io/otel/metric v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
 	go.uber.org/zap v1.27.0
-	trpc.group/trpc-go/trpc-a2a-go v0.2.3
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
 	trpc.group/trpc-go/trpc-agent-go v0.1.2
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.3
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.3
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.4
-	trpc.group/trpc-go/trpc-mcp-go v0.0.4
+	trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03
 )
 
 require (
@@ -88,7 +92,7 @@ require (
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
-	github.com/rs/cors v1.10.1 // indirect
+	github.com/rs/cors v1.11.1 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
@@ -99,7 +103,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	github.com/yuin/goldmark v1.7.12 // indirect
+	github.com/yuin/goldmark v1.4.13 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.37.0 // indirect
@@ -117,7 +121,7 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
-	google.golang.org/genai v1.15.0 // indirect
+	google.golang.org/genai v1.0.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250707201910-8d1bb00bc6a7 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
@@ -125,5 +129,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.0.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.3 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9 // indirect
 )
