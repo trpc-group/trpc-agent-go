@@ -34,23 +34,25 @@ const (
 )
 
 var (
-	defaultChannelBufferSize = 256
-	defaultMaxSteps          = 100
-	defaultStepTimeout       = time.Duration(0) // No timeout by default, users can set if needed
+	defaultChannelBufferSize     = 256
+	defaultMaxSteps              = 100
+	defaultStepTimeout           = time.Duration(0) // No timeout by default, users can set if needed
+	defaultCheckpointSaveTimeout = 10 * time.Second // Default timeout for checkpoint save operations
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
 type Executor struct {
-	graph              *Graph
-	channelBufferSize  int
-	maxSteps           int
-	stepTimeout        time.Duration
-	nodeTimeout        time.Duration
-	checkpointSaver    CheckpointSaver
-	checkpointManager  *CheckpointManager
-	lastCheckpoint     *Checkpoint
-	pendingWrites      []PendingWrite
-	nextNodesToExecute []string // Nodes to execute when resuming from checkpoint
+	graph                 *Graph
+	channelBufferSize     int
+	maxSteps              int
+	stepTimeout           time.Duration
+	nodeTimeout           time.Duration
+	checkpointSaveTimeout time.Duration
+	checkpointSaver       CheckpointSaver
+	checkpointManager     *CheckpointManager
+	lastCheckpoint        *Checkpoint
+	pendingWrites         []PendingWrite
+	nextNodesToExecute    []string // Nodes to execute when resuming from checkpoint
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -66,6 +68,8 @@ type ExecutorOptions struct {
 	StepTimeout time.Duration
 	// NodeTimeout is the timeout for individual node execution (default: StepTimeout/2, min 1s).
 	NodeTimeout time.Duration
+	// CheckpointSaveTimeout is the timeout for saving checkpoints (default: 10s).
+	CheckpointSaveTimeout time.Duration
 	// CheckpointSaver is the checkpoint saver for persisting graph state.
 	CheckpointSaver CheckpointSaver
 }
@@ -105,15 +109,23 @@ func WithCheckpointSaver(saver CheckpointSaver) ExecutorOption {
 	}
 }
 
+// WithCheckpointSaveTimeout sets the timeout for checkpoint save operations.
+func WithCheckpointSaveTimeout(timeout time.Duration) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		opts.CheckpointSaveTimeout = timeout
+	}
+}
+
 // NewExecutor creates a new graph executor.
 func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
 		return nil, fmt.Errorf("invalid graph: %w", err)
 	}
 	var options ExecutorOptions
-	options.ChannelBufferSize = defaultChannelBufferSize // Default buffer size.
-	options.MaxSteps = defaultMaxSteps                   // Default max steps.
-	options.StepTimeout = defaultStepTimeout             // Default step timeout.
+	options.ChannelBufferSize = defaultChannelBufferSize         // Default buffer size.
+	options.MaxSteps = defaultMaxSteps                           // Default max steps.
+	options.StepTimeout = defaultStepTimeout                     // Default step timeout.
+	options.CheckpointSaveTimeout = defaultCheckpointSaveTimeout // Default checkpoint save timeout.
 	// Apply function options.
 	for _, opt := range opts {
 		opt(&options)
@@ -129,12 +141,13 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	}
 
 	executor := &Executor{
-		graph:             graph,
-		channelBufferSize: options.ChannelBufferSize,
-		maxSteps:          options.MaxSteps,
-		stepTimeout:       options.StepTimeout,
-		nodeTimeout:       nodeTimeout,
-		checkpointSaver:   options.CheckpointSaver,
+		graph:                 graph,
+		channelBufferSize:     options.ChannelBufferSize,
+		maxSteps:              options.MaxSteps,
+		stepTimeout:           options.StepTimeout,
+		nodeTimeout:           nodeTimeout,
+		checkpointSaveTimeout: options.CheckpointSaveTimeout,
+		checkpointSaver:       options.CheckpointSaver,
 	}
 	// Create checkpoint manager if saver is provided.
 	if options.CheckpointSaver != nil {
@@ -1761,6 +1774,15 @@ func (e *Executor) handleInterrupt(
 		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
 
 		// Store the interrupt checkpoint using PutFull for consistency
+		// Use a new context to ensure checkpoint saves even if main context is canceled.
+		// Use configured timeout, fallback to default if not set.
+		saveTimeout := e.checkpointSaveTimeout
+		if saveTimeout == 0 {
+			saveTimeout = defaultCheckpointSaveTimeout
+		}
+		saveCtx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+		defer cancel()
+
 		req := PutFullRequest{
 			Config:        checkpointConfig,
 			Checkpoint:    checkpoint,
@@ -1768,7 +1790,7 @@ func (e *Executor) handleInterrupt(
 			NewVersions:   checkpoint.ChannelVersions,
 			PendingWrites: []PendingWrite{},
 		}
-		updatedConfig, err := e.checkpointSaver.PutFull(ctx, req)
+		updatedConfig, err := e.checkpointSaver.PutFull(saveCtx, req)
 		if err != nil {
 			log.Warnf("Failed to store interrupt checkpoint: %v", err)
 		} else {
