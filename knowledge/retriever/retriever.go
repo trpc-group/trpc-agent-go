@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 )
 
 // Retriever defines the interface for retrieving relevant documents based on queries.
@@ -26,16 +27,8 @@ type Retriever interface {
 }
 
 // ConversationMessage represents a message in a conversation history.
-type ConversationMessage struct {
-	// Role indicates if this is from user or assistant.
-	Role string
-
-	// Content is the message content.
-	Content string
-
-	// Timestamp when the message was sent.
-	Timestamp int64
-}
+// It's an alias to the query package type for API compatibility.
+type ConversationMessage = query.ConversationMessage
 
 // Query represents a retrieval query.
 type Query struct {

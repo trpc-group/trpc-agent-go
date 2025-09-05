@@ -330,7 +330,7 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// The retriever will handle query enhancement if configured.
 	retrieverReq := &retriever.Query{
 		Text:      req.Query,
-		History:   convertToRetrieverHistory(req.History),
+		History:   req.History, // Same type now, no conversion needed
 		UserID:    req.UserID,
 		SessionID: req.SessionID,
 		Limit:     limit,
@@ -355,23 +355,6 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		Score:    bestDoc.Score,
 		Text:     content,
 	}, nil
-}
-
-// convertToRetrieverHistory converts knowledge.ConversationMessage to retriever.ConversationMessage.
-func convertToRetrieverHistory(history []ConversationMessage) []retriever.ConversationMessage {
-	if len(history) == 0 {
-		return nil
-	}
-
-	result := make([]retriever.ConversationMessage, len(history))
-	for i, msg := range history {
-		result[i] = retriever.ConversationMessage{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Timestamp: msg.Timestamp,
-		}
-	}
-	return result
 }
 
 // Close closes the knowledge base and releases resources.
