@@ -25,7 +25,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.38.0
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
-	trpc.group/trpc-go/trpc-agent-go v0.0.4
+	trpc.group/trpc-go/trpc-agent-go v0.1.2
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.0.0-00010101000000-000000000000
