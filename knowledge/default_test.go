@@ -183,11 +183,19 @@ func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) 
 }
 func (*stubVectorStore) Close() error { return nil }
 
-func TestConvertConversationHistory(t *testing.T) {
+func TestConvertToRetrieverHistory(t *testing.T) {
 	in := []ConversationMessage{{Role: "user", Content: "hi", Timestamp: 1}}
-	got := convertConversationHistory(in)
-	if len(got) != 1 || got[0].Content != "hi" {
+	got := convertToRetrieverHistory(in)
+	if len(got) != 1 || got[0].Content != "hi" || got[0].Timestamp != 1 {
 		t.Fatalf("unexpected conversion result %+v", got)
+	}
+
+	// Test nil/empty input
+	if result := convertToRetrieverHistory(nil); result != nil {
+		t.Fatalf("expected nil result for nil input, got %+v", result)
+	}
+	if result := convertToRetrieverHistory([]ConversationMessage{}); result != nil {
+		t.Fatalf("expected nil result for empty input, got %+v", result)
 	}
 }
 

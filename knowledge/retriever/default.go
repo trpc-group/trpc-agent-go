@@ -73,10 +73,12 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 	// Step 1: Enhance query (if enhancer is available).
 	finalQuery := q.Text
 	if dr.queryEnhancer != nil {
-		// Create query request with context (retriever doesn't have full context info).
+		// Create query request with full context.
 		queryReq := &query.Request{
-			Query: q.Text,
-			// History, UserID, SessionID would need to be passed from higher level.
+			Query:     q.Text,
+			History:   convertConversationHistory(q.History),
+			UserID:    q.UserID,
+			SessionID: q.SessionID,
 		}
 		enhanced, err := dr.queryEnhancer.EnhanceQuery(ctx, queryReq)
 		if err != nil {
@@ -149,4 +151,21 @@ func convertQueryFilter(qf *QueryFilter) *vectorstore.SearchFilter {
 		IDs:      qf.DocumentIDs,
 		Metadata: qf.Metadata,
 	}
+}
+
+// convertConversationHistory converts retriever.ConversationMessage to query.ConversationMessage.
+func convertConversationHistory(history []ConversationMessage) []query.ConversationMessage {
+	if len(history) == 0 {
+		return nil
+	}
+
+	result := make([]query.ConversationMessage, len(history))
+	for i, msg := range history {
+		result[i] = query.ConversationMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+		}
+	}
+	return result
 }

@@ -25,10 +25,32 @@ type Retriever interface {
 	Close() error
 }
 
+// ConversationMessage represents a message in a conversation history.
+type ConversationMessage struct {
+	// Role indicates if this is from user or assistant.
+	Role string
+
+	// Content is the message content.
+	Content string
+
+	// Timestamp when the message was sent.
+	Timestamp int64
+}
+
 // Query represents a retrieval query.
 type Query struct {
 	// Text is the query text for semantic search.
 	Text string
+
+	// History contains recent conversation messages for context.
+	// Should be limited to last N messages for performance.
+	History []ConversationMessage
+
+	// UserID can help with personalized search results.
+	UserID string
+
+	// SessionID can help with session-specific context.
+	SessionID string
 
 	// Limit specifies the number of documents to retrieve.
 	Limit int
