@@ -13,23 +13,17 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNew(t *testing.T) {
 	schema := NewStateSchema()
 	g := New(schema)
-	if g == nil {
-		t.Fatal("Expected non-nil graph")
-	}
-	if g.nodes == nil {
-		t.Error("Expected nodes map to be initialized")
-	}
-	if g.edges == nil {
-		t.Error("Expected edges map to be initialized")
-	}
-	if g.schema == nil {
-		t.Error("Expected schema to be set")
-	}
+	assert.NotNil(t, g, "Expected non-nil graph")
+	assert.NotNil(t, g.nodes, "Expected nodes map to be initialized")
+	assert.NotNil(t, g.edges, "Expected edges map to be initialized")
+	assert.NotNil(t, g.schema, "Expected schema to be set")
 }
 
 func TestAddNode(t *testing.T) {
@@ -48,18 +42,13 @@ func TestAddNode(t *testing.T) {
 	}
 
 	err := g.addNode(node)
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	assert.NoError(t, err, "Expected no error")
 
 	// Verify node was added.
 	retrievedNode, exists := g.Node("test-node")
-	if !exists {
-		t.Error("Expected node to exist")
-	}
-	if retrievedNode.Name != "Test Node" {
-		t.Errorf("Expected name 'Test Node', got '%s'", retrievedNode.Name)
-	}
+	assert.True(t, exists, "Expected node to exist")
+	assert.Equal(t, "Test Node", retrievedNode.Name, "Expected name 'Test Node'")
+	assert.NotNil(t, retrievedNode.Function, "Expected node to have function")
 }
 
 func TestAddEdge(t *testing.T) {
@@ -80,18 +69,12 @@ func TestAddEdge(t *testing.T) {
 	// Test adding valid edge.
 	edge := &Edge{From: "node1", To: "node2"}
 	err := g.addEdge(edge)
-	if err != nil {
-		t.Fatalf("Expected no error, got %v", err)
-	}
+	assert.NoError(t, err, "Expected no error")
 
 	// Verify edge was added.
 	edges := g.Edges("node1")
-	if len(edges) != 1 {
-		t.Errorf("Expected 1 edge, got %d", len(edges))
-	}
-	if edges[0].To != "node2" {
-		t.Errorf("Expected edge to 'node2', got '%s'", edges[0].To)
-	}
+	assert.Equal(t, 1, len(edges), "Expected 1 edge")
+	assert.Equal(t, "node2", edges[0].To, "Expected edge to 'node2'")
 }
 
 func TestValidate_NoStaticReachabilityRequired(t *testing.T) {
@@ -151,38 +134,32 @@ func TestStateSchema(t *testing.T) {
 
 	result := schema.ApplyUpdate(state, update)
 
-	if result["counter"] != 2 {
-		t.Errorf("Expected counter 2, got %v", result["counter"])
-	}
+	assert.Equal(t, 2, result["counter"], "Expected counter 2")
 
-	items := result["items"].([]any)
-	if len(items) != 1 || items[0] != "item1" {
-		t.Errorf("Expected items [item1], got %v", items)
-	}
+	items, ok := result["items"].([]any)
+	assert.True(t, ok, "Expected items to be a slice")
+	assert.Equal(t, 1, len(items), "Expected 1 item")
+	assert.Equal(t, "item1", items[0], "Expected items [item1]")
 }
 
 func TestStateReducers(t *testing.T) {
 	// Test DefaultReducer.
 	result := DefaultReducer("old", "new")
-	if result != "new" {
-		t.Errorf("Expected 'new', got %v", result)
-	}
+	assert.Equal(t, "new", result, "Expected 'new'")
 
 	// Test AppendReducer.
 	existing := []any{"a", "b"}
 	update := []any{"c", "d"}
 	result = AppendReducer(existing, update)
 	resultSlice := result.([]any)
-	if len(resultSlice) != 4 {
-		t.Errorf("Expected length 4, got %d", len(resultSlice))
-	}
+	assert.Equal(t, 4, len(resultSlice), "Expected length 4")
 
 	// Test MergeReducer.
 	existingMap := map[string]any{"a": 1, "b": 2}
 	updateMap := map[string]any{"b": 3, "c": 4}
 	result = MergeReducer(existingMap, updateMap)
 	resultMap := result.(map[string]any)
-	if resultMap["a"] != 1 || resultMap["b"] != 3 || resultMap["c"] != 4 {
-		t.Errorf("Expected merged map, got %v", resultMap)
-	}
+	assert.Equal(t, 1, resultMap["a"], "Expected '1'")
+	assert.Equal(t, 3, resultMap["b"], "Expected '3'")
+	assert.Equal(t, 4, resultMap["c"], "Expected '4'")
 }

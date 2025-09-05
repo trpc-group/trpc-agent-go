@@ -202,11 +202,16 @@ func (g *Graph) validate() error {
 // ExecutionContext contains context for graph execution.
 type ExecutionContext struct {
 	Graph        *Graph
-	State        State
 	EventChan    chan<- *event.Event
 	InvocationID string
 
+	// stateMutex protects State reads/writes.
 	stateMutex sync.RWMutex
+	State      State
+
+	// tasksMutex protects pendingTasks queue operations.
+	tasksMutex   sync.Mutex
+	pendingTasks []*Task
 }
 
 // Command represents a command that combines state updates with routing.
