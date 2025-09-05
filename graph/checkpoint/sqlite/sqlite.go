@@ -120,7 +120,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, errors.New("lineage_id is required")
 	}
 
-	// Query checkpoint data
+	// Query checkpoint data.
 	checkpointJSON, metadataJSON, parentID, resolvedID, err := s.queryCheckpointData(
 		ctx, lineageID, checkpointNS, checkpointID)
 	if err != nil {
@@ -130,7 +130,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, err
 	}
 
-	// Build the tuple from retrieved data
+	// Build the tuple from retrieved data.
 	return s.buildTuple(ctx, lineageID, checkpointNS, resolvedID, parentID,
 		checkpointJSON, metadataJSON)
 }
@@ -140,7 +140,7 @@ func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS
 	checkpointID string) (checkpointJSON, metadataJSON []byte, parentID, resolvedID string, err error) {
 
 	if checkpointID == "" {
-		// Get latest checkpoint
+		// Get latest checkpoint.
 		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
 		err = row.Scan(&checkpointJSON, &metadataJSON, &parentID, &resolvedID)
 		if err != nil {
@@ -149,7 +149,7 @@ func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS
 		return checkpointJSON, metadataJSON, parentID, resolvedID, nil
 	}
 
-	// Get specific checkpoint
+	// Get specific checkpoint.
 	row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
 	err = row.Scan(&checkpointJSON, &metadataJSON, &parentID)
 	if err != nil {
@@ -182,7 +182,6 @@ func (s *Saver) buildTuple(ctx context.Context, lineageID, checkpointNS, checkpo
 	if parentID != "" {
 		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
 	}
-
 	return &graph.CheckpointTuple{
 		Config:        cfg,
 		Checkpoint:    &ckpt,
@@ -204,20 +203,20 @@ func (s *Saver) List(
 		return nil, errors.New("lineage_id is required")
 	}
 
-	// Query beforeTs if Before filter is specified
+	// Query beforeTs if Before filter is specified.
 	beforeTs, err := s.getBeforeTimestamp(ctx, lineageID, checkpointNS, filter)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build and execute query
+	// Build and execute query.
 	rows, err := s.executeListQuery(ctx, lineageID, checkpointNS, beforeTs, filter)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	// Process results
+	// Process results.
 	return s.processListResults(ctx, rows, lineageID, checkpointNS, filter)
 }
 
@@ -288,14 +287,14 @@ func (s *Saver) processListResults(ctx context.Context, rows *sql.Rows,
 			continue
 		}
 
-		// Apply metadata filter
+		// Apply metadata filter.
 		if !s.matchesMetadataFilter(tuple, filter) {
 			continue
 		}
 
 		tuples = append(tuples, tuple)
 
-		// Check limit
+		// Check limit.
 		if filter != nil && filter.Limit > 0 && len(tuples) >= filter.Limit {
 			break
 		}
@@ -433,14 +432,14 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		return nil, errors.New("checkpoint cannot be nil")
 	}
 
-	// Start transaction
+	// Start transaction.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Marshal checkpoint and metadata
+	// Marshal checkpoint and metadata.
 	checkpointJSON, err := json.Marshal(req.Checkpoint)
 	if err != nil {
 		return nil, fmt.Errorf("marshal checkpoint: %w", err)
@@ -450,7 +449,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	// Insert checkpoint
+	// Insert checkpoint.
 	// Use the ParentCheckpointID from the checkpoint itself, not from config.
 	parentID := req.Checkpoint.ParentCheckpointID
 	_, err = tx.ExecContext(
@@ -468,14 +467,14 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		return nil, fmt.Errorf("insert checkpoint: %w", err)
 	}
 
-	// Insert pending writes with sequence numbers
+	// Insert pending writes with sequence numbers.
 	for idx, w := range req.PendingWrites {
 		valueJSON, err := json.Marshal(w.Value)
 		if err != nil {
 			return nil, fmt.Errorf("marshal write value: %w", err)
 		}
 
-		// Use Sequence if available, otherwise fallback to timestamp
+		// Use Sequence if available, otherwise fallback to timestamp.
 		seq := w.Sequence
 		if seq == 0 {
 			seq = time.Now().UnixNano()
@@ -488,10 +487,10 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 			checkpointNS,
 			req.Checkpoint.ID,
 			w.TaskID,
-			idx, // Use index as sequence number
+			idx, // Use index as sequence number.
 			w.Channel,
 			valueJSON,
-			"", // task_path
+			"", // task_path.
 			seq,
 		)
 		if err != nil {
@@ -499,12 +498,12 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 		}
 	}
 
-	// Commit transaction
+	// Commit transaction.
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
-	// Return updated config with the new checkpoint ID
+	// Return updated config with the new checkpoint ID.
 	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, checkpointNS)
 	return updatedConfig, nil
 }

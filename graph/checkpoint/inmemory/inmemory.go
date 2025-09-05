@@ -71,102 +71,113 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, fmt.Errorf("lineage_id is required")
 	}
 
-	// Get the latest checkpoint if no specific ID is provided.
 	if checkpointID == "" {
-		namespaces, exists := s.storage[lineageID]
-		if !exists {
-			return nil, nil
-		}
-
-		// Find the latest checkpoint across all namespaces if namespace is empty
-		var latestTuple *graph.CheckpointTuple
-		var latestTime time.Time
-
-		if namespace == "" {
-			// Search across all namespaces for the latest checkpoint
-			for _, nsCheckpoints := range namespaces {
-				for _, tuple := range nsCheckpoints {
-					if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
-						latestTime = tuple.Checkpoint.Timestamp
-						latestTuple = tuple
-					}
-				}
-			}
-		} else {
-			// Search in specific namespace
-			checkpoints, exists := namespaces[namespace]
-			if !exists || len(checkpoints) == 0 {
-				return nil, nil
-			}
-
-			for _, tuple := range checkpoints {
-				if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
-					latestTime = tuple.Checkpoint.Timestamp
-					latestTuple = tuple
-				}
-			}
-		}
-
-		if latestTuple == nil {
-			return nil, nil
-		}
-
-		// Update config with the found checkpoint ID.
-		checkpointID = latestTuple.Checkpoint.ID
-		if configurable, ok := config[graph.CfgKeyConfigurable].(map[string]any); ok {
-			configurable[graph.CfgKeyCheckpointID] = checkpointID
-		}
-
-		// Create a copy to avoid concurrent modification issues.
-		result := &graph.CheckpointTuple{
-			Config:       latestTuple.Config,
-			Checkpoint:   latestTuple.Checkpoint.Copy(),
-			Metadata:     latestTuple.Metadata,
-			ParentConfig: latestTuple.ParentConfig,
-		}
-
-		// Add pending writes if they exist.
-		if writes, exists := s.writes[lineageID][namespace][checkpointID]; exists {
-			result.PendingWrites = make([]graph.PendingWrite, len(writes))
-			copy(result.PendingWrites, writes)
-		}
-		return result, nil
+		return s.getLatestCheckpoint(lineageID, namespace, config)
 	}
+	return s.getSpecificCheckpoint(lineageID, namespace, checkpointID)
+}
 
-	// Retrieve the specific checkpoint by ID.
+// getLatestCheckpoint retrieves the latest checkpoint.
+func (s *Saver) getLatestCheckpoint(lineageID, namespace string,
+	config map[string]any) (*graph.CheckpointTuple, error) {
+
 	namespaces, exists := s.storage[lineageID]
 	if !exists {
 		return nil, nil
 	}
 
-	// If namespace is empty, search across all namespaces for the checkpoint ID
-	var tuple *graph.CheckpointTuple
+	latestTuple := s.findLatestTuple(namespaces, namespace)
+	if latestTuple == nil {
+		return nil, nil
+	}
+
+	// Update config with the found checkpoint ID.
+	checkpointID := latestTuple.Checkpoint.ID
+	if configurable, ok := config[graph.CfgKeyConfigurable].(map[string]any); ok {
+		configurable[graph.CfgKeyCheckpointID] = checkpointID
+	}
+	return s.createResultTuple(latestTuple, lineageID, namespace, checkpointID), nil
+}
+
+// findLatestTuple finds the latest checkpoint tuple.
+func (s *Saver) findLatestTuple(namespaces map[string]map[string]*graph.CheckpointTuple,
+	namespace string) *graph.CheckpointTuple {
+
+	var latestTuple *graph.CheckpointTuple
+	var latestTime time.Time
+
 	if namespace == "" {
-		// Search for checkpoint ID across all namespaces
+		// Search across all namespaces
 		for _, nsCheckpoints := range namespaces {
-			if t, exists := nsCheckpoints[checkpointID]; exists {
-				tuple = t
-				break
+			tuple := s.findLatestInMap(nsCheckpoints, &latestTime)
+			if tuple != nil {
+				latestTuple = tuple
 			}
-		}
-		if tuple == nil {
-			return nil, nil
 		}
 	} else {
 		// Search in specific namespace
-		checkpoints, exists := namespaces[namespace]
-		if !exists {
-			return nil, nil
+		if checkpoints, exists := namespaces[namespace]; exists {
+			latestTuple = s.findLatestInMap(checkpoints, &latestTime)
 		}
+	}
+	return latestTuple
+}
 
-		t, exists := checkpoints[checkpointID]
-		if !exists {
-			return nil, nil
+// findLatestInMap finds the latest tuple in a map of checkpoints.
+func (s *Saver) findLatestInMap(checkpoints map[string]*graph.CheckpointTuple,
+	latestTime *time.Time) *graph.CheckpointTuple {
+
+	var latestTuple *graph.CheckpointTuple
+	for _, tuple := range checkpoints {
+		if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(*latestTime) {
+			*latestTime = tuple.Checkpoint.Timestamp
+			latestTuple = tuple
 		}
-		tuple = t
+	}
+	return latestTuple
+}
+
+// getSpecificCheckpoint retrieves a specific checkpoint by ID.
+func (s *Saver) getSpecificCheckpoint(lineageID, namespace,
+	checkpointID string) (*graph.CheckpointTuple, error) {
+
+	namespaces, exists := s.storage[lineageID]
+	if !exists {
+		return nil, nil
 	}
 
-	// Create a copy to avoid concurrent modification issues.
+	tuple := s.findCheckpointByID(namespaces, namespace, checkpointID)
+	if tuple == nil {
+		return nil, nil
+	}
+	return s.createResultTuple(tuple, lineageID, namespace, checkpointID), nil
+}
+
+// findCheckpointByID finds a checkpoint by ID.
+func (s *Saver) findCheckpointByID(namespaces map[string]map[string]*graph.CheckpointTuple,
+	namespace, checkpointID string) *graph.CheckpointTuple {
+
+	if namespace == "" {
+		// Search across all namespaces
+		for _, nsCheckpoints := range namespaces {
+			if tuple, exists := nsCheckpoints[checkpointID]; exists {
+				return tuple
+			}
+		}
+		return nil
+	}
+
+	// Search in specific namespace
+	if checkpoints, exists := namespaces[namespace]; exists {
+		return checkpoints[checkpointID]
+	}
+	return nil
+}
+
+// createResultTuple creates a result tuple with pending writes.
+func (s *Saver) createResultTuple(tuple *graph.CheckpointTuple, lineageID,
+	namespace, checkpointID string) *graph.CheckpointTuple {
+
 	result := &graph.CheckpointTuple{
 		Config:       tuple.Config,
 		Checkpoint:   tuple.Checkpoint.Copy(),
@@ -179,8 +190,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		result.PendingWrites = make([]graph.PendingWrite, len(writes))
 		copy(result.PendingWrites, writes)
 	}
-
-	return result, nil
+	return result
 }
 
 // List retrieves checkpoints matching criteria.
@@ -324,7 +334,6 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 	writes := make([]graph.PendingWrite, len(req.Writes))
 	copy(writes, req.Writes)
 	s.writes[lineageID][namespace][checkpointID] = writes
-
 	return nil
 }
 
@@ -401,7 +410,6 @@ func (s *Saver) DeleteLineage(ctx context.Context, lineageID string) error {
 
 	delete(s.storage, lineageID)
 	delete(s.writes, lineageID)
-
 	return nil
 }
 
@@ -413,7 +421,6 @@ func (s *Saver) Close() error {
 	// Clear all data.
 	s.storage = make(map[string]map[string]map[string]*graph.CheckpointTuple)
 	s.writes = make(map[string]map[string]map[string][]graph.PendingWrite)
-
 	return nil
 }
 
