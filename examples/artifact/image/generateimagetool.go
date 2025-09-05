@@ -57,7 +57,7 @@ func generateImage(ctx context.Context, input generateImageInput) (generateImage
 	if err != nil {
 		return generateImageOutput{}, fmt.Errorf("failed to marshal state: %w", err)
 	}
-	toolCtx.State.Set(generateImageStateKey, bts)
+	toolCtx.State[generateImageStateKey] = bts
 	return output, nil
 }
 

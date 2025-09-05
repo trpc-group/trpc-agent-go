@@ -20,12 +20,12 @@ func displayImage(ctx context.Context, _ displayImageInput) (displayImageOutput,
 	if err != nil {
 		return displayImageOutput{}, fmt.Errorf("failed to create tool context: %w", err)
 	}
-	value, ok := tc.State.Get(generateImageStateKey)
+	value, ok := tc.State[generateImageStateKey]
 	if !ok {
 		return displayImageOutput{Result: "no image to display"}, nil
 	}
 	var stateValue generateImageStateValue
-	if err := json.Unmarshal(value.([]byte), &stateValue); err != nil {
+	if err := json.Unmarshal(value, &stateValue); err != nil {
 		return displayImageOutput{}, fmt.Errorf("failed to unmarshal state: %w", err)
 	}
 	var output displayImageOutput

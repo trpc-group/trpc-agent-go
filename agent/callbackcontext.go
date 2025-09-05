@@ -25,7 +25,7 @@ type CallbackContext struct {
 	context.Context
 	invocation *Invocation
 	// State is the delta-aware state of the current session.
-	State *session.State
+	State session.StateMap
 }
 
 // NewCallbackContext creates a CallbackContext from a standard context.
@@ -35,14 +35,10 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 	if !ok || invocation == nil {
 		return nil, errors.New("invocation not found in context")
 	}
-
-	state := session.NewState()
-	state.Value = invocation.Session.State
-
 	return &CallbackContext{
 		Context:    ctx,
 		invocation: invocation,
-		State:      state,
+		State:      invocation.Session.State,
 	}, nil
 }
 
