@@ -342,7 +342,7 @@ type calculatorRsp struct {
 | `planner`   | 提供 agent 的规划与推理能力。                                                                                 |
 - 时序图
 
-![excecution](docs/assets/img/timing_diagram.png)
+![execution](docs/assets/img/timing_diagram.png)
 
 
 ## 使用内置 Agents

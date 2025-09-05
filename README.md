@@ -349,7 +349,7 @@ Key packages:
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 
 Execution flow
-![excecution](docs/assets/img/timing_diagram.png)
+![execution](docs/assets/img/timing_diagram.png)
 
 ## Using Built-in Agents
 
