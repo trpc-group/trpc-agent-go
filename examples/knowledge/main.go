@@ -36,10 +36,7 @@ import (
 
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
-	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
-	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
-	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -57,10 +54,11 @@ var (
 	modelName     = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming     = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType  = flag.String("embedder", "openai", "Embedder type: openai, gemini")
-	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector")
+	vectorStore   = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
 	esVersion     = flag.String("es-version", "v9", "Elasticsearch version: v7, v8, v9 (only used when vectorstore=elasticsearch)")
 	agenticFilter = flag.Bool("agentic_filter", true, "Enable agentic filter for knowledge search")
-	loadData      = flag.Bool("load", true, "Load data into the vector store on startup")
+	recreate      = flag.Bool("recreate", false, "Recreate the vector store on startup, all data in vector store will be deleted.")
+	sourceSync    = flag.Bool("source_sync", false, "Enable source sync for incremental sync, all data in vector store will be sync with source. And orphan documents will be deleted.")
 )
 
 // Default values for optional configurations.
@@ -77,8 +75,8 @@ var (
 	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
 	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
-	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vec")
+	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "123")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "homerpan1")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
@@ -296,40 +294,6 @@ func (c *knowledgeChat) createSources() []source.Source {
 			filesource.WithMetadataValue("source_type", "local_file"),
 			filesource.WithMetadataValue("content_type", "golang"),
 		),
-		dirsource.New(
-			[]string{
-				"./dir",
-			},
-			dirsource.WithName("Data Directory"),
-			dirsource.WithMetadataValue("category", "dataset"),
-			dirsource.WithMetadataValue("topic", "machine_learning"),
-			dirsource.WithMetadataValue("source_type", "local_directory"),
-			dirsource.WithMetadataValue("content_type", "transformer"),
-		),
-		// URL source for web content.
-		urlsource.New(
-			[]string{
-				"https://en.wikipedia.org/wiki/Byte-pair_encoding",
-			},
-			urlsource.WithName("Byte-pair encoding"),
-			urlsource.WithMetadataValue("category", "encyclopedia"),
-			urlsource.WithMetadataValue("topic", "natural_language_processing"),
-			urlsource.WithMetadataValue("source_type", "web_url"),
-			urlsource.WithMetadataValue("content_type", "wiki"),
-		),
-		// Auto source that can handle mixed inputs.
-		autosource.New(
-			[]string{
-				"Cloud computing is the delivery of computing services over the internet, including servers, storage, databases, networking, software, and analytics. It provides on-demand access to shared computing resources.",
-				"https://en.wikipedia.org/wiki/N-gram",
-				"./README.md",
-			},
-			autosource.WithName("Mixed Content Source"),
-			autosource.WithMetadataValue("category", "mixed"),
-			autosource.WithMetadataValue("topic", "technology"),
-			autosource.WithMetadataValue("source_type", "auto_detect"),
-			autosource.WithMetadataValue("content_type", "mixed"),
-		),
 	}
 	return sources
 }
@@ -357,26 +321,19 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(c.sources),
 	)
-	// Decide whether to load the knowledge base.
-	load := *loadData
-	if strings.ToLower(*vectorStore) == "inmemory" && !load {
-		// In-memory store is non-persistent, so force loading.
-		fmt.Println("ℹ️  In-memory store is non-persistent; forcing data load.")
-		load = true
-	}
 
 	// Optionally load the knowledge base.
-	if load {
-		if err := c.kb.Load(
-			ctx,
-			knowledge.WithShowProgress(false),  // The default is true.
-			knowledge.WithProgressStepSize(10), // The default is 10.
-			knowledge.WithShowStats(false),     // The default is true.
-			knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
-			knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
-		); err != nil {
-			return fmt.Errorf("failed to load knowledge base: %w", err)
-		}
+	if err := c.kb.Load(
+		ctx,
+		knowledge.WithShowProgress(false),  // The default is true.
+		knowledge.WithProgressStepSize(10), // The default is 10.
+		knowledge.WithShowStats(false),     // The default is true.
+		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
+		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
+		knowledge.WithRecreate(*recreate),
+		knowledge.WithSourceSync(*sourceSync),
+	); err != nil {
+		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}
 	return nil
 }
