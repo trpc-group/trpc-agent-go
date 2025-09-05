@@ -243,59 +243,68 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, sourceName string,
 	}
 
 	if dk.enableSourceSync {
-		// Case 1: sourceSync enabled - use incremental sync logic
-		log.Infof("Reloading source %s with incremental sync enabled", sourceName)
-
-		// Find related document IDs from cacheSourceInfo
-		if sourceDocs, exists := dk.cacheSourceInfo[sourceName]; exists {
-			// Remove related documents from processedDocIDs to mark them for reprocessing
-			for _, docInfo := range sourceDocs {
-				dk.processedDocIDs.Delete(docInfo.DocumentID)
-				log.Debugf("Marked document %s for reprocessing", docInfo.DocumentID)
-			}
-		}
-
-		// Load the source (will use incremental sync logic)
-		config := dk.buildLoadConfig(1, opts...)
-		if config.srcParallelism > 1 || config.docParallelism > 1 {
-			if _, err := dk.loadConcurrent(ctx, config, []source.Source{targetSource}); err != nil {
-				return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
-			}
-		} else {
-			if _, err := dk.loadSequential(ctx, config, []source.Source{targetSource}); err != nil {
-				return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
-			}
-		}
-
-		// Cleanup orphan documents after reload
-		if err := dk.cleanupOrphanDocuments(ctx); err != nil {
-			log.Warnf("Failed to cleanup orphan documents after reloading source %s: %v", sourceName, err)
-		}
-
+		return dk.reloadSourceWithSync(ctx, targetSource, sourceName, opts...)
 	} else {
-		// Case 2: sourceSync disabled - direct delete and reload
-		log.Infof("Reloading source %s with direct delete and reload", sourceName)
+		return dk.reloadSourceDirect(ctx, targetSource, sourceName, filter, opts...)
+	}
 
-		// Delete existing documents for this source from vector store
-		if err := dk.vectorStore.DeleteByFilter(ctx, nil, filter, false); err != nil {
-			return fmt.Errorf("failed to delete existing documents for source %s: %w", sourceName, err)
-		}
+}
 
-		// Load the source
-		config := dk.buildLoadConfig(1, opts...)
-		if config.srcParallelism > 1 || config.docParallelism > 1 {
-			if _, err := dk.loadConcurrent(ctx, config, []source.Source{targetSource}); err != nil {
-				return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
-			}
-		} else {
-			if _, err := dk.loadSequential(ctx, config, []source.Source{targetSource}); err != nil {
-				return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
-			}
+// reloadSourceWithSync reloads a source using incremental sync strategy
+func (dk *BuiltinKnowledge) reloadSourceWithSync(ctx context.Context, targetSource source.Source, sourceName string, opts ...LoadOption) error {
+	log.Infof("Reloading source %s with incremental sync", sourceName)
+
+	// Mark existing documents for reprocessing
+	if sourceDocs, exists := dk.cacheSourceInfo[sourceName]; exists {
+		for _, docInfo := range sourceDocs {
+			dk.processedDocIDs.Delete(docInfo.DocumentID)
+			log.Debugf("Marked document %s for reprocessing", docInfo.DocumentID)
 		}
 	}
 
-	log.Infof("Successfully reloaded source %s", sourceName)
+	// Load source using incremental sync logic
+	if err := dk.loadSourceInternal(ctx, []source.Source{targetSource}, opts...); err != nil {
+		return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
+	}
+
+	// Cleanup orphan documents
+	if err := dk.cleanupOrphanDocuments(ctx); err != nil {
+		log.Warnf("Failed to cleanup orphan documents after reloading source %s: %v", sourceName, err)
+	}
+
+	log.Infof("Successfully reloaded source %s with sync", sourceName)
 	return nil
+}
+
+// reloadSourceDirect reloads a source using direct delete and reload strategy
+func (dk *BuiltinKnowledge) reloadSourceDirect(ctx context.Context, targetSource source.Source, sourceName string, filter map[string]interface{}, opts ...LoadOption) error {
+	log.Infof("Reloading source %s with direct delete and reload", sourceName)
+
+	// Delete existing documents
+	if err := dk.vectorStore.DeleteByFilter(ctx, nil, filter, false); err != nil {
+		return fmt.Errorf("failed to delete existing documents for source %s: %w", sourceName, err)
+	}
+
+	// Load source
+	if err := dk.loadSourceInternal(ctx, []source.Source{targetSource}, opts...); err != nil {
+		return fmt.Errorf("failed to reload source %s: %w", sourceName, err)
+	}
+
+	log.Infof("Successfully reloaded source %s directly", sourceName)
+	return nil
+}
+
+// loadSourceInternal loads sources with proper concurrency handling
+func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []source.Source, opts ...LoadOption) error {
+	config := dk.buildLoadConfig(len(sources), opts...)
+
+	if config.srcParallelism > 1 || config.docParallelism > 1 {
+		_, err := dk.loadConcurrent(ctx, config, sources)
+		return err
+	} else {
+		_, err := dk.loadSequential(ctx, config, sources)
+		return err
+	}
 }
 
 // RemoveSourceByName removes a source from the knowledge base by name.
@@ -324,30 +333,9 @@ func (dk *BuiltinKnowledge) RemoveSourceByName(ctx context.Context, sourceName s
 		source.MetaSourceName: sourceName,
 	}
 
-	// Remove from caches if sourceSync is enabled (do this BEFORE deleting from vector store)
+	// Clean up caches if sourceSync is enabled (do this BEFORE deleting from vector store)
 	if dk.enableSourceSync {
-		// Get metadata for documents to be removed
-		metas, err := dk.vectorStore.GetMetadata(ctx, nil, filter, -1, -1)
-		if err != nil {
-			// If GetMetadata fails, we still continue with cache cleanup
-			log.Warnf("Failed to get metadata for source %s during removal: %v", sourceName, err)
-		} else {
-			// Remove from cacheURIInfo
-			for _, meta := range metas {
-				if uri, ok := meta.Metadata[source.MetaURI].(string); ok {
-					delete(dk.cacheURIInfo, uri)
-				}
-			}
-
-			// Remove from cacheSourceInfo
-			delete(dk.cacheSourceInfo, sourceName)
-
-			// Remove from cacheMetaInfo and processedDocIDs
-			for docID := range metas {
-				delete(dk.cacheMetaInfo, docID)
-				dk.processedDocIDs.Delete(docID)
-			}
-		}
+		dk.cleanupSourceCache(ctx, sourceName, filter)
 	}
 
 	// Delete documents from vector store by source name filter
@@ -356,6 +344,25 @@ func (dk *BuiltinKnowledge) RemoveSourceByName(ctx context.Context, sourceName s
 	}
 
 	return nil
+}
+
+// cleanupSourceCache cleans up cache entries for a specific source
+func (dk *BuiltinKnowledge) cleanupSourceCache(ctx context.Context, sourceName string, filter map[string]interface{}) {
+	// Get metadata for documents to be removed
+	metas, err := dk.vectorStore.GetMetadata(ctx, nil, filter, -1, -1)
+	if err != nil {
+		log.Warnf("Failed to get metadata for source %s during cache cleanup: %v", sourceName, err)
+		return
+	}
+
+	// Remove documents from caches
+	for docID := range metas {
+		dk.removeDocumentFromCache(docID)
+		dk.processedDocIDs.Delete(docID)
+	}
+
+	// Also clean up the source cache directly
+	delete(dk.cacheSourceInfo, sourceName)
 }
 
 // loadSource loads one or more source
@@ -370,7 +377,7 @@ func (dk *BuiltinKnowledge) loadSource(
 	config := dk.buildLoadConfig(len(sources), opts...)
 
 	if err := dk.sourcesValidate(); err != nil {
-		return fmt.Errorf("sources validate failed, ")
+		return fmt.Errorf("sources validation failed: %w", err)
 	}
 	if config.recreate {
 		// clear vector store data
@@ -777,16 +784,13 @@ func (dk *BuiltinKnowledge) updateVectorStoreMetadata(ctx context.Context) error
 	dk.cacheMetaInfo = allMeta
 	log.Infof("Found %d existing documents in vector store", len(allMeta))
 
-	// group existing documents by URI
+	// Build both caches in single pass to avoid duplication
 	for docID, meta := range allMeta {
-		uri, ok := meta.Metadata[source.MetaURI].(string)
-		if !ok {
-			log.Debugf("Document %s missing URI metadata", docID)
-			continue
-		}
-		sourceName, ok := meta.Metadata[source.MetaSourceName].(string)
-		if !ok {
-			log.Debugf("Document %s missing source name metadata", docID)
+		uri, hasURI := meta.Metadata[source.MetaURI].(string)
+		sourceName, hasSource := meta.Metadata[source.MetaSourceName].(string)
+
+		if !hasURI || !hasSource {
+			log.Debugf("Document %s missing required metadata (URI: %v, Source: %v)", docID, hasURI, hasSource)
 			continue
 		}
 
@@ -799,31 +803,8 @@ func (dk *BuiltinKnowledge) updateVectorStoreMetadata(ctx context.Context) error
 			AllMeta:    meta.Metadata,
 		}
 
+		// Add to both caches simultaneously
 		dk.cacheURIInfo[uri] = append(dk.cacheURIInfo[uri], docInfo)
-	}
-
-	// group existing documents by source name
-	for docID, meta := range allMeta {
-		uri, ok := meta.Metadata[source.MetaURI].(string)
-		if !ok {
-			log.Debugf("Document %s missing URI metadata", docID)
-			continue
-		}
-		sourceName, ok := meta.Metadata[source.MetaSourceName].(string)
-		if !ok {
-			log.Debugf("Document %s missing source name metadata", docID)
-			continue
-		}
-
-		chunkIndex, _ := meta.Metadata[source.MetaChunkIndex].(int)
-		docInfo := DocumentInfo{
-			DocumentID: docID,
-			SourceName: sourceName,
-			ChunkIndex: chunkIndex,
-			URI:        uri,
-			AllMeta:    meta.Metadata,
-		}
-
 		dk.cacheSourceInfo[sourceName] = append(dk.cacheSourceInfo[sourceName], docInfo)
 	}
 
@@ -890,52 +871,80 @@ func (dk *BuiltinKnowledge) cleanupOrphanDocuments(ctx context.Context) error {
 		return fmt.Errorf("failed to delete orphan documents: %w", err)
 	}
 
-	// Clean up cache info for successfully deleted documents
+	// Clean up cache for deleted documents
 	for _, docID := range toDeleteDocIDs {
-		if meta, exists := dk.cacheMetaInfo[docID]; exists {
-			// Remove from cacheURIInfo
-			if uri, ok := meta.Metadata[source.MetaURI].(string); ok {
-				if uriDocs, exists := dk.cacheURIInfo[uri]; exists {
-					// Remove the specific document from URI cache
-					filtered := make([]DocumentInfo, 0, len(uriDocs))
-					for _, doc := range uriDocs {
-						if doc.DocumentID != docID {
-							filtered = append(filtered, doc)
-						}
-					}
-					if len(filtered) == 0 {
-						delete(dk.cacheURIInfo, uri)
-					} else {
-						dk.cacheURIInfo[uri] = filtered
-					}
-				}
-			}
-
-			// Remove from cacheSourceInfo
-			if sourceName, ok := meta.Metadata[source.MetaSourceName].(string); ok {
-				if sourceDocs, exists := dk.cacheSourceInfo[sourceName]; exists {
-					// Remove the specific document from source cache
-					filtered := make([]DocumentInfo, 0, len(sourceDocs))
-					for _, doc := range sourceDocs {
-						if doc.DocumentID != docID {
-							filtered = append(filtered, doc)
-						}
-					}
-					if len(filtered) == 0 {
-						delete(dk.cacheSourceInfo, sourceName)
-					} else {
-						dk.cacheSourceInfo[sourceName] = filtered
-					}
-				}
-			}
-
-			// Remove from cacheMetaInfo
-			delete(dk.cacheMetaInfo, docID)
-		}
+		dk.removeDocumentFromCache(docID)
 	}
 
 	log.Infof("Successfully deleted %d documents", len(toDeleteDocIDs))
 	return nil
+}
+
+// removeDocumentFromCache removes a document from all caches
+func (dk *BuiltinKnowledge) removeDocumentFromCache(docID string) {
+	meta, exists := dk.cacheMetaInfo[docID]
+	if !exists {
+		return // Document not in cache
+	}
+
+	// Get URI and source name from metadata
+	uri, hasURI := meta.Metadata[source.MetaURI].(string)
+	sourceName, hasSource := meta.Metadata[source.MetaSourceName].(string)
+
+	// Remove from URI cache
+	if hasURI {
+		dk.removeDocumentFromURICache(docID, uri)
+	}
+
+	// Remove from Source cache
+	if hasSource {
+		dk.removeDocumentFromSourceCache(docID, sourceName)
+	}
+
+	// Remove from metadata cache
+	delete(dk.cacheMetaInfo, docID)
+}
+
+// removeDocumentFromURICache removes a document from URI cache
+func (dk *BuiltinKnowledge) removeDocumentFromURICache(docID, uri string) {
+	uriDocs, exists := dk.cacheURIInfo[uri]
+	if !exists {
+		return
+	}
+
+	filtered := make([]DocumentInfo, 0, len(uriDocs))
+	for _, doc := range uriDocs {
+		if doc.DocumentID != docID {
+			filtered = append(filtered, doc)
+		}
+	}
+
+	if len(filtered) == 0 {
+		delete(dk.cacheURIInfo, uri)
+	} else {
+		dk.cacheURIInfo[uri] = filtered
+	}
+}
+
+// removeDocumentFromSourceCache removes a document from Source cache
+func (dk *BuiltinKnowledge) removeDocumentFromSourceCache(docID, sourceName string) {
+	sourceDocs, exists := dk.cacheSourceInfo[sourceName]
+	if !exists {
+		return
+	}
+
+	filtered := make([]DocumentInfo, 0, len(sourceDocs))
+	for _, doc := range sourceDocs {
+		if doc.DocumentID != docID {
+			filtered = append(filtered, doc)
+		}
+	}
+
+	if len(filtered) == 0 {
+		delete(dk.cacheSourceInfo, sourceName)
+	} else {
+		dk.cacheSourceInfo[sourceName] = filtered
+	}
 }
 
 // clearVectorStoreMetadata clear vector store metadata cache
