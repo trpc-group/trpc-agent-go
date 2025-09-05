@@ -148,17 +148,12 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 					finalState = make(State)
 				}
 				for key, valueBytes := range event.StateDelta {
-<<<<<<< HEAD
-					// Don't skip any keys for debugging
-					var value interface{}
-=======
 					if key == MetadataKeyNode || key == MetadataKeyPregel ||
 						key == MetadataKeyChannel || key == MetadataKeyState ||
 						key == MetadataKeyCompletion {
 						continue
 					}
 					var value any
->>>>>>> main
 					if err := json.Unmarshal(valueBytes, &value); err == nil {
 						finalState[key] = value
 					}
@@ -169,17 +164,6 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 			}
 		}
 
-<<<<<<< HEAD
-		// Verify results - simplified test
-		if finalState == nil {
-			t.Fatal("No final state received")
-		}
-
-		// Just verify we have some state
-		if len(finalState) == 0 {
-			t.Error("Expected non-empty final state")
-		}
-=======
 		// Verify results
 		require.NotNil(t, finalState, "No final state received")
 
@@ -190,7 +174,6 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		wordCount, ok := finalState["word_count"].(float64)
 		require.True(t, ok, "Expected word count")
 		assert.GreaterOrEqual(t, wordCount, float64(100), "Expected high word count")
->>>>>>> main
 	})
 
 	// Test with simple document
@@ -228,19 +211,6 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		// Verify results
 		require.NotNil(t, finalState, "No final state received")
 
-<<<<<<< HEAD
-		if result, ok := finalState["last_response"].(string); !ok {
-			t.Logf("No last_response found, available keys: %v", getStateKeys(finalState))
-		} else if !strings.Contains(result, "FINAL OUTPUT:") {
-			t.Logf("Response format different than expected, got: %s", result)
-		}
-
-		if wordCount, ok := finalState["word_count"].(float64); !ok {
-			t.Logf("No word_count found, available keys: %v", getStateKeys(finalState))
-		} else if wordCount > 50 {
-			t.Errorf("Expected low word count, got: %f", wordCount)
-		}
-=======
 		result, ok := finalState[StateKeyLastResponse].(string)
 		require.True(t, ok, "Expected final response")
 		assert.Contains(t, result, "FINAL OUTPUT:", "Expected formatted output")
@@ -248,7 +218,6 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		wordCount, ok := finalState["word_count"].(float64)
 		require.True(t, ok, "Expected word count")
 		assert.LessOrEqual(t, wordCount, float64(50), "Expected low word count")
->>>>>>> main
 	})
 }
 
@@ -899,19 +868,6 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 			// Verify results
 			require.NotNil(t, finalState, "No final state received")
 
-<<<<<<< HEAD
-			if routedTo, ok := finalState["routed_to"].(string); !ok {
-				t.Logf("No routed_to field found, available keys: %v", getStateKeys(finalState))
-			} else if routedTo != tc.expectedRoute {
-				t.Errorf("Expected route %s, got %s", tc.expectedRoute, routedTo)
-			}
-
-			if result, ok := finalState["last_response"].(string); !ok {
-				t.Logf("No last_response found, available keys: %v", getStateKeys(finalState))
-			} else if !strings.Contains(result, "ISSUE ROUTED:") {
-				t.Errorf("Expected routing message, got: %s", result)
-			}
-=======
 			routedTo, ok := finalState["routed_to"].(string)
 			require.True(t, ok, "Expected routed_to field")
 			assert.Equal(t, tc.expectedRoute, routedTo, "Expected correct route")
@@ -919,7 +875,6 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 			result, ok := finalState[StateKeyLastResponse].(string)
 			require.True(t, ok, "Expected final response")
 			assert.Contains(t, result, "ISSUE ROUTED:", "Expected routing message")
->>>>>>> main
 		})
 	}
 }
@@ -967,16 +922,6 @@ func (m *IssueClassificationMockModel) Info() model.Info {
 		Name: "issue-classification-mock-model",
 	}
 }
-
-<<<<<<< HEAD
-// Helper function to get state keys for debugging
-func getStateKeys(state State) []string {
-	keys := make([]string, 0, len(state))
-	for k := range state {
-		keys = append(keys, k)
-	}
-	return keys
-=======
 // TestParallelFanOutWithCommands verifies that a node returning []*Command
 // fan-outs into multiple tasks that execute in parallel with isolated overlays
 // and that their results are merged back into the global State via reducers.
@@ -1443,5 +1388,4 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 		require.NoError(t, exec.processConditionalEdges(context.Background(), execCtx, "start", i), "conditional processing failed.")
 	}
 	close(stopCh)
->>>>>>> main
 }
