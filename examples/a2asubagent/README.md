@@ -9,7 +9,7 @@ examples/a2asubagent/
 ├── agents/                    # AI agent servers
 │   ├── calculator/           # Calculator agent (port 8087)
 │   │   └── calculate_agent.go
-│   └── codecheck/            # Code check agent (port 8088)  
+│   └── codecheck/            # Code check agent (port 8088)
 │       ├── codecc_agent.go
 │       ├── codecc_tool.go
 │       └── spec.txt
@@ -82,11 +82,13 @@ go run client.go
 ## Agent Descriptions
 
 ### Coordinator Agent
+
 - **Function**: Serves as the system entry point, managing and coordinating multiple sub-agents
 - **Features**: Intelligent task dispatch, agent transfer, streaming responses
 - **Icon**: 🎯
 
 ### Calculator Agent
+
 - **Port**: 8087
 - **Function**: Handles mathematical calculation tasks
 - **URL**: http://localhost:8087/
@@ -94,13 +96,12 @@ go run client.go
 - **Agent Card**: http://localhost:8087/.well-known/agent.json
 
 ### CodeCheck Agent
+
 - **Port**: 8088
 - **Function**: Analyzes Go code quality and checks Go language standard compliance
 - **URL**: http://localhost:8088/
 - **Icon**: 🔍
 - **Agent Card**: http://localhost:8088/.well-known/agent.json
-
-
 
 ## Usage Examples
 
@@ -159,25 +160,28 @@ This specification emphasizes the importance of consistent formatting using `gof
 Would you like me to help you analyze specific Go code against these standards or do you have any questions about these specifications?
 ```
 
-
 ## Core Features
 
 ### 1. Intelligent Agent Transfer
+
 - Coordinator automatically identifies task types and transfers to appropriate sub-agents
 - Supports real-time transfer event display (🔄 Transfer Event)
 - Each agent has unique icons and display names
 
 ### 2. Streaming Response Processing
+
 - Supports real-time streaming content display
 - Tool invocation process visualization (🔧 executing tools)
 - Tool completion status indication (✅ Tool completed)
 
 ### 3. Multi-Agent Collaboration
+
 - Calculator Agent: Handles mathematical operations and numerical calculations
 - Code Check Agent: Analyzes Go code quality and standard compliance
 - Coordinator Agent: Intelligent task dispatch and session management
 
 ### 4. User-Friendly Interface
+
 - Clear agent identity identification
 - Real-time transfer status display
 - Support for new session creation (type 'new')
@@ -198,24 +202,24 @@ Would you like me to help you analyze specific Go code against these standards o
 ```bash
 # Use different models
 export OPENAI_MODEL="gpt-4"
-export OPENAI_MODEL="claude-3-sonnet"
 export OPENAI_MODEL="deepseek-chat"
 ```
 
 ### Client Configuration
 
 The client automatically connects to the following sub-agents:
+
 - http://localhost:8087/ (Calculator Agent)
 - http://localhost:8088/ (Code Check Agent)
 
 You can configure different agent addresses by modifying the `agentURLS` variable in `client.go`.
-
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **Connection Failure**
+
    ```bash
    # Check if agents are running
    curl http://localhost:8087/.well-known/agent.json
@@ -223,6 +227,7 @@ You can configure different agent addresses by modifying the `agentURLS` variabl
    ```
 
 2. **API Key Error**
+
    ```bash
    # Verify environment variable settings
    echo $OPENAI_API_KEY
@@ -231,6 +236,7 @@ You can configure different agent addresses by modifying the `agentURLS` variabl
    ```
 
 3. **Port Occupation**
+
    ```bash
    # Check port usage
    lsof -i :8087
@@ -245,11 +251,13 @@ You can configure different agent addresses by modifying the `agentURLS` variabl
 ## Technical Implementation
 
 ### Agent Transfer Mechanism
+
 - Uses `transfer_to_agent` tool to implement inter-agent transfers
 - Supports real-time transfer event handling and status tracking
 - Each agent maintains independent session state
 
 ### Streaming Processing
+
 - Event-driven streaming response processing
 - Supports tool invocation visualization and status feedback
 - Optimized content display logic to avoid duplicate output

@@ -209,7 +209,7 @@ export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini em
 ### Command Line Options
 
 ```bash
--model string       LLM model name (default: "claude-4-sonnet-20250514")
+-model string       LLM model name (default: "deepseek-chat")
 -streaming bool     Enable streaming mode for responses (default: true)
 -embedder string    Embedder type: openai, gemini (default: "openai")
 -vectorstore string Vector store type: inmemory, pgvector, tcvector, elasticsearch (default: "inmemory")

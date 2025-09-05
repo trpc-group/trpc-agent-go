@@ -1,8 +1,8 @@
 # Large Language Model
 
-*A large language model (LLM) is a language model trained with self-supervised machine learning on a vast amount of text, designed for natural language processing tasks, especially language generation.*
+_A large language model (LLM) is a language model trained with self-supervised machine learning on a vast amount of text, designed for natural language processing tasks, especially language generation._
 
-The largest and most capable LLMs are generative pretrained transformers (GPTs), which are largely used in generative chatbots such as ChatGPT, Gemini or Claude. LLMs can be fine-tuned for specific tasks or guided by prompt engineering. These models acquire predictive power regarding syntax, semantics, and ontologies inherent in human language corpora, but they also inherit inaccuracies and biases present in the data they are trained in.
+The largest and most capable LLMs are generative pretrained transformers (GPTs), which are largely used in generative chatbots such as ChatGPT, Gemini or DeepSeek. LLMs can be fine-tuned for specific tasks or guided by prompt engineering. These models acquire predictive power regarding syntax, semantics, and ontologies inherent in human language corpora, but they also inherit inaccuracies and biases present in the data they are trained in.
 
 ## Table of Contents
 
@@ -88,6 +88,7 @@ An LLM is a type of foundation model (large X model) trained on language. LLMs c
 The qualifier "large" in "large language model" is inherently vague, as there is no definitive threshold for the number of parameters required to qualify as "large". As time goes on, what was previously considered "large" may evolve.
 
 As technology advanced, large sums have been invested in increasingly large models. For example:
+
 - Training of GPT-2 (1.5-billion-parameters) in 2019 cost $50,000
 - Training of PaLM (540-billion-parameters) in 2022 cost $8 million
 - Megatron-Turing NLG 530B (2021) cost around $11 million
@@ -112,7 +113,7 @@ LLMs are generally based on the transformer architecture, which leverages an att
 
 In order to find out which tokens are relevant to each other within the scope of the context window, the attention mechanism calculates "soft" weights for each token, more precisely for its embedding, by using multiple attention heads, each with its own "relevance" for calculating its own soft weights.
 
-The largest models, such as Google's Gemini 1.5, presented in February 2024, can have a context window sized up to 1 million tokens. Other models with large context windows includes Anthropic's Claude 2.1, with a context window of up to 200k tokens.
+The largest models, such as Google's Gemini 1.5, presented in February 2024, can have a context window sized up to 1 million tokens. Other models with large context windows includes OpenAI's GPT-5 with a context window of up to 272k tokens.
 
 ### Mixture of Experts
 
