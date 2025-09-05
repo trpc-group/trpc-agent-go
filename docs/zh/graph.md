@@ -72,7 +72,7 @@ graph := graph.New(schema)
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -141,7 +141,7 @@ Graph 包提供了一些内置状态键，主要用于系统内部通信：
 ```go
 import (
     "reflect"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -169,7 +169,7 @@ import (
     "context"
     "fmt"
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -181,29 +181,29 @@ import (
 func main() {
     // 1. 创建状态模式
     schema := graph.MessagesStateSchema()
-    
+
     // 2. 创建状态图构建器
     stateGraph := graph.NewStateGraph(schema)
-    
+
     // 3. 添加节点
     stateGraph.AddNode("start", startNodeFunc).
         AddNode("process", processNodeFunc)
-    
+
     // 4. 设置边
     stateGraph.AddEdge("start", "process")
-    
+
     // 5. 设置入口点和结束点
     // SetEntryPoint 会自动创建虚拟 Start 节点到 "start" 节点的边
     // SetFinishPoint 会自动创建 "process" 节点到虚拟 End 节点的边
     stateGraph.SetEntryPoint("start").
         SetFinishPoint("process")
-    
+
     // 6. 编译图
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         panic(err)
     }
-    
+
     // 7. 创建 GraphAgent
     graphAgent, err := graphagent.New("simple-workflow", compiledGraph,
         graphagent.WithDescription("简单的工作流示例"),
@@ -212,45 +212,45 @@ func main() {
     if err != nil {
         panic(err)
     }
-    
+
     // 8. 创建会话服务
     sessionService := inmemory.NewSessionService()
-    
+
     // 9. 创建 Runner
     appRunner := runner.NewRunner(
         "simple-app",
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     // 10. 执行工作流
     ctx := context.Background()
     userID := "user"
     sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
-    
+
     // 创建用户消息（Runner 会自动将消息内容放入 StateKeyUserInput）
     message := model.NewUserMessage("Hello World")
-    
+
     // 通过 Runner 执行
     eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
     if err != nil {
         panic(err)
     }
-    
+
     // 处理事件流
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("错误: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             choice := event.Choices[0]
             if choice.Delta.Content != "" {
                 fmt.Print(choice.Delta.Content)
             }
         }
-        
+
         if event.Done {
             break
         }
@@ -300,6 +300,7 @@ stateGraph.AddLLMNode("analyze", model,
 ```
 
 **重要说明**：
+
 - SystemPrompt 仅用于本次输入，不落持久化状态。
 - 一次性键（`user_input`/`one_shot_messages`）在成功执行后自动清空。
 - 所有状态更新都是原子性的，确保一致性。
@@ -310,11 +311,13 @@ stateGraph.AddLLMNode("analyze", model,
 #### 三种输入范式
 
 - OneShot（`StateKeyOneShotMessages`）：
+
   - 当该键存在时，本轮仅使用这里提供的 `[]model.Message` 调用模型，
     通常包含完整的 system prompt 与 user prompt。调用后自动清空。
   - 适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。
 
 - UserInput（`StateKeyUserInput`）：
+
   - 当 `user_input` 非空时，LLM 节点会取持久化历史 `messages`，并将
     本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
     `MessageOp`（例如 `AppendMessages`、`ReplaceLastUser`）原子性写入
@@ -324,7 +327,7 @@ stateGraph.AddLLMNode("analyze", model,
 - Messages only（仅 `StateKeyMessages`）：
   - 多用于工具调用回路。当第一轮经由 `user_input` 发起后，路由到工具
     节点执行，再回到 LLM 节点时，因为 `user_input` 已被清空，LLM 将走
-  “Messages only” 分支，以历史中的 tool 响应继续推理。
+    “Messages only” 分支，以历史中的 tool 响应继续推理。
 
 #### 通过 Reducer 与 MessageOp 实现的原子更新
 
@@ -414,6 +417,7 @@ stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
 **工具调用配对机制与二次进入 LLM：**
+
 - 从 `messages` 尾部向前扫描最近的 `assistant(tool_calls)`；遇到 `user`
   则停止，确保配对正确。
 - 当工具节点完成后返回到 LLM 节点时，`user_input` 已被清空，LLM 将走
@@ -488,7 +492,7 @@ return graph.State{
 ```go
 import (
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -554,7 +558,7 @@ graph.MessageReducer(existing, update) any
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -566,12 +570,44 @@ func routingNodeFunc(ctx context.Context, state graph.State) (any, error) {
             GoTo:   "node_a",
         }, nil
     }
-    
+
     return &graph.Command{
         Update: graph.State{"status": "going_to_b"},
         GoTo:   "node_b",
     }, nil
 }
+```
+
+Fan-out 与动态路由：
+
+- 节点返回 `[]*graph.Command` 即可在下一步并行创建多个分支。
+- 使用 `Command{ GoTo: "target" }` 时，路由在运行时动态触发，无需静态可达性边。需确保目标节点存在；若为终点，请保留 `SetFinishPoint(target)`。
+
+示例（并行 fan-out + 动态路由）：
+
+```go
+stateGraph.AddNode("fanout", func(ctx context.Context, s graph.State) (any, error) {
+    tasks := []*graph.Command{
+        {Update: graph.State{"param": "A"}, GoTo: "worker"},
+        {Update: graph.State{"param": "B"}, GoTo: "worker"},
+        {Update: graph.State{"param": "C"}, GoTo: "worker"},
+    }
+    return tasks, nil
+})
+
+stateGraph.AddNode("worker", func(ctx context.Context, s graph.State) (any, error) {
+    p, _ := s["param"].(string)
+    if p == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{"results": []string{p}}, nil
+})
+
+// 入口与结束
+stateGraph.SetEntryPoint("fanout")
+stateGraph.SetFinishPoint("worker")
+
+// 无需添加 fanout->worker 的静态边；路由由 GoTo 驱动。
 ```
 
 ### 3. 执行器配置
@@ -628,7 +664,7 @@ stateGraph.SetFinishPoint("last_node")
 ```go
 import (
     "errors"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -715,7 +751,7 @@ func (h *StateHelper) GetUserInput() (string, error) {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -724,11 +760,11 @@ func safeNodeFunc(ctx context.Context, state graph.State) (any, error) {
     if !ok {
         return nil, fmt.Errorf("input field not found or wrong type")
     }
-    
+
     if input == "" {
         return nil, fmt.Errorf("input cannot be empty")
     }
-    
+
     // 处理逻辑...
     return result, nil
 }
@@ -746,7 +782,7 @@ func safeNodeFunc(ctx context.Context, state graph.State) (any, error) {
 import (
     "context"
     "testing"
-    
+
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -755,16 +791,16 @@ import (
 func TestWorkflow(t *testing.T) {
     // 创建测试图
     graph := createTestGraph()
-    
+
     // 创建执行器
     executor, err := graph.NewExecutor(graph)
     require.NoError(t, err)
-    
+
     // 执行测试
     initialState := graph.State{"test_input": "test"}
     eventChan, err := executor.Execute(context.Background(), initialState, nil)
     require.NoError(t, err)
-    
+
     // 验证结果
     for event := range eventChan {
         // 验证事件内容
@@ -787,7 +823,7 @@ import (
     "fmt"
     "strings"
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -850,23 +886,23 @@ func (w *documentWorkflow) setup() error {
 func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error) {
     // 创建状态模式
     schema := graph.MessagesStateSchema()
-    
+
     // 创建模型实例
     modelInstance := openai.New(w.modelName)
-    
+
     // 创建分析工具
     complexityTool := function.NewFunctionTool(
         w.analyzeComplexity,
         function.WithName("analyze_complexity"),
         function.WithDescription("分析文档复杂度级别"),
     )
-    
+
     // 创建状态图
     stateGraph := graph.NewStateGraph(schema)
     tools := map[string]tool.Tool{
         "analyze_complexity": complexityTool,
     }
-    
+
     // 构建工作流图
     stateGraph.
         AddNode("preprocess", w.preprocessDocument).
@@ -902,23 +938,23 @@ func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error)
         AddNode("format_output", w.formatOutput).
         SetEntryPoint("preprocess").
         SetFinishPoint("format_output")
-    
+
     // 添加工作流边
     stateGraph.AddEdge("preprocess", "analyze")
     stateGraph.AddToolsConditionalEdges("analyze", "tools", "route_complexity")
     stateGraph.AddEdge("tools", "analyze")
-    
+
     // 添加复杂度条件路由
     stateGraph.AddConditionalEdges("route_complexity", w.complexityCondition, map[string]string{
         "simple":  "enhance",
         "complex": "summarize",
     })
-    
+
     stateGraph.AddEdge("enhance", "format_output")
     stateGraph.AddEdge("summarize", "format_output")
-    
+
     // SetEntryPoint 和 SetFinishPoint 会自动处理与虚拟 Start/End 节点的连接
-    
+
     return stateGraph.Compile()
 }
 
@@ -931,12 +967,12 @@ func (w *documentWorkflow) preprocessDocument(ctx context.Context, state graph.S
     if input == "" {
         return nil, fmt.Errorf("no input document found")
     }
-    
+
     input = strings.TrimSpace(input)
     if len(input) < 10 {
         return nil, fmt.Errorf("document too short for processing (minimum 10 characters)")
     }
-    
+
     return graph.State{
         StateKeyDocumentLength:  len(input),
         StateKeyWordCount:       len(strings.Fields(input)),
@@ -968,7 +1004,7 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
     if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
         result = lastResponse
     }
-    
+
     finalOutput := fmt.Sprintf(`DOCUMENT PROCESSING RESULTS
 ========================
 Processing Stage: %s
@@ -978,14 +1014,14 @@ Complexity Level: %s
 
 Processed Content:
 %s
-`, 
+`,
         state[StateKeyProcessingStage],
         state[StateKeyDocumentLength],
         state[StateKeyWordCount],
         state[StateKeyComplexityLevel],
         result,
     )
-    
+
     return graph.State{
         graph.StateKeyLastResponse: finalOutput,
     }, nil
@@ -997,13 +1033,13 @@ func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args map[strin
     if !ok {
         return nil, fmt.Errorf("text argument is required")
     }
-    
+
     wordCount := len(strings.Fields(text))
     sentenceCount := len(strings.Split(text, "."))
-    
+
     var level string
     var score float64
-    
+
     if wordCount < 100 {
         level = "simple"
         score = 0.3
@@ -1014,7 +1050,7 @@ func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args map[strin
         level = "complex"
         score = 0.9
     }
-    
+
     return map[string]any{
         "level":          level,
         "score":          score,
@@ -1036,13 +1072,13 @@ func (w *documentWorkflow) processDocument(ctx context.Context, content string) 
 func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
     var workflowStarted bool
     var finalResult string
-    
+
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("❌ Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             choice := event.Choices[0]
             if choice.Delta.Content != "" {
@@ -1052,12 +1088,12 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
                 }
                 fmt.Print(choice.Delta.Content)
             }
-            
+
             if choice.Message.Content != "" && event.Done {
                 finalResult = choice.Message.Content
             }
         }
-        
+
         if event.Done {
             if finalResult != "" && strings.Contains(finalResult, "DOCUMENT PROCESSING RESULTS") {
                 fmt.Printf("\n\n%s\n", finalResult)
@@ -1085,30 +1121,30 @@ import (
 func createChatBot(modelName string) (*runner.Runner, error) {
     // 创建状态图
     stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
-    
+
     // 创建模型和工具
     modelInstance := openai.New(modelName)
     tools := map[string]tool.Tool{
         "calculator": calculatorTool,
         "search":     searchTool,
     }
-    
+
     // 构建对话图
     stateGraph.
-        AddLLMNode("chat", modelInstance, 
+        AddLLMNode("chat", modelInstance,
             `你是一个有用的AI助手。根据用户的问题提供帮助，并在需要时使用工具。`,
             tools).
         AddToolsNode("tools", tools).
         AddToolsConditionalEdges("chat", "tools", "chat").
         SetEntryPoint("chat").
         SetFinishPoint("chat")
-    
+
     // 编译图
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // 创建 GraphAgent
     graphAgent, err := graphagent.New("chat-bot", compiledGraph,
         graphagent.WithDescription("智能对话机器人"),
@@ -1117,7 +1153,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // 创建 Runner
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
@@ -1125,7 +1161,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     return appRunner, nil
 }
 ```
@@ -1135,7 +1171,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
 ```go
 import (
     "reflect"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -1155,10 +1191,10 @@ func createDataPipeline() (*runner.Runner, error) {
         Type:    reflect.TypeOf(0.0),
         Reducer: graph.DefaultReducer,
     })
-    
+
     // 创建状态图
     stateGraph := graph.NewStateGraph(schema)
-    
+
     // 构建数据处理管道
     stateGraph.
         AddNode("extract", extractData).
@@ -1175,13 +1211,13 @@ func createDataPipeline() (*runner.Runner, error) {
         AddEdge("transform", "load").
         SetEntryPoint("extract").
         SetFinishPoint("load")
-    
+
     // 编译图
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // 创建 GraphAgent
     graphAgent, err := graphagent.New("data-pipeline", compiledGraph,
         graphagent.WithDescription("数据处理管道"),
@@ -1190,7 +1226,7 @@ func createDataPipeline() (*runner.Runner, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // 创建 Runner
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
@@ -1198,7 +1234,7 @@ func createDataPipeline() (*runner.Runner, error) {
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     return appRunner, nil
 }
 ```
@@ -1211,7 +1247,7 @@ GraphAgent 可以作为其他 Agent 的子 Agent，实现复杂的多 Agent 协�
 import (
     "context"
     "log"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -1225,7 +1261,7 @@ import (
 func createDocumentProcessor() (agent.Agent, error) {
     // 创建文档处理图
     stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
-    
+
     // 添加文档处理节点
     stateGraph.
         AddNode("preprocess", preprocessDocument).
@@ -1233,13 +1269,13 @@ func createDocumentProcessor() (agent.Agent, error) {
         AddNode("format", formatOutput).
         SetEntryPoint("preprocess").
         SetFinishPoint("format")
-    
+
     // 编译图
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // 创建 GraphAgent
     return graphagent.New("document-processor", compiledGraph,
         graphagent.WithDescription("专业文档处理工作流"),
@@ -1253,14 +1289,14 @@ func createCoordinatorAgent() (agent.Agent, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // 创建其他子 Agent
-    mathAgent := llmagent.New("math-agent", 
+    mathAgent := llmagent.New("math-agent",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("数学计算专家"),
         llmagent.WithTools([]tool.Tool{calculatorTool}),
     )
-    
+
     // 创建协调器 Agent
     coordinator := llmagent.New("coordinator",
         llmagent.WithModel(modelInstance),
@@ -1275,7 +1311,7 @@ func createCoordinatorAgent() (agent.Agent, error) {
             mathAgent,
         }),
     )
-    
+
     return coordinator, nil
 }
 
@@ -1286,10 +1322,10 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // 创建 Runner
     runner := runner.NewRunner("coordinator-app", coordinator)
-    
+
     // 执行任务（协调器会自动选择合适的子 Agent）
     message := model.NewUserMessage("请分析这份文档并计算其中的统计数据")
     eventChan, err := runner.Run(ctx, userID, sessionID, message)
@@ -1358,7 +1394,7 @@ Graph 包提供了一个强大而灵活的工作流编排系统，特别适合�
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/model"
