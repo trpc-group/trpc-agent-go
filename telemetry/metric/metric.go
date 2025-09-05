@@ -22,15 +22,14 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/metric"
-	noopm "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
 
 var (
 	// Meter is the global OpenTelemetry meter for the trpc-go-agent.
-	Meter metric.Meter = noopm.Meter{}
+	Meter metric.Meter = otel.GetMeterProvider().Meter("")
 )
 
 // Start collects telemetry with optional configuration.

@@ -22,7 +22,20 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 )
+
+var (
+	// supportedExtensions defines the file extensions supported by this reader.
+	supportedExtensions = []string{".txt", ".text"}
+)
+
+// init registers the text reader with the global registry.
+func init() {
+	reader.RegisterReader(supportedExtensions, func() reader.Reader {
+		return New()
+	})
+}
 
 // Reader reads text documents and applies chunking strategies.
 type Reader struct {
@@ -159,4 +172,9 @@ func (r *Reader) extractFileNameFromURL(url string) string {
 // Name returns the name of this reader.
 func (r *Reader) Name() string {
 	return "TextReader"
+}
+
+// SupportedExtensions returns the file extensions this reader supports.
+func (r *Reader) SupportedExtensions() []string {
+	return supportedExtensions
 }
