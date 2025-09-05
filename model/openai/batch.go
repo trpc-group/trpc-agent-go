@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 
@@ -137,7 +136,9 @@ func (m *Model) CreateBatch(
 	var meta shared.Metadata
 	if md != nil {
 		meta = make(shared.Metadata)
-		maps.Copy(meta, md)
+		for k, v := range md {
+			meta[k] = v
+		}
 	}
 
 	// Resolve endpoint from model (fallback when constructed without New()).

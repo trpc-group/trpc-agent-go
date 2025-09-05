@@ -16,24 +16,18 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+
+	// Import readers to trigger their init() functions for registration.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
-// GetReaders returns all available readers.
+// GetReaders returns all available readers from the registry.
 func GetReaders() map[string]reader.Reader {
-	readers := make(map[string]reader.Reader)
-	readers["text"] = text.New()
-	readers["pdf"] = pdf.New()
-	readers["markdown"] = markdown.New()
-	readers["json"] = json.New()
-	readers["csv"] = csv.New()
-	readers["docx"] = docx.New()
-	return readers
+	return reader.GetAllReaders()
 }
 
 // GetFileType determines the file type based on the file extension.
@@ -124,13 +118,21 @@ func GetReadersWithChunkConfig(chunkSize, overlap int) map[string]reader.Reader 
 	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
 	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
 
+	// Create readers with custom chunking configuration.
+	// We need to use the concrete types to access their WithChunkingStrategy options.
 	readers := make(map[string]reader.Reader)
 	readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
-	readers["pdf"] = pdf.New(pdf.WithChunkingStrategy(fixedChunk))
 	readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
 	readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
 	readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
 	readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
+
+	// Check if PDF reader is registered and add it with chunking.
+	if pdfReader, exists := reader.GetReader(".pdf"); exists {
+		// PDF reader is available, but we can't configure its chunking
+		// without importing the package. Just use the default instance.
+		readers["pdf"] = pdfReader
+	}
 
 	return readers
 }

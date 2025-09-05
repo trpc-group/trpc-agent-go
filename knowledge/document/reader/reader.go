@@ -31,4 +31,8 @@ type Reader interface {
 
 	// Name returns the name of this reader.
 	Name() string
+
+	// SupportedExtensions returns the file extensions this reader supports.
+	// Extensions should include the dot prefix (e.g., ".pdf", ".txt").
+	SupportedExtensions() []string
 }

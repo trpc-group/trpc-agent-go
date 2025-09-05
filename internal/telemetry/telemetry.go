@@ -16,7 +16,6 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel/attribute"
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -57,10 +56,10 @@ var (
 // TraceToolCall traces the invocation of a tool call.
 func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
 	span.SetAttributes(
-		semconv.GenAISystemKey.String("trpc.go.agent"),
-		semconv.GenAIOperationNameExecuteTool,
-		semconv.GenAIToolName(declaration.Name),
-		semconv.GenAIToolDescription(declaration.Description),
+		attribute.String("gen_ai.system", "trpc.go.agent"),
+		attribute.String("gen_ai.operation.name", "tool.execute"),
+		attribute.String("gen_ai.tool.name", declaration.Name),
+		attribute.String("gen_ai.tool.description", declaration.Description),
 		attribute.String(KeyEventID, rspEvent.ID),
 		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
 	)
@@ -88,10 +87,10 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 // TraceMergedToolCalls traces the invocation of a merged tool call.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
-		semconv.GenAISystemKey.String("trpc.go.agent"),
-		semconv.GenAIOperationNameExecuteTool,
-		semconv.GenAIToolName("(merged tools)"),
-		semconv.GenAIToolDescription("(merged tools)"),
+		attribute.String("gen_ai.system", "trpc.go.agent"),
+		attribute.String("gen_ai.operation.name", "tool.execute"),
+		attribute.String("gen_ai.tool.name", "(merged tools)"),
+		attribute.String("gen_ai.tool.description", "(merged tools)"),
 		attribute.String(KeyEventID, rspEvent.ID),
 		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
 		attribute.String("trpc.go.agent.tool_call_args", "N/A"),
@@ -114,11 +113,11 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 // TraceCallLLM traces the invocation of an LLM call.
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	span.SetAttributes(
-		semconv.GenAISystemKey.String("trpc.go.agent"),
+		attribute.String("gen_ai.system", "trpc.go.agent"),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeySessionID, invoke.Session.ID),
 		attribute.String(KeyEventID, eventID),
-		semconv.GenAIRequestModelKey.String(invoke.Model.Info().Name),
+		attribute.String("gen_ai.request.model", invoke.Model.Info().Name),
 	)
 
 	if bts, err := json.Marshal(req); err == nil {
@@ -142,7 +141,7 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 func NewGRPCConn(endpoint string) (*grpc.ClientConn, error) {
 	// It connects the OpenTelemetry Collector through gRPC connection.
 	// You can customize the endpoint using SetConfig() or environment variables.
-	conn, err := grpc.NewClient(endpoint,
+	conn, err := grpc.Dial(endpoint,
 		// Note the use of insecure transport here. TLS is recommended in production.
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
