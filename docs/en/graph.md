@@ -76,7 +76,7 @@ A node represents a processing step in the workflow:
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -145,7 +145,7 @@ State schema defines the structure and behavior of state:
 ```go
 import (
     "reflect"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -173,7 +173,7 @@ import (
     "context"
     "fmt"
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -185,29 +185,29 @@ import (
 func main() {
     // 1. Create state schema.
     schema := graph.MessagesStateSchema()
-    
+
     // 2. Create state graph builder.
     stateGraph := graph.NewStateGraph(schema)
-    
+
     // 3. Add nodes.
     stateGraph.AddNode("start", startNodeFunc).
         AddNode("process", processNodeFunc)
-    
+
     // 4. Set edges.
     stateGraph.AddEdge("start", "process")
-    
+
     // 5. Set entry point and finish point.
     // SetEntryPoint automatically creates edge from virtual Start node to "start" node.
     // SetFinishPoint automatically creates edge from "process" node to virtual End node.
     stateGraph.SetEntryPoint("start").
         SetFinishPoint("process")
-    
+
     // 6. Compile graph.
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         panic(err)
     }
-    
+
     // 7. Create GraphAgent.
     graphAgent, err := graphagent.New("simple-workflow", compiledGraph,
         graphagent.WithDescription("Simple workflow example"),
@@ -216,45 +216,45 @@ func main() {
     if err != nil {
         panic(err)
     }
-    
+
     // 8. Create session service.
     sessionService := inmemory.NewSessionService()
-    
+
     // 9. Create Runner.
     appRunner := runner.NewRunner(
         "simple-app",
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     // 10. Execute workflow.
     ctx := context.Background()
     userID := "user"
     sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
-    
+
     // Create user message (Runner automatically puts message content into StateKeyUserInput).
     message := model.NewUserMessage("Hello World")
-    
+
     // Execute through Runner.
     eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
     if err != nil {
         panic(err)
     }
-    
+
     // Handle event stream.
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             choice := event.Choices[0]
             if choice.Delta.Content != "" {
                 fmt.Print(choice.Delta.Content)
             }
         }
-        
+
         if event.Done {
             break
         }
@@ -304,6 +304,7 @@ Please provide structured analysis results.`,
 ```
 
 Important notes:
+
 - System prompt is only used for this round and is not persisted to state.
 - One-shot keys (`user_input` / `one_shot_messages`) are automatically cleared after successful execution.
 - All state updates are atomic.
@@ -312,10 +313,12 @@ Important notes:
 #### Three input paradigms
 
 - OneShot (`StateKeyOneShotMessages`):
+
   - When present, only the provided `[]model.Message` is used for this round, typically including a full system prompt and user prompt. Automatically cleared afterwards.
   - Use case: a dedicated pre-node constructs the full prompt and must fully override input.
 
 - UserInput (`StateKeyUserInput`):
+
   - When non-empty, the LLM node uses durable `messages` plus this round's user input to call the model. After the call, it writes the user input and assistant reply to `messages` using `MessageOp` (e.g., `AppendMessages`, `ReplaceLastUser`) atomically, and clears `user_input` to avoid repeated appends.
   - Use case: conversational flows where pre-nodes may adjust user input.
 
@@ -406,6 +409,7 @@ stateGraph.AddToolsConditionalEdges("llm_node", "tools", "fallback_node")
 ```
 
 Tool-call pairing and second entry into LLM:
+
 - Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.
 - When returning from tools to the LLM node, since `user_input` is cleared, the LLM follows the “Messages only” branch and continues based on the tool response in history.
 
@@ -478,7 +482,7 @@ return graph.State{
 ```go
 import (
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -799,7 +803,7 @@ Nodes can return commands to simultaneously update state and specify routing:
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -811,12 +815,44 @@ func routingNodeFunc(ctx context.Context, state graph.State) (any, error) {
             GoTo:   "node_a",
         }, nil
     }
-    
+
     return &graph.Command{
         Update: graph.State{"status": "going_to_b"},
         GoTo:   "node_b",
     }, nil
 }
+```
+
+Fan-out and dynamic routing:
+
+- Return `[]*graph.Command` from a node to create parallel branches that run in the next step.
+- Using `Command{ GoTo: "target" }` dynamically routes to `target` at runtime; no static edge is required for reachability checks. Ensure the target node exists, and use `SetFinishPoint(target)` if it is terminal.
+
+Example (fan-out with dynamic routing):
+
+```go
+stateGraph.AddNode("fanout", func(ctx context.Context, s graph.State) (any, error) {
+    tasks := []*graph.Command{
+        {Update: graph.State{"param": "A"}, GoTo: "worker"},
+        {Update: graph.State{"param": "B"}, GoTo: "worker"},
+        {Update: graph.State{"param": "C"}, GoTo: "worker"},
+    }
+    return tasks, nil
+})
+
+stateGraph.AddNode("worker", func(ctx context.Context, s graph.State) (any, error) {
+    p, _ := s["param"].(string)
+    if p == "" {
+        return graph.State{}, nil
+    }
+    return graph.State{"results": []string{p}}, nil
+})
+
+// Entry/finish
+stateGraph.SetEntryPoint("fanout")
+stateGraph.SetFinishPoint("worker")
+
+// No need to add a static edge fanout->worker; routing is driven by GoTo.
 ```
 
 ### 6. Executor Configuration
@@ -879,7 +915,7 @@ This design makes workflow definitions more concise, developers only need to foc
 ```go
 import (
     "errors"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -933,7 +969,7 @@ func (h *StateHelper) GetUserInput() (string, error) {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
 
@@ -942,11 +978,11 @@ func safeNodeFunc(ctx context.Context, state graph.State) (any, error) {
     if !ok {
         return nil, fmt.Errorf("input field not found or wrong type")
     }
-    
+
     if input == "" {
         return nil, fmt.Errorf("input cannot be empty")
     }
-    
+
     // Processing logic...
     return result, nil
 }
@@ -964,7 +1000,7 @@ func safeNodeFunc(ctx context.Context, state graph.State) (any, error) {
 import (
     "context"
     "testing"
-    
+
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -973,16 +1009,16 @@ import (
 func TestWorkflow(t *testing.T) {
     // Create test graph.
     graph := createTestGraph()
-    
+
     // Create executor.
     executor, err := graph.NewExecutor(graph)
     require.NoError(t, err)
-    
+
     // Execute test.
     initialState := graph.State{"test_input": "test"}
     eventChan, err := executor.Execute(context.Background(), initialState, nil)
     require.NoError(t, err)
-    
+
     // Verify results.
     for event := range eventChan {
         // Verify event content.
@@ -1005,7 +1041,7 @@ import (
     "fmt"
     "strings"
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/graph"
@@ -1068,23 +1104,23 @@ func (w *documentWorkflow) setup() error {
 func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error) {
     // Create state schema.
     schema := graph.MessagesStateSchema()
-    
+
     // Create model instance.
     modelInstance := openai.New(w.modelName)
-    
+
     // Create analysis tool.
     complexityTool := function.NewFunctionTool(
         w.analyzeComplexity,
         function.WithName("analyze_complexity"),
         function.WithDescription("Analyze document complexity level"),
     )
-    
+
     // Create state graph.
     stateGraph := graph.NewStateGraph(schema)
     tools := map[string]tool.Tool{
         "analyze_complexity": complexityTool,
     }
-    
+
     // Build workflow graph.
     stateGraph.
         AddNode("preprocess", w.preprocessDocument).
@@ -1120,23 +1156,23 @@ Remember: Only output the final result itself, no other text.`,
         AddNode("format_output", w.formatOutput).
         SetEntryPoint("preprocess").
         SetFinishPoint("format_output")
-    
+
     // Add workflow edges.
     stateGraph.AddEdge("preprocess", "analyze")
     stateGraph.AddToolsConditionalEdges("analyze", "tools", "route_complexity")
     stateGraph.AddEdge("tools", "analyze")
-    
+
     // Add complexity conditional routing.
     stateGraph.AddConditionalEdges("route_complexity", w.complexityCondition, map[string]string{
         "simple":  "enhance",
         "complex": "summarize",
     })
-    
+
     stateGraph.AddEdge("enhance", "format_output")
     stateGraph.AddEdge("summarize", "format_output")
-    
+
     // SetEntryPoint and SetFinishPoint automatically handle connections with virtual Start/End nodes.
-    
+
     return stateGraph.Compile()
 }
 
@@ -1149,12 +1185,12 @@ func (w *documentWorkflow) preprocessDocument(ctx context.Context, state graph.S
     if input == "" {
         return nil, fmt.Errorf("no input document found")
     }
-    
+
     input = strings.TrimSpace(input)
     if len(input) < 10 {
         return nil, fmt.Errorf("document too short for processing (minimum 10 characters)")
     }
-    
+
     return graph.State{
         StateKeyDocumentLength:  len(input),
         StateKeyWordCount:       len(strings.Fields(input)),
@@ -1186,7 +1222,7 @@ func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) 
     if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
         result = lastResponse
     }
-    
+
     finalOutput := fmt.Sprintf(`DOCUMENT PROCESSING RESULTS
 ========================
 Processing Stage: %s
@@ -1196,14 +1232,14 @@ Complexity Level: %s
 
 Processed Content:
 %s
-`, 
+`,
         state[StateKeyProcessingStage],
         state[StateKeyDocumentLength],
         state[StateKeyWordCount],
         state[StateKeyComplexityLevel],
         result,
     )
-    
+
     return graph.State{
         graph.StateKeyLastResponse: finalOutput,
     }, nil
@@ -1215,13 +1251,13 @@ func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args map[strin
     if !ok {
         return nil, fmt.Errorf("text argument is required")
     }
-    
+
     wordCount := len(strings.Fields(text))
     sentenceCount := len(strings.Split(text, "."))
-    
+
     var level string
     var score float64
-    
+
     if wordCount < 100 {
         level = "simple"
         score = 0.3
@@ -1232,7 +1268,7 @@ func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args map[strin
         level = "complex"
         score = 0.9
     }
-    
+
     return map[string]any{
         "level":          level,
         "score":          score,
@@ -1254,13 +1290,13 @@ func (w *documentWorkflow) processDocument(ctx context.Context, content string) 
 func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
     var workflowStarted bool
     var finalResult string
-    
+
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("❌ Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             choice := event.Choices[0]
             if choice.Delta.Content != "" {
@@ -1270,12 +1306,12 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
                 }
                 fmt.Print(choice.Delta.Content)
             }
-            
+
             if choice.Message.Content != "" && event.Done {
                 finalResult = choice.Message.Content
             }
         }
-        
+
         if event.Done {
             if finalResult != "" && strings.Contains(finalResult, "DOCUMENT PROCESSING RESULTS") {
                 fmt.Printf("\n\n%s\n", finalResult)
@@ -1303,30 +1339,30 @@ import (
 func createChatBot(modelName string) (*runner.Runner, error) {
     // Create state graph.
     stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
-    
+
     // Create model and tools.
     modelInstance := openai.New(modelName)
     tools := map[string]tool.Tool{
         "calculator": calculatorTool,
         "search":     searchTool,
     }
-    
+
     // Build conversation graph.
     stateGraph.
-        AddLLMNode("chat", modelInstance, 
+        AddLLMNode("chat", modelInstance,
             `You are a helpful AI assistant. Provide help based on user questions and use tools when needed.`,
             tools).
         AddToolsNode("tools", tools).
         AddToolsConditionalEdges("chat", "tools", "chat").
         SetEntryPoint("chat").
         SetFinishPoint("chat")
-    
+
     // Compile graph.
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // Create GraphAgent.
     graphAgent, err := graphagent.New("chat-bot", compiledGraph,
         graphagent.WithDescription("Intelligent chat bot"),
@@ -1335,7 +1371,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // Create Runner.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
@@ -1343,7 +1379,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     return appRunner, nil
 }
 ```
@@ -1353,7 +1389,7 @@ func createChatBot(modelName string) (*runner.Runner, error) {
 ```go
 import (
     "reflect"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -1373,10 +1409,10 @@ func createDataPipeline() (*runner.Runner, error) {
         Type:    reflect.TypeOf(0.0),
         Reducer: graph.DefaultReducer,
     })
-    
+
     // Create state graph.
     stateGraph := graph.NewStateGraph(schema)
-    
+
     // Build data processing pipeline.
     stateGraph.
         AddNode("extract", extractData).
@@ -1393,13 +1429,13 @@ func createDataPipeline() (*runner.Runner, error) {
         AddEdge("transform", "load").
         SetEntryPoint("extract").
         SetFinishPoint("load")
-    
+
     // Compile graph.
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // Create GraphAgent.
     graphAgent, err := graphagent.New("data-pipeline", compiledGraph,
         graphagent.WithDescription("Data processing pipeline"),
@@ -1408,7 +1444,7 @@ func createDataPipeline() (*runner.Runner, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // Create Runner.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
@@ -1416,7 +1452,7 @@ func createDataPipeline() (*runner.Runner, error) {
         graphAgent,
         runner.WithSessionService(sessionService),
     )
-    
+
     return appRunner, nil
 }
 ```
@@ -1429,7 +1465,7 @@ GraphAgent can be used as a sub-agent of other Agents, implementing complex mult
 import (
     "context"
     "log"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -1443,7 +1479,7 @@ import (
 func createDocumentProcessor() (agent.Agent, error) {
     // Create document processing graph.
     stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
-    
+
     // Add document processing nodes.
     stateGraph.
         AddNode("preprocess", preprocessDocument).
@@ -1451,13 +1487,13 @@ func createDocumentProcessor() (agent.Agent, error) {
         AddNode("format", formatOutput).
         SetEntryPoint("preprocess").
         SetFinishPoint("format")
-    
+
     // Compile graph.
     compiledGraph, err := stateGraph.Compile()
     if err != nil {
         return nil, err
     }
-    
+
     // Create GraphAgent.
     return graphagent.New("document-processor", compiledGraph,
         graphagent.WithDescription("Professional document processing workflow"),
@@ -1471,14 +1507,14 @@ func createCoordinatorAgent() (agent.Agent, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // Create other sub-agents.
-    mathAgent := llmagent.New("math-agent", 
+    mathAgent := llmagent.New("math-agent",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("Mathematical calculation expert"),
         llmagent.WithTools([]tool.Tool{calculatorTool}),
     )
-    
+
     // Create coordinator Agent.
     coordinator := llmagent.New("coordinator",
         llmagent.WithModel(modelInstance),
@@ -1493,7 +1529,7 @@ Choose appropriate sub-agents based on user needs to handle tasks.`),
             mathAgent,
         }),
     )
-    
+
     return coordinator, nil
 }
 
@@ -1504,10 +1540,10 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // Create Runner.
     runner := runner.NewRunner("coordinator-app", coordinator)
-    
+
     // Execute task (coordinator will automatically choose appropriate sub-agent).
     message := model.NewUserMessage("Please analyze this document and calculate the statistical data in it")
     eventChan, err := runner.Run(ctx, userID, sessionID, message)
@@ -1576,7 +1612,7 @@ The Graph package provides a powerful and flexible workflow orchestration system
 ```go
 import (
     "context"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/model"

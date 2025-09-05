@@ -23,40 +23,7 @@ Langfuse 是专为 LLM 应用设计的可观测平台，支持通过 OpenTelemet
 
 可参考 [Langfuse 官方自托管指南](https://langfuse.com/self-hosting) 进行本地或云端部署。快速体验可参考 [Docker Compose 部署文档](https://langfuse.com/self-hosting/docker-compose)。
 
-#### 2. 配置 OpenTelemetry 导出到 Langfuse
-
-Langfuse 支持通过 `/api/public/otel` (OTLP) 接口接收 Trace 数据，推荐使用 HTTP/protobuf 协议。
-
-**环境变量配置示例：**
-
-```bash
-# 欧盟数据区
-OTEL_EXPORTER_OTLP_ENDPOINT="https://cloud.langfuse.com/api/public/otel"
-# 美国数据区
-# OTEL_EXPORTER_OTLP_ENDPOINT="https://us.cloud.langfuse.com/api/public/otel"
-# 本地部署 (>= v3.22.0)
-# OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:3000/api/public/otel"
-
-# 设置 Basic Auth 认证
-OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic ${AUTH_STRING}"
-```
-
-其中 `AUTH_STRING` 为 base64 编码的 `public_key:secret_key`，可用如下命令生成：
-
-```bash
-echo -n "pk-lf-xxxx:sk-lf-xxxx" | base64
-# GNU 系统可加 -w 0 防止换行
-```
-
-如需单独指定 trace 数据的 endpoint，可设置：
-
-```bash
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:3000/api/public/otel/v1/traces"
-```
-
-> 注意：Langfuse 仅支持 HTTP/protobuf，不支持 gRPC。
-
-#### 3. Go 代码集成示例
+#### 2. Go 编写接入代码
 
 ```go
 import (
@@ -110,6 +77,36 @@ go run .
 ```
 
 你可以在 Langfuse 控制台查看链路追踪数据。
+
+##### 接入代码说明
+Langfuse 支持通过 `/api/public/otel` (OTLP) 接口接收 Trace 数据，仅支持 HTTP/protobuf，不支持 gRPC。
+上述代码通过设置 `OTEL_EXPORTER_OTLP_HEADERS` 和 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 来接入 langfuse。
+
+```bash
+# 欧盟数据区
+OTEL_EXPORTER_OTLP_ENDPOINT="https://cloud.langfuse.com/api/public/otel"
+# 美国数据区
+# OTEL_EXPORTER_OTLP_ENDPOINT="https://us.cloud.langfuse.com/api/public/otel"
+# 本地部署 (>= v3.22.0)
+# OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:3000/api/public/otel"
+
+# 设置 Basic Auth 认证
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic ${AUTH_STRING}"
+```
+
+其中 `AUTH_STRING` 为 base64 编码的 `public_key:secret_key`，可用如下命令生成：
+
+```bash
+echo -n "pk-lf-xxxx:sk-lf-xxxx" | base64
+# GNU 系统可加 -w 0 防止换行
+```
+
+如需单独指定 trace 数据的 endpoint，可设置：
+
+```bash
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="http://localhost:3000/api/public/otel/v1/traces"
+```
+
 
 ### Jaeger、Prometheus 等开源监控平台
 
