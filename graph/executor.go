@@ -428,12 +428,26 @@ func (e *Executor) executeGraph(
 	for k := range execState {
 		execStateKeys = append(execStateKeys, k)
 	}
+	// Initialize versionsSeen - restore from checkpoint if available.
+	versionsSeen := make(map[string]map[string]any)
+	if resumed && e.lastCheckpoint != nil && e.lastCheckpoint.VersionsSeen != nil {
+		// Deep copy versionsSeen from checkpoint.
+		for nodeID, nodeVersions := range e.lastCheckpoint.VersionsSeen {
+			versionsSeen[nodeID] = make(map[string]any)
+			for channel, version := range nodeVersions {
+				versionsSeen[nodeID][channel] = version
+			}
+		}
+		log.Debugf("Restored versionsSeen for %d nodes from checkpoint", len(versionsSeen))
+	}
+
 	execCtx := &ExecutionContext{
 		Graph:        e.graph,
 		State:        execState,
 		EventChan:    eventChan,
 		InvocationID: invocation.InvocationID,
 		resumed:      resumed,
+		versionsSeen: versionsSeen,
 	}
 
 	// Apply pending writes if we resumed from checkpoint.
@@ -624,7 +638,7 @@ func (e *Executor) createCheckpointAndSave(
 	execCtx.stateMutex.RUnlock()
 
 	// Create checkpoint object.
-	checkpoint := e.createCheckpointFromState(stateCopy, step)
+	checkpoint := e.createCheckpointFromState(stateCopy, step, execCtx)
 	if checkpoint == nil {
 		log.Debug("Failed to create checkpoint object")
 		return fmt.Errorf("failed to create checkpoint")
@@ -941,7 +955,7 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 	return tasks
 }
 
-// planBasedOnVersionTriggers creates tasks based on version differences.
+// planBasedOnVersionTriggers creates tasks based on per-node version tracking.
 func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step int) []*Task {
 	var tasks []*Task
 
@@ -949,44 +963,48 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 		return tasks
 	}
 
-	// Get channels that have new versions since last checkpoint
 	channels := e.graph.getAllChannels()
+	triggerToNodes := e.graph.getTriggerToNodes()
+
+	// Track which nodes we've already scheduled to avoid duplicates.
+	scheduledNodes := make(map[string]bool)
+
+	// Check each available channel and determine which nodes should be triggered.
 	for channelName, channel := range channels {
 		if !channel.IsAvailable() {
 			continue
 		}
 
-		// Check if channel version has increased since last checkpoint
-		lastVersion, exists := e.lastCheckpoint.ChannelVersions[channelName]
+		currentVersion := int64(channel.Version)
+
+		// Get nodes that are triggered by this channel.
+		nodeIDs, exists := triggerToNodes[channelName]
 		if !exists {
-			// New channel, trigger all connected nodes
-			tasks = append(tasks, e.createTasksForChannel(channelName, execCtx.State, step)...)
-			channel.Acknowledge()
 			continue
 		}
 
-		// Compare versions (handle both int and json.Number)
-		var lastVersionInt int64
-		switch v := lastVersion.(type) {
-		case int:
-			lastVersionInt = int64(v)
-		case int64:
-			lastVersionInt = v
-		case float64:
-			lastVersionInt = int64(v)
-		case json.Number:
-			if i, err := v.Int64(); err == nil {
-				lastVersionInt = i
-			} else {
-				continue // Skip if version comparison fails
+		// Check each node to see if it should be triggered.
+		for _, nodeID := range nodeIDs {
+			// Skip if already scheduled.
+			if scheduledNodes[nodeID] {
+				continue
 			}
-		default:
-			continue // Skip unknown version types
-		}
 
-		// If channel version has increased, trigger connected nodes
-		if int64(channel.Version) > lastVersionInt {
-			tasks = append(tasks, e.createTasksForChannel(channelName, execCtx.State, step)...)
+			// Check if this node should be triggered based on version tracking.
+			if e.shouldTriggerNode(nodeID, channelName, currentVersion, e.lastCheckpoint) {
+				task := e.createTask(nodeID, execCtx.State, step)
+				if task != nil {
+					tasks = append(tasks, task)
+					scheduledNodes[nodeID] = true
+					log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
+				}
+			}
+		}
+	}
+
+	// Acknowledge all available channels after planning.
+	for _, channel := range channels {
+		if channel.IsAvailable() {
 			channel.Acknowledge()
 		}
 	}
@@ -1290,6 +1308,9 @@ func (e *Executor) executeSingleTask(
 	if err := e.handleNodeResult(ctx, execCtx, t, result); err != nil {
 		return err
 	}
+
+	// Update versions seen for this node after successful execution.
+	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
 	if err := e.processConditionalEdges(ctx, execCtx, t.NodeID, step); err != nil {
@@ -1881,7 +1902,7 @@ func (e *Executor) handleInterrupt(
 		// they may be needed when the node is re-executed after resume
 
 		// Set interrupt state in the checkpoint.
-		checkpoint := e.createCheckpointFromState(currentState, step)
+		checkpoint := e.createCheckpointFromState(currentState, step, execCtx)
 
 		// IMPORTANT: Set parent checkpoint ID from current config to maintain proper tree structure
 		if parentCheckpointID := GetCheckpointID(checkpointConfig); parentCheckpointID != "" {
@@ -1968,7 +1989,7 @@ func (e *Executor) handleInterrupt(
 }
 
 // createCheckpointFromState creates a checkpoint from the current execution state.
-func (e *Executor) createCheckpointFromState(state State, step int) *Checkpoint {
+func (e *Executor) createCheckpointFromState(state State, step int, execCtx *ExecutionContext) *Checkpoint {
 	// Convert state to channel values, ensuring we capture the latest state
 	// including any updates from nodes that haven't been written to channels yet.
 	channelValues := make(map[string]any)
@@ -1985,9 +2006,18 @@ func (e *Executor) createCheckpointFromState(state State, step int) *Checkpoint 
 		}
 	}
 
-	// Create versions seen for each node (simplified for now)
+	// Create versions seen from execution context.
 	versionsSeen := make(map[string]map[string]any)
-	// TODO: Implement proper version tracking per node per channel
+	if execCtx != nil {
+		execCtx.versionsSeenMu.RLock()
+		for nodeID, nodeVersions := range execCtx.versionsSeen {
+			versionsSeen[nodeID] = make(map[string]any)
+			for channel, version := range nodeVersions {
+				versionsSeen[nodeID][channel] = version
+			}
+		}
+		execCtx.versionsSeenMu.RUnlock()
+	}
 
 	// Create checkpoint.
 	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
@@ -2064,6 +2094,86 @@ func (e *Executor) clearChannelStepMarks() {
 // Returns nil if no checkpoint saver was configured.
 func (e *Executor) CheckpointManager() *CheckpointManager {
 	return e.checkpointManager
+}
+
+// updateVersionsSeen updates the versions seen by a node after task execution.
+func (e *Executor) updateVersionsSeen(execCtx *ExecutionContext, nodeID string, triggers []string) {
+	execCtx.versionsSeenMu.Lock()
+	defer execCtx.versionsSeenMu.Unlock()
+
+	// Initialize map for node if needed.
+	if execCtx.versionsSeen[nodeID] == nil {
+		execCtx.versionsSeen[nodeID] = make(map[string]any)
+	}
+
+	// Record current version of all trigger channels this node has seen.
+	channels := e.graph.getAllChannels()
+	for _, trigger := range triggers {
+		if channel, exists := channels[trigger]; exists {
+			execCtx.versionsSeen[nodeID][trigger] = channel.Version
+			log.Debugf("Node %s saw channel %s version %d", nodeID, trigger, channel.Version)
+		}
+	}
+}
+
+// shouldTriggerNode checks if a node should be triggered based on version tracking.
+func (e *Executor) shouldTriggerNode(
+	nodeID string,
+	channelName string,
+	currentVersion int64,
+	lastCheckpoint *Checkpoint,
+) bool {
+	if lastCheckpoint == nil || lastCheckpoint.VersionsSeen == nil {
+		// No checkpoint or no version tracking - should trigger.
+		return true
+	}
+
+	// Get what this node has seen before.
+	nodeVersions, nodeExists := lastCheckpoint.VersionsSeen[nodeID]
+	if !nodeExists {
+		// Node has never run - should trigger.
+		log.Debugf("Node %s has never run, triggering", nodeID)
+		return true
+	}
+
+	// Check if node has seen this channel version.
+	seenVersion, channelSeen := nodeVersions[channelName]
+	if !channelSeen {
+		// Node hasn't seen this channel before - should trigger.
+		log.Debugf("Node %s hasn't seen channel %s before, triggering", nodeID, channelName)
+		return true
+	}
+
+	// Convert seenVersion to int64 for comparison.
+	var seenVersionInt int64
+	switch v := seenVersion.(type) {
+	case int64:
+		seenVersionInt = v
+	case int:
+		seenVersionInt = int64(v)
+	case float64:
+		seenVersionInt = int64(v)
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			seenVersionInt = i
+		} else {
+			// Error converting - assume should trigger.
+			return true
+		}
+	default:
+		// Unknown type - assume should trigger.
+		return true
+	}
+
+	// Only trigger if channel has newer version than what node has seen.
+	shouldTrigger := currentVersion > seenVersionInt
+	if shouldTrigger {
+		log.Debugf("Node %s should trigger: channel %s version %d > seen %d",
+			nodeID, channelName, currentVersion, seenVersionInt)
+	} else {
+		log.Debugf("Node %s already saw channel %s version %d", nodeID, channelName, currentVersion)
+	}
+	return shouldTrigger
 }
 
 // Fork creates a new branch from an existing checkpoint within the same lineage.

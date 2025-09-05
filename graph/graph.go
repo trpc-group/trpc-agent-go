@@ -219,6 +219,11 @@ type ExecutionContext struct {
 	// tasksMutex protects pendingTasks queue operations.
 	tasksMutex   sync.Mutex
 	pendingTasks []*Task
+
+	// versionsSeen tracks which channel versions each node has seen.
+	// Map from nodeID -> channelName -> version number.
+	versionsSeen   map[string]map[string]any
+	versionsSeenMu sync.RWMutex
 }
 
 // Command represents a command that combines state updates with routing.
