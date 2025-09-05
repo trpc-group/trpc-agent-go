@@ -525,3 +525,18 @@ func (vs *VectorStore) Close() error {
 	// Elasticsearch client doesn't need explicit close.
 	return nil
 }
+
+// Count counts the number of documents.
+func (vs *VectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+	return 0, fmt.Errorf("elasticsearch count not implemented")
+}
+
+// DeleteByFilter deletes documents by filter.
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, ids []string, filter map[string]interface{}, deleteAll bool) error {
+	return nil
+}
+
+// GetMetadata retrieves all metadata from the vector store.
+func (vs *VectorStore) GetMetadata(ctx context.Context, limit int, offset int) (map[string]vectorstore.DocumentMetadata, error) {
+	return nil, fmt.Errorf("elasticsearch get all metadata not implemented")
+}

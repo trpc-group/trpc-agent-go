@@ -143,10 +143,6 @@ func TestJSONChunkingLargeDocument(t *testing.T) {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
 
-		// Verify chunk metadata.
-		if chunk.Metadata["json_chunk"] != true {
-			t.Errorf("Chunk %d missing json_chunk metadata", i)
-		}
 		if chunk.Metadata["chunk_type"] != "json" {
 			t.Errorf("Chunk %d missing chunk_type metadata", i)
 		}

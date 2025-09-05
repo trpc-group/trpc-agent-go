@@ -19,6 +19,7 @@ import (
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
+	tcdocument "github.com/tencent/vectordatabase-sdk-go/tcvectordb/api/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -46,6 +47,11 @@ var (
 	fieldSparseVector = "sparse_vector"
 	fieldMetadata     = "metadata"
 	defaultLimit      = 10
+)
+
+const (
+	// Batch processing constants
+	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
 // VectorStore is the vector store for tcvectordb.
@@ -397,6 +403,74 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteByFilter deletes documents from the vector store based on filter conditions.
+func (vs *VectorStore) DeleteByFilter(
+	ctx context.Context,
+	ids []string,
+	filter map[string]interface{},
+	deleteAll bool,
+) error {
+	// Handle deleteAll case - truncate collection
+	if deleteAll {
+		if _, err := vs.client.Delete(
+			ctx,
+			vs.option.database,
+			vs.option.collection,
+			tcvectordb.DeleteDocumentParams{},
+		); err != nil {
+			return fmt.Errorf("tcvectordb delete all documents: %w", err)
+		}
+		return nil
+	}
+
+	// Validate that at least one filter condition is provided
+	if len(filter) == 0 && len(ids) == 0 {
+		return fmt.Errorf("tcvectordb delete by filter: no filter conditions specified")
+	}
+
+	deleteParams := tcvectordb.DeleteDocumentParams{
+		DocumentIds: ids,
+	}
+
+	// Delete by IDs if provided
+	if len(ids) > 0 {
+		deleteParams.DocumentIds = ids
+	}
+
+	// Delete by metadata filter if provided
+	if len(filter) > 0 {
+		// Use the existing getCondFromQuery function to build filter
+		tcFilter := getCondFromQuery([]string{}, filter)
+		deleteParams.Filter = tcFilter
+	}
+
+	if _, err := vs.client.Delete(
+		ctx,
+		vs.option.database,
+		vs.option.collection,
+		deleteParams,
+	); err != nil {
+		return fmt.Errorf("tcvectordb delete documents by filter: %w", err)
+	}
+	return nil
+}
+
+// Count counts the number of documents in the vector store.
+func (vs *VectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+	countParams := tcvectordb.CountDocumentParams{}
+	if filter != nil {
+		tcFilter := getCondFromQuery([]string{}, *filter)
+		countParams.CountFilter = tcFilter
+	}
+
+	countResult, err := vs.client.Count(ctx, vs.option.database, vs.option.collection, countParams)
+	if err != nil {
+		return 0, fmt.Errorf("tcvectordb count documents: %w", err)
+	}
+	result := int(countResult.Count)
+	return result, nil
+}
+
 // Search performs similarity search and returns the most similar documents.
 // Automatically chooses the appropriate search method based on query parameters.
 // Tencent VectorDB not support hybrid search of structure filter and vector/sparse vector.
@@ -427,7 +501,85 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 }
 
-// vectorSearch performs pure vector similarity search using dense embeddings.
+// GetMetadata retrieves metadata from the vector store with pagination support.
+// If limit < 0, retrieves all metadata in batches ordered by created_at.
+func (vs *VectorStore) GetMetadata(
+	ctx context.Context, limit int, offset int,
+) (map[string]vectorstore.DocumentMetadata, error) {
+	result := make(map[string]vectorstore.DocumentMetadata)
+
+	// If limit < 0 or offset < 0, query all data in batches
+	if limit < 0 || offset < 0 {
+		currentOffset := 0
+
+		for {
+			batchResult, err := vs.queryMetadataBatch(ctx, metadataBatchSize, currentOffset)
+			if err != nil {
+				return nil, err
+			}
+
+			// Merge batch result into final result
+			batchCount := 0
+			for docID, metadata := range batchResult {
+				result[docID] = metadata
+				batchCount++
+			}
+
+			// If batch size is less than expected, we've reached the end
+			if batchCount < metadataBatchSize {
+				break
+			}
+
+			currentOffset += metadataBatchSize
+		}
+	} else {
+		// Normal pagination query
+		paginationResult, err := vs.queryMetadataBatch(ctx, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		result = paginationResult
+	}
+
+	return result, nil
+}
+
+// queryMetadataBatch executes a single metadata query with the given limit and offset
+func (vs *VectorStore) queryMetadataBatch(ctx context.Context, limit, offset int) (map[string]vectorstore.DocumentMetadata, error) {
+	QueryDocumentParams := tcvectordb.QueryDocumentParams{
+		Offset:       int64(offset),
+		Limit:        int64(limit),
+		OutputFields: []string{fieldMetadata, fieldID},
+		Sort: []tcdocument.SortRule{
+			{
+				FieldName: fieldCreatedAt,
+				Direction: "asc",
+			},
+		},
+	}
+
+	queryResult, err := vs.client.Query(ctx, vs.option.database, vs.option.collection, nil, &QueryDocumentParams)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb get metadata batch: %w", err)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for _, tcDoc := range queryResult.Documents {
+		metadata := make(map[string]interface{})
+		if field, ok := tcDoc.Fields[fieldMetadata]; ok {
+			if metaField, ok := field.Val.(map[string]interface{}); ok {
+				metadata = metaField
+			}
+		}
+		result[tcDoc.Id] = vectorstore.DocumentMetadata{
+			Metadata: metadata,
+		}
+	}
+
+	return result, nil
+}
+
+// vectorSearch performs pure vector similarity search using dense embeddings
 func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, errors.New("tcvectordb: searching with a nil or empty vector is not supported")

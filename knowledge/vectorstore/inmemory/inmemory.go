@@ -29,6 +29,7 @@ var (
 	// errEmbeddingCannotBeEmpty is the error when the embedding is empty.
 	errEmbeddingCannotBeEmpty = errors.New("embedding cannot be empty")
 )
+var _ vectorstore.VectorStore = (*VectorStore)(nil)
 
 // VectorStore implements vectorstore.VectorStore interface using in-memory storage.
 type VectorStore struct {
@@ -147,6 +148,80 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteByFilter deletes documents by filter.
+func (vs *VectorStore) DeleteByFilter(
+	ctx context.Context,
+	ids []string,
+	filter map[string]interface{},
+	deleteAll bool,
+) error {
+	vs.mutex.Lock()
+	defer vs.mutex.Unlock()
+
+	// Handle delete all case
+	if deleteAll {
+		vs.documents = make(map[string]*document.Document)
+		vs.embeddings = make(map[string][]float64)
+		return nil
+	}
+
+	// Check if any filter conditions are provided
+	if filter == nil && len(ids) == 0 {
+		return fmt.Errorf("inmemory delete by filter: no filter conditions specified")
+	}
+
+	// Create a SearchFilter for reusing matchesFilter logic
+	searchFilter := &vectorstore.SearchFilter{}
+	if len(ids) > 0 {
+		searchFilter.IDs = ids
+	}
+	if filter != nil && len(filter) > 0 {
+		searchFilter.Metadata = filter
+	}
+
+	// Collect document IDs to delete
+	var toDelete []string
+	for docID := range vs.documents {
+		if vs.matchesFilter(docID, searchFilter) {
+			toDelete = append(toDelete, docID)
+		}
+	}
+
+	// Delete the matched documents
+	for _, docID := range toDelete {
+		delete(vs.documents, docID)
+		delete(vs.embeddings, docID)
+	}
+
+	return nil
+}
+
+// Count counts the number of documents in the vector store.
+func (vs *VectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+	vs.mutex.RLock()
+	defer vs.mutex.RUnlock()
+
+	// If no filter, return total count
+	if filter == nil || len(*filter) == 0 {
+		return len(vs.documents), nil
+	}
+
+	// Create a SearchFilter for reusing matchesFilter logic
+	searchFilter := &vectorstore.SearchFilter{
+		Metadata: *filter,
+	}
+
+	// Count documents that match the filter
+	count := 0
+	for docID := range vs.documents {
+		if vs.matchesFilter(docID, searchFilter) {
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 // Search implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
@@ -198,6 +273,23 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	return &vectorstore.SearchResult{
 		Results: results,
 	}, nil
+}
+
+// GetAllMetadata retrieves all metadata from the vector store.
+func (vs *VectorStore) GetMetadata(
+	ctx context.Context, limit int, offset int,
+) (map[string]vectorstore.DocumentMetadata, error) {
+	vs.mutex.RLock()
+	defer vs.mutex.RUnlock()
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for docID, doc := range vs.documents {
+		result[docID] = vectorstore.DocumentMetadata{
+			Metadata: doc.Metadata,
+		}
+	}
+
+	return result, nil
 }
 
 // Close implements vectorstore.VectorStore interface.

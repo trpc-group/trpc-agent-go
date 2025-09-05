@@ -7,7 +7,7 @@
 //
 //
 
-// Package pgvector provides a vector store for pgvector.
+// Package pgvector provides a PostgreSQL pgvector-based implementation of the VectorStore interface.
 package pgvector
 
 import (
@@ -47,6 +47,11 @@ var (
 	defaultLimit   = 10
 )
 
+const (
+	// Batch processing constants
+	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
+)
+
 // SQL templates for better maintainability and safety.
 const (
 	sqlCreateTable = `
@@ -80,7 +85,12 @@ const (
 
 	sqlDeleteDocument = `DELETE FROM %s WHERE id = $1`
 
+	sqlTruncateTable = `TRUNCATE TABLE %s`
+
 	sqlDocumentExists = `SELECT 1 FROM %s WHERE id = $1`
+
+	// Metadata query templates
+	sqlGetAllMetadata = `SELECT id, metadata FROM %s ORDER BY created_at LIMIT $1 OFFSET $2`
 )
 
 // VectorStore is the vector store for pgvector.
@@ -290,6 +300,61 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// DeleteByFilter deletes documents from the vector store based on filter conditions.
+// It supports deletion by document IDs, metadata filters, or all documents.
+func (vs *VectorStore) DeleteByFilter(
+	ctx context.Context,
+	ids []string,
+	filter map[string]interface{},
+	deleteAll bool) error {
+
+	// Handle delete all case with TRUNCATE
+	if deleteAll {
+		truncateSQL := fmt.Sprintf(sqlTruncateTable, vs.option.table)
+		_, err := vs.pool.Exec(ctx, truncateSQL)
+		if err != nil {
+			return fmt.Errorf("pgvector delete all documents: %w", err)
+		}
+		log.Infof("pgvector truncated all documents from table %s", vs.option.table)
+		return nil
+	}
+
+	if len(filter) == 0 && len(ids) == 0 {
+		return fmt.Errorf("pgvector delete by filter: no filter conditions specified")
+	}
+
+	// Build DELETE query using deleteSqlBuilder
+	dsb := newDeleteSqlBuilder(vs.option.table)
+	if len(ids) > 0 {
+		dsb.addIDFilter(ids)
+	}
+
+	if len(filter) > 0 {
+		dsb.addMetadataFilter(filter)
+	}
+
+	// Build and execute the DELETE query
+	deleteSQL, args := dsb.build()
+	if deleteSQL == "" {
+		return fmt.Errorf("pgvector delete by filter: failed to build delete query")
+	}
+
+	result, err := vs.pool.Exec(ctx, deleteSQL, args...)
+	if err != nil {
+		return fmt.Errorf("pgvector delete by filter: %w", err)
+	}
+
+	deletedCount := result.RowsAffected()
+	log.Infof("pgvector deleted %d documents by filter", deletedCount)
+
+	return nil
+}
+
+// Count counts the number of documents in the vector store.
+func (vs *VectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+	return 0, nil
+}
+
 // Search performs similarity search and returns the most similar documents.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
@@ -319,6 +384,81 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	default:
 		return nil, fmt.Errorf("pgvector: invalid search mode: %d", query.SearchMode)
 	}
+}
+
+// GetMetadata retrieves metadata from the vector store with pagination support.
+// If limit < 0, retrieves all metadata in batches of 5000 records ordered by created_at.
+func (vs *VectorStore) GetMetadata(
+	ctx context.Context, limit int, offset int,
+) (map[string]vectorstore.DocumentMetadata, error) {
+	result := make(map[string]vectorstore.DocumentMetadata)
+	// If limit < 0, query all data in batches
+	if limit < 0 || offset < 0 {
+		currentOffset := 0
+
+		for {
+			batchResult, err := vs.queryMetadataBatch(ctx, metadataBatchSize, currentOffset)
+			if err != nil {
+				return nil, err
+			}
+			// Merge batch result into final result
+			batchCount := 0
+			for docID, metadata := range batchResult {
+				result[docID] = metadata
+				batchCount++
+			}
+			// If batch size is less than expected, we've reached the end
+			if batchCount < metadataBatchSize {
+				break
+			}
+
+			currentOffset += metadataBatchSize
+		}
+	} else {
+		// Normal pagination query
+		paginationResult, err := vs.queryMetadataBatch(ctx, limit, offset)
+		if err != nil {
+			return nil, err
+		}
+		result = paginationResult
+	}
+
+	return result, nil
+}
+
+// queryMetadataBatch executes a single metadata query with the given limit and offset
+func (vs *VectorStore) queryMetadataBatch(ctx context.Context, limit, offset int) (map[string]vectorstore.DocumentMetadata, error) {
+	query := fmt.Sprintf(sqlGetAllMetadata, vs.option.table)
+	rows, err := vs.pool.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("pgvector get metadata batch: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for rows.Next() {
+		var docID string
+		var metadataJSON string
+
+		err := rows.Scan(&docID, &metadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("pgvector scan metadata: %w", err)
+		}
+
+		metadata, err := jsonToMap(metadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
+		}
+
+		result[docID] = vectorstore.DocumentMetadata{
+			Metadata: metadata,
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgvector iterate metadata rows: %w", err)
+	}
+
+	return result, nil
 }
 
 // searchByVector performs pure vector similarity search

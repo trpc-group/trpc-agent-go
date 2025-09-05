@@ -106,7 +106,65 @@ func newFilterQueryBuilder(table string, language string) *queryBuilder {
 	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeFilter, 0, 0)
 }
 
-// newQueryBuilderWithMode creates a query builder with specific search mode and weights.
+// deleteSqlBuilder builds DELETE SQL statements safely with comprehensive filter support
+type deleteSqlBuilder struct {
+	table      string
+	conditions []string
+	args       []interface{}
+	argIndex   int
+}
+
+// newDeleteSqlBuilder creates a builder for DELETE operations
+func newDeleteSqlBuilder(table string) *deleteSqlBuilder {
+	return &deleteSqlBuilder{
+		table:      table,
+		conditions: []string{"1=1"},
+		args:       make([]interface{}, 0),
+		argIndex:   1,
+	}
+}
+
+// addIDFilter adds document ID filter conditions to the delete query
+func (dsb *deleteSqlBuilder) addIDFilter(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	placeholders := make([]string, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", dsb.argIndex)
+		dsb.args = append(dsb.args, id)
+		dsb.argIndex++
+	}
+
+	condition := fmt.Sprintf("id IN (%s)", strings.Join(placeholders, ", "))
+	dsb.conditions = append(dsb.conditions, condition)
+}
+
+// addMetadataFilter adds metadata filter conditions to the delete query
+// Uses @> operator for efficient JSONB queries, same as queryBuilder implementation
+func (dsb *deleteSqlBuilder) addMetadataFilter(metadata map[string]interface{}) {
+	if len(metadata) == 0 {
+		return
+	}
+
+	condition := fmt.Sprintf("metadata @> $%d::jsonb", dsb.argIndex)
+	dsb.conditions = append(dsb.conditions, condition)
+
+	// Convert map to JSON string for @> operator
+	metadataJSON := mapToJSON(metadata)
+	dsb.args = append(dsb.args, metadataJSON)
+	dsb.argIndex++
+}
+
+// build builds the DELETE query with all conditions
+func (dsb *deleteSqlBuilder) build() (string, []interface{}) {
+	whereClause := strings.Join(dsb.conditions, " AND ")
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dsb.table, whereClause)
+	return sql, dsb.args
+}
+
+// newQueryBuilderWithMode creates a query builder with specific search mode and weights
 func newQueryBuilderWithMode(table, language string, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
 	qb := newQueryBuilder(table, language)
 	qb.searchMode = mode

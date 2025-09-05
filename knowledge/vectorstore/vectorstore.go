@@ -30,8 +30,18 @@ type VectorStore interface {
 	// Delete removes a document and its embedding.
 	Delete(ctx context.Context, id string) error
 
+	// DeleteByFilter deletes documents by filter.
+	DeleteByFilter(ctx context.Context, ids []string, filters map[string]interface{}, deleteAll bool) error
+
+	// SyncSource syncs the source to the vector store.
+	Count(ctx context.Context, filter *map[string]interface{}) (int, error)
+
 	// Search performs similarity search and returns the most similar documents.
 	Search(ctx context.Context, query *SearchQuery) (*SearchResult, error)
+
+	// GetAllMetadata retrieves all metadata from the vector store.
+	// the key is the document id.
+	GetMetadata(ctx context.Context, ids []string, filter map[string]interface{}, limit int, offset int) (map[string]DocumentMetadata, error)
 
 	// Close closes the vector store connection.
 	Close() error
@@ -94,4 +104,10 @@ type ScoredDocument struct {
 
 	// Score is the similarity score (0.0 to 1.0, higher is more similar).
 	Score float64
+}
+
+// DocumentMetadata represents a document metadata.
+type DocumentMetadata struct {
+	// Metadata is the document metadata.
+	Metadata map[string]interface{}
 }
