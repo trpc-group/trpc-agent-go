@@ -7,6 +7,8 @@
 //
 //
 
+// Package inmemory provides in-memory checkpoint storage implementation
+// for graph execution state persistence and recovery.
 package inmemory
 
 import (
@@ -79,7 +81,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		// Find the latest checkpoint across all namespaces if namespace is empty
 		var latestTuple *graph.CheckpointTuple
 		var latestTime time.Time
-		
+
 		if namespace == "" {
 			// Search across all namespaces for the latest checkpoint
 			for _, nsCheckpoints := range namespaces {
@@ -96,7 +98,7 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 			if !exists || len(checkpoints) == 0 {
 				return nil, nil
 			}
-			
+
 			for _, tuple := range checkpoints {
 				if tuple.Checkpoint != nil && tuple.Checkpoint.Timestamp.After(latestTime) {
 					latestTime = tuple.Checkpoint.Timestamp
@@ -273,7 +275,7 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	// Create updated config with THIS checkpoint's ID.
 	// This ensures proper parent-child relationships when resuming.
 	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
-	
+
 	// Create checkpoint tuple with the updated config.
 	tuple := &graph.CheckpointTuple{
 		Config:     updatedConfig,
@@ -361,7 +363,7 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	// Create updated config with THIS checkpoint's ID.
 	// This ensures proper parent-child relationships when resuming.
 	updatedConfig := graph.CreateCheckpointConfig(lineageID, req.Checkpoint.ID, namespace)
-	
+
 	// Create checkpoint tuple with the updated config.
 	tuple := &graph.CheckpointTuple{
 		Config:     updatedConfig,

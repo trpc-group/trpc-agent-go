@@ -119,68 +119,62 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	if lineageID == "" {
 		return nil, errors.New("lineage_id is required")
 	}
-	var row *sql.Row
+
+	// Query checkpoint data
+	var checkpointJSON, metadataJSON []byte
+	var parentID, resolvedID string
+
 	if checkpointID == "" {
-		row = s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
-		var checkpointJSON, metadataJSON []byte
-		var parentID, foundID string
-		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID, &foundID); err != nil {
+		// Get latest checkpoint
+		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
+		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID, &resolvedID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("select latest: %w", err)
 		}
-		var ckpt graph.Checkpoint
-		if err := json.Unmarshal(checkpointJSON, &ckpt); err != nil {
-			return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
+	} else {
+		// Get specific checkpoint
+		row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
+		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("select by id: %w", err)
 		}
-		var meta graph.CheckpointMetadata
-		if err := json.Unmarshal(metadataJSON, &meta); err != nil {
-			return nil, fmt.Errorf("unmarshal metadata: %w", err)
-		}
-		cfg := graph.CreateCheckpointConfig(lineageID, foundID, checkpointNS)
-		writes, err := s.loadWrites(ctx, lineageID, checkpointNS, foundID)
-		if err != nil {
-			return nil, err
-		}
-		var parentCfg map[string]any
-		if parentID != "" {
-			parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
-		}
-		return &graph.CheckpointTuple{
-			Config:        cfg,
-			Checkpoint:    &ckpt,
-			Metadata:      &meta,
-			ParentConfig:  parentCfg,
-			PendingWrites: writes,
-		}, nil
+		resolvedID = checkpointID
 	}
-	row = s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
-	var checkpointJSON, metadataJSON []byte
-	var parentID string
-	if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("select by id: %w", err)
-	}
+
+	// Build the tuple from retrieved data
+	return s.buildTuple(ctx, lineageID, checkpointNS, resolvedID, parentID,
+		checkpointJSON, metadataJSON)
+}
+
+// buildTuple constructs a CheckpointTuple from raw data.
+func (s *Saver) buildTuple(ctx context.Context, lineageID, checkpointNS, checkpointID,
+	parentID string, checkpointJSON, metadataJSON []byte) (*graph.CheckpointTuple, error) {
+
 	var ckpt graph.Checkpoint
 	if err := json.Unmarshal(checkpointJSON, &ckpt); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint: %w", err)
 	}
+
 	var meta graph.CheckpointMetadata
 	if err := json.Unmarshal(metadataJSON, &meta); err != nil {
 		return nil, fmt.Errorf("unmarshal metadata: %w", err)
 	}
+
 	cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
 	writes, err := s.loadWrites(ctx, lineageID, checkpointNS, checkpointID)
 	if err != nil {
 		return nil, err
 	}
+
 	var parentCfg map[string]any
 	if parentID != "" {
 		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
 	}
+
 	return &graph.CheckpointTuple{
 		Config:        cfg,
 		Checkpoint:    &ckpt,

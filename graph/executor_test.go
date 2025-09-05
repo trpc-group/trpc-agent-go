@@ -922,6 +922,7 @@ func (m *IssueClassificationMockModel) Info() model.Info {
 		Name: "issue-classification-mock-model",
 	}
 }
+
 // TestParallelFanOutWithCommands verifies that a node returning []*Command
 // fan-outs into multiple tasks that execute in parallel with isolated overlays
 // and that their results are merged back into the global State via reducers.
