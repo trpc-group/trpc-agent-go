@@ -367,10 +367,11 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	if err != nil {
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
-	ts := req.Checkpoint.Timestamp.Unix()
+	// Use UnixNano for better precision in ordering.
+	ts := req.Checkpoint.Timestamp.UnixNano()
 	if ts == 0 {
 		// Ensure non-zero timestamp for ordering.
-		ts = time.Now().UTC().Unix()
+		ts = time.Now().UTC().UnixNano()
 	}
 	_, err = s.db.ExecContext(
 		ctx,
@@ -402,6 +403,11 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 		if err != nil {
 			return fmt.Errorf("marshal write: %w", err)
 		}
+		// Use Sequence if available in the write, otherwise use index.
+		seq := w.Sequence
+		if seq == 0 {
+			seq = int64(idx)
+		}
 		_, err = s.db.ExecContext(
 			ctx,
 			sqliteInsertWrite,
@@ -413,6 +419,7 @@ func (s *Saver) PutWrites(ctx context.Context, req graph.PutWritesRequest) error
 			w.Channel,
 			valueJSON,
 			req.TaskPath,
+			seq,
 		)
 		if err != nil {
 			return fmt.Errorf("insert write: %w", err)

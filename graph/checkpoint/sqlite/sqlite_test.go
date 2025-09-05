@@ -14,7 +14,9 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
+	_ "github.com/mattn/go-sqlite3" // Import SQLite driver.
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,10 +24,6 @@ import (
 )
 
 func setupTestDB(t *testing.T) (*sql.DB, func()) {
-	// Skip SQLite tests if driver is not available.
-	t.Skip("SQLite driver not available in test environment")
-
-	// This code won't be reached due to Skip, but kept for reference.
 	// Create a temporary database file.
 	tmpfile, err := os.CreateTemp("", "test-*.db")
 	require.NoError(t, err)
@@ -83,7 +81,14 @@ func TestSQLiteCheckpointSaver(t *testing.T) {
 	require.NotNil(t, retrieved)
 
 	assert.NotEmpty(t, retrieved.ID)
-	assert.Equal(t, checkpoint.ChannelValues, retrieved.ChannelValues)
+	// JSON unmarshaling converts integers to float64, so compare values properly.
+	assert.Equal(t, len(checkpoint.ChannelValues), len(retrieved.ChannelValues))
+	for key, expectedVal := range checkpoint.ChannelValues {
+		actualVal, exists := retrieved.ChannelValues[key]
+		assert.True(t, exists, "Key %s should exist", key)
+		// Compare as float64 since JSON unmarshaling converts numbers to float64.
+		assert.Equal(t, float64(expectedVal.(int)), actualVal)
+	}
 
 	// Test retrieving tuple.
 	tuple, err := saver.GetTuple(ctx, updatedConfig)
@@ -189,7 +194,7 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 
 	assert.Len(t, tuple.PendingWrites, 2)
 	assert.Equal(t, "counter", tuple.PendingWrites[0].Channel)
-	assert.Equal(t, 42, tuple.PendingWrites[0].Value)
+	assert.Equal(t, float64(42), tuple.PendingWrites[0].Value)
 	assert.Equal(t, "message", tuple.PendingWrites[1].Channel)
 	assert.Equal(t, "hello", tuple.PendingWrites[1].Value)
 }
@@ -253,6 +258,10 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 	// Create multiple checkpoints.
 	var checkpointIDs []string
 	for i := 0; i < 3; i++ {
+		// Add small delay to ensure different timestamps.
+		if i > 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
 			map[string]any{"step": i + 1},
@@ -278,9 +287,13 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 
+	// Debug: print what we got
+	t.Logf("Expected ID: %s, Got ID: %s", checkpointIDs[2], latest.ID)
+	t.Logf("Expected step: 2, Got step: %v", latest.ChannelValues["step"])
+
 	// Verify it's the latest checkpoint.
 	assert.Equal(t, checkpointIDs[2], latest.ID)
-	assert.Equal(t, 2, latest.ChannelValues["step"])
+	assert.Equal(t, float64(2), latest.ChannelValues["step"])
 }
 
 func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
@@ -325,7 +338,7 @@ func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
 	checkpoints, err := saver.List(ctx, config, filter)
 	require.NoError(t, err)
 	assert.Len(t, checkpoints, 1)
-	assert.Equal(t, 1, checkpoints[0].Checkpoint.ChannelValues["step"])
+	assert.Equal(t, float64(1), checkpoints[0].Checkpoint.ChannelValues["step"])
 }
 
 func TestSQLiteCheckpointSaverNilDB(t *testing.T) {
