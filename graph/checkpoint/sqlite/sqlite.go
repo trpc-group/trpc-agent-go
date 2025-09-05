@@ -121,33 +121,41 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 	}
 
 	// Query checkpoint data
-	var checkpointJSON, metadataJSON []byte
-	var parentID, resolvedID string
-
-	if checkpointID == "" {
-		// Get latest checkpoint
-		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
-		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID, &resolvedID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("select latest: %w", err)
+	checkpointJSON, metadataJSON, parentID, resolvedID, err := s.queryCheckpointData(
+		ctx, lineageID, checkpointNS, checkpointID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
 		}
-	} else {
-		// Get specific checkpoint
-		row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
-		if err := row.Scan(&checkpointJSON, &metadataJSON, &parentID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("select by id: %w", err)
-		}
-		resolvedID = checkpointID
+		return nil, err
 	}
 
 	// Build the tuple from retrieved data
 	return s.buildTuple(ctx, lineageID, checkpointNS, resolvedID, parentID,
 		checkpointJSON, metadataJSON)
+}
+
+// queryCheckpointData retrieves checkpoint data from database.
+func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS,
+	checkpointID string) (checkpointJSON, metadataJSON []byte, parentID, resolvedID string, err error) {
+
+	if checkpointID == "" {
+		// Get latest checkpoint
+		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
+		err = row.Scan(&checkpointJSON, &metadataJSON, &parentID, &resolvedID)
+		if err != nil {
+			return nil, nil, "", "", fmt.Errorf("select latest: %w", err)
+		}
+		return checkpointJSON, metadataJSON, parentID, resolvedID, nil
+	}
+
+	// Get specific checkpoint
+	row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
+	err = row.Scan(&checkpointJSON, &metadataJSON, &parentID)
+	if err != nil {
+		return nil, nil, "", "", fmt.Errorf("select by id: %w", err)
+	}
+	return checkpointJSON, metadataJSON, parentID, checkpointID, nil
 }
 
 // buildTuple constructs a CheckpointTuple from raw data.
@@ -195,83 +203,146 @@ func (s *Saver) List(
 	if lineageID == "" {
 		return nil, errors.New("lineage_id is required")
 	}
+
 	// Query beforeTs if Before filter is specified
-	var beforeTs *int64
-	if filter != nil && filter.Before != nil {
-		beforeID := graph.GetCheckpointID(filter.Before)
-		if beforeID != "" {
-			row := s.db.QueryRowContext(ctx,
-				"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
-				lineageID, checkpointNS, beforeID)
-			var ts int64
-			if err := row.Scan(&ts); err == nil {
-				beforeTs = &ts
-			}
-		}
+	beforeTs, err := s.getBeforeTimestamp(ctx, lineageID, checkpointNS, filter)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build query with proper filtering and ordering
+	// Build and execute query
+	rows, err := s.executeListQuery(ctx, lineageID, checkpointNS, beforeTs, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Process results
+	return s.processListResults(ctx, rows, lineageID, checkpointNS, filter)
+}
+
+// getBeforeTimestamp retrieves the timestamp for the Before filter.
+func (s *Saver) getBeforeTimestamp(ctx context.Context, lineageID, checkpointNS string,
+	filter *graph.CheckpointFilter) (*int64, error) {
+
+	if filter == nil || filter.Before == nil {
+		return nil, nil
+	}
+
+	beforeID := graph.GetCheckpointID(filter.Before)
+	if beforeID == "" {
+		return nil, nil
+	}
+
+	row := s.db.QueryRowContext(ctx,
+		"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
+		lineageID, checkpointNS, beforeID)
+	var ts int64
+	if err := row.Scan(&ts); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get before timestamp: %w", err)
+	}
+	return &ts, nil
+}
+
+// executeListQuery builds and executes the list query.
+func (s *Saver) executeListQuery(ctx context.Context, lineageID, checkpointNS string,
+	beforeTs *int64, filter *graph.CheckpointFilter) (*sql.Rows, error) {
+
 	q := "SELECT checkpoint_id, ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=?"
 	args := []any{lineageID, checkpointNS}
+
 	if beforeTs != nil {
 		q += " AND ts < ?"
 		args = append(args, *beforeTs)
 	}
+
 	q += " ORDER BY ts DESC"
+
 	if filter != nil && filter.Limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, filter.Limit)
 	}
 
-	// Execute the optimized query
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("select checkpoints: %w", err)
 	}
-	defer rows.Close()
+	return rows, nil
+}
+
+// processListResults processes the query results and applies filters.
+func (s *Saver) processListResults(ctx context.Context, rows *sql.Rows,
+	lineageID, checkpointNS string, filter *graph.CheckpointFilter) ([]*graph.CheckpointTuple, error) {
+
 	var tuples []*graph.CheckpointTuple
+
 	for rows.Next() {
-		var checkpointID string
-		var ts int64
-		if err := rows.Scan(&checkpointID, &ts); err != nil {
-			return nil, fmt.Errorf("scan checkpoint: %w", err)
-		}
-		// Get full tuple for this checkpoint.
-		cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
-		tuple, err := s.GetTuple(ctx, cfg)
+		tuple, err := s.processSingleRow(ctx, rows, lineageID, checkpointNS)
 		if err != nil {
 			return nil, err
 		}
 		if tuple == nil {
 			continue
 		}
-		// Apply metadata filter if specified.
-		if filter != nil && filter.Metadata != nil {
-			matches := true
-			for key, value := range filter.Metadata {
-				if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
-					matches = false
-					break
-				}
-				if tuple.Metadata.Extra[key] != value {
-					matches = false
-					break
-				}
-			}
-			if !matches {
-				continue
-			}
+
+		// Apply metadata filter
+		if !s.matchesMetadataFilter(tuple, filter) {
+			continue
 		}
+
 		tuples = append(tuples, tuple)
-		// Apply limit if specified.
+
+		// Check limit
 		if filter != nil && filter.Limit > 0 && len(tuples) >= filter.Limit {
 			break
 		}
 	}
+
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iter checkpoints: %w", err)
 	}
 	return tuples, nil
+}
+
+// processSingleRow processes a single row from the query result.
+func (s *Saver) processSingleRow(ctx context.Context, rows *sql.Rows,
+	lineageID, checkpointNS string) (*graph.CheckpointTuple, error) {
+
+	var checkpointID string
+	var ts int64
+	if err := rows.Scan(&checkpointID, &ts); err != nil {
+		return nil, fmt.Errorf("scan checkpoint: %w", err)
+	}
+
+	cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, checkpointNS)
+	tuple, err := s.GetTuple(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return tuple, nil
+}
+
+// matchesMetadataFilter checks if a tuple matches the metadata filter.
+func (s *Saver) matchesMetadataFilter(tuple *graph.CheckpointTuple,
+	filter *graph.CheckpointFilter) bool {
+
+	if filter == nil || filter.Metadata == nil {
+		return true
+	}
+
+	if tuple.Metadata == nil || tuple.Metadata.Extra == nil {
+		return false
+	}
+
+	for key, value := range filter.Metadata {
+		if tuple.Metadata.Extra[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 // Put stores the checkpoint and returns the updated config with checkpoint ID.
