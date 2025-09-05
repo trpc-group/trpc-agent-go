@@ -24,7 +24,7 @@ type generateImageOutput struct {
 func generateImage(ctx context.Context, input generateImageInput) (generateImageOutput, error) {
 	images, err := mockLLMGenerateImage(ctx, input.Prompt)
 	if err != nil {
-		return generateImageOutput{}, fmt.Errorf("failed to generate image:: %w", err)
+		return generateImageOutput{}, fmt.Errorf("failed to generate image: %w", err)
 	}
 	if len(images) == 0 {
 		return generateImageOutput{"No images generated"}, nil
