@@ -12,7 +12,9 @@ package source
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
+	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
@@ -25,7 +27,7 @@ const (
 	TypeURL  = "url"
 )
 
-const metaPrefix = "trpc_agent_go"
+const metaPrefix = "trpc_agent_go_"
 
 // Metadata keys
 const (
@@ -45,6 +47,14 @@ const (
 	MetaURLScheme     = metaPrefix + "url_scheme"
 	MetaInputCount    = metaPrefix + "input_count"
 	MetaInputs        = metaPrefix + "inputs"
+
+	MetaChunkType = metaPrefix + "chunk_type"
+	MetaChunkSize = metaPrefix + "chunk_size"
+
+	// necessary metadata
+	MetaURI        = metaPrefix + "uri"         // 文件URI（绝对路径或URL）
+	MetaSourceName = metaPrefix + "source_name" // source 名称
+	MetaChunkIndex = metaPrefix + "chunk_index" // chunk 序号
 )
 
 // Source represents a knowledge source that can provide documents.
@@ -59,7 +69,7 @@ type Source interface {
 	// Type returns the type of this source (e.g., "file", "url", "dir").
 	Type() string
 
-	// GetMetadata returns the metadata associated with this source.
+	// GetMetadata returns the metadata that user set
 	GetMetadata() map[string]interface{}
 }
 
@@ -112,4 +122,37 @@ func GetAllMetadataKeys(sources []Source) []string {
 		result = append(result, key)
 	}
 	return result
+}
+
+// GenerateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
+// Uses MD5 hash to ensure uniqueness and avoid collisions.
+func GenerateDocumentID(sourceName, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
+	hasher := md5.New()
+
+	// Write source name
+	hasher.Write([]byte(sourceName))
+	hasher.Write([]byte(":"))
+
+	// Write content
+	hasher.Write([]byte(content))
+	hasher.Write([]byte(":"))
+
+	// Write chunk index
+	hasher.Write([]byte(fmt.Sprintf("%d", chunkIndex)))
+	hasher.Write([]byte(":"))
+
+	// Write source metadata (sorted by keys for consistency)
+	if sourceMetadata != nil {
+		keys := make([]string, 0, len(sourceMetadata))
+		for k := range sourceMetadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			hasher.Write([]byte(fmt.Sprintf("%s:%v:", k, sourceMetadata[k])))
+		}
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
