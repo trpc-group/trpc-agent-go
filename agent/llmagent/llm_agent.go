@@ -447,11 +447,6 @@ func New(name string, opts ...Option) *LLMAgent {
 func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor {
 	var requestProcessors []flow.RequestProcessor
 
-	// 0. Transfer pre-processor - handle pending transfers before any LLM call if sub-agents exist.
-	if len(options.SubAgents) > 0 {
-		requestProcessors = append(requestProcessors, processor.NewTransferRequestProcessor())
-	}
-
 	// 1. Basic processor - handles generation config.
 	basicOptions := []processor.BasicOption{
 		processor.WithGenerationConfig(options.GenerationConfig),
