@@ -232,15 +232,6 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		// If any response processor (e.g., transfer) decided to end the
-		// invocation, stop consuming further LLM stream chunks immediately
-		// to avoid mixing parent and target agent events.
-		if invocation.EndInvocation {
-			log.Debugf("Invocation %s ended during streaming; stopping further LLM chunk processing",
-				invocation.InvocationID)
-			break
-		}
-
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
 
 		// 7. Handle function calls if present in the response.
