@@ -22,15 +22,14 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
-	noopt "go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
 // Tracer is the global tracer instance for telemetry.
-var Tracer trace.Tracer = noopt.Tracer{}
+var Tracer trace.Tracer = trace.NewNoopTracerProvider().Tracer("")
 
 // Start collects telemetry with optional configuration.
 // The environment variables described below can be used for endpoint configuration.
@@ -182,7 +181,7 @@ func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 		otlptracegrpc.WithHeaders(opts.headers),
 	}
 	if opts.tracesEndpointURL != "" {
-		otelOpts = append(otelOpts, otlptracegrpc.WithEndpointURL(opts.tracesEndpointURL))
+		otelOpts = append(otelOpts, otlptracegrpc.WithEndpoint(opts.tracesEndpointURL))
 	}
 	// Set up a trace exporter
 	traceExporter, err := otlptracegrpc.New(ctx, otelOpts...)
@@ -203,7 +202,7 @@ func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 		otlptracehttp.WithHeaders(opts.headers),
 	}
 	if opts.tracesEndpointURL != "" {
-		otelOpts = append(otelOpts, otlptracehttp.WithEndpointURL(opts.tracesEndpointURL))
+		otelOpts = append(otelOpts, otlptracehttp.WithEndpoint(opts.tracesEndpointURL))
 	}
 	traceExporter, err := otlptracehttp.New(ctx, otelOpts...)
 	if err != nil {

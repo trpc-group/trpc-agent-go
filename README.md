@@ -10,14 +10,96 @@ English | [中文](README.zh_CN.md)
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-A powerful Go framework for building intelligent **agent systems** with large
-language models (LLMs), hierarchical planners, memory, telemetry and a rich
-**tool** ecosystem. If you want to create autonomous or semi-autonomous agents
-that reason, call tools, collaborate with sub-agents and keep long-term state,
-`tRPC-Agent-Go` has you covered.
+🚀 **A powerful Go framework for building intelligent agent systems** that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease.
+
+✨ **Why tRPC-Agent-Go?**
+- 🧠 **Intelligent Reasoning**: Advanced hierarchical planners and multi-agent orchestration
+- 🧰 **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services  
+- 💾 **Persistent Memory**: Long-term state management and contextual awareness
+- 🔗 **Multi-Agent Collaboration**: Chain, parallel, and graph-based agent workflows
+- 📊 **Production Ready**: Built-in telemetry, tracing, and enterprise-grade reliability
+- ⚡ **High Performance**: Optimized for scalability and low latency
+
+## 🎯 Use Cases
+
+**Perfect for building:**
+- 🤖 **Customer Support Bots** - Intelligent agents that understand context and solve complex queries
+- 📊 **Data Analysis Assistants** - Agents that query databases, generate reports, and provide insights  
+- 🔧 **DevOps Automation** - Smart deployment, monitoring, and incident response systems
+- 💼 **Business Process Automation** - Multi-step workflows with human-in-the-loop capabilities
+- 🧠 **Research & Knowledge Management** - RAG-powered agents for document analysis and Q&A
+
+## 🚀 Key Features
+
+<table>
+<tr>
+<td width="50%">
+
+### 🎪 **Multi-Agent Orchestration**
+```go
+// Chain agents for complex workflows
+pipeline := chainagent.New("pipeline",
+    chainagent.WithSubAgents([]agent.Agent{
+        analyzer, processor, reporter,
+    }))
+
+// Or run them in parallel
+parallel := parallelagent.New("concurrent",
+    parallelagent.WithSubAgents(tasks))
+```
+
+</td>
+<td width="50%">
+
+### 🧠 **Advanced Memory System**
+```go
+// Persistent memory with search
+memory := memorysvc.NewInMemoryService()
+agent := llmagent.New("assistant",
+    llmagent.WithMemory(memory),
+    llmagent.WithModel(model))
+
+// Agents remember context across sessions
+```
+
+</td>
+</tr>
+<tr>
+<td>
+
+### 🛠️ **Rich Tool Integration**
+```go
+// Any function becomes a tool
+calculator := function.NewFunctionTool(
+    calculate,
+    function.WithName("calculator"),
+    function.WithDescription("Math operations"))
+
+// MCP protocol support
+mcpTool := mcptool.New(serverConn)
+```
+
+</td>
+<td>
+
+### 📈 **Production Monitoring**
+```go
+// OpenTelemetry integration
+runner := runner.NewRunner("app", agent,
+    runner.WithTelemetry(telemetry.Config{
+        TracingEnabled: true,
+        MetricsEnabled: true,
+    }))
+```
+
+</td>
+</tr>
+</table>
 
 ## Table of Contents
 
+- [Use Cases](#-use-cases)
+- [Key Features](#-key-features)
 - [Documentation](#documentation)
 - [Quick Start](#quick-start)
 - [Examples](#examples)
@@ -40,32 +122,41 @@ that reason, call tools, collaborate with sub-agents and keep long-term state,
 
 Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.io/trpc-agent-go/) covers everything from basic concepts to advanced techniques, helping you build powerful AI applications with confidence. Whether you're new to AI agents or an experienced developer, you'll find detailed guides, practical examples, and best practices to accelerate your development journey.
 
-## Quick Start
+## ⚡ Quick Start
 
-### Prerequisites
+> 🎬 **See it in Action**: *[Demo GIF placeholder - showing agent reasoning and tool usage]*
 
-1. Go 1.24.1 or later.
-2. An LLM provider key (e.g. `OPENAI_API_KEY`, `OPENAI_BASE_URL`).
+### 📋 Prerequisites
 
-### Run the example
+- ✅ Go 1.24.1 or later
+- 🔑 LLM provider API key (OpenAI, DeepSeek, etc.)
+- 💡 5 minutes to build your first intelligent agent
 
-Use the commands below to configure your environment and start a multi-turn
-chat session with streaming and tool calls via the Runner.
+### 🚀 Run the Example
+
+**Get started in 3 simple steps:**
 
 ```bash
-# Clone the project
+# 1️⃣ Clone and setup
 git clone https://github.com/trpc-group/trpc-agent-go.git
 cd trpc-agent-go
 
-# Run a quick example
-export OPENAI_API_KEY="<your-api-key>"
-export OPENAI_BASE_URL="<your-base-url>"
+# 2️⃣ Configure your LLM
+export OPENAI_API_KEY="your-api-key-here"
+export OPENAI_BASE_URL="your-base-url-here"  # Optional
+
+# 3️⃣ Run your first agent! 🎉
 cd examples/runner
 go run . -model="gpt-4o-mini" -streaming=true
 ```
 
-[examples/runner](examples/runner) demonstrates multi‑turn chat via the **Runner** with session management, streaming output, and tool calling.
-It includes two tools: a calculator and a current time tool. Toggle behavior with flags like `-streaming` and `-enable-parallel`.
+**What you'll see:**
+- 💬 **Interactive chat** with your AI agent
+- ⚡ **Real-time streaming** responses  
+- 🧮 **Tool usage** (calculator + time tools)
+- 🔄 **Multi-turn conversations** with memory
+
+Try asking: *"What's the current time? Then calculate 15 * 23 + 100"*
 
 ### Basic Usage
 
@@ -230,29 +321,19 @@ Other notable examples:
 
 See individual `README.md` files in each example folder for usage details.
 
-## Architecture Overview
+## 🏗️ Architecture Overview
+Architecture 
 
-```text
-┌─────────────────────┐
-│       Runner        │  orchestrates session, memory, ...
-└─────────┬───────────┘
-          │ invokes
-┌─────────▼───────────┐
-│       Agent         │  implements business logic, integrated with knowledge, code executor, ...
-└─────────┬───────────┘
-          │ sub-agents(LLM, Graph, Multi, A2A agents)
-┌─────────▼───────────┐
-│       Planner       │  decide next action / tool use
-└────────┬────────────┘
-         │ LLM flow
-┌────────▼──────────┐   ┌──────────────┐
-│     Model Call    │──►│    Tools     │ function / agent / MCP
-└────────┬──────────┘   └──────────────┘
-         │ calls
-┌────────▼──────────┐
-│     LLM Model     │  chat-completion, batch, embedding, …
-└───────────────────┘
-```
+![architecture](docs/assets/img/component_architecture.png)
+
+### 🔄 **Execution Flow**
+
+1. **🚀 Runner** orchestrates the entire execution pipeline with session management
+2. **🤖 Agent** processes requests using multiple specialized components
+3. **🧠 Planner** determines the optimal strategy and tool selection
+4. **🛠️ Tools** execute specific tasks (API calls, calculations, web searches)
+5. **💾 Memory** maintains context and learns from interactions
+6. **📚 Knowledge** provides RAG capabilities for document understanding
 
 Key packages:
 
@@ -266,6 +347,9 @@ Key packages:
 | `memory`    | Records user long-term memory and personalized information.                                                 |
 | `knowledge` | Implements RAG knowledge retrieval capabilities.                                                            |
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
+
+Execution flow
+![execution](docs/assets/img/timing_diagram.png)
 
 ## Using Built-in Agents
 
@@ -312,26 +396,54 @@ for ev := range events { /* ... */ }
 The composition API lets you nest chains, cycles, or parallels to build complex
 workflows without low-level plumbing.
 
-## Future Enhancements
 
-- Persistent memory adapters (PostgreSQL, Redis).
-- More built-in tools (web search, calculators, file I/O).
-- Advanced planners (tree-of-thought, graph execution).
-- gRPC & HTTP servers for remote agent invocation.
-- Comprehensive benchmark & test suite.
+## 🤝 Contributing
 
-## Contributing
+We ❤️ contributions! Join our growing community of developers building the future of AI agents.
 
-Pull requests, issues and suggestions are very welcome! Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) and follow Go coding conventions. Run
-`go test ./... && go vet ./...` before submitting.
+### 🌟 **Ways to Contribute**
+- 🐛 **Report bugs** or suggest features via [Issues](https://github.com/trpc-group/trpc-agent-go/issues)
+- 📖 **Improve documentation** - help others learn faster
+- 🔧 **Submit PRs** - bug fixes, new features, or examples
+- 💡 **Share your use cases** - inspire others with your agent applications
 
-## Acknowledgements
+### 🚀 **Quick Contribution Setup**
+```bash
+# Fork & clone the repo
+git clone https://github.com/YOUR_USERNAME/trpc-agent-go.git
+cd trpc-agent-go
 
-Thanks to Tencent internal businesses such as Tencent Yuanbao, Tencent Video, Tencent News, IMA, QQ Music,
-and other businesses for their support. Business scenario refinement is the best validation for the framework.
+# Run tests to ensure everything works
+go test ./...
+go vet ./...
 
-Thanks to excellent open-source frameworks like ADK, Agno, CrewAI, AutoGen, etc., for their inspiration,
-providing ideas for tRPC-Agent-Go development.
+# Make your changes and submit a PR! 🎉
+```
 
-Licensed under the Apache 2.0 License.
+📋 **Please read** [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines and coding standards.
+
+## 🏆 Acknowledgements
+
+### 🏢 **Enterprise Validation**
+Special thanks to Tencent's business units including **Tencent Yuanbao**, **Tencent Video**, **Tencent News**, **IMA**, and **QQ Music** for their invaluable support and real-world validation. Production usage drives framework excellence! 🚀
+
+### 🌟 **Open Source Inspiration**  
+Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, and many others. Standing on the shoulders of giants! 🙏
+
+---
+
+## 📜 License
+
+Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for details.
+
+---
+
+<div align="center">
+
+### 🌟 **Star us on GitHub** • 🐛 **Report Issues** • 💬 **Join Discussions**
+
+**Built with ❤️ by the tRPC-Agent-Go team**
+
+*Empowering developers to build the next generation of intelligent applications*
+
+</div>
