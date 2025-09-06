@@ -57,10 +57,11 @@ type Options struct {
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors   []flow.RequestProcessor
-	responseProcessors  []flow.ResponseProcessor
-	channelBufferSize   int
-	enableParallelTools bool
+	requestProcessors      []flow.RequestProcessor
+	responseProcessorsPre  []flow.ResponseProcessor
+	responseProcessorsPost []flow.ResponseProcessor
+	channelBufferSize      int
+	enableParallelTools    bool
 }
 
 // toolResult holds the result of a single tool execution.
@@ -82,11 +83,22 @@ func New(
 		channelBufferSize = defaultChannelBufferSize
 	}
 
+	// Partition response processors into pre- and post-actions.
+	var pre, post []flow.ResponseProcessor
+	for _, rp := range responseProcessors {
+		if _, ok := rp.(flow.AfterActionsResponseProcessor); ok {
+			post = append(post, rp)
+		} else {
+			pre = append(pre, rp)
+		}
+	}
+
 	return &Flow{
-		requestProcessors:   requestProcessors,
-		responseProcessors:  responseProcessors,
-		channelBufferSize:   channelBufferSize,
-		enableParallelTools: opts.EnableParallelTools,
+		requestProcessors:      requestProcessors,
+		responseProcessorsPre:  pre,
+		responseProcessorsPost: post,
+		channelBufferSize:      channelBufferSize,
+		enableParallelTools:    opts.EnableParallelTools,
 	}
 }
 
@@ -214,8 +226,8 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		// 6. Postprocess response.
-		f.postprocess(ctx, invocation, response, eventChan)
+		// 6. Postprocess (pre-actions) response processors.
+		f.postprocessPre(ctx, invocation, response, eventChan)
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
@@ -248,6 +260,17 @@ func (f *Flow) processStreamingResponses(
 					return lastEvent, err
 				}
 			}
+		}
+
+		// 8. Postprocess (after-actions) response processors.
+		f.postprocessPost(ctx, invocation, response, eventChan)
+		if err := f.checkContextCancelled(ctx); err != nil {
+			return lastEvent, err
+		}
+		if invocation.EndInvocation {
+			log.Debugf("Invocation %s ended after after-actions; stopping streaming",
+				invocation.InvocationID)
+			break
 		}
 	}
 
@@ -975,8 +998,8 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	}
 }
 
-// postprocess handles post-LLM call processing using response processors.
-func (f *Flow) postprocess(
+// postprocessPre handles pre-actions response processors.
+func (f *Flow) postprocessPre(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
@@ -987,7 +1010,23 @@ func (f *Flow) postprocess(
 	}
 
 	// Run response processors - they send events directly to the channel.
-	for _, processor := range f.responseProcessors {
+	for _, processor := range f.responseProcessorsPre {
+		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
+	}
+}
+
+// postprocessPost handles after-actions response processors.
+func (f *Flow) postprocessPost(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmResponse *model.Response,
+	eventChan chan<- *event.Event,
+) {
+	if llmResponse == nil {
+		return
+	}
+
+	for _, processor := range f.responseProcessorsPost {
 		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
 	}
 }
