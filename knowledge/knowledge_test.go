@@ -76,13 +76,22 @@ func TestBuiltinKnowledge_Search(t *testing.T) {
 		t.Fatalf("unexpected doc id: %s", res.Document.ID)
 	}
 
-	// Case 4: enhancer error propagates.
+	// Case 4: Query enhancement now happens in retriever.
+	// Test that context is properly passed to retriever.
 	kb = &BuiltinKnowledge{
-		retriever:     stubRetriever{result: &retriever.Result{Documents: []*retriever.RelevantDocument{rel}}},
-		queryEnhancer: stubEnhancer{err: true},
+		retriever: stubRetriever{result: &retriever.Result{Documents: []*retriever.RelevantDocument{rel}}},
 	}
-	_, err = kb.Search(ctx, &SearchRequest{Query: "hello"})
-	if err == nil {
-		t.Fatalf("expected error from enhancer")
+	searchReq := &SearchRequest{
+		Query:     "hello",
+		History:   []ConversationMessage{{Role: "user", Content: "previous message"}},
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+	res, err = kb.Search(ctx, searchReq)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Document.ID != "1" {
+		t.Fatalf("unexpected doc id: %s", res.Document.ID)
 	}
 }

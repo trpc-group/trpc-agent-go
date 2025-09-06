@@ -19,3 +19,7 @@ dpskv3.sh
 .kiro
 .claude*
 CLAUDE.md
+*test*.sh
+*test*.exp
+*test*.py
+*.db

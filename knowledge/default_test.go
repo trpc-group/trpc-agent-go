@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
@@ -183,11 +184,17 @@ func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) 
 }
 func (*stubVectorStore) Close() error { return nil }
 
-func TestConvertConversationHistory(t *testing.T) {
-	in := []ConversationMessage{{Role: "user", Content: "hi", Timestamp: 1}}
-	got := convertConversationHistory(in)
-	if len(got) != 1 || got[0].Content != "hi" {
-		t.Fatalf("unexpected conversion result %+v", got)
+// TestConversationMessageTypes verifies that knowledge and retriever use the same type.
+func TestConversationMessageTypes(t *testing.T) {
+	// Create a knowledge ConversationMessage
+	kmsg := ConversationMessage{Role: "user", Content: "hi", Timestamp: 1}
+
+	// Should be directly assignable to retriever.ConversationMessage
+	// This test ensures they're the same type (via type alias to internal/types)
+	var rmsg retriever.ConversationMessage = kmsg
+
+	if rmsg.Role != "user" || rmsg.Content != "hi" || rmsg.Timestamp != 1 {
+		t.Fatalf("unexpected message after assignment: %+v", rmsg)
 	}
 }
 
