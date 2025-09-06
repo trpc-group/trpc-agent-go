@@ -220,6 +220,15 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
+		// If any response processor (e.g., transfer) decided to end the
+		// invocation, stop consuming further LLM stream chunks immediately
+		// to avoid mixing parent and target agent events.
+		if invocation.EndInvocation {
+			log.Debugf("Invocation %s ended during streaming; stopping further LLM chunk processing",
+				invocation.InvocationID)
+			break
+		}
+
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
 
 		// 7. Handle function calls if present in the response.
@@ -375,6 +384,12 @@ func (f *Flow) preprocess(
 	// Run request processors - they send events directly to the channel.
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
+		// If any processor ended the invocation (e.g., pre-LLM transfer),
+		// stop running subsequent processors to avoid emitting parent events
+		// after the transfer handoff.
+		if invocation.EndInvocation {
+			return
+		}
 	}
 
 	// Add tools to the request.
