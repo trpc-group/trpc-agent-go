@@ -122,15 +122,16 @@ func New(name string, opts ...Option) *CycleAgent {
 // createSubAgentInvocation creates a proper invocation for sub-agents with correct attribution.
 // This ensures events from sub-agents have the correct Author field set.
 func (a *CycleAgent) createSubAgentInvocation(
+	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := agent.CreateBranchInvocation(baseInvocation)
+	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Set branch info for hierarchical event filtering.
 	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the
 	// previous agent's conversation history.
-	if baseInvocation.Branch == "" {
+	if subInvocation.Branch == "" {
 		subInvocation.Branch = a.name
 	}
 
@@ -243,7 +244,7 @@ func (a *CycleAgent) runSubAgent(
 	eventChan chan<- *event.Event,
 ) bool {
 	// Create a proper invocation for the sub-agent with correct attribution.
-	subInvocation := a.createSubAgentInvocation(invocation)
+	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 	// Reset invcation information in context
 	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)

@@ -102,15 +102,16 @@ func New(name string, opts ...Option) *ChainAgent {
 // createSubAgentInvocation creates a clean invocation for a sub-agent.
 // This ensures proper agent attribution for sequential execution.
 func (a *ChainAgent) createSubAgentInvocation(
+	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := agent.CreateBranchInvocation(baseInvocation)
+	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Set branch info to track sequence in multi-agent scenarios.
 	// Do not include sub-agent name in branch, so that the chain sub-agents can
 	// observe each other's events.
-	if baseInvocation.Branch == "" {
+	if subInvocation.Branch == "" {
 		subInvocation.Branch = a.name
 	}
 
@@ -210,7 +211,7 @@ func (a *ChainAgent) executeSubAgents(
 ) {
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
-		subInvocation := a.createSubAgentInvocation(invocation)
+		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 		// Reset invcation information in context
 		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)

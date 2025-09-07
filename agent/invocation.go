@@ -87,10 +87,12 @@ type RunOptions struct {
 	RuntimeState map[string]any
 }
 
-// CreateBranchInvocation creates a new invocation with the given base invocation.
-func CreateBranchInvocation(baseInvocation *Invocation) *Invocation {
+// CreateBranchInvocation create a new invocation for branch agent
+func (baseInvocation *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	return &Invocation{
+	branchInvocation := Invocation{
+		Agent:             branchAgent,
+		AgentName:         branchAgent.Info().Name,
 		InvocationID:      baseInvocation.InvocationID,
 		Branch:            baseInvocation.Branch,
 		Session:           baseInvocation.Session,
@@ -99,4 +101,6 @@ func CreateBranchInvocation(baseInvocation *Invocation) *Invocation {
 		RunOptions:        baseInvocation.RunOptions,
 		ArtifactService:   baseInvocation.ArtifactService,
 	}
+
+	return &branchInvocation
 }

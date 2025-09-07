@@ -104,7 +104,7 @@ func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	branchInvocation := agent.CreateBranchInvocation(baseInvocation)
+	branchInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Create unique invocation ID for this branch.
 	branchSuffix := a.name + "." + subAgent.Info().Name
@@ -118,7 +118,8 @@ func (a *ParallelAgent) createBranchInvocation(
 
 // setupInvocation prepares the invocation for execution.
 func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name
+	// Set agent and agent name
+	invocation.Agent = a
 	invocation.AgentName = a.name
 
 	// Set agent callbacks if available.
