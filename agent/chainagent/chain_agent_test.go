@@ -358,10 +358,8 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 		Branch:       "root",
 	}
 
-	sub := &mockMinimalAgent{name: "child"}
-	inv := parent.createSubAgentInvocation(sub, base)
+	inv := parent.createSubAgentInvocation(base)
 
-	require.Equal(t, "child", inv.AgentName)
 	require.Equal(t, "root", inv.Branch)
 	// Ensure original invocation not mutated.
 	require.Equal(t, "parent", base.AgentName)
@@ -373,11 +371,9 @@ func TestCreateSubAgentInvokeNoBranch(t *testing.T) {
 		"parent",
 	)
 	base := &agent.Invocation{InvocationID: "id", AgentName: "parent"}
-	sub := &mockMinimalAgent{name: "child"}
 
-	inv := parent.createSubAgentInvocation(sub, base)
+	inv := parent.createSubAgentInvocation(base)
 
-	require.Equal(t, "child", inv.AgentName)
 	require.Equal(t, "parent", inv.Branch)
 }
 

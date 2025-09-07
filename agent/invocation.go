@@ -86,3 +86,17 @@ type RunOptions struct {
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
 }
+
+// CreateBranchInvocation creates a new invocation with the given base invocation.
+func CreateBranchInvocation(baseInvocation *Invocation) *Invocation {
+	// Create a copy of the invocation - no shared state mutation.
+	return &Invocation{
+		InvocationID:      baseInvocation.InvocationID,
+		Branch:            baseInvocation.Branch,
+		Session:           baseInvocation.Session,
+		Message:           baseInvocation.Message,
+		EventCompletionCh: baseInvocation.EventCompletionCh,
+		RunOptions:        baseInvocation.RunOptions,
+		ArtifactService:   baseInvocation.ArtifactService,
+	}
+}

@@ -177,18 +177,15 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 	// Add parent agent to state so agent nodes can access sub-agents.
 	initialState[graph.StateKeyParentAgent] = ga
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
-		invocation.AgentCallbacks = ga.agentCallbacks
-	}
-	// Set model callbacks if available.
-	if invocation.ModelCallbacks == nil && ga.modelCallbacks != nil {
-		invocation.ModelCallbacks = ga.modelCallbacks
-	}
-	// Set tool callbacks if available.
-	if invocation.ToolCallbacks == nil && ga.toolCallbacks != nil {
-		invocation.ToolCallbacks = ga.toolCallbacks
-	}
+	// Set agent and agent name.
+	invocation.Agent = ga
+	invocation.AgentName = ga.name
+	// Set agent callbacks.
+	invocation.AgentCallbacks = ga.agentCallbacks
+	// Set model callbacks.
+	invocation.ModelCallbacks = ga.modelCallbacks
+	// Set tool callbacks.
+	invocation.ToolCallbacks = ga.toolCallbacks
 	// Execute the graph.
 	if invocation.AgentCallbacks != nil {
 		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)

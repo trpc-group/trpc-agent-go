@@ -534,11 +534,9 @@ func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *ev
 func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 	parent := newFromLegacy(legacyOptions{Name: "parent"})
 	base := &agent.Invocation{InvocationID: "base", AgentName: "parent", Branch: "branchA"}
-	child := &noopAgent{name: "child"}
 
-	inv := parent.createSubAgentInvocation(child, base)
+	inv := parent.createSubAgentInvocation(base)
 
-	require.Equal(t, "child", inv.AgentName)
 	// Branch should stay unchanged when base.Branch non-empty.
 	require.Equal(t, "branchA", inv.Branch)
 	// Ensure TransferInfo cleared.

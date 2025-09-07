@@ -121,15 +121,11 @@ func (a *ParallelAgent) createBranchInvocationForSubAgent(
 
 // setupInvocation prepares the invocation for execution.
 func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
+	// Set agent name
+	invocation.AgentName = a.name
 
 	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	invocation.AgentCallbacks = a.agentCallbacks
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -191,8 +187,11 @@ func (a *ParallelAgent) startSubAgents(
 			// Create branch invocation for this sub-agent.
 			branchInvocation := a.createBranchInvocationForSubAgent(sa, invocation)
 
+			// Reset invcation information in context
+			subAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
+
 			// Run the sub-agent.
-			subEventChan, err := sa.Run(ctx, branchInvocation)
+			subEventChan, err := sa.Run(subAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(

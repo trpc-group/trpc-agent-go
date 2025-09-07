@@ -548,33 +548,21 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		a.mu.RUnlock()
 	}
 
-	// Ensure the agent name is set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
+	// Set model
+	invocation.Model = a.model
+
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
 
 	// Propagate structured output configuration into invocation and request path.
-	if invocation.StructuredOutput == nil && a.structuredOutput != nil {
-		invocation.StructuredOutput = a.structuredOutput
-	}
-	if invocation.StructuredOutputType == nil && a.structuredOutputType != nil {
-		invocation.StructuredOutputType = a.structuredOutputType
-	}
+	invocation.StructuredOutputType = a.structuredOutputType
+	invocation.StructuredOutput = a.structuredOutput
 
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
-
-	// Set model callbacks if available.
-	if invocation.ModelCallbacks == nil && a.modelCallbacks != nil {
-		invocation.ModelCallbacks = a.modelCallbacks
-	}
-
-	// Set tool callbacks if available.
-	if invocation.ToolCallbacks == nil && a.toolCallbacks != nil {
-		invocation.ToolCallbacks = a.toolCallbacks
-	}
+	// Set callbacks.
+	invocation.AgentCallbacks = a.agentCallbacks
+	invocation.ModelCallbacks = a.modelCallbacks
+	invocation.ToolCallbacks = a.toolCallbacks
 
 	// Run before agent callbacks if they exist.
 	if invocation.AgentCallbacks != nil {
