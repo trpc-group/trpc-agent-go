@@ -541,15 +541,10 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
-	// Ensure the invocation has a model set.
-	if invocation.Model == nil && a.model != nil {
-		a.mu.RLock()
-		invocation.Model = a.model
-		a.mu.RUnlock()
-	}
-
-	// Set model
+	// set model.
+	a.mu.RLock()
 	invocation.Model = a.model
+	a.mu.RUnlock()
 
 	// Set agent and agent name
 	invocation.Agent = a
