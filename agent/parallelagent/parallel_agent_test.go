@@ -207,15 +207,12 @@ func TestParallelAgent_BranchInvoke(t *testing.T) {
 		InvocationID: "base-001",
 	}
 
-	branchInvocation := parallelAgent.createBranchInvocationForSubAgent(subAgent, baseInvocation)
+	branchInvocation := parallelAgent.createBranchInvocation(subAgent, baseInvocation)
 
 	// Verify branch has different ID.
 	require.NotEqual(t, branchInvocation.InvocationID, baseInvocation.InvocationID)
 	// Verify branch contains base ID.
 	require.True(t, strings.Contains(branchInvocation.InvocationID, baseInvocation.InvocationID))
-	// Verify agent is set.
-	require.NotNil(t, branchInvocation.Agent)
-	require.Equal(t, subAgent.Info().Name, branchInvocation.Agent.Info().Name)
 }
 
 func TestParallelAgent_ChannelBufferSize(t *testing.T) {

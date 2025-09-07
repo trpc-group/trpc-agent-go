@@ -541,23 +541,9 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
-	// set model.
-	a.mu.RLock()
-	invocation.Model = a.model
-	a.mu.RUnlock()
 
-	// Set agent and agent name
-	invocation.Agent = a
-	invocation.AgentName = a.name
-
-	// Propagate structured output configuration into invocation and request path.
-	invocation.StructuredOutputType = a.structuredOutputType
-	invocation.StructuredOutput = a.structuredOutput
-
-	// Set callbacks.
-	invocation.AgentCallbacks = a.agentCallbacks
-	invocation.ModelCallbacks = a.modelCallbacks
-	invocation.ToolCallbacks = a.toolCallbacks
+	// Setup invocation
+	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
 	if invocation.AgentCallbacks != nil {
@@ -588,6 +574,27 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	}
 
 	return flowEventChan, nil
+}
+
+// setupInvocation sets up the invocation
+func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
+	// set model.
+	a.mu.RLock()
+	invocation.Model = a.model
+	a.mu.RUnlock()
+
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
+
+	// Propagate structured output configuration into invocation and request path.
+	invocation.StructuredOutputType = a.structuredOutputType
+	invocation.StructuredOutput = a.structuredOutput
+
+	// Set callbacks.
+	invocation.AgentCallbacks = a.agentCallbacks
+	invocation.ModelCallbacks = a.modelCallbacks
+	invocation.ToolCallbacks = a.toolCallbacks
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

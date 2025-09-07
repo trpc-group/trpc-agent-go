@@ -355,11 +355,11 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
+	// Setup invocation.
+	a.setupInvocation(invocation)
+
 	go func() {
 		defer close(eventChan)
-
-		// Setup invocation.
-		a.setupInvocation(invocation)
 
 		// Handle before agent callbacks.
 		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
