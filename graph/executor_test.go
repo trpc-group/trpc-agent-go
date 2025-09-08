@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -921,6 +922,224 @@ func (m *IssueClassificationMockModel) Info() model.Info {
 	return model.Info{
 		Name: "issue-classification-mock-model",
 	}
+}
+
+// inMemoryCheckpointSaver is a minimal in-memory implementation of CheckpointSaver for tests.
+type inMemoryCheckpointSaver struct {
+	mu         sync.RWMutex
+	cfgToTuple map[string]*CheckpointTuple
+	saved      []*CheckpointTuple
+}
+
+func newInMemoryCheckpointSaver() *inMemoryCheckpointSaver {
+	return &inMemoryCheckpointSaver{cfgToTuple: make(map[string]*CheckpointTuple)}
+}
+
+func (s *inMemoryCheckpointSaver) configKey(cfg map[string]any) string {
+	b, _ := json.Marshal(cfg)
+	return string(b)
+}
+
+func (s *inMemoryCheckpointSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if t := s.cfgToTuple[s.configKey(config)]; t != nil {
+		return t.Checkpoint, nil
+	}
+	return nil, nil
+}
+
+func (s *inMemoryCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfgToTuple[s.configKey(config)], nil
+}
+
+func (s *inMemoryCheckpointSaver) List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+	return nil, nil
+}
+
+func (s *inMemoryCheckpointSaver) Put(ctx context.Context, req PutRequest) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := s.configKey(req.Config)
+	s.cfgToTuple[key] = &CheckpointTuple{
+		Config:     req.Config,
+		Checkpoint: req.Checkpoint,
+		Metadata:   req.Metadata,
+	}
+	s.saved = append(s.saved, s.cfgToTuple[key])
+	return req.Config, nil
+}
+
+func (s *inMemoryCheckpointSaver) PutWrites(ctx context.Context, req PutWritesRequest) error {
+	return nil
+}
+
+func (s *inMemoryCheckpointSaver) PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := s.configKey(req.Config)
+	s.cfgToTuple[key] = &CheckpointTuple{
+		Config:        req.Config,
+		Checkpoint:    req.Checkpoint,
+		Metadata:      req.Metadata,
+		PendingWrites: req.PendingWrites,
+	}
+	s.saved = append(s.saved, s.cfgToTuple[key])
+	return req.Config, nil
+}
+
+func (s *inMemoryCheckpointSaver) DeleteLineage(ctx context.Context, lineageID string) error {
+	return nil
+}
+func (s *inMemoryCheckpointSaver) Close() error { return nil }
+
+// TestResumeFromCheckpoint_UsesNextNodes ensures that when a checkpoint contains
+// NextNodes and there are no pending writes, execution resumes by scheduling
+// those nodes immediately.
+func TestResumeFromCheckpoint_UsesNextNodes(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("x", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) { return State{"x": 1}, nil })
+	sg.SetEntryPoint("A")
+	sg.SetFinishPoint("A")
+	g, err := sg.Compile()
+	require.NoError(t, err, "compile graph failed.")
+
+	saver := newInMemoryCheckpointSaver()
+
+	cfg := CreateCheckpointConfig("lineage-test", "ckpt-1", "")
+	ckpt := NewCheckpoint(map[string]any{}, map[string]int64{}, map[string]map[string]int64{})
+	ckpt.NextNodes = []string{"A"}
+	meta := &CheckpointMetadata{Source: CheckpointSourceInput, Step: -1, Extra: map[string]any{}}
+	_, err = saver.PutFull(context.Background(), PutFullRequest{Config: cfg, Checkpoint: ckpt, Metadata: meta, NewVersions: map[string]int64{}})
+	require.NoError(t, err, "seed checkpoint failed.")
+
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err, "create executor failed.")
+
+	initial := State{CfgKeyLineageID: "lineage-test", CfgKeyCheckpointID: "ckpt-1", CfgKeyCheckpointNS: ""}
+	inv := &agent.Invocation{InvocationID: "inv-resume-next"}
+	ch, err := exec.Execute(context.Background(), initial, inv)
+	require.NoError(t, err, "execute failed.")
+
+	var final State
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			final = make(State)
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.NotNil(t, final, "no final state.")
+	if xv, ok := final["x"].(float64); ok {
+		require.Equal(t, float64(1), xv)
+	} else if xi, ok := final["x"].(int); ok {
+		require.Equal(t, 1, xi)
+	} else {
+		t.Fatalf("expected x numeric, got %T", final["x"])
+	}
+}
+
+// TestInitialCheckpointCreated verifies that an initial checkpoint is saved
+// when a saver is configured and we are not resuming.
+func TestInitialCheckpointCreated(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("y", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer})
+	sg := NewStateGraph(schema)
+	sg.AddNode("N", func(ctx context.Context, s State) (any, error) { return State{"y": 2}, nil })
+	sg.SetEntryPoint("N")
+	sg.SetFinishPoint("N")
+	g, err := sg.Compile()
+	require.NoError(t, err, "compile graph failed.")
+
+	saver := newInMemoryCheckpointSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err, "create executor failed.")
+
+	initial := State{}
+	inv := &agent.Invocation{InvocationID: "inv-init-ckpt"}
+	ch, err := exec.Execute(context.Background(), initial, inv)
+	require.NoError(t, err, "execute failed.")
+	for range ch {
+		// Drain channel.
+	}
+
+	// We expect that at least one checkpoint tuple was saved with step -1.
+	saver.mu.RLock()
+	defer saver.mu.RUnlock()
+	found := false
+	for _, tpl := range saver.saved {
+		if tpl != nil && tpl.Metadata != nil && tpl.Metadata.Step == -1 {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected an initial checkpoint (step=-1) to be saved.")
+}
+
+// TestBeforeCallbackShortCircuit ensures that a BeforeNode callback returning a
+// custom result short-circuits node execution and that the custom result is
+// applied to state.
+func TestBeforeCallbackShortCircuit(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("result", StateField{Type: reflect.TypeOf(""), Reducer: DefaultReducer})
+	g := NewStateGraph(schema)
+
+	// This node would error if executed; the callback should short-circuit it.
+	g.AddNode("danger", func(ctx context.Context, s State) (any, error) {
+		return nil, fmt.Errorf("should not run")
+	}).SetEntryPoint("danger").SetFinishPoint("danger")
+
+	// Global callbacks: Before returns a custom State to short-circuit.
+	cbs := NewNodeCallbacks()
+	cbs.RegisterBeforeNode(func(ctx context.Context, cb *NodeCallbackContext, st State) (any, error) {
+		if cb.NodeID == "danger" {
+			return State{"result": "ok"}, nil
+		}
+		return nil, nil
+	})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err, "compile failed.")
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err, "executor failed.")
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-short"})
+	require.NoError(t, err, "execute failed.")
+
+	var final State
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			final = make(State)
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.NotNil(t, final, "no final state.")
+	res, ok := final["result"].(string)
+	require.True(t, ok, "expected result field.")
+	require.Equal(t, "ok", res, "expected short-circuit result.")
 }
 
 // TestParallelFanOutWithCommands verifies that a node returning []*Command
