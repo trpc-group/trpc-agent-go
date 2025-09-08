@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
@@ -209,15 +210,28 @@ type ExecutionContext struct {
 	stateMutex sync.RWMutex
 	State      State
 
+	// pendingMu protects pendingWrites operations.
+	pendingMu     sync.Mutex
+	pendingWrites []PendingWrite
+	resumed       bool
+	seq           atomic.Int64 // Atomic sequence counter for deterministic replay
+
 	// tasksMutex protects pendingTasks queue operations.
 	tasksMutex   sync.Mutex
 	pendingTasks []*Task
+
+	// versionsSeen tracks which channel versions each node has seen.
+	// Map from nodeID -> channelName -> version number.
+	versionsSeen   map[string]map[string]int64
+	versionsSeenMu sync.RWMutex
 }
 
 // Command represents a command that combines state updates with routing.
 type Command struct {
-	Update State
-	GoTo   string
+	Update    State
+	GoTo      string
+	Resume    any
+	ResumeMap map[string]any
 }
 
 // addNode adds a node to the graph.

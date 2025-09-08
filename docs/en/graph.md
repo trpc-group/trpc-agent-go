@@ -40,6 +40,10 @@ This design allows GraphAgent to flexibly integrate into complex multi-Agent sys
 - **Tool nodes**: Support function calls and external tool integration
 - **Streaming execution**: Support real-time event streams and progress tracking
 - **Concurrency safety**: Thread-safe graph execution
+- **Checkpoint-based Time Travel**: Navigate through execution history and restore previous states
+- **Human-in-the-Loop (HITL)**: Support for interactive workflows with interrupt and resume capabilities
+- **Atomic checkpointing**: Atomic storage of checkpoints with pending writes for reliable recovery
+- **Checkpoint Lineage**: Track related checkpoints forming execution threads with parent-child relationships
 
 ## Core Concepts
 
@@ -516,7 +520,274 @@ return graph.State{
 
 ## Advanced Features
 
-### 1. Custom Reducer
+### 1. Interrupt and Resume (Human-in-the-Loop)
+
+The Graph package supports human-in-the-loop (HITL) workflows through interrupt and resume functionality. This enables workflows to pause execution, wait for human input or approval, and then resume from the exact point where they were interrupted.
+
+#### Basic Usage
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// Create a node that can interrupt execution for human input
+b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
+    // Use the Interrupt helper for clean interrupt/resume handling
+    prompt := map[string]any{
+        "message": "Please approve this action (yes/no):",
+        "data":    s["some_data"],
+    }
+    
+    // Interrupt execution and wait for user input
+    // The key "approval" identifies this specific interrupt point
+    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Process the resume value when execution continues
+    approved := false
+    if resumeStr, ok := resumeValue.(string); ok {
+        approved = resumeStr == "yes"
+    }
+    
+    return graph.State{
+        "approved": approved,
+    }, nil
+})
+```
+
+#### Multi-Stage Approval Example
+
+```go
+// First approval stage
+b.AddNode("first_approval", func(ctx context.Context, s graph.State) (any, error) {
+    prompt := map[string]any{
+        "message": "Manager approval required:",
+        "level": 1,
+    }
+    
+    approval, err := graph.Interrupt(ctx, s, "manager_approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    if approval != "yes" {
+        return graph.State{"rejected_at": "manager"}, nil
+    }
+    
+    return graph.State{"manager_approved": true}, nil
+})
+
+// Second approval stage (only if first approved)
+b.AddNode("second_approval", func(ctx context.Context, s graph.State) (any, error) {
+    if !s["manager_approved"].(bool) {
+        return s, nil // Skip if not approved by manager
+    }
+    
+    prompt := map[string]any{
+        "message": "Director approval required:",
+        "level": 2,
+    }
+    
+    approval, err := graph.Interrupt(ctx, s, "director_approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    return graph.State{
+        "director_approved": approval == "yes",
+        "final_approval": approval == "yes",
+    }, nil
+})
+```
+
+#### Resume from Interrupt
+
+```go
+// Resume execution with user input using ResumeMap
+cmd := &graph.Command{
+    ResumeMap: map[string]any{
+        "approval": "yes", // Resume value for the "approval" interrupt key
+    },
+}
+
+// Pass the command through state
+state := graph.State{
+    graph.StateKeyCommand: cmd,
+}
+
+// Execute with resume command
+events, err := executor.Execute(ctx, state, invocation)
+
+// Resume merge rule:
+// When resuming, if the caller provides initial state keys that do not start
+// with an underscore ("_") and are not present in the restored checkpoint
+// state, they will be merged into the execution state. Internal framework
+// keys (prefixed with "_") are ignored for this merge.
+```
+
+#### Resume Helper Functions
+
+```go
+// Type-safe resume value extraction
+if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
+    // Use the resume value
+}
+
+// Resume with default value
+value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// Check if resume value exists
+if graph.HasResumeValue(state, "approval") {
+    // Handle resume case
+}
+
+// Clear resume values
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+### 2. Checkpoint-based Time Travel
+
+Checkpoints enable "time travel" capabilities, allowing you to navigate through execution history and restore previous states. This is essential for debugging, auditing, and implementing sophisticated recovery strategies.
+
+#### Checkpoint Configuration
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+)
+
+// Create checkpoint saver (Memory or SQLite)
+// Memory saver - good for development/testing
+memorySaver := inmemory.NewSaver()
+
+// SQLite saver - persistent storage for production
+sqliteSaver, err := sqlite.NewCheckpointSaver("checkpoints.db")
+
+// Create executor with checkpoint support
+executor, err := graph.NewExecutor(compiledGraph,
+    graph.WithCheckpointSaver(sqliteSaver),
+    graph.WithCheckpointSaveTimeout(30*time.Second), // Configurable timeout
+    graph.WithMaxSteps(100),
+)
+```
+
+#### Checkpoint Lineage and Branching
+
+```go
+// Checkpoints form a lineage - a thread of execution
+lineageID := "user-session-123"
+namespace := "" // Optional namespace for branching
+// Note: when namespace is empty (""), Latest/List/GetTuple perform cross-namespace
+// queries within the same lineage. Use a concrete namespace to restrict scope.
+
+// Create checkpoint configuration
+config := graph.NewCheckpointConfig(lineageID).
+    WithNamespace(namespace)
+
+// Execute with checkpoint support
+state := graph.State{
+    "lineage_id": lineageID,
+    "checkpoint_ns": namespace,
+}
+
+events, err := executor.Execute(ctx, state, invocation)
+```
+
+#### Checkpoint Management
+
+```go
+// Create checkpoint manager
+manager := graph.NewCheckpointManager(saver)
+
+// List all checkpoints for a lineage
+checkpoints, err := manager.ListCheckpoints(ctx, config.ToMap(), &graph.CheckpointFilter{
+    Limit: 10, // Results are ordered by timestamp (newest first)
+})
+
+// Get the latest checkpoint
+// When namespace is empty (""), Latest searches across namespaces for the lineage
+latest, err := manager.Latest(ctx, lineageID, namespace)
+if latest != nil && latest.Checkpoint.IsInterrupted() {
+    fmt.Printf("Workflow interrupted at: %s\n", latest.Checkpoint.InterruptState.NodeID)
+}
+
+// Get specific checkpoint by ID
+ckptConfig := graph.CreateCheckpointConfig(lineageID, checkpointID, namespace)
+tuple, err := manager.GetTuple(ctx, ckptConfig)
+
+// Delete a lineage (all its checkpoints)
+err = manager.DeleteLineage(ctx, lineageID)
+```
+
+#### Checkpoint Tree Visualization
+
+```go
+// Build checkpoint tree showing parent-child relationships
+tree, err := manager.GetCheckpointTree(ctx, lineageID)
+
+// Visualize the tree
+for _, node := range tree {
+    indent := strings.Repeat("  ", node.Level)
+    marker := "📍"
+    if node.Checkpoint.IsInterrupted() {
+        marker = "🔴" // Interrupted checkpoint
+    }
+    fmt.Printf("%s%s %s (step=%d)\n", 
+        indent, marker, node.ID[:8], node.Metadata.Step)
+}
+```
+
+#### Resume from Specific Checkpoint
+
+```go
+// Resume from a specific checkpoint (time travel)
+state := graph.State{
+    "lineage_id": lineageID,
+    "checkpoint_id": checkpointID, // Resume from this checkpoint
+}
+
+// The executor will load the checkpoint and continue from there
+events, err := executor.Execute(ctx, state, invocation)
+```
+
+### 3. Checkpoint Storage Strategies
+
+#### In-Memory Storage
+Best for development and testing:
+```go
+saver := memory.NewCheckpointSaver()
+```
+
+#### SQLite Storage
+Best for production with persistence:
+```go
+saver, err := sqlite.NewCheckpointSaver("workflow.db",
+    sqlite.WithMaxConnections(10),
+    sqlite.WithTimeout(30*time.Second),
+)
+```
+
+#### Checkpoint Metadata
+Each checkpoint stores:
+- **State**: Complete workflow state at that point
+- **Metadata**: Source (input/loop/interrupt), step number, timestamp
+- **Parent ID**: Link to parent checkpoint for tree structure
+- **Interrupt State**: If interrupted, contains node ID, task ID, and prompt
+- **Next Nodes**: Nodes to execute when resuming
+- **Channel Versions**: For Pregel-style execution
+- **Pending Writes**: Uncommitted channel writes recorded and atomically stored
+  with checkpoints to deterministically rebuild the frontier during resume
+- **Versions Seen**: Per-node, per-channel version map used to avoid re-running
+  a node if it has already observed the latest version of its trigger channels
+
+### 4. Custom Reducer
 
 Reducer defines how to merge state updates:
 
@@ -538,7 +809,7 @@ graph.AppendReducer(existing, update) any
 graph.MessageReducer(existing, update) any
 ```
 
-### 2. Command Pattern
+### 5. Command Pattern
 
 Nodes can return commands to simultaneously update state and specify routing:
 
@@ -597,21 +868,27 @@ stateGraph.SetFinishPoint("worker")
 // No need to add a static edge fanout->worker; routing is driven by GoTo.
 ```
 
-### 3. Executor Configuration
+### 6. Executor Configuration
 
 ```go
 import (
+    "time"
     "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
 
-// Create executor with configuration.
+// Create executor with comprehensive configuration
 executor, err := graph.NewExecutor(compiledGraph,
-    graph.WithChannelBufferSize(1024),
-    graph.WithMaxSteps(50),
+    graph.WithChannelBufferSize(1024),      // Event channel buffer size
+    graph.WithMaxSteps(50),                  // Maximum execution steps
+    graph.WithStepTimeout(5*time.Minute),    // Timeout per step
+    graph.WithNodeTimeout(2*time.Minute),    // Timeout per node execution
+    graph.WithCheckpointSaver(inmemory.NewSaver()),  // Enable checkpointing
+    graph.WithCheckpointSaveTimeout(30*time.Second), // Checkpoint save timeout
 )
 ```
 
-### 4. Virtual Nodes and Routing
+### 7. Virtual Nodes and Routing
 
 The Graph package uses virtual nodes to simplify workflow entry and exit:
 

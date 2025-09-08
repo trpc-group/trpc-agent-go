@@ -929,9 +929,9 @@ type modelExecutionConfig struct {
 	EventChan      chan<- *event.Event
 	InvocationID   string
 	SessionID      string
+	NodeID         string // Add NodeID for parallel execution support
+	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
-	// NodeID, when provided, is used as the event author.
-	NodeID string
 }
 
 // executeModelWithEvents executes the model with event processing.
