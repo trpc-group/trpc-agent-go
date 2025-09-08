@@ -315,22 +315,6 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		return nil, fmt.Errorf("retriever not configured")
 	}
 
-	// Enhanced query using conversation context.
-	finalQuery := req.Query
-	if dk.queryEnhancer != nil {
-		queryReq := &query.Request{
-			Query:     req.Query,
-			History:   convertConversationHistory(req.History),
-			UserID:    req.UserID,
-			SessionID: req.SessionID,
-		}
-		enhanced, err := dk.queryEnhancer.EnhanceQuery(ctx, queryReq)
-		if err != nil {
-			return nil, fmt.Errorf("query enhancement failed: %w", err)
-		}
-		finalQuery = enhanced.Enhanced
-	}
-
 	// Set defaults for search parameters.
 	limit := req.MaxResults
 	if limit <= 0 {
@@ -342,11 +326,15 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		minScore = 0.0
 	}
 
-	// Use built-in retriever for RAG pipeline.
+	// Use built-in retriever for RAG pipeline with full context.
+	// The retriever will handle query enhancement if configured.
 	retrieverReq := &retriever.Query{
-		Text:     finalQuery,
-		Limit:    limit,
-		MinScore: minScore,
+		Text:      req.Query,
+		History:   req.History, // Same type now, no conversion needed
+		UserID:    req.UserID,
+		SessionID: req.SessionID,
+		Limit:     limit,
+		MinScore:  minScore,
 	}
 
 	result, err := dk.retriever.Retrieve(ctx, retrieverReq)
@@ -367,19 +355,6 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		Score:    bestDoc.Score,
 		Text:     content,
 	}, nil
-}
-
-// convertConversationHistory converts conversation messages to query format.
-func convertConversationHistory(history []ConversationMessage) []query.ConversationMessage {
-	result := make([]query.ConversationMessage, len(history))
-	for i, msg := range history {
-		result[i] = query.ConversationMessage{
-			Role:      msg.Role,
-			Content:   msg.Content,
-			Timestamp: msg.Timestamp,
-		}
-	}
-	return result
 }
 
 // Close closes the knowledge base and releases resources.
