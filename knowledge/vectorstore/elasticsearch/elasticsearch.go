@@ -168,7 +168,11 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	tm.Properties[fieldID] = types.NewKeywordProperty()
 	// name/content: text
 	tm.Properties[fieldName] = types.NewTextProperty()
-	tm.Properties[fieldContent] = types.NewTextProperty()
+	contentField := vs.option.contentFieldName
+	if contentField == "" {
+		contentField = "content"
+	}
+	tm.Properties[contentField] = types.NewTextProperty()
 	// metadata: object with dynamic true
 	metaObj := types.NewObjectProperty()
 	dm := dynamicmapping.True
@@ -185,7 +189,11 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	dv.Index = &indexed
 	sim := densevectorsimilarity.Cosine
 	dv.Similarity = &sim
-	tm.Properties[fieldEmbedding] = dv
+	embeddingField := vs.option.embeddingFieldName
+	if embeddingField == "" {
+		embeddingField = "embedding"
+	}
+	tm.Properties[embeddingField] = dv
 
 	// Settings: shards/replicas are strings in IndexSettings
 	is := types.NewIndexSettings()
