@@ -26,9 +26,6 @@ func NewTransferResponseProcessor() *TransferResponseProcessor {
 	return &TransferResponseProcessor{}
 }
 
-// AfterActionsMarker marks this processor to run after tool actions are handled.
-func (*TransferResponseProcessor) AfterActionsMarker() {}
-
 // ProcessResponse implements the flow.ResponseProcessor interface.
 // It checks for transfer requests and handles agent handoffs by actually calling
 // the target agent's Run method.

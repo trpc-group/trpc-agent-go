@@ -57,11 +57,10 @@ type Options struct {
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors      []flow.RequestProcessor
-	responseProcessorsPre  []flow.ResponseProcessor
-	responseProcessorsPost []flow.ResponseProcessor
-	channelBufferSize      int
-	enableParallelTools    bool
+	requestProcessors   []flow.RequestProcessor
+	responseProcessors  []flow.ResponseProcessor
+	channelBufferSize   int
+	enableParallelTools bool
 }
 
 // toolResult holds the result of a single tool execution.
@@ -83,23 +82,18 @@ func New(
 		channelBufferSize = defaultChannelBufferSize
 	}
 
-	// Partition response processors into pre- and post-actions.
-	var pre, post []flow.ResponseProcessor
-	for _, rp := range responseProcessors {
-		if _, ok := rp.(flow.AfterActionsResponseProcessor); ok {
-			post = append(post, rp)
-		} else {
-			pre = append(pre, rp)
-		}
+	// Initialize flow first so we can construct the function-call processor with a self reference.
+	f := &Flow{
+		requestProcessors:   requestProcessors,
+		channelBufferSize:   channelBufferSize,
+		enableParallelTools: opts.EnableParallelTools,
 	}
 
-	return &Flow{
-		requestProcessors:      requestProcessors,
-		responseProcessorsPre:  pre,
-		responseProcessorsPost: post,
-		channelBufferSize:      channelBufferSize,
-		enableParallelTools:    opts.EnableParallelTools,
-	}
+	// Insert the function-call processor at the beginning by default.
+	fc := newFunctionCallResponseProcessor(f)
+	f.responseProcessors = append(f.responseProcessors, fc)
+	f.responseProcessors = append(f.responseProcessors, responseProcessors...)
+	return f
 }
 
 // Run executes the flow in a loop until completion.
@@ -226,35 +220,16 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		// 6. Postprocess (pre-actions) response processors.
-		f.postprocessPre(ctx, invocation, response, eventChan)
-		if err := f.checkContextCancelled(ctx); err != nil {
-			return lastEvent, err
-		}
-
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
 
-		// 7. Handle function calls if present in the response.
+		// 6. Run unified response processors pipeline
+		f.runResponseProcessors(ctx, invocation, response, eventChan)
+
+		// If there were tool calls, ensure outer loop sees a non-final event
 		if f.hasToolCalls(response) {
-			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmResponseEvent, llmRequest.Tools, eventChan)
-			if err != nil {
-				return lastEvent, err
-			}
-			if functionResponseEvent != nil {
-				lastEvent = functionResponseEvent
-				if err := f.checkContextCancelled(ctx); err != nil {
-					return lastEvent, err
-				}
-
-				// Wait for completion if required.
-				if err := f.waitForCompletion(ctx, invocation, lastEvent); err != nil {
-					return lastEvent, err
-				}
-			}
+			// We don't need the actual event object here; a stub indicates continuation
+			lastEvent = &event.Event{Response: &model.Response{Object: model.ObjectTypeToolResponse}}
 		}
-
-		// 8. Postprocess (after-actions) response processors.
-		f.postprocessPost(ctx, invocation, response, eventChan)
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
@@ -989,8 +964,8 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	}
 }
 
-// postprocessPre handles pre-actions response processors.
-func (f *Flow) postprocessPre(
+// runResponseProcessors runs the unified response processors pipeline.
+func (f *Flow) runResponseProcessors(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
@@ -999,25 +974,7 @@ func (f *Flow) postprocessPre(
 	if llmResponse == nil {
 		return
 	}
-
-	// Run response processors - they send events directly to the channel.
-	for _, processor := range f.responseProcessorsPre {
-		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
-	}
-}
-
-// postprocessPost handles after-actions response processors.
-func (f *Flow) postprocessPost(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	llmResponse *model.Response,
-	eventChan chan<- *event.Event,
-) {
-	if llmResponse == nil {
-		return
-	}
-
-	for _, processor := range f.responseProcessorsPost {
+	for _, processor := range f.responseProcessors {
 		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
 	}
 }
