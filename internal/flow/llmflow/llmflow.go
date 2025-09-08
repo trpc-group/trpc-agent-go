@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -90,7 +91,14 @@ func New(
 	}
 
 	// Insert the function-call processor at the beginning by default.
-	fc := newFunctionCallResponseProcessor(f)
+	fc := processor.NewFunctionCallResponseProcessor(
+		func(ctx context.Context, invocation *agent.Invocation, llmEvent *event.Event, tools map[string]tool.Tool, ch chan<- *event.Event) (*event.Event, error) {
+			return f.handleFunctionCallsAndSendEvent(ctx, invocation, llmEvent, tools, ch)
+		},
+		func(ctx context.Context, invocation *agent.Invocation, lastEvent *event.Event) error {
+			return f.waitForCompletion(ctx, invocation, lastEvent)
+		},
+	)
 	f.responseProcessors = append(f.responseProcessors, fc)
 	f.responseProcessors = append(f.responseProcessors, responseProcessors...)
 	return f
@@ -200,8 +208,18 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
+	// If EndInvocation gets set during response processing, we stop emitting
+	// further events but continue draining the response channel to avoid
+	// blocking the model's streaming producer.
+	var draining bool
 
 	for response := range responseChan {
+		if draining || invocation.EndInvocation {
+			// Continue draining without emitting events.
+			draining = true
+			continue
+		}
+
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {
@@ -224,6 +242,9 @@ func (f *Flow) processStreamingResponses(
 
 		// 6. Run unified response processors pipeline
 		f.runResponseProcessors(ctx, invocation, llmRequest, response, eventChan)
+		if invocation.EndInvocation {
+			draining = true
+		}
 
 		// If there were tool calls, ensure outer loop sees a non-final event
 		if f.hasToolCalls(response) {
