@@ -13,6 +13,7 @@ nav:
       - Runner: runner.md
       - Model: model.md
       - Memory: memory.md
+      - Artifact: artifact.md
       - Tool: tool.md
       - Session: session.md
       - Knowledge: knowledge.md
@@ -45,6 +46,7 @@ plugins:
                 - Runner: runner.md
                 - Model: model.md
                 - Memory: memory.md
+                - Artifact: artifact.md
                 - Tool: tool.md
                 - Session: session.md
                 - Knowledge: knowledge.md
