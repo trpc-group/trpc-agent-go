@@ -54,7 +54,7 @@ import (
 
 // command line flags.
 var (
-	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	modelName    = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
 	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")
