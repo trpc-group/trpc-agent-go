@@ -68,7 +68,7 @@ type diamondWorkflow struct {
 func main() {
 	fmt.Println("🔷 Diamond Pattern Workflow Example")
 	fmt.Println("This example demonstrates the need for per-node version tracking.")
-	fmt.Println("Without proper versions_seen, the aggregator node will execute multiple times.\n")
+	fmt.Println("Without proper versions_seen, the aggregator node will execute multiple times.")
 
 	// Create and initialize workflow.
 	workflow := &diamondWorkflow{
