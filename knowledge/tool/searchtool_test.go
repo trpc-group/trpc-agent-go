@@ -170,7 +170,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
 		decl := searchTool.Declaration()
 		require.NotEmpty(t, decl.Name)
-		require.Equal(t, "knowledge_search_with_filter", decl.Name)
+		require.Equal(t, "knowledge_search_with_agentic_filter", decl.Name)
 		require.NotEmpty(t, decl.Description)
 		require.Contains(t, decl.Description, "Available filters")
 		require.Contains(t, decl.Description, "category")
