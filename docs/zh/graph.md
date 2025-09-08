@@ -40,6 +40,10 @@ GraphAgent 实现了 `agent.Agent` 接口，可以：
 - **工具节点**：支持函数调用和外部工具集成
 - **流式执行**：支持实时事件流和进度跟踪
 - **并发安全**：线程安全的图执行
+- **基于检查点的时间旅行**：浏览执行历史并恢复之前的状态
+- **人机协作 (HITL)**：支持带有中断和恢复功能的交互式工作流
+- **原子检查点**：原子存储检查点和待写入数据，确保可靠的恢复
+- **检查点谱系**：跟踪形成执行线程的相关检查点及其父子关系
 
 ## 核心概念
 
@@ -529,7 +533,273 @@ return graph.State{
 
 ## 高级功能
 
-### 1. 自定义 Reducer
+### 1. 中断和恢复（人机协作）
+
+Graph 包通过中断和恢复功能支持人机协作 (HITL) 工作流。这使得工作流可以暂停执行，等待人工输入或审批，然后从中断的确切位置恢复。
+
+#### 基本用法
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// 创建一个可以中断执行等待人工输入的节点
+b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
+    // 使用 Interrupt 助手函数进行干净的中断/恢复处理
+    prompt := map[string]any{
+        "message": "请审批此操作 (yes/no):",
+        "data":    s["some_data"],
+    }
+    
+    // 中断执行并等待用户输入
+    // 键 "approval" 标识这个特定的中断点
+    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    // 当执行继续时处理恢复值
+    approved := false
+    if resumeStr, ok := resumeValue.(string); ok {
+        approved = resumeStr == "yes"
+    }
+    
+    return graph.State{
+        "approved": approved,
+    }, nil
+})
+```
+
+#### 多阶段审批示例
+
+```go
+// 第一个审批阶段
+b.AddNode("first_approval", func(ctx context.Context, s graph.State) (any, error) {
+    prompt := map[string]any{
+        "message": "需要经理审批:",
+        "level": 1,
+    }
+    
+    approval, err := graph.Interrupt(ctx, s, "manager_approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    if approval != "yes" {
+        return graph.State{"rejected_at": "manager"}, nil
+    }
+    
+    return graph.State{"manager_approved": true}, nil
+})
+
+// 第二个审批阶段（仅在第一个审批通过后）
+b.AddNode("second_approval", func(ctx context.Context, s graph.State) (any, error) {
+    if !s["manager_approved"].(bool) {
+        return s, nil // 如果经理未批准则跳过
+    }
+    
+    prompt := map[string]any{
+        "message": "需要总监审批:",
+        "level": 2,
+    }
+    
+    approval, err := graph.Interrupt(ctx, s, "director_approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    return graph.State{
+        "director_approved": approval == "yes",
+        "final_approval": approval == "yes",
+    }, nil
+})
+```
+
+#### 从中断恢复
+
+```go
+// 使用 ResumeMap 携带用户输入恢复执行
+cmd := &graph.Command{
+    ResumeMap: map[string]any{
+        "approval": "yes", // "approval" 中断键的恢复值
+    },
+}
+
+// 通过状态传递命令
+state := graph.State{
+    graph.StateKeyCommand: cmd,
+}
+
+// 使用恢复命令执行
+events, err := executor.Execute(ctx, state, invocation)
+
+// 恢复合并规则：
+// 恢复执行时，如果调用者提供了初始状态中不以下划线（"_"）开头，且在检查点
+// 恢复状态中不存在的键，这些键会被合并进执行状态；框架内部键（以 "_" 开头）
+// 不参与该合并。
+```
+
+#### 恢复助手函数
+
+```go
+// 类型安全的恢复值提取
+if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
+    // 使用恢复值
+}
+
+// 带默认值的恢复
+value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// 检查恢复值是否存在
+if graph.HasResumeValue(state, "approval") {
+    // 处理恢复情况
+}
+
+// 清除恢复值
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+### 2. 基于检查点的时间旅行
+
+检查点提供了"时间旅行"功能，允许您浏览执行历史并恢复之前的状态。这对于调试、审计和实现复杂的恢复策略至关重要。
+
+#### 检查点配置
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+)
+
+// 创建检查点保存器（内存或 SQLite）
+// 内存保存器 - 适合开发/测试
+memorySaver := inmemory.NewSaver()
+
+// SQLite 保存器 - 生产环境的持久化存储
+sqliteSaver, err := sqlite.NewCheckpointSaver("checkpoints.db")
+
+// 创建带检查点支持的执行器
+executor, err := graph.NewExecutor(compiledGraph,
+    graph.WithCheckpointSaver(sqliteSaver),
+    graph.WithCheckpointSaveTimeout(30*time.Second), // 可配置的超时时间
+    graph.WithMaxSteps(100),
+)
+```
+
+#### 检查点谱系和分支
+
+```go
+// 检查点形成谱系 - 一个执行线程
+lineageID := "user-session-123"
+namespace := "" // 可选的命名空间用于分支
+// 注意：当命名空间为空（""）时，Latest/List/GetTuple 将在同一谱系内进行跨
+// 命名空间查询；若希望限定范围，请指定具体命名空间。
+
+// 创建检查点配置
+config := graph.NewCheckpointConfig(lineageID).
+    WithNamespace(namespace)
+
+// 带检查点支持执行
+state := graph.State{
+    "lineage_id": lineageID,
+    "checkpoint_ns": namespace,
+}
+
+events, err := executor.Execute(ctx, state, invocation)
+```
+
+#### 检查点管理
+
+```go
+// 创建检查点管理器
+manager := graph.NewCheckpointManager(saver)
+
+// 列出谱系的所有检查点
+checkpoints, err := manager.ListCheckpoints(ctx, config.ToMap(), &graph.CheckpointFilter{
+    Limit: 10, // 结果按时间倒序（最新优先）
+})
+
+// 获取最新的检查点
+// 当 namespace 为空（""）时，Latest 会在谱系内跨命名空间查询
+latest, err := manager.Latest(ctx, lineageID, namespace)
+if latest != nil && latest.Checkpoint.IsInterrupted() {
+    fmt.Printf("工作流在此处中断: %s\n", latest.Checkpoint.InterruptState.NodeID)
+}
+
+// 获取特定的检查点
+ckptConfig := graph.CreateCheckpointConfig(lineageID, checkpointID, namespace)
+tuple, err := manager.GetTuple(ctx, ckptConfig)
+
+// 删除一个谱系（所有相关检查点）
+err = manager.DeleteLineage(ctx, lineageID)
+```
+
+#### 检查点树可视化
+
+```go
+// 构建显示父子关系的检查点树
+tree, err := manager.GetCheckpointTree(ctx, lineageID)
+
+// 可视化树结构
+for _, node := range tree {
+    indent := strings.Repeat("  ", node.Level)
+    marker := "📍"
+    if node.Checkpoint.IsInterrupted() {
+        marker = "🔴" // 中断的检查点
+    }
+    fmt.Printf("%s%s %s (step=%d)\n", 
+        indent, marker, node.ID[:8], node.Metadata.Step)
+}
+```
+
+#### 从特定检查点恢复
+
+```go
+// 从特定检查点恢复（时间旅行）
+state := graph.State{
+    "lineage_id": lineageID,
+    "checkpoint_id": checkpointID, // 从这个检查点恢复
+}
+
+// 执行器将加载检查点并从那里继续
+events, err := executor.Execute(ctx, state, invocation)
+```
+
+### 3. 检查点存储策略
+
+#### 内存存储
+最适合开发和测试：
+```go
+saver := memory.NewCheckpointSaver()
+```
+
+#### SQLite 存储
+最适合需要持久化的生产环境：
+```go
+saver, err := sqlite.NewCheckpointSaver("workflow.db",
+    sqlite.WithMaxConnections(10),
+    sqlite.WithTimeout(30*time.Second),
+)
+```
+
+#### 检查点元数据
+每个检查点存储：
+- **状态**：该时刻的完整工作流状态
+- **元数据**：来源 (input/loop/interrupt)、步骤编号、时间戳
+- **父 ID**：链接到父检查点形成树结构
+- **中断状态**：如果中断，包含节点 ID、任务 ID 和提示信息
+- **下一节点**：恢复时要执行的节点
+- **通道版本**：用于 Pregel 风格的执行
+- **待写（Pending Writes）**：与检查点原子保存的未提交通道写入，用于恢复时
+  确定性地重建前沿
+- **已见版本（Versions Seen）**：按节点/通道记录的已观测版本，用于避免节点在
+  恢复后重复执行（只有触发通道出现新版本才会重新触发）
+
+### 4. 自定义 Reducer
 
 Reducer 定义如何合并状态更新：
 
@@ -551,7 +821,7 @@ graph.AppendReducer(existing, update) any
 graph.MessageReducer(existing, update) any
 ```
 
-### 2. 命令模式
+### 5. 命令模式
 
 节点可以返回命令来同时更新状态和指定路由：
 
@@ -610,21 +880,27 @@ stateGraph.SetFinishPoint("worker")
 // 无需添加 fanout->worker 的静态边；路由由 GoTo 驱动。
 ```
 
-### 3. 执行器配置
+### 6. 执行器配置
 
 ```go
 import (
+    "time"
     "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/memory"
 )
 
-// 创建带配置的执行器
+// 创建带全面配置的执行器
 executor, err := graph.NewExecutor(compiledGraph,
-    graph.WithChannelBufferSize(1024),
-    graph.WithMaxSteps(50),
+    graph.WithChannelBufferSize(1024),               // 事件通道缓冲区大小
+    graph.WithMaxSteps(50),                           // 最大执行步骤数
+    graph.WithStepTimeout(5*time.Minute),             // 每步骤超时时间
+    graph.WithNodeTimeout(2*time.Minute),             // 每节点执行超时时间
+    graph.WithCheckpointSaver(memorySaver),           // 启用检查点
+    graph.WithCheckpointSaveTimeout(30*time.Second),  // 检查点保存超时时间
 )
 ```
 
-### 4. 虚拟节点和路由
+### 7. 虚拟节点和路由
 
 Graph 包使用虚拟节点来简化工作流的入口和出口：
 
@@ -1340,6 +1616,21 @@ func main() {
 - GraphAgent 专注于工作流执行，不支持自己的子 Agent
 - 这种设计实现了复杂工作流与多 Agent 系统的无缝集成
 
+## 语义与边界：节点级恢复与副作用幂等
+
+在恢复机制上，本框架采用节点级恢复（node-level resume）。这意味着：
+
+- 仅恢复到被中断的节点或其后继节点的执行边界，不会整步回滚整个图。
+- 在任意节点内产生的外部副作用（例如：数据库写入、HTTP 调用、消息发送）必须具备一次语义保障：
+  - 建议封装为幂等操作（例如基于业务幂等键、去重表、Upsert）。
+  - 或使用事务性边界（例如本地事务/分布式事务/Outbox + Relay）。
+- 恢复后会重放 PendingWrites 构建执行前沿；写入顺序使用单调自增序列号保证跨后端一致性。
+
+生产建议：
+- 为所有外部副作用定义幂等键（如 order_id + step_id）。
+- 对不可重复的调用（如三方支付）使用“准备-提交/撤销”模式，确保 at-least-once 与可补偿。
+- 对更新型写入，尽量 Upsert 并记录版本（version）与来源（source），便于审计与追踪。
+
 ## 故障排除
 
 ### 常见错误
@@ -1418,3 +1709,123 @@ eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
 这种模式使得 Graph 包特别适合构建企业级的 AI 工作流应用，提供了良好的可扩展性、可维护性和用户体验。
+
+## 高级特性
+
+### 1. 中断和恢复
+
+Graph 包支持人机交互工作流，通过中断和恢复功能，工作流可以在执行过程中暂停，等待外部输入，然后从精确的中断点恢复执行。
+
+#### 基本用法
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// 创建一个可以中断执行的节点
+b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error) {
+    // 使用 Interrupt 辅助函数进行清晰的中断/恢复处理
+    prompt := map[string]any{
+        "message": "请批准此操作 (yes/no):",
+        "data":    s["some_data"],
+    }
+    
+    // 暂停执行并等待用户输入
+    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
+    if err != nil {
+        return nil, err
+    }
+    
+    // 处理恢复值
+    approved := false
+    if resumeStr, ok := resumeValue.(string); ok {
+        approved = resumeStr == "yes"
+    }
+    
+    return graph.State{
+        "approved": approved,
+    }, nil
+})
+```
+
+#### 从中断恢复
+
+```go
+// 使用用户输入恢复执行
+cmd := &graph.Command{
+    ResumeMap: map[string]any{
+        "approval": "yes", // "approval" 键的恢复值
+    },
+}
+
+state := graph.State{
+    "__command__": cmd,
+}
+
+// 使用恢复命令执行
+events, err := exec.Execute(ctx, state, inv)
+```
+
+#### 恢复辅助函数
+
+```go
+// 类型安全的恢复值提取
+if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
+    // 使用恢复值
+}
+
+// 使用默认值恢复
+value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// 检查恢复值是否存在
+if graph.HasResumeValue(state, "approval") {
+    // 处理恢复情况
+}
+
+// 清除恢复值
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+#### 检查点管理
+
+```go
+// 创建检查点管理器
+manager := graph.NewCheckpointManager(saver)
+
+// 列出检查点
+checkpoints, err := manager.List(ctx, lineageID, &graph.CheckpointFilter{
+    Limit: 10,
+})
+
+// 获取特定检查点
+checkpoint, err := manager.Get(ctx, lineageID, checkpointID)
+```
+
+> **⚠️ 生产环境重要提示**: 强烈建议在生产环境中显式指定 `namespace`，使用稳定的业务标识符（如 `svc:prod:graphX`），而不是依赖自动生成的 `default:{lineage_id}:{timestamp}` 模式。这样可以确保审计追踪的一致性和业务逻辑的清晰性。
+
+> **⚠️ 类型安全提示**: 检查点使用 JSON 深拷贝进行状态持久化，数值类型会被转换为 `float64`。在业务代码中处理状态时，建议使用类型断言或类型转换函数，避免直接断言为 `int`/`int64` 等类型。
+
+### 2. 原子检查点存储
+
+Graph 包提供了原子检查点存储功能，确保检查点和待写入数据的原子性保存，避免数据不一致问题。
+
+#### 特性
+
+- **原子性保存**: 使用 `PutFull` 方法原子保存检查点和待写入数据
+- **深度拷贝**: 安全的深拷贝实现，支持所有数据类型
+- **排序和过滤**: 检查点列表支持时间戳排序和条件过滤
+- **超时控制**: 支持步骤级和节点级超时控制
+
+#### 使用示例
+
+```go
+// 创建执行器时启用检查点
+saver := inmemory.NewSaver()
+exec, err := graph.NewExecutor(g, graph.WithCheckpointSaver(saver))
+
+// 执行器会自动使用原子保存
+// 无需额外配置，所有检查点操作都是原子的
+```

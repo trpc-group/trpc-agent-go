@@ -47,11 +47,14 @@ import (
 	vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpgvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	vectortcvector "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
+
+	// Import PDF reader to register it (optional - comment out if PDF support is not needed).
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 )
 
 // command line flags.
 var (
-	modelName    = flag.String("model", "claude-4-sonnet-20250514", "Name of the model to use")
+	modelName    = flag.String("model", "deepseek-chat", "Name of the model to use")
 	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	embedderType = flag.String("embedder", "openai", "Embedder type: openai, gemini")
 	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory, pgvector, tcvector, elasticsearch")

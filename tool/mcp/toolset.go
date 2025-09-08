@@ -92,7 +92,7 @@ func (ts *ToolSet) Close() error {
 		}
 	}
 
-	log.Info("MCP tool set closed successfully")
+	log.Debug("MCP tool set closed successfully")
 	return nil
 }
 
@@ -190,7 +190,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return nil
 	}
 
-	log.Info("Connecting to MCP server", "transport", m.config.Transport)
+	log.Debug("Connecting to MCP server", "transport", m.config.Transport)
 
 	client, err := m.createClient()
 	if err != nil {
@@ -209,7 +209,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Info("Successfully connected to MCP server")
+	log.Debug("Successfully connected to MCP server")
 	return nil
 }
 
@@ -292,7 +292,7 @@ func (m *mcpSessionManager) initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Info("MCP session initialized",
+	log.Debug("MCP session initialized",
 		"server_name", initResp.ServerInfo.Name,
 		"server_version", initResp.ServerInfo.Version,
 		"protocol_version", initResp.ProtocolVersion)
@@ -383,7 +383,7 @@ func (m *mcpSessionManager) close() error {
 		return nil
 	}
 
-	log.Info("Closing MCP session")
+	log.Debug("Closing MCP session")
 
 	err := m.client.Close()
 	m.connected = false
@@ -395,7 +395,7 @@ func (m *mcpSessionManager) close() error {
 		return fmt.Errorf("failed to close MCP client: %w", err)
 	}
 
-	log.Info("MCP session closed successfully")
+	log.Debug("MCP session closed successfully")
 	return nil
 }
 
