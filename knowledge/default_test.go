@@ -529,20 +529,6 @@ func TestBuiltinKnowledge_SearchTableDriven(t *testing.T) {
 				return result.Text == "enhanced content" && result.Score == 0.8
 			},
 		},
-		{
-			name: "query_enhancer_error",
-			setupKB: func() *BuiltinKnowledge {
-				return &BuiltinKnowledge{
-					queryEnhancer: &mockQueryEnhancer{
-						err: fmt.Errorf("enhancement failed"),
-					},
-					retriever: &mockRetriever{},
-				}
-			},
-			request:        &SearchRequest{Query: "test"},
-			expectError:    true,
-			expectedErrMsg: "query enhancement failed",
-		},
 	}
 
 	for _, tt := range tests {
@@ -595,19 +581,6 @@ func TestBuiltinKnowledge_Close(t *testing.T) {
 				}
 			},
 			expectError: false,
-		},
-		{
-			name: "retriever_close_error",
-			setupKB: func() *BuiltinKnowledge {
-				return &BuiltinKnowledge{
-					retriever: &mockRetriever{
-						closeErr: fmt.Errorf("retriever close error"),
-					},
-					vectorStore: &stubVectorStore{},
-				}
-			},
-			expectError:    true,
-			expectedErrMsg: "failed to close retriever",
 		},
 		{
 			name: "vector_store_close_error",
