@@ -976,6 +976,98 @@ func TestBeforeCallbackShortCircuit(t *testing.T) {
 	require.Equal(t, "ok", res, "expected short-circuit result.")
 }
 
+// TestCommandGoToRouting ensures Command{GoTo} triggers the target node and
+// state Update is applied, without double-triggering via static writes.
+func TestCommandGoToRouting(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("x", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer}).
+		AddField("routed", StateField{Type: reflect.TypeOf(false), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("start", func(ctx context.Context, s State) (any, error) {
+		return &Command{Update: State{"x": 1}, GoTo: "B"}, nil
+	})
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) {
+		return State{"routed": true}, nil
+	})
+	sg.SetEntryPoint("start")
+	sg.AddEdge("start", "B") // Static edge present; GoTo routing should avoid double.
+	sg.SetFinishPoint("B")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-goto"})
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+	// Expect both x update and routed result.
+	if xv, ok := final["x"].(float64); ok {
+		require.Equal(t, float64(1), xv)
+	} else if xi, ok := final["x"].(int); ok {
+		require.Equal(t, 1, xi)
+	} else {
+		t.Fatalf("expected x numeric, got %T", final["x"])
+	}
+	rv, ok := final["routed"].(bool)
+	require.True(t, ok)
+	require.True(t, rv)
+}
+
+// TestAfterCallbackOverride ensures AfterNode callback can override node result.
+func TestAfterCallbackOverride(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("result", StateField{Type: reflect.TypeOf(""), Reducer: DefaultReducer})
+	g := NewStateGraph(schema)
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) { return State{"result": "orig"}, nil })
+	g.SetEntryPoint("N").SetFinishPoint("N")
+
+	cbs := NewNodeCallbacks()
+	cbs.RegisterAfterNode(func(ctx context.Context, cb *NodeCallbackContext, s State, res any, nodeErr error) (any, error) {
+		return State{"result": "override"}, nil
+	})
+	g.WithNodeCallbacks(cbs)
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-after"})
+	require.NoError(t, err)
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+	rv, ok := final["result"].(string)
+	require.True(t, ok)
+	require.Equal(t, "override", rv)
+}
+
 // TestParallelFanOutWithCommands verifies that a node returning []*Command
 // fan-outs into multiple tasks that execute in parallel with isolated overlays
 // and that their results are merged back into the global State via reducers.
