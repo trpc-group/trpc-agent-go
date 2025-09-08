@@ -621,6 +621,12 @@ state := graph.State{
 
 // Execute with resume command
 events, err := executor.Execute(ctx, state, invocation)
+
+// Resume merge rule:
+// When resuming, if the caller provides initial state keys that do not start
+// with an underscore ("_") and are not present in the restored checkpoint
+// state, they will be merged into the execution state. Internal framework
+// keys (prefixed with "_") are ignored for this merge.
 ```
 
 #### Resume Helper Functions
@@ -654,12 +660,12 @@ Checkpoints enable "time travel" capabilities, allowing you to navigate through 
 import (
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/memory"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
 
 // Create checkpoint saver (Memory or SQLite)
 // Memory saver - good for development/testing
-memorySaver := memory.NewCheckpointSaver()
+memorySaver := inmemory.NewSaver()
 
 // SQLite saver - persistent storage for production
 sqliteSaver, err := sqlite.NewCheckpointSaver("checkpoints.db")
@@ -678,6 +684,8 @@ executor, err := graph.NewExecutor(compiledGraph,
 // Checkpoints form a lineage - a thread of execution
 lineageID := "user-session-123"
 namespace := "" // Optional namespace for branching
+// Note: when namespace is empty (""), Latest/List/GetTuple perform cross-namespace
+// queries within the same lineage. Use a concrete namespace to restrict scope.
 
 // Create checkpoint configuration
 config := graph.NewCheckpointConfig(lineageID).
@@ -700,18 +708,19 @@ manager := graph.NewCheckpointManager(saver)
 
 // List all checkpoints for a lineage
 checkpoints, err := manager.ListCheckpoints(ctx, config.ToMap(), &graph.CheckpointFilter{
-    Limit: 10,
-    SortOrder: "desc", // Latest first
+    Limit: 10, // Results are ordered by timestamp (newest first)
 })
 
 // Get the latest checkpoint
+// When namespace is empty (""), Latest searches across namespaces for the lineage
 latest, err := manager.Latest(ctx, lineageID, namespace)
 if latest != nil && latest.Checkpoint.IsInterrupted() {
     fmt.Printf("Workflow interrupted at: %s\n", latest.Checkpoint.InterruptState.NodeID)
 }
 
 // Get specific checkpoint by ID
-checkpoint, err := manager.GetCheckpoint(ctx, checkpointID)
+ckptConfig := graph.CreateCheckpointConfig(lineageID, checkpointID, namespace)
+tuple, err := manager.GetTuple(ctx, ckptConfig)
 
 // Delete a lineage (all its checkpoints)
 err = manager.DeleteLineage(ctx, lineageID)
@@ -721,7 +730,7 @@ err = manager.DeleteLineage(ctx, lineageID)
 
 ```go
 // Build checkpoint tree showing parent-child relationships
-tree, err := manager.BuildCheckpointTree(ctx, lineageID)
+tree, err := manager.GetCheckpointTree(ctx, lineageID)
 
 // Visualize the tree
 for _, node := range tree {
@@ -773,6 +782,10 @@ Each checkpoint stores:
 - **Interrupt State**: If interrupted, contains node ID, task ID, and prompt
 - **Next Nodes**: Nodes to execute when resuming
 - **Channel Versions**: For Pregel-style execution
+- **Pending Writes**: Uncommitted channel writes recorded and atomically stored
+  with checkpoints to deterministically rebuild the frontier during resume
+- **Versions Seen**: Per-node, per-channel version map used to avoid re-running
+  a node if it has already observed the latest version of its trigger channels
 
 ### 4. Custom Reducer
 
@@ -861,7 +874,7 @@ stateGraph.SetFinishPoint("worker")
 import (
     "time"
     "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/memory"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
 
 // Create executor with comprehensive configuration
@@ -870,7 +883,7 @@ executor, err := graph.NewExecutor(compiledGraph,
     graph.WithMaxSteps(50),                  // Maximum execution steps
     graph.WithStepTimeout(5*time.Minute),    // Timeout per step
     graph.WithNodeTimeout(2*time.Minute),    // Timeout per node execution
-    graph.WithCheckpointSaver(memorySaver),  // Enable checkpointing
+    graph.WithCheckpointSaver(inmemory.NewSaver()),  // Enable checkpointing
     graph.WithCheckpointSaveTimeout(30*time.Second), // Checkpoint save timeout
 )
 ```

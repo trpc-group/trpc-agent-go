@@ -30,8 +30,8 @@ func TestInMemoryCheckpointSaver(t *testing.T) {
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 1},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -40,7 +40,7 @@ func TestInMemoryCheckpointSaver(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -99,8 +99,8 @@ func TestInMemoryCheckpointSaverList(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 
@@ -108,7 +108,7 @@ func TestInMemoryCheckpointSaverList(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		_, err := saver.Put(ctx, req)
 		require.NoError(t, err)
@@ -136,8 +136,8 @@ func TestInMemoryCheckpointSaverWrites(t *testing.T) {
 	// Create a checkpoint first.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 0},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -145,7 +145,7 @@ func TestInMemoryCheckpointSaverWrites(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -187,8 +187,8 @@ func TestInMemoryCheckpointSaverDeleteLineage(t *testing.T) {
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 42},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -196,7 +196,7 @@ func TestInMemoryCheckpointSaverDeleteLineage(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -227,8 +227,8 @@ func TestInMemoryCheckpointSaverMaxCheckpoints(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 
@@ -236,7 +236,7 @@ func TestInMemoryCheckpointSaverMaxCheckpoints(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		_, err := saver.Put(ctx, req)
 		require.NoError(t, err)
@@ -263,8 +263,8 @@ func TestInMemoryCheckpointSaverConcurrentAccess(t *testing.T) {
 
 			checkpoint := graph.NewCheckpoint(
 				map[string]any{"counter": id},
-				map[string]any{"counter": id + 1},
-				map[string]map[string]any{},
+				map[string]int64{"counter": int64(id + 1)},
+				map[string]map[string]int64{},
 			)
 			metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, id)
 
@@ -272,7 +272,7 @@ func TestInMemoryCheckpointSaverConcurrentAccess(t *testing.T) {
 				Config:      config,
 				Checkpoint:  checkpoint,
 				Metadata:    metadata,
-				NewVersions: map[string]any{"counter": id + 1},
+				NewVersions: map[string]int64{"counter": int64(id + 1)},
 			}
 			_, err := saver.Put(ctx, req)
 			assert.NoError(t, err)
@@ -300,8 +300,8 @@ func TestInMemoryCheckpointSaverClose(t *testing.T) {
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 42},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -309,7 +309,7 @@ func TestInMemoryCheckpointSaverClose(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -340,8 +340,8 @@ func TestInMemoryCheckpointSaverPutFull(t *testing.T) {
 	// Create a checkpoint with parent ID.
 	parentCheckpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 0},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	parentCheckpoint.ID = "parent-checkpoint-id"
 
@@ -357,8 +357,8 @@ func TestInMemoryCheckpointSaverPutFull(t *testing.T) {
 	// Create child checkpoint with parent reference.
 	childCheckpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 1},
-		map[string]any{"counter": 2},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 2},
+		map[string]map[string]int64{},
 	)
 	childCheckpoint.ParentCheckpointID = parentCheckpoint.ID
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, 1)
@@ -384,7 +384,7 @@ func TestInMemoryCheckpointSaverPutFull(t *testing.T) {
 		Config:        config,
 		Checkpoint:    childCheckpoint,
 		Metadata:      metadata,
-		NewVersions:   map[string]any{"counter": 2},
+		NewVersions:   map[string]int64{"counter": 2},
 		PendingWrites: pendingWrites,
 	}
 	updatedConfig, err := saver.PutFull(ctx, fullReq)
@@ -441,8 +441,8 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 
@@ -450,7 +450,7 @@ func TestInMemoryCheckpointSaverGetLatest(t *testing.T) {
 			Config:      graph.CreateCheckpointConfig(lineageID, "", namespace),
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		lastConfig, err = saver.Put(ctx, req)
 		require.NoError(t, err)
@@ -487,8 +487,8 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 
 		// Add extra metadata to some checkpoints.
@@ -511,7 +511,7 @@ func TestInMemoryCheckpointSaverFilters(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		cfg, err := saver.Put(ctx, req)
 		require.NoError(t, err)

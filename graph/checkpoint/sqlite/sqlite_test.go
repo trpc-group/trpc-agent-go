@@ -56,8 +56,8 @@ func TestSQLiteCheckpointSaver(t *testing.T) {
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 1},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -66,7 +66,7 @@ func TestSQLiteCheckpointSaver(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -116,8 +116,8 @@ func TestSQLiteCheckpointSaverList(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 
@@ -125,7 +125,7 @@ func TestSQLiteCheckpointSaverList(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		_, err := saver.Put(ctx, req)
 		require.NoError(t, err)
@@ -158,8 +158,8 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 	// Create a checkpoint first.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 0},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -167,7 +167,7 @@ func TestSQLiteCheckpointSaverWrites(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -214,8 +214,8 @@ func TestSQLiteCheckpointSaverDeleteLineage(t *testing.T) {
 	// Create a checkpoint.
 	checkpoint := graph.NewCheckpoint(
 		map[string]any{"counter": 42},
-		map[string]any{"counter": 1},
-		map[string]map[string]any{},
+		map[string]int64{"counter": 1},
+		map[string]map[string]int64{},
 	)
 	metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceInput, -1)
 
@@ -223,7 +223,7 @@ func TestSQLiteCheckpointSaverDeleteLineage(t *testing.T) {
 		Config:      config,
 		Checkpoint:  checkpoint,
 		Metadata:    metadata,
-		NewVersions: map[string]any{"counter": 1},
+		NewVersions: map[string]int64{"counter": 1},
 	}
 	updatedConfig, err := saver.Put(ctx, req)
 	require.NoError(t, err)
@@ -264,8 +264,8 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 		}
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 
@@ -273,7 +273,7 @@ func TestSQLiteCheckpointSaverLatestCheckpoint(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		updatedConfig, err := saver.Put(ctx, req)
 		require.NoError(t, err)
@@ -312,8 +312,8 @@ func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		checkpoint := graph.NewCheckpoint(
 			map[string]any{"step": i},
-			map[string]any{"step": i + 1},
-			map[string]map[string]any{},
+			map[string]int64{"step": int64(i + 1)},
+			map[string]map[string]int64{},
 		)
 		metadata := graph.NewCheckpointMetadata(graph.CheckpointSourceLoop, i)
 		metadata.Extra["type"] = "test"
@@ -325,7 +325,7 @@ func TestSQLiteCheckpointSaverMetadataFilter(t *testing.T) {
 			Config:      config,
 			Checkpoint:  checkpoint,
 			Metadata:    metadata,
-			NewVersions: map[string]any{"step": i + 1},
+			NewVersions: map[string]int64{"step": int64(i + 1)},
 		}
 		_, err := saver.Put(ctx, req)
 		require.NoError(t, err)

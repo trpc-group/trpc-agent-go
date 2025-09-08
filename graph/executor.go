@@ -65,9 +65,10 @@ type ExecutorOptions struct {
 	ChannelBufferSize int
 	// MaxSteps is the maximum number of steps for graph execution.
 	MaxSteps int
-	// StepTimeout is the timeout for each step (default: 5m).
+	// StepTimeout is the timeout for each step (default: 0 = no timeout).
 	StepTimeout time.Duration
-	// NodeTimeout is the timeout for individual node execution (default: StepTimeout/2, min 1s).
+	// NodeTimeout is the timeout for individual node execution
+	// (default: derived from StepTimeout/2 when StepTimeout>0; otherwise no timeout).
 	NodeTimeout time.Duration
 	// CheckpointSaveTimeout is the timeout for saving checkpoints (default: 10s).
 	CheckpointSaveTimeout time.Duration
@@ -429,11 +430,11 @@ func (e *Executor) executeGraph(
 		execStateKeys = append(execStateKeys, k)
 	}
 	// Initialize versionsSeen - restore from checkpoint if available.
-	versionsSeen := make(map[string]map[string]any)
+	versionsSeen := make(map[string]map[string]int64)
 	if resumed && e.lastCheckpoint != nil && e.lastCheckpoint.VersionsSeen != nil {
 		// Deep copy versionsSeen from checkpoint.
 		for nodeID, nodeVersions := range e.lastCheckpoint.VersionsSeen {
-			versionsSeen[nodeID] = make(map[string]any)
+			versionsSeen[nodeID] = make(map[string]int64)
 			for channel, version := range nodeVersions {
 				versionsSeen[nodeID][channel] = version
 			}
@@ -581,13 +582,13 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 	}
 
 	// Create channel versions (simple incrementing integers for now).
-	channelVersions := make(map[string]any)
+	channelVersions := make(map[string]int64)
 	for k := range state {
 		channelVersions[k] = 1 // This should be managed by the graph execution.
 	}
 
 	// Create versions seen (simplified for now).
-	versionsSeen := make(map[string]map[string]any)
+	versionsSeen := make(map[string]map[string]int64)
 
 	// Create checkpoint.
 	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
@@ -667,7 +668,7 @@ func (e *Executor) createCheckpointAndSave(
 	execCtx.pendingMu.Unlock()
 
 	// Track new versions for channels that were updated.
-	newVersions := make(map[string]any)
+	newVersions := make(map[string]int64)
 	channels := e.graph.getAllChannels()
 	for channelName, channel := range channels {
 		if channel.IsAvailable() {
@@ -1530,7 +1531,7 @@ func (e *Executor) handleNodeResult(
 
 	// Process channel writes, unless this is a fan-out case to avoid double trigger.
 	if !fanOut && len(t.Writes) > 0 {
-		e.processChannelWrites(execCtx, t.Writes)
+		e.processChannelWrites(execCtx, t.TaskID, t.Writes)
 	}
 
 	return nil
@@ -1626,7 +1627,7 @@ func (e *Executor) handleCommandRouting(
 	ctx context.Context, execCtx *ExecutionContext, targetNode string,
 ) {
 	// Create trigger channel for the target node (including self).
-	triggerChannel := fmt.Sprintf("trigger:%s", targetNode)
+	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
 
 	// Write to the channel to trigger the target node.
@@ -1640,7 +1641,7 @@ func (e *Executor) handleCommandRouting(
 }
 
 // processChannelWrites processes the channel writes for a task.
-func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []channelWriteEntry) {
+func (e *Executor) processChannelWrites(execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
 	for _, write := range writes {
 		ch, _ := e.graph.getChannel(write.Channel)
 		if ch != nil {
@@ -1653,8 +1654,8 @@ func (e *Executor) processChannelWrites(execCtx *ExecutionContext, writes []chan
 			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
 				Channel:  write.Channel,
 				Value:    write.Value,
-				TaskID:   execCtx.InvocationID, // Use invocation ID as task ID for now
-				Sequence: execCtx.seq.Add(1),   // Use atomic increment for deterministic replay
+				TaskID:   taskID,
+				Sequence: execCtx.seq.Add(1), // Use atomic increment for deterministic replay
 			})
 			execCtx.pendingMu.Unlock()
 		}
@@ -1865,7 +1866,7 @@ func (e *Executor) processConditionalResult(
 	}
 
 	// Create and trigger the target channel.
-	channelName := fmt.Sprintf("branch:to:%s", target)
+	channelName := fmt.Sprintf("%s%s", ChannelBranchPrefix, target)
 	e.graph.addChannel(channelName, channel.BehaviorLastValue)
 	e.graph.addNodeTrigger(channelName, target)
 
@@ -1998,7 +1999,7 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	}
 
 	// Create channel versions from current channel states
-	channelVersions := make(map[string]any)
+	channelVersions := make(map[string]int64)
 	channels := e.graph.getAllChannels()
 	for channelName, channel := range channels {
 		if channel.IsAvailable() {
@@ -2007,11 +2008,11 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	}
 
 	// Create versions seen from execution context.
-	versionsSeen := make(map[string]map[string]any)
+	versionsSeen := make(map[string]map[string]int64)
 	if execCtx != nil {
 		execCtx.versionsSeenMu.RLock()
 		for nodeID, nodeVersions := range execCtx.versionsSeen {
-			versionsSeen[nodeID] = make(map[string]any)
+			versionsSeen[nodeID] = make(map[string]int64)
 			for channel, version := range nodeVersions {
 				versionsSeen[nodeID][channel] = version
 			}
@@ -2103,7 +2104,7 @@ func (e *Executor) updateVersionsSeen(execCtx *ExecutionContext, nodeID string, 
 
 	// Initialize map for node if needed.
 	if execCtx.versionsSeen[nodeID] == nil {
-		execCtx.versionsSeen[nodeID] = make(map[string]any)
+		execCtx.versionsSeen[nodeID] = make(map[string]int64)
 	}
 
 	// Record current version of all trigger channels this node has seen.
@@ -2144,32 +2145,11 @@ func (e *Executor) shouldTriggerNode(
 		return true
 	}
 
-	// Convert seenVersion to int64 for comparison.
-	var seenVersionInt int64
-	switch v := seenVersion.(type) {
-	case int64:
-		seenVersionInt = v
-	case int:
-		seenVersionInt = int64(v)
-	case float64:
-		seenVersionInt = int64(v)
-	case json.Number:
-		if i, err := v.Int64(); err == nil {
-			seenVersionInt = i
-		} else {
-			// Error converting - assume should trigger.
-			return true
-		}
-	default:
-		// Unknown type - assume should trigger.
-		return true
-	}
-
 	// Only trigger if channel has newer version than what node has seen.
-	shouldTrigger := currentVersion > seenVersionInt
+	shouldTrigger := currentVersion > seenVersion
 	if shouldTrigger {
 		log.Debugf("Node %s should trigger: channel %s version %d > seen %d",
-			nodeID, channelName, currentVersion, seenVersionInt)
+			nodeID, channelName, currentVersion, seenVersion)
 	} else {
 		log.Debugf("Node %s already saw channel %s version %d", nodeID, channelName, currentVersion)
 	}

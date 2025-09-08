@@ -26,7 +26,9 @@ const (
 
 // Channel conventions (input channel prefix)
 const (
-	ChannelInputPrefix = "input:"
+	ChannelInputPrefix   = "input:"
+	ChannelTriggerPrefix = "trigger:"
+	ChannelBranchPrefix  = "branch:to:"
 )
 
 // Event metadata keys (used in checkpoint events).

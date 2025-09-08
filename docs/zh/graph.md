@@ -634,6 +634,11 @@ state := graph.State{
 
 // 使用恢复命令执行
 events, err := executor.Execute(ctx, state, invocation)
+
+// 恢复合并规则：
+// 恢复执行时，如果调用者提供了初始状态中不以下划线（"_"）开头，且在检查点
+// 恢复状态中不存在的键，这些键会被合并进执行状态；框架内部键（以 "_" 开头）
+// 不参与该合并。
 ```
 
 #### 恢复助手函数
@@ -667,12 +672,12 @@ graph.ClearAllResumeValues(state)
 import (
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/memory"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
 )
 
 // 创建检查点保存器（内存或 SQLite）
 // 内存保存器 - 适合开发/测试
-memorySaver := memory.NewCheckpointSaver()
+memorySaver := inmemory.NewSaver()
 
 // SQLite 保存器 - 生产环境的持久化存储
 sqliteSaver, err := sqlite.NewCheckpointSaver("checkpoints.db")
@@ -691,6 +696,8 @@ executor, err := graph.NewExecutor(compiledGraph,
 // 检查点形成谱系 - 一个执行线程
 lineageID := "user-session-123"
 namespace := "" // 可选的命名空间用于分支
+// 注意：当命名空间为空（""）时，Latest/List/GetTuple 将在同一谱系内进行跨
+// 命名空间查询；若希望限定范围，请指定具体命名空间。
 
 // 创建检查点配置
 config := graph.NewCheckpointConfig(lineageID).
@@ -713,18 +720,19 @@ manager := graph.NewCheckpointManager(saver)
 
 // 列出谱系的所有检查点
 checkpoints, err := manager.ListCheckpoints(ctx, config.ToMap(), &graph.CheckpointFilter{
-    Limit: 10,
-    SortOrder: "desc", // 最新的优先
+    Limit: 10, // 结果按时间倒序（最新优先）
 })
 
 // 获取最新的检查点
+// 当 namespace 为空（""）时，Latest 会在谱系内跨命名空间查询
 latest, err := manager.Latest(ctx, lineageID, namespace)
 if latest != nil && latest.Checkpoint.IsInterrupted() {
     fmt.Printf("工作流在此处中断: %s\n", latest.Checkpoint.InterruptState.NodeID)
 }
 
 // 获取特定的检查点
-checkpoint, err := manager.GetCheckpoint(ctx, checkpointID)
+ckptConfig := graph.CreateCheckpointConfig(lineageID, checkpointID, namespace)
+tuple, err := manager.GetTuple(ctx, ckptConfig)
 
 // 删除一个谱系（所有相关检查点）
 err = manager.DeleteLineage(ctx, lineageID)
@@ -734,7 +742,7 @@ err = manager.DeleteLineage(ctx, lineageID)
 
 ```go
 // 构建显示父子关系的检查点树
-tree, err := manager.BuildCheckpointTree(ctx, lineageID)
+tree, err := manager.GetCheckpointTree(ctx, lineageID)
 
 // 可视化树结构
 for _, node := range tree {
@@ -786,6 +794,10 @@ saver, err := sqlite.NewCheckpointSaver("workflow.db",
 - **中断状态**：如果中断，包含节点 ID、任务 ID 和提示信息
 - **下一节点**：恢复时要执行的节点
 - **通道版本**：用于 Pregel 风格的执行
+- **待写（Pending Writes）**：与检查点原子保存的未提交通道写入，用于恢复时
+  确定性地重建前沿
+- **已见版本（Versions Seen）**：按节点/通道记录的已观测版本，用于避免节点在
+  恢复后重复执行（只有触发通道出现新版本才会重新触发）
 
 ### 4. 自定义 Reducer
 

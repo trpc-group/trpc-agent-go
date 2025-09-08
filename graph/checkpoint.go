@@ -63,9 +63,9 @@ type Checkpoint struct {
 	// ChannelValues contains the values of channels at checkpoint time.
 	ChannelValues map[string]any `json:"channel_values"`
 	// ChannelVersions contains the versions of channels at checkpoint time.
-	ChannelVersions map[string]any `json:"channel_versions"`
+	ChannelVersions map[string]int64 `json:"channel_versions"`
 	// VersionsSeen tracks which versions each node has seen.
-	VersionsSeen map[string]map[string]any `json:"versions_seen"`
+	VersionsSeen map[string]map[string]int64 `json:"versions_seen"`
 	// ParentCheckpointID is the ID of the parent checkpoint (for branching).
 	ParentCheckpointID string `json:"parent_checkpoint_id,omitempty"`
 	// UpdatedChannels lists channels updated in this checkpoint.
@@ -151,7 +151,7 @@ type PutRequest struct {
 	Config      map[string]any
 	Checkpoint  *Checkpoint
 	Metadata    *CheckpointMetadata
-	NewVersions map[string]any
+	NewVersions map[string]int64
 }
 
 // PutWritesRequest contains all data needed to store writes.
@@ -167,7 +167,7 @@ type PutFullRequest struct {
 	Config        map[string]any
 	Checkpoint    *Checkpoint
 	Metadata      *CheckpointMetadata
-	NewVersions   map[string]any
+	NewVersions   map[string]int64
 	PendingWrites []PendingWrite
 }
 
@@ -236,17 +236,17 @@ type CheckpointConfig struct {
 // NewCheckpoint creates a new checkpoint with the given data.
 func NewCheckpoint(
 	channelValues map[string]any,
-	channelVersions map[string]any,
-	versionsSeen map[string]map[string]any,
+	channelVersions map[string]int64,
+	versionsSeen map[string]map[string]int64,
 ) *Checkpoint {
 	if channelValues == nil {
 		channelValues = make(map[string]any)
 	}
 	if channelVersions == nil {
-		channelVersions = make(map[string]any)
+		channelVersions = make(map[string]int64)
 	}
 	if versionsSeen == nil {
-		versionsSeen = make(map[string]map[string]any)
+		versionsSeen = make(map[string]map[string]int64)
 	}
 	return &Checkpoint{
 		Version:         CheckpointVersion,
@@ -375,12 +375,19 @@ func (c *Checkpoint) Copy() *Checkpoint {
 	channelValues := deepCopyMap(c.ChannelValues)
 
 	// Deep copy channel versions.
-	channelVersions := deepCopyMap(c.ChannelVersions)
+	channelVersions := make(map[string]int64, len(c.ChannelVersions))
+	for k, v := range c.ChannelVersions {
+		channelVersions[k] = v
+	}
 
 	// Deep copy versions seen.
-	versionsSeen := make(map[string]map[string]any, len(c.VersionsSeen))
+	versionsSeen := make(map[string]map[string]int64, len(c.VersionsSeen))
 	for k, v := range c.VersionsSeen {
-		versionsSeen[k] = deepCopyMap(v)
+		inner := make(map[string]int64, len(v))
+		for kk, vv := range v {
+			inner[kk] = vv
+		}
+		versionsSeen[k] = inner
 	}
 
 	// Deep copy updated channels.
@@ -545,13 +552,13 @@ func (cm *CheckpointManager) CreateCheckpoint(
 	maps.Copy(channelValues, state)
 
 	// Create channel versions (simple incrementing integers for now).
-	channelVersions := make(map[string]any)
+	channelVersions := make(map[string]int64)
 	for k := range state {
-		channelVersions[k] = DefaultChannelVersion
+		channelVersions[k] = int64(DefaultChannelVersion)
 	}
 
 	// Create versions seen (simplified for now).
-	versionsSeen := make(map[string]map[string]any)
+	versionsSeen := make(map[string]map[string]int64)
 
 	// Create checkpoint.
 	checkpoint := NewCheckpoint(channelValues, channelVersions, versionsSeen)
@@ -708,11 +715,17 @@ func (cm *CheckpointManager) BranchFrom(
 	newCheckpoint := sourceTuple.Checkpoint.Fork() // Fork creates a new ID.
 	newCheckpoint.Timestamp = time.Now().UTC()
 
+	// Determine step from source if available.
+	var step int
+	if sourceTuple.Metadata != nil {
+		step = sourceTuple.Metadata.Step
+	}
+
 	// Store the new checkpoint.
 	req := PutFullRequest{
 		Config:        newConfig,
 		Checkpoint:    newCheckpoint,
-		Metadata:      NewCheckpointMetadata(CheckpointSourceFork, 0),
+		Metadata:      NewCheckpointMetadata(CheckpointSourceFork, step),
 		NewVersions:   newCheckpoint.ChannelVersions,
 		PendingWrites: []PendingWrite{},
 	}
@@ -726,7 +739,7 @@ func (cm *CheckpointManager) BranchFrom(
 	return &CheckpointTuple{
 		Config:     updatedConfig,
 		Checkpoint: newCheckpoint,
-		Metadata:   NewCheckpointMetadata(CheckpointSourceFork, 0),
+		Metadata:   NewCheckpointMetadata(CheckpointSourceFork, step),
 	}, nil
 }
 
@@ -743,6 +756,7 @@ func (cm *CheckpointManager) BranchToNewLineage(
 	// Get the source checkpoint.
 	// If namespace is empty and we're getting latest, we need to search across all namespaces.
 	var sourceCheckpoint *Checkpoint
+	var sourceStep int
 	var err error
 	if sourceCheckpointID == "" {
 		// When getting latest without a specific checkpoint ID, search all namespaces if namespace is empty.
@@ -763,9 +777,11 @@ func (cm *CheckpointManager) BranchToNewLineage(
 			return nil, fmt.Errorf("no checkpoints found in source lineage")
 		}
 		sourceCheckpoint = tuple.Checkpoint
+		if tuple.Metadata != nil {
+			sourceStep = tuple.Metadata.Step
+		}
 	} else {
-		// When we have a specific checkpoint ID but potentially empty namespace,
-		// we need to handle this specially.
+		// Fetch full tuple to get step as well.
 		searchConfig := map[string]any{
 			CfgKeyConfigurable: map[string]any{
 				CfgKeyLineageID:    sourceLineageID,
@@ -775,12 +791,16 @@ func (cm *CheckpointManager) BranchToNewLineage(
 		if sourceNamespace != "" {
 			searchConfig[CfgKeyConfigurable].(map[string]any)[CfgKeyCheckpointNS] = sourceNamespace
 		}
-		sourceCheckpoint, err = cm.saver.Get(ctx, searchConfig)
+		tuple, err := cm.saver.GetTuple(ctx, searchConfig)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get source checkpoint: %w", err)
 		}
-		if sourceCheckpoint == nil {
+		if tuple == nil || tuple.Checkpoint == nil {
 			return nil, fmt.Errorf("source checkpoint not found")
+		}
+		sourceCheckpoint = tuple.Checkpoint
+		if tuple.Metadata != nil {
+			sourceStep = tuple.Metadata.Step
 		}
 	}
 
@@ -790,7 +810,7 @@ func (cm *CheckpointManager) BranchToNewLineage(
 	newCheckpoint.Timestamp = time.Now().UTC()
 
 	// Create metadata with source information.
-	metadata := NewCheckpointMetadata(CheckpointSourceFork, 0)
+	metadata := NewCheckpointMetadata(CheckpointSourceFork, sourceStep)
 	metadata.Extra["source_lineage"] = sourceLineageID
 	metadata.Extra["source_checkpoint"] = sourceCheckpointID
 	metadata.Extra["source_namespace"] = sourceNamespace

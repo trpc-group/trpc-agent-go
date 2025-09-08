@@ -120,42 +120,85 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, errors.New("lineage_id is required")
 	}
 
-	// Query checkpoint data.
-	checkpointJSON, metadataJSON, parentID, resolvedID, err := s.queryCheckpointData(
-		ctx, lineageID, checkpointNS, checkpointID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, err
-	}
+    // Query checkpoint data (supports cross-namespace when checkpointNS is empty).
+    row, err := s.queryCheckpointData(ctx, lineageID, checkpointNS, checkpointID)
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, nil
+        }
+        return nil, err
+    }
 
-	// Build the tuple from retrieved data.
-	return s.buildTuple(ctx, lineageID, checkpointNS, resolvedID, parentID,
-		checkpointJSON, metadataJSON)
+    // Determine the namespace to use when searching across namespaces.
+    nsForTuple := checkpointNS
+    if checkpointNS == "" {
+        nsForTuple = row.namespace
+    }
+
+    // Build the tuple from retrieved data.
+    return s.buildTuple(ctx, lineageID, nsForTuple, row.checkpointID, row.parentID,
+        row.checkpointJSON, row.metadataJSON)
 }
 
 // queryCheckpointData retrieves checkpoint data from database.
+type checkpointRow struct {
+    checkpointJSON []byte
+    metadataJSON   []byte
+    parentID       string
+    checkpointID   string
+    namespace      string
+}
+
 func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS,
-	checkpointID string) (checkpointJSON, metadataJSON []byte, parentID, resolvedID string, err error) {
+    checkpointID string) (*checkpointRow, error) {
 
 	if checkpointID == "" {
-		// Get latest checkpoint.
-		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
-		err = row.Scan(&checkpointJSON, &metadataJSON, &parentID, &resolvedID)
-		if err != nil {
-			return nil, nil, "", "", fmt.Errorf("select latest: %w", err)
-		}
-		return checkpointJSON, metadataJSON, parentID, resolvedID, nil
-	}
+		// Get latest checkpoint. When namespace is empty, search across all namespaces.
+        if checkpointNS == "" {
+            // Cross-namespace latest
+            row := s.db.QueryRowContext(ctx,
+                "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? ORDER BY ts DESC LIMIT 1",
+                lineageID,
+            )
+            var r checkpointRow
+            if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID, &r.namespace); err != nil {
+                return nil, fmt.Errorf("select latest (cross-ns): %w", err)
+            }
+            return &r, nil
+        }
+        // Latest within specific namespace
+        row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
+        var r checkpointRow
+        if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID); err != nil {
+            return nil, fmt.Errorf("select latest: %w", err)
+        }
+        r.namespace = checkpointNS
+        return &r, nil
+    }
 
-	// Get specific checkpoint.
-	row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
-	err = row.Scan(&checkpointJSON, &metadataJSON, &parentID)
-	if err != nil {
-		return nil, nil, "", "", fmt.Errorf("select by id: %w", err)
-	}
-	return checkpointJSON, metadataJSON, parentID, checkpointID, nil
+    // Get specific checkpoint.
+    if checkpointNS == "" {
+        // Cross-namespace lookup by ID
+        row := s.db.QueryRowContext(ctx,
+            "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? AND checkpoint_id = ? LIMIT 1",
+            lineageID, checkpointID,
+        )
+        var r checkpointRow
+        if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace); err != nil {
+            return nil, fmt.Errorf("select by id (cross-ns): %w", err)
+        }
+        r.checkpointID = checkpointID
+        return &r, nil
+    }
+
+    row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
+    var r checkpointRow
+    if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID); err != nil {
+        return nil, fmt.Errorf("select by id: %w", err)
+    }
+    r.checkpointID = checkpointID
+    r.namespace = checkpointNS
+    return &r, nil
 }
 
 // buildTuple constructs a CheckpointTuple from raw data.
@@ -233,9 +276,19 @@ func (s *Saver) getBeforeTimestamp(ctx context.Context, lineageID, checkpointNS 
 		return nil, nil
 	}
 
-	row := s.db.QueryRowContext(ctx,
-		"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
-		lineageID, checkpointNS, beforeID)
+	var row *sql.Row
+	if checkpointNS == "" {
+		// Cross-namespace lookup for before timestamp
+		row = s.db.QueryRowContext(ctx,
+			"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_id=? ORDER BY ts DESC LIMIT 1",
+			lineageID, beforeID,
+		)
+	} else {
+		row = s.db.QueryRowContext(ctx,
+			"SELECT ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=? AND checkpoint_id=? LIMIT 1",
+			lineageID, checkpointNS, beforeID,
+		)
+	}
 	var ts int64
 	if err := row.Scan(&ts); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -250,8 +303,17 @@ func (s *Saver) getBeforeTimestamp(ctx context.Context, lineageID, checkpointNS 
 func (s *Saver) executeListQuery(ctx context.Context, lineageID, checkpointNS string,
 	beforeTs *int64, filter *graph.CheckpointFilter) (*sql.Rows, error) {
 
-	q := "SELECT checkpoint_id, ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=?"
-	args := []any{lineageID, checkpointNS}
+	var q string
+	var args []any
+
+	if checkpointNS == "" {
+		// Cross-namespace listing
+		q = "SELECT checkpoint_id, checkpoint_ns, ts FROM checkpoints WHERE lineage_id=?"
+		args = []any{lineageID}
+	} else {
+		q = "SELECT checkpoint_id, ts FROM checkpoints WHERE lineage_id=? AND checkpoint_ns=?"
+		args = []any{lineageID, checkpointNS}
+	}
 
 	if beforeTs != nil {
 		q += " AND ts < ?"
@@ -312,6 +374,19 @@ func (s *Saver) processSingleRow(ctx context.Context, rows *sql.Rows,
 
 	var checkpointID string
 	var ts int64
+	if checkpointNS == "" {
+		var ns string
+		if err := rows.Scan(&checkpointID, &ns, &ts); err != nil {
+			return nil, fmt.Errorf("scan checkpoint (cross-ns): %w", err)
+		}
+		cfg := graph.CreateCheckpointConfig(lineageID, checkpointID, ns)
+		tuple, err := s.GetTuple(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return tuple, nil
+	}
+
 	if err := rows.Scan(&checkpointID, &ts); err != nil {
 		return nil, fmt.Errorf("scan checkpoint: %w", err)
 	}

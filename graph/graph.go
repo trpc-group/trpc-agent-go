@@ -222,7 +222,7 @@ type ExecutionContext struct {
 
 	// versionsSeen tracks which channel versions each node has seen.
 	// Map from nodeID -> channelName -> version number.
-	versionsSeen   map[string]map[string]any
+	versionsSeen   map[string]map[string]int64
 	versionsSeenMu sync.RWMutex
 }
 
