@@ -222,7 +222,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Build update using updateBuilder
-	ub := newUpdateBuilder(vs.option.table, doc.ID, vs.option.language)
+	ub := newUpdateBuilder(vs.option.table, doc.ID)
 
 	if doc.Name != "" {
 		ub.addField("name", doc.Name)
@@ -281,13 +281,13 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 
 	if !vs.option.enableTSVector &&
-		(query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
+		(query.SearchMode == vectorstore.SearchModeKeyword ||
+			query.SearchMode == vectorstore.SearchModeHybrid) {
 		log.Infof("pgvector: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
-		} else {
-			return vs.searchByFilter(ctx, query)
 		}
+		return vs.searchByFilter(ctx, query)
 	}
 
 	// default is hybrid search

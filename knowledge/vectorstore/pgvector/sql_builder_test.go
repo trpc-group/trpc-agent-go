@@ -173,7 +173,7 @@ func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			ub := newUpdateBuilder(tt.table, tt.id, "english")
+			ub := newUpdateBuilder(tt.table, tt.id)
 
 			// Test initial state
 			assert.Equal(suite.T(), tt.table, ub.table)

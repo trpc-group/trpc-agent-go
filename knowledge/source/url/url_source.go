@@ -208,3 +208,12 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 	}
 	s.metadata[key] = value
 }
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
+}

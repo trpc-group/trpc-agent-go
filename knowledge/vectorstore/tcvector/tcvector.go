@@ -83,7 +83,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb new rpc client pool: %w", err)
 	}
-	if err := initVectorDB(c, option); err != nil {
+	if err = initVectorDB(c, option); err != nil {
 		return nil, err
 	}
 
@@ -114,8 +114,7 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		return fmt.Errorf("tcvectordb check collection exists: %w", err)
 	}
 	if exists {
-		log.Infof("tcvectordb collection %s already exists", options.collection)
-		return nil
+		return checkIndexes(db, options)
 	}
 
 	indexes := tcvectordb.Indexes{}
@@ -124,6 +123,9 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		IndexType: tcvectordb.PRIMARY,
 		FieldType: tcvectordb.String,
 	})
+
+	// Add filter indexes for configured filterFields
+	indexes.FilterIndex = append(indexes.FilterIndex, options.filterIndexes...)
 	indexes.VectorIndex = append(indexes.VectorIndex, tcvectordb.VectorIndex{
 		FilterIndex: tcvectordb.FilterIndex{
 			FieldName: fieldVector,
@@ -162,6 +164,65 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 	return nil
 }
 
+func checkIndexes(db *tcvectordb.Database, option options) error {
+	collection, err := db.DescribeCollection(context.Background(), option.collection)
+	if err != nil {
+		return fmt.Errorf("tcvectordb describe collection: %w", err)
+	}
+	if collection == nil {
+		return fmt.Errorf("tcvectordb collection %s not found", option.collection)
+	}
+	if len(collection.Indexes.VectorIndex) == 0 {
+		return fmt.Errorf("tcvectordb collection %s vector index not found, not trpc-agent-go collection, you can adjust vector index by yourself", option.collection)
+	}
+	vectorIndexExist := false
+	for _, index := range collection.Indexes.VectorIndex {
+		if index.FieldName == fieldVector {
+			vectorIndexExist = true
+		}
+	}
+	if !vectorIndexExist {
+		return fmt.Errorf("tcvectordb collection %s vector index [%s] not found, not trpc-agent-go collection, you can adjust vector index by yourself", option.collection, fieldVector)
+	}
+	if option.enableTSVector {
+		sparseVectorIndexExist := false
+		for _, index := range collection.Indexes.SparseVectorIndex {
+			if index.FieldName == fieldSparseVector {
+				sparseVectorIndexExist = true
+			}
+		}
+		if !sparseVectorIndexExist {
+			return fmt.Errorf("tcvectordb collection %s sparse vector index [%s] not found, not trpc-agent-go collection, you can adjust sparse vector index by yourself", option.collection, fieldSparseVector)
+		}
+	}
+
+	existingFilterIndex := make(map[string]struct{})
+	filterIndexToAdd := make([]tcvectordb.FilterIndex, 0)
+	for _, index := range collection.Indexes.FilterIndex {
+		existingFilterIndex[index.FieldName] = struct{}{}
+	}
+	for _, index := range option.filterIndexes {
+		if _, exists := existingFilterIndex[index.FieldName]; exists {
+			continue
+		}
+		filterIndexToAdd = append(filterIndexToAdd, index)
+	}
+	if len(filterIndexToAdd) == 0 {
+		return nil
+	}
+
+	log.Infof("tcvectordb collection %s filter index need to add %v", option.collection, filterIndexToAdd)
+	addIndexParam := &tcvectordb.AddIndexParams{
+		FilterIndexs:     filterIndexToAdd,
+		BuildExistedData: &[]bool{true}[0],
+	}
+	if err := collection.AddIndex(context.Background(), addIndexParam); err != nil {
+		return fmt.Errorf("tcvectordb add indexes: %w", err)
+	}
+	log.Infof("tcvectordb collection %s add filter indexes success, filter indexes: %v", option.collection, filterIndexToAdd)
+	return nil
+}
+
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc.ID == "" {
@@ -178,6 +239,13 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		fieldCreatedAt: {Val: now},
 		fieldUpdatedAt: {Val: now},
 		fieldMetadata:  {Val: doc.Metadata},
+	}
+
+	// Extract filterField data from metadata and add as separate fields
+	for _, filterField := range vs.option.filterFields {
+		if value, exists := doc.Metadata[filterField]; exists {
+			fields[filterField] = tcvectordb.Field{Val: value}
+		}
 	}
 
 	tcDoc := tcvectordb.Document{
@@ -270,6 +338,12 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 	if len(doc.Metadata) > 0 {
 		updateFields[fieldMetadata] = tcvectordb.Field{Val: doc.Metadata}
+		// Extract filterField data from metadata and update as separate fields
+		for _, filterField := range vs.option.filterFields {
+			if value, exists := doc.Metadata[filterField]; exists {
+				updateFields[filterField] = tcvectordb.Field{Val: value}
+			}
+		}
 	}
 
 	updateParams := tcvectordb.UpdateDocumentParams{}
@@ -320,9 +394,8 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
 		if len(query.Vector) > 0 {
 			return vs.searchByVector(ctx, query)
-		} else {
-			return vs.searchByFilter(ctx, query)
 		}
+		return vs.searchByFilter(ctx, query)
 	}
 
 	// default is hybrid search
@@ -353,8 +426,13 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	if limit <= 0 {
 		limit = defaultLimit
 	}
+	var cond *tcvectordb.Filter
+	if query.Filter != nil {
+		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	}
 
 	queryParams := tcvectordb.SearchDocumentParams{
+		Filter:         cond,
 		Limit:          int64(limit),
 		RetrieveVector: true,
 	}
@@ -390,12 +468,17 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	if limit <= 0 {
 		limit = defaultLimit
 	}
+	var cond *tcvectordb.Filter
+	if query.Filter != nil {
+		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	}
 
 	querySparseVector, err := vs.sparseEncoder.EncodeQueries([]string{query.Query})
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
 	queryParams := tcvectordb.FullTextSearchParams{
+		Filter:         cond,
 		Limit:          &limit,
 		RetrieveVector: true,
 		Match: &tcvectordb.FullTextSearchMatchOption{
@@ -435,6 +518,11 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		limit = defaultLimit
 	}
 
+	var cond *tcvectordb.Filter
+	if query.Filter != nil {
+		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	}
+
 	// Encode the query text using BM25 for sparse vector
 	querySparseVector, err := vs.sparseEncoder.EncodeQuery(query.Query)
 	if err != nil {
@@ -458,6 +546,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 				Data:      querySparseVector,
 			},
 		},
+		Filter: cond,
 		// Use weighted rerank
 		Rerank: &tcvectordb.RerankOption{
 			Method:    tcvectordb.RerankWeighted,
@@ -480,14 +569,19 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 
 // filterSearch performs filter-only search when no vector or keyword is provided
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	if query.Filter == nil || len(query.Filter.IDs) == 0 {
+	if query.Filter == nil {
 		return &vectorstore.SearchResult{Results: make([]*vectorstore.ScoredDocument, 0)}, nil
 	}
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
+	var cond *tcvectordb.Filter
+	if query.Filter != nil {
+		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	}
 	queryParams := tcvectordb.QueryDocumentParams{
+		Filter:         cond,
 		Limit:          int64(limit),
 		RetrieveVector: true,
 	}
@@ -495,7 +589,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		ctx,
 		vs.option.database,
 		vs.option.collection,
-		query.Filter.IDs,
+		nil,
 		&queryParams,
 	)
 	if err != nil {
@@ -603,4 +697,19 @@ func covertToVector32(embedding []float64) []float32 {
 		vector32[i] = float32(v)
 	}
 	return vector32
+}
+
+// getCondFromQuery converts filter to tcvectordb filter
+func getCondFromQuery(ids []string, filter map[string]interface{}) *tcvectordb.Filter {
+	if filter == nil && len(ids) == 0 {
+		return nil
+	}
+	cond := tcvectordb.NewFilter("")
+	for k, v := range filter {
+		cond.And(fmt.Sprintf(`%s = "%v"`, k, v))
+	}
+	if len(ids) > 0 {
+		cond.And(tcvectordb.In(fieldID, ids))
+	}
+	return cond
 }

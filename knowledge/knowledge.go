@@ -45,6 +45,8 @@ type SearchRequest struct {
 
 	// MinScore sets minimum relevance score threshold (optional).
 	MinScore float64
+
+	SearchFilter *SearchFilter
 }
 
 // ConversationMessage represents a message in conversation history.
@@ -61,4 +63,13 @@ type SearchResult struct {
 
 	// Text is the document content for agent context.
 	Text string
+}
+
+// SearchFilter represents filtering criteria for vector search.
+type SearchFilter struct {
+	// DocumentIDs filters results to specific document DocumentIDs.
+	DocumentIDs []string
+
+	// Metadata filters results by metadata key-value pairs.
+	Metadata map[string]interface{}
 }
