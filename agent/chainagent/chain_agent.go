@@ -213,7 +213,7 @@ func (a *ChainAgent) executeSubAgents(
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
-		// Reset invcation information in context
+		// Reset invocation information in context
 		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
 
 		// Run the sub-agent.

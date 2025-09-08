@@ -185,7 +185,7 @@ func (a *ParallelAgent) startSubAgents(
 			// Create branch invocation for this sub-agent.
 			branchInvocation := a.createBranchInvocation(sa, invocation)
 
-			// Reset invcation information in context
+			// Reset invocation information in context
 			branchAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
 
 			// Run the sub-agent.

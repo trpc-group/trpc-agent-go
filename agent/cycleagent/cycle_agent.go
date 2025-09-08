@@ -246,7 +246,7 @@ func (a *CycleAgent) runSubAgent(
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
-	// Reset invcation information in context
+	// Reset invocation information in context
 	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
 
 	// Run the sub-agent.
