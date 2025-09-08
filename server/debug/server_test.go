@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -73,17 +74,11 @@ func TestNew(t *testing.T) {
 	}
 
 	server := New(agents)
-	if server == nil {
-		t.Fatal("New() returned nil")
-	}
+	assert.NotNilf(t, server, "New() returned nil")
 
-	if len(server.agents) != 1 {
-		t.Errorf("expected 1 agent, got %d", len(server.agents))
-	}
+	assert.Equal(t, 1, len(server.agents), "expected 1 agent, got %d", len(server.agents))
 
-	if server.agents["test-agent"] == nil {
-		t.Error("agent not found in server")
-	}
+	assert.NotNilf(t, server.agents["test-agent"], "agent not found in server")
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -95,9 +90,7 @@ func TestNew_WithOptions(t *testing.T) {
 	customSessionSvc := &mockSessionService{}
 	server := New(agents, WithSessionService(customSessionSvc))
 
-	if server.sessionSvc != customSessionSvc {
-		t.Error("custom session service not set")
-	}
+	assert.Equal(t, customSessionSvc, server.sessionSvc, "custom session service not set")
 }
 
 func TestServer_Handler(t *testing.T) {
@@ -108,9 +101,7 @@ func TestServer_Handler(t *testing.T) {
 	server := New(agents)
 	handler := server.Handler()
 
-	if handler == nil {
-		t.Fatal("Handler() returned nil")
-	}
+	assert.NotNilf(t, handler, "Handler() returned nil")
 }
 
 func TestServer_handleListApps(t *testing.T) {
@@ -125,18 +116,14 @@ func TestServer_handleListApps(t *testing.T) {
 
 	server.handleListApps(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
+	assert.Equal(t, http.StatusOK, w.Code, "expected status 200, got %d", w.Code)
 
 	var apps []string
 	if err := json.Unmarshal(w.Body.Bytes(), &apps); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if len(apps) != 2 {
-		t.Errorf("expected 2 apps, got %d", len(apps))
-	}
+	assert.Equal(t, 2, len(apps), "expected 2 apps, got %d", len(apps))
 
 	// Check that both agent names are present.
 	found := make(map[string]bool)
@@ -144,9 +131,7 @@ func TestServer_handleListApps(t *testing.T) {
 		found[app] = true
 	}
 
-	if !found["agent1"] || !found["agent2"] {
-		t.Error("expected agent names not found in response")
-	}
+	assert.True(t, found["agent1"] && found["agent2"], "expected agent names not found in response")
 }
 
 func TestServer_handleCreateSession(t *testing.T) {
@@ -166,26 +151,18 @@ func TestServer_handleCreateSession(t *testing.T) {
 
 	server.handleCreateSession(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
+	assert.Equal(t, http.StatusOK, w.Code, "expected status 200, got %d", w.Code)
 
 	var session schema.ADKSession
 	if err := json.Unmarshal(w.Body.Bytes(), &session); err != nil {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if session.AppName != "test-agent" {
-		t.Errorf("expected appName 'test-agent', got '%s'", session.AppName)
-	}
+	assert.Equal(t, "test-agent", session.AppName, "expected appName 'test-agent', got '%s'", session.AppName)
 
-	if session.UserID != "test-user" {
-		t.Errorf("expected userId 'test-user', got '%s'", session.UserID)
-	}
+	assert.Equal(t, "test-user", session.UserID, "expected userId 'test-user', got '%s'", session.UserID)
 
-	if session.ID == "" {
-		t.Error("expected non-empty session ID")
-	}
+	assert.NotEmpty(t, session.ID, "expected non-empty session ID")
 }
 
 func TestServer_handleRun(t *testing.T) {
@@ -229,14 +206,10 @@ func TestServer_handleRun(t *testing.T) {
 	if w.Code == http.StatusOK {
 		// If it succeeded, verify the response structure.
 		var response map[string]interface{}
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("failed to unmarshal response: %v", err)
-		}
+		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response), "failed to unmarshal response: %v")
 	} else {
 		// Expected to fail due to model configuration, but should not be 500.
-		if w.Code == http.StatusInternalServerError {
-			t.Errorf("unexpected internal server error: %s", w.Body.String())
-		}
+		assert.Equal(t, http.StatusInternalServerError, w.Code, "expected status 500, got %d", w.Code)
 	}
 }
 
@@ -250,13 +223,9 @@ func TestConvertContentToMessage(t *testing.T) {
 
 	message := convertContentToMessage(content)
 
-	if message.Role != model.RoleUser {
-		t.Errorf("expected role 'user', got '%s'", message.Role)
-	}
+	assert.Equal(t, model.RoleUser, message.Role, "expected role 'user', got '%s'", message.Role)
 
-	if message.Content != "Hello, world!" {
-		t.Errorf("expected content 'Hello, world!', got '%s'", message.Content)
-	}
+	assert.Equal(t, "Hello, world!", message.Content, "expected content 'Hello, world!', got '%s'", message.Content)
 }
 
 func TestConvertContentToMessage_Func(t *testing.T) {
@@ -277,22 +246,14 @@ func TestConvertContentToMessage_Func(t *testing.T) {
 
 	message := convertContentToMessage(content)
 
-	if message.Role != model.RoleAssistant {
-		t.Errorf("expected role 'assistant', got '%s'", message.Role)
-	}
+	assert.Equal(t, model.RoleAssistant, message.Role, "expected role 'assistant', got '%s'", message.Role)
 
-	if len(message.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call, got %d", len(message.ToolCalls))
-	}
+	assert.Equal(t, 1, len(message.ToolCalls), "expected 1 tool call, got %d", len(message.ToolCalls))
 
 	toolCall := message.ToolCalls[0]
-	if toolCall.Type != "function" {
-		t.Errorf("expected type 'function', got '%s'", toolCall.Type)
-	}
+	assert.Equal(t, "function", toolCall.Type, "expected type 'function', got '%s'", toolCall.Type)
 
-	if toolCall.Function.Name != "test_function" {
-		t.Errorf("expected function name 'test_function', got '%s'", toolCall.Function.Name)
-	}
+	assert.Equal(t, "test_function", toolCall.Function.Name, "expected function name 'test_function', got '%s'", toolCall.Function.Name)
 }
 
 func TestConvertSessionToADKFormat(t *testing.T) {
@@ -308,29 +269,17 @@ func TestConvertSessionToADKFormat(t *testing.T) {
 
 	adkSession := convertSessionToADKFormat(sess)
 
-	if adkSession.ID != "test-session-id" {
-		t.Errorf("expected ID 'test-session-id', got '%s'", adkSession.ID)
-	}
+	assert.Equal(t, "test-session-id", adkSession.ID, "expected ID 'test-session-id', got '%s'", adkSession.ID)
 
-	if adkSession.AppName != "test-app" {
-		t.Errorf("expected AppName 'test-app', got '%s'", adkSession.AppName)
-	}
+	assert.Equal(t, "test-app", adkSession.AppName, "expected AppName 'test-app', got '%s'", adkSession.AppName)
 
-	if adkSession.UserID != "test-user" {
-		t.Errorf("expected UserID 'test-user', got '%s'", adkSession.UserID)
-	}
+	assert.Equal(t, "test-user", adkSession.UserID, "expected UserID 'test-user', got '%s'", adkSession.UserID)
 
-	if adkSession.CreateTime == 0 {
-		t.Error("expected non-zero CreateTime")
-	}
+	assert.NotZero(t, adkSession.CreateTime, "expected non-zero CreateTime")
 
-	if adkSession.LastUpdateTime == 0 {
-		t.Error("expected non-zero LastUpdateTime")
-	}
+	assert.NotZero(t, adkSession.LastUpdateTime, "expected non-zero LastUpdateTime")
 
-	if len(adkSession.State) != 1 {
-		t.Errorf("expected 1 state entry, got %d", len(adkSession.State))
-	}
+	assert.Equal(t, 1, len(adkSession.State), "expected 1 state entry, got %d", len(adkSession.State))
 }
 
 // mockSessionService is a simple mock session service for testing.

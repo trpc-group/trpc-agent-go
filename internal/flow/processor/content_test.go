@@ -12,6 +12,8 @@ package processor
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -59,14 +61,10 @@ func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
 			// Check that the content matches expected.
-			if len(convertedEvent.Choices) == 0 {
-				t.Fatal("Expected converted event to have choices")
-			}
+			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
 
 			actualContent := convertedEvent.Choices[0].Message.Content
-			if actualContent != tt.expectedPrefix {
-				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
-			}
+			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}
 }
@@ -148,14 +146,10 @@ func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
-			if len(convertedEvent.Choices) == 0 {
-				t.Fatal("Expected converted event to have choices")
-			}
+			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
 
 			actualContent := convertedEvent.Choices[0].Message.Content
-			if actualContent != tt.expectedPrefix {
-				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
-			}
+			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}
 }
@@ -200,14 +194,128 @@ func TestContentRequestProcessor_ToolResponses(t *testing.T) {
 
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
-			if len(convertedEvent.Choices) == 0 {
-				t.Fatal("Expected converted event to have choices")
-			}
+			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
 
 			actualContent := convertedEvent.Choices[0].Message.Content
-			if actualContent != tt.expectedPrefix {
-				t.Errorf("Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
-			}
+			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}
+}
+
+// Tests for getContents (aka generate content pipeline).
+func TestContentRequestProcessor_getContents_Basic(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	events := []event.Event{
+		{
+			Author: "user",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "hello world",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	msgs := p.getContents("main", events, "agent-a")
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, model.RoleUser, msgs[0].Role)
+	assert.Equal(t, "hello world", msgs[0].Content)
+}
+
+func TestContentRequestProcessor_getContents_ForeignAgentConvert(t *testing.T) {
+	tests := []struct {
+		name      string
+		addPrefix bool
+		wantSub   string
+	}{
+		{
+			name:      "with prefix",
+			addPrefix: true,
+			wantSub:   "For context:",
+		},
+		{
+			name:      "no prefix",
+			addPrefix: false,
+			wantSub:   "foreign reply",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor(
+				WithAddContextPrefix(tt.addPrefix),
+			)
+
+			// Event authored by another agent should be converted to
+			// user message content.
+			events := []event.Event{
+				{
+					Author: "agent-b",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleAssistant,
+									Content: "foreign reply",
+								},
+							},
+						},
+					},
+				},
+			}
+
+			msgs := p.getContents("main", events, "agent-a")
+			assert.Len(t, msgs, 1)
+			assert.Equal(t, model.RoleUser, msgs[0].Role)
+			assert.NotEmpty(t, msgs[0].Content)
+			assert.Contains(t, msgs[0].Content, tt.wantSub)
+		})
+	}
+}
+
+func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	events := []event.Event{
+		{
+			Author: "user",
+			Branch: "main",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "kept",
+						},
+					},
+				},
+			},
+		},
+		{
+			Author: "user",
+			Branch: "dev",
+			Response: &model.Response{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "filtered",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Current branch main/feature should include events whose branch is
+	// prefix of the current, i.e. "main" only.
+	msgs := p.getContents("main/feature", events, "agent-a")
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, "kept", msgs[0].Content)
 }

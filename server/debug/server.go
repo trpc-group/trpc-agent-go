@@ -550,6 +550,8 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 	adkEvents := make([]map[string]interface{}, 0, len(s.Events))
 	for _, e := range s.Events {
+		// Create a local copy to avoid implicit memory aliasing.
+		e := e
 		if ev := convertEventToADKFormat(&e, false); ev != nil {
 			adkEvents = append(adkEvents, ev)
 		}

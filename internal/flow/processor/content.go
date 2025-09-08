@@ -134,6 +134,11 @@ func (p *ContentRequestProcessor) getContents(
 	// Parse the events, leaving the contents and the function calls and
 	// responses from the current agent.
 	for _, evt := range events {
+		// Create a local copy to avoid implicit memory aliasing.
+		// This bug is fixed in go 1.22.
+		// See: https://tip.golang.org/doc/go1.22#language
+		evt := evt
+
 		// Skip events without content, or generated neither by user nor by model
 		// or has empty text. E.g. events purely for mutating session states.
 		if !p.hasValidContent(&evt) {
@@ -358,6 +363,9 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 
 	// Map function response IDs to event indices.
 	for i, evt := range events {
+		// Create a local copy to avoid implicit memory aliasing.
+		evt := evt
+
 		if p.isFunctionResponseEvent(&evt) {
 			responseIDs := p.getFunctionResponseIDs(&evt)
 			for responseID := range responseIDs {
@@ -368,6 +376,9 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 
 	var resultEvents []event.Event
 	for _, evt := range events {
+		// Create a local copy to avoid implicit memory aliasing.
+		evt := evt
+
 		if p.isFunctionResponseEvent(&evt) {
 			// Function response should be handled with function call below.
 			continue
