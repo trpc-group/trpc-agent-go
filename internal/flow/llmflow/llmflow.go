@@ -233,13 +233,7 @@ func (f *Flow) processStreamingResponses(
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
-		if invocation.EndInvocation {
-			log.Debugf("Invocation %s ended after after-actions; stopping streaming",
-				invocation.InvocationID)
-			break
-		}
 	}
-
 	return lastEvent, nil
 }
 
