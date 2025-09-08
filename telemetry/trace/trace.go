@@ -14,7 +14,9 @@ package trace
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -166,6 +168,38 @@ func tracesEndpoint(protocol string) string {
 	}
 }
 
+// parseEndpointURL parses a full URL and returns the host:port and path components.
+// For example, "http://localhost:3000/api/public/otel" returns "localhost:3000" and "/api/public/otel".
+// If no scheme is provided, "http://" will be assumed.
+func parseEndpointURL(endpointURL string) (endpoint, urlPath string, err error) {
+	// Add missing imports at the top
+	originalURL := endpointURL
+
+	// If the URL doesn't start with a scheme, add http:// as default
+	if !strings.HasPrefix(endpointURL, "http://") && !strings.HasPrefix(endpointURL, "https://") {
+		endpointURL = "http://" + endpointURL
+	}
+
+	u, err := url.Parse(endpointURL)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse URL %q: %w", originalURL, err)
+	}
+
+	// Extract host:port
+	endpoint = u.Host
+	if endpoint == "" {
+		return "", "", fmt.Errorf("no host found in URL %q", originalURL)
+	}
+
+	// Extract path
+	urlPath = u.Path
+	if urlPath == "" {
+		urlPath = "/"
+	}
+
+	return endpoint, urlPath, nil
+}
+
 // Initializes an OTLP gRPC exporter, and configures the corresponding trace provider.
 func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, opts *options) (
 	func(context.Context) error, error) {
@@ -202,7 +236,15 @@ func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 		otlptracehttp.WithHeaders(opts.headers),
 	}
 	if opts.tracesEndpointURL != "" {
-		otelOpts = append(otelOpts, otlptracehttp.WithEndpoint(opts.tracesEndpointURL))
+		// Parse the full URL to extract host:port and path components
+		endpoint, urlPath, err := parseEndpointURL(opts.tracesEndpointURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse endpoint URL %q: %w", opts.tracesEndpointURL, err)
+		}
+		otelOpts = append(otelOpts,
+			otlptracehttp.WithEndpoint(endpoint),
+			otlptracehttp.WithURLPath(urlPath),
+		)
 	}
 	traceExporter, err := otlptracehttp.New(ctx, otelOpts...)
 	if err != nil {
@@ -216,6 +258,7 @@ func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 func setupTracerProvider(res *resource.Resource, traceExporter sdktrace.SpanExporter) func(context.Context) error {
 	// Register the trace exporter with a TracerProvider, using a batch
 	// span processor to aggregate spans before export.
+
 	bsp := sdktrace.NewBatchSpanProcessor(traceExporter)
 	tracerProvider := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),

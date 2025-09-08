@@ -57,7 +57,7 @@ var (
 func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String("gen_ai.system", "trpc.go.agent"),
-		attribute.String("gen_ai.operation.name", "tool.execute"),
+		attribute.String("gen_ai.operation.name", "execute_tool"),
 		attribute.String("gen_ai.tool.name", declaration.Name),
 		attribute.String("gen_ai.tool.description", declaration.Description),
 		attribute.String(KeyEventID, rspEvent.ID),
@@ -88,7 +88,7 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String("gen_ai.system", "trpc.go.agent"),
-		attribute.String("gen_ai.operation.name", "tool.execute"),
+		attribute.String("gen_ai.operation.name", "execute_tool"),
 		attribute.String("gen_ai.tool.name", "(merged tools)"),
 		attribute.String("gen_ai.tool.description", "(merged tools)"),
 		attribute.String(KeyEventID, rspEvent.ID),
@@ -114,6 +114,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	span.SetAttributes(
 		attribute.String("gen_ai.system", "trpc.go.agent"),
+		attribute.String("gen_ai.operation.name", "call_llm"),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeySessionID, invoke.Session.ID),
 		attribute.String(KeyEventID, eventID),
