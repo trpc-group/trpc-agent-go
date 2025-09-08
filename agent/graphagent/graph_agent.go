@@ -167,7 +167,39 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Setup invocation.
+	ga.setupInvocation(invocation)
+
 	// Prepare initial state.
+	initialState := ga.createInitialState(invocation)
+
+	// Execute the graph.
+	if invocation.AgentCallbacks != nil {
+		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("before agent callback failed: %w", err)
+		}
+		if customResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			// Create an event from the custom response.
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			eventChan <- customEvent
+			close(eventChan)
+			return eventChan, nil
+		}
+	}
+	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.AgentCallbacks != nil {
+		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
+	}
+	return eventChan, nil
+}
+
+func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.State {
 	var initialState graph.State
 
 	if ga.initialState != nil {
@@ -206,42 +238,20 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 	// Add parent agent to state so agent nodes can access sub-agents.
 	initialState[graph.StateKeyParentAgent] = ga
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
-		invocation.AgentCallbacks = ga.agentCallbacks
-	}
-	// Set model callbacks if available.
-	if invocation.ModelCallbacks == nil && ga.modelCallbacks != nil {
-		invocation.ModelCallbacks = ga.modelCallbacks
-	}
-	// Set tool callbacks if available.
-	if invocation.ToolCallbacks == nil && ga.toolCallbacks != nil {
-		invocation.ToolCallbacks = ga.toolCallbacks
-	}
-	// Execute the graph.
-	if invocation.AgentCallbacks != nil {
-		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-		if err != nil {
-			return nil, fmt.Errorf("before agent callback failed: %w", err)
-		}
-		if customResponse != nil {
-			// Create a channel that returns the custom response and then closes.
-			eventChan := make(chan *event.Event, 1)
-			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			eventChan <- customEvent
-			close(eventChan)
-			return eventChan, nil
-		}
-	}
-	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
-	if err != nil {
-		return nil, err
-	}
-	if invocation.AgentCallbacks != nil {
-		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
-	}
-	return eventChan, nil
+
+	return initialState
+}
+
+func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent and agent name.
+	invocation.Agent = ga
+	invocation.AgentName = ga.name
+	// Set agent callbacks.
+	invocation.AgentCallbacks = ga.agentCallbacks
+	// Set model callbacks.
+	invocation.ModelCallbacks = ga.modelCallbacks
+	// Set tool callbacks.
+	invocation.ToolCallbacks = ga.toolCallbacks
 }
 
 // Tools returns the list of tools that this agent has access to.
