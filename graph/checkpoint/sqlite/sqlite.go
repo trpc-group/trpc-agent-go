@@ -120,85 +120,85 @@ func (s *Saver) GetTuple(ctx context.Context, config map[string]any) (*graph.Che
 		return nil, errors.New("lineage_id is required")
 	}
 
-    // Query checkpoint data (supports cross-namespace when checkpointNS is empty).
-    row, err := s.queryCheckpointData(ctx, lineageID, checkpointNS, checkpointID)
-    if err != nil {
-        if errors.Is(err, sql.ErrNoRows) {
-            return nil, nil
-        }
-        return nil, err
-    }
+	// Query checkpoint data (supports cross-namespace when checkpointNS is empty).
+	row, err := s.queryCheckpointData(ctx, lineageID, checkpointNS, checkpointID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
 
-    // Determine the namespace to use when searching across namespaces.
-    nsForTuple := checkpointNS
-    if checkpointNS == "" {
-        nsForTuple = row.namespace
-    }
+	// Determine the namespace to use when searching across namespaces.
+	nsForTuple := checkpointNS
+	if checkpointNS == "" {
+		nsForTuple = row.namespace
+	}
 
-    // Build the tuple from retrieved data.
-    return s.buildTuple(ctx, lineageID, nsForTuple, row.checkpointID, row.parentID,
-        row.checkpointJSON, row.metadataJSON)
+	// Build the tuple from retrieved data.
+	return s.buildTuple(ctx, lineageID, nsForTuple, row.checkpointID, row.parentID,
+		row.checkpointJSON, row.metadataJSON)
 }
 
 // queryCheckpointData retrieves checkpoint data from database.
 type checkpointRow struct {
-    checkpointJSON []byte
-    metadataJSON   []byte
-    parentID       string
-    checkpointID   string
-    namespace      string
+	checkpointJSON []byte
+	metadataJSON   []byte
+	parentID       string
+	checkpointID   string
+	namespace      string
 }
 
 func (s *Saver) queryCheckpointData(ctx context.Context, lineageID, checkpointNS,
-    checkpointID string) (*checkpointRow, error) {
+	checkpointID string) (*checkpointRow, error) {
 
 	if checkpointID == "" {
 		// Get latest checkpoint. When namespace is empty, search across all namespaces.
-        if checkpointNS == "" {
-            // Cross-namespace latest
-            row := s.db.QueryRowContext(ctx,
-                "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? ORDER BY ts DESC LIMIT 1",
-                lineageID,
-            )
-            var r checkpointRow
-            if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID, &r.namespace); err != nil {
-                return nil, fmt.Errorf("select latest (cross-ns): %w", err)
-            }
-            return &r, nil
-        }
-        // Latest within specific namespace
-        row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
-        var r checkpointRow
-        if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID); err != nil {
-            return nil, fmt.Errorf("select latest: %w", err)
-        }
-        r.namespace = checkpointNS
-        return &r, nil
-    }
+		if checkpointNS == "" {
+			// Cross-namespace latest
+			row := s.db.QueryRowContext(ctx,
+				"SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? ORDER BY ts DESC LIMIT 1",
+				lineageID,
+			)
+			var r checkpointRow
+			if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID, &r.namespace); err != nil {
+				return nil, fmt.Errorf("select latest (cross-ns): %w", err)
+			}
+			return &r, nil
+		}
+		// Latest within specific namespace
+		row := s.db.QueryRowContext(ctx, sqliteSelectLatest, lineageID, checkpointNS)
+		var r checkpointRow
+		if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.checkpointID); err != nil {
+			return nil, fmt.Errorf("select latest: %w", err)
+		}
+		r.namespace = checkpointNS
+		return &r, nil
+	}
 
-    // Get specific checkpoint.
-    if checkpointNS == "" {
-        // Cross-namespace lookup by ID
-        row := s.db.QueryRowContext(ctx,
-            "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? AND checkpoint_id = ? LIMIT 1",
-            lineageID, checkpointID,
-        )
-        var r checkpointRow
-        if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace); err != nil {
-            return nil, fmt.Errorf("select by id (cross-ns): %w", err)
-        }
-        r.checkpointID = checkpointID
-        return &r, nil
-    }
+	// Get specific checkpoint.
+	if checkpointNS == "" {
+		// Cross-namespace lookup by ID
+		row := s.db.QueryRowContext(ctx,
+			"SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns FROM checkpoints WHERE lineage_id = ? AND checkpoint_id = ? LIMIT 1",
+			lineageID, checkpointID,
+		)
+		var r checkpointRow
+		if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID, &r.namespace); err != nil {
+			return nil, fmt.Errorf("select by id (cross-ns): %w", err)
+		}
+		r.checkpointID = checkpointID
+		return &r, nil
+	}
 
-    row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
-    var r checkpointRow
-    if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID); err != nil {
-        return nil, fmt.Errorf("select by id: %w", err)
-    }
-    r.checkpointID = checkpointID
-    r.namespace = checkpointNS
-    return &r, nil
+	row := s.db.QueryRowContext(ctx, sqliteSelectByID, lineageID, checkpointNS, checkpointID)
+	var r checkpointRow
+	if err := row.Scan(&r.checkpointJSON, &r.metadataJSON, &r.parentID); err != nil {
+		return nil, fmt.Errorf("select by id: %w", err)
+	}
+	r.checkpointID = checkpointID
+	r.namespace = checkpointNS
+	return &r, nil
 }
 
 // buildTuple constructs a CheckpointTuple from raw data.
