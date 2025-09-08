@@ -36,6 +36,7 @@ func NewFunctionCallResponseProcessor(f *Flow) flow.ResponseProcessor {
 func (p *functionCallResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
@@ -43,11 +44,12 @@ func (p *functionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	// Build tools map from the agent at response-time (matches request-time tools).
+	// Prefer tools from the concrete request (supports dynamic tool filtering),
+	// which were prepared during preprocess and possibly modified by callbacks.
 	tools := make(map[string]tool.Tool)
-	if invocation.Agent != nil {
-		for _, t := range invocation.Agent.Tools() {
-			tools[t.Declaration().Name] = t
+	if req != nil && req.Tools != nil {
+		for name, t := range req.Tools {
+			tools[name] = t
 		}
 	}
 

@@ -38,7 +38,7 @@ func TestOutputResponseProcessor_StructuredOutputTypedEvent(t *testing.T) {
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{Content: string(b)}}}}
 
 	ch := make(chan *event.Event, 1)
-	proc.ProcessResponse(ctx, inv, rsp, ch)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
 
 	select {
 	case evt := <-ch:

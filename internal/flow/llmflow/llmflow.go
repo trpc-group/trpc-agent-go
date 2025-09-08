@@ -223,7 +223,7 @@ func (f *Flow) processStreamingResponses(
 		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
 
 		// 6. Run unified response processors pipeline
-		f.runResponseProcessors(ctx, invocation, response, eventChan)
+		f.runResponseProcessors(ctx, invocation, llmRequest, response, eventChan)
 
 		// If there were tool calls, ensure outer loop sees a non-final event
 		if f.hasToolCalls(response) {
@@ -968,6 +968,7 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 func (f *Flow) runResponseProcessors(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	llmRequest *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
@@ -975,7 +976,7 @@ func (f *Flow) runResponseProcessors(
 		return
 	}
 	for _, processor := range f.responseProcessors {
-		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
+		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
 	}
 }
 
