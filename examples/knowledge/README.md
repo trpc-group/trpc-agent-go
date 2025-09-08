@@ -8,6 +8,7 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 - **Elasticsearch Version Support**: Multi-version compatibility (v7, v8, v9) with automatic version selection
 - **Multiple Embedder Support**: OpenAI and Gemini embedder options
 - **Rich Knowledge Sources**: Supports file, directory, URL, and auto-detection sources
+- **Agentic Filtered Search**: Intelligent metadata-based filtering using natural language queries
 - **Interactive Chat Interface**: Features knowledge search with multi-turn conversation support
 - **Streaming Response**: Real-time streaming of LLM responses with tool execution feedback
 - **Session Management**: Maintains conversation history and supports new session creation
@@ -16,25 +17,54 @@ This example demonstrates how to integrate a knowledge base with the LLM agent i
 
 The following sources are automatically loaded when you run `main.go`:
 
-| Source Type | Name / File                                                                  | What It Covers                                       |
-| ----------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
-| File        | `./data/llm.md`                                                              | Large-Language-Model (LLM) basics.                   |
-| Directory   | `./dir/`                                                                     | Various documents in the directory.                  |
-| URL         | <https://en.wikipedia.org/wiki/Byte-pair_encoding>                           | Byte-pair encoding (BPE) algorithm.                  |
-| Auto Source | Mixed content (Cloud computing blurb, N-gram Wikipedia page, project README) | Cloud computing overview and N-gram language models. |
+| Source Type | Name / File | What It Covers | Metadata Filters |
+|-------------|-------------|----------------|------------------|
+| File | `./data/llm.md` | Large-Language-Model (LLM) basics | `category`: documentation<br/>`topic`: machine_learning<br/>`source_type`: local_file<br/>`content_type`: llm |
+| File | `./data/golang.md` | Go programming language documentation | `category`: documentation<br/>`topic`: programming<br/>`source_type`: local_file<br/>`content_type`: golang |
+| Directory | `./dir/` | Various documents in the directory | `category`: dataset<br/>`topic`: machine_learning<br/>`source_type`: local_directory<br/>`content_type`: transformer |
+| URL | <https://en.wikipedia.org/wiki/Byte-pair_encoding> | Byte-pair encoding (BPE) algorithm | `category`: encyclopedia<br/>`topic`: natural_language_processing<br/>`source_type`: web_url<br/>`content_type`: wiki |
+| Auto Source | Mixed content (Cloud computing, N-gram Wikipedia, README) | Cloud computing overview and N-gram language models | `category`: mixed<br/>`topic`: technology<br/>`source_type`: auto_detect<br/>`content_type`: mixed |
 
-These documents are embedded and indexed, enabling the `knowledge_search` tool to answer related questions.
+These documents are embedded and indexed with their metadata, enabling both `knowledge_search` and `knowledge_search_with_filter` tools to answer related questions.
 
 ### Try Asking Questions Like
 
 ```
 • What is a Large Language Model?
-• Explain the Transformer architecture.
-• What is a Mixture-of-Experts (MoE) model?
+• Tell me about Golang programming language
 • How does Byte-pair encoding work?
-• What is an N-gram model?
 • What is cloud computing?
+• Show me documentation about machine learning
+• Find content from wiki sources
 ```
+
+### Agentic Filtered Search
+
+The knowledge base supports intelligent filtering through natural language queries. The LLM automatically identifies relevant metadata filters and applies them to narrow down search results.
+
+#### Natural Language Filter Examples
+
+You can use natural language to trigger intelligent filtering:
+
+```
+👤 You: Query something about programming and golang related stuff
+🤖 Assistant: I'll search for programming and golang related content in the knowledge base for you.
+🔧 Tool calls initiated:
+   • knowledge_search_with_filter (ID: toolu_bdrk_01NRTD4d4o4UxJGxcYm5nJmF)
+     Args: {"query": "programming golang", "filters": [{"key":"topic","value":"programming"},{"key":"content_type","value":"golang"}]}
+
+🔄 Executing tools...
+✅ Tool response (ID: toolu_bdrk_01NRTD4d4o4UxJGxcYm5nJmF): {"text":"# Go Programming Language\n\nGo, also known as Golang, is an open-source programming language developed by Google in 2007 and released to the public in 2009. Created by Robert Griesemer, Rob Pike, and Ken Thompson, Go was designed to address the challenges of modern software development at scale.","score":0.5876700282096863,"message":"Found relevant content (score: 0.59)"}
+```
+
+#### How It Works
+
+1. **Automatic Filter Detection**: The LLM analyzes your query and identifies relevant metadata filters
+2. **Intelligent Value Selection**: For each filter key, the system either:
+   - Uses explicit key=value pairs if provided
+   - Intelligently selects appropriate values based on context
+3. **Fallback Strategy**: If filtered search returns no results, it automatically retries without filters
+4. **Natural Language Interface**: No need to memorize filter syntax - just ask naturally
 
 ## Usage
 
@@ -81,6 +111,9 @@ go run main.go -embedder=gemini
 
 # Disable streaming mode
 go run main.go -streaming=false
+
+# Disable agentic filter (use basic knowledge search only)
+go run main.go -agentic_filter=false
 ```
 
 ### Interactive Commands
@@ -92,9 +125,10 @@ go run main.go -streaming=false
 
 ## Available Tools
 
-| Tool               | Description                                        | Example Usage                     |
-| ------------------ | -------------------------------------------------- | --------------------------------- |
-| `knowledge_search` | Search the knowledge base for relevant information | "What is a Large Language Model?" |
+| Tool                         | Description                                        | Example Usage                                    |
+| ---------------------------- | -------------------------------------------------- | ------------------------------------------------ |
+| `knowledge_search`           | Search the knowledge base for relevant information | "What is a Large Language Model?"                |
+| `knowledge_search_with_filter` | Intelligent filtered search with metadata-based filtering | "Query something about programming and golang related stuff" |
 
 ## Vector Store Options
 
@@ -215,6 +249,7 @@ export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini em
 -vectorstore string Vector store type: inmemory, pgvector, tcvector, elasticsearch (default: "inmemory")
 -es-version string Elasticsearch version: v7, v8, v9 (default: "v9", only used when vectorstore=elasticsearch)
 -load bool         Load data into the vector store on startup (default: true)
+-agentic_filter bool Enable agentic filter for knowledge search (default: true)
 ```
 
 ---
@@ -261,20 +296,30 @@ sources := []source.Source{
     filesource.New(
         []string{"./data/llm.md"},
         filesource.WithName("Large Language Model"),
-        filesource.WithMetadataValue("type", "documentation"),
+        filesource.WithMetadataValue("category", "documentation"),
+        filesource.WithMetadataValue("topic", "machine_learning"),
+        filesource.WithMetadataValue("source_type", "local_file"),
+        filesource.WithMetadataValue("content_type", "llm"),
     ),
 
     // Directory source for multiple files
     dirsource.New(
         []string{"./dir"},
         dirsource.WithName("Data Directory"),
+        dirsource.WithMetadataValue("category", "dataset"),
+        dirsource.WithMetadataValue("topic", "machine_learning"),
+        dirsource.WithMetadataValue("source_type", "local_directory"),
+        dirsource.WithMetadataValue("content_type", "transformer"),
     ),
 
     // URL source for web content
     urlsource.New(
         []string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},
         urlsource.WithName("Byte-pair encoding"),
-        urlsource.WithMetadataValue("source", "wikipedia"),
+        urlsource.WithMetadataValue("category", "encyclopedia"),
+        urlsource.WithMetadataValue("topic", "natural_language_processing"),
+        urlsource.WithMetadataValue("source_type", "web_url"),
+        urlsource.WithMetadataValue("content_type", "wiki"),
     ),
 
     // Auto source handles mixed content types
@@ -285,6 +330,10 @@ sources := []source.Source{
             "./README.md", // File
         },
         autosource.WithName("Mixed Content Source"),
+        autosource.WithMetadataValue("category", "mixed"),
+        autosource.WithMetadataValue("topic", "technology"),
+        autosource.WithMetadataValue("source_type", "auto_detect"),
+        autosource.WithMetadataValue("content_type", "mixed"),
     ),
 }
 ```
@@ -294,22 +343,28 @@ sources := []source.Source{
 The agent is configured with the knowledge base using the `WithKnowledge()` option:
 
 ```go
+// Get metadata from sources for agentic filtering
+sourcesMetadata := source.GetAllMetadata(c.sources)
+
 llmAgent := llmagent.New(
     "knowledge-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithKnowledge(kb), // This automatically adds the knowledge_search tool
     llmagent.WithDescription("A helpful AI assistant with knowledge base access."),
     llmagent.WithInstruction("Use the knowledge_search tool to find relevant information from the knowledge base. Be helpful and conversational."),
+    llmagent.WithEnableKnowledgeAgenticFilter(true), // Enable intelligent filtering
+    llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata), // Provide metadata for filtering
 )
 ```
 
 ### 4. Automatic Tool Registration
 
-When `WithKnowledge()` is used, the agent automatically gets access to the `knowledge_search` tool, which allows it to:
+When `WithKnowledge()` is used, the agent automatically gets access to knowledge search tools:
 
-- Search the knowledge base for relevant information
-- Retrieve document content based on queries
-- Use the retrieved information to answer user questions
+- **`knowledge_search`**: Basic search functionality for relevant information
+- **`knowledge_search_with_filter`**: Intelligent filtered search (when agentic filter is enabled)
+- Retrieve document content based on queries with optional metadata filtering
+- Use the retrieved information to answer user questions with enhanced precision
 
 ## Implementation Details
 
@@ -332,14 +387,20 @@ The example uses `BuiltinKnowledge` which provides:
 - **Embedder**: OpenAI or Gemini embedder for document representation
 - **Retriever**: Complete RAG pipeline with query enhancement and reranking
 
-### Knowledge Search Tool
+### Knowledge Search Tools
 
-The `knowledge_search` tool is automatically created by `knowledgetool.NewKnowledgeSearchTool()` and provides:
+The knowledge integration automatically provides two search tools:
 
-- Query validation
-- Search execution
+**`knowledge_search`** (Basic search):
+- Query validation and execution
 - Result formatting with relevance scores
-- Error handling
+- Simple keyword-based search
+
+**`knowledge_search_with_filter`** (Agentic filtered search):
+- Intelligent metadata-based filtering
+- Natural language filter detection
+- Automatic fallback to basic search if no results
+- Enhanced precision through context-aware filtering
 
 ### Knowledge Loading Configuration
 
@@ -449,16 +510,6 @@ knowledge.WithDocConcurrency(16),    // Reduce from default runtime.NumCPU()
 // knowledge.WithSourceConcurrency() // Default: min(4, len(sources))
 // knowledge.WithDocConcurrency()     // Default: runtime.NumCPU()
 ```
-
-## Example Files
-
-| File                  | Description                                                            |
-| --------------------- | ---------------------------------------------------------------------- |
-| `main.go`             | Complete knowledge integration example with multi-vector store support |
-| `data/llm.md`         | Sample documentation about Large Language Models                       |
-| `dir/transformer.pdf` | Transformer architecture documentation                                 |
-| `dir/moe.txt`         | Mixture-of-Experts model notes                                         |
-| `README.md`           | This comprehensive documentation                                       |
 
 ## Key Dependencies
 
