@@ -98,38 +98,32 @@ func New(name string, opts ...Option) *ParallelAgent {
 	}
 }
 
-// createBranchInvocationForSubAgent creates an isolated branch invocation for each sub-agent.
+// createBranchInvocation creates an isolated branch invocation for each sub-agent.
 // This ensures parallel execution doesn't interfere with each other.
-func (a *ParallelAgent) createBranchInvocationForSubAgent(
+func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	// Create a copy of the invocation.
-	branchInvocation := *baseInvocation
-	branchInvocation.Agent = subAgent
-	branchInvocation.AgentName = subAgent.Info().Name
+	branchInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Create unique invocation ID for this branch.
-	branchSuffix := a.name + "." + branchInvocation.AgentName
+	branchSuffix := a.name + "." + subAgent.Info().Name
 	branchInvocation.InvocationID = baseInvocation.InvocationID + "." + branchSuffix
 
 	// Set branch identifier for hierarchical event filtering.
 	branchInvocation.Branch = branchInvocation.InvocationID
 
-	return &branchInvocation
+	return branchInvocation
 }
 
 // setupInvocation prepares the invocation for execution.
 func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
 
 	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	invocation.AgentCallbacks = a.agentCallbacks
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -189,10 +183,13 @@ func (a *ParallelAgent) startSubAgents(
 			defer wg.Done()
 
 			// Create branch invocation for this sub-agent.
-			branchInvocation := a.createBranchInvocationForSubAgent(sa, invocation)
+			branchInvocation := a.createBranchInvocation(sa, invocation)
+
+			// Reset invocation information in context
+			branchAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
 
 			// Run the sub-agent.
-			subEventChan, err := sa.Run(ctx, branchInvocation)
+			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
 				errorEvent := event.NewErrorEvent(

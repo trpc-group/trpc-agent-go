@@ -106,23 +106,16 @@ func (a *ChainAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := *baseInvocation
-
-	// Update agent-specific fields.
-	subInvocation.Agent = subAgent
-	subInvocation.AgentName = subAgent.Info().Name
-	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
+	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Set branch info to track sequence in multi-agent scenarios.
 	// Do not include sub-agent name in branch, so that the chain sub-agents can
 	// observe each other's events.
-	if baseInvocation.Branch != "" {
-		subInvocation.Branch = baseInvocation.Branch
-	} else {
+	if subInvocation.Branch == "" {
 		subInvocation.Branch = a.name
 	}
 
-	return &subInvocation
+	return subInvocation
 }
 
 // Run implements the agent.Agent interface.
@@ -161,15 +154,12 @@ func (a *ChainAgent) executeChainRun(
 
 // setupInvocation prepares the invocation for execution.
 func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
+	// Set agent and agent name.
+	invocation.Agent = a
+	invocation.AgentName = a.name
 
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	// Set agent callbacks.
+	invocation.AgentCallbacks = a.agentCallbacks
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -223,8 +213,11 @@ func (a *ChainAgent) executeSubAgents(
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
+		// Reset invocation information in context
+		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+
 		// Run the sub-agent.
-		subEventChan, err := subAgent.Run(ctx, subInvocation)
+		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 		if err != nil {
 			// Send error event.
 			errorEvent := event.NewErrorEvent(

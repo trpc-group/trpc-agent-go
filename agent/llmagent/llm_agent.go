@@ -266,6 +266,27 @@ func WithAddContextPrefix(addPrefix bool) Option {
 	}
 }
 
+// WithKnowledgeFilter sets the knowledge filter for the knowledge base.
+func WithKnowledgeFilter(filter map[string]interface{}) Option {
+	return func(opts *Options) {
+		opts.KnowledgeFilter = filter
+	}
+}
+
+// WithKnowledgeAgenticFilterInfo sets the knowledge agentic filter info for the knowledge base.
+func WithKnowledgeAgenticFilterInfo(filter map[string][]interface{}) Option {
+	return func(opts *Options) {
+		opts.AgenticFilterInfo = filter
+	}
+}
+
+// WithEnableKnowledgeAgenticFilter sets whether enable llm generate filter for the knowledge base.
+func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
+	return func(opts *Options) {
+		opts.EnableKnowledgeAgenticFilter = agenticFilter
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -301,6 +322,13 @@ type Options struct {
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
+	// KnowledgeFilter is the filter for the knowledge search tool.
+	KnowledgeFilter map[string]interface{}
+	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
+	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
+	EnableKnowledgeAgenticFilter bool
+	// KnowledgeAgenticFilter is the knowledge agentic filter for the knowledge search tool.
+	AgenticFilterInfo map[string][]interface{}
 	// Memory is the memory service for the agent.
 	// If provided, the memory tools will be automatically added.
 	Memory memory.Service
@@ -418,7 +446,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
-	tools := registerTools(options.Tools, options.ToolSets, options.Knowledge, options.Memory)
+	tools := registerTools(&options)
 
 	return &LLMAgent{
 		name:                 name,
@@ -509,14 +537,14 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	return requestProcessors
 }
 
-func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Knowledge, memory memory.Service) []tool.Tool {
+func registerTools(options *Options) []tool.Tool {
 	// Start with direct tools.
-	allTools := make([]tool.Tool, 0, len(tools))
-	allTools = append(allTools, tools...)
+	allTools := make([]tool.Tool, 0, len(options.Tools))
+	allTools = append(allTools, options.Tools...)
 
 	// Add tools from each toolset.
 	ctx := context.Background()
-	for _, toolSet := range toolSets {
+	for _, toolSet := range options.ToolSets {
 		setTools := toolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
@@ -524,13 +552,22 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 	}
 
 	// Add knowledge search tool if knowledge base is provided.
-	if kb != nil {
-		allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(kb))
+	if options.Knowledge != nil {
+		if options.EnableKnowledgeAgenticFilter {
+			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
+				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+			)
+			allTools = append(allTools, agentticKnowledge)
+		} else {
+			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
+				options.Knowledge, options.KnowledgeFilter,
+			))
+		}
 	}
 
 	// Add memory tool if memory service is provided.
-	if memory != nil {
-		allTools = append(allTools, memory.Tools()...)
+	if options.Memory != nil {
+		allTools = append(allTools, options.Memory.Tools()...)
 	}
 
 	return allTools
@@ -541,40 +578,9 @@ func registerTools(tools []tool.Tool, toolSets []tool.ToolSet, kb knowledge.Know
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
 	defer span.End()
-	// Ensure the invocation has a model set.
-	if invocation.Model == nil && a.model != nil {
-		a.mu.RLock()
-		invocation.Model = a.model
-		a.mu.RUnlock()
-	}
 
-	// Ensure the agent name is set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
-
-	// Propagate structured output configuration into invocation and request path.
-	if invocation.StructuredOutput == nil && a.structuredOutput != nil {
-		invocation.StructuredOutput = a.structuredOutput
-	}
-	if invocation.StructuredOutputType == nil && a.structuredOutputType != nil {
-		invocation.StructuredOutputType = a.structuredOutputType
-	}
-
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
-
-	// Set model callbacks if available.
-	if invocation.ModelCallbacks == nil && a.modelCallbacks != nil {
-		invocation.ModelCallbacks = a.modelCallbacks
-	}
-
-	// Set tool callbacks if available.
-	if invocation.ToolCallbacks == nil && a.toolCallbacks != nil {
-		invocation.ToolCallbacks = a.toolCallbacks
-	}
+	// Setup invocation
+	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
 	if invocation.AgentCallbacks != nil {
@@ -605,6 +611,27 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	}
 
 	return flowEventChan, nil
+}
+
+// setupInvocation sets up the invocation
+func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
+	// set model.
+	a.mu.RLock()
+	invocation.Model = a.model
+	a.mu.RUnlock()
+
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
+
+	// Propagate structured output configuration into invocation and request path.
+	invocation.StructuredOutputType = a.structuredOutputType
+	invocation.StructuredOutput = a.structuredOutput
+
+	// Set callbacks.
+	invocation.AgentCallbacks = a.agentCallbacks
+	invocation.ModelCallbacks = a.modelCallbacks
+	invocation.ToolCallbacks = a.toolCallbacks
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

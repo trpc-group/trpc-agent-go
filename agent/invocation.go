@@ -79,10 +79,38 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// WithKnowledgeFilter sets the knowledge filter for the RunOptions.
+func WithKnowledgeFilter(filter map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		opts.KnowledgeFilter = filter
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
 	// for this specific run. This allows callers to pass dynamic parameters
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
 	RuntimeState map[string]any
+
+	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
+	KnowledgeFilter map[string]any
+}
+
+// CreateBranchInvocation create a new invocation for branch agent
+func (baseInvocation *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
+	// Create a copy of the invocation - no shared state mutation.
+	branchInvocation := Invocation{
+		Agent:             branchAgent,
+		AgentName:         branchAgent.Info().Name,
+		InvocationID:      baseInvocation.InvocationID,
+		Branch:            baseInvocation.Branch,
+		Session:           baseInvocation.Session,
+		Message:           baseInvocation.Message,
+		EventCompletionCh: baseInvocation.EventCompletionCh,
+		RunOptions:        baseInvocation.RunOptions,
+		ArtifactService:   baseInvocation.ArtifactService,
+	}
+
+	return &branchInvocation
 }

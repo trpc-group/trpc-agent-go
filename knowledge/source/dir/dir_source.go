@@ -62,9 +62,9 @@ func New(dirPaths []string, opts ...Option) *Source {
 	return s
 }
 
-// initializeReaders initializes all available readers.
+// initializeReaders sets up readers for different file types.
 func (s *Source) initializeReaders() {
-	// Use the internal source helper to get readers with appropriate configuration.
+	// Use the common reader initialization with chunk configuration.
 	if s.chunkSize > 0 || s.chunkOverlap > 0 {
 		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
 	} else {
@@ -232,4 +232,13 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 // SetMetadata sets a metadata value for the directory source.
 func (s *Source) SetMetadata(key string, value interface{}) {
 	s.metadata[key] = value
+}
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
 }

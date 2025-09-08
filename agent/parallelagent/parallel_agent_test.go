@@ -207,7 +207,7 @@ func TestParallelAgent_BranchInvoke(t *testing.T) {
 		InvocationID: "base-001",
 	}
 
-	branchInvocation := parallelAgent.createBranchInvocationForSubAgent(subAgent, baseInvocation)
+	branchInvocation := parallelAgent.createBranchInvocation(subAgent, baseInvocation)
 
 	// Verify branch has different ID.
 	require.NotEqual(t, branchInvocation.InvocationID, baseInvocation.InvocationID)
