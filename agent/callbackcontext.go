@@ -35,10 +35,14 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 	if !ok || invocation == nil {
 		return nil, errors.New("invocation not found in context")
 	}
+	var state = make(session.StateMap)
+	if invocation.Session != nil && invocation.Session.State != nil {
+		state = invocation.Session.State
+	}
 	return &CallbackContext{
 		Context:    ctx,
 		invocation: invocation,
-		State:      invocation.Session.State,
+		State:      state,
 	}, nil
 }
 
