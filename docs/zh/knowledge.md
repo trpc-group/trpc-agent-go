@@ -26,8 +26,10 @@ Knowledge 系统的使用遵循以下模式：
 Knowledge 系统与 Agent 的集成方式：
 
 - **自动工具注册**：使用 `WithKnowledge()` 选项自动添加 `knowledge_search` 工具
+- **智能过滤工具**：使用 `WithEnableKnowledgeAgenticFilter(true)` 启用 `knowledge_search_with_agentic_filter` 工具
 - **工具调用**：Agent 可以调用知识搜索工具获取相关信息
 - **上下文增强**：检索到的知识内容自动添加到 Agent 的上下文中
+- **元数据过滤**：支持基于文档元数据进行精准搜索
 
 ## 快速开始
 
@@ -386,6 +388,219 @@ err := kb.Load(ctx,
 > - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`；
 > - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调。
 
+## 过滤器功能
+
+Knowledge 系统提供了强大的过滤器功能，允许基于文档元数据进行精准搜索。这包括静态过滤器和智能过滤器两种模式。
+
+### 基础过滤器
+
+基础过滤器支持两种设置方式：Agent 级别的固定过滤器和 Runner 级别的运行时过滤器。
+
+#### Agent 级过滤器
+
+在创建 Agent 时预设固定的搜索过滤条件：
+
+```go
+// 创建带有固定过滤器的 Agent
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb),
+    llmagent.WithKnowledgeFilter(map[string]interface{}{
+        "category": "documentation",
+        "topic":    "programming",
+    }),
+)
+```
+
+#### Runner 级过滤器
+
+在调用 `runner.Run()` 时动态传递过滤器，适用于需要根据不同请求上下文进行过滤的场景：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent"
+
+// 在运行时传递过滤器
+eventCh, err := runner.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithKnowledgeFilter(map[string]interface{}{
+        "user_level": "premium",     // 根据用户级别过滤
+        "region":     "china",       // 根据地区过滤
+        "language":   "zh",          // 根据语言过滤
+    }),
+)
+```
+
+Runner 级过滤器的优先级高于 Agent 级过滤器，相同键的值会被覆盖：
+
+```go
+// Agent 级过滤器
+llmAgent := llmagent.New(
+    "assistant",
+    llmagent.WithKnowledge(kb),
+    llmagent.WithKnowledgeFilter(map[string]interface{}{
+        "category": "general",
+        "source":   "internal",
+    }),
+)
+
+// Runner 级过滤器会覆盖相同的键
+eventCh, err := runner.Run(
+    ctx, userID, sessionID, message,
+    agent.WithKnowledgeFilter(map[string]interface{}{
+        "source": "external",  // 覆盖 Agent 级的 "internal"
+        "topic":  "api",       // 新增过滤条件
+    }),
+)
+
+// 最终生效的过滤器：
+// {
+//     "category": "general",   // 来自 Agent 级
+//     "source":   "external",  // 来自 Runner 级（覆盖）
+//     "topic":    "api",       // 来自 Runner 级（新增）
+// }
+```
+
+### 智能过滤器 (Agentic Filter)
+
+智能过滤器是 Knowledge 系统的高级功能，允许 LLM Agent 根据用户查询动态选择合适的过滤条件。
+
+#### 启用智能过滤器
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+)
+
+// 获取所有源的元数据信息
+sourcesMetadata := source.GetAllMetadata(sources)
+
+// 创建支持智能过滤的 Agent
+llmAgent := llmagent.New(
+    "knowledge-assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithKnowledge(kb),
+    llmagent.WithEnableKnowledgeAgenticFilter(true),           // 启用智能过滤器
+    llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata), // 提供可用的过滤器信息
+)
+```
+
+#### 过滤器优先级
+
+系统支持多层过滤器，按以下优先级合并（后者覆盖前者）：
+
+1. **Agent 级过滤器**：`WithKnowledgeFilter()` 设置的固定过滤器（优先级最低）
+2. **Runner 级过滤器**：运行时传递的过滤器（优先级中等）
+3. **智能过滤器**：LLM 动态生成的过滤器（优先级最高）
+
+```go
+// 过滤器合并逻辑（优先级：Agent < Runner < 智能过滤器）
+// 如果多个层级设置了相同的键，高优先级的值会覆盖低优先级的值
+
+// Agent 级过滤器（基础过滤器）
+agentFilter := map[string]interface{}{
+    "category": "documentation",
+    "source":   "internal",
+}
+
+// Runner 级过滤器（运行时过滤器）
+runnerFilter := map[string]interface{}{
+    "source": "official",  // 覆盖 Agent 级的 "internal"
+    "topic":  "api",
+}
+
+// 智能过滤器（LLM 动态生成）
+intelligentFilter := map[string]interface{}{
+    "topic": "programming",  // 覆盖 Runner 级的 "api"
+    "level": "advanced",
+}
+
+// 最终合并结果
+finalFilter := {
+    "category": "documentation",  // 来自 Agent 级
+    "source":   "official",       // 来自 Runner 级（覆盖了 Agent 级）
+    "topic":    "programming",     // 来自智能过滤器（覆盖了 Runner 级）
+    "level":    "advanced",       // 来自智能过滤器
+}
+```
+
+### 配置元数据源
+
+为了使智能过滤器正常工作，需要在创建文档源时添加丰富的元数据：
+
+```go
+sources := []source.Source{
+    // 文件源配置元数据
+    filesource.New(
+        []string{"./docs/api.md"},
+        filesource.WithName("API Documentation"),
+        filesource.WithMetadataValue("category", "documentation"),
+        filesource.WithMetadataValue("topic", "api"),
+        filesource.WithMetadataValue("service_type", "gateway"),
+        filesource.WithMetadataValue("protocol", "trpc-go"),
+        filesource.WithMetadataValue("version", "v1.0"),
+    ),
+    
+    // 目录源配置元数据
+    dirsource.New(
+        []string{"./tutorials"},
+        dirsource.WithName("Tutorials"),
+        dirsource.WithMetadataValue("category", "tutorial"),
+        dirsource.WithMetadataValue("difficulty", "beginner"),
+        dirsource.WithMetadataValue("topic", "programming"),
+    ),
+    
+    // URL 源配置元数据
+    urlsource.New(
+        []string{"https://example.com/wiki/rpc"},
+        urlsource.WithName("RPC Wiki"),
+        urlsource.WithMetadataValue("category", "encyclopedia"),
+        urlsource.WithMetadataValue("source_type", "web"),
+        urlsource.WithMetadataValue("topic", "rpc"),
+        urlsource.WithMetadataValue("language", "zh"),
+    ),
+}
+```
+
+### 向量数据库过滤器支持
+
+不同的向量数据库对过滤器的支持程度不同：
+
+#### PostgreSQL + pgvector
+- ✅ 支持所有元数据字段过滤
+- ✅ 支持复杂查询条件
+- ✅ 支持 JSONB 字段索引
+
+```go
+vectorStore, err := vectorpgvector.New(
+    vectorpgvector.WithHost("127.0.0.1"),
+    vectorpgvector.WithPort(5432),
+    // ... 其他配置
+)
+```
+
+#### TcVector
+- ✅ 支持预定义字段过滤
+- ⚠️ 需要预先建立过滤字段索引
+
+```go
+// 获取所有元数据键用于建立索引
+metadataKeys := source.GetAllMetadataKeys(sources)
+
+vectorStore, err := vectortcvector.New(
+    vectortcvector.WithURL("https://your-endpoint"),
+    vectortcvector.WithFilterIndexFields(metadataKeys), // 建立过滤字段索引
+    // ... 其他配置
+)
+```
+
+#### 内存存储
+- ✅ 支持所有过滤器功能
+- ⚠️ 仅适用于开发和测试
+
 ## 高级功能
 
 ### QueryEnhancer
@@ -588,13 +803,18 @@ func main() {
     // 6. 创建 LLM 模型
     modelInstance := openai.New(*modelName)
 
+    // 获取所有源的元数据信息（用于智能过滤器）
+    sourcesMetadata := source.GetAllMetadata(sources)
+    
     // 7. 创建 Agent 并集成 Knowledge
     llmAgent := llmagent.New(
         "knowledge-assistant",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有 Knowledge 访问能力的智能助手"),
-        llmagent.WithInstruction("使用 knowledge_search 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。"),
+        llmagent.WithInstruction("使用 knowledge_search 或 knowledge_search_with_filter 工具从 Knowledge 检索相关信息，并基于检索内容回答问题。根据用户查询选择合适的过滤条件。"),
         llmagent.WithKnowledge(kb), // 自动添加 knowledge_search 工具
+        llmagent.WithEnableKnowledgeAgenticFilter(true),           // 启用智能过滤器
+        llmagent.WithKnowledgeAgenticFilterInfo(sourcesMetadata), // 提供可用的过滤器信息
     )
 
     // 8. 创建 Runner

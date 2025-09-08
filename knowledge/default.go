@@ -105,6 +105,7 @@ type loadConfig struct {
 	showStats        bool
 	srcParallelism   int
 	docParallelism   int
+	recreate         bool
 }
 
 // WithShowProgress enables or disables progress logging during load.
@@ -148,6 +149,14 @@ func WithDocConcurrency(n int) LoadOption {
 	}
 }
 
+// WithRecreate recreates the vector store before loading documents, be careful to use this option.
+// ATTENTION! This option will delete all documents from the vector store and recreate it.
+func WithRecreate(recreate bool) LoadOption {
+	return func(lc *loadConfig) {
+		lc.recreate = recreate
+	}
+}
+
 // New creates a new BuiltinKnowledge instance with the given options.
 func New(opts ...Option) *BuiltinKnowledge {
 	dk := &BuiltinKnowledge{}
@@ -179,36 +188,36 @@ func New(opts ...Option) *BuiltinKnowledge {
 
 // Load processes all sources and adds their documents to the knowledge base.
 func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error {
-	// Apply load options with defaults.
-	config := &loadConfig{
-		showProgress:     true,
-		progressStepSize: 10,
-		showStats:        true,
-	}
-	for _, opt := range opts {
-		opt(config)
-	}
+	err := dk.loadSource(ctx, dk.sources, opts...)
+	return err
+}
 
-	// Derive automatic defaults when the caller did not specify explicit values.
-	if config.srcParallelism == 0 {
-		// Use the smaller of default cap or number of available sources.
-		if len(dk.sources) < maxDefaultSourceParallel {
-			config.srcParallelism = len(dk.sources)
-		} else {
-			config.srcParallelism = maxDefaultSourceParallel
-		}
+// loadSource loads one or more source
+func (dk *BuiltinKnowledge) loadSource(
+	ctx context.Context,
+	sources []source.Source,
+	opts ...LoadOption) error {
+	if dk.vectorStore == nil {
+		return fmt.Errorf("vector store not configured")
 	}
-
-	if config.docParallelism == 0 {
-		// Match logical CPUs for CPU-bound embedding work.
-		config.docParallelism = runtime.NumCPU()
-	}
-
-	// Use the concurrent loader when there is any real parallelism to gain.
+	config := dk.buildLoadConfig(len(sources), opts...)
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
-		return dk.loadConcurrent(ctx, config)
+		if _, err := dk.loadConcurrent(ctx, config, sources); err != nil {
+			return err
+		}
+		return nil
 	}
+	if _, err := dk.loadSequential(ctx, config, sources); err != nil {
+		return err
+	}
+	return nil
+}
 
+// loadSourcesSequential loads sources sequentially
+func (dk *BuiltinKnowledge) loadSequential(
+	ctx context.Context,
+	config *loadConfig,
+	sources []source.Source) ([]string, error) {
 	// Timing variables.
 	startTime := time.Now()
 
@@ -216,11 +225,12 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 	sizeBuckets := defaultSizeBuckets
 	stats := newSizeStats(sizeBuckets)
 
-	totalSources := len(dk.sources)
+	totalSources := len(sources)
 	log.Infof("Starting knowledge base loading with %d sources", totalSources)
 
+	var allAddedIDs []string
 	var processedDocs int
-	for i, src := range dk.sources {
+	for i, src := range sources {
 		sourceName := src.Name()
 		sourceType := src.Type()
 		log.Infof("Loading source %d/%d: %s (type: %s)", i+1, totalSources, sourceName, sourceType)
@@ -229,7 +239,7 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
 			log.Errorf("Failed to read documents from source %s: %v", sourceName, err)
-			return fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
+			return nil, fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
 		log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
@@ -253,9 +263,10 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 		for j, doc := range docs {
 			if err := dk.addDocument(ctx, doc); err != nil {
 				log.Errorf("Failed to add document from source %s: %v", sourceName, err)
-				return fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
+				return nil, fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
 			}
 
+			allAddedIDs = append(allAddedIDs, doc.ID)
 			processedDocs++
 
 			// Log progress based on configuration.
@@ -286,7 +297,158 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 	if config.showStats && stats.totalDocs > 0 {
 		stats.log(sizeBuckets)
 	}
+	return allAddedIDs, nil
+}
+
+// loadSourcesConcurrent loads sources concurrently
+func (dk *BuiltinKnowledge) loadConcurrent(
+	ctx context.Context,
+	config *loadConfig,
+	sources []source.Source) ([]string, error) {
+	// Create aggregator for collecting results
+	aggr := loader.NewAggregator(defaultSizeBuckets, config.showStats, config.showProgress, config.progressStepSize)
+	defer aggr.Close()
+
+	// Create worker pool for source processing
+	srcPool, err := ants.NewPool(config.srcParallelism)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create source worker pool: %w", err)
+	}
+	defer srcPool.Release()
+
+	// Create worker pool for document processing
+	docPool, err := ants.NewPool(config.docParallelism)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create document worker pool: %w", err)
+	}
+	defer docPool.Release()
+
+	var wg sync.WaitGroup
+	var allAddedIDs []string
+	var mu sync.Mutex
+	errCh := make(chan error, len(sources))
+
+	for i, src := range sources {
+		wg.Add(1)
+		// Capture loop variables for the closure to avoid race conditions
+		srcIdx := i
+		source := src
+		err := srcPool.Submit(func() {
+			defer wg.Done()
+			sourceName := source.Name()
+			sourceType := source.Type()
+			log.Infof("Loading source %d/%d: %s (type: %s)", srcIdx+1, len(sources), sourceName, sourceType)
+			docs, err := source.ReadDocuments(ctx)
+			if err != nil {
+				errCh <- fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
+				return
+			}
+			log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
+			if err := dk.processDocuments(ctx, sourceName, docs, config, aggr, docPool); err != nil {
+				errCh <- fmt.Errorf("failed to process documents for source %s: %w", sourceName, err)
+				return
+			}
+			log.Infof("Successfully loaded source %s", sourceName)
+
+			// Collect document IDs
+			mu.Lock()
+			for _, doc := range docs {
+				allAddedIDs = append(allAddedIDs, doc.ID)
+			}
+			mu.Unlock()
+		})
+		if err != nil {
+			wg.Done()
+			errCh <- fmt.Errorf("failed to submit source processing task: %w", err)
+		}
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	if err := <-errCh; err != nil {
+		return nil, err
+	}
+
+	return allAddedIDs, nil
+}
+
+// processDocuments embeds and stores all documents from a single source using
+// document-level parallelism.
+func (dk *BuiltinKnowledge) processDocuments(
+	ctx context.Context,
+	sourceName string,
+	docs []*document.Document,
+	cfg *loadConfig,
+	aggr *loader.Aggregator,
+	pool *ants.Pool,
+) error {
+	var wgDoc sync.WaitGroup
+	errCh := make(chan error, len(docs))
+
+	processDoc := func(doc *document.Document, docIndex int) func() {
+		return func() {
+			defer wgDoc.Done()
+			if err := dk.addDocument(ctx, doc); err != nil {
+				errCh <- fmt.Errorf("add document: %w", err)
+				return
+			}
+
+			aggr.StatCh() <- loader.StatEvent{Size: len(doc.Content)}
+			if cfg.showProgress {
+				aggr.ProgCh() <- loader.ProgEvent{
+					SrcName:      sourceName,
+					SrcProcessed: docIndex + 1,
+					SrcTotal:     len(docs),
+				}
+			}
+		}
+	}
+
+	for i, doc := range docs {
+		wgDoc.Add(1)
+		task := processDoc(doc, i)
+		if pool != nil {
+			if err := pool.Submit(task); err != nil {
+				wgDoc.Done()
+				errCh <- fmt.Errorf("submit doc task: %w", err)
+			}
+		} else {
+			task()
+		}
+	}
+
+	wgDoc.Wait()
+	close(errCh)
+
+	if err := <-errCh; err != nil {
+		return err
+	}
 	return nil
+}
+
+// buildLoadConfig creates a load configuration with defaults and applies the given options.
+func (dk *BuiltinKnowledge) buildLoadConfig(sourceCount int, opts ...LoadOption) *loadConfig {
+	// Apply load options with defaults.
+	config := &loadConfig{
+		showProgress:     true,
+		progressStepSize: 10,
+		showStats:        true,
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+	if config.srcParallelism == 0 {
+		if sourceCount < maxDefaultSourceParallel {
+			config.srcParallelism = sourceCount
+		} else {
+			config.srcParallelism = maxDefaultSourceParallel
+		}
+	}
+	if config.docParallelism == 0 {
+		config.docParallelism = runtime.NumCPU()
+	}
+	return config
 }
 
 // addDocument adds a document to the knowledge base (internal method).
@@ -333,6 +495,7 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		History:   req.History, // Same type now, no conversion needed
 		UserID:    req.UserID,
 		SessionID: req.SessionID,
+		Filter:    convertQueryFilter(req.SearchFilter),
 		Limit:     limit,
 		MinScore:  minScore,
 	}
@@ -371,6 +534,18 @@ func (dk *BuiltinKnowledge) Close() error {
 		}
 	}
 	return nil
+}
+
+// convertQueryFilter converts retriever.QueryFilter to vectorstore.SearchFilter.
+func convertQueryFilter(qf *SearchFilter) *retriever.QueryFilter {
+	if qf == nil {
+		return nil
+	}
+
+	return &retriever.QueryFilter{
+		DocumentIDs: qf.DocumentIDs,
+		Metadata:    qf.Metadata,
+	}
 }
 
 // sizeStats tracks statistics for document sizes during a load run.
@@ -459,152 +634,4 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 		return 0
 	}
 	return expected - elapsed
-}
-
-// loadConcurrent processes sources and documents concurrently according to the
-// given configuration. It shares the majority of logic with the sequential
-// loader but uses errgroup and semaphores to control parallelism, and a
-// dedicated aggregator goroutine to avoid lock-based sharing.
-func (dk *BuiltinKnowledge) loadConcurrent(ctx context.Context, config *loadConfig) error {
-	startTime := time.Now()
-
-	aggr := loader.NewAggregator(defaultSizeBuckets, config.showStats,
-		config.showProgress, config.progressStepSize)
-	defer aggr.Close()
-
-	totalSources := len(dk.sources)
-	log.Infof("Starting knowledge base loading with %d sources", totalSources)
-
-	srcCap := max(1, config.srcParallelism)
-	semSrc := make(chan struct{}, srcCap)
-
-	var wgSrc sync.WaitGroup
-	errCh := make(chan error, 1)
-
-	for idx, src := range dk.sources {
-		semSrc <- struct{}{}
-		wgSrc.Add(1)
-
-		submitErr := ants.Submit(func(idx int, src source.Source) func() {
-			return func() {
-				defer func() {
-					<-semSrc
-					wgSrc.Done()
-				}()
-
-				if err := dk.processSource(ctx, src, idx, totalSources, config, aggr); err != nil {
-					select {
-					case errCh <- err:
-					default:
-					}
-				}
-			}
-		}(idx, src))
-
-		if submitErr != nil {
-			wgSrc.Done()
-			<-semSrc
-			return fmt.Errorf("submit source task: %w", submitErr)
-		}
-	}
-
-	wgSrc.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
-	}
-
-	log.Infof("Knowledge base loading completed in %s (%d sources)",
-		time.Since(startTime), totalSources)
-	return nil
-}
-
-// processSource handles reading documents from one source and feeding them to
-// the document-level workers.
-func (dk *BuiltinKnowledge) processSource(
-	ctx context.Context,
-	src source.Source,
-	idx, total int,
-	cfg *loadConfig,
-	aggr *loader.Aggregator,
-) error {
-	sourceName := src.Name()
-	log.Infof("Loading source %d/%d: %s (type: %s)",
-		idx+1, total, sourceName, src.Type())
-
-	docs, err := src.ReadDocuments(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
-	}
-
-	log.Infof("Fetched %d document(s) from source %s", len(docs), sourceName)
-
-	if err := dk.processDocuments(ctx, sourceName, docs, cfg, aggr); err != nil {
-		return err
-	}
-
-	log.Infof("Successfully loaded source %s", sourceName)
-	return nil
-}
-
-// processDocuments embeds and stores all documents from a single source using
-// document-level parallelism.
-func (dk *BuiltinKnowledge) processDocuments(
-	ctx context.Context,
-	sourceName string,
-	docs []*document.Document,
-	cfg *loadConfig,
-	aggr *loader.Aggregator,
-) error {
-	docCap := max(1, cfg.docParallelism)
-	semDoc := make(chan struct{}, docCap)
-	var wgDoc sync.WaitGroup
-	errCh := make(chan error, 1)
-
-	for i, doc := range docs {
-		semDoc <- struct{}{}
-		wgDoc.Add(1)
-
-		if submitErr := ants.Submit(func(idx int, d *document.Document) func() {
-			return func() {
-				defer func() {
-					<-semDoc
-					wgDoc.Done()
-				}()
-
-				if err := dk.addDocument(ctx, d); err != nil {
-					select {
-					case errCh <- fmt.Errorf("add document: %w", err):
-					default:
-					}
-					return
-				}
-
-				aggr.StatCh() <- loader.StatEvent{Size: len(d.Content)}
-				if cfg.showProgress {
-					aggr.ProgCh() <- loader.ProgEvent{
-						SrcName:      sourceName,
-						SrcProcessed: idx + 1,
-						SrcTotal:     len(docs),
-					}
-				}
-			}
-		}(i, doc)); submitErr != nil {
-			wgDoc.Done()
-			<-semDoc
-			select {
-			case errCh <- fmt.Errorf("submit doc task: %w", submitErr):
-			default:
-			}
-		}
-	}
-
-	wgDoc.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
-		return nil
-	}
 }

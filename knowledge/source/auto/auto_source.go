@@ -190,7 +190,24 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 // processAsText processes the input as text content.
 func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Create a text reader and process the input as text.
-	return s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	docs, err := s.textReader.ReadFromReader("text_input", strings.NewReader(input))
+	if err != nil {
+		return nil, err
+	}
+
+	// Add metadata for each document
+	for _, doc := range docs {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]interface{})
+		}
+		// Copy existing metadata
+		for k, v := range s.metadata {
+			doc.Metadata[k] = v
+		}
+		doc.Metadata[source.MetaSource] = source.TypeAuto
+	}
+
+	return docs, nil
 }
 
 // SetMetadata sets metadata for this source.
@@ -199,4 +216,13 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 		s.metadata = make(map[string]interface{})
 	}
 	s.metadata[key] = value
+}
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
 }
