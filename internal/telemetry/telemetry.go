@@ -117,21 +117,21 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyEventID, eventID),
 	}
-	
+
 	// Add session ID if session exists
 	if invoke.Session != nil {
 		attrs = append(attrs, attribute.String(KeySessionID, invoke.Session.ID))
 	} else {
 		attrs = append(attrs, attribute.String(KeySessionID, ""))
 	}
-	
+
 	// Add model name if model exists
 	if invoke.Model != nil {
 		attrs = append(attrs, attribute.String("gen_ai.request.model", invoke.Model.Info().Name))
 	} else {
 		attrs = append(attrs, attribute.String("gen_ai.request.model", ""))
 	}
-	
+
 	span.SetAttributes(attrs...)
 
 	if bts, err := json.Marshal(req); err == nil {
