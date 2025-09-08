@@ -26,5 +26,5 @@ O_WRONLY = "O_WRONLY"
 [default.extend-words]
 unmarshaling = "unmarshaling" 
 Unarshaling = "Unmarshaling" 
-FilterIndexes = "FilterIndexes"
+Indexes = "Indices"
 ba = "ba"
