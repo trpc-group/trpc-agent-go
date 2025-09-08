@@ -3,6 +3,8 @@ package evaluation
 import (
 	"context"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // EvalStatus represents the status of an evaluation
@@ -120,14 +122,7 @@ type AgentEvaluatorConfig struct {
 	DefaultCriteria map[string]float64 `json:"default_criteria"`
 }
 
-// AgentRunner defines the interface for running agents during evaluation
-type AgentRunner interface {
-	// RunAgent executes an agent with the given eval case and returns invocations
-	RunAgent(ctx context.Context, evalCase interface{}) (interface{}, error)
-
-	// GetAgentInfo returns information about the agent
-	GetAgentInfo() *AgentInfo
-}
+// Note: We use runner.Runner interface from the runner package for agent execution
 
 // AgentInfo contains information about an agent
 type AgentInfo struct {
@@ -171,8 +166,8 @@ func NewAgentEvaluatorWithConfig(config AgentEvaluatorConfig) *AgentEvaluator {
 	return &AgentEvaluator{}
 }
 
-// Evaluate evaluates an agent using eval data from file or directory
-func (ae *AgentEvaluator) Evaluate(ctx context.Context, agentRunner AgentRunner, evalDataPath string) (*EvaluationResult, error) {
+// Evaluate evaluates an agent using the runner
+func (ae *AgentEvaluator) Evaluate(ctx context.Context, runner runner.Runner) (*EvaluationResult, error) {
 	// TODO: Implementation will be added when needed
 	// For now, return a simple success result
 	return &EvaluationResult{
