@@ -126,23 +126,16 @@ func (a *CycleAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := *baseInvocation
-
-	// Update agent-specific fields for proper agent attribution.
-	subInvocation.Agent = subAgent
-	subInvocation.AgentName = subAgent.Info().Name
-	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
+	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
 
 	// Set branch info for hierarchical event filtering.
 	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the
 	// previous agent's conversation history.
-	if baseInvocation.Branch != "" {
-		subInvocation.Branch = baseInvocation.Branch
-	} else {
+	if subInvocation.Branch == "" {
 		subInvocation.Branch = a.name
 	}
 
-	return &subInvocation
+	return subInvocation
 }
 
 // shouldEscalate checks if an event indicates escalation using injectable logic.
@@ -194,15 +187,12 @@ func (a *CycleAgent) isEscalationCheckEvent(evt *event.Event) bool {
 
 // setupInvocation prepares the invocation for execution.
 func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
 
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	// Set agent callbacks
+	invocation.AgentCallbacks = a.agentCallbacks
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -256,8 +246,11 @@ func (a *CycleAgent) runSubAgent(
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
+	// Reset invocation information in context
+	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+
 	// Run the sub-agent.
-	subEventChan, err := subAgent.Run(ctx, subInvocation)
+	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
 		errorEvent := event.NewErrorEvent(
@@ -363,11 +356,11 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
+	// Setup invocation.
+	a.setupInvocation(invocation)
+
 	go func() {
 		defer close(eventChan)
-
-		// Setup invocation.
-		a.setupInvocation(invocation)
 
 		// Handle before agent callbacks.
 		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {

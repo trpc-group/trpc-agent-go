@@ -120,6 +120,22 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithInstruction("You are a planning specialist. Analyze the user's request and create a brief, structured plan (2-3 steps max). Be concise and specific about what needs to be done. Keep your response under 100 words."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
+		llmagent.WithAgentCallbacks(agent.NewCallbacks().RegisterBeforeAgent(
+			func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+				fmt.Printf("\n--- The %s is executing task planning\n", invocation.AgentName)
+				if invocation.AgentName != "planning-agent" {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", invocation.AgentName, "planning-agent")
+				}
+				ctxInvocation, ok := agent.InvocationFromContext(ctx)
+				if !ok {
+					return nil, fmt.Errorf("failed to get invocation from context")
+				}
+				if ctxInvocation.AgentName != invocation.AgentName {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", ctxInvocation.AgentName, invocation.AgentName)
+				}
+				return nil, nil
+			},
+		)),
 	)
 
 	// Create Research Agent with tools.
@@ -131,6 +147,22 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
 		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
+		llmagent.WithAgentCallbacks(agent.NewCallbacks().RegisterBeforeAgent(
+			func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+				fmt.Printf("\n----- The %s is searching for information\n", invocation.AgentName)
+				if invocation.AgentName != "research-agent" {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", invocation.AgentName, "research-agent")
+				}
+				ctxInvocation, ok := agent.InvocationFromContext(ctx)
+				if !ok {
+					return nil, fmt.Errorf("failed to get invocation from context")
+				}
+				if ctxInvocation.AgentName != invocation.AgentName {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", ctxInvocation.AgentName, invocation.AgentName)
+				}
+				return nil, nil
+			},
+		)),
 	)
 
 	// Create Writing Agent.
@@ -141,6 +173,22 @@ func (c *chainChat) setup(_ context.Context) error {
 		llmagent.WithInstruction("You are a writing specialist. Create a brief, well-structured response based on the plan and research from previous agents. Be clear and concise. Keep your response under 200 words."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithAddContextPrefix(!c.disablePrefix), // Use flag to control prefix
+		llmagent.WithAgentCallbacks(agent.NewCallbacks().RegisterBeforeAgent(
+			func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+				fmt.Printf("\n----- The %s is composing the final response\n", invocation.AgentName)
+				if invocation.AgentName != "writing-agent" {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", invocation.AgentName, "writing-agent")
+				}
+				ctxInvocation, ok := agent.InvocationFromContext(ctx)
+				if !ok {
+					return nil, fmt.Errorf("failed to get invocation from context")
+				}
+				if ctxInvocation.AgentName != invocation.AgentName {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", ctxInvocation.AgentName, invocation.AgentName)
+				}
+				return nil, nil
+			},
+		)),
 	)
 
 	// Create Chain Agent with sub-agents.
@@ -148,6 +196,23 @@ func (c *chainChat) setup(_ context.Context) error {
 		"multi-agent-chain",
 		chainagent.WithSubAgents([]agent.Agent{planningAgent, researchAgent, writingAgent}),
 		chainagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
+		chainagent.WithAgentCallbacks(agent.NewCallbacks().RegisterBeforeAgent(
+			func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
+				fmt.Printf("\n--- The %s is Runing\n", invocation.AgentName)
+				if invocation.AgentName != "multi-agent-chain" {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", invocation.AgentName,
+						"multi-agent-chain")
+				}
+				ctxInvocation, ok := agent.InvocationFromContext(ctx)
+				if !ok {
+					return nil, fmt.Errorf("failed to get invocation from context")
+				}
+				if ctxInvocation.AgentName != invocation.AgentName {
+					return nil, fmt.Errorf("agent name mismatch: %s != %s", ctxInvocation.AgentName, invocation.AgentName)
+				}
+				return nil, nil
+			},
+		)),
 	)
 
 	// Create runner with the chain agent.
