@@ -26,7 +26,7 @@ This pattern provides:
 How the Knowledge system integrates with Agents:
 
 - **Automatic Tool Registration**: Use `WithKnowledge()` option to automatically add `knowledge_search` tool
-- **Intelligent Filter Tool**: Use `WithEnableKnowledgeAgenticFilter(true)` to enable `knowledge_search_with_filter` tool
+- **Intelligent Filter Tool**: Use `WithEnableKnowledgeAgenticFilter(true)` to enable `knowledge_search_with_agentic_filter` tool
 - **Tool Invocation**: Agents can call knowledge search tools to obtain relevant information
 - **Context Enhancement**: Retrieved knowledge content is automatically added to Agent's context
 - **Metadata Filtering**: Support precise search based on document metadata

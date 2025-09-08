@@ -104,7 +104,7 @@ func main() {
 		fmt.Printf(" (Version: %s)", *esVersion)
 	}
 	if *agenticFilter {
-		fmt.Printf("Available tools: knowledge_search, knowledge_search_with_filter\n")
+		fmt.Printf("Available tools: knowledge_search, knowledge_search_with_agentic_filter\n")
 	} else {
 		fmt.Printf("Available tools: knowledge_search\n")
 	}
@@ -227,7 +227,7 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
 			vectortcvector.WithPassword(tcvectorPassword),
-			vectortcvector.WithCollection("homerpan1"),
+			vectortcvector.WithCollection("tcvector-agent-go"),
 			// tcvector need build index for the filter fields
 			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
 		)

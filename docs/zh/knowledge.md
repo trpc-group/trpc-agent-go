@@ -26,7 +26,7 @@ Knowledge 系统的使用遵循以下模式：
 Knowledge 系统与 Agent 的集成方式：
 
 - **自动工具注册**：使用 `WithKnowledge()` 选项自动添加 `knowledge_search` 工具
-- **智能过滤工具**：使用 `WithEnableKnowledgeAgenticFilter(true)` 启用 `knowledge_search_with_filter` 工具
+- **智能过滤工具**：使用 `WithEnableKnowledgeAgenticFilter(true)` 启用 `knowledge_search_with_agentic_filter` 工具
 - **工具调用**：Agent 可以调用知识搜索工具获取相关信息
 - **上下文增强**：检索到的知识内容自动添加到 Agent 的上下文中
 - **元数据过滤**：支持基于文档元数据进行精准搜索

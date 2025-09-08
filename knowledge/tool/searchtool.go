@@ -146,7 +146,7 @@ func NewAgenticFilterSearchTool(
 	description := generateAgenticFilterPrompt(agenticFilterInfo)
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName("knowledge_search_with_filter"),
+		function.WithName("knowledge_search_with_agentic_filter"),
 		function.WithDescription(description),
 	)
 }

@@ -369,14 +369,7 @@ honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWh
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 mellium.im/sasl v0.3.1 h1:wE0LW6g7U83vhvxjC1IY8DnXM+EU095yeo8XClvCdfo=
 mellium.im/sasl v0.3.1/go.mod h1:xm59PUYpZHhgQ9ZqoJ5QaCqzWMi8IeS49dhp6plPCzw=
-<<<<<<< HEAD
 trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 h1:Als3R0+WZSm+bkDVkt5ATElgRixuGRY7iBSEJXBq2XM=
 trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
 trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03 h1:m/sWqKITBVfA+Q+4Q44UkDNArvF+CP7v0WWVmBiCK7w=
 trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03/go.mod h1:q9nAeg9aALr8S38fAPSd+wQVkFpmPW/1r2JGtZAM2ts=
-=======
-trpc.group/trpc-go/trpc-a2a-go v0.2.2 h1:+KSxwAvZ3W2iWJR1HVAmgYlQyD4tOKfluFSEJ0bydgs=
-trpc.group/trpc-go/trpc-a2a-go v0.2.2/go.mod h1:lu052zH/pTlTBwWMU/E3UckR0U9ajL1NlhiRkIF9R6A=
-trpc.group/trpc-go/trpc-mcp-go v0.0.4 h1:ppRZxLe3tUNGcC64JBahGv/QqLbkYwkMQU8kDpZDbeE=
-trpc.group/trpc-go/trpc-mcp-go v0.0.4/go.mod h1:Fv6w5+GES1wmbjNlegUWB0QBR8MzwcPOlVtHbqqPjfk=
->>>>>>> 97c31c6 (add agentic example)
