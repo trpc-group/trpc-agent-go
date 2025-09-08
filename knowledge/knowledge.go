@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 )
 
 // Knowledge is the main interface for knowledge management operations.
@@ -47,16 +48,8 @@ type SearchRequest struct {
 }
 
 // ConversationMessage represents a message in conversation history.
-type ConversationMessage struct {
-	// Role indicates if this is from user or assistant.
-	Role string
-
-	// Content is the message content.
-	Content string
-
-	// Timestamp when the message was sent.
-	Timestamp int64
-}
+// It's an alias to the query package type for API compatibility.
+type ConversationMessage = query.ConversationMessage
 
 // SearchResult represents the result of a knowledge search.
 type SearchResult struct {
