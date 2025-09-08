@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // CallbackContext provides a typed wrapper around context with agent-specific operations.
@@ -23,6 +24,8 @@ import (
 type CallbackContext struct {
 	context.Context
 	invocation *Invocation
+	// State is the delta-aware state of the current session.
+	State session.StateMap
 }
 
 // NewCallbackContext creates a CallbackContext from a standard context.
@@ -32,9 +35,14 @@ func NewCallbackContext(ctx context.Context) (*CallbackContext, error) {
 	if !ok || invocation == nil {
 		return nil, errors.New("invocation not found in context")
 	}
+	var state = make(session.StateMap)
+	if invocation.Session != nil && invocation.Session.State != nil {
+		state = invocation.Session.State
+	}
 	return &CallbackContext{
 		Context:    ctx,
 		invocation: invocation,
+		State:      state,
 	}, nil
 }
 
