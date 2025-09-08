@@ -30,15 +30,16 @@ const (
 
 // Channel represents a communication channel between nodes in Pregel-style execution.
 type Channel struct {
-	mu          sync.RWMutex
-	Name        string
-	Behavior    Behavior
-	Value       any
-	Values      []any // For Topic channels
-	Subscribers []string
-	BarrierSet  map[string]bool // For barrier channels
-	Version     int64
-	Available   bool
+	mu              sync.RWMutex
+	Name            string
+	Behavior        Behavior
+	Value           any
+	Values          []any
+	Subscribers     []string
+	BarrierSet      map[string]bool
+	Version         int64
+	Available       bool
+	LastUpdatedStep int
 }
 
 // NewChannel creates a new channel with the specified behavior.
@@ -53,7 +54,7 @@ func NewChannel(name string, channelBehavior Behavior) *Channel {
 }
 
 // Update updates the channel with new values.
-func (c *Channel) Update(values []any) bool {
+func (c *Channel) Update(values []any, step int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -63,18 +64,21 @@ func (c *Channel) Update(values []any) bool {
 			c.Value = values[len(values)-1]
 			c.Version++
 			c.Available = true
+			c.LastUpdatedStep = step
 			return true
 		}
 	case BehaviorTopic:
 		c.Values = append(c.Values, values...)
 		c.Version++
 		c.Available = true
+		c.LastUpdatedStep = step
 		return true
 	case BehaviorEphemeral:
 		if len(values) > 0 {
 			c.Value = values[0]
 			c.Version++
 			c.Available = true
+			c.LastUpdatedStep = step
 			return true
 		}
 	case BehaviorBarrier:
@@ -85,6 +89,7 @@ func (c *Channel) Update(values []any) bool {
 		}
 		c.Version++
 		c.Available = true
+		c.LastUpdatedStep = step
 		return true
 	}
 	return false
@@ -123,6 +128,20 @@ func (c *Channel) IsAvailable() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.Available
+}
+
+// IsUpdatedInStep returns true if the channel was updated in the specified step.
+func (c *Channel) IsUpdatedInStep(step int) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.LastUpdatedStep == step
+}
+
+// ClearStepMark clears the step update mark, typically called after checkpoint creation.
+func (c *Channel) ClearStepMark() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.LastUpdatedStep = 0
 }
 
 // Finish marks the channel as finished (for barrier channels).

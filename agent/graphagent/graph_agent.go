@@ -82,6 +82,13 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 	}
 }
 
+// WithCheckpointSaver sets the checkpoint saver for the executor.
+func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
+	return func(opts *Options) {
+		opts.CheckpointSaver = saver
+	}
+}
+
 // Options contains configuration options for creating a GraphAgent.
 type Options struct {
 	// Description is a description of the agent.
@@ -100,6 +107,8 @@ type Options struct {
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// CheckpointSaver is the checkpoint saver for the executor.
+	CheckpointSaver graph.CheckpointSaver
 }
 
 // GraphAgent is an agent that executes a graph.
@@ -127,8 +136,16 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		opt(&options)
 	}
 
-	executor, err := graph.NewExecutor(g,
+	// Build executor options.
+	var executorOpts []graph.ExecutorOption
+	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.CheckpointSaver != nil {
+		executorOpts = append(executorOpts,
+			graph.WithCheckpointSaver(options.CheckpointSaver))
+	}
+
+	executor, err := graph.NewExecutor(g, executorOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create graph executor: %w", err)
 	}
@@ -168,8 +185,20 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 
 	// Add invocation message to state.
+	// When resuming from checkpoint, only add user input if it's meaningful content
+	// (not just a resume signal), following LangGraph's pattern.
+	isResuming := invocation.RunOptions.RuntimeState != nil &&
+		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
+
 	if invocation.Message.Content != "" {
-		initialState[graph.StateKeyUserInput] = invocation.Message.Content
+		// If resuming and the message is just "resume", don't add it as input
+		// This allows pure checkpoint resumption without input interference
+		if isResuming && invocation.Message.Content == "resume" {
+			// Skip adding user_input to preserve checkpoint state
+		} else {
+			// Add user input for normal execution or resume with meaningful input
+			initialState[graph.StateKeyUserInput] = invocation.Message.Content
+		}
 	}
 	// Add session context if available.
 	if invocation.Session != nil {
@@ -292,4 +321,9 @@ func (ga *GraphAgent) wrapEventChannel(
 		}
 	}()
 	return wrappedChan
+}
+
+// Executor returns the graph executor for direct access to checkpoint management.
+func (ga *GraphAgent) Executor() *graph.Executor {
+	return ga.executor
 }
