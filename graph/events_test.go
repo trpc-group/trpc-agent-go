@@ -36,7 +36,7 @@ func TestWithMetadataHelpers(t *testing.T) {
 	WithPregelMetadata(prMeta)(e)
 	require.Contains(t, e.StateDelta, MetadataKeyPregel)
 
-    chMeta := ChannelUpdateMetadata{ChannelName: "c", ChannelType: channel.BehaviorTopic, ValueCount: 2}
+	chMeta := ChannelUpdateMetadata{ChannelName: "c", ChannelType: channel.BehaviorTopic, ValueCount: 2}
 	WithChannelMetadata(chMeta)(e)
 	require.Contains(t, e.StateDelta, MetadataKeyChannel)
 
@@ -75,7 +75,7 @@ func TestNewNodeEvents(t *testing.T) {
 		WithNodeEventStartTime(start),
 		WithNodeEventEndTime(end),
 		WithNodeEventOutputKeys([]string{"b"}),
-        WithNodeEventToolCalls([]model.ToolCall{{ID: "t1", Function: model.FunctionDefinitionParam{Name: "tool"}}}),
+		WithNodeEventToolCalls([]model.ToolCall{{ID: "t1", Function: model.FunctionDefinitionParam{Name: "tool"}}}),
 		WithNodeEventModelName("gpt-2"),
 	)
 	require.Equal(t, ObjectTypeGraphNodeComplete, e2.Object)
@@ -200,7 +200,7 @@ func TestNewPregelAndChannelStateEvents(t *testing.T) {
 	ce := NewChannelUpdateEvent(
 		WithChannelEventInvocationID("inv"),
 		WithChannelEventChannelName("ch"),
-        WithChannelEventChannelType(channel.BehaviorTopic),
+		WithChannelEventChannelType(channel.BehaviorTopic),
 		WithChannelEventValueCount(3),
 		WithChannelEventAvailable(true),
 		WithChannelEventTriggeredNodes([]string{"n2"}),
@@ -249,5 +249,5 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	var cm CompletionMetadata
 	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
 	require.Equal(t, 10, cm.TotalSteps)
-    require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
+	require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
 }
