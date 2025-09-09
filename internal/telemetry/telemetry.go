@@ -133,6 +133,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+// TraceRunner traces the invocation of a runner.
 func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message, event *event.Event) {
 	input := message.Content
 	for _, part := range message.ContentParts {
