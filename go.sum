@@ -190,5 +190,5 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 h1:Als3R0+WZSm+bkDVkt5ATElgRixuGRY7iBSEJXBq2XM=
 trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
-trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03 h1:m/sWqKITBVfA+Q+4Q44UkDNArvF+CP7v0WWVmBiCK7w=
-trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03/go.mod h1:q9nAeg9aALr8S38fAPSd+wQVkFpmPW/1r2JGtZAM2ts=
+trpc.group/trpc-go/trpc-mcp-go v0.0.5 h1:sokuTLv73DYVrsylmCVrUCigLg2WVPvSxz4BUpzESRU=
+trpc.group/trpc-go/trpc-mcp-go v0.0.5/go.mod h1:q9nAeg9aALr8S38fAPSd+wQVkFpmPW/1r2JGtZAM2ts=

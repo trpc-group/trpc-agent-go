@@ -23,6 +23,7 @@ import (
 type mcpTool struct {
 	mcpToolRef     *mcp.Tool
 	inputSchema    *tool.Schema
+	outputSchema   *tool.Schema
 	sessionManager *mcpSessionManager
 }
 
@@ -36,6 +37,11 @@ func newMCPTool(mcpToolData mcp.Tool, sessionManager *mcpSessionManager) *mcpToo
 	// Convert MCP input schema to inner Schema.
 	if mcpToolData.InputSchema != nil {
 		mcpTool.inputSchema = convertMCPSchemaToSchema(mcpToolData.InputSchema)
+	}
+
+	// Convert MCP output schema to inner Schema.
+	if mcpToolData.OutputSchema != nil {
+		mcpTool.outputSchema = convertMCPSchemaToSchema(mcpToolData.OutputSchema)
 	}
 
 	return mcpTool
@@ -71,8 +77,9 @@ func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]any) (any, 
 // Declaration implements the Tool interface.
 func (t *mcpTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name:        t.mcpToolRef.Name,
-		Description: t.mcpToolRef.Description,
-		InputSchema: t.inputSchema,
+		Name:         t.mcpToolRef.Name,
+		Description:  t.mcpToolRef.Description,
+		InputSchema:  t.inputSchema,
+		OutputSchema: t.outputSchema,
 	}
 }

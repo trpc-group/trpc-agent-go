@@ -28,7 +28,7 @@ require (
 	golang.org/x/text v0.21.0
 	google.golang.org/grpc v1.58.3
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
-	trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03
+	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
 require (
