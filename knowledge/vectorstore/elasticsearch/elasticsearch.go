@@ -591,7 +591,7 @@ func (vs *VectorStore) buildCountQuery(filter map[string]interface{}) *types.Sea
 			termQuery.Value = value
 			mustClause := types.NewQuery()
 			mustClause.Term = map[string]types.TermQuery{
-				fmt.Sprintf("%s.%s", fieldMetadata, key): *termQuery,
+				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
 			}
 			boolQuery.Must = append(boolQuery.Must, *mustClause)
 		}
@@ -654,7 +654,7 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 		termQuery.Value = value
 		mustClause := types.NewQuery()
 		mustClause.Term = map[string]types.TermQuery{
-			fmt.Sprintf("%s.%s", fieldMetadata, key): *termQuery,
+			fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
 		}
 		boolQuery.Must = append(boolQuery.Must, *mustClause)
 	}
@@ -712,7 +712,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	metadataQuery.From = &offset
 
 	// Only return id and metadata fields
-	includes := []string{fieldID, fieldMetadata}
+	includes := []string{vs.option.idFieldName, defaultFieldMetadata}
 	sourceFilter := types.NewSourceFilter()
 	sourceFilter.Includes = includes
 	metadataQuery.Source_ = sourceFilter
@@ -736,7 +736,7 @@ func (vs *VectorStore) queryMetadataBatch(
 			termQuery.Value = value
 			mustClause := types.NewQuery()
 			mustClause.Term = map[string]types.TermQuery{
-				fmt.Sprintf("%s.%s", fieldMetadata, key): *termQuery,
+				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
 			}
 			boolQuery.Must = append(boolQuery.Must, *mustClause)
 		}

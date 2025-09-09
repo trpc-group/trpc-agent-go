@@ -189,7 +189,7 @@ Note: Use option 4 to reload all sources or option 6 to view current status
 
 ──────────────────────────────────────────────────
 Enter source name: other
-Enter file path (relative to data/ folder): data/other.md
+Enter file path (relative to data/ folder): ../exampledata/file/other.md
 Enter metadata (key1 value1 key2 value2 ... or press enter to skip): tag cpp
 2025-09-09T19:32:59+08:00       INFO    knowledge/default.go:600        Loading source 1/1: other (type: file)
 2025-09-09T19:32:59+08:00       INFO    knowledge/default.go:606        Fetched 22 document(s) from source other

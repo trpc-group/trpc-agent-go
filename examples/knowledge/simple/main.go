@@ -36,7 +36,10 @@ import (
 
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	autosource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/auto"
+	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 
 	// Vector store.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
@@ -75,7 +78,7 @@ var (
 	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
 	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
-	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "123")
+	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
 	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 
 	// TCVector.
@@ -276,7 +279,7 @@ func (c *knowledgeChat) createSources() []source.Source {
 		// File source for local documentation (if files exist).
 		filesource.New(
 			[]string{
-				"./data/llm.md",
+				"../exampledata/file/llm.md",
 			},
 			filesource.WithName("Large Language Model"),
 			filesource.WithMetadataValue("category", "documentation"),
@@ -286,13 +289,47 @@ func (c *knowledgeChat) createSources() []source.Source {
 		),
 		filesource.New(
 			[]string{
-				"./data/golang.md",
+				"../exampledata/file/golang.md",
 			},
 			filesource.WithName("Golang"),
 			filesource.WithMetadataValue("category", "documentation"),
 			filesource.WithMetadataValue("topic", "programming"),
 			filesource.WithMetadataValue("source_type", "local_file"),
 			filesource.WithMetadataValue("content_type", "golang"),
+		),
+		dirsource.New(
+			[]string{
+				"../exampledata/dir",
+			},
+			dirsource.WithName("Data Directory"),
+			dirsource.WithMetadataValue("category", "dataset"),
+			dirsource.WithMetadataValue("topic", "machine_learning"),
+			dirsource.WithMetadataValue("source_type", "local_directory"),
+			dirsource.WithMetadataValue("content_type", "transformer"),
+		),
+		// URL source for web content.
+		urlsource.New(
+			[]string{
+				"https://en.wikipedia.org/wiki/Byte-pair_encoding",
+			},
+			urlsource.WithName("Byte-pair encoding"),
+			urlsource.WithMetadataValue("category", "encyclopedia"),
+			urlsource.WithMetadataValue("topic", "natural_language_processing"),
+			urlsource.WithMetadataValue("source_type", "web_url"),
+			urlsource.WithMetadataValue("content_type", "wiki"),
+		),
+		// Auto source that can handle mixed inputs.
+		autosource.New(
+			[]string{
+				"Cloud computing is the delivery of computing services over the internet, including servers, storage, databases, networking, software, and analytics. It provides on-demand access to shared computing resources.",
+				"https://en.wikipedia.org/wiki/N-gram",
+				"./README.md",
+			},
+			autosource.WithName("Mixed Content Source"),
+			autosource.WithMetadataValue("category", "mixed"),
+			autosource.WithMetadataValue("topic", "technology"),
+			autosource.WithMetadataValue("source_type", "auto_detect"),
+			autosource.WithMetadataValue("content_type", "mixed"),
 		),
 	}
 	return sources

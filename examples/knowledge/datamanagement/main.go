@@ -61,7 +61,7 @@ var (
 	pgvectorHost     = getEnvOrDefault("PGVECTOR_HOST", "127.0.0.1")
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
 	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
-	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "123")
+	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "")
 	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 
 	// TCVector.
@@ -70,9 +70,9 @@ var (
 	tcvectorPassword = getEnvOrDefault("TCVECTOR_PASSWORD", "")
 
 	// Elasticsearch.
-	elasticsearchHosts     = getEnvOrDefault("ELASTICSEARCH_HOSTS", "http://9.134.95.112:9200")
+	elasticsearchHosts     = getEnvOrDefault("ELASTICSEARCH_HOSTS", "http://localhost:9200")
 	elasticsearchUsername  = getEnvOrDefault("ELASTICSEARCH_USERNAME", "elastic")
-	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "12345678Aa")
+	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "")
 	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
 	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")
 	esVersion              = getEnvOrDefault("ELASTICSEARCH_VERSION", "v8")
@@ -443,12 +443,12 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 	}
 
 	fileSource1 := file.New(
-		[]string{"./data/llm.md"},
+		[]string{"../exampledata/file/llm.md"},
 		file.WithName("LLMDocSource"),
 		file.WithMetadata(map[string]interface{}{"tag": "llm"}),
 	)
 	fileSource2 := file.New(
-		[]string{"./data/golang.md"},
+		[]string{"../exampledata/file/golang.md"},
 		file.WithName("GolangDocSource"),
 		file.WithMetadata(map[string]interface{}{"tag": "golang"}),
 	)
