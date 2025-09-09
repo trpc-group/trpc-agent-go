@@ -372,10 +372,6 @@ graphAgent, err := graphagent.New("workflow-name", compiledGraph,
         "initial_data": "初始数据",
     }),
     graphagent.WithChannelBufferSize(1024),
-    graphagent.WithTools([]tool.Tool{
-        calculatorTool,
-        searchTool,
-    }),
     graphagent.WithModelCallbacks(&model.Callbacks{
         // 模型回调配置
     }),
