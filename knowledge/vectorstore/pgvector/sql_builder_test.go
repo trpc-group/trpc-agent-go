@@ -576,3 +576,105 @@ func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
 	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1", sql)
 	assert.Empty(t, args)
 }
+
+// TestDeleteSQLBuilder_Basic tests basic delete query building
+func TestDeleteSQLBuilder_Basic(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestDeleteSQLBuilder_WithIDFilter tests delete query with ID filter
+func TestDeleteSQLBuilder_WithIDFilter(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+	dsb.addIDFilter([]string{"doc1", "doc2", "doc3"})
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2, $3)", sql)
+	assert.Equal(t, []interface{}{"doc1", "doc2", "doc3"}, args)
+}
+
+// TestDeleteSQLBuilder_WithMetadataFilter tests delete query with metadata filter
+func TestDeleteSQLBuilder_WithMetadataFilter(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	filter := map[string]interface{}{
+		"category": "test",
+		"status":   "deleted",
+	}
+	dsb.addMetadataFilter(filter)
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND metadata @> $1::jsonb", sql)
+	assert.Len(t, args, 1)
+
+	// Verify the JSON argument contains the filter
+	jsonArg, ok := args[0].(string)
+	assert.True(t, ok)
+	assert.Contains(t, jsonArg, "category")
+	assert.Contains(t, jsonArg, "test")
+	assert.Contains(t, jsonArg, "status")
+	assert.Contains(t, jsonArg, "deleted")
+}
+
+// TestDeleteSQLBuilder_WithBothFilters tests delete query with both ID and metadata filters
+func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+	dsb.addIDFilter([]string{"doc1", "doc2"})
+
+	filter := map[string]interface{}{
+		"category": "test",
+	}
+	dsb.addMetadataFilter(filter)
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2) AND metadata @> $3::jsonb", sql)
+	assert.Equal(t, []interface{}{"doc1", "doc2", "{\"category\":\"test\"}"}, args)
+}
+
+// TestDeleteSQLBuilder_EmptyFilters tests delete query with empty filters
+func TestDeleteSQLBuilder_EmptyFilters(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	// Test with empty ID filter
+	dsb.addIDFilter([]string{})
+	dsb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := dsb.build()
+
+	// Should only have the basic WHERE 1=1 condition
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestDeleteSQLBuilder_Integration tests delete query execution integration
+func (suite *SQLBuilderTestSuite) TestDeleteSQLBuilder_Integration() {
+	// First verify document exists
+	countSQL := "SELECT COUNT(*) FROM test_documents WHERE id IN ('doc1', 'doc2')"
+	var initialCount int
+	err := suite.pool.QueryRow(context.Background(), countSQL).Scan(&initialCount)
+	require.NoError(suite.T(), err)
+	assert.Greater(suite.T(), initialCount, 0)
+
+	// Build delete query
+	dsb := newDeleteSQLBuilder("test_documents")
+	dsb.addIDFilter([]string{"doc1", "doc2"})
+
+	sql, args := dsb.build()
+
+	// Execute delete
+	_, err = suite.pool.Exec(context.Background(), sql, args...)
+	assert.NoError(suite.T(), err)
+
+	// Verify documents were deleted
+	var finalCount int
+	err = suite.pool.QueryRow(context.Background(), countSQL).Scan(&finalCount)
+	require.NoError(suite.T(), err)
+	assert.Equal(suite.T(), 0, finalCount)
+}

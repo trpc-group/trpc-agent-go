@@ -12,7 +12,7 @@ package knowledge
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"fmt"
 	"runtime"
 	"sort"
@@ -288,9 +288,20 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 
 	config := dk.buildLoadConfig(1, opts...)
 	if dk.enableSourceSync {
-		return dk.reloadSourceWithSync(ctx, oldSource, sourceName, config)
+		err := dk.reloadSourceWithSync(ctx, src, sourceName, config)
+		if err != nil {
+			return err
+		}
+	} else {
+		err := dk.reloadSourceDirect(ctx, src, sourceName, config)
+		if err != nil {
+			return err
+		}
 	}
-	return dk.reloadSourceDirect(ctx, oldSource, sourceName, config)
+
+	// Add the new source to the sources list
+	dk.sources = append(dk.sources, src)
+	return nil
 }
 
 // reloadSourceWithSync reloads a source using incremental sync strategy
@@ -828,7 +839,8 @@ func (dk *BuiltinKnowledge) refreshSourceDocInfo(ctx context.Context, sourceName
 	}
 
 	// add new metadata
-	for docID, meta := range metas {
+	for docID := range metas {
+		meta := metas[docID]
 		dk.cacheMetaInfo[docID] = convertMetaToDocumentInfo(docID, &meta)
 	}
 
@@ -846,7 +858,8 @@ func (dk *BuiltinKnowledge) refreshAllDocInfo(ctx context.Context) error {
 	}
 
 	// cache metadata
-	for docID, meta := range allMeta {
+	for docID := range allMeta {
+		meta := allMeta[docID]
 		docInfo := convertMetaToDocumentInfo(docID, &meta)
 		dk.cacheMetaInfo[docID] = docInfo
 	}
@@ -1135,9 +1148,9 @@ func convertToInt(value interface{}) int {
 }
 
 // generateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
-// Uses MD5 hash to ensure uniqueness and avoid collisions.
+// Uses SHA256 hash to ensure uniqueness and avoid collisions.
 func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
-	hasher := md5.New()
+	hasher := sha256.New()
 
 	// Write source name
 	hasher.Write([]byte(sourceName))
