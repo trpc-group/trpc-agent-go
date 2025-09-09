@@ -139,14 +139,28 @@ func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, mess
 
 // TraceCallLLM traces the invocation of an LLM call.
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
-	span.SetAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String("gen_ai.system", "trpc.go.agent"),
 		attribute.String("gen_ai.operation.name", "call_llm"),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
-		attribute.String(KeySessionID, invoke.Session.ID),
 		attribute.String(KeyEventID, eventID),
-		attribute.String("gen_ai.request.model", invoke.Model.Info().Name),
-	)
+	}
+
+	// Add session ID if session exists
+	if invoke.Session != nil {
+		attrs = append(attrs, attribute.String(KeySessionID, invoke.Session.ID))
+	} else {
+		attrs = append(attrs, attribute.String(KeySessionID, ""))
+	}
+
+	// Add model name if model exists
+	if invoke.Model != nil {
+		attrs = append(attrs, attribute.String("gen_ai.request.model", invoke.Model.Info().Name))
+	} else {
+		attrs = append(attrs, attribute.String("gen_ai.request.model", ""))
+	}
+
+	span.SetAttributes(attrs...)
 
 	if bts, err := json.Marshal(req); err == nil {
 		span.SetAttributes(

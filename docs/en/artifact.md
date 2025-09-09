@@ -74,7 +74,7 @@ The Artifact Service provides different storage implementations for managing art
 Perfect for development and testing:
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/artifact/inmemeory"
+import "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 
 service := inmemory.NewService()
 ```
@@ -99,7 +99,7 @@ service := cos.NewService("https://bucket.cos.region.myqcloud.com")
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/artifact/inmemeory"
+    "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 

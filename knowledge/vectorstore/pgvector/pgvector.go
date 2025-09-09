@@ -7,6 +7,7 @@
 //
 //
 
+// Package pgvector provides a vector store for pgvector.
 package pgvector
 
 import (
@@ -27,6 +28,15 @@ import (
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
 
 var (
+	// errDocumentRequired is the error when document is nil.
+	errDocumentRequired = errors.New("pgvector document is required")
+	// errDocumentIDRequired is the error when document ID is required.
+	errDocumentIDRequired = errors.New("pgvector document ID is required")
+	// errIDRequired is the error when ID is required.
+	errIDRequired = errors.New("pgvector id is required")
+)
+
+var (
 	fieldID        = "id"
 	fieldUpdatedAt = "updated_at"
 	fieldCreatedAt = "created_at"
@@ -37,7 +47,7 @@ var (
 	defaultLimit   = 10
 )
 
-// SQL templates for better maintainability and safety
+// SQL templates for better maintainability and safety.
 const (
 	sqlCreateTable = `
 		CREATE TABLE IF NOT EXISTS %s (
@@ -93,7 +103,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, errors.New("pgvector password is required")
 	}
 
-	// Build connection string
+	// Build connection string.
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		option.host, option.port, option.user, option.password, option.database, option.sslMode)
 
@@ -115,28 +125,28 @@ func New(opts ...Option) (*VectorStore, error) {
 }
 
 func (vs *VectorStore) initDB(ctx context.Context) error {
-	// Enable pgvector extension
+	// Enable pgvector extension.
 	_, err := vs.pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS vector")
 	if err != nil {
 		return fmt.Errorf("pgvector enable extension: %w", err)
 	}
 
-	// Create table if not exists with detailed column comments
+	// Create table if not exists with detailed column comments.
 	createTableSQL := fmt.Sprintf(sqlCreateTable, vs.option.table, vs.option.indexDimension)
 	_, err = vs.pool.Exec(ctx, createTableSQL)
 	if err != nil {
 		return fmt.Errorf("pgvector create table: %w", err)
 	}
 
-	// Create HNSW vector index for faster similarity search
-	// Using cosine distance operator for semantic similarity
+	// Create HNSW vector index for faster similarity search.
+	// Using cosine distance operator for semantic similarity.
 	indexSQL := fmt.Sprintf(sqlCreateIndex, vs.option.table, vs.option.table)
 	_, err = vs.pool.Exec(ctx, indexSQL)
 	if err != nil {
 		return fmt.Errorf("pgvector create vector index: %w", err)
 	}
 
-	// If tsvector is enabled, create GIN index for full-text search on content
+	// If tsvector is enabled, create GIN index for full-text search on content.
 	if vs.option.enableTSVector {
 		textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, vs.option.table, vs.option.table, vs.option.language)
 		_, err = vs.pool.Exec(ctx, textIndexSQL)
@@ -150,11 +160,14 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
+	if doc == nil {
+		return errDocumentRequired
+	}
 	if doc.ID == "" {
-		return fmt.Errorf("pgvector document ID is required")
+		return errDocumentIDRequired
 	}
 	if len(embedding) == 0 {
-		return fmt.Errorf("pgvector embedding is required")
+		return fmt.Errorf("pgvector embedding is required for %s", doc.ID)
 	}
 	if len(embedding) != vs.option.indexDimension {
 		return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d, table: %s", vs.option.indexDimension, len(embedding), vs.option.table)
@@ -176,7 +189,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 // Get retrieves a document by ID along with its embedding.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, fmt.Errorf("pgvector id is required")
+		return nil, nil, errIDRequired
 	}
 
 	querySQL := fmt.Sprintf(sqlSelectDocument, vs.option.table)
@@ -208,11 +221,14 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 
 // Update modifies an existing document.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
+	if doc == nil {
+		return errDocumentRequired
+	}
 	if doc.ID == "" {
-		return fmt.Errorf("pgvector document ID is required")
+		return errDocumentIDRequired
 	}
 
-	// Check if document exists
+	// Check if document exists.
 	exists, err := vs.documentExists(ctx, doc.ID)
 	if err != nil {
 		return fmt.Errorf("pgvector check document existence: %w", err)
@@ -221,7 +237,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 		return fmt.Errorf("pgvector document not found: %s", doc.ID)
 	}
 
-	// Build update using updateBuilder
+	// Build update using updateBuilder.
 	ub := newUpdateBuilder(vs.option.table, doc.ID)
 
 	if doc.Name != "" {
@@ -258,7 +274,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 // Delete removes a document and its embedding.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return fmt.Errorf("pgvector id is required")
+		return errIDRequired
 	}
 
 	deleteSQL := fmt.Sprintf(sqlDeleteDocument, vs.option.table)
@@ -277,7 +293,7 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 // Search performs similarity search and returns the most similar documents.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
-		return nil, fmt.Errorf("pgvector: query is required")
+		return nil, errors.New("pgvector: query is required")
 	}
 
 	if !vs.option.enableTSVector &&
@@ -308,7 +324,7 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 // searchByVector performs pure vector similarity search
 func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("pgvector: searching with a nil or empty vector is not supported")
+		return nil, errors.New("pgvector: searching with a nil or empty vector is not supported")
 	}
 	if len(query.Vector) != vs.option.indexDimension {
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
@@ -345,7 +361,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 // searchByKeyword performs full-text search.
 func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
-		return nil, fmt.Errorf("pgvector keyword is required for keyword search")
+		return nil, errors.New("pgvector keyword is required for keyword search")
 	}
 
 	limit := query.Limit
@@ -372,11 +388,11 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeKeyword)
 }
 
-// searchByHybrid combines vector similarity and keyword matching
+// searchByHybrid combines vector similarity and keyword matching.
 func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	// check vector dimension and keyword
+	// Check vector dimension and keyword.
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("pgvector vector is required for hybrid search")
+		return nil, errors.New("pgvector vector is required for hybrid search")
 	}
 	if len(query.Vector) != vs.option.indexDimension {
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
@@ -394,16 +410,16 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		limit = defaultLimit
 	}
 
-	// Build hybrid search query
+	// Build hybrid search query.
 	qb := newHybridQueryBuilder(vs.option.table, vs.option.language, vectorWeight, textWeight)
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
 
-	// Add full-text search condition only if query text is provided
+	// Add full-text search condition only if query text is provided.
 	if query.Query != "" {
 		qb.addHybridFtsCondition(query.Query)
 	}
 
-	// Add filters
+	// Add filters.
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
 		qb.addIDFilter(query.Filter.IDs)
 	}
@@ -422,19 +438,15 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 
 // searchByFilter returns documents based on filters only
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	if query == nil {
-		return nil, fmt.Errorf("pgvector query is required")
-	}
-
 	limit := query.Limit
 	if limit <= 0 {
 		limit = defaultLimit
 	}
 
-	// Build filter-only search query
+	// Build filter-only search query.
 	qb := newFilterQueryBuilder(vs.option.table, vs.option.language)
 
-	// Add filters
+	// Add filters.
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
 		qb.addIDFilter(query.Filter.IDs)
 	}
@@ -447,8 +459,8 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeFilter)
 }
 
-// executeSearch executes the search query and returns results
-func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []interface{}, searchMode vectorstore.SearchMode) (*vectorstore.SearchResult, error) {
+// executeSearch executes the search query and returns results.
+func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []any, searchMode vectorstore.SearchMode) (*vectorstore.SearchResult, error) {
 	rows, err := vs.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector search documents: %w", err)
@@ -504,7 +516,7 @@ func (vs *VectorStore) Close() error {
 	return nil
 }
 
-// Helper functions
+// Helper functions.
 func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, error) {
 	querySQL := fmt.Sprintf(sqlDocumentExists, vs.option.table)
 	var exists int
@@ -534,28 +546,28 @@ func convertToFloat64Vector(embedding []float32) []float64 {
 	return vector64
 }
 
-func mapToJSON(m map[string]interface{}) string {
+func mapToJSON(m map[string]any) string {
 	if len(m) == 0 {
 		return "{}"
 	}
 
 	data, err := json.Marshal(m)
 	if err != nil {
-		// Fallback to empty JSON if marshal fails
+		// Fallback to empty JSON if marshal fails.
 		return "{}"
 	}
 	return string(data)
 }
 
-func jsonToMap(jsonStr string) (map[string]interface{}, error) {
-	result := make(map[string]interface{})
+func jsonToMap(jsonStr string) (map[string]any, error) {
+	result := make(map[string]any)
 	if jsonStr == "{}" || jsonStr == "" {
 		return result, nil
 	}
 
 	err := json.Unmarshal([]byte(jsonStr), &result)
 	if err != nil {
-		// Return empty map if unmarshal fails, but log the error
+		// Return empty map if unmarshal fails, but log the error.
 		return result, fmt.Errorf("failed to unmarshal JSON: %w", err)
 	}
 
