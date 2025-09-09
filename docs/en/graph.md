@@ -360,10 +360,6 @@ graphAgent, err := graphagent.New("workflow-name", compiledGraph,
         "initial_data": "Initial data",
     }),
     graphagent.WithChannelBufferSize(1024),
-    graphagent.WithTools([]tool.Tool{
-        calculatorTool,
-        searchTool,
-    }),
     graphagent.WithModelCallbacks(&model.Callbacks{
         // Model callback configuration.
     }),

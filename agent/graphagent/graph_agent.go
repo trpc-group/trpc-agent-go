@@ -33,13 +33,6 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithTools sets the list of tools available to the agent.
-func WithTools(tools []tool.Tool) Option {
-	return func(opts *Options) {
-		opts.Tools = tools
-	}
-}
-
 // WithAgentCallbacks sets the agent callbacks.
 func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
@@ -93,8 +86,6 @@ func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
 type Options struct {
 	// Description is a description of the agent.
 	Description string
-	// Tools is the list of tools available to the agent.
-	Tools []tool.Tool
 	// SubAgents is the list of sub-agents available to this agent.
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
@@ -117,7 +108,6 @@ type GraphAgent struct {
 	description       string
 	graph             *graph.Graph
 	executor          *graph.Executor
-	tools             []tool.Tool
 	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
 	modelCallbacks    *model.Callbacks
@@ -155,7 +145,6 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		description:       options.Description,
 		graph:             g,
 		executor:          executor,
-		tools:             options.Tools,
 		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
 		modelCallbacks:    options.ModelCallbacks,
@@ -254,10 +243,7 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.ToolCallbacks = ga.toolCallbacks
 }
 
-// Tools returns the list of tools that this agent has access to.
-func (ga *GraphAgent) Tools() []tool.Tool {
-	return ga.tools
-}
+func (ga *GraphAgent) Tools() []tool.Tool { return nil }
 
 // Info returns the basic information about this agent.
 func (ga *GraphAgent) Info() agent.Info {
