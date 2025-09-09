@@ -1068,6 +1068,269 @@ func TestAfterCallbackOverride(t *testing.T) {
 	require.Equal(t, "override", rv)
 }
 
+// TestShouldTriggerNode tests the shouldTriggerNode logic with various scenarios.
+func TestShouldTriggerNode(t *testing.T) {
+	exec := &Executor{}
+
+	tests := []struct {
+		name           string
+		nodeID         string
+		channelName    string
+		currentVersion int64
+		lastCheckpoint *Checkpoint
+		expected       bool
+	}{
+		{
+			name:           "no_checkpoint_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: nil,
+			expected:       true,
+		},
+		{
+			name:           "no_versions_seen_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{VersionsSeen: nil},
+			expected:       true,
+		},
+		{
+			name:           "node_never_run_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"other_node": {"channel1": 1},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "node_hasnt_seen_channel_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"other_channel": 1},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "newer_version_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 3,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "same_version_should_not_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 2,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:           "older_version_should_not_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := exec.shouldTriggerNode(tt.nodeID, tt.channelName, tt.currentVersion, tt.lastCheckpoint)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestFork tests the Fork function with various scenarios.
+func TestFork(t *testing.T) {
+	// Create a mock checkpoint saver
+	saver := &mockCheckpointSaver{
+		cfgToTuple: make(map[string]*CheckpointTuple),
+	}
+
+	exec := &Executor{checkpointSaver: saver}
+
+	// Test case 1: No checkpoint saver configured
+	t.Run("no_checkpoint_saver", func(t *testing.T) {
+		execNoSaver := &Executor{checkpointSaver: nil}
+		_, err := execNoSaver.Fork(context.Background(), map[string]any{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "checkpoint saver is not configured")
+	})
+
+	// Test case 2: Source checkpoint not found
+	t.Run("source_checkpoint_not_found", func(t *testing.T) {
+		config := map[string]any{"lineage_id": "test", "checkpoint_id": "nonexistent"}
+		_, err := exec.Fork(context.Background(), config)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "source checkpoint not found")
+	})
+
+	// Test case 3: Successful fork
+	t.Run("successful_fork", func(t *testing.T) {
+		// Create a source checkpoint
+		sourceCheckpoint := &Checkpoint{
+			ID:              "source-1",
+			ChannelVersions: map[string]int64{"channel1": 1},
+			NextNodes:       []string{"node1"},
+		}
+		sourceMetadata := &CheckpointMetadata{
+			Step: 5,
+		}
+		sourceTuple := &CheckpointTuple{
+			Checkpoint:    sourceCheckpoint,
+			Metadata:      sourceMetadata,
+			PendingWrites: []PendingWrite{{TaskID: "task1", Channel: "channel1", Value: []byte("test")}},
+		}
+
+		// Mock the saver to return the source checkpoint
+		config := map[string]any{
+			"configurable": map[string]any{
+				"lineage_id":    "test",
+				"checkpoint_id": "source-1",
+				"namespace":     "ns1",
+			},
+		}
+		saver.cfgToTuple[fmt.Sprintf("%v", config)] = sourceTuple
+
+		// Mock PutFull to return updated config
+		saver.putFullFunc = func(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+			return map[string]any{
+				"configurable": map[string]any{
+					"lineage_id":    "test",
+					"checkpoint_id": "forked-1",
+					"namespace":     "ns1",
+				},
+			}, nil
+		}
+
+		result, err := exec.Fork(context.Background(), config)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		configurable, ok := result["configurable"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "test", configurable["lineage_id"])
+		require.Equal(t, "forked-1", configurable["checkpoint_id"])
+		require.Equal(t, "ns1", configurable["namespace"])
+	})
+
+	// Test case 4: Fork with no pending writes
+	t.Run("fork_no_pending_writes", func(t *testing.T) {
+		// Create a source checkpoint with no pending writes
+		sourceCheckpoint := &Checkpoint{
+			ID:              "source-2",
+			ChannelVersions: map[string]int64{"channel1": 1},
+			NextNodes:       []string{"node1"},
+		}
+		sourceMetadata := &CheckpointMetadata{
+			Step: 3,
+		}
+		sourceTuple := &CheckpointTuple{
+			Checkpoint:    sourceCheckpoint,
+			Metadata:      sourceMetadata,
+			PendingWrites: nil, // No pending writes
+		}
+
+		config := map[string]any{
+			"configurable": map[string]any{
+				"lineage_id":    "test2",
+				"checkpoint_id": "source-2",
+				"namespace":     "ns2",
+			},
+		}
+		saver.cfgToTuple[fmt.Sprintf("%v", config)] = sourceTuple
+
+		saver.putFullFunc = func(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+			return map[string]any{
+				"configurable": map[string]any{
+					"lineage_id":    "test2",
+					"checkpoint_id": "forked-2",
+					"namespace":     "ns2",
+				},
+			}, nil
+		}
+
+		result, err := exec.Fork(context.Background(), config)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		configurable, ok := result["configurable"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "test2", configurable["lineage_id"])
+		require.Equal(t, "forked-2", configurable["checkpoint_id"])
+	})
+}
+
+// mockCheckpointSaver is a mock implementation for testing Fork function.
+type mockCheckpointSaver struct {
+	cfgToTuple  map[string]*CheckpointTuple
+	putFullFunc func(ctx context.Context, req PutFullRequest) (map[string]any, error)
+}
+
+func (m *mockCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
+	key := fmt.Sprintf("%v", config)
+	tuple, exists := m.cfgToTuple[key]
+	if !exists {
+		return nil, nil
+	}
+	return tuple, nil
+}
+
+func (m *mockCheckpointSaver) PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+	if m.putFullFunc != nil {
+		return m.putFullFunc(ctx, req)
+	}
+	return req.Config, nil
+}
+
+func (m *mockCheckpointSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) Put(ctx context.Context, req PutRequest) (map[string]any, error) {
+	return req.Config, nil
+}
+
+func (m *mockCheckpointSaver) List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) PutWrites(ctx context.Context, req PutWritesRequest) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) DeleteLineage(ctx context.Context, lineageID string) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) Close() error {
+	return nil
+}
+
 // TestParallelFanOutWithCommands verifies that a node returning []*Command
 // fan-outs into multiple tasks that execute in parallel with isolated overlays
 // and that their results are merged back into the global State via reducers.
