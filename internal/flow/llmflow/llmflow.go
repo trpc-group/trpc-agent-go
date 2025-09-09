@@ -332,7 +332,7 @@ func (f *Flow) callLLM(
 func (f *Flow) postprocess(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	req *model.Request,
+	llmRequest *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
@@ -342,6 +342,6 @@ func (f *Flow) postprocess(
 
 	// Run response processors - they send events directly to the channel.
 	for _, processor := range f.responseProcessors {
-		processor.ProcessResponse(ctx, invocation, req, llmResponse, eventChan)
+		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
 	}
 }

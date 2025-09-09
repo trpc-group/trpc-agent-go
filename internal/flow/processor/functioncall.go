@@ -109,14 +109,14 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	functionCallResponse *model.Response,
+	llmResponse *model.Response,
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	functionResponseEvent, err := p.handleFunctionCalls(
 		ctx,
 		invocation,
-		functionCallResponse,
+		llmResponse,
 		tools,
 	)
 	if err != nil {
@@ -147,19 +147,19 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	functionCallResponse *model.Response,
+	llmResponse *model.Response,
 	tools map[string]tool.Tool,
 ) (*event.Event, error) {
-	if functionCallResponse == nil || len(functionCallResponse.Choices) == 0 {
+	if llmResponse == nil || len(llmResponse.Choices) == 0 {
 		return nil, nil
 	}
 
 	var toolCallResponsesEvents []*event.Event
-	toolCalls := functionCallResponse.Choices[0].Message.ToolCalls
+	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	if p.enableParallelTools && len(toolCalls) > 1 {
-		return p.executeToolCallsInParallel(ctx, invocation, functionCallResponse, toolCalls, tools)
+		return p.executeToolCallsInParallel(ctx, invocation, llmResponse, toolCalls, tools)
 	}
 
 	// Execute each tool call.
@@ -176,7 +176,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 				return nil
 			}
 			choice.Message.ToolName = toolCall.Function.Name
-			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallResponse,
+			toolCallResponseEvent := newToolCallResponseEvent(invocation, llmResponse,
 				[]model.Choice{*choice})
 			toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
 			tl, ok := tools[toolCall.Function.Name]
@@ -198,7 +198,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
-		mergedEvent = newToolCallResponseEvent(invocation, functionCallResponse, nil)
+		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, nil)
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
@@ -219,7 +219,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	functionCallResponse *model.Response,
+	llmResponse *model.Response,
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
 ) (*event.Event, error) {
@@ -238,7 +238,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 					// Send error result to channel.
 					errorChoice := p.createErrorChoice(index, tc.ID, fmt.Sprintf("tool execution panic: %v", r))
 					errorChoice.Message.ToolName = tc.Function.Name
-					errorEvent := newToolCallResponseEvent(invocation, functionCallResponse, []model.Choice{*errorChoice})
+					errorEvent := newToolCallResponseEvent(invocation, llmResponse, []model.Choice{*errorChoice})
 					select {
 					case resultChan <- toolResult{index: index, event: errorEvent}:
 					case <-ctx.Done():
@@ -258,7 +258,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 				// Send error result to channel.
 				errorChoice := p.createErrorChoice(index, tc.ID, fmt.Sprintf("tool execution error: %v", err))
 				errorChoice.Message.ToolName = tc.Function.Name
-				errorEvent := newToolCallResponseEvent(invocation, functionCallResponse,
+				errorEvent := newToolCallResponseEvent(invocation, llmResponse,
 					[]model.Choice{*errorChoice})
 				select {
 				case resultChan <- toolResult{index: index, event: errorEvent}:
@@ -278,7 +278,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			}
 
 			choice.Message.ToolName = tc.Function.Name
-			toolCallResponseEvent := newToolCallResponseEvent(invocation, functionCallResponse,
+			toolCallResponseEvent := newToolCallResponseEvent(invocation, llmResponse,
 				[]model.Choice{*choice})
 
 			tl, ok := tools[tc.Function.Name]
@@ -318,7 +318,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
-		mergedEvent = newToolCallResponseEvent(invocation, functionCallResponse, nil)
+		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, nil)
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
