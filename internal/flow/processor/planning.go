@@ -127,6 +127,7 @@ func NewPlanningResponseProcessor(p planner.Planner) *PlanningResponseProcessor 
 func (p *PlanningResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {

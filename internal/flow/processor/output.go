@@ -43,6 +43,7 @@ func NewOutputResponseProcessor(
 func (p *OutputResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {

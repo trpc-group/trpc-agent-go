@@ -88,7 +88,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 
 	// Start processing in a goroutine so we can send completion signals
 	go func() {
-		processor.ProcessResponse(ctx, invocation, response, eventCh)
+		processor.ProcessResponse(ctx, invocation, &model.Request{}, response, eventCh)
 		close(eventCh)
 	}()
 
@@ -169,7 +169,7 @@ func TestOutputResponseProcessor_ProcessResponse_NoOutputKey(t *testing.T) {
 	eventCh := make(chan *event.Event, 1)
 
 	// Process the response
-	processor.ProcessResponse(ctx, invocation, response, eventCh)
+	processor.ProcessResponse(ctx, invocation, &model.Request{}, response, eventCh)
 
 	// Close the channel and collect events
 	close(eventCh)
@@ -216,7 +216,7 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 	eventCh := make(chan *event.Event, 1)
 
 	// Process the response
-	processor.ProcessResponse(ctx, invocation, response, eventCh)
+	processor.ProcessResponse(ctx, invocation, &model.Request{}, response, eventCh)
 
 	// Close the channel and collect events
 	close(eventCh)

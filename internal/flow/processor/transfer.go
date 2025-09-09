@@ -32,6 +32,7 @@ func NewTransferResponseProcessor() *TransferResponseProcessor {
 func (p *TransferResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
@@ -113,6 +114,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		EventCompletionCh: invocation.EventCompletionCh,
 		RunOptions:        invocation.RunOptions,
 		TransferInfo:      nil, // Clear transfer info for target agent
+		// Preserve additional execution context similar to request-time transfer
+		AgentCallbacks:       invocation.AgentCallbacks,
+		ModelCallbacks:       invocation.ModelCallbacks,
+		ToolCallbacks:        invocation.ToolCallbacks,
+		StructuredOutput:     invocation.StructuredOutput,
+		StructuredOutputType: invocation.StructuredOutputType,
+		ArtifactService:      invocation.ArtifactService,
+		Branch:               invocation.Branch,
 	}
 
 	// Set the message for the target agent.
@@ -126,8 +135,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		targetInvocation.Message = invocation.Message
 	}
 
-	// Actually call the target agent's Run method.
-	targetEventChan, err := targetAgent.Run(ctx, targetInvocation)
+	// Actually call the target agent's Run method with the target invocation in context
+	// so tools can correctly access agent.InvocationFromContext(ctx).
+	log.Debugf("Transfer response processor: starting target agent '%s'", targetAgent.Info().Name)
+	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
+	targetEventChan, err := targetAgent.Run(targetCtx, targetInvocation)
 	if err != nil {
 		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
@@ -154,12 +166,9 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		}
 	}
 
-	// Clear the transfer info from the original invocation.
+	// Clear the transfer info and end the original invocation to stop further LLM calls.
+	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
+	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
 	invocation.TransferInfo = nil
-
-	// Update the original invocation to reflect the transfer.
-	invocation.Agent = targetAgent
-	invocation.AgentName = targetAgent.Info().Name
-	// Always end the original invocation after transfer.
 	invocation.EndInvocation = true
 }

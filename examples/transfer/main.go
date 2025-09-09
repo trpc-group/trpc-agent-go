@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	alog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -34,6 +35,7 @@ import (
 func main() {
 	// Parse command line flags.
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	debug := flag.Bool("debug", false, "Enable debug logging and verbose event traces")
 	flag.Parse()
 
 	fmt.Printf("🔄 Agent Transfer Demo\n")
@@ -43,9 +45,16 @@ func main() {
 	fmt.Printf("Use natural language to request tasks - the coordinator will transfer to appropriate agents\n")
 	fmt.Println(strings.Repeat("=", 70))
 
+	// Enable debug logging if requested.
+	if *debug {
+		alog.SetLevel(alog.LevelDebug)
+		fmt.Println("🪵 Debug logging enabled (internal flow logs at DEBUG level)")
+	}
+
 	// Create and run the chat.
 	chat := &transferChat{
 		modelName: *modelName,
+		debug:     *debug,
 	}
 
 	if err := chat.run(); err != nil {
@@ -59,6 +68,7 @@ type transferChat struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
+	debug     bool
 }
 
 // run starts the interactive chat session.
@@ -201,15 +211,50 @@ func (c *transferChat) processStreamingResponse(eventChan <-chan *event.Event) e
 		toolCallsDetected bool
 		assistantStarted  bool
 		currentAgent      string = "coordinator-agent"
+		sawTransferEvent  bool
+		debugWarned       bool
 	)
 
 	for event := range eventChan {
+		if c.debug {
+			// Verbose event trace for debugging transfer ordering/author
+			var obj = event.Object
+			var author = event.Author
+			var partial = false
+			var done = false
+			if event.Response != nil {
+				partial = event.Response.IsPartial
+				done = event.Response.Done
+			}
+			fmt.Printf("\n[DBG] event id=%s obj=%s author=%s partial=%t done=%t branch=%s\n", event.ID, obj, author, partial, done, event.Branch)
+			if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+				fmt.Printf("[DBG]  tool_calls: ")
+				for _, tc := range event.Choices[0].Message.ToolCalls {
+					fmt.Printf("%s ", tc.Function.Name)
+				}
+				fmt.Println()
+			}
+		}
+
 		if err := c.handleTransferEvent(event, &fullContent, &toolCallsDetected, &assistantStarted, &currentAgent); err != nil {
 			return err
+		}
+
+		if event.Object == model.ObjectTypeTransfer {
+			sawTransferEvent = true
+		}
+
+		// Safety check: after transfer, no parent/coordinator events should appear
+		if c.debug && sawTransferEvent && event.Author == "coordinator-agent" && event.Object != model.ObjectTypeTransfer {
+			fmt.Printf("\n[DBG][WARN] Received coordinator event after transfer — this should not happen\n")
+			debugWarned = true
 		}
 	}
 
 	fmt.Println() // Final newline
+	if c.debug && sawTransferEvent && !debugWarned {
+		fmt.Println("[DBG] OK: No parent chunks observed after transfer; ordering looks correct")
+	}
 	return nil
 }
 
