@@ -28,6 +28,9 @@ func Start(ctx context.Context, config *Config, opts ...atrace.Option) (clean fu
 	if config == nil {
 		config = newConfigFromEnv()
 	}
+	if config.SecretKey == "" || config.PublicKey == "" || config.Host == "" {
+		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided")
+	}
 
 	langfuseOpts := []atrace.Option{
 		atrace.WithEndpointURL(config.Host + "/api/public/otel/v1/traces"),
