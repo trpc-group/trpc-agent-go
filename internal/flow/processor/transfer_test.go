@@ -75,7 +75,7 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 
 	out := make(chan *event.Event, 10)
 	proc := NewTransferResponseProcessor()
-	proc.ProcessResponse(context.Background(), inv, rsp, out)
+	proc.ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 	close(out)
 
 	// Expect transfer event + child event
@@ -93,7 +93,7 @@ func TestTransferResponseProc_Target404(t *testing.T) {
 	inv := &agent.Invocation{Agent: parent, AgentName: "parent", InvocationID: "inv", TransferInfo: &agent.TransferInfo{TargetAgentName: "missing"}}
 	rsp := &model.Response{ID: "r"}
 	out := make(chan *event.Event, 1)
-	NewTransferResponseProcessor().ProcessResponse(context.Background(), inv, rsp, out)
+	NewTransferResponseProcessor().ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
 	close(out)
 	evt := <-out
 	require.NotNil(t, evt.Error)

@@ -26,4 +26,8 @@ O_WRONLY = "O_WRONLY"
 [default.extend-words]
 unmarshaling = "unmarshaling" 
 Unarshaling = "Unmarshaling" 
+Indexes = "Indexes"
+Indexs = "Indexs"
+indexes = "indexes"
+indexs = "indexs"
 ba = "ba"
