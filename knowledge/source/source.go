@@ -12,9 +12,7 @@ package source
 
 import (
 	"context"
-	"crypto/md5"
 	"fmt"
-	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
@@ -122,37 +120,4 @@ func GetAllMetadataKeys(sources []Source) []string {
 		result = append(result, key)
 	}
 	return result
-}
-
-// GenerateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
-// Uses MD5 hash to ensure uniqueness and avoid collisions.
-func GenerateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
-	hasher := md5.New()
-
-	// Write source name
-	hasher.Write([]byte(sourceName))
-	hasher.Write([]byte(":"))
-
-	// Write content
-	hasher.Write([]byte(content))
-	hasher.Write([]byte(":"))
-
-	// Write chunk index
-	hasher.Write([]byte(fmt.Sprintf("%d", chunkIndex)))
-	hasher.Write([]byte(":"))
-
-	// Write source metadata (sorted by keys for consistency)
-	if sourceMetadata != nil {
-		keys := make([]string, 0, len(sourceMetadata))
-		for k := range sourceMetadata {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		for _, k := range keys {
-			hasher.Write([]byte(fmt.Sprintf("%s:%v:", k, sourceMetadata[k])))
-		}
-	}
-
-	return fmt.Sprintf("%x", hasher.Sum(nil))
 }

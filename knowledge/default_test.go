@@ -48,7 +48,6 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 			Metadata: map[string]interface{}{
 				"category": fmt.Sprintf("cat-%d", i%3), // Categories: cat-0, cat-1, cat-2
 				"level":    i%2 + 1,                    // Levels: 1, 2
-				"source":   "test",
 			},
 		}
 	}

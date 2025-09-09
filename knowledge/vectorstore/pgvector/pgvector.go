@@ -556,7 +556,7 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 }
 
 func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
-	dsb := newDeleteSqlBuilder(vs.option.table)
+	dsb := newDeleteSQLBuilder(vs.option.table)
 
 	if len(config.DocumentIDs) > 0 {
 		dsb.addIDFilter(config.DocumentIDs)

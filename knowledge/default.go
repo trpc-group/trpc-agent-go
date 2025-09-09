@@ -12,8 +12,10 @@ package knowledge
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -287,9 +289,8 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 	config := dk.buildLoadConfig(1, opts...)
 	if dk.enableSourceSync {
 		return dk.reloadSourceWithSync(ctx, oldSource, sourceName, config)
-	} else {
-		return dk.reloadSourceDirect(ctx, oldSource, sourceName, config)
 	}
+	return dk.reloadSourceDirect(ctx, oldSource, sourceName, config)
 }
 
 // reloadSourceWithSync reloads a source using incremental sync strategy
@@ -358,10 +359,9 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
 		_, err := dk.loadConcurrent(ctx, config, sources)
 		return err
-	} else {
-		_, err := dk.loadSequential(ctx, config, sources)
-		return err
 	}
+	_, err := dk.loadSequential(ctx, config, sources)
+	return err
 }
 
 // RemoveSource removes a source from the knowledge base by name.
@@ -717,15 +717,13 @@ func (dk *BuiltinKnowledge) addDocumentWithSync(
 	doc *document.Document,
 	src source.Source,
 ) error {
+	if !dk.enableSourceSync {
+		return dk.addDocument(ctx, doc)
+	}
 	// check document metadata
 	if err := dk.resetDocumentID(doc, src); err != nil {
 		return fmt.Errorf("failed to check document metadata: %w", err)
 	}
-
-	if !dk.enableSourceSync {
-		return dk.addDocument(ctx, doc)
-	}
-
 	// check if document should be processed
 	shouldProcess, err := dk.shouldProcessDocument(doc)
 	if err != nil {
@@ -793,7 +791,7 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 
 	// generate document ID by source name, content, chunk index and source metadata
 	// we cal hash with metadata that user set
-	doc.ID = source.GenerateDocumentID(src.Name(), uri, doc.Content, chunkIndexInt, src.GetMetadata())
+	doc.ID = generateDocumentID(src.Name(), uri, doc.Content, chunkIndexInt, src.GetMetadata())
 	return nil
 }
 
@@ -1134,4 +1132,37 @@ func convertToInt(value interface{}) int {
 	default:
 		return 0
 	}
+}
+
+// generateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
+// Uses MD5 hash to ensure uniqueness and avoid collisions.
+func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
+	hasher := md5.New()
+
+	// Write source name
+	hasher.Write([]byte(sourceName))
+	hasher.Write([]byte(":"))
+
+	// Write content
+	hasher.Write([]byte(content))
+	hasher.Write([]byte(":"))
+
+	// Write chunk index
+	hasher.Write([]byte(fmt.Sprintf("%d", chunkIndex)))
+	hasher.Write([]byte(":"))
+
+	// Write source metadata (sorted by keys for consistency)
+	if sourceMetadata != nil {
+		keys := make([]string, 0, len(sourceMetadata))
+		for k := range sourceMetadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			hasher.Write([]byte(fmt.Sprintf("%s:%v:", k, sourceMetadata[k])))
+		}
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil))
 }

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // TestRecursiveChunking_Errors verifies that error conditions are handled
@@ -73,8 +74,8 @@ func TestRecursiveChunking_Basic(t *testing.T) {
 		if c.Metadata["source"] != "unit-test" {
 			t.Fatalf("metadata not propagated in chunk %d", i)
 		}
-		if c.Metadata["chunk"].(int) != i+1 {
-			t.Fatalf("wrong chunk index, expected %d got %v", i+1, c.Metadata["chunk"])
+		if c.Metadata[source.MetaChunkIndex].(int) != i+1 {
+			t.Fatalf("wrong chunk index, expected %d got %v", i+1, c.Metadata[source.MetaChunkIndex])
 		}
 	}
 }

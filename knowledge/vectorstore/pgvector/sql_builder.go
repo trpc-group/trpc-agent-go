@@ -106,17 +106,17 @@ func newFilterQueryBuilder(table string, language string) *queryBuilder {
 	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeFilter, 0, 0)
 }
 
-// deleteSqlBuilder builds DELETE SQL statements safely with comprehensive filter support
-type deleteSqlBuilder struct {
+// deleteSQLBuilder builds DELETE SQL statements safely with comprehensive filter support
+type deleteSQLBuilder struct {
 	table      string
 	conditions []string
 	args       []interface{}
 	argIndex   int
 }
 
-// newDeleteSqlBuilder creates a builder for DELETE operations
-func newDeleteSqlBuilder(table string) *deleteSqlBuilder {
-	return &deleteSqlBuilder{
+// newDeleteSQLBuilder creates a builder for DELETE operations
+func newDeleteSQLBuilder(table string) *deleteSQLBuilder {
+	return &deleteSQLBuilder{
 		table:      table,
 		conditions: []string{"1=1"},
 		args:       make([]interface{}, 0),
@@ -125,7 +125,7 @@ func newDeleteSqlBuilder(table string) *deleteSqlBuilder {
 }
 
 // addIDFilter adds document ID filter conditions to the delete query
-func (dsb *deleteSqlBuilder) addIDFilter(ids []string) {
+func (dsb *deleteSQLBuilder) addIDFilter(ids []string) {
 	if len(ids) == 0 {
 		return
 	}
@@ -143,7 +143,7 @@ func (dsb *deleteSqlBuilder) addIDFilter(ids []string) {
 
 // addMetadataFilter adds metadata filter conditions to the delete query
 // Uses @> operator for efficient JSONB queries, same as queryBuilder implementation
-func (dsb *deleteSqlBuilder) addMetadataFilter(metadata map[string]interface{}) {
+func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]interface{}) {
 	if len(metadata) == 0 {
 		return
 	}
@@ -158,7 +158,7 @@ func (dsb *deleteSqlBuilder) addMetadataFilter(metadata map[string]interface{}) 
 }
 
 // build builds the DELETE query with all conditions
-func (dsb *deleteSqlBuilder) build() (string, []interface{}) {
+func (dsb *deleteSQLBuilder) build() (string, []interface{}) {
 	whereClause := strings.Join(dsb.conditions, " AND ")
 	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dsb.table, whereClause)
 	return sql, dsb.args
