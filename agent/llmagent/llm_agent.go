@@ -415,6 +415,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, orp)
 	}
 
+	responseProcessors = append(responseProcessors, processor.NewFunctionCallResponseProcessor())
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()

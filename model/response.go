@@ -167,6 +167,25 @@ func (r *Response) Clone() *Response {
 	return &clone
 }
 
+// HasToolCalls checks if the response contains tool calls.
+func (rsp *Response) HasToolCalls() bool {
+	return len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+}
+
+// IsFinalResponse checks if the Response is a final response.
+func (rsp *Response) IsFinalResponse() bool {
+	if rsp == nil {
+		return true
+	}
+
+	if rsp.HasToolCalls() {
+		return false
+	}
+
+	// Consider response final if it's marked as done and has content or error.
+	return rsp.Done && (len(rsp.Choices) > 0 || rsp.Error != nil)
+}
+
 // ResponseError represents an error response from the API.
 type ResponseError struct {
 	// Message is the error message.
