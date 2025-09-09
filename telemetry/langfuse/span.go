@@ -63,69 +63,69 @@ func (s *span) transformAttributes(attrs map[attribute.Key]attribute.Value) {
 
 func (s *span) transformRunRunner(attrs map[attribute.Key]attribute.Value) {
 	if name, ok := attrs["trpc.go.agent.runner.name"]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.name", name.AsString()))
+		s.underlying.SetAttributes(attribute.String(traceName, name.AsString()))
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.name", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.name", "N/A"))
+		s.underlying.SetAttributes(attribute.String(traceName, "N/A"))
 	}
 
 	if userID, ok := attrs["trpc.go.agent.runner.user_id"]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.user_id", userID.AsString()))
+		s.underlying.SetAttributes(attribute.String(traceUserID, userID.AsString()))
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.user_id", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.user_id", "N/A"))
+		s.underlying.SetAttributes(attribute.String(traceUserID, "N/A"))
 	}
 
 	if sessionID, ok := attrs["trpc.go.agent.runner.session_id"]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.session_id", sessionID.AsString()))
+		s.underlying.SetAttributes(attribute.String(traceSessionID, sessionID.AsString()))
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.session_id", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.session_id", "N/A"))
+		s.underlying.SetAttributes(attribute.String(traceSessionID, "N/A"))
 	}
 
 	if input, ok := attrs["trpc.go.agent.runner.input"]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.input", input.AsString()))
+		s.underlying.SetAttributes(attribute.String(traceInput, input.AsString()))
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.input", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.input", "N/A"))
+		s.underlying.SetAttributes(attribute.String(traceInput, "N/A"))
 	}
 
 	if output, ok := attrs["trpc.go.agent.runner.output"]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.output", output.AsString()))
+		s.underlying.SetAttributes(attribute.String(traceOutput, output.AsString()))
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.output", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.trace.output", "N/A"))
+		s.underlying.SetAttributes(attribute.String(traceOutput, "N/A"))
 	}
 
 }
 
 func (s *span) transformExecuteTool(attrs map[attribute.Key]attribute.Value) {
-	s.underlying.SetAttributes(attribute.String("langfuse.observation.type", "tool"))
+	s.underlying.SetAttributes(attribute.String(observationType, "tool"))
 	if callArgs, ok := attrs[attribute.Key("trpc.go.agent.tool_call_args")]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.observation.input", callArgs.AsString()))
+		s.underlying.SetAttributes(attribute.String(observationInput, callArgs.AsString()))
 		// Exclude tool_call_args as they're mapped separately
 		s.underlying.SetAttributes(attribute.String("tool_call_args", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.observation.input", "N/A"))
+		s.underlying.SetAttributes(attribute.String(observationInput, "N/A"))
 	}
 
 	if toolResult, ok := attrs[attribute.Key("trpc.go.agent.tool_response")]; ok {
-		s.underlying.SetAttributes(attribute.String("langfuse.observation.output", toolResult.AsString()))
+		s.underlying.SetAttributes(attribute.String(observationOutput, toolResult.AsString()))
 		// Exclude tool_response as they're mapped separately
 		s.underlying.SetAttributes(attribute.String("trpc.go.agent.tool_response", ""))
 	} else {
-		s.underlying.SetAttributes(attribute.String("langfuse.observation.output", "N/A"))
+		s.underlying.SetAttributes(attribute.String(observationOutput, "N/A"))
 	}
 
 }
 
 // processLLMGenerationSpan handles the transformation for LLM generation spans.
 func (s *span) transformCallLLM(attrs map[attribute.Key]attribute.Value) {
-	s.underlying.SetAttributes(attribute.String("langfuse.observation.type", "generation"))
+	s.underlying.SetAttributes(attribute.String(observationType, "generation"))
 
 	if request, ok := attrs[attribute.Key(itelemetry.KeyLLMRequest)]; ok {
 		s.underlying.SetAttributes(
-			attribute.String("langfuse.observation.input", request.AsString()),
+			attribute.String(observationInput, request.AsString()),
 		)
 		// generation_config
 		req := make(map[string]interface{})
@@ -134,7 +134,7 @@ func (s *span) transformCallLLM(attrs map[attribute.Key]attribute.Value) {
 				jsonConfig, err := json.Marshal(genConfig)
 				if err == nil {
 					s.underlying.SetAttributes(
-						attribute.String("langfuse.observation.model.parameters", string(jsonConfig)),
+						attribute.String(observationModelParameters, string(jsonConfig)),
 					)
 				}
 			}
@@ -144,20 +144,20 @@ func (s *span) transformCallLLM(attrs map[attribute.Key]attribute.Value) {
 	} else {
 		// If no request attribute, set a default input
 		s.underlying.SetAttributes(
-			attribute.String("langfuse.observation.input", "N/A"),
+			attribute.String(observationInput, "N/A"),
 		)
 	}
 
 	if response, ok := attrs[attribute.Key(itelemetry.KeyLLMResponse)]; ok {
 		s.underlying.SetAttributes(
-			attribute.String("langfuse.observation.output", response.AsString()),
+			attribute.String(observationOutput, response.AsString()),
 		)
 		// Exclude llm_response as they're mapped separately
 		s.underlying.SetAttributes(attribute.String(itelemetry.KeyLLMResponse, ""))
 	} else {
 		// If no response attribute, set a default output
 		s.underlying.SetAttributes(
-			attribute.String("langfuse.observation.output", "N/A"),
+			attribute.String(observationOutput, "N/A"),
 		)
 	}
 }
