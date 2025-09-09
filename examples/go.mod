@@ -19,6 +19,7 @@ replace (
 )
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/openai/openai-go v1.12.0
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/metric v1.38.0
@@ -33,7 +34,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.4
-	trpc.group/trpc-go/trpc-mcp-go v0.0.5-0.20250904104707-ad3358b7ea03
+	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
 require (
@@ -82,7 +83,6 @@ require (
 	github.com/lestrrat-go/jwx/v2 v2.1.4 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
-	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
