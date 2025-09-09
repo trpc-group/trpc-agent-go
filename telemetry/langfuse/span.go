@@ -48,7 +48,7 @@ func (s *span) End(options ...trace.SpanEndOption) {
 
 // transformAttributes applies custom transformations to span attributes.
 func (s *span) transformAttributes(attrs map[attribute.Key]attribute.Value) {
-	operationName, ok := attrs[attribute.Key("gen_ai.operation.name")]
+	operationName, ok := attrs[attribute.Key(itelemetry.KeyGenAIOperationName)]
 	if !ok {
 		return
 	}
@@ -62,37 +62,37 @@ func (s *span) transformAttributes(attrs map[attribute.Key]attribute.Value) {
 }
 
 func (s *span) transformRunRunner(attrs map[attribute.Key]attribute.Value) {
-	if name, ok := attrs["trpc.go.agent.runner.name"]; ok {
+	if name, ok := attrs[attribute.Key(itelemetry.KeyRunnerName)]; ok {
 		s.underlying.SetAttributes(attribute.String(traceName, name.AsString()))
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.name", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyRunnerName, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(traceName, "N/A"))
 	}
 
-	if userID, ok := attrs["trpc.go.agent.runner.user_id"]; ok {
+	if userID, ok := attrs[attribute.Key(itelemetry.KeyRunnerUserID)]; ok {
 		s.underlying.SetAttributes(attribute.String(traceUserID, userID.AsString()))
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.user_id", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyRunnerUserID, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(traceUserID, "N/A"))
 	}
 
-	if sessionID, ok := attrs["trpc.go.agent.runner.session_id"]; ok {
+	if sessionID, ok := attrs[attribute.Key(itelemetry.KeyRunnerSessionID)]; ok {
 		s.underlying.SetAttributes(attribute.String(traceSessionID, sessionID.AsString()))
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.session_id", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyRunnerSessionID, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(traceSessionID, "N/A"))
 	}
 
-	if input, ok := attrs["trpc.go.agent.runner.input"]; ok {
+	if input, ok := attrs[attribute.Key(itelemetry.KeyRunnerInput)]; ok {
 		s.underlying.SetAttributes(attribute.String(traceInput, input.AsString()))
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.input", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyRunnerInput, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(traceInput, "N/A"))
 	}
 
-	if output, ok := attrs["trpc.go.agent.runner.output"]; ok {
+	if output, ok := attrs[attribute.Key(itelemetry.KeyRunnerOutput)]; ok {
 		s.underlying.SetAttributes(attribute.String(traceOutput, output.AsString()))
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.output", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyRunnerOutput, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(traceOutput, "N/A"))
 	}
@@ -101,18 +101,18 @@ func (s *span) transformRunRunner(attrs map[attribute.Key]attribute.Value) {
 
 func (s *span) transformExecuteTool(attrs map[attribute.Key]attribute.Value) {
 	s.underlying.SetAttributes(attribute.String(observationType, "tool"))
-	if callArgs, ok := attrs[attribute.Key("trpc.go.agent.tool_call_args")]; ok {
+	if callArgs, ok := attrs[attribute.Key(itelemetry.KeyToolCallArgs)]; ok {
 		s.underlying.SetAttributes(attribute.String(observationInput, callArgs.AsString()))
 		// Exclude tool_call_args as they're mapped separately
-		s.underlying.SetAttributes(attribute.String("tool_call_args", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyToolCallArgs, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(observationInput, "N/A"))
 	}
 
-	if toolResult, ok := attrs[attribute.Key("trpc.go.agent.tool_response")]; ok {
+	if toolResult, ok := attrs[attribute.Key(itelemetry.KeyToolResponse)]; ok {
 		s.underlying.SetAttributes(attribute.String(observationOutput, toolResult.AsString()))
 		// Exclude tool_response as they're mapped separately
-		s.underlying.SetAttributes(attribute.String("trpc.go.agent.tool_response", ""))
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyToolResponse, ""))
 	} else {
 		s.underlying.SetAttributes(attribute.String(observationOutput, "N/A"))
 	}
