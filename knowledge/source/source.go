@@ -126,7 +126,7 @@ func GetAllMetadataKeys(sources []Source) []string {
 
 // GenerateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
 // Uses MD5 hash to ensure uniqueness and avoid collisions.
-func GenerateDocumentID(sourceName, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
+func GenerateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
 	hasher := md5.New()
 
 	// Write source name

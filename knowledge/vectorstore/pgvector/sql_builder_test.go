@@ -454,3 +454,125 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 		})
 	}
 }
+
+func TestMetadataQueryBuilder_Basic(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "SELECT id, metadata")
+	assert.Contains(t, sql, "FROM test_table")
+	assert.Contains(t, sql, "WHERE 1=1")
+	assert.Contains(t, sql, "ORDER BY created_at")
+	assert.Contains(t, sql, "LIMIT $1 OFFSET $2")
+	assert.Equal(t, []interface{}{10, 0}, args)
+}
+
+func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	mqb.addIDFilter([]string{"id1", "id2", "id3"})
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "id IN ($1, $2, $3)")
+	assert.Equal(t, []interface{}{"id1", "id2", "id3", 10, 0}, args)
+}
+
+func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	filter := map[string]interface{}{
+		"category": "test",
+		"status":   "active",
+	}
+	mqb.addMetadataFilter(filter)
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "metadata @> $1::jsonb")
+	assert.Len(t, args, 3) // metadata JSON, limit, offset
+	assert.Equal(t, 10, args[1])
+	assert.Equal(t, 0, args[2])
+}
+
+func TestMetadataQueryBuilder_WithBothFilters(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	mqb.addIDFilter([]string{"id1", "id2"})
+	filter := map[string]interface{}{
+		"category": "test",
+	}
+	mqb.addMetadataFilter(filter)
+
+	sql, args := mqb.buildWithPagination(5, 10)
+
+	assert.Contains(t, sql, "id IN ($1, $2)")
+	assert.Contains(t, sql, "metadata @> $3::jsonb")
+	assert.Contains(t, sql, "WHERE 1=1 AND id IN ($1, $2) AND metadata @> $3::jsonb")
+	assert.Len(t, args, 5) // id1, id2, metadata JSON, limit, offset
+	assert.Equal(t, "id1", args[0])
+	assert.Equal(t, "id2", args[1])
+	assert.Equal(t, 5, args[3])  // limit
+	assert.Equal(t, 10, args[4]) // offset
+}
+
+func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+
+	// Test with empty ID filter
+	mqb.addIDFilter([]string{})
+	mqb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	// Should only have the basic WHERE 1=1 condition
+	assert.Contains(t, sql, "WHERE 1=1")
+	assert.NotContains(t, sql, "id IN")
+	assert.NotContains(t, sql, "metadata @>")
+	assert.Equal(t, []interface{}{10, 0}, args)
+}
+
+// TestCountQueryBuilder_Basic tests basic count query building
+func TestCountQueryBuilder_Basic(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestCountQueryBuilder_WithMetadataFilter tests count query with metadata filter
+func TestCountQueryBuilder_WithMetadataFilter(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	filter := map[string]interface{}{
+		"category": "science",
+		"status":   "published",
+	}
+	cqb.addMetadataFilter(filter)
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1 AND metadata @> $1::jsonb", sql)
+	assert.Len(t, args, 1)
+
+	// Verify the JSON argument contains the filter
+	jsonArg, ok := args[0].(string)
+	assert.True(t, ok)
+	assert.Contains(t, jsonArg, "category")
+	assert.Contains(t, jsonArg, "science")
+	assert.Contains(t, jsonArg, "status")
+	assert.Contains(t, jsonArg, "published")
+}
+
+// TestCountQueryBuilder_EmptyFilter tests count query with empty filter
+func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	// Add empty filter (should be ignored)
+	cqb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}

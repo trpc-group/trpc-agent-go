@@ -13,6 +13,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -127,7 +128,8 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
-	metadata[source.MetaURI] = fmt.Sprintf("file://%s", absPath)
+	fileURL := (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaURI] = fileURL
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.

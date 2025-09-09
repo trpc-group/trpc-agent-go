@@ -76,7 +76,7 @@ var (
 	pgvectorPort     = getEnvOrDefault("PGVECTOR_PORT", "5432")
 	pgvectorUser     = getEnvOrDefault("PGVECTOR_USER", "root")
 	pgvectorPassword = getEnvOrDefault("PGVECTOR_PASSWORD", "123")
-	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "homerpan1")
+	pgvectorDatabase = getEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
 
 	// TCVector.
 	tcvectorURL      = getEnvOrDefault("TCVECTOR_URL", "")
@@ -88,7 +88,7 @@ var (
 	elasticsearchUsername  = getEnvOrDefault("ELASTICSEARCH_USERNAME", "")
 	elasticsearchPassword  = getEnvOrDefault("ELASTICSEARCH_PASSWORD", "")
 	elasticsearchAPIKey    = getEnvOrDefault("ELASTICSEARCH_API_KEY", "")
-	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")
+	elasticsearchIndexName = getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_go")
 )
 
 func main() {
@@ -320,6 +320,7 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
 		knowledge.WithSources(c.sources),
+		knowledge.WithEnableSourceSync(*sourceSync),
 	)
 
 	// Optionally load the knowledge base.
@@ -331,7 +332,6 @@ func (c *knowledgeChat) setupKnowledgeBase(ctx context.Context) error {
 		knowledge.WithSourceConcurrency(4), // The default is min(4, len(sources)).
 		knowledge.WithDocConcurrency(64),   // The default is runtime.NumCPU().
 		knowledge.WithRecreate(*recreate),
-		knowledge.WithSourceSync(*sourceSync),
 	); err != nil {
 		return fmt.Errorf("failed to load knowledge base: %w", err)
 	}

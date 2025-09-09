@@ -205,15 +205,13 @@ func (*stubVectorStore) Update(ctx context.Context, doc *document.Document, emb 
 func (*stubVectorStore) Delete(ctx context.Context, id string) error { return nil }
 func (*stubVectorStore) DeleteByFilter(
 	ctx context.Context,
-	ids []string,
-	filter map[string]interface{},
-	deleteAll bool) error {
+	opts ...vectorstore.DeleteOption) error {
 	return nil
 }
-func (*stubVectorStore) GetMetadata(ctx context.Context, limit int, offset int) (map[string]vectorstore.DocumentMetadata, error) {
+func (*stubVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
 	return nil, nil
 }
-func (*stubVectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+func (*stubVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	return 0, nil
 }
 func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
@@ -820,9 +818,7 @@ func (e *errorVectorStore) Delete(ctx context.Context, id string) error {
 
 func (e *errorVectorStore) DeleteByFilter(
 	ctx context.Context,
-	ids []string,
-	filter map[string]interface{},
-	deleteAll bool) error {
+	opts ...vectorstore.DeleteOption) error {
 	return fmt.Errorf("vector store error")
 }
 
@@ -830,11 +826,11 @@ func (e *errorVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuer
 	return nil, fmt.Errorf("vector store error")
 }
 
-func (e *errorVectorStore) GetMetadata(ctx context.Context, limit int, offset int) (map[string]vectorstore.DocumentMetadata, error) {
+func (e *errorVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
 	return nil, fmt.Errorf("vector store error")
 }
 
-func (e *errorVectorStore) Count(ctx context.Context, filter *map[string]interface{}) (int, error) {
+func (e *errorVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	return 0, fmt.Errorf("vector store error")
 }
 
