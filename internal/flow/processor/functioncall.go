@@ -87,16 +87,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 
 	if err := p.checkContextCancelled(ctx); err != nil {
-		errorEvent := event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			model.ErrorTypeFlowError,
-			err.Error(),
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
 		return
 	}
 
