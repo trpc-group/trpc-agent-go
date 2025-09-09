@@ -25,8 +25,9 @@
 // Usage:
 //
 //	go run main.go
+//	go run main.go -model gpt-4 -addr :9090
 //
-// The server will listen on :8080 by default.
+// The server will listen on :8080 by default and use deepseek-chat model.
 //
 // Author: Tencent, 2025
 //
@@ -34,11 +35,8 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"net/http"
-	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -56,15 +54,14 @@ const defaultListenAddr = ":8080"
 // It sets up an LLM agent with calculator and time tools,
 // and starts an HTTP server for ADK Web UI compatibility.
 func main() {
-	// Parse command-line flags for server address.
-	var addr string
-	flag.StringVar(&addr, "addr", defaultListenAddr, "Listen address")
+	// Parse command-line flags for server address and model.
+	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	addr := flag.String("addr", defaultListenAddr, "Listen address")
 	flag.Parse()
 
 	// --- Model and tools setup ---
 	// Create the OpenAI model instance for LLM interactions.
-	modelName := "deepseek-chat"
-	modelInstance := openai.New(modelName)
+	modelInstance := openai.New(*modelName)
 
 	// Create calculator tool for mathematical operations.
 	calculatorTool := function.NewFunctionTool(
@@ -122,124 +119,16 @@ func main() {
 
 	// Start the HTTP server and handle requests.
 	log.Infof(
-		// Log the server listening address and registered agents.
-		"CLI server listening on %s (apps: %v)",
-		addr,
+		// Log the server listening address, model, and registered agents.
+		"CLI server listening on %s (model: %s, apps: %v)",
+		*addr,
+		*modelName,
 		agents,
 	)
 	// Start the HTTP server and handle requests.
 	// This is a test server, so we don't need to use a more secure server.
 	//nolint:gosec
-	if err := http.ListenAndServe(addr, server.Handler()); err != nil {
+	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
-
-// -----------------------------------------------------------------------------
-// Constants & helpers ----------------------------------------------------------
-// -----------------------------------------------------------------------------
-
-// Constants for supported calculator operations.
-const (
-	opAdd      = "add"
-	opSubtract = "subtract"
-	opMultiply = "multiply"
-	opDivide   = "divide"
-)
-
-// calculatorArgs holds the input for the calculator tool.
-type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-// calculatorResult holds the output for the calculator tool.
-type calculatorResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-}
-
-// timeArgs holds the input for the time tool.
-type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
-}
-
-// timeResult holds the output for the time tool.
-type timeResult struct {
-	Timezone string `json:"timezone"`
-	Time     string `json:"time"`
-	Date     string `json:"date"`
-	Weekday  string `json:"weekday"`
-}
-
-// Calculator tool implementation.
-// calculate performs the requested mathematical operation.
-// It supports add, subtract, multiply, and divide operations.
-func calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
-	var result float64
-	// Select operation based on input.
-	switch strings.ToLower(args.Operation) {
-	case opAdd:
-		result = args.A + args.B
-	case opSubtract:
-		result = args.A - args.B
-	case opMultiply:
-		result = args.A * args.B
-	case opDivide:
-		if args.B != 0 {
-			result = args.A / args.B
-		}
-	}
-	return calculatorResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// Time tool implementation.
-// getCurrentTime returns the current time for the specified timezone.
-// If the timezone is invalid or empty, it defaults to local time.
-func getCurrentTime(ctx context.Context, args timeArgs) (timeResult, error) {
-	loc := time.Local
-	zone := args.Timezone
-	// Attempt to load the specified timezone.
-	if zone != "" {
-		var err error
-		loc, err = time.LoadLocation(zone)
-		if err != nil {
-			loc = time.Local
-		}
-	}
-	now := time.Now().In(loc)
-	return timeResult{
-		Timezone: loc.String(),
-		Time:     now.Format("15:04:05"),
-		Date:     now.Format("2006-01-02"),
-		Weekday:  now.Weekday().String(),
-	}, nil
-}
-
-// intPtr returns a pointer to the given int value.
-func intPtr(i int) *int {
-	return &i
-}
-
-// floatPtr returns a pointer to the given float64 value.
-func floatPtr(f float64) *float64 {
-	return &f
-}
-
-// This example demonstrates how to integrate tRPC agent orchestration
-// with LLM-based tools, providing a simple HTTP server for manual
-// testing. It is intended as a reference for developers looking to build
-// custom LLM agents with tool support in Go.
-//
-// The calculator tool supports basic arithmetic operations, while the
-// time tool provides current time information for a given timezone.
-//
-// The code is structured for clarity and ease of extension.
