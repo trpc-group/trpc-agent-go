@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	ch "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -145,7 +145,7 @@ func TestExecutor_EmitNodeErrorEvent(t *testing.T) {
 func TestExecutor_GetNextChannelsInStep_And_ClearMarks_And_UpdateVersionsSeen(t *testing.T) {
 	g := New(NewStateSchema())
 	// add a channel and mark updated at step 5
-	g.addChannel("branch:to:x", ch.BehaviorLastValue)
+	g.addChannel("branch:to:x", ichannel.BehaviorLastValue)
 	c, ok := g.getChannel("branch:to:x")
 	require.True(t, ok)
 	c.Update([]any{"v"}, 5)
@@ -251,7 +251,7 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	require.Error(t, err)
 
 	// tuple with pending writes
-	g.addChannel("branch:to:N1", ch.BehaviorLastValue)
+	g.addChannel("branch:to:N1", ichannel.BehaviorLastValue)
 	ck := &Checkpoint{ID: "c1", ChannelValues: map[string]any{"x": 1}}
 	tuple := &CheckpointTuple{Checkpoint: ck, PendingWrites: []PendingWrite{{Channel: "branch:to:N1", Value: 2, Sequence: 1}}}
 	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
@@ -311,8 +311,8 @@ func TestExecutor_BuildExecutionContext_ResumedVersionsSeen(t *testing.T) {
 func TestExecutor_GetNextNodes_Dedup(t *testing.T) {
 	g := New(NewStateSchema())
 	// Two different channels trigger the same node "dup"
-	g.addChannel("branch:to:dup", ch.BehaviorLastValue)
-	g.addChannel("branch:to:dup2", ch.BehaviorLastValue)
+	g.addChannel("branch:to:dup", ichannel.BehaviorLastValue)
+	g.addChannel("branch:to:dup2", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:dup", "dup")
 	g.addNodeTrigger("branch:to:dup2", "dup")
 	c1, _ := g.getChannel("branch:to:dup")
@@ -334,8 +334,8 @@ func TestExecutor_GetNextNodes_Dedup(t *testing.T) {
 func TestExecutor_NodeHelpers(t *testing.T) {
 	g := New(NewStateSchema())
 	// Node present
-	nd := &Node{ID: "n1", Name: "Name1", Type: NodeTypeTool}
-	_ = g.addNode(nd)
+	node := &Node{ID: "n1", Name: "Name1", Type: NodeTypeTool}
+	_ = g.addNode(node)
 	exec := &Executor{graph: g}
 	require.Equal(t, NodeTypeTool, exec.getNodeType("n1"))
 	require.Equal(t, "Name1", exec.getNodeName("n1"))
@@ -374,7 +374,7 @@ func TestDeepCopyAny_SliceBranch(t *testing.T) {
 func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *testing.T) {
 	g := New(NewStateSchema())
 	// Setup trigger mapping for nodeX
-	g.addChannel("branch:to:nodeX", ch.BehaviorLastValue)
+	g.addChannel("branch:to:nodeX", ichannel.BehaviorLastValue)
 	g.addNodeTrigger("branch:to:nodeX", "nodeX")
 	// Set channel available
 	chX, _ := g.getChannel("branch:to:nodeX")
@@ -399,9 +399,9 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 		return nil, nil
 	})
 	// attach per-node callbacks to nodeX in graph
-	nd := &Node{ID: "nodeX"}
-	nd.callbacks = pcb
-	_ = g.addNode(nd)
+	node := &Node{ID: "nodeX"}
+	node.callbacks = pcb
+	_ = g.addNode(node)
 	st2 := State{StateKeyNodeCallbacks: gcb}
 	merged := exec.getMergedCallbacks(st2, "nodeX")
 	require.Equal(t, 1, len(merged.BeforeNode))
