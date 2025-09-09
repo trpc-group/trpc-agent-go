@@ -150,6 +150,7 @@ type mockResponseProcessor struct{}
 func (m *mockResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	resp *model.Response,
 	ch chan<- *event.Event,
 ) {

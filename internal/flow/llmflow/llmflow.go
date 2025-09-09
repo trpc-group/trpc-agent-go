@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -82,12 +83,25 @@ func New(
 		channelBufferSize = defaultChannelBufferSize
 	}
 
-	return &Flow{
+	// Initialize flow first so we can construct the function-call processor with a self reference.
+	f := &Flow{
 		requestProcessors:   requestProcessors,
-		responseProcessors:  responseProcessors,
 		channelBufferSize:   channelBufferSize,
 		enableParallelTools: opts.EnableParallelTools,
 	}
+
+	// Insert the function-call processor at the beginning by default.
+	fc := processor.NewFunctionCallResponseProcessor(
+		func(ctx context.Context, invocation *agent.Invocation, llmEvent *event.Event, tools map[string]tool.Tool, ch chan<- *event.Event) (*event.Event, error) {
+			return f.handleFunctionCallsAndSendEvent(ctx, invocation, llmEvent, tools, ch)
+		},
+		func(ctx context.Context, invocation *agent.Invocation, lastEvent *event.Event) error {
+			return f.waitForCompletion(ctx, invocation, lastEvent)
+		},
+	)
+	f.responseProcessors = append(f.responseProcessors, fc)
+	f.responseProcessors = append(f.responseProcessors, responseProcessors...)
+	return f
 }
 
 // Run executes the flow in a loop until completion.
@@ -194,8 +208,18 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
+	// If EndInvocation gets set during response processing, we stop emitting
+	// further events but continue draining the response channel to avoid
+	// blocking the model's streaming producer.
+	var draining bool
 
 	for response := range responseChan {
+		if draining || invocation.EndInvocation {
+			// Continue draining without emitting events.
+			draining = true
+			continue
+		}
+
 		// Handle after model callbacks.
 		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
 		if err != nil {
@@ -214,34 +238,23 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		// 6. Postprocess response.
-		f.postprocess(ctx, invocation, response, eventChan)
+		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
+
+		// 6. Run unified response processors pipeline
+		f.runResponseProcessors(ctx, invocation, llmRequest, response, eventChan)
+		if invocation.EndInvocation {
+			draining = true
+		}
+
+		// If there were tool calls, ensure outer loop sees a non-final event
+		if f.hasToolCalls(response) {
+			// We don't need the actual event object here; a stub indicates continuation
+			lastEvent = &event.Event{Response: &model.Response{Object: model.ObjectTypeToolResponse}}
+		}
 		if err := f.checkContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
-
-		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
-
-		// 7. Handle function calls if present in the response.
-		if f.hasToolCalls(response) {
-			functionResponseEvent, err := f.handleFunctionCallsAndSendEvent(ctx, invocation, llmResponseEvent, llmRequest.Tools, eventChan)
-			if err != nil {
-				return lastEvent, err
-			}
-			if functionResponseEvent != nil {
-				lastEvent = functionResponseEvent
-				if err := f.checkContextCancelled(ctx); err != nil {
-					return lastEvent, err
-				}
-
-				// Wait for completion if required.
-				if err := f.waitForCompletion(ctx, invocation, lastEvent); err != nil {
-					return lastEvent, err
-				}
-			}
-		}
 	}
-
 	return lastEvent, nil
 }
 
@@ -375,6 +388,12 @@ func (f *Flow) preprocess(
 	// Run request processors - they send events directly to the channel.
 	for _, processor := range f.requestProcessors {
 		processor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
+		// If any processor ended the invocation (e.g., pre-LLM transfer),
+		// stop running subsequent processors to avoid emitting parent events
+		// after the transfer handoff.
+		if invocation.EndInvocation {
+			return
+		}
 	}
 
 	// Add tools to the request.
@@ -960,20 +979,19 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	}
 }
 
-// postprocess handles post-LLM call processing using response processors.
-func (f *Flow) postprocess(
+// runResponseProcessors runs the unified response processors pipeline.
+func (f *Flow) runResponseProcessors(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	llmRequest *model.Request,
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
 	if llmResponse == nil {
 		return
 	}
-
-	// Run response processors - they send events directly to the channel.
 	for _, processor := range f.responseProcessors {
-		processor.ProcessResponse(ctx, invocation, llmResponse, eventChan)
+		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
 	}
 }
 
