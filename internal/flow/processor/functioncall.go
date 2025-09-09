@@ -81,25 +81,37 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	functionResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
-	// TODO 这里需要
-	if err != nil {
-		emitErrEvent(ctx, invocation, err, ch)
-		return
-	}
-
-	if functionResponseEvent == nil {
+	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
+	if err != nil || functioncallResponseEvent == nil {
 		return
 	}
 
 	if err := p.checkContextCancelled(ctx); err != nil {
-		emitErrEvent(ctx, invocation, err, ch)
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		)
+		select {
+		case ch <- errorEvent:
+		case <-ctx.Done():
+		}
 		return
 	}
 
 	// Wait for completion if required.
-	if err := p.waitForCompletion(ctx, invocation, functionResponseEvent); err != nil {
-		emitErrEvent(ctx, invocation, err, ch)
+	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
+		errorEvent := event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		)
+		select {
+		case ch <- errorEvent:
+		case <-ctx.Done():
+		}
 		return
 	}
 }
@@ -691,38 +703,6 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 		ID:           eventID,
 		Timestamp:    baseEvent.Timestamp, // Use the base event as the timestamp
 		Branch:       baseEvent.Branch,
-	}
-}
-
-func emitErrEvent(ctx context.Context, invocation *agent.Invocation, err error,
-	eventChan chan<- *event.Event) {
-	if err == nil {
-		return
-	}
-
-	var errorEvent *event.Event
-	if _, ok := agent.AsStopError(err); ok {
-		errorEvent = event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			agent.ErrorTypeStopAgentError,
-			err.Error(),
-		)
-		log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)
-	} else {
-		// Send error event through channel instead of just logging.
-		errorEvent = event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			model.ErrorTypeFlowError,
-			err.Error(),
-		)
-		log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
-	}
-
-	select {
-	case eventChan <- errorEvent:
-	case <-ctx.Done():
 	}
 }
 
