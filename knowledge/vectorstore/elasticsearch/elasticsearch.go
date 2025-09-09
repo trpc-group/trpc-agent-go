@@ -52,13 +52,13 @@ const (
 
 // Elasticsearch field name constants.
 const (
-	fieldID        = "id"
-	fieldName      = "name"
-	fieldContent   = "content"
-	fieldEmbedding = "embedding"
-	fieldMetadata  = "metadata"
-	fieldCreatedAt = "created_at"
-	fieldUpdatedAt = "updated_at"
+	defaultFieldID        = "id"
+	defaultFieldName      = "name"
+	defaultFieldContent   = "content"
+	defaultFieldEmbedding = "embedding"
+	defaultFieldMetadata  = "metadata"
+	defaultFieldCreatedAt = "created_at"
+	defaultFieldUpdatedAt = "updated_at"
 )
 
 // esDocument represents a document in Elasticsearch format using composition.
@@ -165,18 +165,22 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	tm.Properties = make(map[string]types.Property)
 
 	// id: keyword
-	tm.Properties[fieldID] = types.NewKeywordProperty()
+	tm.Properties[defaultFieldID] = types.NewKeywordProperty()
 	// name/content: text
-	tm.Properties[fieldName] = types.NewTextProperty()
-	tm.Properties[fieldContent] = types.NewTextProperty()
+	tm.Properties[defaultFieldName] = types.NewTextProperty()
+	contentField := vs.option.contentFieldName
+	if contentField == "" {
+		contentField = defaultFieldContent
+	}
+	tm.Properties[contentField] = types.NewTextProperty()
 	// metadata: object with dynamic true
 	metaObj := types.NewObjectProperty()
 	dm := dynamicmapping.True
 	metaObj.Dynamic = &dm
-	tm.Properties[fieldMetadata] = metaObj
+	tm.Properties[defaultFieldMetadata] = metaObj
 	// created_at / updated_at: date
-	tm.Properties[fieldCreatedAt] = types.NewDateProperty()
-	tm.Properties[fieldUpdatedAt] = types.NewDateProperty()
+	tm.Properties[defaultFieldCreatedAt] = types.NewDateProperty()
+	tm.Properties[defaultFieldUpdatedAt] = types.NewDateProperty()
 	// embedding: dense_vector with dims, index, similarity
 	dv := types.NewDenseVectorProperty()
 	dims := vs.option.vectorDimension
@@ -185,7 +189,11 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	dv.Index = &indexed
 	sim := densevectorsimilarity.Cosine
 	dv.Similarity = &sim
-	tm.Properties[fieldEmbedding] = dv
+	embeddingField := vs.option.embeddingFieldName
+	if embeddingField == "" {
+		embeddingField = defaultFieldEmbedding
+	}
+	tm.Properties[embeddingField] = dv
 
 	// Settings: shards/replicas are strings in IndexSettings
 	is := types.NewIndexSettings()

@@ -50,6 +50,14 @@ type options struct {
 	enableTSVector bool
 	// version is the Elasticsearch version to use (v7, v8, v9).
 	version elasticsearch.ESVersion
+	// idFieldName is the Elasticsearch field name for ID.
+	idFieldName string
+	// nameFieldName is the Elasticsearch field name for name/title.
+	nameFieldName string
+	// contentFieldName is the Elasticsearch field name for content.
+	contentFieldName string
+	// embeddingFieldName is the Elasticsearch field name for embedding.
+	embeddingFieldName string
 }
 
 // defaultOptions returns default configuration.
@@ -61,12 +69,16 @@ var defaultOptions = options{
 	enableDebugLogger:   false,
 	retryOnStatus: []int{http.StatusInternalServerError, http.StatusBadGateway,
 		http.StatusServiceUnavailable, http.StatusTooManyRequests},
-	indexName:       defaultIndexName,
-	scoreThreshold:  defaultScoreThreshold,
-	maxResults:      defaultMaxResults,
-	vectorDimension: defaultVectorDimension,
-	enableTSVector:  true,
-	version:         elasticsearch.ESVersionV9, // Default to latest version.
+	indexName:          defaultIndexName,
+	scoreThreshold:     defaultScoreThreshold,
+	maxResults:         defaultMaxResults,
+	vectorDimension:    defaultVectorDimension,
+	enableTSVector:     true,
+	version:            elasticsearch.ESVersionV9, // Default to latest version.
+	idFieldName:        "id",
+	nameFieldName:      "name",
+	contentFieldName:   "content",
+	embeddingFieldName: "embedding",
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -181,5 +193,33 @@ func WithEnableTSVector(enable bool) Option {
 func WithVersion(version string) Option {
 	return func(o *options) {
 		o.version = elasticsearch.ESVersion(version)
+	}
+}
+
+// WithIDField sets the Elasticsearch field name for ID.
+func WithIDField(field string) Option {
+	return func(o *options) {
+		o.idFieldName = field
+	}
+}
+
+// WithNameField sets the Elasticsearch field name for name/title.
+func WithNameField(field string) Option {
+	return func(o *options) {
+		o.nameFieldName = field
+	}
+}
+
+// WithContentField sets the Elasticsearch field name for content.
+func WithContentField(field string) Option {
+	return func(o *options) {
+		o.contentFieldName = field
+	}
+}
+
+// WithEmbeddingField sets the Elasticsearch field name for embedding.
+func WithEmbeddingField(field string) Option {
+	return func(o *options) {
+		o.embeddingFieldName = field
 	}
 }
