@@ -36,6 +36,10 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	WithVectorDimension(123)(&opt)
 	WithEnableTSVector(false)(&opt)
 	WithVersion(string(elasticsearch.ESVersionV8))(&opt)
+	WithIDField("doc_id")(&opt)
+	WithNameField("title")(&opt)
+	WithContentField("body")(&opt)
+	WithEmbeddingField("vec")(&opt)
 
 	assert.Equal(t, []string{"http://example:9200"}, opt.addresses)
 	assert.Equal(t, "user", opt.username)
@@ -53,4 +57,8 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	assert.Equal(t, 123, opt.vectorDimension)
 	assert.False(t, opt.enableTSVector)
 	assert.Equal(t, elasticsearch.ESVersionV8, opt.version)
+	assert.Equal(t, "doc_id", opt.idFieldName)
+	assert.Equal(t, "title", opt.nameFieldName)
+	assert.Equal(t, "body", opt.contentFieldName)
+	assert.Equal(t, "vec", opt.embeddingFieldName)
 }
