@@ -52,10 +52,6 @@ const (
 
 // Elasticsearch field name constants.
 const (
-	defaultFieldID        = "id"
-	defaultFieldName      = "name"
-	defaultFieldContent   = "content"
-	defaultFieldEmbedding = "embedding"
 	defaultFieldMetadata  = "metadata"
 	defaultFieldCreatedAt = "created_at"
 	defaultFieldUpdatedAt = "updated_at"
@@ -165,13 +161,10 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	tm.Properties = make(map[string]types.Property)
 
 	// id: keyword
-	tm.Properties[defaultFieldID] = types.NewKeywordProperty()
+	tm.Properties[vs.option.idFieldName] = types.NewKeywordProperty()
 	// name/content: text
-	tm.Properties[defaultFieldName] = types.NewTextProperty()
+	tm.Properties[vs.option.nameFieldName] = types.NewTextProperty()
 	contentField := vs.option.contentFieldName
-	if contentField == "" {
-		contentField = defaultFieldContent
-	}
 	tm.Properties[contentField] = types.NewTextProperty()
 	// metadata: object with dynamic true
 	metaObj := types.NewObjectProperty()
@@ -190,9 +183,6 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	sim := densevectorsimilarity.Cosine
 	dv.Similarity = &sim
 	embeddingField := vs.option.embeddingFieldName
-	if embeddingField == "" {
-		embeddingField = defaultFieldEmbedding
-	}
 	tm.Properties[embeddingField] = dv
 
 	// Settings: shards/replicas are strings in IndexSettings
