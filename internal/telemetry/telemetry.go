@@ -64,12 +64,8 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
 	)
 
-	if bts, err := json.Marshal(args); err == nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_call_args", string(bts)))
-	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_call_args", "<not json serializable>"))
-	}
-
+	// args is json-encoded.
+	span.SetAttributes(attribute.String("trpc.go.agent.tool_call_args", string(args)))
 	if bts, err := json.Marshal(rspEvent.Response); err == nil {
 		span.SetAttributes(attribute.String("trpc.go.agent.tool_response", string(bts)))
 	} else {

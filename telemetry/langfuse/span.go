@@ -49,59 +49,81 @@ func (s *span) End(options ...trace.SpanEndOption) {
 
 // transformAttributes applies custom transformations to span attributes.
 func (s *span) transformAttributes(attrs map[attribute.Key]attribute.Value) {
-
 	operationName, ok := attrs[attribute.Key("gen_ai.operation.name")]
 	if !ok {
 		return
 	}
+
 	if operationName.AsString() == "call_llm" {
-		s.underlying.SetAttributes(
-			attribute.String("langfuse.observation.type", "generation"),
-		)
+		s.transformCallLLM(attrs)
+	} else if operationName.AsString() == "execute_tool" {
+		s.transformExecuteTool(attrs)
+	}
+}
 
-		if request, ok := attrs[attribute.Key(itelemetry.KeyLLMRequest)]; ok {
-			s.underlying.SetAttributes(
-				attribute.String("langfuse.observation.input", request.AsString()),
-			)
-			// generation_config
-			req := make(map[string]interface{})
-			if err := json.Unmarshal([]byte(request.AsString()), &req); err == nil {
-				if genConfig, exists := req["generation_config"]; exists {
-					jsonConfig, err := json.Marshal(genConfig)
-					if err == nil {
-						s.underlying.SetAttributes(
-							attribute.String("langfuse.observation.model.parameters", string(jsonConfig)),
-						)
-					}
-				}
-			}
-			// Exclude llm_request as they're mapped separately
-			s.underlying.SetAttributes(attribute.String(itelemetry.KeyLLMRequest, ""))
-		} else {
-			// If no request attribute, set a default input
-			s.underlying.SetAttributes(
-				attribute.String("langfuse.observation.input", "N/A"),
-			)
-		}
+func (s *span) transformExecuteTool(attrs map[attribute.Key]attribute.Value) {
+	s.underlying.SetAttributes(attribute.String("langfuse.observation.type", "tool"))
+	if callArgs, ok := attrs[attribute.Key("trpc.go.agent.tool_call_args")]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.observation.input", callArgs.AsString()))
+		// Exclude tool_call_args as they're mapped separately
+		s.underlying.SetAttributes(attribute.String("tool_call_args", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.observation.input", "N/A"))
+	}
 
-		if response, ok := attrs[attribute.Key(itelemetry.KeyLLMResponse)]; ok {
-			s.underlying.SetAttributes(
-				attribute.String("langfuse.observation.output", response.AsString()),
-			)
-			// Exclude llm_response as they're mapped separately
-			s.underlying.SetAttributes(attribute.String(itelemetry.KeyLLMResponse, ""))
-		} else {
-			// If no response attribute, set a default output
-			s.underlying.SetAttributes(
-				attribute.String("langfuse.observation.output", "N/A"),
-			)
-		}
-
+	if toolResult, ok := attrs[attribute.Key("trpc.go.agent.tool_response")]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.observation.output", toolResult.AsString()))
+		// Exclude tool_response as they're mapped separately
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.tool_response", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.observation.output", "N/A"))
 	}
 
 }
 
-// Delegate all other methods to the underlying span
+// processLLMGenerationSpan handles the transformation for LLM generation spans.
+func (s *span) transformCallLLM(attrs map[attribute.Key]attribute.Value) {
+	s.underlying.SetAttributes(attribute.String("langfuse.observation.type", "generation"))
+
+	if request, ok := attrs[attribute.Key(itelemetry.KeyLLMRequest)]; ok {
+		s.underlying.SetAttributes(
+			attribute.String("langfuse.observation.input", request.AsString()),
+		)
+		// generation_config
+		req := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(request.AsString()), &req); err == nil {
+			if genConfig, exists := req["generation_config"]; exists {
+				jsonConfig, err := json.Marshal(genConfig)
+				if err == nil {
+					s.underlying.SetAttributes(
+						attribute.String("langfuse.observation.model.parameters", string(jsonConfig)),
+					)
+				}
+			}
+		}
+		// Exclude llm_request as they're mapped separately
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyLLMRequest, ""))
+	} else {
+		// If no request attribute, set a default input
+		s.underlying.SetAttributes(
+			attribute.String("langfuse.observation.input", "N/A"),
+		)
+	}
+
+	if response, ok := attrs[attribute.Key(itelemetry.KeyLLMResponse)]; ok {
+		s.underlying.SetAttributes(
+			attribute.String("langfuse.observation.output", response.AsString()),
+		)
+		// Exclude llm_response as they're mapped separately
+		s.underlying.SetAttributes(attribute.String(itelemetry.KeyLLMResponse, ""))
+	} else {
+		// If no response attribute, set a default output
+		s.underlying.SetAttributes(
+			attribute.String("langfuse.observation.output", "N/A"),
+		)
+	}
+}
+
 func (s *span) SpanContext() trace.SpanContext {
 	return s.underlying.SpanContext()
 }
