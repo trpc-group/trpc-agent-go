@@ -22,18 +22,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// SQLBuilderTestSuite contains the test suite for SQL builder
+// SQLBuilderTestSuite contains the test suite for SQL builder.
 type SQLBuilderTestSuite struct {
 	suite.Suite
 	pool *pgxpool.Pool
 }
 
-// Run the test suite
+// Run the test suite.
 func TestSQLBuilderSuite(t *testing.T) {
 	suite.Run(t, new(SQLBuilderTestSuite))
 }
 
-// SetupSuite runs once before all tests
+// SetupSuite runs once before all tests.
 func (suite *SQLBuilderTestSuite) SetupSuite() {
 	// Use the same environment variables as pgvector_test.go
 	host := getEnvOrDefault("PGVECTOR_HOST", "")
@@ -47,7 +47,7 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 	password := getEnvOrDefault("PGVECTOR_PASSWORD", "")
 	database := getEnvOrDefault("PGVECTOR_DATABASE", "trpc_agent_unit_test")
 
-	// Build connection string
+	// Build connection string.
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, database)
 
@@ -57,14 +57,14 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 		return
 	}
 
-	// Test connection
+	// Test connection.
 	err = pool.Ping(context.Background())
 	if err != nil {
 		suite.T().Skipf("Skipping SQL Builder tests: cannot ping PostgreSQL: %v", err)
 		return
 	}
 
-	// Enable pgvector extension
+	// Enable pgvector extension.
 	_, err = pool.Exec(context.Background(), "CREATE EXTENSION IF NOT EXISTS vector")
 	if err != nil {
 		suite.T().Skipf("Skipping SQL Builder tests: cannot enable vector extension: %v", err)
@@ -74,35 +74,35 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 	suite.pool = pool
 }
 
-// TearDownSuite runs once after all tests
+// TearDownSuite runs once after all tests.
 func (suite *SQLBuilderTestSuite) TearDownSuite() {
 	if suite.pool != nil {
 		suite.pool.Close()
 	}
 }
 
-// SetupTest runs before each test
+// SetupTest runs before each test.
 func (suite *SQLBuilderTestSuite) SetupTest() {
 	if suite.pool == nil {
 		suite.T().Skip("Database connection not available")
 	}
 
-	// Create test table
+	// Create test table.
 	createTableSQL := fmt.Sprintf(sqlCreateTable, "test_documents", 3)
 	_, err := suite.pool.Exec(context.Background(), createTableSQL)
 	require.NoError(suite.T(), err)
 
-	// Create vector index
+	// Create vector index.
 	indexSQL := fmt.Sprintf(sqlCreateIndex, "test_documents", "test_documents")
 	_, err = suite.pool.Exec(context.Background(), indexSQL)
 	require.NoError(suite.T(), err)
 
-	// Create text index for full-text search
+	// Create text index for full-text search.
 	textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, "test_documents", "test_documents", "english")
 	_, err = suite.pool.Exec(context.Background(), textIndexSQL)
 	require.NoError(suite.T(), err)
 
-	// Insert test data
+	// Insert test data.
 	testData := []struct {
 		id       string
 		name     string
@@ -119,23 +119,23 @@ func (suite *SQLBuilderTestSuite) SetupTest() {
 	for _, data := range testData {
 		upsertSQL := fmt.Sprintf(sqlUpsertDocument, "test_documents")
 		vector := pgvector.NewVector(data.vector)
-		now := int64(1640995200) // Fixed timestamp for testing
+		now := int64(1640995200) // Fixed timestamp for testing.
 		_, err := suite.pool.Exec(context.Background(), upsertSQL,
 			data.id, data.name, data.content, vector, data.metadata, now, now)
 		require.NoError(suite.T(), err)
 	}
 }
 
-// TearDownTest runs after each test
+// TearDownTest runs after each test.
 func (suite *SQLBuilderTestSuite) TearDownTest() {
 	if suite.pool == nil {
 		return
 	}
-	// Clean up test table
+	// Clean up test table.
 	_, _ = suite.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_documents")
 }
 
-// TestUpdateBuilder tests the update builder functionality
+// TestUpdateBuilder tests the update builder functionality.
 func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 	tests := []struct {
 		name        string
@@ -175,30 +175,30 @@ func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 		suite.Run(tt.name, func() {
 			ub := newUpdateBuilder(tt.table, tt.id)
 
-			// Test initial state
+			// Test initial state.
 			assert.Equal(suite.T(), tt.table, ub.table)
 			assert.Equal(suite.T(), tt.id, ub.id)
 
-			// Add fields
+			// Add fields.
 			for field, value := range tt.fields {
 				ub.addField(field, value)
 			}
 
 			sql, args := ub.build()
 
-			// Verify SQL structure
+			// Verify SQL structure.
 			assert.Equal(suite.T(), tt.expectedSQL, sql)
 			assert.Len(suite.T(), args, tt.expectedLen)
 			assert.Equal(suite.T(), tt.id, args[0])
 
-			// Test executing the update
+			// Test executing the update.
 			_, err := suite.pool.Exec(context.Background(), sql, args...)
 			assert.NoError(suite.T(), err)
 		})
 	}
 }
 
-// TestQueryBuilders tests all query builder types
+// TestQueryBuilders tests all query builder types.
 func (suite *SQLBuilderTestSuite) TestQueryBuilders() {
 	tests := []struct {
 		name          string
@@ -270,40 +270,40 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilders() {
 				qb = newFilterQueryBuilder("test_documents", "english")
 			}
 
-			// Test initial state
+			// Test initial state.
 			assert.Equal(suite.T(), tt.mode, qb.searchMode)
 			assert.Equal(suite.T(), tt.expectedOrder, qb.orderClause)
 
-			// Setup query
+			// Setup query.
 			tt.setupFunc(qb)
 
 			sql, args := qb.build(10)
 
-			// Verify SQL structure
+			// Verify SQL structure.
 			for _, expected := range tt.expectedSQL {
 				assert.Contains(suite.T(), sql, expected)
 			}
 
-			// Verify arguments
+			// Verify arguments.
 			assert.Greater(suite.T(), len(args), 0)
 
-			// Test executing the query
+			// Test executing the query.
 			rows, err := suite.pool.Query(context.Background(), sql, args...)
 			assert.NoError(suite.T(), err)
 			defer rows.Close()
 
-			// Should return results (basic smoke test)
+			// Should return results (basic smoke test).
 			count := 0
 			for rows.Next() {
 				count++
 			}
-			// For some queries we might get 0 results, that's okay
+			// For some queries we might get 0 results, that's okay.
 			assert.GreaterOrEqual(suite.T(), count, 0)
 		})
 	}
 }
 
-// TestBuildSelectClause tests the dynamic SELECT clause building
+// TestBuildSelectClause tests the dynamic SELECT clause building.
 func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 	tests := []struct {
 		name                string
@@ -372,12 +372,12 @@ func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 			qb.textQueryPos = tt.textQueryPos
 			selectClause := qb.buildSelectClause()
 
-			// Check expected contains
+			// Check expected contains.
 			for _, expected := range tt.expectedContains {
 				assert.Contains(suite.T(), selectClause, expected)
 			}
 
-			// Check expected not contains
+			// Check expected not contains.
 			for _, notExpected := range tt.expectedNotContains {
 				assert.NotContains(suite.T(), selectClause, notExpected)
 			}
@@ -385,7 +385,7 @@ func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 	}
 }
 
-// TestQueryBuilderEdgeCases tests edge cases and error conditions
+// TestQueryBuilderEdgeCases tests edge cases and error conditions.
 func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 	tests := []struct {
 		name                string
@@ -431,23 +431,23 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 		suite.Run(tt.name, func() {
 			qb := newVectorQueryBuilder("test_documents", "english")
 
-			// Add filters
+			// Add filters.
 			qb.addIDFilter(tt.idFilter)
 			qb.addMetadataFilter(tt.metadataFilter)
 
 			sql, args := qb.build(10)
 
-			// Check expected contains
+			// Check expected contains.
 			for _, expected := range tt.expectedContains {
 				assert.Contains(suite.T(), sql, expected)
 			}
 
-			// Check expected not contains
+			// Check expected not contains.
 			for _, notExpected := range tt.expectedNotContains {
 				assert.NotContains(suite.T(), sql, notExpected)
 			}
 
-			// Check args expectation
+			// Check args expectation.
 			if tt.expectArgs {
 				assert.Greater(suite.T(), len(args), 0)
 			}

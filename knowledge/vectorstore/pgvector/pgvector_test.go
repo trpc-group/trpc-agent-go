@@ -28,18 +28,18 @@ var (
 	table    = getEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_unit_test_documents")
 )
 
-// PgVectorTestSuite contains the test suite for pgvector basic operations
+// PgVectorTestSuite contains the test suite for pgvector basic operations.
 type PgVectorTestSuite struct {
 	suite.Suite
 	vs *VectorStore
 }
 
-// Run the test suite
+// Run the test suite.
 func TestPgVectorSuite(t *testing.T) {
 	suite.Run(t, new(PgVectorTestSuite))
 }
 
-// SetupSuite runs once before all tests
+// SetupSuite runs once before all tests.
 func (suite *PgVectorTestSuite) SetupSuite() {
 	if host == "" {
 		suite.T().Skip("Skipping PgVector tests: PGVECTOR_HOST not set")
@@ -66,21 +66,21 @@ func (suite *PgVectorTestSuite) SetupSuite() {
 // TearDownSuite runs once after all tests
 func (suite *PgVectorTestSuite) TearDownSuite() {
 	if suite.vs != nil {
-		// Clean up test table
+		// Clean up test table.
 		_, err := suite.vs.pool.Exec(context.Background(), "DROP TABLE IF EXISTS "+table)
 		suite.NoError(err)
 		suite.vs.Close()
 	}
 }
 
-// SetupTest runs before each test
+// SetupTest runs before each test.
 func (suite *PgVectorTestSuite) SetupTest() {
 	// Clean up table data before each test
 	_, err := suite.vs.pool.Exec(context.Background(), "DELETE FROM "+table)
 	suite.NoError(err)
 }
 
-// TestAdd tests adding documents with embeddings
+// TestAdd tests adding documents with embeddings.
 func (suite *PgVectorTestSuite) TestAdd() {
 	ctx := context.Background()
 
@@ -96,7 +96,7 @@ func (suite *PgVectorTestSuite) TestAdd() {
 				ID:      "doc1",
 				Name:    "Test Document",
 				Content: "This is a test document for vector search",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "test",
 					"priority": 1,
 					"active":   true,
@@ -148,44 +148,44 @@ func (suite *PgVectorTestSuite) TestAdd() {
 	}
 }
 
-// TestCRUDOperations tests basic CRUD operations
+// TestCRUDOperations tests basic CRUD operations.
 func (suite *PgVectorTestSuite) TestCRUDOperations() {
 	ctx := context.Background()
 
-	// Test document
+	// Test document.
 	doc := &document.Document{
 		ID:      "crud_test",
 		Name:    "CRUD Test Document",
 		Content: "This document tests CRUD operations",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"type":    "test",
 			"version": 1,
 		},
 	}
 	embedding := []float64{0.1, 0.2, 0.3}
 
-	// Test Add
+	// Test Add.
 	err := suite.vs.Add(ctx, doc, embedding)
 	suite.NoError(err)
 
-	// Test Get
+	// Test Get.
 	retrievedDoc, retrievedEmbedding, err := suite.vs.Get(ctx, doc.ID)
 	suite.NoError(err)
 	suite.Equal(doc.ID, retrievedDoc.ID)
 	suite.Equal(doc.Name, retrievedDoc.Name)
 	suite.Equal(doc.Content, retrievedDoc.Content)
-	// Use InDelta for float comparison due to precision loss in float64<->float32 conversion
+	// Use InDelta for float comparison due to precision loss in float64<->float32 conversion.
 	suite.Len(retrievedEmbedding, len(embedding))
 	for i, expected := range embedding {
 		suite.InDelta(expected, retrievedEmbedding[i], 0.0001)
 	}
 
-	// Test Update
+	// Test Update.
 	updatedDoc := &document.Document{
 		ID:      doc.ID,
 		Name:    "Updated Name",
 		Content: "Updated content for testing",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"type":    "test",
 			"version": 2,
 			"updated": true,
@@ -196,27 +196,27 @@ func (suite *PgVectorTestSuite) TestCRUDOperations() {
 	err = suite.vs.Update(ctx, updatedDoc, updatedEmbedding)
 	suite.NoError(err)
 
-	// Verify update
+	// Verify update.
 	retrievedDoc, retrievedEmbedding, err = suite.vs.Get(ctx, doc.ID)
 	suite.NoError(err)
 	suite.Equal(updatedDoc.Name, retrievedDoc.Name)
 	suite.Equal(updatedDoc.Content, retrievedDoc.Content)
-	// Use InDelta for float comparison due to precision loss in float64<->float32 conversion
+	// Use InDelta for float comparison due to precision loss in float64<->float32 conversion.
 	suite.Len(retrievedEmbedding, len(updatedEmbedding))
 	for i, expected := range updatedEmbedding {
 		suite.InDelta(expected, retrievedEmbedding[i], 0.0001)
 	}
 
-	// Test Delete
+	// Test Delete.
 	err = suite.vs.Delete(ctx, doc.ID)
 	suite.NoError(err)
 
-	// Verify deletion
+	// Verify deletion.
 	_, _, err = suite.vs.Get(ctx, doc.ID)
 	suite.Error(err)
 }
 
-// TestErrorHandling tests various non-search error conditions
+// TestErrorHandling tests various non-search error conditions.
 func (suite *PgVectorTestSuite) TestErrorHandling() {
 	ctx := context.Background()
 
@@ -279,7 +279,8 @@ func (suite *PgVectorTestSuite) TestErrorHandling() {
 	}
 }
 
-// Helper functions for environment variable parsing used in tests
+// Helper functions for environment variable parsing used in tests.
+
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

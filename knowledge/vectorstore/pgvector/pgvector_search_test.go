@@ -21,19 +21,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// PgVectorSearchTestSuite contains the search test suite for pgvector
+// PgVectorSearchTestSuite contains the search test suite for pgvector.
 type PgVectorSearchTestSuite struct {
 	suite.Suite
 	vs       *VectorStore
 	testDocs map[string]*document.Document // Store test documents for validation
 }
 
-// Run the search test suite
+// Run the search test suite.
 func TestPgVectorSearchSuite(t *testing.T) {
 	suite.Run(t, new(PgVectorSearchTestSuite))
 }
 
-// SetupSuite runs once before all tests
+// SetupSuite runs once before all tests.
 func (suite *PgVectorSearchTestSuite) SetupSuite() {
 	if host == "" {
 		suite.T().Skip("Skipping PgVector tests: PGVECTOR_HOST not set")
@@ -64,7 +64,7 @@ func (suite *PgVectorSearchTestSuite) SetupSuite() {
 	suite.testDocs = make(map[string]*document.Document)
 }
 
-// TearDownSuite runs once after all search tests
+// TearDownSuite runs once after all search tests.
 func (suite *PgVectorSearchTestSuite) TearDownSuite() {
 	if suite.vs != nil {
 		// Clean up test table
@@ -74,14 +74,14 @@ func (suite *PgVectorSearchTestSuite) TearDownSuite() {
 	}
 }
 
-// SetupTest runs before each search test
+// SetupTest runs before each search test.
 func (suite *PgVectorSearchTestSuite) SetupTest() {
 	// Clean up table data before each test
 	_, err := suite.vs.pool.Exec(context.Background(), "DELETE FROM "+table)
 	suite.NoError(err)
 }
 
-// validateSearchResult validates a single search result
+// validateSearchResult validates a single search result.
 func (suite *PgVectorSearchTestSuite) validateSearchResult(result *vectorstore.ScoredDocument) {
 	// Validate document structure
 	suite.NotNil(result.Document, "Document should not be nil")
@@ -99,7 +99,7 @@ func (suite *PgVectorSearchTestSuite) validateSearchResult(result *vectorstore.S
 	}
 }
 
-// validateDocumentContent compares returned document with original
+// validateDocumentContent compares returned document with original.
 func (suite *PgVectorSearchTestSuite) validateDocumentContent(expected, actual *document.Document) {
 	suite.Equal(expected.ID, actual.ID, "Document ID should match")
 	suite.Equal(expected.Name, actual.Name, "Document Name should match")
@@ -118,8 +118,8 @@ func (suite *PgVectorSearchTestSuite) validateDocumentContent(expected, actual *
 	}
 }
 
-// compareMetadataValues provides flexible comparison for metadata values
-func (suite *PgVectorSearchTestSuite) compareMetadataValues(expected, actual interface{}) bool {
+// compareMetadataValues provides flexible comparison for metadata values.
+func (suite *PgVectorSearchTestSuite) compareMetadataValues(expected, actual any) bool {
 	// Direct equality check
 	if expected == actual {
 		return true
@@ -136,7 +136,7 @@ func (suite *PgVectorSearchTestSuite) compareMetadataValues(expected, actual int
 			return e == float64(a)
 		}
 	case []string:
-		if a, ok := actual.([]interface{}); ok {
+		if a, ok := actual.([]any); ok {
 			if len(e) != len(a) {
 				return false
 			}
@@ -151,7 +151,7 @@ func (suite *PgVectorSearchTestSuite) compareMetadataValues(expected, actual int
 	return false
 }
 
-// validateSearchResults validates the complete search result set
+// validateSearchResults validates the complete search result set.
 func (suite *PgVectorSearchTestSuite) validateSearchResults(results []*vectorstore.ScoredDocument, expectedMinCount int) {
 	suite.GreaterOrEqual(len(results), expectedMinCount,
 		"Should return at least %d results", expectedMinCount)
@@ -171,7 +171,7 @@ func (suite *PgVectorSearchTestSuite) validateSearchResults(results []*vectorsto
 	}
 }
 
-// validateKeywordRelevance checks if results are relevant to the keyword query
+// validateKeywordRelevance checks if results are relevant to the keyword query.
 func (suite *PgVectorSearchTestSuite) validateKeywordRelevance(results []*vectorstore.ScoredDocument, keywords []string) {
 	for _, result := range results {
 		hasRelevantContent := false
@@ -192,11 +192,11 @@ func (suite *PgVectorSearchTestSuite) validateKeywordRelevance(results []*vector
 	}
 }
 
-// TestSearchModes tests different search modes
+// TestSearchModes tests different search modes.
 func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 	ctx := context.Background()
 
-	// Setup test data
+	// Setup test data.
 	testDocs := []struct {
 		doc       *document.Document
 		embedding []float64
@@ -206,7 +206,7 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 				ID:      "doc1",
 				Name:    "Python Programming",
 				Content: "Python is a powerful programming language for data science and machine learning",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "programming",
 					"language": "python",
 					"level":    "beginner",
@@ -219,7 +219,7 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 				ID:      "doc2",
 				Name:    "Go Development",
 				Content: "Go is a fast and efficient language for system programming and web development",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "programming",
 					"language": "go",
 					"level":    "intermediate",
@@ -232,7 +232,7 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 				ID:      "doc3",
 				Name:    "Data Science Tutorial",
 				Content: "Learn data science fundamentals with Python and machine learning algorithms",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "tutorial",
 					"language": "python",
 					"level":    "advanced",
@@ -309,7 +309,7 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 			name: "filter search",
 			query: &vectorstore.SearchQuery{
 				Filter: &vectorstore.SearchFilter{
-					Metadata: map[string]interface{}{
+					Metadata: map[string]any{
 						"category": "programming",
 					},
 				},
@@ -375,30 +375,30 @@ func (suite *PgVectorSearchTestSuite) TestSearchModes() {
 	}
 }
 
-// TestHybridSearchWeights tests hybrid search weight configuration
+// TestHybridSearchWeights tests hybrid search weight configuration.
 func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 	ctx := context.Background()
 
-	// Add test document
+	// Add test document.
 	doc := &document.Document{
 		ID:      "weight_test",
 		Name:    "Weight Test Document",
 		Content: "This document tests hybrid search weight configuration with machine learning",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"category": "test",
 		},
 	}
 	embedding := []float64{0.1, 0.2, 0.3}
 	err := suite.vs.Add(ctx, doc, embedding)
 	suite.NoError(err)
-	// Store for validation
+	// Store for validation.
 	suite.testDocs[doc.ID] = doc
 
 	testCases := []struct {
 		name         string
 		vectorWeight float64
 		textWeight   float64
-		expectNorm   bool // Whether weights should be normalized
+		expectNorm   bool // Whether weights should be normalized.
 	}{
 		{
 			name:         "default weights",
@@ -434,7 +434,7 @@ func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 
 	for _, tc := range testCases {
 		suite.Run(tc.name, func() {
-			// Create a new vector store with specific weights
+			// Create a new vector store with specific weights.
 			table := "test_weights_" + time.Now().Format("150405")
 			vs, err := New(
 				WithHost(host),
@@ -452,11 +452,11 @@ func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 				vs.Close()
 			}()
 
-			// Add the same test document
+			// Add the same test document.
 			err = vs.Add(ctx, doc, embedding)
 			suite.NoError(err)
 
-			// Perform hybrid search
+			// Perform hybrid search.
 			query := &vectorstore.SearchQuery{
 				Vector:     []float64{0.1, 0.2, 0.3},
 				Query:      "machine learning",
@@ -469,27 +469,27 @@ func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 			suite.NotNil(result, "Search result should not be nil")
 			suite.Len(result.Results, 1, "Should return exactly 1 result")
 
-			// Validate search results content
+			// Validate search results content.
 			if len(result.Results) > 0 {
 				resultDoc := result.Results[0]
 
-				// Validate document structure
+				// Validate document structure.
 				suite.NotNil(resultDoc.Document, "Document should not be nil")
 				suite.Equal(doc.ID, resultDoc.Document.ID, "Document ID should match")
 				suite.Equal(doc.Name, resultDoc.Document.Name, "Document name should match")
 				suite.Equal(doc.Content, resultDoc.Document.Content, "Document content should match")
 
-				// Validate score
+				// Validate score.
 				suite.Greater(resultDoc.Score, 0.0, "Score should be positive")
 				suite.LessOrEqual(resultDoc.Score, 1.0, "Score should not exceed 1.0")
 
-				// Validate keyword relevance
+				// Validate keyword relevance.
 				content := strings.ToLower(resultDoc.Document.Name + " " + resultDoc.Document.Content)
 				suite.True(strings.Contains(content, "machine") || strings.Contains(content, "learning"),
 					"Result should be relevant to search keywords")
 			}
 
-			// Verify weights are correctly applied
+			// Verify weights are correctly applied.
 			if tc.expectNorm {
 				// For normalized weights, just ensure search works
 				suite.Greater(result.Results[0].Score, 0.0, "Normalized weights should produce valid scores")
@@ -506,11 +506,11 @@ func (suite *PgVectorSearchTestSuite) TestHybridSearchWeights() {
 	}
 }
 
-// TestMetadataFiltering tests different metadata filtering approaches
+// TestMetadataFiltering tests different metadata filtering approaches.
 func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 	ctx := context.Background()
 
-	// Setup test data with various metadata types
+	// Setup test data with various metadata types.
 	testDocs := []struct {
 		doc       *document.Document
 		embedding []float64
@@ -520,7 +520,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 				ID:      "meta1",
 				Name:    "Document 1",
 				Content: "Content with integer metadata",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"priority": 1,
 					"active":   true,
 					"score":    95.5,
@@ -534,7 +534,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 				ID:      "meta2",
 				Name:    "Document 2",
 				Content: "Content with different metadata",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"priority": 2,
 					"active":   false,
 					"score":    87.2,
@@ -548,7 +548,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 				ID:      "meta3",
 				Name:    "Document 3",
 				Content: "Content with mixed metadata",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"priority": 1,
 					"active":   true,
 					"score":    92.8,
@@ -559,23 +559,23 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 	}
 
-	// Add test documents
+	// Add test documents.
 	for _, td := range testDocs {
 		err := suite.vs.Add(ctx, td.doc, td.embedding)
 		suite.NoError(err)
-		// Store for validation
+		// Store for validation.
 		suite.testDocs[td.doc.ID] = td.doc
 	}
 
 	testCases := []struct {
 		name          string
-		filter        map[string]interface{}
+		filter        map[string]any
 		expectedCount int
 		expectedIDs   []string
 	}{
 		{
 			name: "integer filter",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"priority": 1,
 			},
 			expectedCount: 2,
@@ -583,7 +583,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 		{
 			name: "boolean filter",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"active": true,
 			},
 			expectedCount: 2,
@@ -591,7 +591,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 		{
 			name: "string filter",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"category": "urgent",
 			},
 			expectedCount: 2,
@@ -599,7 +599,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 		{
 			name: "float filter",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"score": 95.5,
 			},
 			expectedCount: 1,
@@ -607,7 +607,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 		{
 			name: "multiple filters",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"priority": 1,
 				"active":   true,
 			},
@@ -616,7 +616,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 		},
 		{
 			name: "no match filter",
-			filter: map[string]interface{}{
+			filter: map[string]any{
 				"priority": 999,
 			},
 			expectedCount: 0,
@@ -641,12 +641,12 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 			suite.Len(result.Results, tc.expectedCount,
 				"Should return exactly %d results", tc.expectedCount)
 
-			// Validate search results
+			// Validate search results.
 			if len(result.Results) > 0 {
 				suite.validateSearchResults(result.Results, tc.expectedCount)
 			}
 
-			// Verify the correct documents are returned
+			// Verify the correct documents are returned.
 			actualIDs := make([]string, len(result.Results))
 			for i, scored := range result.Results {
 				actualIDs[i] = scored.Document.ID
@@ -654,7 +654,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 			suite.ElementsMatch(tc.expectedIDs, actualIDs,
 				"Should return expected document IDs")
 
-			// Validate that all results match the filter criteria
+			// Validate that all results match the filter criteria.
 			for _, result := range result.Results {
 				for filterKey, filterValue := range tc.filter {
 					actualValue, exists := result.Document.Metadata[filterKey]
@@ -667,7 +667,7 @@ func (suite *PgVectorSearchTestSuite) TestMetadataFiltering() {
 	}
 }
 
-// TestSearchErrorHandling tests search-related error conditions
+// TestSearchErrorHandling tests search-related error conditions.
 func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 	ctx := context.Background()
 
@@ -748,11 +748,11 @@ func (suite *PgVectorSearchTestSuite) TestSearchErrorHandling() {
 	}
 }
 
-// TestAdvancedSearchScenarios tests more complex search scenarios
+// TestAdvancedSearchScenarios tests more complex search scenarios.
 func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 	ctx := context.Background()
 
-	// Setup test data for advanced scenarios
+	// Setup test data for advanced scenarios.
 	testDocs := []struct {
 		doc       *document.Document
 		embedding []float64
@@ -762,7 +762,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 				ID:      "advanced1",
 				Name:    "Machine Learning Fundamentals",
 				Content: "Introduction to machine learning algorithms and neural networks",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category":   "education",
 					"difficulty": "beginner",
 					"rating":     4.5,
@@ -776,7 +776,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 				ID:      "advanced2",
 				Name:    "Deep Learning Applications",
 				Content: "Advanced neural network architectures and their applications",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category":   "education",
 					"difficulty": "advanced",
 					"rating":     4.8,
@@ -790,7 +790,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 				ID:      "advanced3",
 				Name:    "Python for Data Science",
 				Content: "Using Python libraries for data analysis and machine learning",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category":   "programming",
 					"difficulty": "intermediate",
 					"rating":     4.2,
@@ -801,11 +801,11 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 		},
 	}
 
-	// Add test documents
+	// Add test documents.
 	for _, td := range testDocs {
 		err := suite.vs.Add(ctx, td.doc, td.embedding)
 		suite.NoError(err)
-		// Store for validation
+		// Store for validation.
 		suite.testDocs[td.doc.ID] = td.doc
 	}
 
@@ -813,7 +813,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 		query := &vectorstore.SearchQuery{
 			Vector: []float64{0.2, 0.5, 0.3},
 			Filter: &vectorstore.SearchFilter{
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category":   "education",
 					"difficulty": "beginner",
 				},
@@ -846,7 +846,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 		suite.NoError(err, "High similarity threshold search should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// Should find at least the exact match
+		// Should find at least the exact match.
 		suite.GreaterOrEqual(len(result.Results), 1,
 			"Should find at least 1 high similarity result")
 
@@ -862,7 +862,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 			Vector: []float64{0.2, 0.7, 0.3},
 			Query:  "machine learning neural networks",
 			Filter: &vectorstore.SearchFilter{
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "education",
 				},
 			},
@@ -879,11 +879,11 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 		if len(result.Results) > 0 {
 			suite.validateSearchResults(result.Results, 1)
 
-			// Validate keyword relevance
+			// Validate keyword relevance.
 			suite.validateKeywordRelevance(result.Results,
 				[]string{"machine", "learning", "neural", "networks"})
 
-			// Verify all results match the filter
+			// Verify all results match the filter.
 			for _, scored := range result.Results {
 				category, exists := scored.Document.Metadata["category"]
 				suite.True(exists, "Category metadata should exist")
@@ -898,7 +898,7 @@ func (suite *PgVectorSearchTestSuite) TestAdvancedSearchScenarios() {
 func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 	ctx := context.Background()
 
-	// Setup test data specifically for MinScore testing
+	// Setup test data specifically for MinScore testing.
 	testDocs := []struct {
 		doc       *document.Document
 		embedding []float64
@@ -908,7 +908,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 				ID:      "minscore1",
 				Name:    "Artificial Intelligence Guide",
 				Content: "Comprehensive guide to artificial intelligence and machine learning concepts",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "education",
 					"type":     "guide",
 					"rating":   4.8,
@@ -921,7 +921,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 				ID:      "minscore2",
 				Name:    "Programming Best Practices",
 				Content: "Essential programming practices for software development and code quality",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "programming",
 					"type":     "tutorial",
 					"rating":   4.5,
@@ -934,7 +934,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 				ID:      "minscore3",
 				Name:    "Database Design Principles",
 				Content: "Database design fundamentals and normalization techniques for efficient data storage",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "database",
 					"type":     "reference",
 					"rating":   4.2,
@@ -944,11 +944,11 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		},
 	}
 
-	// Add test documents
+	// Add test documents.
 	for _, td := range testDocs {
 		err := suite.vs.Add(ctx, td.doc, td.embedding)
 		suite.NoError(err)
-		// Store for validation
+		// Store for validation.
 		suite.testDocs[td.doc.ID] = td.doc
 	}
 
@@ -964,13 +964,13 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Vector search with MinScore should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// All results should meet the minimum score requirement
+		// All results should meet the minimum score requirement.
 		for _, scored := range result.Results {
 			suite.GreaterOrEqual(scored.Score, 0.6,
 				"All results should meet MinScore threshold of 0.6, got %.4f", scored.Score)
 		}
 
-		// Should find at least the highly similar document
+		// Should find at least the highly similar document.
 		suite.GreaterOrEqual(len(result.Results), 1,
 			"Should find at least 1 result with score >= 0.6")
 
@@ -989,13 +989,13 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Keyword search with MinScore should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// All results should meet the minimum score requirement
+		// All results should meet the minimum score requirement.
 		for _, scored := range result.Results {
 			suite.GreaterOrEqual(scored.Score, 0.01,
 				"All results should meet MinScore threshold of 0.01, got %.4f", scored.Score)
 		}
 
-		// Should find relevant documents
+		// Should find relevant documents.
 		if len(result.Results) > 0 {
 			suite.validateKeywordRelevance(result.Results,
 				[]string{"artificial", "intelligence", "machine", "learning"})
@@ -1017,13 +1017,13 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Hybrid search with MinScore should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// All results should meet the minimum score requirement
+		// All results should meet the minimum score requirement.
 		for _, scored := range result.Results {
 			suite.GreaterOrEqual(scored.Score, 0.3,
 				"All results should meet MinScore threshold of 0.3, got %.4f", scored.Score)
 		}
 
-		// Should combine semantic and keyword relevance
+		// Should combine semantic and keyword relevance.
 		if len(result.Results) > 0 {
 			suite.validateKeywordRelevance(result.Results,
 				[]string{"artificial", "intelligence", "programming"})
@@ -1044,7 +1044,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Search with very high MinScore should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// Should return no results due to high threshold
+		// Should return no results due to high threshold.
 		suite.Equal(0, len(result.Results),
 			"Search with very high MinScore should return no results")
 
@@ -1055,7 +1055,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		query := &vectorstore.SearchQuery{
 			Vector: []float64{0.2, 0.8, 0.2},
 			Filter: &vectorstore.SearchFilter{
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category": "education",
 				},
 			},
@@ -1068,7 +1068,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Search with MinScore and metadata filter should not error")
 		suite.NotNil(result, "Search result should not be nil")
 
-		// All results should meet both criteria
+		// All results should meet both criteria.
 		for _, scored := range result.Results {
 			suite.GreaterOrEqual(scored.Score, 0.5,
 				"All results should meet MinScore threshold of 0.5, got %.4f", scored.Score)
@@ -1083,7 +1083,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 	})
 
 	suite.Run("MinScore edge cases", func() {
-		// Test with MinScore = 0 (should return all results)
+		// Test with MinScore = 0 (should return all results).
 		query1 := &vectorstore.SearchQuery{
 			Vector:     []float64{0.5, 0.5, 0.5},
 			MinScore:   0.0,
@@ -1095,13 +1095,13 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Search with MinScore 0.0 should not error")
 		suite.NotNil(result1, "Search result should not be nil")
 
-		// Should return documents (scores can be 0 or higher)
+		// Should return documents (scores can be 0 or higher).
 		for _, scored := range result1.Results {
 			suite.GreaterOrEqual(scored.Score, 0.0,
 				"All results should have score >= 0.0, got %.4f", scored.Score)
 		}
 
-		// Test with MinScore = 1.0 (perfect match only)
+		// Test with MinScore = 1.0 (perfect match only).
 		query2 := &vectorstore.SearchQuery{
 			Vector:     []float64{0.1, 0.9, 0.1}, // Exact match to minscore1
 			MinScore:   1.0,
@@ -1113,7 +1113,7 @@ func (suite *PgVectorSearchTestSuite) TestMinScoreFiltering() {
 		suite.NoError(err, "Search with MinScore 1.0 should not error")
 		suite.NotNil(result2, "Search result should not be nil")
 
-		// Should only return perfect or near-perfect matches
+		// Should only return perfect or near-perfect matches.
 		for _, scored := range result2.Results {
 			suite.GreaterOrEqual(scored.Score, 1.0,
 				"All results should meet MinScore threshold of 1.0, got %.4f", scored.Score)

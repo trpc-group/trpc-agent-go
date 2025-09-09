@@ -7,12 +7,14 @@
 //
 //
 
+// Package tcvector provides a vector store for tcvectordb.
 package tcvector
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
@@ -24,6 +26,15 @@ import (
 )
 
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
+
+var (
+	// errDocumentRequired is the error when document is required.
+	errDocumentRequired = errors.New("tcvectordb document is required")
+	// errDocumentIDRequired is the error when document ID is required.
+	errDocumentIDRequired = errors.New("tcvectordb document ID is required")
+	// errQueryRequired is the error when query is required.
+	errQueryRequired = errors.New("tcvectordb query is required")
+)
 
 var (
 	fieldID           = "id"
@@ -51,7 +62,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		opt(&option)
 	}
 
-	// check opts
+	// Check required options.
 	if option.instanceName == "" && (option.url == "" || option.username == "" || option.password == "") {
 		return nil, errors.New("tcvectordb instance name or (url, username, password) is required")
 	}
@@ -65,13 +76,13 @@ func New(opts ...Option) (*VectorStore, error) {
 	builderOpts := make([]storage.ClientBuilderOpt, 0)
 
 	if option.url != "" && option.username != "" && option.password != "" {
-		// url and username and password are provided, use it
+		// url and username and password are provided, use it.
 		builderOpts = append(builderOpts,
 			storage.WithClientBuilderHTTPURL(option.url),
 			storage.WithClientBuilderUserName(option.username),
 			storage.WithClientBuilderKey(option.password))
 	} else if option.instanceName != "" {
-		// instance name is provided, use it
+		// instance name is provided, use it.
 		instanceOpts, ok := storage.GetTcVectorInstance(option.instanceName)
 		if !ok {
 			return nil, errors.New("tcvectordb instance name not found")
@@ -87,7 +98,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		return nil, err
 	}
 
-	var sparseEncoder encoder.SparseEncoder = nil
+	var sparseEncoder encoder.SparseEncoder
 	if option.enableTSVector {
 		sparseEncoder, err = encoder.NewBM25Encoder(&encoder.BM25EncoderParams{Bm25Language: option.language})
 		if err != nil {
@@ -108,7 +119,7 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		return fmt.Errorf("tcvectordb database %s not found", options.database)
 	}
 
-	// check collection exists
+	// Check collection exists.
 	exists, err := db.ExistsCollection(context.Background(), options.collection)
 	if err != nil {
 		return fmt.Errorf("tcvectordb check collection exists: %w", err)
@@ -124,7 +135,7 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 		FieldType: tcvectordb.String,
 	})
 
-	// Add filter indexes for configured filterFields
+	// Add filter indexes for configured filterFields.
 	indexes.FilterIndex = append(indexes.FilterIndex, options.filterIndexes...)
 	indexes.VectorIndex = append(indexes.VectorIndex, tcvectordb.VectorIndex{
 		FilterIndex: tcvectordb.FilterIndex{
@@ -225,8 +236,11 @@ func checkIndexes(db *tcvectordb.Database, option options) error {
 
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
+	if doc == nil {
+		return errDocumentRequired
+	}
 	if doc.ID == "" {
-		return fmt.Errorf("tcvectordb document id is required")
+		return errDocumentIDRequired
 	}
 	if len(embedding) != int(vs.option.indexDimension) {
 		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
@@ -241,7 +255,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		fieldMetadata:  {Val: doc.Metadata},
 	}
 
-	// Extract filterField data from metadata and add as separate fields
+	// Extract filterField data from metadata and add as separate fields.
 	for _, filterField := range vs.option.filterFields {
 		if value, exists := doc.Metadata[filterField]; exists {
 			fields[filterField] = tcvectordb.Field{Val: value}
@@ -276,7 +290,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 // Get retrieves a document by ID along with its embedding.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, fmt.Errorf("tcvectordb document id is required")
+		return nil, nil, errDocumentIDRequired
 	}
 	result, err := vs.client.Query(
 		ctx,
@@ -313,7 +327,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 // Update modifies an existing document and its embedding.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc.ID == "" {
-		return fmt.Errorf("tcvectordb document id is required")
+		return errDocumentIDRequired
 	}
 	if len(embedding) != int(vs.option.indexDimension) {
 		return fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(embedding))
@@ -338,7 +352,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 	if len(doc.Metadata) > 0 {
 		updateFields[fieldMetadata] = tcvectordb.Field{Val: doc.Metadata}
-		// Extract filterField data from metadata and update as separate fields
+		// Extract filterField data from metadata and update as separate fields.
 		for _, filterField := range vs.option.filterFields {
 			if value, exists := doc.Metadata[filterField]; exists {
 				updateFields[filterField] = tcvectordb.Field{Val: value}
@@ -367,7 +381,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 // Delete removes a document and its embedding.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return fmt.Errorf("tcvectordb document id is required")
+		return errDocumentIDRequired
 	}
 	if _, err := vs.client.Delete(
 		ctx,
@@ -388,7 +402,7 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 // Tencent VectorDB not support hybrid search of structure filter and vector/sparse vector.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
-		return nil, fmt.Errorf("tcvectordb query is required")
+		return nil, errQueryRequired
 	}
 	if !vs.option.enableTSVector && (query.SearchMode == vectorstore.SearchModeKeyword || query.SearchMode == vectorstore.SearchModeHybrid) {
 		log.Infof("tcvectordb: keyword or hybrid search is not supported when enableTSVector is disabled, use filter/vector search instead")
@@ -398,7 +412,7 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return vs.searchByFilter(ctx, query)
 	}
 
-	// default is hybrid search
+	// Default is hybrid search.
 	switch query.SearchMode {
 	case vectorstore.SearchModeVector:
 		return vs.searchByVector(ctx, query)
@@ -413,10 +427,10 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 }
 
-// vectorSearch performs pure vector similarity search using dense embeddings
+// vectorSearch performs pure vector similarity search using dense embeddings.
 func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("tcvectordb: searching with a nil or empty vector is not supported")
+		return nil, errors.New("tcvectordb: searching with a nil or empty vector is not supported")
 	}
 	if len(query.Vector) != int(vs.option.indexDimension) {
 		return nil, fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(query.Vector))
@@ -437,7 +451,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		RetrieveVector: true,
 	}
 
-	// Set minimum score threshold if specified
+	// Set minimum score threshold if specified.
 	if query.MinScore > 0 {
 		radius := float32(query.MinScore)
 		queryParams.Radius = &radius
@@ -458,10 +472,10 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	return vs.convertSearchResult(vectorstore.SearchModeVector, searchResult)
 }
 
-// keywordSearch performs pure keyword search using BM25 sparse vectors
+// keywordSearch performs pure keyword search using BM25 sparse vectors.
 func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
-		return nil, fmt.Errorf("tcvectordb keyword is required for keyword search")
+		return nil, errors.New("tcvectordb keyword is required for keyword search")
 	}
 
 	limit := query.Limit
@@ -500,10 +514,10 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	return vs.convertSearchResult(vectorstore.SearchModeKeyword, searchResult)
 }
 
-// hybridSearch performs hybrid search combining dense vector similarity and BM25 keyword matching
+// hybridSearch performs hybrid search combining dense vector similarity and BM25 keyword matching.
 func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("tcvectordb vector is required for hybrid search")
+		return nil, errors.New("tcvectordb vector is required for hybrid search")
 	}
 
 	vectorWeight := vs.option.vectorWeight
@@ -523,7 +537,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
 	}
 
-	// Encode the query text using BM25 for sparse vector
+	// Encode the query text using BM25 for sparse vector.
 	querySparseVector, err := vs.sparseEncoder.EncodeQuery(query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
@@ -567,7 +581,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	return vs.convertSearchResult(vectorstore.SearchModeHybrid, searchResult)
 }
 
-// filterSearch performs filter-only search when no vector or keyword is provided
+// filterSearch performs filter-only search when no vector or keyword is provided.
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Filter == nil {
 		return &vectorstore.SearchResult{Results: make([]*vectorstore.ScoredDocument, 0)}, nil
@@ -604,7 +618,7 @@ func (vs *VectorStore) Close() error {
 	return nil
 }
 
-// convertSearchResult converts tcvectordb search result to vectorstore result
+// convertSearchResult converts tcvectordb search result to vectorstore result.
 func (vs *VectorStore) convertSearchResult(
 	searchMode vectorstore.SearchMode,
 	searchResult *tcvectordb.SearchDocumentResult,
@@ -641,7 +655,7 @@ func (vs *VectorStore) convertSearchResult(
 	return result, nil
 }
 
-// convertQueryResult converts tcvectordb query result to vectorstore result
+// convertQueryResult converts tcvectordb query result to vectorstore result.
 func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentResult) (*vectorstore.SearchResult, error) {
 	result := &vectorstore.SearchResult{
 		Results: make([]*vectorstore.ScoredDocument, 0, len(queryResult.Documents)),
@@ -652,7 +666,7 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
 		}
-		// For query results, we assign a default score of 1.0
+		// For query results, we assign a default score of 1.0.
 		result.Results = append(result.Results, &vectorstore.ScoredDocument{
 			Document: doc,
 			Score:    1.0,
@@ -662,6 +676,7 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	return result, nil
 }
 
+// covertToDocument converts tcvectordb document to document.Document.
 func covertToDocument(tcDoc tcvectordb.Document) (*document.Document, error) {
 	doc := &document.Document{
 		ID: tcDoc.Id,
@@ -673,13 +688,17 @@ func covertToDocument(tcDoc tcvectordb.Document) (*document.Document, error) {
 		doc.Content = field.String()
 	}
 	if field, ok := tcDoc.Fields[fieldCreatedAt]; ok {
-		doc.CreatedAt = time.Unix(int64(field.Uint64()), 0)
+		u := min(field.Uint64(), uint64(math.MaxInt64))
+		//nolint:gosec // u is not overflowed and the conversion is safe.
+		doc.CreatedAt = time.Unix(int64(u), 0)
 	}
 	if field, ok := tcDoc.Fields[fieldUpdatedAt]; ok {
-		doc.UpdatedAt = time.Unix(int64(field.Uint64()), 0)
+		u := min(field.Uint64(), uint64(math.MaxInt64))
+		//nolint:gosec // u is not overflowed and the conversion is safe.
+		doc.UpdatedAt = time.Unix(int64(u), 0)
 	}
 	if field, ok := tcDoc.Fields[fieldMetadata]; ok {
-		if metadata, ok := field.Val.(map[string]interface{}); ok {
+		if metadata, ok := field.Val.(map[string]any); ok {
 			doc.Metadata = metadata
 		}
 	}
@@ -691,6 +710,7 @@ func covertToDocument(tcDoc tcvectordb.Document) (*document.Document, error) {
 	return doc, nil
 }
 
+// covertToVector32 converts float64 slice to float32 slice.
 func covertToVector32(embedding []float64) []float32 {
 	vector32 := make([]float32, len(embedding))
 	for i, v := range embedding {
@@ -699,8 +719,8 @@ func covertToVector32(embedding []float64) []float32 {
 	return vector32
 }
 
-// getCondFromQuery converts filter to tcvectordb filter
-func getCondFromQuery(ids []string, filter map[string]interface{}) *tcvectordb.Filter {
+// getCondFromQuery converts filter to tcvectordb filter.
+func getCondFromQuery(ids []string, filter map[string]any) *tcvectordb.Filter {
 	if filter == nil && len(ids) == 0 {
 		return nil
 	}

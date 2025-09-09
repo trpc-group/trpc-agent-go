@@ -27,6 +27,7 @@ type options struct {
 	language     string  // Default: english, if you install zhparser or jieba, you can set it to your configuration
 }
 
+// defaultOptions is the default options for pgvector.
 var defaultOptions = options{
 	host:           "localhost",
 	port:           5432,
@@ -43,70 +44,70 @@ var defaultOptions = options{
 // Option is the option for pgvector.
 type Option func(*options)
 
-// WithHost sets the PostgreSQL host
+// WithHost sets the PostgreSQL host.
 func WithHost(host string) Option {
 	return func(o *options) {
 		o.host = host
 	}
 }
 
-// WithPort sets the PostgreSQL port
+// WithPort sets the PostgreSQL port.
 func WithPort(port int) Option {
 	return func(o *options) {
 		o.port = port
 	}
 }
 
-// WithUser sets the username for authentication
+// WithUser sets the username for authentication.
 func WithUser(user string) Option {
 	return func(o *options) {
 		o.user = user
 	}
 }
 
-// WithPassword sets the password for authentication
+// WithPassword sets the password for authentication.
 func WithPassword(password string) Option {
 	return func(o *options) {
 		o.password = password
 	}
 }
 
-// WithDatabase sets the database name
+// WithDatabase sets the database name.
 func WithDatabase(database string) Option {
 	return func(o *options) {
 		o.database = database
 	}
 }
 
-// WithTable sets the table name
+// WithTable sets the table name.
 func WithTable(table string) Option {
 	return func(o *options) {
 		o.table = table
 	}
 }
 
-// WithIndexDimension sets the vector dimension for the index
+// WithIndexDimension sets the vector dimension for the index.
 func WithIndexDimension(dimension int) Option {
 	return func(o *options) {
 		o.indexDimension = dimension
 	}
 }
 
-// WithSSLMode sets the SSL mode for connection
+// WithSSLMode sets the SSL mode for connection.
 func WithSSLMode(sslMode string) Option {
 	return func(o *options) {
 		o.sslMode = sslMode
 	}
 }
 
-// WithEnableTSVector sets the enable text search vector
+// WithEnableTSVector sets the enable text search vector.
 func WithEnableTSVector(enableTSVector bool) Option {
 	return func(o *options) {
 		o.enableTSVector = enableTSVector
 	}
 }
 
-// WithHybridSearchWeights sets the weights for hybrid search scoring
+// WithHybridSearchWeights sets the weights for hybrid search scoring.
 // vectorWeight: Weight for vector similarity (0.0-1.0)
 // textWeight: Weight for text relevance (0.0-1.0)
 // Note: weights will be normalized to sum to 1.0
@@ -125,7 +126,7 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 	}
 }
 
-// WithLanguageExtension sets the language extension for the index
+// WithLanguageExtension sets the language extension for the index.
 func WithLanguageExtension(languageExtension string) Option {
 	return func(o *options) {
 		o.language = languageExtension

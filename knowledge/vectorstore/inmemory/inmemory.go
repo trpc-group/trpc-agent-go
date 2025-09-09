@@ -12,12 +12,22 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+)
+
+var (
+	// errDocumentCannotBeNil is the error when the document is nil.
+	errDocumentCannotBeNil = errors.New("document cannot be nil")
+	// errDocumentIDCannotBeEmpty is the error when the document ID is empty.
+	errDocumentIDCannotBeEmpty = errors.New("document ID cannot be empty")
+	// errEmbeddingCannotBeEmpty is the error when the embedding is empty.
+	errEmbeddingCannotBeEmpty = errors.New("embedding cannot be empty")
 )
 
 // VectorStore implements vectorstore.VectorStore interface using in-memory storage.
@@ -48,13 +58,13 @@ func New(opts ...Option) *VectorStore {
 // Add implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return fmt.Errorf("document cannot be nil")
+		return errDocumentCannotBeNil
 	}
 	if doc.ID == "" {
-		return fmt.Errorf("document ID cannot be empty")
+		return errDocumentIDCannotBeEmpty
 	}
 	if len(embedding) == 0 {
-		return fmt.Errorf("embedding cannot be empty")
+		return errEmbeddingCannotBeEmpty
 	}
 
 	vs.mutex.Lock()
@@ -70,7 +80,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 // Get implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
 	if id == "" {
-		return nil, nil, fmt.Errorf("document ID cannot be empty")
+		return nil, nil, errDocumentIDCannotBeEmpty
 	}
 
 	vs.mutex.RLock()
@@ -95,13 +105,13 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 // Update implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
-		return fmt.Errorf("document cannot be nil")
+		return errDocumentCannotBeNil
 	}
 	if doc.ID == "" {
-		return fmt.Errorf("document ID cannot be empty")
+		return errDocumentIDCannotBeEmpty
 	}
 	if len(embedding) == 0 {
-		return fmt.Errorf("embedding cannot be empty")
+		return errEmbeddingCannotBeEmpty
 	}
 
 	vs.mutex.Lock()
@@ -121,7 +131,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 // Delete implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return fmt.Errorf("document ID cannot be empty")
+		return errDocumentIDCannotBeEmpty
 	}
 
 	vs.mutex.Lock()
@@ -140,10 +150,10 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 // Search implements vectorstore.VectorStore interface.
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
-		return nil, fmt.Errorf("query cannot be nil")
+		return nil, errors.New("query cannot be nil")
 	}
 	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("query vector cannot be empty")
+		return nil, errors.New("query vector cannot be empty")
 	}
 
 	vs.mutex.RLock()

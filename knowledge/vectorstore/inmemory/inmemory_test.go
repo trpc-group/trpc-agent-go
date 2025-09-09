@@ -29,7 +29,7 @@ func TestVectorStore_CRUDAndSearch(t *testing.T) {
 	doc1 := &document.Document{
 		ID:      "doc1",
 		Content: "hello world",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"lang": "en",
 		},
 	}
@@ -48,7 +48,7 @@ func TestVectorStore_CRUDAndSearch(t *testing.T) {
 	updatedDoc := &document.Document{
 		ID:      "doc1",
 		Content: "hello updated",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"lang": "en",
 		},
 	}
@@ -61,7 +61,7 @@ func TestVectorStore_CRUDAndSearch(t *testing.T) {
 		Limit:    5,
 		MinScore: 0.0,
 		Filter: &vectorstore.SearchFilter{
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"lang": "en",
 			},
 		},
@@ -105,16 +105,17 @@ func TestSortByScore(t *testing.T) {
 }
 
 func TestMatchesFilter(t *testing.T) {
+	ctx := context.Background()
 	store := New()
 	doc := &document.Document{
 		ID:      "doc1",
 		Content: "data",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"type": "test",
 		},
 	}
 	embedding := []float64{0.1, 0.2, 0.3}
-	require.NoError(t, store.Add(nil, doc, embedding))
+	require.NoError(t, store.Add(ctx, doc, embedding))
 
 	// Match by ID
 	filterByID := &vectorstore.SearchFilter{IDs: []string{"doc1"}}
@@ -125,27 +126,28 @@ func TestMatchesFilter(t *testing.T) {
 	require.False(t, store.matchesFilter("doc1", filterWrongID))
 
 	// Match by metadata
-	filterByMeta := &vectorstore.SearchFilter{Metadata: map[string]interface{}{"type": "test"}}
+	filterByMeta := &vectorstore.SearchFilter{Metadata: map[string]any{"type": "test"}}
 	require.True(t, store.matchesFilter("doc1", filterByMeta))
 
 	// Non-matching metadata
-	filterWrongMeta := &vectorstore.SearchFilter{Metadata: map[string]interface{}{"type": "prod"}}
+	filterWrongMeta := &vectorstore.SearchFilter{Metadata: map[string]any{"type": "prod"}}
 	require.False(t, store.matchesFilter("doc1", filterWrongMeta))
 }
 
 func TestVectorStore_ErrorPathsAndClose(t *testing.T) {
+	ctx := context.Background()
 	store := New()
 
 	// Get non-existent ID.
-	_, _, err := store.Get(nil, "missing")
+	_, _, err := store.Get(ctx, "missing")
 	require.Error(t, err)
 
 	// Delete non-existent ID.
-	err = store.Delete(nil, "missing")
+	err = store.Delete(ctx, "missing")
 	require.Error(t, err)
 
 	// Search with empty vector.
-	_, err = store.Search(nil, &vectorstore.SearchQuery{Vector: []float64{}})
+	_, err = store.Search(ctx, &vectorstore.SearchQuery{Vector: []float64{}})
 	require.Error(t, err)
 
 	// Close store.
