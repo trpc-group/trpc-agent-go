@@ -54,10 +54,10 @@ type askForApprovalOutput struct {
 	TicketID string `json:"ticket_id"`
 }
 
-func newLLMAgent() *llmagent.LLMAgent {
+func newLLMAgent(modelName string, streaming bool) *llmagent.LLMAgent {
 	return llmagent.New(
 		"reimbursement_agent",
-		llmagent.WithModel(openai.New("deepseek-chat")),
+		llmagent.WithModel(openai.New(modelName)),
 		llmagent.WithDescription("A helpful AI agent for reimbursement"),
 		llmagent.WithInstruction(`
 You are an agent whose job is to handle the reimbursement process for the employees. 
@@ -69,7 +69,7 @@ If the manager rejects, you will inform the employee of the rejection.
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			MaxTokens:   intPtr(2000),
 			Temperature: floatPtr(0.7),
-			Stream:      true, // Enable streaming
+			Stream:      streaming, // Enable or disable streaming.
 		}),
 		llmagent.WithTools([]tool.Tool{
 			function.NewFunctionTool(
