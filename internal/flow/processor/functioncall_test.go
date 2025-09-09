@@ -71,7 +71,7 @@ func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 
 func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor()
+	p := NewFunctionCallResponseProcessor(false)
 
 	// Prepare invocation with a parent agent that has a sub-agent named weather-agent.
 	inv := &agent.Invocation{
@@ -107,7 +107,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor()
+	p := NewFunctionCallResponseProcessor(false)
 
 	// Invocation without matching sub-agent and with a mock model to satisfy logging.
 	inv := &agent.Invocation{

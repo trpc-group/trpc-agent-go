@@ -13,7 +13,6 @@ package llmflow
 import (
 	"context"
 	"errors"
-	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -30,38 +29,18 @@ import (
 
 const (
 	defaultChannelBufferSize = 256
-
-	// ErrorToolNotFound is the error message for tool not found.
-	ErrorToolNotFound = "Error: tool not found"
-	// ErrorCallableToolExecution is the error message for callable tool execution failed.
-	ErrorCallableToolExecution = "Error: callable tool execution failed"
-	// ErrorStreamableToolExecution is the error message for streamable tool execution failed.
-	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
-	// ErrorMarshalResult is the error message for failed to marshal result.
-	ErrorMarshalResult = "Error: failed to marshal result"
-
-	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
 )
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize   int  // Buffer size for event channels (default: 256)
-	EnableParallelTools bool // If true, enable parallel tool execution (default: false, serial execution for safety)
+	ChannelBufferSize int // Buffer size for event channels (default: 256)
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors   []flow.RequestProcessor
-	responseProcessors  []flow.ResponseProcessor
-	channelBufferSize   int
-	enableParallelTools bool
-}
-
-// toolResult holds the result of a single tool execution.
-type toolResult struct {
-	index int
-	event *event.Event
+	requestProcessors  []flow.RequestProcessor
+	responseProcessors []flow.ResponseProcessor
+	channelBufferSize  int
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -78,10 +57,9 @@ func New(
 	}
 
 	return &Flow{
-		requestProcessors:   requestProcessors,
-		responseProcessors:  responseProcessors,
-		channelBufferSize:   channelBufferSize,
-		enableParallelTools: opts.EnableParallelTools,
+		requestProcessors:  requestProcessors,
+		responseProcessors: responseProcessors,
+		channelBufferSize:  channelBufferSize,
 	}
 }
 

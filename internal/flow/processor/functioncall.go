@@ -56,11 +56,15 @@ type subAgentCall struct {
 }
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
-type FunctionCallResponseProcessor struct{}
+type FunctionCallResponseProcessor struct {
+	enableParallelTools bool
+}
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
-func NewFunctionCallResponseProcessor() *FunctionCallResponseProcessor {
-	return &FunctionCallResponseProcessor{}
+func NewFunctionCallResponseProcessor(enableParallelTools bool) *FunctionCallResponseProcessor {
+	return &FunctionCallResponseProcessor{
+		enableParallelTools: enableParallelTools,
+	}
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -152,7 +156,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	toolCalls := functionCallResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
-	if false && len(toolCalls) > 1 {
+	if p.enableParallelTools && len(toolCalls) > 1 {
 		return p.executeToolCallsInParallel(ctx, invocation, functionCallResponse, toolCalls, tools)
 	}
 
