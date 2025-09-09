@@ -106,6 +106,37 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message, event *event.Event) {
+	input := message.Content
+	for _, part := range message.ContentParts {
+		if part.Text != nil {
+			input += "\n" + *part.Text
+		}
+	}
+
+	var output string
+	if event != nil && event.Response != nil && len(event.Response.Choices) > 0 {
+		m := event.Response.Choices[0].Message
+		output = m.Content
+		for _, part := range m.ContentParts {
+			if part.Text != nil {
+				output += "\n" + *part.Text
+			}
+		}
+	}
+
+	span.SetAttributes(
+		attribute.String("gen_ai.system", "trpc.go.agent"),
+		attribute.String("gen_ai.operation.name", "run_runner"),
+		attribute.String("trpc.go.agent.runner.name", fmt.Sprintf("[trpc-go-agent]: %s/%s", appName, invoke.AgentName)),
+		attribute.String("trpc.go.agent.runner.invocation_id", invoke.InvocationID),
+		attribute.String("trpc.go.agent.runner.session_id", invoke.Session.ID),
+		attribute.String("trpc.go.agent.runner.user_id", invoke.Session.UserID),
+		attribute.String("trpc.go.agent.runner.input", input),
+		attribute.String("trpc.go.agent.runner.output", output),
+	)
+}
+
 // TraceCallLLM traces the invocation of an LLM call.
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	span.SetAttributes(

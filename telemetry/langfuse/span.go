@@ -13,11 +13,10 @@ import (
 	"encoding/json"
 	"sync"
 
-	"go.opentelemetry.io/otel/trace/embedded"
-
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/embedded"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
@@ -53,12 +52,51 @@ func (s *span) transformAttributes(attrs map[attribute.Key]attribute.Value) {
 	if !ok {
 		return
 	}
-
 	if operationName.AsString() == "call_llm" {
 		s.transformCallLLM(attrs)
 	} else if operationName.AsString() == "execute_tool" {
 		s.transformExecuteTool(attrs)
+	} else if operationName.AsString() == "run_runner" {
+		s.transformRunRunner(attrs)
 	}
+}
+
+func (s *span) transformRunRunner(attrs map[attribute.Key]attribute.Value) {
+	if name, ok := attrs["trpc.go.agent.runner.name"]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.name", name.AsString()))
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.name", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.name", "N/A"))
+	}
+
+	if userID, ok := attrs["trpc.go.agent.runner.user_id"]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.user_id", userID.AsString()))
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.user_id", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.user_id", "N/A"))
+	}
+
+	if sessionID, ok := attrs["trpc.go.agent.runner.session_id"]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.session_id", sessionID.AsString()))
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.session_id", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.session_id", "N/A"))
+	}
+
+	if input, ok := attrs["trpc.go.agent.runner.input"]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.input", input.AsString()))
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.input", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.input", "N/A"))
+	}
+
+	if output, ok := attrs["trpc.go.agent.runner.output"]; ok {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.output", output.AsString()))
+		s.underlying.SetAttributes(attribute.String("trpc.go.agent.runner.output", ""))
+	} else {
+		s.underlying.SetAttributes(attribute.String("langfuse.trace.output", "N/A"))
+	}
+
 }
 
 func (s *span) transformExecuteTool(attrs map[attribute.Key]attribute.Value) {

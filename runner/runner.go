@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -101,8 +102,6 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, "invocation")
-	defer span.End()
 
 	sessionKey := session.Key{
 		AppName:   r.appName,
@@ -171,6 +170,8 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	ctx, span := trace.Tracer.Start(ctx, "run_runner")
+	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -179,7 +180,8 @@ func (r *runner) Run(
 
 	// Create a new channel for processed events.
 	processedEventCh := make(chan *event.Event)
-
+	//  Track the last non-streaming event for tracing
+	var lastNonStreamingEvent *event.Event
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer close(processedEventCh)
@@ -188,6 +190,7 @@ func (r *runner) Run(
 			// Append event to session if it's complete (not partial).
 			if agentEvent.StateDelta != nil ||
 				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
+				lastNonStreamingEvent = agentEvent
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
@@ -233,6 +236,8 @@ func (r *runner) Run(
 		case <-ctx.Done():
 		}
 	}()
+
+	itelemetry.TraceRunner(span, r.appName, invocation, message, lastNonStreamingEvent)
 
 	return processedEventCh, nil
 }
