@@ -35,12 +35,12 @@ func TestTCVectorSuite(t *testing.T) {
 	suite.Run(t, new(TCVectorTestSuite))
 }
 
-// TCVectorTestSuite contains test suite state
+// TCVectorTestSuite contains test suite state.
 type TCVectorTestSuite struct {
 	suite.Suite
 	vs          *VectorStore
 	ctx         context.Context
-	addedDocIDs []string // Track documents for cleanup
+	addedDocIDs []string // Track documents for cleanup.
 }
 
 var testData = []struct {
@@ -54,7 +54,7 @@ var testData = []struct {
 			ID:      "test_001",
 			Name:    "AI Fundamentals",
 			Content: "Artificial intelligence is a branch of computer science",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"category": "AI",
 				"priority": 5,
 				"tags":     []string{"AI", "fundamentals"},
@@ -68,7 +68,7 @@ var testData = []struct {
 			ID:      "test_002",
 			Name:    "Machine Learning Algorithms",
 			Content: "Machine learning is the core technology of artificial intelligence",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"category": "ML",
 				"priority": 8,
 				"tags":     []string{"ML", "algorithms"},
@@ -82,7 +82,7 @@ var testData = []struct {
 			ID:      "test_003",
 			Name:    "Deep Learning Framework",
 			Content: "Deep learning is a subset of machine learning",
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"category": "DL",
 				"priority": 6,
 				"tags":     []string{"DL", "framework"},
@@ -92,7 +92,7 @@ var testData = []struct {
 	},
 }
 
-// SetupSuite initializes the test suite
+// SetupSuite initializes the test suite.
 func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.ctx = context.Background()
 	if urlStr == "" || key == "" {
@@ -115,11 +115,11 @@ func (suite *TCVectorTestSuite) SetupSuite() {
 	suite.addedDocIDs = make([]string, 0)
 
 	suite.T().Logf("Test suite setup completed with collection: %s", collection)
-	// sleep 3 seconds to ensure the collection is ready
+	// sleep 3 seconds to ensure the collection is ready.
 	time.Sleep(3 * time.Second)
 }
 
-// TearDownSuite cleans up test data
+// TearDownSuite cleans up test data.
 func (suite *TCVectorTestSuite) TearDownSuite() {
 	if suite.vs == nil {
 		return
@@ -129,23 +129,23 @@ func (suite *TCVectorTestSuite) TearDownSuite() {
 	suite.vs.Close()
 }
 
-// SetupTest runs before each test to ensure a clean state
+// SetupTest runs before each test to ensure a clean state.
 func (suite *TCVectorTestSuite) SetupTest() {
-	// Clean up any documents that were added in a previous test run
+	// Clean up any documents that were added in a previous test run.
 	for _, id := range suite.addedDocIDs {
 		_ = suite.vs.Delete(suite.ctx, id) // Ignore error as doc might already be deleted
 	}
-	// Reset the tracker
+	// Reset the tracker.
 	suite.addedDocIDs = make([]string, 0)
 }
 
-// validateDocument compares two documents for equality
+// validateDocument compares two documents for equality.
 func (suite *TCVectorTestSuite) validateDocument(expected *document.Document, actual *document.Document) {
 	suite.Equal(expected.ID, actual.ID, "Document ID should match")
 	suite.Equal(expected.Name, actual.Name, "Document Name should match")
 	suite.Equal(expected.Content, actual.Content, "Document Content should match")
 
-	// Validate metadata with more flexible type checking
+	// Validate metadata with more flexible type checking.
 	for key, expectedValue := range expected.Metadata {
 		actualValue, exists := actual.Metadata[key]
 		if !exists {
@@ -153,21 +153,21 @@ func (suite *TCVectorTestSuite) validateDocument(expected *document.Document, ac
 			continue
 		}
 
-		// More flexible comparison for different types
+		// More flexible comparison for different types.
 		suite.True(suite.compareMetadataValues(expectedValue, actualValue),
 			"Metadata %s should match: got %v (%T), expected %v (%T)",
 			key, actualValue, actualValue, expectedValue, expectedValue)
 	}
 }
 
-// compareMetadataValues provides flexible comparison for metadata values
-func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual interface{}) bool {
-	// Direct equality
+// compareMetadataValues provides flexible comparison for metadata values.
+func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual any) bool {
+	// Direct equality.
 	if reflect.DeepEqual(expected, actual) {
 		return true
 	}
 
-	// Handle numeric type conversions
+	// Handle numeric type conversions.
 	switch a := actual.(type) {
 	case json.Number:
 		eStr := fmt.Sprintf("%v", expected)
@@ -185,7 +185,7 @@ func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual interface
 		}
 	}
 
-	// For slices, try element-wise comparison
+	// For slices, try element-wise comparison.
 	expectedVal := reflect.ValueOf(expected)
 	actualVal := reflect.ValueOf(actual)
 	if expectedVal.Kind() == reflect.Slice && actualVal.Kind() == reflect.Slice {
@@ -203,7 +203,7 @@ func (suite *TCVectorTestSuite) compareMetadataValues(expected, actual interface
 	return false
 }
 
-// validateVector compares two vectors for equality
+// validateVector compares two vectors for equality.
 func (suite *TCVectorTestSuite) validateVector(expected []float64, actual []float64, tolerance float64) {
 	suite.Require().Len(actual, len(expected), "Vector length should match")
 
@@ -244,7 +244,7 @@ func (suite *TCVectorTestSuite) TestAdd() {
 
 			suite.Require().NoError(err, "no error expected")
 
-			// Track for cleanup
+			// Track for cleanup.
 			suite.addedDocIDs = append(suite.addedDocIDs, tt.doc.ID)
 			retrievedDoc, retrievedVector, err := suite.vs.Get(suite.ctx, tt.doc.ID)
 			suite.Require().NoError(err, "query after add should succeed")
@@ -259,7 +259,7 @@ func (suite *TCVectorTestSuite) TestAdd() {
 }
 
 func (suite *TCVectorTestSuite) TestGet() {
-	// Setup: Add test document first
+	// Setup: Add test document first.
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
 	suite.Require().NoError(err, "Failed to add test document")
@@ -304,7 +304,7 @@ func (suite *TCVectorTestSuite) TestGet() {
 }
 
 func (suite *TCVectorTestSuite) TestUpdate() {
-	// Setup: Add test document
+	// Setup: Add test document.
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
 	suite.Require().NoError(err, "Failed to add test document")
@@ -323,7 +323,7 @@ func (suite *TCVectorTestSuite) TestUpdate() {
 				ID:      testDoc.doc.ID,
 				Name:    "Updated AI Fundamentals",
 				Content: "Updated content about artificial intelligence",
-				Metadata: map[string]interface{}{
+				Metadata: map[string]any{
 					"category":   "AI",
 					"priority":   9,
 					"tags":       []string{"AI", "fundamentals", "updated"},
@@ -358,7 +358,7 @@ func (suite *TCVectorTestSuite) TestUpdate() {
 }
 
 func (suite *TCVectorTestSuite) TestDelete() {
-	// Setup: Add test document
+	// Setup: Add test document.
 	testDoc := testData[0]
 	err := suite.vs.Add(suite.ctx, testDoc.doc, testDoc.vector)
 	suite.Require().NoError(err, "Failed to add test document")
@@ -376,7 +376,7 @@ func (suite *TCVectorTestSuite) TestDelete() {
 		{
 			name:    "non_existing_document",
 			id:      "non_existent_id",
-			wantErr: false, // Delete non-existing should not error
+			wantErr: false, // Delete non-existing should not error.
 		},
 	}
 
@@ -407,7 +407,7 @@ func (suite *TCVectorTestSuite) TestEdgeCases() {
 			SearchMode: vectorstore.SearchModeVector,
 		}
 		_, err := suite.vs.Search(suite.ctx, query)
-		// Empty vector search might be valid or invalid depending on implementation
+		// Empty vector search might be valid or invalid depending on implementation.
 		if err != nil {
 			suite.T().Logf("Empty vector search error (may be expected): %v", err)
 		}
@@ -430,7 +430,7 @@ func (suite *TCVectorTestSuite) TestEdgeCases() {
 	})
 }
 
-// Helper functions for environment variable parsing used in tests
+// Helper functions for environment variable parsing used in tests.
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
