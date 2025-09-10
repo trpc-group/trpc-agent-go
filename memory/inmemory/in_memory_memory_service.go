@@ -26,14 +26,6 @@ import (
 
 var _ memory.Service = (*MemoryService)(nil)
 
-// defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = imemory.DefaultEnabledTools
-
-const (
-	// defaultMemoryLimit is the default limit of memories per user.
-	defaultMemoryLimit = imemory.DefaultMemoryLimit
-)
-
 // appMemories represents memories for a specific app.
 type appMemories struct {
 	mu       sync.RWMutex
@@ -72,13 +64,13 @@ type MemoryService struct {
 // NewMemoryService creates a new in-memory memory service.
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := serviceOpts{
-		memoryLimit:  defaultMemoryLimit,
+		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
 
 	// Enable default tools first.
-	for toolName, creator := range defaultEnabledTools {
+	for toolName, creator := range imemory.DefaultEnabledTools {
 		opts.enabledTools[toolName] = true
 		opts.toolCreators[toolName] = creator
 	}
@@ -357,7 +349,7 @@ func (s *MemoryService) Tools() []tool.Tool {
 		if s.opts.enabledTools[toolName] {
 			// Create the tool if not cached.
 			if _, exists := s.cachedTools[toolName]; !exists {
-				s.cachedTools[toolName] = creator(s)
+				s.cachedTools[toolName] = creator()
 			}
 			tools = append(tools, s.cachedTools[toolName])
 		}

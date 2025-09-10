@@ -174,6 +174,7 @@ func (r *runner) Run(
 		Message:           message,
 		RunOptions:        ro,
 		EventCompletionCh: eventCompletionCh,
+		MemoryService:     r.memoryService,
 		ArtifactService:   r.artifactService,
 	}
 

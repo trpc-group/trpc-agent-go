@@ -28,10 +28,10 @@ const (
 // DefaultEnabledTools are the creators of default memory tools to enable.
 // This is shared between different memory service implementations.
 var DefaultEnabledTools = map[string]memory.ToolCreator{
-	memory.AddToolName:    func(service memory.Service) tool.Tool { return memorytool.NewAddTool(service) },
-	memory.UpdateToolName: func(service memory.Service) tool.Tool { return memorytool.NewUpdateTool(service) },
-	memory.SearchToolName: func(service memory.Service) tool.Tool { return memorytool.NewSearchTool(service) },
-	memory.LoadToolName:   func(service memory.Service) tool.Tool { return memorytool.NewLoadTool(service) },
+	memory.AddToolName:    func() tool.Tool { return memorytool.NewAddTool() },
+	memory.UpdateToolName: func() tool.Tool { return memorytool.NewUpdateTool() },
+	memory.SearchToolName: func() tool.Tool { return memorytool.NewSearchTool() },
+	memory.LoadToolName:   func() tool.Tool { return memorytool.NewLoadTool() },
 }
 
 // validToolNames contains all valid memory tool names.

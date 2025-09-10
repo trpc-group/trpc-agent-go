@@ -23,40 +23,40 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	memorypkg "trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // mockMemoryService is a mock implementation of memory.Service for testing.
 type mockMemoryService struct {
-	memories map[string]*memorypkg.Entry
+	memories map[string]*memory.Entry
 	counter  int
 }
 
 func newMockMemoryService() *mockMemoryService {
 	return &mockMemoryService{
-		memories: make(map[string]*memorypkg.Entry),
+		memories: make(map[string]*memory.Entry),
 		counter:  0,
 	}
 }
 
-func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memorypkg.UserKey, memory string, topics []string) error {
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
 	m.counter++
 	memoryID := fmt.Sprintf("memory-%d", m.counter)
 	key := userKey.AppName + ":" + userKey.UserID + ":" + memoryID
-	m.memories[key] = &memorypkg.Entry{
+	m.memories[key] = &memory.Entry{
 		ID:        memoryID,
 		AppName:   userKey.AppName,
 		UserID:    userKey.UserID,
-		Memory:    &memorypkg.Memory{Memory: memory, Topics: topics},
+		Memory:    &memory.Memory{Memory: memoryStr, Topics: topics},
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 	return nil
 }
 
-func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memorypkg.Key, memory string, topics []string) error {
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
 	key := memoryKey.AppName + ":" + memoryKey.UserID + ":" + memoryKey.MemoryID
 	if entry, exists := m.memories[key]; exists {
 		entry.Memory.Memory = memory
@@ -67,7 +67,7 @@ func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memorypk
 	return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 }
 
-func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memorypkg.Key) error {
+func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	key := memoryKey.AppName + ":" + memoryKey.UserID + ":" + memoryKey.MemoryID
 	if _, exists := m.memories[key]; exists {
 		delete(m.memories, key)
@@ -76,7 +76,7 @@ func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey memorypk
 	return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 }
 
-func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memorypkg.UserKey) error {
+func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	prefix := userKey.AppName + ":" + userKey.UserID + ":"
 	for key := range m.memories {
 		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
@@ -86,8 +86,8 @@ func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memorypkg
 	return nil
 }
 
-func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memorypkg.UserKey, limit int) ([]*memorypkg.Entry, error) {
-	var results []*memorypkg.Entry
+func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	var results []*memory.Entry
 	prefix := userKey.AppName + ":" + userKey.UserID + ":"
 
 	for key, entry := range m.memories {
@@ -101,8 +101,8 @@ func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memorypkg.
 	return results, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memorypkg.UserKey, query string) ([]*memorypkg.Entry, error) {
-	var results []*memorypkg.Entry
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+	var results []*memory.Entry
 	prefix := userKey.AppName + ":" + userKey.UserID + ":"
 
 	for key, entry := range m.memories {
@@ -128,7 +128,7 @@ func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPromp
 }
 
 // createMockContext creates a mock context with session information.
-func createMockContext(appName, userID string) context.Context {
+func createMockContext(appName, userID string, service memory.Service) context.Context {
 	mockSession := &session.Session{
 		ID:        "test-session",
 		AppName:   appName,
@@ -140,8 +140,9 @@ func createMockContext(appName, userID string) context.Context {
 	}
 
 	mockInvocation := &agent.Invocation{
-		AgentName: "test-agent",
-		Session:   mockSession,
+		AgentName:     "test-agent",
+		Session:       mockSession,
+		MemoryService: service,
 	}
 
 	return agent.NewInvocationContext(context.Background(), mockInvocation)
@@ -149,9 +150,9 @@ func createMockContext(appName, userID string) context.Context {
 
 func TestMemoryTool_AddMemory(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddTool(service)
+	tool := NewAddTool()
 
-	ctx := createMockContext("test-app", "test-user")
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test adding a memory with topics.
 	args := map[string]any{
@@ -173,7 +174,7 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 	assert.Equal(t, "personal", response.Topics[0], "Expected topic 'personal', got '%s'", response.Topics[0])
 
 	// Verify memory was added.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	memories, err := service.ReadMemories(context.Background(), userKey, 10)
 	require.NoError(t, err, "Failed to read memories")
 
@@ -183,9 +184,9 @@ func TestMemoryTool_AddMemory(t *testing.T) {
 
 func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddTool(service)
+	tool := NewAddTool()
 
-	ctx := createMockContext("test-app", "test-user")
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test adding a memory without topics.
 	args := map[string]any{
@@ -207,8 +208,7 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 }
 
 func TestMemoryTool_Declaration(t *testing.T) {
-	service := newMockMemoryService()
-	tool := NewAddTool(service)
+	tool := NewAddTool()
 
 	decl := tool.Declaration()
 	require.NotNil(t, decl, "Expected non-nil declaration")
@@ -221,7 +221,7 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add some test memories first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	require.NoError(t, err, "Failed to add first memory")
 
@@ -233,9 +233,9 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	require.NoError(t, err, "Failed to read memories")
 	assert.Len(t, memories, 2, "Expected 2 memories, got %d", len(memories))
 
-	tool := NewSearchTool(service)
+	tool := NewSearchTool()
 
-	ctx := createMockContext("test-app", "test-user")
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test searching memories.
 	args := map[string]any{
@@ -261,13 +261,13 @@ func TestMemoryTool_LoadMemory(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add some test memories first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
-	tool := NewLoadTool(service)
+	tool := NewLoadTool()
 
-	ctx := createMockContext("test-app", "test-user")
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test loading memories with limit.
 	args := map[string]any{
@@ -292,7 +292,7 @@ func TestMemoryTool_UpdateMemory(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add a test memory first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	require.NoError(t, err, "Failed to add memory")
 
@@ -302,8 +302,8 @@ func TestMemoryTool_UpdateMemory(t *testing.T) {
 	require.Len(t, memories, 1, "Expected 1 memory")
 	memoryID := memories[0].ID
 
-	tool := NewUpdateTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewUpdateTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test updating memory.
 	args := map[string]any{
@@ -338,7 +338,7 @@ func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add a test memory first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	require.NoError(t, err, "Failed to add memory")
 
@@ -348,8 +348,8 @@ func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 	require.Len(t, memories, 1, "Expected 1 memory")
 	memoryID := memories[0].ID
 
-	tool := NewUpdateTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewUpdateTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test updating memory without topics.
 	args := map[string]any{
@@ -374,8 +374,8 @@ func TestMemoryTool_UpdateMemory_WithoutTopics(t *testing.T) {
 
 func TestMemoryTool_UpdateMemory_InvalidID(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewUpdateTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewUpdateTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test updating with invalid memory ID.
 	args := map[string]any{
@@ -395,8 +395,8 @@ func TestMemoryTool_UpdateMemory_InvalidID(t *testing.T) {
 
 func TestMemoryTool_UpdateMemory_MissingMemoryID(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewUpdateTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewUpdateTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test updating without memory ID.
 	args := map[string]any{
@@ -415,8 +415,8 @@ func TestMemoryTool_UpdateMemory_MissingMemoryID(t *testing.T) {
 
 func TestMemoryTool_UpdateMemory_MissingMemory(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewUpdateTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewUpdateTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test updating without memory content.
 	args := map[string]any{
@@ -437,7 +437,7 @@ func TestMemoryTool_DeleteMemory(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add a test memory first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	require.NoError(t, err, "Failed to add memory")
 
@@ -447,8 +447,8 @@ func TestMemoryTool_DeleteMemory(t *testing.T) {
 	require.Len(t, memories, 1, "Expected 1 memory")
 	memoryID := memories[0].ID
 
-	tool := NewDeleteTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewDeleteTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test deleting memory.
 	args := map[string]any{
@@ -475,8 +475,8 @@ func TestMemoryTool_DeleteMemory(t *testing.T) {
 
 func TestMemoryTool_DeleteMemory_InvalidID(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewDeleteTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewDeleteTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test deleting with invalid memory ID.
 	args := map[string]any{
@@ -494,8 +494,8 @@ func TestMemoryTool_DeleteMemory_InvalidID(t *testing.T) {
 
 func TestMemoryTool_DeleteMemory_MissingMemoryID(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewDeleteTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewDeleteTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test deleting without memory ID.
 	args := map[string]any{}
@@ -513,7 +513,7 @@ func TestMemoryTool_ClearMemories(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add some test memories first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	require.NoError(t, err, "Failed to add first memory")
 	err = service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
@@ -524,8 +524,8 @@ func TestMemoryTool_ClearMemories(t *testing.T) {
 	require.NoError(t, err, "Failed to read memories")
 	assert.Len(t, memories, 2, "Expected 2 memories before clearing")
 
-	tool := NewClearTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewClearTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test clearing memories.
 	args := map[string]any{}
@@ -549,8 +549,8 @@ func TestMemoryTool_ClearMemories(t *testing.T) {
 
 func TestMemoryTool_AddMemory_MissingMemory(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewAddTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewAddTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test adding memory without content.
 	args := map[string]any{
@@ -568,8 +568,8 @@ func TestMemoryTool_AddMemory_MissingMemory(t *testing.T) {
 
 func TestMemoryTool_SearchMemory_MissingQuery(t *testing.T) {
 	service := newMockMemoryService()
-	tool := NewSearchTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test searching without query.
 	args := map[string]any{}
@@ -587,12 +587,12 @@ func TestMemoryTool_LoadMemory_DefaultLimit(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add some test memories first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 	service.AddMemory(context.Background(), userKey, "User works as a developer", []string{"work"})
 
-	tool := NewLoadTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewLoadTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test loading memories without specifying limit (should use default).
 	args := map[string]any{}
@@ -615,11 +615,11 @@ func TestMemoryTool_LoadMemory_ZeroLimit(t *testing.T) {
 	service := newMockMemoryService()
 
 	// Add some test memories first.
-	userKey := memorypkg.UserKey{AppName: "test-app", UserID: "test-user"}
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
 	service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
 
-	tool := NewLoadTool(service)
-	ctx := createMockContext("test-app", "test-user")
+	tool := NewLoadTool()
+	ctx := createMockContext("test-app", "test-user", service)
 
 	// Test loading memories with zero limit (should use default).
 	args := map[string]any{
@@ -640,7 +640,8 @@ func TestMemoryTool_LoadMemory_ZeroLimit(t *testing.T) {
 }
 
 func TestGetAppAndUserFromContext_ValidContext(t *testing.T) {
-	ctx := createMockContext("test-app", "test-user")
+	service := newMockMemoryService()
+	ctx := createMockContext("test-app", "test-user", service)
 	appName, userID, err := GetAppAndUserFromContext(ctx)
 	require.NoError(t, err, "Expected no error for valid context")
 	assert.Equal(t, "test-app", appName, "Expected app name 'test-app', got '%s'", appName)
@@ -723,12 +724,11 @@ func TestGetAppAndUserFromContext_MissingUserID(t *testing.T) {
 }
 
 func TestMemoryTool_Declaration_AllTools(t *testing.T) {
-	service := newMockMemoryService()
 
 	// Test all tool declarations.
 	tools := []struct {
 		name     string
-		creator  func(memorypkg.Service) tool.CallableTool
+		creator  func() tool.CallableTool
 		expected string
 	}{
 		{"AddTool", NewAddTool, "memory_add"},
@@ -741,7 +741,7 @@ func TestMemoryTool_Declaration_AllTools(t *testing.T) {
 
 	for _, tt := range tools {
 		t.Run(tt.name, func(t *testing.T) {
-			tool := tt.creator(service)
+			tool := tt.creator()
 			decl := tool.Declaration()
 			require.NotNil(t, decl, "Expected non-nil declaration for %s", tt.name)
 			assert.Equal(t, tt.expected, decl.Name, "Expected name '%s' for %s, got '%s'", tt.expected, tt.name, decl.Name)
@@ -749,4 +749,70 @@ func TestMemoryTool_Declaration_AllTools(t *testing.T) {
 			assert.NotNil(t, decl.InputSchema, "Expected non-nil input schema for %s", tt.name)
 		})
 	}
+}
+
+func TestGetMemoryServiceFromContext(t *testing.T) {
+	t.Run("valid context with memory service", func(t *testing.T) {
+		service := newMockMemoryService()
+		ctx := createMockContext("test-app", "test-user", service)
+
+		memoryService, err := getMemoryServiceFromContext(ctx)
+		require.NoError(t, err, "Expected no error for valid context with memory service")
+		require.NotNil(t, memoryService, "Expected non-nil memory service")
+		assert.Equal(t, service, memoryService, "Expected the same memory service instance")
+	})
+
+	t.Run("context without invocation", func(t *testing.T) {
+		ctx := context.Background()
+
+		memoryService, err := getMemoryServiceFromContext(ctx)
+		require.Error(t, err, "Expected error for context without invocation")
+		assert.Nil(t, memoryService, "Expected nil memory service on error")
+		assert.Contains(t, err.Error(), "no invocation context found", "Expected specific error message")
+	})
+
+	t.Run("context with nil invocation", func(t *testing.T) {
+		// Create a context with nil invocation
+		ctx := agent.NewInvocationContext(context.Background(), nil)
+
+		memoryService, err := getMemoryServiceFromContext(ctx)
+		require.Error(t, err, "Expected error for context with nil invocation")
+		assert.Nil(t, memoryService, "Expected nil memory service on error")
+		assert.Contains(t, err.Error(), "no invocation context found", "Expected specific error message")
+	})
+
+	t.Run("context with invocation but nil memory service", func(t *testing.T) {
+		mockSession := &session.Session{
+			ID:        "test-session",
+			AppName:   "test-app",
+			UserID:    "test-user",
+			State:     session.StateMap{},
+			Events:    []event.Event{},
+			UpdatedAt: time.Now(),
+			CreatedAt: time.Now(),
+		}
+
+		mockInvocation := &agent.Invocation{
+			AgentName:     "test-agent",
+			Session:       mockSession,
+			MemoryService: nil, // Explicitly set to nil
+		}
+
+		ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
+
+		memoryService, err := getMemoryServiceFromContext(ctx)
+		require.Error(t, err, "Expected error for context with nil memory service")
+		assert.Nil(t, memoryService, "Expected nil memory service on error")
+		assert.Contains(t, err.Error(), "memory service is not available", "Expected specific error message")
+	})
+
+	t.Run("context with valid invocation and memory service", func(t *testing.T) {
+		service := newMockMemoryService()
+		ctx := createMockContext("test-app", "test-user", service)
+
+		memoryService, err := getMemoryServiceFromContext(ctx)
+		require.NoError(t, err, "Expected no error for valid context")
+		require.NotNil(t, memoryService, "Expected non-nil memory service")
+		assert.Equal(t, service, memoryService, "Expected the same memory service instance")
+	})
 }

@@ -136,7 +136,7 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 	}
 
 	toolName := memory.AddToolName
-	creator := func(service memory.Service) tool.Tool { return nil }
+	creator := func() tool.Tool { return nil }
 
 	WithCustomTool(toolName, creator)(&opts)
 
@@ -169,7 +169,7 @@ func TestServiceOpts_InvalidToolName(t *testing.T) {
 	}
 
 	invalidToolName := "invalid_tool"
-	creator := func(service memory.Service) tool.Tool { return nil }
+	creator := func() tool.Tool { return nil }
 
 	// Test WithCustomTool with invalid name.
 	WithCustomTool(invalidToolName, creator)(&opts)
@@ -206,7 +206,7 @@ func TestServiceOpts_ToolManagement(t *testing.T) {
 	// Test enabling multiple tools.
 	tools := []string{memory.AddToolName, memory.SearchToolName, memory.LoadToolName}
 	for _, toolName := range tools {
-		creator := func(service memory.Service) tool.Tool { return nil }
+		creator := func() tool.Tool { return nil }
 		WithCustomTool(toolName, creator)(&opts)
 	}
 
@@ -228,12 +228,12 @@ func TestServiceOpts_EdgeCases(t *testing.T) {
 	}
 
 	// Test with empty tool name.
-	WithCustomTool("", func(service memory.Service) tool.Tool { return nil })(&opts)
+	WithCustomTool("", func() tool.Tool { return nil })(&opts)
 	assert.Empty(t, opts.toolCreators, "Empty tool name should not be added")
 
 	// Test with very long tool name.
 	longToolName := string(make([]byte, 1000))
-	WithCustomTool(longToolName, func(service memory.Service) tool.Tool { return nil })(&opts)
+	WithCustomTool(longToolName, func() tool.Tool { return nil })(&opts)
 	assert.Empty(t, opts.toolCreators, "Very long tool name should not be added")
 
 	// Test with zero memory limit.

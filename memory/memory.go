@@ -61,9 +61,9 @@ type Service interface {
 	Tools() []tool.Tool
 }
 
-// ToolCreator creates a tool with a given memory service.
+// ToolCreator creates a tool.
 // This type can be shared by different implementations.
-type ToolCreator func(Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Memory represents a memory entry with content and metadata.
 type Memory struct {

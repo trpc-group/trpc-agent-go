@@ -28,14 +28,6 @@ import (
 
 var _ memory.Service = (*Service)(nil)
 
-// defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = imemory.DefaultEnabledTools
-
-const (
-	// defaultMemoryLimit is the default limit of memories per user.
-	defaultMemoryLimit = imemory.DefaultMemoryLimit
-)
-
 // Service is the redis memory service.
 // Storage structure:
 //
@@ -50,12 +42,12 @@ type Service struct {
 // NewService creates a new redis memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
-		memoryLimit:  defaultMemoryLimit,
+		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
 	// Enable default tools.
-	for name, creator := range defaultEnabledTools {
+	for name, creator := range imemory.DefaultEnabledTools {
 		opts.toolCreators[name] = creator
 		opts.enabledTools[name] = true
 	}
@@ -263,7 +255,7 @@ func (s *Service) Tools() []tool.Tool {
 	for toolName, creator := range s.opts.toolCreators {
 		if s.opts.enabledTools[toolName] {
 			if _, ok := s.cachedTools[toolName]; !ok {
-				s.cachedTools[toolName] = creator(s)
+				s.cachedTools[toolName] = creator()
 			}
 			toolsList = append(toolsList, s.cachedTools[toolName])
 		}
