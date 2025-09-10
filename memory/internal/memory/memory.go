@@ -152,3 +152,62 @@ func isStopword(s string) bool {
 		return false
 	}
 }
+
+// MatchMemoryEntry checks if a memory entry matches the given query.
+// It uses token-based matching for better search accuracy.
+// The function returns true if the query matches either the memory content or any of the topics.
+func MatchMemoryEntry(entry *memory.Entry, query string) bool {
+	if entry == nil || entry.Memory == nil {
+		return false
+	}
+
+	// Handle empty or whitespace-only queries.
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return false
+	}
+
+	// Build tokens with shared EN and CJK handling.
+	tokens := BuildSearchTokens(query)
+	hasTokens := len(tokens) > 0
+
+	contentLower := strings.ToLower(entry.Memory.Memory)
+	matched := false
+
+	if hasTokens {
+		// OR match on any token against content or topics.
+		for _, tk := range tokens {
+			if tk == "" {
+				continue
+			}
+			if strings.Contains(contentLower, tk) {
+				matched = true
+				break
+			}
+			for _, topic := range entry.Memory.Topics {
+				if strings.Contains(strings.ToLower(topic), tk) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+	} else {
+		// Fallback to original substring match when no tokens built.
+		ql := strings.ToLower(query)
+		if strings.Contains(contentLower, ql) {
+			matched = true
+		} else {
+			for _, topic := range entry.Memory.Topics {
+				if strings.Contains(strings.ToLower(topic), ql) {
+					matched = true
+					break
+				}
+			}
+		}
+	}
+
+	return matched
+}

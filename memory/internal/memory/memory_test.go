@@ -12,6 +12,7 @@ package memory
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,4 +136,159 @@ func TestBuildSearchTokens_Performance(t *testing.T) {
 		assert.Contains(t, result, "hello")
 		assert.Contains(t, result, "world")
 	}
+}
+
+func TestMatchMemoryEntry(t *testing.T) {
+	now := time.Now()
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Hello world, this is a test memory",
+			Topics: []string{"test", "example"},
+		},
+		CreatedAt: now,
+	}
+
+	tests := []struct {
+		name     string
+		entry    *memory.Entry
+		query    string
+		expected bool
+	}{
+		{
+			name:     "exact content match",
+			entry:    entry,
+			query:    "hello world",
+			expected: true,
+		},
+		{
+			name:     "partial content match",
+			entry:    entry,
+			query:    "test memory",
+			expected: true,
+		},
+		{
+			name:     "topic match",
+			entry:    entry,
+			query:    "example",
+			expected: true,
+		},
+		{
+			name:     "case insensitive match",
+			entry:    entry,
+			query:    "HELLO WORLD",
+			expected: true,
+		},
+		{
+			name:     "chinese content match",
+			entry:    &memory.Entry{Memory: &memory.Memory{Memory: "这是一个中文测试", Topics: []string{"测试"}}},
+			query:    "中文测试",
+			expected: true,
+		},
+		{
+			name:     "chinese topic match",
+			entry:    &memory.Entry{Memory: &memory.Memory{Memory: "test content", Topics: []string{"中文测试"}}},
+			query:    "中文",
+			expected: true,
+		},
+		{
+			name:     "no match",
+			entry:    entry,
+			query:    "nonexistent",
+			expected: false,
+		},
+		{
+			name:     "empty query",
+			entry:    entry,
+			query:    "",
+			expected: false,
+		},
+		{
+			name:     "whitespace query",
+			entry:    entry,
+			query:    "   ",
+			expected: false,
+		},
+		{
+			name:     "nil entry",
+			entry:    nil,
+			query:    "test",
+			expected: false,
+		},
+		{
+			name:     "nil memory",
+			entry:    &memory.Entry{Memory: nil},
+			query:    "test",
+			expected: false,
+		},
+		{
+			name:     "stopword only query",
+			entry:    entry,
+			query:    "the and or",
+			expected: false,
+		},
+		{
+			name:     "punctuation only query",
+			entry:    entry,
+			query:    "!@#$%",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MatchMemoryEntry(tt.entry, tt.query)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMatchMemoryEntry_EdgeCases(t *testing.T) {
+	t.Run("very long content", func(t *testing.T) {
+		longContent := strings.Repeat("hello world ", 1000)
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: longContent,
+				Topics: []string{"test"},
+			},
+		}
+		result := MatchMemoryEntry(entry, "hello")
+		assert.True(t, result)
+	})
+
+	t.Run("very long query", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "test content",
+				Topics: []string{"example"},
+			},
+		}
+		longQuery := strings.Repeat("hello world ", 1000)
+		result := MatchMemoryEntry(entry, longQuery)
+		assert.False(t, result)
+	})
+
+	t.Run("unicode characters", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "🚀hello🌟world",
+				Topics: []string{"emoji"},
+			},
+		}
+		result := MatchMemoryEntry(entry, "hello")
+		assert.True(t, result)
+	})
+
+	t.Run("mixed languages", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "hello 世界 world",
+				Topics: []string{"多语言", "multilingual"},
+			},
+		}
+		assert.True(t, MatchMemoryEntry(entry, "hello"))
+		assert.True(t, MatchMemoryEntry(entry, "世界"))
+		assert.True(t, MatchMemoryEntry(entry, "world"))
+		assert.True(t, MatchMemoryEntry(entry, "多语言"))
+		assert.True(t, MatchMemoryEntry(entry, "multilingual"))
+	})
 }

@@ -333,53 +333,13 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 
 	var results []*memory.Entry
 
-	// Build tokens with shared EN and CJK handling.
-	tokens := imemory.BuildSearchTokens(query)
-	hasTokens := len(tokens) > 0
-
 	userMemories := app.memories[userKey.UserID]
 	if userMemories == nil {
 		return results, nil
 	}
 
 	for _, memoryEntry := range userMemories {
-		contentLower := strings.ToLower(memoryEntry.Memory.Memory)
-		matched := false
-		if hasTokens {
-			// OR match on any token against content or topics.
-			for _, tk := range tokens {
-				if tk == "" {
-					continue
-				}
-				if strings.Contains(contentLower, tk) {
-					matched = true
-					break
-				}
-				for _, topic := range memoryEntry.Memory.Topics {
-					if strings.Contains(strings.ToLower(topic), tk) {
-						matched = true
-						break
-					}
-				}
-				if matched {
-					break
-				}
-			}
-		} else {
-			// Fallback to original substring match when no tokens built.
-			ql := strings.ToLower(query)
-			if strings.Contains(contentLower, ql) {
-				matched = true
-			} else {
-				for _, topic := range memoryEntry.Memory.Topics {
-					if strings.Contains(strings.ToLower(topic), ql) {
-						matched = true
-						break
-					}
-				}
-			}
-		}
-		if matched {
+		if imemory.MatchMemoryEntry(memoryEntry, query) {
 			results = append(results, memoryEntry)
 		}
 	}
