@@ -300,9 +300,12 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 		memories = append(memories, memoryEntry)
 	}
 
-	// Sort by creation time (newest first).
+	// Sort by updated time (newest first), tie-breaker by created time.
 	sort.Slice(memories, func(i, j int) bool {
-		return memories[i].CreatedAt.After(memories[j].CreatedAt)
+		if memories[i].UpdatedAt.Equal(memories[j].UpdatedAt) {
+			return memories[i].CreatedAt.After(memories[j].CreatedAt)
+		}
+		return memories[i].UpdatedAt.After(memories[j].UpdatedAt)
 	})
 
 	// Apply limit if specified.
@@ -336,24 +339,38 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 			results = append(results, memoryEntry)
 		}
 	}
+
+	// Sort results by updated time (newest first), tie-breaker by created time.
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
+			return results[i].CreatedAt.After(results[j].CreatedAt)
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
 	return results, nil
 }
 
 // Tools returns the list of available memory tools.
 func (s *MemoryService) Tools() []tool.Tool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Ensure concurrency-safety and stable ordering.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	var tools []tool.Tool
-	for toolName, creator := range s.opts.toolCreators {
+	// Collect enabled tool names and sort for stable order.
+	var names []string
+	for toolName := range s.opts.toolCreators {
 		if s.opts.enabledTools[toolName] {
-			// Create the tool if not cached.
-			if _, exists := s.cachedTools[toolName]; !exists {
-				s.cachedTools[toolName] = creator()
-			}
-			tools = append(tools, s.cachedTools[toolName])
+			names = append(names, toolName)
 		}
 	}
+	sort.Strings(names)
 
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, exists := s.cachedTools[name]; !exists {
+			s.cachedTools[name] = s.opts.toolCreators[name]()
+		}
+		tools = append(tools, s.cachedTools[name])
+	}
 	return tools
 }

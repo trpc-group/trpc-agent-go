@@ -50,9 +50,11 @@ func IsValidToolName(toolName string) bool {
 	return ok
 }
 
-// BuildSearchTokens tokenizes the query for EN and CJK in a simple way.
-// For EN: split by non letters/digits, filter by min length and stopwords.
-// For CJK: generate overlapping bigrams of CJK runes for better recall.
+// BuildSearchTokens builds tokens for searching memory content.
+// Notes:
+//   - Stopwords and minimum token length are fixed defaults for now; future versions may expose configuration.
+//   - CJK handling currently treats only unicode.Han as CJK. This is not the full CJK range
+//     (does not include Hiragana/Katakana/Hangul). Adjust if broader coverage is desired.
 func BuildSearchTokens(query string) []string {
 	const minTokenLen = 2
 	q := strings.TrimSpace(strings.ToLower(query))

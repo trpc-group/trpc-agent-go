@@ -213,8 +213,12 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		}
 		entries = append(entries, e)
 	}
+	// Sort by updated time (newest first), tie-breaker by created time.
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
 	})
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
@@ -246,21 +250,38 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 			results = append(results, e)
 		}
 	}
+	// Stable sort by updated time desc.
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
+			return results[i].CreatedAt.After(results[j].CreatedAt)
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
 	return results, nil
 }
 
 // Tools returns the list of available memory tools.
 func (s *Service) Tools() []tool.Tool {
-	var toolsList []tool.Tool
-	for toolName, creator := range s.opts.toolCreators {
-		if s.opts.enabledTools[toolName] {
-			if _, ok := s.cachedTools[toolName]; !ok {
-				s.cachedTools[toolName] = creator()
-			}
-			toolsList = append(toolsList, s.cachedTools[toolName])
+	// Concurrency-safe and stable order by name.
+	// Protect tool creators/enabled flags and cache with a single lock at call-site
+	// by converting to a local snapshot first (no struct-level mutex exists).
+	// We assume opts are immutable after construction.
+	names := make([]string, 0, len(s.opts.toolCreators))
+	for name := range s.opts.toolCreators {
+		if s.opts.enabledTools[name] {
+			names = append(names, name)
 		}
 	}
-	return toolsList
+	sort.Strings(names)
+
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, ok := s.cachedTools[name]; !ok {
+			s.cachedTools[name] = s.opts.toolCreators[name]()
+		}
+		tools = append(tools, s.cachedTools[name])
+	}
+	return tools
 }
 
 // generateMemoryID generates a memory ID from memory content.

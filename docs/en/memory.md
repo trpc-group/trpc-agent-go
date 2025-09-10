@@ -284,6 +284,13 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
+### Overwrite Semantics (IDs and duplicates)
+
+- Memory IDs are generated from content + topics. Adding the same content and topics
+  is idempotent and overwrites the existing entry (not append). UpdatedAt is refreshed.
+- If you need append semantics or different duplicate-handling strategies, you can
+  implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
+
 ### Custom Tool Implementation
 
 You can override default tools with custom implementations. See

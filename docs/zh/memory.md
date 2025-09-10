@@ -258,6 +258,11 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
+### 覆盖语义（ID 与重复）
+
+- 记忆 ID 基于「内容 + 主题」生成。对同一用户重复添加相同内容与主题是幂等的：会覆盖原有记录（非追加），并刷新 UpdatedAt。
+- 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
+
 ### 自定义工具实现
 
 你可以用自定义实现覆盖默认工具。参考 [memory/tool/tool.go](https://github.com/trpc-group/trpc-agent-go/blob/main/memory/tool/tool.go) 了解如何实现自定义工具：
