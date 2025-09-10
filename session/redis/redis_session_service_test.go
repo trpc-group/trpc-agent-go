@@ -198,7 +198,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			},
 		},
 		{
-			name:                   "single_event_updates_time_aysnc_persistence",
+			name:                   "single_event_updates_time_async_persistence",
 			enableAsyncPersistence: true,
 			setupEvents: func() []*event.Event {
 				return []*event.Event{
