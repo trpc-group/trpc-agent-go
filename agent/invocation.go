@@ -69,7 +69,7 @@ type Invocation struct {
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
-	// notice
+	// noticeChanMap is used to signal when events are written to the session.
 	noticeChanMap map[string]chan any
 	noticeMu      *sync.Mutex
 }
@@ -131,6 +131,7 @@ func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
 	return &branchInvocation
 }
 
+// AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
@@ -140,13 +141,16 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 	}
 
 	ch := make(chan any)
+	if inv.noticeChanMap == nil {
+		inv.noticeChanMap = make(map[string]chan any)
+	}
 	inv.noticeChanMap[key] = ch
 
 	return ch
 }
 
-// NoticeCompletion send completion notice to waiting task
-func (inv *Invocation) NoticeCompletion(ctx context.Context, key string) error {
+// NotifyCompletion notify completion signal to waiting task
+func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
@@ -154,6 +158,7 @@ func (inv *Invocation) NoticeCompletion(ctx context.Context, key string) error {
 	if !ok {
 		return fmt.Errorf("notice channel not found for %s.", key)
 	}
+
 	close(ch)
 	delete(inv.noticeChanMap, key)
 
