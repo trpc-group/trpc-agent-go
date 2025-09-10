@@ -248,10 +248,17 @@ if err != nil {
     // Handle error.
 }
 
-// Pass the service to the Agent.
+// Register memory tools with the Agent.
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithMemory(memService), // Or use redisService.
+    llmagent.WithTools(memService.Tools()), // Or use redisService.Tools().
+)
+
+// Set memory service in the Runner.
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memService), // Or use redisService.
 )
 ```
 
@@ -274,25 +281,6 @@ memoryService := memoryinmemory.NewMemoryService(
 // Disable enabled tools.
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithToolEnabled(memory.AddToolName, false),
-)
-```
-
-### Custom Memory Instruction Prompt
-
-You can provide a custom instruction builder for memory prompts.
-
-```go
-memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithInstructionBuilder(
-        func(enabledTools []string, defaultPrompt string) string {
-            header := "[Memory Instructions] Follow these guidelines to manage user memory.\n\n"
-            // Example A: Wrap the default content.
-            return header + defaultPrompt
-            // Example B: Replace with your own content.
-            // return fmt.Sprintf("[Memory Instructions] Tools: %s\n...",
-            //     strings.Join(enabledTools, ", "))
-        },
-    ),
 )
 ```
 
@@ -400,12 +388,6 @@ func main() {
         }
     default: // inmemory.
         memoryService = memoryinmemory.NewMemoryService(
-            memoryinmemory.WithInstructionBuilder(
-                func(enabledTools []string, defaultPrompt string) string {
-                    return "[Memory Instructions] Follow these guidelines.\n\n" +
-                        defaultPrompt
-                },
-            ),
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
             memoryinmemory.WithCustomTool(
                 memory.ClearToolName, customClearMemoryTool,

@@ -223,10 +223,17 @@ if err != nil {
     // 处理错误
 }
 
-// 传递给 Agent
+// 向 Agent 注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithMemory(memService), // 或 redisService
+    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools()
+)
+
+// 在 Runner 中设置记忆服务
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memService), // 或 redisService
 )
 ```
 
@@ -248,22 +255,6 @@ memoryService := memoryinmemory.NewMemoryService(
 // 禁用启用的工具
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithToolEnabled(memory.AddToolName, false),
-)
-```
-
-### 自定义记忆指令提示
-
-你可以提供自定义的记忆指令提示构建器：
-
-```go
-memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-        header := "[记忆指令] 遵循以下指导原则管理用户记忆。\n\n"
-        // 示例 A：包装默认内容
-        return header + defaultPrompt
-        // 示例 B：替换为你自己的内容
-        // return fmt.Sprintf("[记忆指令] 可用工具: %s\n...", strings.Join(enabledTools, ", "))
-    }),
 )
 ```
 
@@ -357,9 +348,6 @@ func main() {
         }
     default: // inmemory
         memoryService = memoryinmemory.NewMemoryService(
-            memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-                return "[记忆指令] 遵循以下指导原则管理用户记忆。\n\n" + defaultPrompt
-            }),
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
             memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
         )
