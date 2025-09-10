@@ -35,15 +35,15 @@ func (m *MockTracer) Start(ctx context.Context, spanName string, opts ...trace.S
 func TestStart(t *testing.T) {
 	tests := []struct {
 		name        string
-		config      *Config
+		config      *config
 		envVars     map[string]string
 		shouldError bool
 	}{
 		{
-			name: "with valid config",
-			config: &Config{
-				PublicKey: "test-public",
-				Host:      "https://test.langfuse.com",
+			name: "missing secretKey",
+			config: &config{
+				publicKey: "test-public",
+				host:      "https://test.langfuse.com",
 			},
 			shouldError: true,
 		},
@@ -71,10 +71,27 @@ func TestStart(t *testing.T) {
 						os.Unsetenv(key)
 					}
 				}()
+			} else {
+				// 清除所有相关环境变量，确保为空
+				os.Unsetenv("LANGFUSE_SECRET_KEY")
+				os.Unsetenv("LANGFUSE_PUBLIC_KEY")
+				os.Unsetenv("LANGFUSE_HOST")
 			}
 
 			ctx := context.Background()
-			clean, err := Start(ctx, tt.config)
+			var opts []Option
+			if tt.config != nil {
+				if tt.config.secretKey != "" {
+					opts = append(opts, WithSecretKey(tt.config.secretKey))
+				}
+				if tt.config.publicKey != "" {
+					opts = append(opts, WithPublicKey(tt.config.publicKey))
+				}
+				if tt.config.host != "" {
+					opts = append(opts, WithHost(tt.config.host))
+				}
+			}
+			clean, err := Start(ctx, opts...)
 
 			if tt.shouldError {
 				assert.Error(t, err)

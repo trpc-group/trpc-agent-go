@@ -23,27 +23,29 @@ import (
 
 var _ trace.Tracer = (*tracer)(nil)
 
-// Start starts telemetry with Langfuse integration using the provided config.
-func Start(ctx context.Context, config *Config, opts ...atrace.Option) (clean func() error, err error) {
-	if config == nil {
-		config = newConfigFromEnv()
+// Start starts telemetry with Langfuse integration using the function option pattern.
+func Start(ctx context.Context, opts ...Option) (clean func() error, err error) {
+	// Start with default config from environment
+	config := newConfigFromEnv()
+
+	// Apply user-provided options
+	for _, opt := range opts {
+		opt(config)
 	}
-	if config.SecretKey == "" || config.PublicKey == "" || config.Host == "" {
+
+	if config.secretKey == "" || config.publicKey == "" || config.host == "" {
 		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided")
 	}
 
 	langfuseOpts := []atrace.Option{
-		atrace.WithEndpointURL(config.Host + "/api/public/otel/v1/traces"),
+		atrace.WithEndpointURL(config.host + "/api/public/otel/v1/traces"),
 		atrace.WithProtocol("http"),
 		atrace.WithHeaders(map[string]string{
-			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(config.PublicKey, config.SecretKey)),
+			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(config.publicKey, config.secretKey)),
 		}),
 	}
 
-	// Merge with user-provided options (user options take precedence)
-	allOpts := append(langfuseOpts, opts...)
-
-	return start(ctx, allOpts...)
+	return start(ctx, langfuseOpts...)
 }
 
 func start(ctx context.Context, opts ...atrace.Option) (clean func() error, err error) {

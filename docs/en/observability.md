@@ -40,7 +40,7 @@ import (
 
 func main() {
 	// Start trace with Langfuse integration using environment variables
-	clean, err := langfuse.Start(context.Background(), nil)
+	clean, err := langfuse.Start(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}

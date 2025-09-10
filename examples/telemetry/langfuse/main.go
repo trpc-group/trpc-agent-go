@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
 	"trpc.group/trpc-go/trpc-agent-go/examples/telemetry/agent"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -26,7 +27,7 @@ import (
 
 func main() {
 	// Start trace with Langfuse integration using environment variables
-	clean, err := langfuse.Start(context.Background(), nil)
+	clean, err := langfuse.Start(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}

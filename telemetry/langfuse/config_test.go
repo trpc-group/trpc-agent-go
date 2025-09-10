@@ -20,7 +20,7 @@ func TestNewConfigFromEnv(t *testing.T) {
 	tests := []struct {
 		name     string
 		envVars  map[string]string
-		expected *Config
+		expected *config
 	}{
 		{
 			name: "with environment variables",
@@ -29,19 +29,19 @@ func TestNewConfigFromEnv(t *testing.T) {
 				"LANGFUSE_PUBLIC_KEY": "test-public",
 				"LANGFUSE_HOST":       "https://test.langfuse.com",
 			},
-			expected: &Config{
-				SecretKey: "test-secret",
-				PublicKey: "test-public",
-				Host:      "https://test.langfuse.com",
+			expected: &config{
+				secretKey: "test-secret",
+				publicKey: "test-public",
+				host:      "https://test.langfuse.com",
 			},
 		},
 		{
 			name:    "without environment variables (defaults)",
 			envVars: map[string]string{},
-			expected: &Config{
-				SecretKey: "your-secret-key",
-				PublicKey: "your-public-key",
-				Host:      "http://localhost:3000",
+			expected: &config{
+				secretKey: "",
+				publicKey: "",
+				host:      "",
 			},
 		},
 		{
@@ -49,10 +49,10 @@ func TestNewConfigFromEnv(t *testing.T) {
 			envVars: map[string]string{
 				"LANGFUSE_SECRET_KEY": "custom-secret",
 			},
-			expected: &Config{
-				SecretKey: "custom-secret",
-				PublicKey: "your-public-key",
-				Host:      "http://localhost:3000",
+			expected: &config{
+				secretKey: "custom-secret",
+				publicKey: "",
+				host:      "",
 			},
 		},
 	}
