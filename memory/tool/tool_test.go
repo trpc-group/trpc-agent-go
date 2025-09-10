@@ -756,7 +756,7 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 		service := newMockMemoryService()
 		ctx := createMockContext("test-app", "test-user", service)
 
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		require.NoError(t, err, "Expected no error for valid context with memory service")
 		require.NotNil(t, memoryService, "Expected non-nil memory service")
 		assert.Equal(t, service, memoryService, "Expected the same memory service instance")
@@ -765,7 +765,7 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 	t.Run("context without invocation", func(t *testing.T) {
 		ctx := context.Background()
 
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		require.Error(t, err, "Expected error for context without invocation")
 		assert.Nil(t, memoryService, "Expected nil memory service on error")
 		assert.Contains(t, err.Error(), "no invocation context found", "Expected specific error message")
@@ -775,7 +775,7 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 		// Create a context with nil invocation
 		ctx := agent.NewInvocationContext(context.Background(), nil)
 
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		require.Error(t, err, "Expected error for context with nil invocation")
 		assert.Nil(t, memoryService, "Expected nil memory service on error")
 		assert.Contains(t, err.Error(), "no invocation context found", "Expected specific error message")
@@ -800,7 +800,7 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 
 		ctx := agent.NewInvocationContext(context.Background(), mockInvocation)
 
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		require.Error(t, err, "Expected error for context with nil memory service")
 		assert.Nil(t, memoryService, "Expected nil memory service on error")
 		assert.Contains(t, err.Error(), "memory service is not available", "Expected specific error message")
@@ -810,7 +810,7 @@ func TestGetMemoryServiceFromContext(t *testing.T) {
 		service := newMockMemoryService()
 		ctx := createMockContext("test-app", "test-user", service)
 
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		require.NoError(t, err, "Expected no error for valid context")
 		require.NotNil(t, memoryService, "Expected non-nil memory service")
 		assert.Equal(t, service, memoryService, "Expected the same memory service instance")

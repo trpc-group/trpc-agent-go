@@ -27,7 +27,7 @@ import (
 func NewAddTool() tool.CallableTool {
 	addFunc := func(ctx context.Context, req *AddMemoryRequest) (*AddMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("memory add tool: failed to get memory service from context: %v", err)
 		}
@@ -73,7 +73,7 @@ func NewAddTool() tool.CallableTool {
 func NewUpdateTool() tool.CallableTool {
 	updateFunc := func(ctx context.Context, req *UpdateMemoryRequest) (*UpdateMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -124,7 +124,7 @@ func NewUpdateTool() tool.CallableTool {
 func NewDeleteTool() tool.CallableTool {
 	deleteFunc := func(ctx context.Context, req *DeleteMemoryRequest) (*DeleteMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("memory delete tool: failed to get memory service from context: %v", err)
 		}
@@ -164,7 +164,7 @@ func NewDeleteTool() tool.CallableTool {
 func NewClearTool() tool.CallableTool {
 	clearFunc := func(ctx context.Context, _ *struct{}) (*ClearMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("memory clear tool: failed to get memory service from context: %v", err)
 		}
@@ -198,7 +198,7 @@ func NewClearTool() tool.CallableTool {
 func NewSearchTool() tool.CallableTool {
 	searchFunc := func(ctx context.Context, req *SearchMemoryRequest) (*SearchMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("memory search tool: failed to get memory service from context: %v", err)
 		}
@@ -250,7 +250,7 @@ func NewSearchTool() tool.CallableTool {
 func NewLoadTool() tool.CallableTool {
 	loadFunc := func(ctx context.Context, req *LoadMemoryRequest) (*LoadMemoryResponse, error) {
 		// Get MemoryService from context.
-		memoryService, err := getMemoryServiceFromContext(ctx)
+		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("memory load tool: failed to get memory service from context: %v", err)
 		}
@@ -299,8 +299,12 @@ func NewLoadTool() tool.CallableTool {
 	)
 }
 
-// getMemoryServiceFromContext extracts MemoryService from the invocation context.
-func getMemoryServiceFromContext(ctx context.Context) (memory.Service, error) {
+// GetMemoryServiceFromContext extracts MemoryService from the invocation context.
+// This function looks for the MemoryService in the agent invocation context.
+//
+// This function is exported to allow users to implement custom memory tools
+// that need access to the memory service from the invocation context.
+func GetMemoryServiceFromContext(ctx context.Context) (memory.Service, error) {
 	// Get invocation from context.
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
@@ -317,6 +321,9 @@ func getMemoryServiceFromContext(ctx context.Context) (memory.Service, error) {
 
 // GetAppAndUserFromContext extracts appName and userID from the context.
 // This function looks for these values in the agent invocation context.
+//
+// This function is exported to allow users to implement custom memory tools
+// that need access to app and user information from the invocation context.
 func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 	// Try to get from agent invocation context.
 	invocation, ok := agent.InvocationFromContext(ctx)
