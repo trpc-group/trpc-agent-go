@@ -9,7 +9,6 @@
 package summary
 
 import (
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -28,7 +27,7 @@ type Checker func(sess *session.Session) bool
 // Example: SetEventThreshold(30) will trigger once there are at least 30 events.
 func SetEventThreshold(eventCount int) Checker {
 	return func(sess *session.Session) bool {
-		return len(sess.Events) >= eventCount
+		return len(sess.Events) > eventCount
 	}
 }
 
@@ -42,7 +41,7 @@ func SetTimeThreshold(interval time.Duration) Checker {
 			return false
 		}
 		lastEvent := sess.Events[len(sess.Events)-1]
-		return time.Since(lastEvent.Timestamp) >= interval
+		return time.Since(lastEvent.Timestamp) > interval
 	}
 }
 
@@ -58,36 +57,13 @@ func SetTokenThreshold(tokenCount int) Checker {
 
 		totalTokens := 0
 		for _, event := range sess.Events {
-			if event.Response != nil && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				// Rough estimation: 1 token ≈ 4 characters.
-				totalTokens += len(content) / 4
+			if event.Response == nil || event.Response.Usage == nil {
+				continue
 			}
+			totalTokens += event.Response.Usage.TotalTokens
 		}
 
 		return totalTokens > tokenCount
-	}
-}
-
-// SetImportantThreshold creates a checker that triggers when the combined
-// character count of messages (trimmed) exceeds the given threshold.
-// This provides a simple importance heuristic aligned with content density.
-// For more advanced signals, integrate a separate importance detector upstream.
-func SetImportantThreshold(charCount int) Checker {
-	return func(sess *session.Session) bool {
-		if len(sess.Events) == 0 {
-			return false
-		}
-
-		totalChars := 0
-		for _, event := range sess.Events {
-			if event.Response != nil && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				totalChars += len(strings.TrimSpace(content))
-			}
-		}
-
-		return totalChars > charCount
 	}
 }
 

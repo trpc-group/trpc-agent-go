@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -32,11 +31,6 @@ const (
 		"Keep the summary concise but comprehensive. Focus on what would be most important to remember for continuing the conversation.\n\n" +
 		"Conversation:\n" + conversationTextPlaceholder + "\n\n" +
 		"Summary:"
-	// default max summary length is the default max length for summary.
-	// 0 means no truncation (unlimited length).
-	defaultMaxSummaryLength = 0
-	// default keep recent is the default number of recent events to keep after summarization.
-	defaultKeepRecent = 10
 
 	// branchSummary is the branch for summary.
 	branchSummary = "summary"
@@ -49,28 +43,22 @@ const (
 	authorUnknown = "unknown"
 )
 
-// defaultCheckers provides a default set of check functions.
-var defaultCheckers = []Checker{
-	SetEventThreshold(30),             // Summarize after 30 events.
-	SetTimeThreshold(5 * time.Minute), // Or after 5 minutes.
-}
-
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
 	model            model.Model
 	prompt           string
 	checks           []Checker
 	maxSummaryLength int
-	keepRecentCount  int
+	windowSize       int
 }
 
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
 		prompt:           defaultSummarizerPrompt,
-		checks:           defaultCheckers,
-		maxSummaryLength: defaultMaxSummaryLength,
-		keepRecentCount:  defaultKeepRecent,
+		checks:           []Checker{SetEventThreshold(25)}, // Summarize after 25 events.
+		maxSummaryLength: 0,                                // The max summary length is 0 by default, which means no truncation.
+		windowSize:       10,                               // The window size is 10 by default.
 	}
 	s.model = m
 
@@ -105,7 +93,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	if windowSize <= 0 {
-		windowSize = s.keepRecentCount
+		windowSize = s.windowSize
 	}
 
 	// Extract conversation text from events within the window.
@@ -147,7 +135,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	return map[string]any{
 		metadataKeyModelName:        modelName,
 		metadataKeyMaxSummaryLength: s.maxSummaryLength,
-		metadataKeyKeepRecentCount:  s.keepRecentCount,
+		metadataKeyKeepRecentCount:  s.windowSize,
 		metadataKeyModelAvailable:   modelAvailable,
 		metadataKeyCheckFunctions:   len(s.checks),
 	}

@@ -21,7 +21,7 @@ import (
 
 func TestOptions(t *testing.T) {
 	t.Run("WithChecks", func(t *testing.T) {
-		c := SetEventThreshold(2)
+		c := SetEventThreshold(1)
 		s := NewSummarizer(&testModel{}, WithChecks([]Checker{c}))
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}, {Timestamp: time.Now()}}}
 		assert.True(t, s.ShouldSummarize(sess))
@@ -31,22 +31,22 @@ func TestOptions(t *testing.T) {
 		// Verify metadata increments and logic via isolated checks.
 		s := NewSummarizer(&testModel{}, WithTokenThreshold(2))
 		md := s.Metadata()
-		assert.Equal(t, 3, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
 
 		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{SetTokenThreshold(2)}))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "12345678"}}}}, Timestamp: time.Now()},
-			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "abcdefgh"}}}}, Timestamp: time.Now()},
+			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 2}}, Timestamp: time.Now()},
+			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 3}}, Timestamp: time.Now()},
 		}}
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
 
 	t.Run("WithEventThreshold", func(t *testing.T) {
-		s := NewSummarizer(&testModel{}, WithEventThreshold(3))
+		s := NewSummarizer(&testModel{}, WithEventThreshold(2))
 		md := s.Metadata()
-		assert.Equal(t, 3, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
 
-		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{SetEventThreshold(3)}))
+		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{SetEventThreshold(2)}))
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}, {Timestamp: time.Now()}, {Timestamp: time.Now()}}}
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
@@ -54,7 +54,7 @@ func TestOptions(t *testing.T) {
 	t.Run("WithTimeThreshold", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithTimeThreshold(10*time.Millisecond))
 		md := s.Metadata()
-		assert.Equal(t, 3, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
 
 		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{SetTimeThreshold(10 * time.Millisecond)}))
 		older := time.Now().Add(-20 * time.Millisecond)
@@ -62,25 +62,14 @@ func TestOptions(t *testing.T) {
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
 
-	t.Run("WithImportantThreshold", func(t *testing.T) {
-		s := NewSummarizer(&testModel{}, WithImportantThreshold(5))
-		md := s.Metadata()
-		assert.Equal(t, 3, md[metadataKeyCheckFunctions])
-
-		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{SetImportantThreshold(5)}))
-		sess := &session.Session{Events: []event.Event{{
-			Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "   important   "}}}},
-			Timestamp: time.Now(),
-		}}}
-		assert.True(t, sIso.ShouldSummarize(sess))
-	})
+	// Removed: important threshold checker is no longer supported.
 
 	t.Run("WithChecksAll", func(t *testing.T) {
-		checks := []Checker{SetEventThreshold(2), SetTokenThreshold(4)}
+		checks := []Checker{SetEventThreshold(1), SetTokenThreshold(4)}
 		s := NewSummarizer(&testModel{}, WithChecksAll(checks))
 		sess := &session.Session{Events: []event.Event{
-			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "abcdefghijkl"}}}}, Timestamp: time.Now()},
-			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "mnopqrstuvwx"}}}}, Timestamp: time.Now()},
+			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
+			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
 		}}
 		assert.True(t, s.ShouldSummarize(sess))
 	})

@@ -166,7 +166,7 @@ func TestSessionSummarizer_Metadata(t *testing.T) {
 	assert.Equal(t, "fake", md[metadataKeyModelName])
 	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
 	assert.Equal(t, 2, md[metadataKeyKeepRecentCount])
-	assert.GreaterOrEqual(t, md[metadataKeyCheckFunctions].(int), 2)
+	assert.GreaterOrEqual(t, md[metadataKeyCheckFunctions].(int), 1)
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.

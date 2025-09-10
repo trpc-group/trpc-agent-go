@@ -50,7 +50,7 @@ func WithMaxSummaryLength(maxSummaryLength int) Option {
 func WithWindowSize(windowSize int) Option {
 	return func(s *sessionSummarizer) {
 		if windowSize > 0 {
-			s.keepRecentCount = windowSize
+			s.windowSize = windowSize
 		}
 	}
 }
@@ -73,13 +73,6 @@ func WithEventThreshold(eventCount int) Option {
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
 		s.checks = append(s.checks, SetTimeThreshold(interval))
-	}
-}
-
-// WithImportantThreshold creates an important-content-based check function.
-func WithImportantThreshold(importantCount int) Option {
-	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, SetImportantThreshold(importantCount))
 	}
 }
 
