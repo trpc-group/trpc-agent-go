@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -243,22 +243,50 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	q := strings.ToLower(query)
+	tokens := imemory.BuildSearchTokens(query)
+	hasTokens := len(tokens) > 0
 	results := make([]*memory.Entry, 0)
 	for _, v := range all {
 		e := &memory.Entry{}
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
-		if strings.Contains(strings.ToLower(e.Memory.Memory), q) {
-			results = append(results, e)
-			continue
-		}
-		for _, t := range e.Memory.Topics {
-			if strings.Contains(strings.ToLower(t), q) {
-				results = append(results, e)
-				break
+		contentLower := strings.ToLower(e.Memory.Memory)
+		matched := false
+		if hasTokens {
+			for _, tk := range tokens {
+				if tk == "" {
+					continue
+				}
+				if strings.Contains(contentLower, tk) {
+					matched = true
+					break
+				}
+				for _, tp := range e.Memory.Topics {
+					if strings.Contains(strings.ToLower(tp), tk) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
 			}
+		} else {
+			ql := strings.ToLower(query)
+			if strings.Contains(contentLower, ql) {
+				matched = true
+			} else {
+				for _, tp := range e.Memory.Topics {
+					if strings.Contains(strings.ToLower(tp), ql) {
+						matched = true
+						break
+					}
+				}
+			}
+		}
+		if matched {
+			results = append(results, e)
 		}
 	}
 	return results, nil
@@ -293,14 +321,4 @@ func generateMemoryID(mem *memory.Memory) string {
 // getUserMemKey builds the Redis key for a user's memories.
 func getUserMemKey(userKey memory.UserKey) string {
 	return fmt.Sprintf("mem:{%s}:%s", userKey.AppName, userKey.UserID)
-}
-
-// BuildInstruction allows the internal memory package to obtain a customized instruction if provided.
-// Returns (prompt, true) when custom builder is configured; otherwise ("", false).
-func (s *Service) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
-	builder := s.opts.instructionBuilder
-	if builder == nil {
-		return "", false
-	}
-	return builder(enabledTools, defaultPrompt), true
 }

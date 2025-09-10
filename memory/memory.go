@@ -59,10 +59,6 @@ type Service interface {
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
-
-	// BuildInstruction allows the service to customize the memory instruction prompt.
-	// If ok is false, callers should use the provided defaultPrompt.
-	BuildInstruction(enabledTools []string, defaultPrompt string) (prompt string, ok bool)
 }
 
 // ToolCreator creates a tool with a given memory service.

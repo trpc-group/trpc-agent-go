@@ -116,14 +116,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 			return fmt.Errorf("failed to create redis memory service: %w", err)
 		}
 	default: // inmemory
-		memoryService = memoryinmemory.NewMemoryService(
-			// Provide a custom instruction builder for memory service.
-			// The framework generates a default memory instruction based on enabled tools.
-			// You can wrap or replace that default with your own guidance here.
-			memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-				return "[Memory Instruction] Follow these guidelines to manage user memories.\n\n" + defaultPrompt
-			}),
-		)
+		memoryService = memoryinmemory.NewMemoryService()
 	}
 
 	// Setup identifiers first.
@@ -145,7 +138,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 		llmagent.WithDescription("A helpful AI assistant with memory capabilities. "+
 			"I can remember important information about you and recall it when needed."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithMemory(memoryService), // This will automatically add memory tools and memory instruction.
+		llmagent.WithTools(memoryService.Tools()), // Step 1: Prepare memory tools and instruction.
 	)
 
 	// Create runner.
@@ -153,6 +146,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 		appName,
 		llmAgent,
 		runner.WithSessionService(sessioninmemory.NewSessionService()),
+		runner.WithMemoryService(memoryService), // Step 2: Set memory service.
 	)
 
 	fmt.Printf("✅ Memory chat ready! Session: %s\n\n", c.sessionID)

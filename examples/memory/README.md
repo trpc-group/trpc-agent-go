@@ -12,7 +12,7 @@ This implementation showcases the essential features for building AI application
 - **💾 Session Management**: Conversation state preservation and continuity
 - **🔧 Memory Tool Integration**: Working memory tools with proper execution
 - **🚀 Simple Interface**: Clean, focused chat experience with memory capabilities
-- **⚡ Automatic Integration**: Memory tools are automatically registered via `WithMemory()`
+- **⚡ Manual Integration**: Memory tools are manually registered for explicit control
 - **🎨 Custom Tool Support**: Ability to override default tool implementations with custom ones
 - **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
 - **🔴 Redis Support**: Support for Redis-based memory service (ready to use)
@@ -26,15 +26,25 @@ This implementation showcases the essential features for building AI application
 - **Memory Tool Execution**: Proper execution and display of memory tool calling procedures
 - **Memory Visualization**: Clear indication of memory operations, arguments, and responses
 - **Error Handling**: Graceful error recovery and reporting
-- **Automatic Tool Registration**: Memory tools are automatically added to the agent via `WithMemory()`
+- **Manual Tool Registration**: Memory tools are explicitly registered for better control
 - **Custom Tool Override**: Replace default tool implementations with custom ones
 - **Tool Enablement Control**: Enable or disable specific memory tools
 
 ## Architecture
 
+### ADK-Aligned Design
+
+This implementation follows ADK (Application Development Kit) principles for better separation of concerns and explicit control:
+
+- **Step 1 - Explicit Tool Registration**: Memory tools are manually registered via `llmagent.WithTools(memoryService.Tools())`
+- **Step 2 - Service Management**: Memory service is managed at the runner level via `runner.WithMemoryService(memoryService)`
+- **No Automatic Integration**: The framework doesn't automatically inject tools or prompts
+- **Business Logic Control**: Applications have full control over which tools to register and how to use them
+- **Clear Separation**: Framework provides building blocks, business logic decides how to use them
+
 ### Memory Integration
 
-The memory functionality is integrated using the `WithMemory()` option, which automatically registers all enabled memory tools:
+The memory functionality is integrated using a two-step approach that aligns with ADK principles:
 
 ```go
 // Create memory service with default tools enabled
@@ -45,18 +55,19 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
 
-// Create LLM agent with automatic memory tool registration
+// Create LLM agent with manual memory tool registration
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
-    llmagent.WithMemory(memoryService), // Automatic memory tool registration
+    llmagent.WithTools(memoryService.Tools()), // Step 1: Register memory tools
 )
 
-// Create runner (no memory service needed here)
+// Create runner with memory service
 runner := runner.NewRunner(
     appName,
     llmAgent,
     runner.WithSessionService(sessionService),
+    runner.WithMemoryService(memoryService), // Step 2: Set memory service in runner
 )
 ```
 
@@ -90,7 +101,7 @@ This design provides:
 
 ### Available Memory Tools
 
-The following memory tools are automatically registered when using `WithMemory()`:
+The following memory tools are manually registered via `memoryService.Tools()`:
 
 | Tool Name       | Description                   | Parameters                                                                                         |
 | --------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -103,7 +114,7 @@ The following memory tools are automatically registered when using `WithMemory()
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
@@ -483,12 +494,12 @@ Custom tools can provide enhanced functionality:
 
 - Uses `inmemory.NewMemoryService()` for in-memory storage
 - Memory tools directly access the memory service
-- No complex integration required - tools handle memory operations
-- Automatic tool registration via `WithMemory()`
+- Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
+- Explicit control over tool registration and service management
 
 ### Memory Tools Registration
 
-The memory tools are automatically registered when using `WithMemory()`:
+The memory tools are manually registered for explicit control:
 
 ```go
 // Create memory service with custom configuration
@@ -497,11 +508,19 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
 
-// Create LLM agent with automatic memory tool registration
+// Create LLM agent with manual memory tool registration
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
-    llmagent.WithMemory(memoryService), // Automatic registration
+    llmagent.WithTools(memoryService.Tools()), // Step 1: Register memory tools
+)
+
+// Create runner with memory service
+runner := runner.NewRunner(
+    appName,
+    llmAgent,
+    runner.WithSessionService(sessionService),
+    runner.WithMemoryService(memoryService), // Step 2: Set memory service
 )
 ```
 
