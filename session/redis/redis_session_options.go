@@ -9,7 +9,11 @@
 
 package redis
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
 
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
@@ -20,6 +24,8 @@ type ServiceOpts struct {
 	sessionTTL        time.Duration // TTL for session state and event list
 	appStateTTL       time.Duration // TTL for app state
 	userStateTTL      time.Duration // TTL for user state
+	// summarizerManager integrates LLM summarization.
+	summarizerManager summary.SummarizerManager
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -77,5 +83,12 @@ func WithAppStateTTL(ttl time.Duration) ServiceOpt {
 func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.userStateTTL = ttl
+	}
+}
+
+// WithSummarizerManager injects a summarizer manager for LLM-based summaries.
+func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summarizerManager = m
 	}
 }
