@@ -2,53 +2,24 @@ package evaluation
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	localservice "trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-// EvalStatus represents the status of an evaluation
-type EvalStatus int
+// 注意：EvalStatus 已在 evalresult 包中定义，避免重复定义。
 
-const (
-	EvalStatusUnknown EvalStatus = iota
-	EvalStatusPassed
-	EvalStatusFailed
-	EvalStatusNotEvaluated
-)
+// 注意：通用的指标名应定义在 metric 包中（见 metric/names.go）。
 
-func (s EvalStatus) String() string {
-	switch s {
-	case EvalStatusPassed:
-		return "passed"
-	case EvalStatusFailed:
-		return "failed"
-	case EvalStatusNotEvaluated:
-		return "not_evaluated"
-	default:
-		return "unknown"
-	}
-}
-
-// PrebuiltMetrics defines commonly used evaluation metrics
-type PrebuiltMetrics string
-
-const (
-	MetricToolTrajectoryAvgScore  PrebuiltMetrics = "tool_trajectory_avg_score"
-	MetricResponseEvaluationScore PrebuiltMetrics = "response_evaluation_score"
-	MetricResponseMatchScore      PrebuiltMetrics = "response_match_score"
-	MetricSafetyV1                PrebuiltMetrics = "safety_v1"
-	MetricFinalResponseMatchV2    PrebuiltMetrics = "final_response_match_v2"
-)
-
-// Default configuration values
+// 默认配置值（如需适配，请下沉至具体子模块）。
 const (
 	DefaultMaxConcurrency = 10
 	DefaultTimeoutSeconds = 300
-	DefaultMaxTokens      = 2048
-	DefaultTemperature    = 0.7
-	DefaultJudgeModel     = "gemini-2.5-flash"
-	DefaultNumSamples     = 1
 )
 
 // Error messages
@@ -64,8 +35,7 @@ const (
 // This file serves as the main entry point for the evaluation package
 // It re-exports key types and interfaces for easier access
 
-// Re-export key types from sub-packages
-// Note: Actual re-exports would be added here when implementing
+// 评估流、评估器与指标类型请统一复用 service/evaluator/metric 包，避免在入口包重复定义。
 
 // Config represents the configuration for the evaluation system
 type Config struct {
@@ -80,34 +50,17 @@ type Config struct {
 }
 
 // EvalMetric represents a metric used in evaluation
-type EvalMetric struct {
-	// MetricName is the name of the metric
-	MetricName string `json:"metric_name"`
-
-	// Threshold is the threshold value for this metric
-	Threshold float64 `json:"threshold"`
-
-	// JudgeModelOptions contains options for the judge model
-	JudgeModelOptions *JudgeModelOptions `json:"judge_model_options,omitempty"`
-
-	// Config contains metric-specific configuration
-	Config map[string]interface{} `json:"config,omitempty"`
-}
-
-// JudgeModelOptions contains options for a judge model
-type JudgeModelOptions struct {
-	// JudgeModel is the model to use for evaluation
-	JudgeModel string `json:"judge_model"`
-
-	// NumSamples is the number of times to sample the model
-	NumSamples *int `json:"num_samples,omitempty"`
-}
+// 指标定义请使用 metric 包中的类型。
 
 // AgentEvaluator provides a simplified interface for evaluating agents
 // This is the main entry point for users, similar to Python ADK's AgentEvaluator
 type AgentEvaluator struct {
-	// Private fields to avoid circular imports
-	// Implementation will be provided via methods
+	// service coordinates inference and evaluation
+	service service.EvaluationService
+	// registry provides mapping from metric name to evaluator
+	registry *evaluator.Registry
+	// cfg controls high-level behavior
+	cfg AgentEvaluatorConfig
 }
 
 // AgentEvaluatorConfig contains configuration for AgentEvaluator
@@ -135,7 +88,7 @@ type AgentInfo struct {
 // EvaluationResult represents the final evaluation result
 type EvaluationResult struct {
 	// OverallStatus indicates if the evaluation passed or failed
-	OverallStatus EvalStatus `json:"overall_status"`
+	OverallStatus evalresult.EvalStatus `json:"overall_status"`
 
 	// MetricResults contains results for each metric
 	MetricResults map[string]MetricSummary `json:"metric_results"`
@@ -149,31 +102,82 @@ type EvaluationResult struct {
 
 // MetricSummary contains summary information for a metric
 type MetricSummary struct {
-	MetricName   string     `json:"metric_name"`
-	OverallScore *float64   `json:"overall_score,omitempty"`
-	Threshold    float64    `json:"threshold"`
-	Status       EvalStatus `json:"status"`
-	NumSamples   int        `json:"num_samples"`
+	MetricName   string                `json:"metric_name"`
+	OverallScore *float64              `json:"overall_score,omitempty"`
+	Threshold    float64               `json:"threshold"`
+	Status       evalresult.EvalStatus `json:"status"`
+	NumSamples   int                   `json:"num_samples"`
 }
 
-// NewAgentEvaluator creates a new AgentEvaluator with default configuration
-func NewAgentEvaluator() *AgentEvaluator {
-	return &AgentEvaluator{}
+// Option 为 AgentEvaluator 的可选配置。
+type Option func(*AgentEvaluator)
+
+// WithEvaluationService 指定评估服务实现。
+func WithEvaluationService(s service.EvaluationService) Option {
+	return func(ae *AgentEvaluator) { ae.service = s }
 }
 
-// NewAgentEvaluatorWithConfig creates a new AgentEvaluator with custom configuration
-func NewAgentEvaluatorWithConfig(config AgentEvaluatorConfig) *AgentEvaluator {
-	return &AgentEvaluator{}
+// WithRegistry 指定评估器注册表。
+func WithRegistry(r *evaluator.Registry) Option { return func(ae *AgentEvaluator) { ae.registry = r } }
+
+// WithAgentEvaluatorConfig 指定 AgentEvaluator 的基础配置（如 NumRuns、打印细节、默认阈值等）。
+func WithAgentEvaluatorConfig(config AgentEvaluatorConfig) Option {
+	return func(ae *AgentEvaluator) { ae.cfg = config }
+}
+
+// NewAgentEvaluator 使用 Option 模式创建 AgentEvaluator。
+// 如未提供，将注入本地服务与默认注册表，并设置合理默认配置。
+func NewAgentEvaluator(opts ...Option) *AgentEvaluator {
+	ae := &AgentEvaluator{
+		cfg: AgentEvaluatorConfig{
+			NumRuns:              1,
+			PrintDetailedResults: true,
+			DefaultCriteria:      map[string]float64{},
+		},
+	}
+	for _, opt := range opts {
+		opt(ae)
+	}
+	if ae.service == nil {
+		ae.service = localservice.New()
+	}
+	if ae.registry == nil {
+		ae.registry = evaluator.NewRegistry()
+	}
+	return ae
+}
+
+// WithService sets the EvaluationService on the AgentEvaluator.
+func (ae *AgentEvaluator) WithService(s service.EvaluationService) *AgentEvaluator {
+	ae.service = s
+	return ae
+}
+
+// WithRegistry sets the Registry on the AgentEvaluator.
+func (ae *AgentEvaluator) WithRegistry(r *evaluator.Registry) *AgentEvaluator {
+	ae.registry = r
+	return ae
 }
 
 // Evaluate evaluates an agent using the runner
 func (ae *AgentEvaluator) Evaluate(ctx context.Context, runner runner.Runner) (*EvaluationResult, error) {
-	// TODO: Implementation will be added when needed
-	// For now, return a simple success result
-	return &EvaluationResult{
-		OverallStatus: EvalStatusPassed,
+	start := time.Now()
+	if ae.service == nil {
+		return nil, errors.New("evaluation service not configured")
+	}
+
+	// Placeholder minimal implementation to keep API stable.
+	// A full implementation should:
+	// 1) Discover or load eval set (and criteria)
+	// 2) Build N inference requests (NumRuns times)
+	// 3) Collect inference results
+	// 4) Build EvaluateRequest and stream results
+	// 5) Aggregate per-metric scores and set OverallStatus
+	res := &EvaluationResult{
+		OverallStatus: evalresult.EvalStatusNotEvaluated,
 		MetricResults: make(map[string]MetricSummary),
 		TotalCases:    0,
-		ExecutionTime: 0,
-	}, nil
+		ExecutionTime: time.Since(start),
+	}
+	return res, nil
 }

@@ -11,10 +11,11 @@
 package service
 
 import (
-	"context"
+    "context"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 )
 
 // EvaluationService defines the main interface for evaluation operations
@@ -67,8 +68,9 @@ type InferenceResult struct {
 	// EvalCaseID is the ID of the eval case
 	EvalCaseID string `json:"eval_case_id"`
 
-	// Inferences are the generated invocations
-	Inferences interface{} `json:"inferences,omitempty"` // Generic interface to avoid circular imports
+    // Inferences are the generated invocations
+    // Using a concrete type avoids ambiguity and simplifies downstream evaluators.
+    Inferences []evalset.Invocation `json:"inferences,omitempty"`
 
 	// SessionID is the ID of the inference session
 	SessionID string `json:"session_id,omitempty"`
