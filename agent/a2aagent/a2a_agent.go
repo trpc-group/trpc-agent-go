@@ -208,11 +208,12 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			return
 		}
 
-		var aggregatedContent string
+		var aggregatedContentBuilder strings.Builder
 		for streamEvent := range streamChan {
 			select {
 			case <-ctx.Done():
-				r.sendErrorEvent(eventChan, invocation, "context cancelled")
+				// For streaming requests, treat caller cancellation as normal shutdown
+				// and stop without emitting an extra error event.
 				return
 			default:
 			}
@@ -232,10 +233,10 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 						return
 					}
 					if content != "" {
-						aggregatedContent += content
+						aggregatedContentBuilder.WriteString(content)
 					}
 				} else if event.Response.Choices[0].Delta.Content != "" {
-					aggregatedContent += event.Response.Choices[0].Delta.Content
+					aggregatedContentBuilder.WriteString(event.Response.Choices[0].Delta.Content)
 				}
 			}
 
@@ -257,7 +258,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 				Choices: []model.Choice{{
 					Message: model.Message{
 						Role:    model.RoleAssistant,
-						Content: aggregatedContent,
+						Content: aggregatedContentBuilder.String(),
 					},
 				}},
 			},

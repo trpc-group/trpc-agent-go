@@ -42,6 +42,22 @@ type Event struct {
     // Agent clients will understand which function calls are long-running from this field.
     // Only valid for function call events.
     LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
+
+    // StateDelta contains state changes to be written to the session.
+    StateDelta map[string][]byte `json:"stateDelta,omitempty"`
+
+    // StructuredOutput carries a typed, in-memory structured payload (not serialized).
+    StructuredOutput any `json:"-"`
+
+    // Actions carry flow-level hints (e.g., skip post-tool summarization).
+    Actions *EventActions `json:"actions,omitempty"`
+}
+
+// EventActions provides optional behavior hints attached to the event.
+type EventActions struct {
+    // SkipSummarization indicates the flow should not run a summarization LLM call
+    // after a tool.response event.
+    SkipSummarization bool `json:"skipSummarization,omitempty"`
 }
 ```
 
@@ -178,7 +194,7 @@ const (
 
 When developing custom Agent types or Processors, you need to create Events.
 
-Event provides three creation methods, suitable for different scenarios.
+Event provides three creation methods, suitable for different scenarios. Prefer these helpers instead of constructing `&event.Event{}` directly.
 
 ```go
 // Create new event.
@@ -225,6 +241,40 @@ response := &model.Response{
 }
 evt := event.NewResponseEvent("invoke-123", "agent", response)
 ```
+
+### Tool Response Streaming (including AgentTool forwarding)
+
+When a Streamable tool is invoked (including AgentTool), the framework emits `tool.response` events. In streaming mode:
+
+- Each partial chunk appears in `choice.Delta.Content`, `Done=false`, `IsPartial=true`.
+- Final tool messages arrive with `choice.Message.Role=tool` and `choice.Message.Content`.
+
+When AgentTool enables `WithStreamInner(true)`, it also forwards the child Agent’s events inline to the parent flow:
+
+- Forwarded child events are standard `event.Event` items; incremental text appears in `choice.Delta.Content`.
+- To avoid duplicate display, the child’s final full message is not forwarded; it is aggregated into the final `tool.response` content so the next LLM turn has tool messages as required by some providers.
+
+Runner automatically sends completion signals for events requiring them (`RequiresCompletion=true`), so manual handling is not needed.
+
+Example handling in an event loop:
+
+```go
+if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.Response.Choices) > 0 {
+    for _, ch := range evt.Response.Choices {
+        if ch.Delta.Content != "" { // partial
+            fmt.Print(ch.Delta.Content)
+            continue
+        }
+        if ch.Message.Role == model.RoleTool && ch.Message.Content != "" { // final
+            fmt.Println(strings.TrimSpace(ch.Message.Content))
+        }
+    }
+    // Continue to next event; don't treat as assistant content
+    continue
+}
+```
+
+Tip: For custom events, always use `event.New(...)` with `WithResponse`, `WithBranch`, etc., to ensure IDs and timestamps are set consistently.
 
 ### Event Methods
 

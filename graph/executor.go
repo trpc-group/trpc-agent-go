@@ -208,9 +208,33 @@ func deepCopyAny(value any) any {
 	case time.Time:
 		return v
 	default:
-		// For other scalar or struct types, rely on value semantics.
-		// or JSON marshaler to handle safely.
-		return v
+		// Fallback: handle generic maps/slices via reflection to avoid sharing.
+		rv := reflect.ValueOf(value)
+		switch rv.Kind() {
+		case reflect.Map:
+			if rv.IsNil() {
+				return value
+			}
+			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+			for _, mk := range rv.MapKeys() {
+				mv := rv.MapIndex(mk)
+				newMap.SetMapIndex(mk, reflect.ValueOf(deepCopyAny(mv.Interface())))
+			}
+			return newMap.Interface()
+		case reflect.Slice:
+			if rv.IsNil() {
+				return value
+			}
+			l := rv.Len()
+			newSlice := reflect.MakeSlice(rv.Type(), l, l)
+			for i := 0; i < l; i++ {
+				newSlice.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
+			}
+			return newSlice.Interface()
+		default:
+			// For other scalar or struct types, rely on value semantics.
+			return v
+		}
 	}
 }
 
@@ -548,9 +572,10 @@ func (e *Executor) buildCompletionEvent(
 	execCtx *ExecutionContext,
 	startTime time.Time,
 ) *event.Event {
-	finalStateCopy := make(State)
+	// Take a deep snapshot of the final state under read lock to avoid
+	// concurrent map iteration/write during later JSON marshaling.
 	execCtx.stateMutex.RLock()
-	maps.Copy(finalStateCopy, execCtx.State)
+	finalStateCopy := deepCopyState(execCtx.State)
 	execCtx.stateMutex.RUnlock()
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
