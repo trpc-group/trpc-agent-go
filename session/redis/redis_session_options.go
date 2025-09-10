@@ -13,13 +13,14 @@ import "time"
 
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
-	sessionEventLimit int
-	url               string
-	instanceName      string
-	extraOptions      []interface{}
-	sessionTTL        time.Duration // TTL for session state and event list
-	appStateTTL       time.Duration // TTL for app state
-	userStateTTL      time.Duration // TTL for user state
+	sessionEventLimit      int
+	url                    string
+	instanceName           string
+	extraOptions           []interface{}
+	sessionTTL             time.Duration // TTL for session state and event list
+	appStateTTL            time.Duration // TTL for app state
+	userStateTTL           time.Duration // TTL for user state
+	enableAsyncPersistence bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -77,5 +78,13 @@ func WithAppStateTTL(ttl time.Duration) ServiceOpt {
 func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.userStateTTL = ttl
+	}
+}
+
+// WithEnableAsyncPersistence enables async persistence for session state and event list.
+// if not set, default is false.
+func WithEnableAsyncPersistence(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableAsyncPersistence = enable
 	}
 }
