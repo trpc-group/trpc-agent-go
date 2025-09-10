@@ -2,6 +2,19 @@
 
 This example demonstrates intelligent memory management using the `Runner` orchestration component with streaming output, session management, and comprehensive memory tool calling functionality.
 
+## ⚠️ Breaking Changes Notice
+
+**Important**: This example has been updated to use the new two-step memory integration approach. The old `llmagent.WithMemory()` method is no longer supported.
+
+### What Changed
+
+- **Removed**: `llmagent.WithMemory(memoryService)` - automatic memory tool registration
+- **Updated**: Now uses explicit two-step integration:
+  1. `llmagent.WithTools(memoryService.Tools())` - manual tool registration
+  2. `runner.WithMemoryService(memoryService)` - service management in runner
+
+This change provides better separation of concerns and explicit control over memory tool registration.
+
 ## What is Memory Chat?
 
 This implementation showcases the essential features for building AI applications with persistent memory capabilities:
@@ -32,9 +45,9 @@ This implementation showcases the essential features for building AI application
 
 ## Architecture
 
-### ADK-Aligned Design
+### Design
 
-This implementation follows ADK (Application Development Kit) principles for better separation of concerns and explicit control:
+This implementation follows principles for better separation of concerns and explicit control:
 
 - **Step 1 - Explicit Tool Registration**: Memory tools are manually registered via `llmagent.WithTools(memoryService.Tools())`
 - **Step 2 - Service Management**: Memory service is managed at the runner level via `runner.WithMemoryService(memoryService)`
@@ -44,7 +57,7 @@ This implementation follows ADK (Application Development Kit) principles for bet
 
 ### Memory Integration
 
-The memory functionality is integrated using a two-step approach that aligns with ADK principles:
+The memory functionality is integrated using a two-step approach:
 
 ```go
 // Create memory service with default tools enabled

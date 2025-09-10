@@ -8,6 +8,50 @@ the memory service, session management, and memory tools, the Memory system
 helps Agents remember user information, maintain conversation context, and
 offer personalized responses across multi-turn dialogs.
 
+## ⚠️ Breaking Changes Notice
+
+**Important**: The memory integration approach has been updated to provide better separation of concerns and explicit control. This is a **breaking change** that affects how memory services are integrated with Agents.
+
+### What Changed
+
+- **Removed**: `llmagent.WithMemory(memoryService)` - automatic memory tool registration
+- **Added**: Two-step integration approach:
+  1. `llmagent.WithTools(memoryService.Tools())` - manual tool registration
+  2. `runner.WithMemoryService(memoryService)` - service management in runner
+
+### Migration Guide
+
+**Before (old approach)**:
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithMemory(memoryService), // ❌ No longer supported
+)
+```
+
+**After (new approach)**:
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithTools(memoryService.Tools()), // ✅ Step 1: Register tools
+)
+
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // ✅ Step 2: Set service
+)
+```
+
+### Benefits of the New Approach
+
+- **Explicit Control**: Applications have full control over which tools to register
+- **Better Separation**: Clear separation between framework and business logic
+- **Service Management**: Memory service is managed at the appropriate level (runner)
+- **No Automatic Injection**: Framework doesn't automatically inject tools or prompts, which can be used as needed.
+
 ### Usage Pattern
 
 The Memory system follows this pattern:

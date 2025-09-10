@@ -4,6 +4,50 @@
 
 Memory 是 tRPC-Agent-Go 框架中的记忆管理系统，为 Agent 提供持久化记忆和上下文管理能力。通过集成记忆服务、会话管理和记忆工具，Memory 系统能够帮助 Agent 记住用户信息、维护对话上下文，并在多轮对话中提供个性化的响应体验。
 
+## ⚠️ 不兼容更新通知
+
+**重要提示**：记忆集成方式已更新，以提供更好的关注点分离和显式控制。这是一个**不兼容更新**，会影响记忆服务与 Agent 的集成方式。
+
+### 变更内容
+
+- **移除**：`llmagent.WithMemory(memoryService)` - 自动记忆工具注册
+- **新增**：两步集成方式：
+  1. `llmagent.WithTools(memoryService.Tools())` - 手动工具注册
+  2. `runner.WithMemoryService(memoryService)` - 在 runner 中管理服务
+
+### 迁移指南
+
+**之前（旧方式）**：
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithMemory(memoryService), // ❌ 不再支持
+)
+```
+
+**现在（新方式）**：
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithTools(memoryService.Tools()), // ✅ 步骤1：注册工具
+)
+
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // ✅ 步骤2：设置服务
+)
+```
+
+### 新方式的优势
+
+- **显式控制**：应用程序完全控制注册哪些工具
+- **更好的分离**：框架与业务逻辑的清晰分离
+- **服务管理**：记忆服务在适当的层级（runner）进行管理
+- **无自动注入**：框架不会自动注入工具或提示，可以按需使用
+
 ### 使用模式
 
 Memory 系统的使用遵循以下模式：
