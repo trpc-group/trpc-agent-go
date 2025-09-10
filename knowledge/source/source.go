@@ -50,9 +50,9 @@ const (
 	MetaChunkSize = metaPrefix + "chunk_size"
 
 	// necessary metadata
-	MetaURI        = metaPrefix + "uri"         // 文件URI（绝对路径或URL）
-	MetaSourceName = metaPrefix + "source_name" // source 名称
-	MetaChunkIndex = metaPrefix + "chunk_index" // chunk 序号
+	MetaURI        = metaPrefix + "uri"         // URI (absolute path / URL / md5 for pure text)
+	MetaSourceName = metaPrefix + "source_name" // source name
+	MetaChunkIndex = metaPrefix + "chunk_index" // chunk index
 )
 
 // Source represents a knowledge source that can provide documents.

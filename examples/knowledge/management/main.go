@@ -323,75 +323,69 @@ func (chat *knowledgeChat) searchMenu(scanner *bufio.Scanner) {
 	}
 }
 
-// showCurrentSources shows current sources with metadata and counts
+// showCurrentSources shows current sources with metadata and counts using ShowDocumentInfo
 func (chat *knowledgeChat) showCurrentSources() {
 	fmt.Println("\n=== Current Sources Information ===")
 
-	// Get metadata from vector store
-	metadata, err := chat.vectorStore.GetMetadata(chat.ctx)
+	// Get document info using ShowDocumentInfo method
+	docInfos, err := chat.knowledge.ShowDocumentInfo(chat.ctx)
 	if err != nil {
-		fmt.Printf("Error getting metadata: %v\n", err)
+		fmt.Printf("Error getting document info: %v\n", err)
 		return
 	}
 
-	// Get count of documents
-	count, err := chat.vectorStore.Count(chat.ctx)
-	if err != nil {
-		fmt.Printf("Error getting document count: %v\n", err)
-		return
-	}
+	fmt.Printf("Total documents in vector store: %d\n", len(docInfos))
 
-	fmt.Printf("Total documents in vector store: %d\n", count)
-
-	// Organize metadata by source name
+	// Organize document info by source name
 	sourceStats := make(map[string]struct {
 		uriCounts map[string]int         // URI -> document count
 		metadata  map[string]interface{} // source-level metadata
 		uris      []string               // unique URIs for this source
 	})
 
-	for _, docMeta := range metadata {
-		if sourceName, ok := docMeta.Metadata[source.MetaSourceName].(string); ok {
-			if sourceURI, uriOk := docMeta.Metadata[source.MetaURI].(string); uriOk {
-				// Initialize source entry if not exists
-				if _, exists := sourceStats[sourceName]; !exists {
-					sourceStats[sourceName] = struct {
-						uriCounts map[string]int
-						metadata  map[string]interface{}
-						uris      []string
-					}{
-						uriCounts: make(map[string]int),
-						metadata:  make(map[string]interface{}),
-						uris:      []string{},
-					}
+	for _, docInfo := range docInfos {
+		sourceName := docInfo.SourceName
+		sourceURI := docInfo.URI
+
+		if sourceName != "" && sourceURI != "" {
+			// Initialize source entry if not exists
+			if _, exists := sourceStats[sourceName]; !exists {
+				sourceStats[sourceName] = struct {
+					uriCounts map[string]int
+					metadata  map[string]interface{}
+					uris      []string
+				}{
+					uriCounts: make(map[string]int),
+					metadata:  make(map[string]interface{}),
+					uris:      []string{},
 				}
-
-				stats := sourceStats[sourceName]
-
-				// Track URI counts
-				stats.uriCounts[sourceURI]++
-
-				// Collect unique URIs
-				found := false
-				for _, uri := range stats.uris {
-					if uri == sourceURI {
-						found = true
-						break
-					}
-				}
-				if !found {
-					stats.uris = append(stats.uris, sourceURI)
-				}
-
-				// Collect source-level metadata (excluding system fields)
-				for key, value := range docMeta.Metadata {
-					if !strings.HasPrefix(key, "trpc_agent_go_") {
-						stats.metadata[key] = value
-					}
-				}
-
-				sourceStats[sourceName] = stats
 			}
+
+			stats := sourceStats[sourceName]
+
+			// Track URI counts
+			stats.uriCounts[sourceURI]++
+
+			// Collect unique URIs
+			found := false
+			for _, uri := range stats.uris {
+				if uri == sourceURI {
+					found = true
+					break
+				}
+			}
+			if !found {
+				stats.uris = append(stats.uris, sourceURI)
+			}
+
+			// Collect source-level metadata (excluding system fields)
+			for key, value := range docInfo.AllMeta {
+				if !strings.HasPrefix(key, "trpc_agent_go_") {
+					stats.metadata[key] = value
+				}
+			}
+
+			sourceStats[sourceName] = stats
 		}
 	}
 

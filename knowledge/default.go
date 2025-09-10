@@ -52,15 +52,15 @@ type BuiltinKnowledge struct {
 	sources       []source.Source
 
 	// incremental sync related fields
-	cacheURIInfo     map[string][]DocumentInfo // cached document info grouped by URI, generated from vectorMetadata
-	cacheSourceInfo  map[string][]DocumentInfo // cached document info grouped by source name, generated from vectorMetadata
-	cacheMetaInfo    map[string]DocumentInfo   // cached vectorstore metadata
-	processedDocIDs  sync.Map                  // processed doc IDs, used to avoid duplicate processing
-	enableSourceSync bool                      // enable source sync, if true, will keep document in vectorstore be synced with source
+	cacheURIInfo     map[string][]BuiltinDocumentInfo // cached document info grouped by URI, generated from vectorMetadata
+	cacheSourceInfo  map[string][]BuiltinDocumentInfo // cached document info grouped by source name, generated from vectorMetadata
+	cacheMetaInfo    map[string]BuiltinDocumentInfo   // cached vectorstore metadata
+	processedDocIDs  sync.Map                         // processed doc IDs, used to avoid duplicate processing and cleanup orphan documents
+	enableSourceSync bool                             // enable source sync, if true, will keep document in vectorstore be synced with source
 }
 
-// DocumentInfo stores the basic information of a document for incremental sync
-type DocumentInfo struct {
+// BuiltinDocumentInfo stores the basic information of a document for incremental sync
+type BuiltinDocumentInfo struct {
 	DocumentID string
 	SourceName string
 	ChunkIndex int
@@ -69,24 +69,24 @@ type DocumentInfo struct {
 }
 
 // convertMetaToDocumentInfo converts a vectorstore document metadata to a DocumentInfo
-func convertMetaToDocumentInfo(docID string, meta *vectorstore.DocumentMetadata) DocumentInfo {
+func convertMetaToDocumentInfo(docID string, meta *vectorstore.DocumentMetadata) BuiltinDocumentInfo {
 	uri, hasURI := meta.Metadata[source.MetaURI].(string)
 	sourceName, hasSource := meta.Metadata[source.MetaSourceName].(string)
 	chunkIndex, hasChunkIndex := meta.Metadata[source.MetaChunkIndex]
 	if !hasURI {
-		log.Info("uri not found in metadata, set to empty string")
+		log.Debugf("uri not found in metadata, set to empty string")
 		uri = ""
 	}
 	if !hasSource {
-		log.Info("sourceName not found in metadata, set to empty string")
+		log.Debugf("sourceName not found in metadata, set to empty string")
 		sourceName = ""
 	}
 	if !hasChunkIndex {
-		log.Info("chunkIndex not found in metadata, set to 0")
+		log.Debugf("chunkIndex not found in metadata, set to 0")
 		chunkIndex = 0
 	}
 	chunkIndexInt := convertToInt(chunkIndex)
-	docInfo := DocumentInfo{
+	docInfo := BuiltinDocumentInfo{
 		DocumentID: docID,
 		SourceName: sourceName,
 		ChunkIndex: chunkIndexInt,
@@ -94,120 +94,6 @@ func convertMetaToDocumentInfo(docID string, meta *vectorstore.DocumentMetadata)
 		AllMeta:    meta.Metadata,
 	}
 	return docInfo
-}
-
-// Option represents a functional option for configuring BuiltinKnowledge.
-type Option func(*BuiltinKnowledge)
-
-// WithVectorStore sets the vector store for similarity search.
-func WithVectorStore(vs vectorstore.VectorStore) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.vectorStore = vs
-	}
-}
-
-// WithEmbedder sets the embedder for generating document embeddings.
-func WithEmbedder(e embedder.Embedder) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.embedder = e
-	}
-}
-
-// WithEnableSourceSync sets the enable source sync.
-func WithEnableSourceSync(enable bool) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.enableSourceSync = enable
-	}
-}
-
-// WithQueryEnhancer sets a custom query enhancer (optional).
-func WithQueryEnhancer(qe query.Enhancer) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.queryEnhancer = qe
-	}
-}
-
-// WithReranker sets a custom reranker (optional).
-func WithReranker(r reranker.Reranker) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.reranker = r
-	}
-}
-
-// WithRetriever sets a custom retriever (optional).
-func WithRetriever(r retriever.Retriever) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.retriever = r
-	}
-}
-
-// WithSources sets the knowledge sources.
-func WithSources(sources []source.Source) Option {
-	return func(dk *BuiltinKnowledge) {
-		dk.sources = sources
-	}
-}
-
-// LoadOption represents a functional option for configuring load behavior.
-type LoadOption func(*loadConfig)
-
-// loadConfig holds the configuration for load behavior.
-type loadConfig struct {
-	showProgress     bool
-	progressStepSize int
-	showStats        bool
-	srcParallelism   int
-	docParallelism   int
-	recreate         bool
-}
-
-// WithShowProgress enables or disables progress logging during load.
-func WithShowProgress(show bool) LoadOption {
-	return func(lc *loadConfig) {
-		lc.showProgress = show
-	}
-}
-
-// WithProgressStepSize sets the granularity of progress updates.
-func WithProgressStepSize(stepSize int) LoadOption {
-	return func(lc *loadConfig) {
-		lc.progressStepSize = stepSize
-	}
-}
-
-// WithShowStats enables or disables statistics logging during load.
-// By default statistics are shown.
-func WithShowStats(show bool) LoadOption {
-	return func(lc *loadConfig) {
-		lc.showStats = show
-	}
-}
-
-// WithSourceConcurrency configures how many sources can be loaded in parallel.
-// A value = 1 means sequential processing.
-// The default is min(4, len(sources)) when value is not specified (=0).
-func WithSourceConcurrency(n int) LoadOption {
-	return func(lc *loadConfig) {
-		lc.srcParallelism = n
-	}
-}
-
-// WithDocConcurrency configures how many documents per source can be processed
-// concurrently.
-// A value = 1 means sequential processing.
-// The default is runtime.NumCPU() when value is not specified (=0).
-func WithDocConcurrency(n int) LoadOption {
-	return func(lc *loadConfig) {
-		lc.docParallelism = n
-	}
-}
-
-// WithRecreate recreates the vector store before loading documents, be careful to use this option.
-// ATTENTION! This option will delete all documents from the vector store and recreate it.
-func WithRecreate(recreate bool) LoadOption {
-	return func(lc *loadConfig) {
-		lc.recreate = recreate
-	}
 }
 
 // New creates a new BuiltinKnowledge instance with the given options.
@@ -239,6 +125,44 @@ func New(opts ...Option) *BuiltinKnowledge {
 	return dk
 }
 
+// ShowDocumentInfo shows the document info from the vector store.
+func (dk *BuiltinKnowledge) ShowDocumentInfo(
+	ctx context.Context,
+	opts ...ShowDocumentInfoOption,
+) ([]BuiltinDocumentInfo, error) {
+	if dk.vectorStore == nil {
+		return nil, fmt.Errorf("vector store not configured")
+	}
+
+	config := &showDocumentInfoConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+	filter := map[string]interface{}{}
+	if config.filter != nil {
+		filter = config.filter
+	}
+	if config.sourceName != "" {
+		filter[source.MetaSourceName] = config.sourceName
+	}
+	allMetadata, err := dk.vectorStore.GetMetadata(
+		ctx,
+		vectorstore.WithGetMetadataFilter(filter),
+		vectorstore.WithGetMetadataIDs(config.ids),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata: %w", err)
+	}
+
+	docInfos := make([]BuiltinDocumentInfo, 0, len(allMetadata))
+	for docID := range allMetadata {
+		meta := allMetadata[docID]
+		docInfo := convertMetaToDocumentInfo(docID, &meta)
+		docInfos = append(docInfos, docInfo)
+	}
+	return docInfos, nil
+}
+
 // AddSource adds a source to the knowledge base.
 func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, opts ...LoadOption) error {
 	// check if source already exists
@@ -247,24 +171,21 @@ func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, op
 			return fmt.Errorf("source with name %s already exists", src.Name())
 		}
 	}
-
-	dk.sources = append(dk.sources, src)
 	if dk.enableSourceSync {
 		if err := dk.refreshSourceDocInfo(ctx, src.Name()); err != nil {
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
 		}
 	}
-
 	config := dk.buildLoadConfig(1, opts...)
 	if err := dk.loadSourceInternal(ctx, []source.Source{src}, config); err != nil {
 		return fmt.Errorf("failed to load source: %w", err)
 	}
-
 	if dk.enableSourceSync {
 		if err := dk.refreshSourceDocInfo(ctx, src.Name()); err != nil {
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
 		}
 	}
+	dk.sources = append(dk.sources, src)
 	return nil
 }
 
@@ -288,12 +209,12 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 
 	config := dk.buildLoadConfig(1, opts...)
 	if dk.enableSourceSync {
-		err := dk.reloadSourceWithSync(ctx, src, sourceName, config)
+		err := dk.syncReloadSource(ctx, src, sourceName, config)
 		if err != nil {
 			return err
 		}
 	} else {
-		err := dk.reloadSourceDirect(ctx, src, sourceName, config)
+		err := dk.reloadSource(ctx, src, sourceName, config)
 		if err != nil {
 			return err
 		}
@@ -304,8 +225,8 @@ func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source,
 	return nil
 }
 
-// reloadSourceWithSync reloads a source using incremental sync strategy
-func (dk *BuiltinKnowledge) reloadSourceWithSync(
+// syncReloadSource reloads a source using incremental sync strategy
+func (dk *BuiltinKnowledge) syncReloadSource(
 	ctx context.Context,
 	oldSource source.Source,
 	sourceName string,
@@ -339,8 +260,8 @@ func (dk *BuiltinKnowledge) reloadSourceWithSync(
 	return nil
 }
 
-// reloadSourceDirect reloads a source using direct delete and reload strategy
-func (dk *BuiltinKnowledge) reloadSourceDirect(
+// reloadSource reloads a source using direct delete and reload strategy
+func (dk *BuiltinKnowledge) reloadSource(
 	ctx context.Context,
 	targetSource source.Source,
 	sourceName string,
@@ -390,7 +311,6 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 	if targetSource == nil {
 		return fmt.Errorf("source with name %s not found", sourceName)
 	}
-	dk.sources = append(dk.sources[:sourceIndex], dk.sources[sourceIndex+1:]...)
 
 	// Create filter for source documents
 	filter := map[string]interface{}{
@@ -408,14 +328,12 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 			return fmt.Errorf("failed to update vector store metadata: %w", err)
 		}
 	}
+	dk.sources = append(dk.sources[:sourceIndex], dk.sources[sourceIndex+1:]...)
 	return nil
 }
 
 // Load loads one or more source
-func (dk *BuiltinKnowledge) Load(
-	ctx context.Context,
-	opts ...LoadOption,
-) error {
+func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error {
 	if dk.vectorStore == nil {
 		return fmt.Errorf("vector store not configured")
 	}
@@ -809,13 +727,13 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 // refreshSourceDocInfo refreshes metadata by source name
 func (dk *BuiltinKnowledge) refreshSourceDocInfo(ctx context.Context, sourceName string) error {
 	if dk.cacheMetaInfo == nil {
-		dk.cacheMetaInfo = make(map[string]DocumentInfo)
+		dk.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
 	}
 	if dk.cacheSourceInfo == nil {
-		dk.cacheSourceInfo = make(map[string][]DocumentInfo)
+		dk.cacheSourceInfo = make(map[string][]BuiltinDocumentInfo)
 	}
 	if dk.cacheURIInfo == nil {
-		dk.cacheURIInfo = make(map[string][]DocumentInfo)
+		dk.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
 	}
 
 	// get latest metadata by source name
@@ -850,7 +768,7 @@ func (dk *BuiltinKnowledge) refreshSourceDocInfo(ctx context.Context, sourceName
 
 // prepareIncrementalSync prepare incremental sync
 func (dk *BuiltinKnowledge) refreshAllDocInfo(ctx context.Context) error {
-	dk.cacheMetaInfo = make(map[string]DocumentInfo)
+	dk.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
 	// get all existing documents metadata and cache it
 	allMeta, err := dk.vectorStore.GetMetadata(ctx)
 	if err != nil {
@@ -872,8 +790,8 @@ func (dk *BuiltinKnowledge) rebuildDocumentInfo() {
 	if dk.cacheMetaInfo == nil {
 		return
 	}
-	dk.cacheURIInfo = make(map[string][]DocumentInfo)
-	dk.cacheSourceInfo = make(map[string][]DocumentInfo)
+	dk.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+	dk.cacheSourceInfo = make(map[string][]BuiltinDocumentInfo)
 	for _, meta := range dk.cacheMetaInfo {
 		dk.cacheURIInfo[meta.URI] = append(dk.cacheURIInfo[meta.URI], meta)
 		dk.cacheSourceInfo[meta.SourceName] = append(dk.cacheSourceInfo[meta.SourceName], meta)
@@ -960,9 +878,9 @@ func (dk *BuiltinKnowledge) cleanupOrphanDocuments(ctx context.Context) error {
 
 // clearVectorStoreMetadata clear vector store metadata cache
 func (dk *BuiltinKnowledge) clearVectorStoreMetadata() {
-	dk.cacheURIInfo = make(map[string][]DocumentInfo)
-	dk.cacheSourceInfo = make(map[string][]DocumentInfo)
-	dk.cacheMetaInfo = make(map[string]DocumentInfo)
+	dk.cacheURIInfo = make(map[string][]BuiltinDocumentInfo)
+	dk.cacheSourceInfo = make(map[string][]BuiltinDocumentInfo)
+	dk.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
 	dk.processedDocIDs = sync.Map{}
 	log.Infof("Cleared all incremental sync cache")
 }

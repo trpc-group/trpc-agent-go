@@ -1204,7 +1204,7 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 	}
 
 	// Test rebuildDocumentInfo
-	kb.cacheMetaInfo = map[string]DocumentInfo{
+	kb.cacheMetaInfo = map[string]BuiltinDocumentInfo{
 		"doc-1": docInfo,
 	}
 	kb.rebuildDocumentInfo()
@@ -1250,5 +1250,301 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 	kb.clearVectorStoreMetadata()
 	if len(kb.cacheMetaInfo) != 0 {
 		t.Error("Expected cacheMetaInfo to be cleared")
+	}
+}
+
+// mockVectorStoreWithMetadata is an enhanced mock that supports GetMetadata
+type mockVectorStoreWithMetadata struct {
+	stubVectorStore
+	metadata map[string]vectorstore.DocumentMetadata
+}
+
+func (m *mockVectorStoreWithMetadata) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	if m.metadata == nil {
+		return make(map[string]vectorstore.DocumentMetadata), nil
+	}
+
+	// Apply filters if any
+	config := &vectorstore.GetMetadataConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for id, meta := range m.metadata {
+		// Apply document ID filter
+		if len(config.IDs) > 0 {
+			found := false
+			for _, docID := range config.IDs {
+				if id == docID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		// Apply metadata filters
+		if len(config.Filter) > 0 {
+			match := true
+			for key, value := range config.Filter {
+				if metaValue, exists := meta.Metadata[key]; !exists || metaValue != value {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		result[id] = meta
+	}
+
+	return result, nil
+}
+
+// Test ShowDocumentInfo functionality using table-driven tests
+func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupKB        func() *BuiltinKnowledge
+		options        []ShowDocumentInfoOption
+		expectError    bool
+		expectedErrMsg string
+		validateResult func([]BuiltinDocumentInfo) bool
+	}{
+		{
+			name: "successful_show_all_documents",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								source.MetaChunkSize:  100,
+								"category":            "test",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								source.MetaChunkSize:  200,
+								"category":            "demo",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options:     []ShowDocumentInfoOption{},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 2 &&
+					docs[0].SourceName != "" &&
+					docs[1].SourceName != ""
+			},
+		},
+		{
+			name: "filter_by_source_name",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoSourceName("test-source-1"),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].SourceName == "test-source-1"
+			},
+		},
+		{
+			name: "filter_by_document_ids",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoIds([]string{"doc-1"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].URI == "file:///test1.txt"
+			},
+		},
+		{
+			name: "filter_by_metadata",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								"category":            "important",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								"category":            "normal",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoFilter(map[string]interface{}{"category": "important"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].URI == "file:///test1.txt"
+			},
+		},
+		{
+			name: "no_vector_store_configured",
+			setupKB: func() *BuiltinKnowledge {
+				return &BuiltinKnowledge{}
+			},
+			options:        []ShowDocumentInfoOption{},
+			expectError:    true,
+			expectedErrMsg: "vector store not configured",
+		},
+		{
+			name: "empty_result",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: make(map[string]vectorstore.DocumentMetadata),
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options:     []ShowDocumentInfoOption{},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 0
+			},
+		},
+		{
+			name: "multiple_filters_combined",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								"category":            "test",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								"category":            "test",
+							},
+						},
+						"doc-3": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-1",
+								source.MetaURI:        "file:///test3.txt",
+								source.MetaChunkIndex: 2,
+								"category":            "demo",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoSourceName("source-1"),
+				WithShowDocumentInfoFilter(map[string]interface{}{"category": "test"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 &&
+					docs[0].SourceName == "source-1" &&
+					docs[0].URI == "file:///test1.txt"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := tt.setupKB()
+			result, err := kb.ShowDocumentInfo(context.Background(), tt.options...)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+					return
+				}
+				if tt.expectedErrMsg != "" && !strings.Contains(err.Error(), tt.expectedErrMsg) {
+					t.Errorf("Expected error message to contain '%s', got '%s'", tt.expectedErrMsg, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+
+			if tt.validateResult != nil && !tt.validateResult(result) {
+				t.Errorf("Result validation failed for test case '%s'", tt.name)
+			}
+		})
 	}
 }
