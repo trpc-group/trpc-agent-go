@@ -43,6 +43,21 @@ const (
 	eventCompletionTimeout = 5 * time.Second
 )
 
+// summarizationSkipper is implemented by tools that can indicate whether
+// the flow should skip a post-tool summarization step. This allows tools
+// like AgentTool to mark their tool.response as final for the turn.
+type summarizationSkipper interface {
+	SkipSummarization() bool
+}
+
+// streamInnerPreference is implemented by tools that want to control whether
+// the flow should treat them as streamable (forwarding inner deltas) or fall
+// back to the callable path. When this returns false, the flow will not use
+// the StreamableTool path even if the tool implements it.
+type streamInnerPreference interface {
+	StreamInner() bool
+}
+
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
 	index int
@@ -118,6 +133,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		invocation,
 		llmResponse,
 		tools,
+		eventChan,
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
@@ -149,6 +165,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	if llmResponse == nil || len(llmResponse.Choices) == 0 {
 		return nil, nil
@@ -159,7 +176,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
 	if p.enableParallelTools && len(toolCalls) > 1 {
-		return p.executeToolCallsInParallel(ctx, invocation, llmResponse, toolCalls, tools)
+		return p.executeToolCallsInParallel(ctx, invocation, llmResponse, toolCalls, tools, eventChan)
 	}
 
 	// Execute each tool call.
@@ -168,7 +185,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 			ctxWithInvocation, span := trace.Tracer.Start(ctx,
 				fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name))
 			defer span.End()
-			choice, err := p.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i)
+			choice, err := p.executeToolCall(ctxWithInvocation, invocation, toolCall, tools, i, eventChan)
 			if err != nil {
 				return err
 			}
@@ -178,6 +195,15 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 			choice.Message.ToolName = toolCall.Function.Name
 			toolCallResponseEvent := newToolCallResponseEvent(invocation, llmResponse,
 				[]model.Choice{*choice})
+
+			if tl, ok := tools[toolCall.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if toolCallResponseEvent.Actions == nil {
+						toolCallResponseEvent.Actions = &event.EventActions{}
+					}
+					toolCallResponseEvent.Actions.SkipSummarization = true
+				}
+			}
 			toolCallResponsesEvents = append(toolCallResponsesEvents, toolCallResponseEvent)
 			tl, ok := tools[toolCall.Function.Name]
 			var declaration *tool.Declaration
@@ -198,7 +224,21 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
-		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, nil)
+		// No explicit tool result events (likely forwarded inner events).
+		// Create minimal tool response messages so the next LLM call has
+		// required tool messages following tool_calls.
+		minimalChoices := make([]model.Choice, 0, len(toolCalls))
+		for _, tc := range toolCalls {
+			minimalChoices = append(minimalChoices, model.Choice{
+				Index: 0,
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: tc.ID,
+					// Keep Content empty to avoid UI duplication; presence is enough for API.
+				},
+			})
+		}
+		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
@@ -222,6 +262,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	llmResponse *model.Response,
 	toolCalls []model.ToolCall,
 	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	resultChan := make(chan toolResult, len(toolCalls))
 	var wg sync.WaitGroup
@@ -251,7 +292,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 				fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, tc.Function.Name))
 			defer span.End()
 
-			choice, err := p.executeToolCall(ctxWithInvocation, invocation, tc, tools, index)
+			choice, err := p.executeToolCall(ctxWithInvocation, invocation, tc, tools, index, eventChan)
 			if err != nil {
 				log.Errorf("Tool execution error for %s (index: %d, ID: %s, agent: %s): %v",
 					tc.Function.Name, index, tc.ID, invocation.AgentName, err)
@@ -318,7 +359,20 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
-		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, nil)
+		// No explicit tool result events (likely forwarded inner events).
+		// Create minimal tool response messages so the next LLM call has
+		// required tool messages following tool_calls.
+		minimalChoices := make([]model.Choice, 0, len(toolCalls))
+		for _, tc := range toolCalls {
+			minimalChoices = append(minimalChoices, model.Choice{
+				Index: 0,
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: tc.ID,
+				},
+			})
+		}
+		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
@@ -342,6 +396,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	toolCall model.ToolCall,
 	tools map[string]tool.Tool,
 	index int,
+	eventChan chan<- *event.Event,
 ) (*model.Choice, error) {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
@@ -366,7 +421,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
 
 	// Execute the tool with callbacks.
-	result, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl)
+	result, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -470,6 +525,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.Tool,
+	eventChan chan<- *event.Event,
 ) (any, error) {
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
@@ -491,7 +547,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 
 	// Execute the actual tool.
-	result, err := p.executeTool(ctx, toolCall, tl)
+	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
 		return nil, err
 	}
@@ -517,20 +573,37 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	return result, nil
 }
 
-// executeTool executes the actual tool based on its type.
-func (p *FunctionCallResponseProcessor) executeTool(
+// isStreamable returns true if the tool supports streaming and its stream
+// preference is enabled.
+func isStreamable(t tool.Tool) bool {
+	// Check if the tool has a stream preference and if it is enabled.
+	if pref, ok := t.(streamInnerPreference); ok && !pref.StreamInner() {
+		return false
+	}
+	_, ok := t.(tool.StreamableTool)
+	return ok
+}
+
+// executeTool executes the tool based on its capabilities.
+func (f *FunctionCallResponseProcessor) executeTool(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.Tool,
+	eventChan chan<- *event.Event,
 ) (any, error) {
-	switch t := tl.(type) {
-	case tool.CallableTool:
-		return p.executeCallableTool(ctx, toolCall, t)
-	case tool.StreamableTool:
-		return p.executeStreamableTool(ctx, toolCall, t)
-	default:
-		return nil, fmt.Errorf("unsupported tool type: %T", tl)
+	// Prefer streaming execution if the tool supports it.
+	if isStreamable(tl) {
+		// Safe to cast since isStreamable checks for StreamableTool.
+		return f.executeStreamableTool(
+			ctx, invocation, toolCall, tl.(tool.StreamableTool), eventChan,
+		)
 	}
+	// Fallback to callable tool execution if supported.
+	if callable, ok := tl.(tool.CallableTool); ok {
+		return f.executeCallableTool(ctx, toolCall, callable)
+	}
+	return nil, fmt.Errorf("unsupported tool type: %T", tl)
 }
 
 // executeCallableTool executes a callable tool.
@@ -548,10 +621,12 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 }
 
 // executeStreamableTool executes a streamable tool.
-func (p *FunctionCallResponseProcessor) executeStreamableTool(
+func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.StreamableTool,
+	eventChan chan<- *event.Event,
 ) (any, error) {
 	reader, err := tl.StreamableCall(ctx, toolCall.Function.Arguments)
 	if err != nil {
@@ -571,9 +646,93 @@ func (p *FunctionCallResponseProcessor) executeStreamableTool(
 				"may merge incomplete data", toolCall.Function.Name, err)
 			break
 		}
-		contents = append(contents, chunk.Content)
-	}
 
+		// Case 1: Raw sub-agent event passthrough
+		if ev, ok := chunk.Content.(*event.Event); ok {
+			if ev.InvocationID == "" {
+				ev.InvocationID = invocation.InvocationID
+			}
+			if ev.Branch == "" {
+				ev.Branch = invocation.Branch
+			}
+			// Suppress forwarding of the inner agent's final full content to avoid
+			// duplicate large blocks in the parent transcript. We still aggregate
+			// its text from deltas for the final tool.response content.
+			forward := true
+			if ev.Response != nil && len(ev.Response.Choices) > 0 {
+				ch := ev.Response.Choices[0]
+				if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
+					forward = false
+				}
+			}
+			if forward && eventChan != nil {
+				select {
+				case eventChan <- ev:
+				case <-ctx.Done():
+					return tool.Merge(contents), ctx.Err()
+				default:
+				}
+			}
+			if ev.Response != nil && len(ev.Response.Choices) > 0 {
+				ch := ev.Response.Choices[0]
+				if ch.Delta.Content != "" {
+					contents = append(contents, ch.Delta.Content)
+				} else if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
+					contents = append(contents, ch.Message.Content)
+				}
+			}
+			continue
+		}
+
+		// Case 2: Plain text-like chunk. Emit partial tool.response event.
+		var text string
+		switch v := chunk.Content.(type) {
+		case string:
+			text = v
+		default:
+			if bts, e := json.Marshal(v); e == nil {
+				text = string(bts)
+			} else {
+				text = fmt.Sprintf("%v", v)
+			}
+		}
+		if text != "" {
+			contents = append(contents, text)
+			if eventChan != nil {
+				resp := &model.Response{
+					ID:      uuid.New().String(),
+					Object:  model.ObjectTypeToolResponse,
+					Created: time.Now().Unix(),
+					Model:   invocation.Model.Info().Name,
+					Choices: []model.Choice{{
+						Index:   0,
+						Message: model.Message{Role: model.RoleTool, ToolID: toolCall.ID},
+						Delta:   model.Message{Content: text},
+					}},
+					Timestamp: time.Now(),
+					Done:      false,
+					IsPartial: true,
+				}
+				partial := event.New(
+					invocation.InvocationID,
+					invocation.AgentName,
+					event.WithResponse(resp),
+					event.WithBranch(invocation.Branch),
+				)
+				select {
+				case eventChan <- partial:
+				case <-ctx.Done():
+					return tool.Merge(contents), ctx.Err()
+				default:
+				}
+			}
+		}
+	}
+	// If we forwarded inner events, still return the merged content as the
+	// tool result so it can be recorded in the tool response message for the
+	// next LLM turn (to satisfy providers that require tool messages). The
+	// UI example suppresses printing these aggregated strings to avoid
+	// duplication; they are primarily for model consumption.
 	return tool.Merge(contents), nil
 }
 
@@ -658,42 +817,45 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 		}
 	}
 
-	// Fallback if all events are nil (should not happen in normal flow).
-	if baseEvent == nil {
-		return &event.Event{
-			Response: &model.Response{
-				ID:        eventID,
-				Object:    model.ObjectTypeToolResponse,
-				Created:   time.Now().Unix(),
-				Model:     "unknown",
-				Choices:   mergedChoices,
-				Timestamp: time.Now(),
-			},
-			ID:        eventID,
-			Timestamp: time.Now(),
-		}
+	// Build response payload with appropriate metadata.
+	modelName := "unknown"
+	if baseEvent != nil && baseEvent.Response != nil {
+		modelName = baseEvent.Response.Model
 	}
 
-	return &event.Event{
-		Response: &model.Response{
-			ID:      eventID,
-			Object:  model.ObjectTypeToolResponse,
-			Created: time.Now().Unix(),
-			Model: func() string {
-				if baseEvent.Response != nil {
-					return baseEvent.Response.Model
-				}
-				return "unknown"
-			}(),
-			Choices:   mergedChoices,
-			Timestamp: time.Now(),
-		},
-		InvocationID: baseEvent.InvocationID,
-		Author:       baseEvent.Author,
-		ID:           eventID,
-		Timestamp:    baseEvent.Timestamp, // Use the base event as the timestamp
-		Branch:       baseEvent.Branch,
+	resp := &model.Response{
+		ID:        eventID,
+		Object:    model.ObjectTypeToolResponse,
+		Created:   time.Now().Unix(),
+		Model:     modelName,
+		Choices:   mergedChoices,
+		Timestamp: time.Now(),
 	}
+
+	// If we have a base event, carry over invocation, author and branch.
+	var merged *event.Event
+	if baseEvent != nil {
+		merged = event.New(
+			baseEvent.InvocationID,
+			baseEvent.Author,
+			event.WithResponse(resp),
+			event.WithBranch(baseEvent.Branch),
+		)
+	} else {
+		// Fallback: construct without base metadata.
+		merged = event.New("", "", event.WithResponse(resp))
+	}
+	// If any child event prefers skipping summarization, propagate it.
+	for _, e := range es {
+		if e != nil && e.Actions != nil && e.Actions.SkipSummarization {
+			if merged.Actions == nil {
+				merged.Actions = &event.EventActions{}
+			}
+			merged.Actions.SkipSummarization = true
+			break
+		}
+	}
+	return merged
 }
 
 // findCompatibleTool attempts to map a requested (missing) tool name to a compatible tool.

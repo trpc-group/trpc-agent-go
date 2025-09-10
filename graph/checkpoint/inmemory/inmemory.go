@@ -214,7 +214,8 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 
 	// If namespace is empty, search across all namespaces (cross-namespace search like GetTuple)
 	if namespace == "" {
-		// Search across all namespaces
+		// Search across all namespaces. Do not apply limit until after sorting to avoid
+		// bias from map iteration order.
 		for ns, checkpoints := range namespaces {
 			for checkpointID, tuple := range checkpoints {
 				if !s.passesFilters(checkpointID, tuple, checkpoints, filter) {
@@ -222,14 +223,6 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 				}
 				result := s.createCheckpointResult(tuple, lineageID, ns, checkpointID)
 				results = append(results, result)
-				// Apply limit.
-				if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
-					break
-				}
-			}
-			// Break early if limit is reached
-			if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
-				break
 			}
 		}
 	} else {
@@ -245,16 +238,16 @@ func (s *Saver) List(ctx context.Context, config map[string]any, filter *graph.C
 			}
 			result := s.createCheckpointResult(tuple, lineageID, namespace, checkpointID)
 			results = append(results, result)
-			// Apply limit.
-			if filter != nil && filter.Limit > 0 && len(results) >= filter.Limit {
-				break
-			}
 		}
 	}
 	// Sort results by timestamp (newest first).
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Checkpoint.Timestamp.After(results[j].Checkpoint.Timestamp)
 	})
+	// Apply limit after sorting to ensure correct ordering.
+	if filter != nil && filter.Limit > 0 && len(results) > filter.Limit {
+		results = results[:filter.Limit]
+	}
 	return results, nil
 }
 
@@ -294,9 +287,10 @@ func (s *Saver) Put(ctx context.Context, req graph.PutRequest) (map[string]any, 
 	}
 
 	// Set parent config if there's a parent checkpoint ID.
-	// Use the ParentCheckpointID from the checkpoint itself.
+	// Determine the correct parent namespace by looking up the parent checkpoint.
 	if parentID := req.Checkpoint.ParentCheckpointID; parentID != "" {
-		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
+		parentNS := s.findParentNamespace(lineageID, parentID)
+		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, parentNS)
 	}
 
 	// Store the checkpoint.
@@ -381,9 +375,10 @@ func (s *Saver) PutFull(ctx context.Context, req graph.PutFullRequest) (map[stri
 	}
 
 	// Set parent config if there's a parent checkpoint ID.
-	// Use the ParentCheckpointID from the checkpoint itself.
+	// Determine the correct parent namespace by looking up the parent checkpoint.
 	if parentID := req.Checkpoint.ParentCheckpointID; parentID != "" {
-		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, namespace)
+		parentNS := s.findParentNamespace(lineageID, parentID)
+		tuple.ParentConfig = graph.CreateCheckpointConfig(lineageID, parentID, parentNS)
 	}
 
 	// Store the checkpoint.
@@ -523,4 +518,21 @@ func (s *Saver) createCheckpointResult(tuple *graph.CheckpointTuple, lineageID, 
 		copy(result.PendingWrites, writes)
 	}
 	return result
+}
+
+// findParentNamespace locates the namespace of a parent checkpoint ID within a lineage.
+// If not found, returns an empty namespace to allow cross-namespace lookup by ID.
+func (s *Saver) findParentNamespace(lineageID, parentID string) string {
+	if lineageID == "" || parentID == "" {
+		return ""
+	}
+	if namespaces, ok := s.storage[lineageID]; ok {
+		for ns, checkpoints := range namespaces {
+			if _, exists := checkpoints[parentID]; exists {
+				return ns
+			}
+		}
+	}
+	// Unknown parent namespace; use empty to indicate cross-namespace search.
+	return ""
 }

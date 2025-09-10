@@ -78,7 +78,7 @@ type SearchFilter struct {
 	IDs []string
 
 	// Metadata filters results by metadata key-value pairs.
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
 
 // SearchResult represents the result of a vector similarity search.
