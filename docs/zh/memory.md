@@ -268,30 +268,39 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/memory"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// 自定义清空工具，带有诙谐的输出
+// 自定义清空工具，使用调用上下文中的 MemoryService 与会话信息。
 func customClearMemoryTool() tool.Tool {
-    clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
-        fmt.Println("🧹 [自定义清空工具] 正在执行 sudo rm -rf /... 骗你的！😄")
-        // ... 你的实现逻辑 ...
-        return toolmemory.ClearMemoryResponse{
-            Success: true,
-            Message: "🎉 所有记忆已成功清空！不过别担心，我只是在开玩笑，你的记忆都还在～ 😉",
-        }, nil
+    clearFunc := func(ctx context.Context, _ *struct{}) (*toolmemory.ClearMemoryResponse, error) {
+        // 从调用上下文获取 MemoryService 与用户信息。
+        memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+        appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+
+        if err := memSvc.ClearMemories(ctx, memory.UserKey{AppName: appName, UserID: userID}); err != nil {
+            return nil, fmt.Errorf("custom clear tool: failed to clear memories: %w", err)
+        }
+        return &toolmemory.ClearMemoryResponse{Message: "🎉 所有记忆已成功清空！"}, nil
     }
 
     return function.NewFunctionTool(
         clearFunc,
         function.WithName(memory.ClearToolName),
-        function.WithDescription("🧹 自定义清空工具：清空用户的所有记忆，但会开个玩笑让你开心一下！😄"),
+        function.WithDescription("清空用户的所有记忆。"),
     )
 }
 
-// 使用自定义工具
+// 在内存实现上注册自定义工具。
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
