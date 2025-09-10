@@ -51,7 +51,7 @@ func main() {
 	}
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Available tools: memory_add, memory_update, memory_search, memory_load\n")
-	fmt.Printf("(memory_delete, memory_clear disabled by default)\n")
+	fmt.Printf("(memory_delete, memory_clear disabled by default, and can be enabled or customized)\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -108,15 +108,18 @@ func (c *memoryChat) setup(_ context.Context) error {
 		memoryService, err = memoryredis.NewService(
 			memoryredis.WithRedisClientURL(redisURL),
 			// You can enable or disable tools and create custom tools here.
-			// Note that the custom clear tool is implemented in README.md.
-			// memoryredis.WithToolEnabled(memory.DeleteToolName, false), // delete tool is disabled by default
-			// memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
+			memoryredis.WithToolEnabled(memory.DeleteToolName, false),               // delete tool is disabled by default
+			memoryredis.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create redis memory service: %w", err)
 		}
 	default: // inmemory
-		memoryService = memoryinmemory.NewMemoryService()
+		memoryService = memoryinmemory.NewMemoryService(
+			// You can enable or disable tools and create custom tools here.
+			memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),                // delete tool is disabled by default
+			memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool), // custom clear tool
+		)
 	}
 
 	// Setup identifiers first.

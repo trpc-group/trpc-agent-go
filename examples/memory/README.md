@@ -297,21 +297,30 @@ import (
 
 // Custom clear tool with enhanced logging.
 func customClearMemoryTool() tool.Tool {
-	clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
-		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
-		// ... implementation ...
-		return toolmemory.ClearMemoryResponse{
-			Success: true,
-			Message: "🎉 All memories cleared successfully with custom magic! ✨",
-		}, nil
-	}
+    clearFunc := func(ctx context.Context, _ *struct{}) (*toolmemory.ClearMemoryResponse, error) {
+        // Get memory service and user info from invocation context.
+        memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+        appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
 
-	return function.NewFunctionTool(
-		clearFunc,
-		function.WithName(memory.ClearToolName),
-		function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
-	)
+        if err := memSvc.ClearMemories(ctx, memory.UserKey{AppName: appName, UserID: userID}); err != nil {
+            return nil, fmt.Errorf("custom clear tool: failed to clear memories: %w", err)
+        }
+        return &toolmemory.ClearMemoryResponse{Message: "🎉 All memories cleared successfully with custom magic! ✨"}, nil
+    }
+
+    return function.NewFunctionTool(
+        clearFunc,
+        function.WithName(memory.ClearToolName),
+        function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
+    )
 }
+
 
 // Use custom tool
 memoryService := memoryinmemory.NewMemoryService(
@@ -339,13 +348,13 @@ type ToolCreator func() tool.Tool
 
 // Example custom tool
 func myCustomAddTool() tool.Tool {
-	// Implementation that gets memory service from context
-	return function.NewFunctionTool(/* ... */)
+    // Implementation that gets memory service from context
+    return function.NewFunctionTool(/* ... */)
 }
 
 // Register custom tool
 memoryService := memoryinmemory.NewMemoryService(
-	memoryinmemory.WithCustomTool(memory.AddToolName, myCustomAddTool),
+    memoryinmemory.WithCustomTool(memory.AddToolName, myCustomAddTool),
 )
 ```
 
@@ -540,9 +549,9 @@ type ToolCreator func() tool.Tool
 
 // Default tool creators
 var defaultEnabledTools = map[string]ToolCreator{
-	memory.AddToolName:    toolmemory.NewAddTool,
-	memory.UpdateToolName: toolmemory.NewUpdateTool,
-	// ... other tools
+    memory.AddToolName:    toolmemory.NewAddTool,
+    memory.UpdateToolName: toolmemory.NewUpdateTool,
+    // ... other tools
 }
 
 // Custom tool registration
@@ -560,29 +569,7 @@ memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool)
 - **memory_search**: Allows LLM to search for relevant memories
 - **memory_load**: Allows LLM to load user memory overview
 
-**Custom Tools:**
-
-You can override any default tool with a custom implementation:
-
-```go
-// Custom add tool with enhanced logging
-func customAddMemoryTool() tool.Tool {
-	addFunc := func(ctx context.Context, req toolmemory.AddMemoryRequest) (toolmemory.AddMemoryResponse, error) {
-		fmt.Println("📝 [Custom Add Tool] Adding memory with special care... 💖")
-		// ... implementation ...
-		return toolmemory.AddMemoryResponse{
-			Success: true,
-			Message: "💖 Memory added with extra love! 💖",
-		}, nil
-	}
-
-	return function.NewFunctionTool(
-		addFunc,
-		function.WithName(memory.AddToolName),
-		function.WithDescription("📝 Custom add tool: Add memories with extra care and love! 💖"),
-	)
-}
-```
+**Custom Tools:** You can override default tools with custom implementations. Refer to the customClearMemoryTool example above, and follow the same pattern (imports + context helpers) for add/update/delete/search/load.
 
 ### Tool Calling Flow
 
