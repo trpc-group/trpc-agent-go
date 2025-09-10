@@ -49,6 +49,7 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 // ProcessorBuilder returns a message processor for the given agent.
 type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
 
+// ProcessMessageHook is a function that wraps the message processor with additional functionality.
 type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
 
 // TaskManagerBuilder returns a task manager for the given agent.
