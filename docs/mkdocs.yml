@@ -3,7 +3,7 @@ site_url: https://trpc-group.github.io/trpc-agent-go/
 repo_url: https://github.com/trpc-group/trpc-agent-go
 repo_name: trpc-group/trpc-agent-go
 edit_uri: edit/main/docs/
-docs_dir: docs/
+docs_dir: mkdocs/
 
 nav:
   - Overview: index.md
