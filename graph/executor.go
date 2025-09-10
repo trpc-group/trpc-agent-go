@@ -520,7 +520,7 @@ func (e *Executor) runBspLoop(
 	checkpointConfig *map[string]any,
 	startStep int,
 ) (int, error) {
-	stepsExecuted := 0
+	var stepsExecuted int
 	for step := startStep; step < e.maxSteps; step++ {
 		var stepCtx context.Context
 		var stepCancel context.CancelFunc
