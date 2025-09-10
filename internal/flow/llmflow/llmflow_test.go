@@ -1008,3 +1008,103 @@ func TestIsFinalResponse_ToolResponseSkipSummarization(t *testing.T) {
 	e3 := event.New("inv", "a", event.WithResponse(&model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: "ok"}}}}))
 	require.True(t, f.isFinalResponse(e3))
 }
+
+// stream tool sending struct chunks to exercise JSON marshaling path
+type structStreamTool struct{ name string }
+
+func (s *structStreamTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: s.name} }
+func (s *structStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	st := tool.NewStream(2)
+	go func() {
+		defer st.Writer.Close()
+		st.Writer.Send(tool.StreamChunk{Content: struct {
+			A int `json:"a"`
+		}{A: 1}}, nil)
+		st.Writer.Send(tool.StreamChunk{Content: struct {
+			B string `json:"b"`
+		}{B: "x"}}, nil)
+	}()
+	return st.Reader, nil
+}
+
+func TestExecuteStreamableTool_ChunkStructJSON(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-json", AgentName: "tester", Branch: "br", Model: &mockModel{}}
+	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "s"}}
+	st := &structStreamTool{name: "s"}
+	ch := make(chan *event.Event, 4)
+	res, err := f.executeStreamableTool(ctx, inv, tc, st, ch)
+	require.NoError(t, err)
+	// merged should be concatenation of marshaled chunks
+	require.Equal(t, `{"a":1}{"b":"x"}`, res.(string))
+}
+
+// stream tool forwarding inner *event.Event
+type innerEventStreamTool struct{ name string }
+
+func (s *innerEventStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+func (s *innerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	st := tool.NewStream(4)
+	go func() {
+		defer st.Writer.Close()
+		// delta chunk
+		ev1 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		st.Writer.Send(tool.StreamChunk{Content: ev1}, nil)
+		// final full assistant message
+		ev2 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		st.Writer.Send(tool.StreamChunk{Content: ev2}, nil)
+	}()
+	return st.Reader, nil
+}
+
+func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-fwd", AgentName: "parent", Branch: "b", Model: &mockModel{}}
+	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "inner"}}
+	st := &innerEventStreamTool{name: "inner"}
+	ch := make(chan *event.Event, 4)
+	res, err := f.executeStreamableTool(ctx, inv, tc, st, ch)
+	require.NoError(t, err)
+	require.Equal(t, "abcdef", res.(string))
+	// At least one forwarded event (delta). Final full message may be suppressed.
+	n := len(ch)
+	require.GreaterOrEqual(t, n, 1)
+	e1 := <-ch
+	require.Equal(t, inv.InvocationID, e1.InvocationID)
+	require.Equal(t, inv.Branch, e1.Branch)
+	if n > 1 {
+		e2 := <-ch
+		require.Equal(t, inv.InvocationID, e2.InvocationID)
+		require.Equal(t, inv.Branch, e2.Branch)
+	}
+}
+
+func TestWaitForCompletion_SignalReceived(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx := context.Background()
+	ch := make(chan string, 1)
+	inv := &agent.Invocation{InvocationID: "inv-comp", EventCompletionCh: ch}
+	evt := event.New("inv-comp", "author")
+	evt.RequiresCompletion = true
+	evt.CompletionID = "done-1"
+	// send completion
+	ch <- "done-1"
+	err := f.waitForCompletion(ctx, inv, evt)
+	require.NoError(t, err)
+}
+
+func TestWaitForCompletion_ContextCancelled(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	inv := &agent.Invocation{InvocationID: "inv-comp2", EventCompletionCh: make(chan string)}
+	evt := event.New("inv-comp2", "author")
+	evt.RequiresCompletion = true
+	evt.CompletionID = "x"
+	err := f.waitForCompletion(ctx, inv, evt)
+	require.Error(t, err)
+}

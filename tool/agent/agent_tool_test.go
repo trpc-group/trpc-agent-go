@@ -12,6 +12,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -235,5 +237,78 @@ func TestTool_StreamInner_FlagFalse(t *testing.T) {
 	at := NewTool(a, WithStreamInner(false))
 	if at.StreamInner() {
 		t.Fatalf("expected StreamInner to be false")
+	}
+}
+
+// errorMockAgent returns error from Run
+type errorMockAgent struct{ name string }
+
+func (m *errorMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, fmt.Errorf("boom")
+}
+func (m *errorMockAgent) Tools() []tool.Tool              { return nil }
+func (m *errorMockAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "err"} }
+func (m *errorMockAgent) SubAgents() []agent.Agent        { return nil }
+func (m *errorMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_Call_RunError(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"})
+	_, err := at.Call(context.Background(), []byte(`{"request":"x"}`))
+	if err == nil {
+		t.Fatalf("expected error from Call when agent run fails")
+	}
+}
+
+func TestTool_StreamableCall_RunErrorEmitsChunk(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"}, WithStreamInner(true))
+	r, err := at.StreamableCall(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected StreamableCall error: %v", err)
+	}
+	defer r.Close()
+	ch, err := r.Recv()
+	if err != nil {
+		t.Fatalf("unexpected stream read error: %v", err)
+	}
+	if s, ok := ch.Content.(string); !ok || !strings.Contains(s, "agent tool run error") {
+		t.Fatalf("expected error chunk, got: %#v", ch.Content)
+	}
+}
+
+// agentWithSchemaMock returns input/output schema maps in Info()
+type agentWithSchemaMock struct{ name, desc string }
+
+func (m *agentWithSchemaMock) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+func (m *agentWithSchemaMock) Tools() []tool.Tool { return nil }
+func (m *agentWithSchemaMock) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: m.desc,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"request": map[string]any{"type": "string"}},
+			"required":   []any{"request"},
+		},
+		OutputSchema: map[string]any{
+			"type":        "string",
+			"description": "out",
+		},
+	}
+}
+func (m *agentWithSchemaMock) SubAgents() []agent.Agent        { return nil }
+func (m *agentWithSchemaMock) FindSubAgent(string) agent.Agent { return nil }
+
+func TestNewTool_UsesAgentSchemas(t *testing.T) {
+	at := NewTool(&agentWithSchemaMock{name: "s-agent", desc: "d"})
+	decl := at.Declaration()
+	if decl.InputSchema == nil || decl.InputSchema.Type != "object" {
+		t.Fatalf("expected converted input schema, got: %#v", decl.InputSchema)
+	}
+	if decl.OutputSchema == nil || decl.OutputSchema.Type != "string" {
+		t.Fatalf("expected converted output schema, got: %#v", decl.OutputSchema)
 	}
 }
