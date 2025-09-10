@@ -46,6 +46,10 @@ const (
 
 // telemetry attributes constants.
 var (
+	ResourceServiceNamespace = "trpc-go-agent"
+	ResourceServiceName      = "telemetry"
+	ResourceServiceVersion   = "v0.1.0"
+
 	KeyEventID      = "trpc.go.agent.event_id"
 	KeySessionID    = "trpc.go.agent.session_id"
 	KeyInvocationID = "trpc.go.agent.invocation_id"

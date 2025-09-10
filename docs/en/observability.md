@@ -45,7 +45,7 @@ func main() {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
 	defer func() {
-		if err := clean(); err != nil {
+		if err := clean(context.Background()); err != nil {
 			log.Printf("Failed to clean up trace telemetry: %v", err)
 		}
 	}()

@@ -26,12 +26,15 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
+var TracerProvider trace.TracerProvider = noop.NewTracerProvider()
+
 // Tracer is the global tracer instance for telemetry.
-var Tracer trace.Tracer = trace.NewNoopTracerProvider().Tracer("")
+var Tracer trace.Tracer = TracerProvider.Tracer("")
 
 // Start collects telemetry with optional configuration.
 // The environment variables described below can be used for endpoint configuration.
