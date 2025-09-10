@@ -1056,7 +1056,7 @@ func TestWaitForCompletion_SignalReceived(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx := context.Background()
 	ch := make(chan string, 1)
-	inv := &agent.Invocation{InvocationID: "inv-comp", EventCompletionCh: ch}
+	inv := agent.NewInvocation("inv-comp", nil)
 	evt := event.New("inv-comp", "author")
 	evt.RequiresCompletion = true
 	evt.CompletionID = "done-1"
@@ -1070,7 +1070,7 @@ func TestWaitForCompletion_ContextCancelled(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	inv := &agent.Invocation{InvocationID: "inv-comp2", EventCompletionCh: make(chan string)}
+	inv := agent.NewInvocation("inv-comp", nil)
 	evt := event.New("inv-comp2", "author")
 	evt.RequiresCompletion = true
 	evt.CompletionID = "x"

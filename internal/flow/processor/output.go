@@ -151,10 +151,7 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		return
 	}
 	select {
-	case completionID := <-invocation.EventCompletionCh:
-		if completionID == stateEvent.ID {
-			log.Debugf("State delta event %s completed, proceeding with next LLM call", completionID)
-		}
+	case <-invocation.AddNoticeChannel(ctx, stateEvent.ID):
 	case <-ctx.Done():
 		return
 	}

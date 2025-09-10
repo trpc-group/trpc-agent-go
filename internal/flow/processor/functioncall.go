@@ -461,10 +461,7 @@ func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, i
 	}
 
 	select {
-	case completedID := <-invocation.EventCompletionCh:
-		if completedID == lastEvent.CompletionID {
-			log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
-		}
+	case <-invocation.AddNoticeChannel(ctx, lastEvent.CompletionID):
 	case <-time.After(eventCompletionTimeout):
 		log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
 	case <-ctx.Done():

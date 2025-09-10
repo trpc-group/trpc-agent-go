@@ -10,7 +10,10 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"reflect"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 
@@ -47,8 +50,6 @@ type Invocation struct {
 	Model model.Model
 	// Message is the message that is being sent to the agent.
 	Message model.Message
-	// EventCompletionCh is used to signal when events are written to session.
-	EventCompletionCh <-chan string
 	// RunOptions is the options for the Run method.
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
@@ -67,6 +68,10 @@ type Invocation struct {
 
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
+
+	// notice
+	noticeChanMap map[string]chan any
+	noticeMu      *sync.Mutex
 }
 
 // RunOption is a function that configures a RunOptions.
@@ -97,20 +102,60 @@ type RunOptions struct {
 	KnowledgeFilter map[string]any
 }
 
+// NewInvocation create a new invocation
+func NewInvocation(invocationID string, session *session.Session) *Invocation {
+	return &Invocation{
+		InvocationID:  invocationID,
+		Session:       session,
+		noticeMu:      &sync.Mutex{},
+		noticeChanMap: make(map[string]chan any),
+	}
+}
+
 // CreateBranchInvocation create a new invocation for branch agent
-func (baseInvocation *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
+func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
 	// Create a copy of the invocation - no shared state mutation.
 	branchInvocation := Invocation{
-		Agent:             branchAgent,
-		AgentName:         branchAgent.Info().Name,
-		InvocationID:      baseInvocation.InvocationID,
-		Branch:            baseInvocation.Branch,
-		Session:           baseInvocation.Session,
-		Message:           baseInvocation.Message,
-		EventCompletionCh: baseInvocation.EventCompletionCh,
-		RunOptions:        baseInvocation.RunOptions,
-		ArtifactService:   baseInvocation.ArtifactService,
+		Agent:           branchAgent,
+		AgentName:       branchAgent.Info().Name,
+		InvocationID:    inv.InvocationID,
+		Branch:          inv.Branch,
+		Session:         inv.Session,
+		Message:         inv.Message,
+		RunOptions:      inv.RunOptions,
+		ArtifactService: inv.ArtifactService,
+		noticeMu:        inv.noticeMu,
+		noticeChanMap:   inv.noticeChanMap,
 	}
 
 	return &branchInvocation
+}
+
+func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	if ch, ok := inv.noticeChanMap[key]; ok {
+		return ch
+	}
+
+	ch := make(chan any)
+	inv.noticeChanMap[key] = ch
+
+	return ch
+}
+
+// NoticeCompletion send completion notice to waiting task
+func (inv *Invocation) NoticeCompletion(ctx context.Context, key string) error {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	ch, ok := inv.noticeChanMap[key]
+	if !ok {
+		return fmt.Errorf("notice channel not found for %s.", key)
+	}
+	close(ch)
+	delete(inv.noticeChanMap, key)
+
+	return nil
 }

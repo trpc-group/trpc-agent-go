@@ -215,8 +215,6 @@ type Invocation struct {
 	Model model.Model
 	// Message 是用户发送给 Agent 的具体内容
 	Message model.Message
-	// EventCompletionCh 用于在事件写入会话时发出信号
-	EventCompletionCh <-chan string
 	// RunOptions 是 Run 方法的选项配置
 	RunOptions RunOptions
 	// TransferInfo 支持 Agent 之间的控制权转移
@@ -227,6 +225,10 @@ type Invocation struct {
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks 允许在工具调用的不同阶段插入自定义逻辑
 	ToolCallbacks *tool.ToolCallbacks
+
+    // notice
+	noticeChanMap map[string]chan any
+	noticeMu      *sync.Mutex
 }
 ```
 

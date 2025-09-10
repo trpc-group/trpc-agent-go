@@ -159,18 +159,8 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			subInv := &agent.Invocation{
-				Agent:             at.agent,
-				AgentName:         at.agent.Info().Name,
-				InvocationID:      parentInv.InvocationID,
-				Branch:            parentInv.Branch,
-				EndInvocation:     false,
-				Session:           parentInv.Session,
-				Message:           message,
-				EventCompletionCh: parentInv.EventCompletionCh,
-				RunOptions:        parentInv.RunOptions,
-				ArtifactService:   parentInv.ArtifactService,
-			}
+			subInv := parentInv.CreateBranchInvocation(at.agent)
+			subInv.Message = message
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)
 			if err != nil {

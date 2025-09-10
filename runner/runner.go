@@ -150,21 +150,15 @@ func (r *runner) Run(
 	}
 
 	// Create invocation.
-	eventCompletionCh := make(chan string)
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
-	invocation := &agent.Invocation{
-		Agent:             r.agent,
-		Session:           sess,
-		InvocationID:      invocationID,
-		EndInvocation:     false,
-		Message:           message,
-		RunOptions:        ro,
-		EventCompletionCh: eventCompletionCh,
-		ArtifactService:   r.artifactService,
-	}
+	invocation := agent.NewInvocation(invocationID, sess)
+	invocation.Agent = r.agent
+	invocation.Message = message
+	invocation.RunOptions = ro
+	invocation.ArtifactService = r.artifactService
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -194,7 +188,7 @@ func (r *runner) Run(
 			}
 
 			if agentEvent.RequiresCompletion {
-				eventCompletionCh <- agentEvent.CompletionID
+				invocation.NoticeCompletion(ctx, agentEvent.CompletionID)
 			}
 
 			// Forward the event to the output channel.
