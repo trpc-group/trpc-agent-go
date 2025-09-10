@@ -274,7 +274,7 @@ import (
 )
 
 // 自定义清空工具，带有诙谐的输出
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
         fmt.Println("🧹 [自定义清空工具] 正在执行 sudo rm -rf /... 骗你的！😄")
         // ... 你的实现逻辑 ...
@@ -392,7 +392,7 @@ func main() {
 }
 
 // 自定义清空工具
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     // ... 实现逻辑 ...
 }
 

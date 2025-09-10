@@ -296,21 +296,21 @@ import (
 )
 
 // Custom clear tool with enhanced logging.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-    clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
-        fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
-        // ... implementation ...
-        return toolmemory.ClearMemoryResponse{
-            Success: true,
-            Message: "🎉 All memories cleared successfully with custom magic! ✨",
-        }, nil
-    }
+func customClearMemoryTool() tool.Tool {
+	clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
+		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
+		// ... implementation ...
+		return toolmemory.ClearMemoryResponse{
+			Success: true,
+			Message: "🎉 All memories cleared successfully with custom magic! ✨",
+		}, nil
+	}
 
-    return function.NewFunctionTool(
-        clearFunc,
-        function.WithName(memory.ClearToolName),
-        function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
-    )
+	return function.NewFunctionTool(
+		clearFunc,
+		function.WithName(memory.ClearToolName),
+		function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
+	)
 }
 
 // Use custom tool
@@ -335,17 +335,17 @@ if err != nil {
 Custom tools use the `ToolCreator` pattern to avoid circular dependencies:
 
 ```go
-type ToolCreator func(memory.Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Example custom tool
-func myCustomAddTool(memoryService memory.Service) tool.Tool {
-    // Implementation that uses memoryService
-    return function.NewFunctionTool(/* ... */)
+func myCustomAddTool() tool.Tool {
+	// Implementation that gets memory service from context
+	return function.NewFunctionTool(/* ... */)
 }
 
 // Register custom tool
 memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithCustomTool(memory.AddToolName, myCustomAddTool),
+	memoryinmemory.WithCustomTool(memory.AddToolName, myCustomAddTool),
 )
 ```
 
@@ -536,13 +536,13 @@ Custom tools use a factory pattern to avoid circular dependencies:
 
 ```go
 // ToolCreator type for creating tools
-type ToolCreator func(memory.Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Default tool creators
 var defaultEnabledTools = map[string]ToolCreator{
-    memory.AddToolName:    toolmemory.NewAddMemoryTool,
-    memory.UpdateToolName: toolmemory.NewUpdateMemoryTool,
-    // ... other tools
+	memory.AddToolName:    toolmemory.NewAddTool,
+	memory.UpdateToolName: toolmemory.NewUpdateTool,
+	// ... other tools
 }
 
 // Custom tool registration
@@ -566,21 +566,21 @@ You can override any default tool with a custom implementation:
 
 ```go
 // Custom add tool with enhanced logging
-func customAddMemoryTool(memoryService memory.Service) tool.Tool {
-    addFunc := func(ctx context.Context, req toolmemory.AddMemoryRequest) (toolmemory.AddMemoryResponse, error) {
-        fmt.Println("📝 [Custom Add Tool] Adding memory with special care... 💖")
-        // ... implementation ...
-        return toolmemory.AddMemoryResponse{
-            Success: true,
-            Message: "💖 Memory added with extra love! 💖",
-        }, nil
-    }
+func customAddMemoryTool() tool.Tool {
+	addFunc := func(ctx context.Context, req toolmemory.AddMemoryRequest) (toolmemory.AddMemoryResponse, error) {
+		fmt.Println("📝 [Custom Add Tool] Adding memory with special care... 💖")
+		// ... implementation ...
+		return toolmemory.AddMemoryResponse{
+			Success: true,
+			Message: "💖 Memory added with extra love! 💖",
+		}, nil
+	}
 
-    return function.NewFunctionTool(
-        addFunc,
-        function.WithName(memory.AddToolName),
-        function.WithDescription("📝 Custom add tool: Add memories with extra care and love! 💖"),
-    )
+	return function.NewFunctionTool(
+		addFunc,
+		function.WithName(memory.AddToolName),
+		function.WithDescription("📝 Custom add tool: Add memories with extra care and love! 💖"),
+	)
 }
 ```
 

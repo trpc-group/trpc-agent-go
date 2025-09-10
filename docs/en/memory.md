@@ -301,7 +301,7 @@ import (
 )
 
 // A custom clear tool with a playful output.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     clearFunc := func(ctx context.Context, _ struct{}) (
         toolmemory.ClearMemoryResponse, error,
     ) {
@@ -440,7 +440,7 @@ func main() {
 }
 
 // Custom clear tool.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     // ... implementation ...
     return nil
 }
