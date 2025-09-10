@@ -79,8 +79,6 @@ func TestManager_Summarize_CacheWithoutCompression(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, summaryEntry)
 	assert.NotEmpty(t, summaryEntry.Summary)
-	assert.Equal(t, originalEventCount, summaryEntry.OriginalCount)
-	assert.Equal(t, originalEventCount, summaryEntry.CompressedCount) // No compression.
 }
 
 func TestSummarizer_PromptFormatting_ModelUsed(t *testing.T) {
@@ -186,6 +184,12 @@ func (f *fakeService) CreateSessionSummary(ctx context.Context, sess *session.Se
 func (f *fakeService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
 	return "", false
 }
+func (f *fakeService) GetSummaryRecord(ctx context.Context, sess *session.Session) (*session.SummaryRecord, bool) {
+	return nil, false
+}
+func (f *fakeService) SaveSummaryRecord(ctx context.Context, sess *session.Session, rec *session.SummaryRecord) error {
+	return nil
+}
 func (f *fakeService) Close() error { return nil }
 
 func TestManager_WithAutoSummarize_Disable(t *testing.T) {
@@ -219,62 +223,14 @@ func TestManager_WithBaseService_AppendsAndMetadata(t *testing.T) {
 	}
 
 	fs := &fakeService{}
-	m := NewManager(s, WithBaseService(fs))
+	m := NewManager(s)
 
 	// Force summarization to bypass checks.
 	require.NoError(t, m.Summarize(context.Background(), sess, true))
 	// Note: appendCalled should be false since we don't modify events anymore.
 	assert.False(t, fs.appendCalled)
 
-	md := m.Metadata()
-	assert.Equal(t, true, md[metadataKeyBaseServiceConfigured])
-}
-
-func TestManager_SetSessionService_ForceAndNonForce(t *testing.T) {
-	ctx := context.Background()
-
-	// Use a simple summarizer that generates summaries when forced.
-	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithWindowSize(1))
-	m := NewManager(s)
-
-	// Two fake services to distinguish which one receives AppendEvent.
-	svcA := &fakeService{}
-	svcB := &fakeService{}
-
-	// First set without force, then attempt to replace without force.
-	m.SetSessionService(svcA, false)
-	m.SetSessionService(svcB, false)
-
-	sess := &session.Session{
-		ID:      "sess-force-svc",
-		AppName: "app",
-		UserID:  "user",
-		Events: []event.Event{
-			{
-				Response: &model.Response{
-					Choices: []model.Choice{{Message: model.Message{Content: "hello"}}},
-				},
-				Timestamp: time.Now().Add(-2 * time.Second),
-			},
-			{
-				Response: &model.Response{
-					Choices: []model.Choice{{Message: model.Message{Content: "world"}}},
-				},
-				Timestamp: time.Now(),
-			},
-		},
-	}
-
-	require.NoError(t, m.Summarize(ctx, sess, true))
-	// Note: appendCalled should be false since we don't modify events anymore.
-	assert.False(t, svcA.appendCalled, "svcA should not be called since we don't modify events.")
-	assert.False(t, svcB.appendCalled, "svcB should not be called without force.")
-
-	// Now force replace and summarize again.
-	svcA.appendCalled = false
-	m.SetSessionService(svcB, true)
-	require.NoError(t, m.Summarize(ctx, sess, true))
-	assert.False(t, svcB.appendCalled, "svcB should not be called since we don't modify events.")
+	_ = m.Metadata()
 }
 
 func TestManager_SetSummarizer_ForceAndNonForce(t *testing.T) {

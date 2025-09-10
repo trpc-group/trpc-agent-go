@@ -32,6 +32,7 @@ import (
 var (
 	flagModel  = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
 	flagWindow = flag.Int("window", 50, "Event window size for summarization input")
+	flagEvents = flag.Int("events", 1, "Event count threshold to trigger summarization")
 )
 
 func main() {
@@ -66,7 +67,7 @@ func (c *summaryChat) run() error {
 	return c.startChat(ctx)
 }
 
-// setup constructs model, summarizer manager, session service and runner.
+// setup constructs the model, summarizer manager, session service, and runner.
 func (c *summaryChat) setup(_ context.Context) error {
 	// Model used for both chat and summarization.
 	llm := openai.New(c.modelName)
@@ -76,7 +77,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 		llm,
 		summary.WithWindowSize(c.window),
 		summary.WithChecksAny([]summary.Checker{
-			summary.SetEventThreshold(1),
+			summary.SetEventThreshold(*flagEvents),
 		}),
 	)
 	mgr := summary.NewManager(sum)
@@ -85,7 +86,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	sessService := inmemory.NewSessionService(inmemory.WithSummarizerManager(mgr))
 	c.sessionService = sessService
 
-	// Agent and runner (非流式，输出简洁).
+	// Agent and runner (non-streaming for concise output).
 	ag := llmagent.New(
 		"summary-demo-agent",
 		llmagent.WithModel(llm),
@@ -98,8 +99,8 @@ func (c *summaryChat) setup(_ context.Context) error {
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("summary-session-%d", time.Now().Unix())
 
-	fmt.Printf("\n📚 Session Summarization Demo\nModel: %s\nService: inmemory\nWindow: %d\nSessionID: %s\n\n",
-		c.modelName, c.window, c.sessionID)
+	fmt.Printf("\n📚 Session Summarization Demo\nModel: %s\nService: inmemory\nWindow: %d\nEventThreshold: %d\nSessionID: %s\n\n",
+		c.modelName, c.window, *flagEvents, c.sessionID)
 	fmt.Println("Type '/exit' to end. Each turn will trigger LLM summarization and print the latest summary.")
 
 	return nil
@@ -118,7 +119,7 @@ func (c *summaryChat) startChat(ctx context.Context) error {
 			continue
 		}
 		if strings.EqualFold(userInput, "/exit") {
-			fmt.Println("👋 Bye")
+			fmt.Println("👋 Bye.")
 			return nil
 		}
 
@@ -132,7 +133,7 @@ func (c *summaryChat) startChat(ctx context.Context) error {
 	return nil
 }
 
-// processMessage handles one message: run the agent, print answer, then create/print summary.
+// processMessage handles one message: run the agent, print the answer, then create and print the summary.
 func (c *summaryChat) processMessage(ctx context.Context, userMessage string) error {
 	msg := model.NewUserMessage(userMessage)
 	evtCh, err := c.runner.Run(ctx, c.userID, c.sessionID, msg)
@@ -143,7 +144,7 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 	final := c.consumeResponse(evtCh)
 	fmt.Printf("🤖 Assistant: %s\n", strings.TrimSpace(final))
 
-	// Load session and trigger summarization (non-force; checks decide).
+	// Load the session and trigger summarization (non-force; checks decide).
 	sess, err := c.sessionService.GetSession(ctx, session.Key{AppName: c.app, UserID: c.userID, SessionID: c.sessionID})
 	if err != nil || sess == nil {
 		fmt.Printf("⚠️ load session failed: %v\n", err)
@@ -157,12 +158,12 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 	if text, ok := c.sessionService.GetSessionSummaryText(ctx, sess); ok && text != "" {
 		fmt.Printf("📝 Summary:\n%s\n\n", text)
 	} else {
-		fmt.Println("📝 Summary: <empty>")
+		fmt.Println("📝 Summary: <empty>.")
 	}
 	return nil
 }
 
-// consumeResponse reads the event stream and returns final assistant content.
+// consumeResponse reads the event stream and returns the final assistant content.
 func (c *summaryChat) consumeResponse(evtCh <-chan *event.Event) string {
 	var final string
 	for e := range evtCh {
@@ -184,5 +185,5 @@ func (c *summaryChat) consumeResponse(evtCh <-chan *event.Event) string {
 	return final
 }
 
-// Helper
+// Helper.
 func intPtr(i int) *int { return &i }

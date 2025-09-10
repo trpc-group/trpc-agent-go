@@ -23,7 +23,7 @@ import (
 
 func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 	t.Run("OR logic triggers when any condition true", func(t *testing.T) {
-		checks := []Checker{SetTokenThreshold(10000), SetEventThreshold(3)}
+		checks := []Checker{checkTokenThreshold(10000), checkEventThreshold(3)}
 		s := NewSummarizer(&fakeModel{}, WithChecksAny(checks))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
@@ -33,7 +33,7 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 	})
 
 	t.Run("ALL logic fails when one condition false", func(t *testing.T) {
-		checks := []Checker{SetEventThreshold(100), SetTimeThreshold(24 * time.Hour)}
+		checks := []Checker{checkEventThreshold(100), checkTimeThreshold(24 * time.Hour)}
 		s := NewSummarizer(&fakeModel{}, WithChecksAll(checks))
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
 		assert.False(t, s.ShouldSummarize(sess))
@@ -165,7 +165,7 @@ func TestSessionSummarizer_Metadata(t *testing.T) {
 	md := s.Metadata()
 	assert.Equal(t, "fake", md[metadataKeyModelName])
 	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
-	assert.Equal(t, 2, md[metadataKeyKeepRecentCount])
+	assert.Equal(t, 2, md[metadataKeyWindowSize])
 	assert.GreaterOrEqual(t, md[metadataKeyCheckFunctions].(int), 1)
 }
 

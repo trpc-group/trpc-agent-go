@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -33,8 +34,6 @@ const (
 	// summary state hash fields.
 	redisSummaryTextField      = "summary_text"
 	redisSummaryUpdatedAtField = "summary_updated_at"
-	// number of most recent events to include in simple summary if no summarizer wired.
-	defaultRedisSummaryWindowEvents = 50
 )
 
 // SessionState is the state of a session.
@@ -402,36 +401,35 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return err
 	}
 
-	// Prefer LLM summarizer if injected: fetch full session to pass to summarizer.
-	if s.opts.summarizerManager != nil {
-		fullSess, err := s.getSession(ctx, key, 0, time.Time{})
-		if err != nil {
-			return err
-		}
-		if fullSess == nil {
-			return fmt.Errorf("session not found: %s", key.SessionID)
-		}
-		if err := s.opts.summarizerManager.Summarize(ctx, fullSess, force); err != nil {
-			return err
-		}
+	// If no summarizer manager configured, warn and no-op.
+	if s.opts.summarizerManager == nil {
+		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		return nil
 	}
 
-	// Build or read summary text for persistence.
-	var summaryText string
-	if s.opts.summarizerManager != nil {
-		if summary, err := s.opts.summarizerManager.GetSummary(&session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID}); err == nil && summary != nil {
-			summaryText = summary.Summary
-		}
+	fullSess, err := s.getSession(ctx, key, 0, time.Time{})
+	if err != nil {
+		return err
 	}
-	if summaryText == "" {
-		// Fallback: derive from recent events to avoid empty summary.
-		events, err := s.getEventsList(ctx, []session.Key{key}, defaultRedisSummaryWindowEvents, time.Time{})
-		if err != nil {
-			return fmt.Errorf("get events for summary failed: %w", err)
-		}
-		if len(events) > 0 {
-			summaryText = buildRedisSimpleSummary(events[0])
-		}
+	if fullSess == nil {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+
+	return s.summarizeAndPersist(ctx, key, fullSess, force)
+}
+
+// summarizeAndPersist runs the summarizer and persists the summary text into Redis state if available.
+func (s *Service) summarizeAndPersist(ctx context.Context, key session.Key, fullSess *session.Session, force bool) error {
+	if err := s.opts.summarizerManager.Summarize(ctx, fullSess, force); err != nil {
+		return fmt.Errorf("failed to create summary: %w", err)
+	}
+	summary, err := s.opts.summarizerManager.GetSummary(&session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID})
+	if err != nil {
+		return fmt.Errorf("get summary failed: %w", err)
+	}
+	if summary == nil || summary.Summary == "" {
+		log.Warnf("no summary text found for session %s", key.SessionID)
+		return nil
 	}
 
 	sessKey := getSessionStateKey(key)
@@ -446,7 +444,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
-	sessState.State[redisSummaryTextField] = []byte(summaryText)
+	sessState.State[redisSummaryTextField] = []byte(summary.Summary)
 	sessState.State[redisSummaryUpdatedAtField] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
 	sessState.UpdatedAt = time.Now()
 
@@ -496,6 +494,102 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return "", false
 	}
 	return string(val), true
+}
+
+// GetSummaryRecord reconstructs a summary record from manager cache or Redis state.
+func (s *Service) GetSummaryRecord(ctx context.Context, sess *session.Session) (*session.SummaryRecord, bool) {
+	if sess == nil {
+		return nil, false
+	}
+	// Prefer manager cache for text only; records are owned by service.
+	if s.opts.summarizerManager != nil {
+		if sum, err := s.opts.summarizerManager.GetSummary(sess); err == nil && sum != nil && sum.Summary != "" {
+			rec := &session.SummaryRecord{
+				SessionID:         sess.ID,
+				Text:              sum.Summary,
+				Version:           sum.CreatedAt.UnixNano(),
+				CreatedAt:         sum.CreatedAt,
+				CoveredEventCount: len(sess.Events),
+				Metadata:          sum.Metadata,
+			}
+			return rec, true
+		}
+	}
+	// Fallback: read from Redis state
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, false
+	}
+	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	if err != nil {
+		return nil, false
+	}
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return nil, false
+	}
+	if sessState.State == nil {
+		return nil, false
+	}
+	val, ok := sessState.State[redisSummaryTextField]
+	if !ok {
+		return nil, false
+	}
+	rec := &session.SummaryRecord{
+		SessionID:         sess.ID,
+		Text:              string(val),
+		Version:           time.Now().UnixNano(),
+		CreatedAt:         time.Now(),
+		CoveredEventCount: len(sess.Events),
+	}
+	return rec, true
+}
+
+// SaveSummaryRecord stores the summary record into Redis state and mirrors to manager cache.
+func (s *Service) SaveSummaryRecord(ctx context.Context, sess *session.Session, rec *session.SummaryRecord) error {
+	if sess == nil || rec == nil {
+		return fmt.Errorf("nil session or record")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	sessKey := getSessionStateKey(key)
+	stateBytes, err := s.redisClient.HGet(ctx, sessKey, key.SessionID).Bytes()
+	if err != nil {
+		return fmt.Errorf("get session state failed: %w", err)
+	}
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return fmt.Errorf("unmarshal session state failed: %w", err)
+	}
+	if sessState.State == nil {
+		sessState.State = make(session.StateMap)
+	}
+	sessState.State[redisSummaryTextField] = []byte(rec.Text)
+	sessState.State[redisSummaryUpdatedAtField] = []byte(rec.CreatedAt.UTC().Format(time.RFC3339Nano))
+	sessState.UpdatedAt = time.Now()
+
+	updatedStateBytes, err := json.Marshal(sessState)
+	if err != nil {
+		return fmt.Errorf("marshal session state failed: %w", err)
+	}
+	pipe := s.redisClient.TxPipeline()
+	pipe.HSet(ctx, sessKey, key.SessionID, string(updatedStateBytes))
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, sessKey, s.sessionTTL)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("store summary record failed: %w", err)
+	}
+	// Mirror into manager cache if available (text only).
+	if s.opts.summarizerManager != nil {
+		// Best-effort: update cache to keep fast path hot.
+		if err := s.opts.summarizerManager.Summarize(ctx, sess, true); err != nil {
+			return fmt.Errorf("failed to refresh cache: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close closes the service.

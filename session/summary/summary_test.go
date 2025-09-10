@@ -17,17 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestSessionSummary_CompressionRatio(t *testing.T) {
-	ss := &SessionSummary{OriginalCount: 10, CompressedCount: 3}
-	assert.InDelta(t, 70.0, ss.CompressionRatio(), 0.001)
-
-	ss = &SessionSummary{OriginalCount: 0, CompressedCount: 0}
-	assert.Equal(t, 0.0, ss.CompressionRatio())
-
-	ss = &SessionSummary{OriginalCount: 5, CompressedCount: 5}
-	assert.Equal(t, 0.0, ss.CompressionRatio())
-}
-
 func TestBuildPromptMessages(t *testing.T) {
 	t.Run("with summary and anchor", func(t *testing.T) {
 		sess := &session.Session{
@@ -39,7 +28,7 @@ func TestBuildPromptMessages(t *testing.T) {
 			},
 		}
 
-		messages := BuildPromptMessages(sess, "Previous conversation was about greetings", "event2", 2)
+		messages := buildPromptMessages(sess, "Previous conversation was about greetings", "event2", 2)
 
 		// Should have system message + 1 recent event after anchor.
 		assert.Len(t, messages, 2)
@@ -58,7 +47,7 @@ func TestBuildPromptMessages(t *testing.T) {
 			},
 		}
 
-		messages := BuildPromptMessages(sess, "", "", 1)
+		messages := buildPromptMessages(sess, "", "", 1)
 
 		// Should have only 1 recent event.
 		assert.Len(t, messages, 1)
@@ -77,7 +66,7 @@ func TestBuildPromptMessages(t *testing.T) {
 			},
 		}
 
-		messages := BuildPromptMessages(sess, "Summary", "", 2)
+		messages := buildPromptMessages(sess, "Summary", "", 2)
 
 		// Should have system message + 2 most recent events.
 		assert.Len(t, messages, 3)

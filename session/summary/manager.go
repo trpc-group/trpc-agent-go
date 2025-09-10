@@ -21,7 +21,6 @@ import (
 // summarizerManager implements the SummarizerManager interface.
 type summarizerManager struct {
 	mu            sync.RWMutex
-	baseService   session.Service
 	summarizer    SessionSummarizer
 	cache         map[string]map[string]map[string]*SessionSummary // app -> user -> sessionID -> summary
 	autoSummarize bool
@@ -40,16 +39,6 @@ func NewManager(summarizer SessionSummarizer, opts ...ManagerOption) SummarizerM
 	}
 
 	return m
-}
-
-// SetSessionService sets the session service to use.
-func (m *summarizerManager) SetSessionService(service session.Service, force bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.baseService == nil || force {
-		m.baseService = service
-	}
 }
 
 // SetSummarizer sets the summarizer to use.
@@ -78,7 +67,6 @@ func (m *summarizerManager) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	// Generate summary without modifying events.
-	originalEventCount := len(sess.Events)
 	summaryText, err := m.summarizer.Summarize(ctx, sess, 0) // Use default window size.
 	if err != nil {
 		return fmt.Errorf("failed to create summary: %w", err)
@@ -96,17 +84,11 @@ func (m *summarizerManager) Summarize(ctx context.Context, sess *session.Session
 		}
 
 		m.cache[appName][userID][sess.ID] = &SessionSummary{
-			ID:              sess.ID,
-			Summary:         summaryText,
-			OriginalCount:   originalEventCount,
-			CompressedCount: originalEventCount, // No compression, events remain unchanged.
-			CreatedAt:       time.Now(),
-			Metadata: map[string]any{
-				metadataKeyCompressionRatio: 0.0, // No compression in new model.
-			},
+			ID:        sess.ID,
+			Summary:   summaryText,
+			CreatedAt: time.Now(),
+			Metadata:  map[string]any{},
 		}
-
-		// Note: Events are not modified - summary is cached separately.
 	}
 
 	return nil
@@ -149,7 +131,6 @@ func (m *summarizerManager) Metadata() map[string]any {
 
 	metadata := m.summarizer.Metadata()
 	metadata[metadataKeyAutoSummarize] = m.autoSummarize
-	metadata[metadataKeyBaseServiceConfigured] = m.baseService != nil
 
 	// Add cache statistics.
 	totalSummaries := 0
@@ -173,69 +154,4 @@ func (m *summarizerManager) ShouldSummarize(sess *session.Session) bool {
 	}
 
 	return m.summarizer.ShouldSummarize(sess)
-}
-
-// GetSessionSummaryRecord retrieves a persistent summary record for a session.
-func (m *summarizerManager) GetSessionSummaryRecord(sess *session.Session) (*SessionSummaryRecord, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	appName := sess.AppName
-	userID := sess.UserID
-
-	if m.cache[appName] == nil || m.cache[appName][userID] == nil {
-		return nil, false
-	}
-
-	summary, exists := m.cache[appName][userID][sess.ID]
-	if !exists {
-		return nil, false
-	}
-
-	// Convert SessionSummary to SessionSummaryRecord.
-	record := &SessionSummaryRecord{
-		SessionID:         summary.ID,
-		Text:              summary.Summary,
-		Version:           time.Now().UnixNano(), // Simple versioning for now.
-		CreatedAt:         summary.CreatedAt,
-		ModelName:         "unknown", // Would be set by the summarizer.
-		PromptVersion:     "default",
-		AnchorEventID:     "", // Would be set based on last event.
-		CoveredEventCount: summary.OriginalCount,
-		InputTokens:       0,  // Would be calculated.
-		OutputTokens:      0,  // Would be calculated.
-		InputHash:         "", // Would be calculated.
-		Metadata:          summary.Metadata,
-	}
-
-	return record, true
-}
-
-// SaveSessionSummaryRecord saves a persistent summary record.
-func (m *summarizerManager) SaveSessionSummaryRecord(sess *session.Session, record *SessionSummaryRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	appName := sess.AppName
-	userID := sess.UserID
-
-	if m.cache[appName] == nil {
-		m.cache[appName] = make(map[string]map[string]*SessionSummary)
-	}
-	if m.cache[appName][userID] == nil {
-		m.cache[appName][userID] = make(map[string]*SessionSummary)
-	}
-
-	// Convert SessionSummaryRecord to SessionSummary for caching.
-	summary := &SessionSummary{
-		ID:              record.SessionID,
-		Summary:         record.Text,
-		OriginalCount:   record.CoveredEventCount,
-		CompressedCount: record.CoveredEventCount, // No compression.
-		CreatedAt:       record.CreatedAt,
-		Metadata:        record.Metadata,
-	}
-
-	m.cache[appName][userID][sess.ID] = summary
-	return nil
 }

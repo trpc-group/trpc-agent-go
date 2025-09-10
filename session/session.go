@@ -41,6 +41,34 @@ type Session struct {
 	CreatedAt time.Time     `json:"createdAt"` // creation time
 }
 
+// SummaryRecord represents a persistent summary record with full metadata.
+type SummaryRecord struct {
+	// SessionID is the ID of the session.
+	SessionID string `json:"session_id"`
+	// Text is the summary text.
+	Text string `json:"text"`
+	// Version is the version number for optimistic locking.
+	Version int64 `json:"version"`
+	// CreatedAt is the time the summary was created.
+	CreatedAt time.Time `json:"created_at"`
+	// ModelName is the name of the model used for summarization.
+	ModelName string `json:"model_name"`
+	// PromptVersion is the version of the prompt template used.
+	PromptVersion string `json:"prompt_version"`
+	// AnchorEventID is the ID of the last event covered by this summary.
+	AnchorEventID string `json:"anchor_event_id"`
+	// CoveredEventCount is the number of events covered by this summary.
+	CoveredEventCount int `json:"covered_event_count"`
+	// InputTokens is the number of input tokens used.
+	InputTokens int `json:"input_tokens"`
+	// OutputTokens is the number of output tokens generated.
+	OutputTokens int `json:"output_tokens"`
+	// InputHash is the hash of the input for deduplication.
+	InputHash string `json:"input_hash"`
+	// Metadata contains additional metadata.
+	Metadata map[string]any `json:"metadata"`
+}
+
 // Options is the options for getting a session.
 type Options struct {
 	EventNum  int       // number of recent events
@@ -107,6 +135,12 @@ type Service interface {
 	// GetSessionSummaryText returns the latest summary text for the session if any.
 	// The boolean indicates whether a summary exists.
 	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
+
+	// Optional: read a full persistent summary record if available.
+	GetSummaryRecord(ctx context.Context, sess *Session) (*SummaryRecord, bool)
+
+	// Optional: save a full persistent summary record if supported by backend.
+	SaveSummaryRecord(ctx context.Context, sess *Session, rec *SummaryRecord) error
 
 	// Close closes the service.
 	Close() error

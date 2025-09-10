@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -30,8 +31,6 @@ const (
 	// summary state keys.
 	summaryTextKey      = "summary_text"
 	summaryUpdatedAtKey = "summary_updated_at"
-	// number of most recent events to include in simple summary.
-	defaultSummaryWindowEvents = 50
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -666,6 +665,12 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return err
 	}
 
+	// If no summarizer manager configured, warn and no-op.
+	if s.opts.summarizerManager == nil {
+		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		return nil
+	}
+
 	app := s.getOrCreateAppSessions(key.AppName)
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -683,32 +688,35 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
 
-	// Prefer LLM summarizer if injected.
-	if s.opts.summarizerManager != nil {
-		if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
-			return err
-		}
-		// Try to fetch text from manager cache for persistence.
-		if summary, err := s.opts.summarizerManager.GetSummary(storedSession); err == nil && summary != nil {
-			if storedSession.State == nil {
-				storedSession.State = make(session.StateMap)
-			}
-			storedSession.State[summaryTextKey] = []byte(summary.Summary)
-			storedSession.State[summaryUpdatedAtKey] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
-		}
-	} else {
-		// Fallback: simple concatenation summary.
-		summary := buildSimpleSummary(storedSession.Events, defaultSummaryWindowEvents)
-		if storedSession.State == nil {
-			storedSession.State = make(session.StateMap)
-		}
-		storedSession.State[summaryTextKey] = []byte(summary)
-		storedSession.State[summaryUpdatedAtKey] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
+	if err := s.summarizeAndPersist(ctx, storedSession, force); err != nil {
+		return err
 	}
 
 	storedSession.UpdatedAt = time.Now()
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	return nil
+}
+
+// summarizeAndPersist runs the summarizer and, if a summary is available, persists it into session state.
+func (s *SessionService) summarizeAndPersist(ctx context.Context, storedSession *session.Session, force bool) error {
+	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
+		return fmt.Errorf("failed to create summary: %w", err)
+	}
+	sum, err := s.opts.summarizerManager.GetSummary(storedSession)
+	if err != nil {
+		return fmt.Errorf("get summary failed: %w", err)
+	}
+	if sum == nil || sum.Summary == "" {
+		log.Warnf("no summary text found for session %s", storedSession.ID)
+		return nil
+	}
+	if storedSession.State == nil {
+		storedSession.State = make(session.StateMap)
+	}
+	now := time.Now().UTC()
+	storedSession.State[summaryTextKey] = []byte(sum.Summary)
+	storedSession.State[summaryUpdatedAtKey] = []byte(now.Format(time.RFC3339Nano))
 	return nil
 }
 
@@ -751,6 +759,80 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 		return "", false
 	}
 	return string(val), true
+}
+
+// GetSummaryRecord reconstructs a summary record from cache/state.
+func (s *SessionService) GetSummaryRecord(ctx context.Context, sess *session.Session) (*session.SummaryRecord, bool) {
+	if sess == nil {
+		return nil, false
+	}
+	if s.opts.summarizerManager != nil {
+		if sum, err := s.opts.summarizerManager.GetSummary(sess); err == nil && sum != nil && sum.Summary != "" {
+			rec := &session.SummaryRecord{
+				SessionID:         sess.ID,
+				Text:              sum.Summary,
+				Version:           sum.CreatedAt.UnixNano(),
+				CreatedAt:         sum.CreatedAt,
+				CoveredEventCount: len(sess.Events),
+				Metadata:          sum.Metadata,
+			}
+			return rec, true
+		}
+	}
+	if sess.State != nil {
+		if v, ok := sess.State[summaryTextKey]; ok {
+			rec := &session.SummaryRecord{
+				SessionID:         sess.ID,
+				Text:              string(v),
+				Version:           time.Now().UnixNano(),
+				CreatedAt:         time.Now(),
+				CoveredEventCount: len(sess.Events),
+			}
+			return rec, true
+		}
+	}
+	return nil, false
+}
+
+// SaveSummaryRecord stores the summary record into session state and mirrors to manager cache.
+func (s *SessionService) SaveSummaryRecord(ctx context.Context, sess *session.Session, rec *session.SummaryRecord) error {
+	if sess == nil || rec == nil {
+		return fmt.Errorf("nil session or record")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	app := s.getOrCreateAppSessions(key.AppName)
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+	sWithTTL, ok := userSessions[key.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	stored := getValidSession(sWithTTL)
+	if stored == nil {
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	if stored.State == nil {
+		stored.State = make(session.StateMap)
+	}
+	stored.State[summaryTextKey] = []byte(rec.Text)
+	stored.State[summaryUpdatedAtKey] = []byte(rec.CreatedAt.UTC().Format(time.RFC3339Nano))
+	stored.UpdatedAt = time.Now()
+	sWithTTL.session = stored
+	sWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	if s.opts.summarizerManager != nil {
+		// Best-effort: refresh cache by forcing a summarize if needed.
+		if err := s.opts.summarizerManager.Summarize(ctx, stored, true); err != nil {
+			return fmt.Errorf("failed to refresh cache: %w", err)
+		}
+	}
+	return nil
 }
 
 // updateStoredSession updates the stored session with the given event.
@@ -797,36 +879,4 @@ func mergeState(appState, userState session.StateMap, sess *session.Session) *se
 		sess.State[session.StateUserPrefix+k] = v
 	}
 	return sess
-}
-
-// buildSimpleSummary concatenates recent events into a compact summary text.
-func buildSimpleSummary(events []event.Event, window int) string {
-	if len(events) == 0 {
-		return ""
-	}
-	start := 0
-	if window > 0 && len(events) > window {
-		start = len(events) - window
-	}
-	var b strings.Builder
-	for i := start; i < len(events); i++ {
-		content := ""
-		if events[i].Response != nil && len(events[i].Response.Choices) > 0 {
-			content = strings.TrimSpace(events[i].Response.Choices[0].Message.Content)
-		}
-		if content == "" {
-			continue
-		}
-		author := events[i].Author
-		if author == "" {
-			author = "user"
-		}
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(author)
-		b.WriteString(": ")
-		b.WriteString(content)
-	}
-	return b.String()
 }

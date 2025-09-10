@@ -10,8 +10,6 @@ package summary
 
 import (
 	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // Option is a function that configures a SessionSummarizer.
@@ -58,21 +56,21 @@ func WithWindowSize(windowSize int) Option {
 // WithTokenThreshold creates a token-based check function.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, SetTokenThreshold(tokenCount))
+		s.checks = append(s.checks, checkTokenThreshold(tokenCount))
 	}
 }
 
 // WithEventThreshold creates an event-count-based check function.
 func WithEventThreshold(eventCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, SetEventThreshold(eventCount))
+		s.checks = append(s.checks, checkEventThreshold(eventCount))
 	}
 }
 
 // WithTimeThreshold creates a time-based check function.
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, SetTimeThreshold(interval))
+		s.checks = append(s.checks, checkTimeThreshold(interval))
 	}
 }
 
@@ -80,7 +78,7 @@ func WithTimeThreshold(interval time.Duration) Option {
 func WithChecksAll(checks []Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = []Checker{SetChecksAll(checks)}
+			s.checks = []Checker{checksAll(checks)}
 		}
 	}
 }
@@ -89,7 +87,7 @@ func WithChecksAll(checks []Checker) Option {
 func WithChecksAny(checks []Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = []Checker{SetChecksAny(checks)}
+			s.checks = []Checker{checksAny(checks)}
 		}
 	}
 }
@@ -101,12 +99,5 @@ type ManagerOption func(*summarizerManager)
 func WithAutoSummarize(enabled bool) ManagerOption {
 	return func(m *summarizerManager) {
 		m.autoSummarize = enabled
-	}
-}
-
-// WithBaseService sets the base session service.
-func WithBaseService(service session.Service) ManagerOption {
-	return func(m *summarizerManager) {
-		m.baseService = service
 	}
 }
