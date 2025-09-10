@@ -122,6 +122,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
+				// Treat context cancellation as graceful termination (common in streaming
+				// pipelines where the client closes the stream after final event).
+				if errors.Is(err, context.Canceled) {
+					log.Debugf("Flow context canceled for agent %s; exiting without error", invocation.AgentName)
+					return
+				}
 				var errorEvent *event.Event
 				if _, ok := agent.AsStopError(err); ok {
 					errorEvent = event.NewErrorEvent(
