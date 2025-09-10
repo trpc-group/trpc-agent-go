@@ -36,9 +36,6 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Build script source dynamically to support custom embedding field.
 	embeddingField := vs.option.embeddingFieldName
-	if embeddingField == "" {
-		embeddingField = defaultFieldEmbedding
-	}
 	scriptSource := fmt.Sprintf("if (doc['%s'].size() > 0) { cosineSimilarity(params.query_vector, '%s') + 1.0 } else { 0.0 }", embeddingField, embeddingField)
 
 	// Create script for cosine similarity using esdsl.
@@ -68,15 +65,9 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 // buildKeywordSearchQuery builds a keyword-based search query.
 func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
 	contentField := vs.option.contentFieldName
-	if contentField == "" {
-		contentField = defaultFieldContent
-	}
 
 	// Create multi_match query using esdsl.
 	nameField := vs.option.nameFieldName
-	if nameField == "" {
-		nameField = defaultFieldName
-	}
 	multiMatchQuery := esdsl.NewMultiMatchQuery(query.Query).
 		Fields(fmt.Sprintf("%s^2", contentField), fmt.Sprintf("%s^1.5", nameField)).
 		Type(textquerytype.Bestfields)
@@ -104,9 +95,6 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Build script with custom embedding field.
 	embeddingField := vs.option.embeddingFieldName
-	if embeddingField == "" {
-		embeddingField = defaultFieldEmbedding
-	}
 	scriptSource := fmt.Sprintf("if (doc['%s'].size() > 0) { cosineSimilarity(params.query_vector, '%s') + 1.0 } else { 0.0 }", embeddingField, embeddingField)
 	script := esdsl.NewScript().
 		Source(esdsl.NewScriptSource().String(scriptSource)).
@@ -119,13 +107,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 	scriptScoreQuery := esdsl.NewScriptScoreQuery(matchAllQuery, script)
 
 	contentField := vs.option.contentFieldName
-	if contentField == "" {
-		contentField = defaultFieldContent
-	}
 	nameField := vs.option.nameFieldName
-	if nameField == "" {
-		nameField = defaultFieldName
-	}
 	multiMatchQuery := esdsl.NewMultiMatchQuery(query.Query).
 		Fields(fmt.Sprintf("%s^2", contentField), fmt.Sprintf("%s^1.5", nameField)).
 		Type(textquerytype.Bestfields)
@@ -160,9 +142,6 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.
 			fieldValues[i] = esdsl.NewFieldValue().String(id)
 		}
 		idField := vs.option.idFieldName
-		if idField == "" {
-			idField = defaultFieldID
-		}
 		termsQuery.AddTermsQuery(idField, esdsl.NewTermsQueryField().FieldValues(fieldValues...))
 		filters = append(filters, termsQuery)
 	}

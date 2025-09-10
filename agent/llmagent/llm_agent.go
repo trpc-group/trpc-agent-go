@@ -393,6 +393,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, orp)
 	}
 
+	responseProcessors = append(responseProcessors, processor.NewFunctionCallResponseProcessor(options.EnableParallelTools))
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()
@@ -401,8 +403,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize:   options.ChannelBufferSize,
-		EnableParallelTools: options.EnableParallelTools,
+		ChannelBufferSize: options.ChannelBufferSize,
 	}
 
 	llmFlow := llmflow.New(

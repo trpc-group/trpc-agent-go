@@ -104,25 +104,10 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Create new invocation for the target agent.
-	targetInvocation := &agent.Invocation{
-		Agent:             targetAgent,
-		AgentName:         targetAgent.Info().Name,
-		InvocationID:      invocation.InvocationID, // Keep same invocation ID for continuity
-		EndInvocation:     transferInfo.EndInvocation,
-		Session:           invocation.Session,
-		Model:             invocation.Model,
-		EventCompletionCh: invocation.EventCompletionCh,
-		RunOptions:        invocation.RunOptions,
-		TransferInfo:      nil, // Clear transfer info for target agent
-		// Preserve additional execution context similar to request-time transfer
-		AgentCallbacks:       invocation.AgentCallbacks,
-		ModelCallbacks:       invocation.ModelCallbacks,
-		ToolCallbacks:        invocation.ToolCallbacks,
-		StructuredOutput:     invocation.StructuredOutput,
-		StructuredOutputType: invocation.StructuredOutputType,
-		ArtifactService:      invocation.ArtifactService,
-		Branch:               invocation.Branch,
-	}
+	targetInvocation := invocation.CreateBranchInvocation(targetAgent)
+
+	targetInvocation.EndInvocation = transferInfo.EndInvocation
+	targetInvocation.Branch = invocation.Branch
 
 	// Set the message for the target agent.
 	if transferInfo.Message != "" {
@@ -130,9 +115,6 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
-	} else {
-		// Use the original message if no specific message for target agent.
-		targetInvocation.Message = invocation.Message
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context
