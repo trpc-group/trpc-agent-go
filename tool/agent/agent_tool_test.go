@@ -163,3 +163,77 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 		t.Error("Expected skip summarization to be true")
 	}
 }
+
+// streamingMockAgent streams a few delta events then a final full message.
+type streamingMockAgent struct {
+	name string
+}
+
+func (m *streamingMockAgent) Run(ctx context.Context, _ *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+	go func() {
+		defer close(ch)
+		// delta 1
+		ch <- &event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: "hello"}}}}}
+		// delta 2
+		ch <- &event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: " world"}}}}}
+		// final full assistant message (should not be forwarded by UI typically)
+		ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ignored full"}}}}}
+	}()
+	return ch, nil
+}
+
+func (m *streamingMockAgent) Tools() []tool.Tool { return nil }
+func (m *streamingMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "streaming mock"}
+}
+func (m *streamingMockAgent) SubAgents() []agent.Agent        { return nil }
+func (m *streamingMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
+	sa := &streamingMockAgent{name: "stream-agent"}
+	at := NewTool(sa, WithStreamInner(true))
+
+	if !at.StreamInner() {
+		t.Fatalf("expected StreamInner to be true")
+	}
+
+	// Invoke stream
+	reader, err := at.StreamableCall(context.Background(), []byte(`{"request":"hi"}`))
+	if err != nil {
+		t.Fatalf("StreamableCall error: %v", err)
+	}
+	defer reader.Close()
+
+	// Expect to receive forwarded event chunks
+	var got []string
+	for i := 0; i < 3; i++ {
+		chunk, err := reader.Recv()
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+		if ev, ok := chunk.Content.(*event.Event); ok {
+			if len(ev.Choices) > 0 {
+				if ev.Choices[0].Delta.Content != "" {
+					got = append(got, ev.Choices[0].Delta.Content)
+				} else if ev.Choices[0].Message.Content != "" {
+					got = append(got, ev.Choices[0].Message.Content)
+				}
+			}
+		} else {
+			t.Fatalf("expected chunk content to be *event.Event, got %T", chunk.Content)
+		}
+	}
+	// We pushed 3 events; delta1, delta2, final full
+	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
+		t.Fatalf("unexpected forwarded contents: %#v", got)
+	}
+}
+
+func TestTool_StreamInner_FlagFalse(t *testing.T) {
+	a := &mockAgent{name: "agent-x", description: "d"}
+	at := NewTool(a, WithStreamInner(false))
+	if at.StreamInner() {
+		t.Fatalf("expected StreamInner to be false")
+	}
+}

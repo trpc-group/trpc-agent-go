@@ -786,7 +786,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	choice, err := f.executeToolCall(ctx, inv, pc, tools, 0)
+	choice, err := f.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 
@@ -820,11 +820,103 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	choice, err := f.executeToolCall(ctx, inv, pc2, tools, 0)
+	choice, err := f.executeToolCall(ctx, inv, pc2, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 	assert.Equal(t, ErrorToolNotFound, choice.Message.Content)
 	assert.Equal(t, "call-404", choice.Message.ToolID)
+}
+
+// mockStreamTool implements tool.StreamableTool for testing partial tool responses.
+type mockStreamTool struct {
+	name   string
+	chunks []any
+}
+
+func (m *mockStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: m.name, Description: "mock stream tool"}
+}
+
+func (m *mockStreamTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	stream := tool.NewStream(8)
+	go func() {
+		defer stream.Writer.Close()
+		for _, c := range m.chunks {
+			if stream.Writer.Send(tool.StreamChunk{Content: c}, nil) {
+				return
+			}
+		}
+	}()
+	return stream.Reader, nil
+}
+
+// Test that newToolCallResponseEvent constructs events via helpers and fills metadata correctly.
+func TestNewToolCallResponseEvent_Constructor(t *testing.T) {
+	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "tester", Branch: "main"}
+	base := event.New(inv.InvocationID, inv.AgentName, event.WithBranch(inv.Branch), event.WithResponse(&model.Response{Model: "unit-model"}))
+	choices := []model.Choice{{Index: 0, Message: model.Message{Role: model.RoleTool, ToolID: "call-1", Content: "ok"}}}
+
+	evt := newToolCallResponseEvent(inv, base, choices)
+
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotEmpty(t, evt.ID)
+	require.Equal(t, inv.InvocationID, evt.InvocationID)
+	require.Equal(t, inv.AgentName, evt.Author)
+	require.Equal(t, inv.Branch, evt.Branch)
+	require.Equal(t, model.ObjectTypeToolResponse, evt.Object)
+	require.Equal(t, "unit-model", evt.Model)
+	require.Len(t, evt.Choices, 1)
+	require.Equal(t, "call-1", evt.Choices[0].Message.ToolID)
+}
+
+// Test that executeStreamableTool emits partial tool.response events to the channel.
+func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-stream", AgentName: "tester", Branch: "b1", Model: &mockModel{}}
+
+	toolCall := model.ToolCall{
+		ID:       "call-xyz",
+		Function: model.FunctionDefinitionParam{Name: "streamer"},
+	}
+
+	st := &mockStreamTool{name: "streamer", chunks: []any{"hello", " world"}}
+	ch := make(chan *event.Event, 4)
+
+	// Call and collect
+	res, err := f.executeStreamableTool(ctx, inv, toolCall, st, ch)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	// merged content should equal concatenation
+	require.Equal(t, "hello world", res.(string))
+
+	// Expect two partial events
+	var evts []*event.Event
+	for i := 0; i < 2; i++ {
+		select {
+		case e := <-ch:
+			evts = append(evts, e)
+		default:
+			// drain synchronously; function sends before return
+			e := <-ch
+			evts = append(evts, e)
+		}
+	}
+
+	require.Len(t, evts, 2)
+	for i, e := range evts {
+		require.NotNil(t, e)
+		require.NotNil(t, e.Response)
+		require.Equal(t, model.ObjectTypeToolResponse, e.Object)
+		require.True(t, e.IsPartial, "event %d should be partial", i)
+		require.False(t, e.Done)
+		require.Equal(t, inv.InvocationID, e.InvocationID)
+		require.Equal(t, inv.AgentName, e.Author)
+		require.Equal(t, inv.Branch, e.Branch)
+		require.Len(t, e.Choices, 1)
+		require.Equal(t, "call-xyz", e.Choices[0].Message.ToolID)
+	}
 }
 
 // --- Test helpers used above ---
@@ -838,4 +930,81 @@ type mockTransferCallableTool struct {
 func (m *mockTransferCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockTransferCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+// prefTool implements both StreamableTool and CallableTool, with a stream
+// preference toggle to validate isStreamable logic.
+type prefTool struct {
+	name        string
+	preferInner bool
+}
+
+func (p *prefTool) Declaration() *tool.Declaration                  { return &tool.Declaration{Name: p.name} }
+func (p *prefTool) StreamInner() bool                               { return p.preferInner }
+func (p *prefTool) Call(ctx context.Context, _ []byte) (any, error) { return "called:" + p.name, nil }
+func (p *prefTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	s := tool.NewStream(2)
+	go func() {
+		defer s.Writer.Close()
+		s.Writer.Send(tool.StreamChunk{Content: "streamed:" + p.name}, nil)
+	}()
+	return s.Reader, nil
+}
+
+// Ensure executeTool respects streamInnerPreference: when false, fallback to callable path.
+func TestExecuteTool_RespectsStreamInnerPreference(t *testing.T) {
+	f := New(nil, nil, Options{})
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-pref", AgentName: "tester", Model: &mockModel{}}
+	toolCall := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "pref"}}
+	ch := make(chan *event.Event, 2)
+
+	// preferInner=false => should call callable path
+	pt := &prefTool{name: "pref", preferInner: false}
+	res, err := f.executeTool(ctx, inv, toolCall, pt, ch)
+	require.NoError(t, err)
+	str, _ := res.(string)
+	require.Equal(t, "called:pref", str)
+	require.Equal(t, 0, len(ch), "should not emit streaming events when inner disabled")
+
+	// preferInner=true => should stream
+	pt.preferInner = true
+	res2, err := f.executeTool(ctx, inv, toolCall, pt, ch)
+	require.NoError(t, err)
+	str2, _ := res2.(string)
+	require.Equal(t, "streamed:pref", str2)
+	// Should have at least one partial tool.response
+	select {
+	case e := <-ch:
+		require.NotNil(t, e)
+		require.Equal(t, model.ObjectTypeToolResponse, e.Object)
+		require.True(t, e.IsPartial)
+	default:
+		t.Fatalf("expected a partial tool.response event when streaming")
+	}
+}
+
+func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *testing.T) {
+	e1 := event.New("inv", "a", event.WithResponse(&model.Response{Model: "m1"}))
+	e2 := event.New("inv", "a", event.WithResponse(&model.Response{Model: "m1"}))
+	e2.Actions = &event.EventActions{SkipSummarization: true}
+
+	merged := mergeParallelToolCallResponseEvents([]*event.Event{e1, e2})
+	require.NotNil(t, merged)
+	require.NotNil(t, merged.Actions)
+	require.True(t, merged.Actions.SkipSummarization)
+}
+
+func TestIsFinalResponse_ToolResponseSkipSummarization(t *testing.T) {
+	f := New(nil, nil, Options{})
+	// tool.response without skip => not final
+	e := event.New("inv", "a", event.WithResponse(&model.Response{Object: model.ObjectTypeToolResponse}))
+	require.False(t, f.isFinalResponse(e))
+	// tool.response with skip => final
+	e2 := event.New("inv", "a", event.WithResponse(&model.Response{Object: model.ObjectTypeToolResponse}))
+	e2.Actions = &event.EventActions{SkipSummarization: true}
+	require.True(t, f.isFinalResponse(e2))
+	// done non-tool => final
+	e3 := event.New("inv", "a", event.WithResponse(&model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: "ok"}}}}))
+	require.True(t, f.isFinalResponse(e3))
 }
