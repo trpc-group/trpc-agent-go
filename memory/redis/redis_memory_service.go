@@ -12,6 +12,7 @@ package redis
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -271,15 +272,15 @@ func (s *Service) Tools() []tool.Tool {
 }
 
 // generateMemoryID generates a memory ID from memory content.
-// Follow the same scheme as the in-memory implementation for consistency.
+// Uses SHA256 to match the in-memory implementation for consistency.
 func generateMemoryID(mem *memory.Memory) string {
-	// Follow the same scheme as the in-memory implementation for consistency.
 	content := fmt.Sprintf("memory:%s", mem.Memory)
 	if len(mem.Topics) > 0 {
 		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
 	}
-	// Lightweight hex encoding of the content bytes to produce a deterministic ID.
-	return fmt.Sprintf("%x", []byte(content))
+	// Use SHA256 to match in-memory implementation for consistency.
+	hash := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", hash)
 }
 
 // getUserMemKey builds the Redis key for a user's memories.

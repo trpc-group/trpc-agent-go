@@ -166,7 +166,7 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID, memoryStr string, topics []string) *memory.Entry {
+func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
@@ -177,11 +177,12 @@ func createMemoryEntry(userID, memoryStr string, topics []string) *memory.Entry 
 	}
 
 	return &memory.Entry{
-		Memory:    memoryObj,
+		ID:        generateMemoryID(memoryObj), // Generate ID.
+		AppName:   appName,
 		UserID:    userID,
+		Memory:    memoryObj,
 		CreatedAt: now,
 		UpdatedAt: now,
-		ID:        generateMemoryID(memoryObj), // Generate ID.
 	}
 }
 
@@ -194,7 +195,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	app := s.getAppMemories(userKey.AppName)
 
 	// Create memory entry with provided topics.
-	memoryEntry := createMemoryEntry(userKey.UserID, memoryStr, topics)
+	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
