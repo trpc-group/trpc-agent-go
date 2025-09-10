@@ -42,6 +42,21 @@ type Event struct {
     // Agent 客户端将从此字段了解哪些函数调用是长时间运行的
     // 仅对函数调用事件有效
     LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
+
+    // StateDelta 是需要写入会话状态的增量（例如 Processor 产出的状态变更）
+    StateDelta map[string][]byte `json:"stateDelta,omitempty"`
+
+    // StructuredOutput 携带类型化的内存内结构化输出，不参与序列化
+    StructuredOutput any `json:"-"`
+
+    // Actions 携带对 Flow 的行为提示（例如：跳过工具后的总结）
+    Actions *EventActions `json:"actions,omitempty"`
+}
+
+// EventActions 为事件附带的可选行为提示
+type EventActions struct {
+    // SkipSummarization 表示 Flow 在 tool.response 后不再进行总结型 LLM 调用
+    SkipSummarization bool `json:"skipSummarization,omitempty"`
 }
 ```
 
@@ -225,6 +240,39 @@ response := &model.Response{
 }
 evt := event.NewResponseEvent("invoke-123", "agent", response)
 ```
+
+### 工具响应流式输出（含 AgentTool 转发）
+
+当调用支持流式的工具（包括 AgentTool）时，框架会发送 `tool.response` 事件：
+
+- 流式分片：内容在 `choice.Delta.Content`，并且 `Done=false`、`IsPartial=true`
+- 最终消息：`choice.Message.Role=tool`，内容在 `choice.Message.Content`
+
+当 AgentTool 开启 `WithStreamInner(true)` 时，还会把子 Agent 的事件直接转发到父流程：
+
+- 子 Agent 转发事件依然是 `event.Event`，其中增量内容同样在 `choice.Delta.Content`
+- 为避免重复打印，子 Agent 最终整段文本不会再次作为转发事件出现，但会被聚合到最终的 `tool.response` 内容中，供下一轮 LLM 使用
+
+Runner 会自动针对需要完成信号的事件（`RequiresCompletion=true`）发送完成信号，使用者无需额外处理。
+
+事件循环中的处理示例：
+
+```go
+if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.Response.Choices) > 0 {
+    for _, ch := range evt.Response.Choices {
+        if ch.Delta.Content != "" { // 部分片段
+            fmt.Print(ch.Delta.Content)
+            continue
+        }
+        if ch.Message.Role == model.RoleTool && ch.Message.Content != "" { // 最终内容
+            fmt.Println(strings.TrimSpace(ch.Message.Content))
+        }
+    }
+    continue // 不要把工具响应当成助手内容打印
+}
+```
+
+提示：自定义事件时，优先使用 `event.New(...)` 搭配 `WithResponse`、`WithBranch` 等，以保证 ID 和时间戳等元数据一致。
 
 ### Event 方法
 

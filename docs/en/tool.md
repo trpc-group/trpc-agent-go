@@ -75,6 +75,7 @@ type StreamChunk struct {
 | Tool Type | Definition | Integration Method |
 |----------|------------|--------------------|
 | **Function Tools** | Tools implemented by directly calling Go functions | `Tool` interface, in-process calls |
+| **Agent Tool (AgentTool)** | Wrap any Agent as a callable tool | `Tool` interface, supports streaming inner forwarding |
 | **DuckDuckGo Tool** | Search tool based on DuckDuckGo API | `Tool` interface, HTTP API |
 | **MCP ToolSet** | External toolset based on MCP protocol | `ToolSet` interface, multiple transports |
 
@@ -305,6 +306,87 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
 )
 ```
+
+## Agent Tool (AgentTool)
+
+AgentTool lets you expose an existing Agent as a tool to be used by a parent Agent. Compared with a plain function tool, AgentTool provides:
+
+- ✅ Reuse: Wrap complex Agent capabilities as a standard tool
+- 🌊 Streaming: Optionally forward the child Agent’s streaming events inline to the parent flow
+- 🧭 Control: Options to skip post-tool summarization and to enable/disable inner forwarding
+
+### Basic Usage
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
+)
+
+// 1) Define a reusable child Agent (streaming recommended)
+mathAgent := llmagent.New(
+    "math-specialist",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a math specialist..."),
+    llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+)
+
+// 2) Wrap as an Agent tool
+mathTool := agenttool.NewTool(
+    mathAgent,
+    agenttool.WithSkipSummarization(true), // default true: no extra outer summarization after tool.response
+    agenttool.WithStreamInner(true),       // forward child Agent streaming events to parent flow
+)
+
+// 3) Use in parent Agent
+parent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+    llmagent.WithTools([]tool.Tool{mathTool}),
+)
+```
+
+### Streaming Inner Forwarding
+
+When `WithStreamInner(true)` is enabled, AgentTool forwards child Agent events to the parent flow as they happen:
+
+- Forwarded items are actual `event.Event` instances, carrying incremental text in `choice.Delta.Content`
+- To avoid duplication, the child Agent’s final full message is not forwarded again; it is aggregated into the final `tool.response` content for the next LLM turn (to satisfy providers requiring tool messages)
+- UI guidance: show forwarded child deltas; avoid printing the aggregated final `tool.response` content unless debugging
+
+Example: Only show tool fragments when needed to avoid duplicates
+
+```go
+if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
+    // Tool response contains aggregated content; skip printing by default to avoid duplicates
+}
+
+// Child Agent forwarded deltas (author != parent)
+if ev.Author != parentName && len(ev.Choices) > 0 {
+    if delta := ev.Choices[0].Delta.Content; delta != "" {
+        fmt.Print(delta)
+    }
+}
+```
+
+### Options
+
+- WithSkipSummarization(bool):
+  - true (default): The outer flow does not run an extra summarization LLM call after `tool.response`
+  - false: Allow an additional summarization/answer call after the tool result
+
+- WithStreamInner(bool):
+  - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
+  - false: Treat as a callable-only tool, without inner event forwarding
+
+### Notes
+
+- Completion signaling: Tool response events are marked `RequiresCompletion=true`; Runner sends completion automatically
+- De-duplication: When inner deltas are forwarded, avoid printing the aggregated final `tool.response` text again by default
+- Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
 
 ## Tool Integration and Usage
 

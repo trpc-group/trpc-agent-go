@@ -38,6 +38,9 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 | Argument | Description | Default Value |
 |----------|-------------|---------------|
 | `-model` | Name of the model to use | `deepseek-chat` |
+| `-show-inner` | Show inner agent deltas streamed by AgentTool | `false` |
+| `-show-tool` | Show tool.response deltas/finals in transcript | `false` |
+| `-debug` | Prefix streamed lines with author for debugging | `false` |
 
 ## Usage
 
@@ -91,11 +94,11 @@ Chat Assistant (Main Agent)
 2. **Tool Wrapping**: The agent is wrapped as a tool using `agent.NewAgentTool()`
 3. **Tool Integration**: The agent tool is added to the main agent's tool list
 4. **Delegation**: When the main agent encounters tasks that match the specialized agent's expertise, it delegates to the agent tool
-5. **Response Processing**: The agent tool executes the specialized agent and returns the result
+5. **Response Processing**: The agent tool executes the specialized agent and returns the result. When the agent tool streams, you will receive `tool.response` events with partial chunks.
 
 ## Tool Calling Process
 
-When you ask for mathematical calculations, you'll see:
+When you ask for mathematical calculations, you'll see callable tool calls and streamed agent-tool outputs:
 
 ```
 🔧 Tool calls initiated:
@@ -103,13 +106,8 @@ When you ask for mathematical calculations, you'll see:
      Args: {"request":"Calculate 923476 multiplied by 273472354"}
 
 🔄 Executing tools...
-✅ Tool response (ID: call_0_e53a77e9-c994-4421-bfc3-f63fe85678a1): {"request":"Calculate 923476 multiplied by 273472354"}
-"The result of multiplying \\( 923,\\!476 \\) by \\( 273,\\!472,\\!354 \\) is:\n\n\\[\n923,\\!476 \\times 273,\\!472,\\!354 = 252,\\!545,\\!155,\\!582,\\!504\n\\]"
+… (streaming tool.response chunks)
 The result of multiplying 923,476 by 273,472,354 is:
-
-\[
-923,\!476 \times 273,\!472,\!354 = 252,\!545,\!155,\!582,\!504
-\]
 
 ✅ Tool execution completed.
 ```
@@ -219,3 +217,49 @@ llmAgent := llmagent.New(
 - **Quality Assurance**: Use specialized agents for validation and review
 - **Content Generation**: Delegate different types of content to specialized agents
 - **Problem Solving**: Break complex problems into specialized sub-tasks 
+### Streaming Tool Responses in the App
+
+When the main agent invokes the agent tool, the framework emits `tool.response` events for the tool output. In streaming mode, each chunk appears in `choice.Delta.Content` with `Object: tool.response`.
+
+Example handling logic in your event loop:
+
+```go
+if evt.Response != nil && evt.Object == model.ObjectTypeToolResponse && len(evt.Response.Choices) > 0 {
+    for _, ch := range evt.Response.Choices {
+        if ch.Delta.Content != "" { // partial chunk
+            fmt.Print(ch.Delta.Content)
+            continue
+        }
+        if ch.Message.Role == model.RoleTool && ch.Message.Content != "" { // final tool message
+            fmt.Println(strings.TrimSpace(ch.Message.Content))
+        }
+    }
+    continue // don't treat as assistant content
+}
+```
+
+This lets the agent tool stream results progressively while keeping the main conversation flow responsive.
+
+### AgentTool Defaults and Flags
+
+- Default behavior: AgentTool skips summarization by default. The final `tool.response` is treated as the end of the turn (no extra outer summary). This reduces duplication.
+- Streaming inner transcript: By default, inner agent deltas are not forwarded. Pass `-show-inner` to see the inner agent’s streamed deltas in the parent transcript. Under the hood this enables `agenttool.WithStreamInner(true)`.
+- Tool output printing: The framework always emits a final non-partial `tool.response` with merged content for session history and provider compliance. To avoid printing the merged content again when you already saw deltas, the example hides it unless `-show-tool` is set.
+
+Examples:
+
+```bash
+# Clean UX, no inner streaming, end turn at tool.response (default)
+go run main.go -model gpt-4o-mini
+
+# Stream inner agent deltas and show tool messages
+go run main.go -show-inner -show-tool
+
+# Stream inner agent deltas but keep tool messages hidden (marker only)
+go run main.go -show-inner
+```
+
+Notes:
+
+- Even when inner deltas are streamed, the example suppresses the inner agent’s final full content to avoid duplication. The final `tool.response` persists the merged content for history, but the UI prints only a completion marker unless `-show-tool` is used.
+- If you want an outer-agent summary after the tool finishes, you can construct the AgentTool with `agenttool.WithSkipSummarization(false)`.

@@ -75,6 +75,7 @@ type StreamChunk struct {
 | 工具类型 | 定义 | 集成方式 |
 |---------|------|---------|
 | **Function Tools** | 直接调用 Go 函数实现的工具 | `Tool` 接口，进程内调用 |
+| **Agent Tool (AgentTool)** | 将任意 Agent 包装为可调用工具 | `Tool` 接口，支持流式内部转发 |
 | **DuckDuckGo Tool** | 基于 DuckDuckGo API 的搜索工具 | `Tool` 接口，HTTP API |
 | **MCP ToolSet** | 基于 MCP 协议的外部工具集 | `ToolSet` 接口，支持多种传输方式 |
 
@@ -304,6 +305,88 @@ mcpToolSet := mcp.NewMCPToolSet(
     },
 )
 ```
+
+## Agent 工具 (AgentTool)
+
+AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
+
+- ✅ 复用：将复杂 Agent 能力作为标准工具复用
+- 🌊 流式：可选择将子 Agent 的流式事件“内联”转发到父流程
+- 🧭 控制：通过选项控制是否跳过工具后的总结补全、是否进行内部转发
+
+### 基本用法
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/tool"
+    agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
+)
+
+// 1) 定义一个可复用的子 Agent（可配置为流式）
+mathAgent := llmagent.New(
+    "math-specialist",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("你是数学专家..."),
+    llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+)
+
+// 2) 包装为 Agent 工具
+mathTool := agenttool.NewTool(
+    mathAgent,
+    agenttool.WithSkipSummarization(true), // 默认 true：工具后不再让外层模型总结
+    agenttool.WithStreamInner(true),       // 开启：把子 Agent 的流式事件转发给父流程
+)
+
+// 3) 在父 Agent 中使用该工具
+parent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}),
+    llmagent.WithTools([]tool.Tool{mathTool}),
+)
+```
+
+### 流式内部转发详解
+
+当 `WithStreamInner(true)` 时，AgentTool 会把子 Agent 在运行时产生的事件直接转发到父流程的事件流中：
+
+- 转发的事件本质是子 Agent 里的 `event.Event`，包含增量内容（`choice.Delta.Content`）
+- 为避免重复，子 Agent 在结束时产生的“完整大段内容”不会再次作为转发事件打印；但会被聚合到最终 `tool.response` 的内容里，供下一次 LLM 调用作为工具消息使用
+- UI 层建议：展示“转发的子 Agent 增量内容”，但默认不重复打印最终聚合的 `tool.response` 内容（除非用于调试）
+
+示例：仅在需要时显示工具片段，避免重复输出
+
+```go
+if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
+    // 工具响应（包含聚合后的内容），默认不打印，避免和子 Agent 转发的内容重复
+    // ...仅在调试或需要展示工具细节时再打印
+}
+
+// 子 Agent 转发的流式增量（作者不是父 Agent）
+if ev.Author != parentName && len(ev.Choices) > 0 {
+    if delta := ev.Choices[0].Delta.Content; delta != "" {
+        fmt.Print(delta)
+    }
+}
+```
+
+### 选项说明
+
+- WithSkipSummarization(bool)：
+  - true（默认）：外层 Flow 在 `tool.response` 后直接结束本轮（不再额外总结）
+  - false：允许在工具结果后继续一次 LLM 调用进行总结/回答
+
+- WithStreamInner(bool)：
+  - true：把子 Agent 的事件直接转发到父流程（强烈建议父/子 Agent 都开启 `GenerationConfig{Stream: true}`）
+  - false：按“仅可调用工具”处理，不做内部事件转发
+
+### 注意事项
+
+- 事件完成信号：工具响应事件会被标记 `RequiresCompletion=true`，Runner 会自动发送完成信号，无需手工处理
+- 内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 `tool.response` 的聚合内容打印出来
+- 模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求
 
 ## 工具集成与使用
 

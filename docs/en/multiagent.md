@@ -297,7 +297,10 @@ mathAgent := llmagent.New(
 // Wrap Agent as tool.
 agentTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(false),
+    // Default skip summarization=true: end the turn after tool.response
+    agenttool.WithSkipSummarization(true),
+    // Enable inner forwarding: stream child Agent events inline to the parent
+    agenttool.WithStreamInner(true),
 )
 
 // Use Agent tool in main Agent.
@@ -343,6 +346,41 @@ Available tools: current_time, math-specialist
 
 ✅ Tool execution completed.
 ```
+
+#### Streaming Inner Forwarding (StreamInner)
+
+When `WithStreamInner(true)` is enabled for the Agent tool:
+
+- Child Agent events are forwarded as streaming `event.Event` items; you can directly display `choice.Delta.Content`
+- To avoid duplicates, the child Agent’s final full text is not forwarded again; it is aggregated into the final `tool.response` that follows tool_calls (satisfying provider requirements)
+- UI recommendations:
+  - Show forwarded child deltas as they stream
+  - By default, don’t reprint the final aggregated tool response text unless debugging
+
+Example: Distinguish outer assistant, child Agent (forwarded), and tool responses in your event loop
+
+```go
+// Child Agent forwarded delta (author != parent)
+if ev.Author != parentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
+    if delta := ev.Response.Choices[0].Delta.Content; delta != "" {
+        fmt.Print(delta)
+    }
+    return
+}
+
+// Tool response (aggregated content), skip by default to avoid duplicates
+if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
+    // ...show on demand or skip
+    return
+}
+```
+
+#### Option Matrix
+
+- `WithSkipSummarization(true)`: Don’t run an extra outer summarization after the tool response (recommended default)
+- `WithSkipSummarization(false)`: Allow one more summarization LLM call after the tool
+- `WithStreamInner(true)`: Forward child Agent events (use `Stream: true` on both parent and child Agents)
+- `WithStreamInner(false)`: Treat as a callable-only tool, without inner forwarding
 
 ### Agent Transfer
 
