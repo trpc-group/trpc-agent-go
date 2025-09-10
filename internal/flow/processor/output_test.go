@@ -93,7 +93,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 		emittedEvent = event
 		// Send completion signal for the event
 		if event.RequiresCompletion {
-			invocation.NoticeCompletion(ctx, event.CompletionID)
+			invocation.NotifyCompletion(ctx, event.CompletionID)
 		}
 	case <-ctx.Done():
 		t.Fatal("Test timed out waiting for event")
