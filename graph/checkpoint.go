@@ -1054,11 +1054,26 @@ func (cm *CheckpointManager) GetParent(
 		return nil, nil // No parent.
 	}
 
-	// Get the parent checkpoint.
+	// Prefer using explicit ParentConfig if available (handles cross-namespace parents).
+	if currentTuple.ParentConfig != nil {
+		// Try using provided parent config first.
+		if tuple, err := cm.saver.GetTuple(ctx, currentTuple.ParentConfig); err != nil {
+			return nil, fmt.Errorf("failed to get parent checkpoint: %w", err)
+		} else if tuple != nil {
+			return tuple, nil
+		}
+		// If not found (possibly due to namespace mismatch), try cross-namespace search.
+		lineageID := GetLineageID(currentTuple.ParentConfig)
+		crossNSCfg := CreateCheckpointConfig(lineageID, parentID, "")
+		if tuple, err := cm.saver.GetTuple(ctx, crossNSCfg); err == nil && tuple != nil {
+			return tuple, nil
+		}
+	}
+
+	// Fallback: use same-namespace lookup.
 	lineageID := GetLineageID(config)
 	namespace := GetNamespace(config)
 	parentConfig := CreateCheckpointConfig(lineageID, parentID, namespace)
-
 	return cm.saver.GetTuple(ctx, parentConfig)
 }
 

@@ -223,7 +223,13 @@ func (s *Saver) buildTuple(ctx context.Context, lineageID, checkpointNS, checkpo
 
 	var parentCfg map[string]any
 	if parentID != "" {
-		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, checkpointNS)
+		// Look up the parent's actual namespace. If not found, use empty namespace
+		// to allow cross-namespace lookup by ID.
+		parentNS, err := s.findCheckpointNamespace(ctx, lineageID, parentID)
+		if err != nil {
+			return nil, err
+		}
+		parentCfg = graph.CreateCheckpointConfig(lineageID, parentID, parentNS)
 	}
 	return &graph.CheckpointTuple{
 		Config:        cfg,
@@ -232,6 +238,28 @@ func (s *Saver) buildTuple(ctx context.Context, lineageID, checkpointNS, checkpo
 		ParentConfig:  parentCfg,
 		PendingWrites: writes,
 	}, nil
+}
+
+// findCheckpointNamespace returns the namespace of the given checkpoint ID within a lineage.
+// If not found, returns an empty string to indicate cross-namespace lookup should be used.
+func (s *Saver) findCheckpointNamespace(ctx context.Context, lineageID, checkpointID string) (string, error) {
+	if checkpointID == "" || lineageID == "" {
+		return "", nil
+	}
+	row := s.db.QueryRowContext(
+		ctx,
+		"SELECT checkpoint_ns FROM checkpoints WHERE lineage_id = ? AND checkpoint_id = ? LIMIT 1",
+		lineageID,
+		checkpointID,
+	)
+	var ns string
+	if err := row.Scan(&ns); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("lookup parent namespace: %w", err)
+	}
+	return ns, nil
 }
 
 // List returns checkpoints for the lineage/namespace, with optional filters.
