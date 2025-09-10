@@ -109,6 +109,10 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		processor = buildProcessor(agent, sessionService, options)
 	}
 
+	if options.processorHook != nil {
+		processor = options.processorHook(processor)
+	}
+
 	// Create a task manager that wraps the session service
 	var taskManager taskmanager.TaskManager
 	var err error

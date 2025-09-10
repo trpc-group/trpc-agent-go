@@ -19,16 +19,18 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
 )
 
 var (
@@ -133,11 +135,30 @@ func startNewSession() string {
 	return newSessionID
 }
 
+type hookProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (h *hookProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	log.Debugf("original message: %+v", message)
+	return h.next.ProcessMessage(ctx, message, options, handler)
+}
+
 func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
 		a2a.WithHost(host),
 		a2a.WithAgent(remoteAgent, *streaming),
+		a2a.WithProcessMessageHook(
+			func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+				return &hookProcessor{next: next}
+			},
+		),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
