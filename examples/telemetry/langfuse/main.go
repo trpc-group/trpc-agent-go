@@ -16,8 +16,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
-
 	"trpc.group/trpc-go/trpc-agent-go/examples/telemetry/agent"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -66,8 +64,6 @@ func main() {
 
 	for _, msg := range userMessage {
 		func() {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute)
-			defer cancel()
 			ctx, span := atrace.Tracer.Start(ctx, "process-message")
 			span.SetAttributes(attribute.String("user-message", msg))
 			defer span.End()
