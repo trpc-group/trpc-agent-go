@@ -167,7 +167,7 @@ go run . -model="gpt-4o-mini" -streaming=true
 - 🧮 **Tool usage** (calculator + time tools)
 - 🔄 **Multi-turn conversations** with memory
 
-Try asking: _"What's the current time? Then calculate 15 _ 23 + 100"\*
+Try asking: "What's the current time? Then calculate 15 \* 23 + 100"
 
 ### Basic Usage
 
