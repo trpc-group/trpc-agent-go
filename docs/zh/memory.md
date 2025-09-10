@@ -9,31 +9,33 @@ Memory 是 tRPC-Agent-Go 框架中的记忆管理系统，为 Agent 提供持久
 Memory 系统的使用遵循以下模式：
 
 1. **创建 Memory Service**：配置记忆存储后端（内存或 Redis）
-2. **集成到 Agent**：使用 `WithMemory()` 将 Memory Service 集成到 LLM Agent 中
-3. **Agent 自动调用**：Agent 通过内置的记忆工具自动进行记忆管理
-4. **会话持久化**：记忆信息在会话间保持，支持多轮对话
+2. **注册记忆工具**：使用 `llmagent.WithTools(memoryService.Tools())` 手动注册记忆工具到 Agent
+3. **在 Runner 中设置记忆服务**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 中配置记忆服务
+4. **Agent 自动调用**：Agent 通过已注册的记忆工具自动进行记忆管理
+5. **会话持久化**：记忆信息在会话间保持，支持多轮对话
 
 这种模式提供了：
 
 - **智能记忆**：基于对话上下文的自动记忆存储和检索
 - **多轮对话**：维护对话状态和记忆连续性
 - **灵活存储**：支持内存和 Redis 等多种存储后端
-- **工具集成**：自动注册记忆管理工具，无需手动配置
+- **工具集成**：手动注册记忆管理工具，提供显式控制
 - **会话管理**：支持会话创建、切换和重置
 
 ### Agent 集成
 
 Memory 系统与 Agent 的集成方式：
 
-- **自动工具注册**：使用 `WithMemory()` 选项自动添加记忆管理工具
+- **手动工具注册**：使用 `llmagent.WithTools(memoryService.Tools())` 显式注册记忆工具
+- **服务管理**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 层级管理记忆服务
 - **工具调用**：Agent 可以调用记忆工具进行信息的存储、检索和管理
-- **上下文增强**：记忆信息自动添加到 Agent 的上下文中
+- **显式控制**：应用程序完全控制注册哪些工具以及如何使用它们
 
 ## 快速开始
 
 ### 环境要求
 
-- Go 1.24.1 或更高版本
+- Go 1.21 或更高版本
 - 有效的 LLM API 密钥（OpenAI 兼容接口）
 - Redis 服务（可选，用于生产环境）
 
@@ -72,21 +74,22 @@ func main() {
     // 2. 创建 LLM 模型
     modelInstance := openai.New("deepseek-chat")
 
-    // 3. 创建 Agent 并集成 Memory
+    // 3. 创建 Agent 并注册记忆工具
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手"),
         llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-        llmagent.WithMemory(memoryService), // 自动添加记忆工具
+        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
     )
 
-    // 4. 创建 Runner
+    // 4. 创建 Runner 并设置记忆服务
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // 设置记忆服务
     )
 
     // 5. 执行对话（Agent 会自动使用记忆工具）
@@ -119,25 +122,36 @@ memory/
 
 ### 与 Agent 集成
 
-使用 `llmagent.WithMemory(memoryService)` 将 Memory Service 集成到 Agent，框架会自动注册记忆管理工具，无需手动创建自定义工具。
+使用两步方法将 Memory Service 集成到 Agent：
+
+1. 使用 `llmagent.WithTools(memoryService.Tools())` 向 Agent 注册记忆工具
+2. 使用 `runner.WithMemoryService(memoryService)` 在 Runner 中设置记忆服务
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // 创建记忆服务
 memoryService := memoryinmemory.NewMemoryService()
 
-// 创建 Agent 并集成 Memory
+// 创建 Agent 并注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithDescription("具有记忆能力的智能助手"),
     llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-    llmagent.WithMemory(memoryService), // 自动添加记忆工具
+    llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
+)
+
+// 创建 Runner 并设置记忆服务
+appRunner := runner.NewRunner(
+    "memory-chat",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // 设置记忆服务
 )
 ```
 
@@ -310,7 +324,7 @@ func main() {
     // 2. 创建 LLM 模型
     modelInstance := openai.New(*modelName)
 
-    // 3. 创建 Agent 并集成 Memory
+    // 3. 创建 Agent 并注册记忆工具
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
@@ -322,15 +336,16 @@ func main() {
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手。我可以记住关于你的重要信息，并在需要时回忆起来。"),
         llmagent.WithGenerationConfig(genConfig),
-        llmagent.WithMemory(memoryService), // 自动添加记忆工具和记忆指令
+        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
     )
 
-    // 4. 创建 Runner
+    // 4. 创建 Runner 并设置记忆服务
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // 设置记忆服务
     )
 
     // 5. 执行对话（Agent 会自动使用记忆工具）

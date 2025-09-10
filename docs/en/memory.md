@@ -14,11 +14,13 @@ The Memory system follows this pattern:
 
 1. Create the Memory Service: configure the storage backend (in-memory or
    Redis).
-2. Integrate into the Agent: use `WithMemory()` to attach the Memory Service
-   to an LLM Agent.
-3. Agent auto-invocation: the Agent manages memory automatically via built-in
+2. Register memory tools: manually register memory tools with the Agent using
+   `llmagent.WithTools(memoryService.Tools())`.
+3. Set memory service in runner: configure the memory service in the runner
+   using `runner.WithMemoryService(memoryService)`.
+4. Agent auto-invocation: the Agent manages memory automatically via registered
    memory tools.
-4. Session persistence: memory persists across sessions and supports
+5. Session persistence: memory persists across sessions and supports
    multi-turn dialogs.
 
 This provides:
@@ -27,25 +29,27 @@ This provides:
   context.
 - Multi-turn dialogues: maintain dialog state and memory continuity.
 - Flexible storage: supports multiple backends such as in-memory and Redis.
-- Tool integration: memory management tools are registered automatically.
+- Tool integration: memory management tools are registered manually for explicit control.
 - Session management: supports creating, switching, and resetting sessions.
 
 ### Agent Integration
 
 Memory integrates with Agents as follows:
 
-- Automatic tool registration: `WithMemory()` automatically adds memory
-  management tools.
+- Manual tool registration: memory tools are explicitly registered using
+  `llmagent.WithTools(memoryService.Tools())`.
+- Service management: memory service is managed at the runner level using
+  `runner.WithMemoryService(memoryService)`.
 - Tool invocation: the Agent uses memory tools to store, retrieve, and manage
   information.
-- Context enrichment: memory is automatically injected into the Agent's
-  context.
+- Explicit control: applications have full control over which tools to register
+  and how to use them.
 
 ## Quick Start
 
 ### Requirements
 
-- Go 1.24.1 or later.
+- Go 1.21 or later.
 - A valid LLM API key (OpenAI-compatible endpoint).
 - Redis service (optional for production).
 
@@ -84,7 +88,7 @@ func main() {
     // 2. Create the LLM model.
     modelInstance := openai.New("deepseek-chat")
 
-    // 3. Create the Agent and integrate Memory.
+    // 3. Create the Agent and register memory tools.
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
@@ -92,15 +96,16 @@ func main() {
         llmagent.WithInstruction(
             "Remember important user info and recall it when needed.",
         ),
-        llmagent.WithMemory(memoryService), // Automatically adds memory tools.
+        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
     )
 
-    // 4. Create the Runner.
+    // 4. Create the Runner with memory service.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // Set memory service.
     )
 
     // 5. Run a dialog (the Agent uses memory tools automatically).
@@ -139,21 +144,23 @@ memory/
 
 ### Integrate with Agent
 
-Use `llmagent.WithMemory(memoryService)` to integrate the Memory Service with
-an Agent. The framework automatically registers memory tools. No custom tool
-setup is needed.
+Use a two-step approach to integrate the Memory Service with an Agent:
+
+1. Register memory tools with the Agent using `llmagent.WithTools(memoryService.Tools())`
+2. Set the memory service in the runner using `runner.WithMemoryService(memoryService)`
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // Create the memory service.
 memoryService := memoryinmemory.NewMemoryService()
 
-// Create the Agent and integrate Memory.
+// Create the Agent and register memory tools.
 llmAgent := llmagent.New(
     "memory-assistant",
     llmagent.WithModel(modelInstance),
@@ -161,7 +168,14 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction(
         "Remember important user info and recall it when needed.",
     ),
-    llmagent.WithMemory(memoryService), // Automatically adds memory tools.
+    llmagent.WithTools(memoryService.Tools()), // Register memory tools.
+)
+
+// Create the runner with memory service.
+appRunner := runner.NewRunner(
+    "memory-chat",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // Set memory service.
 )
 ```
 
@@ -358,7 +372,7 @@ func main() {
     // 2. Create the LLM model.
     modelInstance := openai.New(*modelName)
 
-    // 3. Create the Agent and integrate Memory.
+    // 3. Create the Agent and register memory tools.
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
@@ -373,15 +387,16 @@ func main() {
                 "and recall it when needed.",
         ),
         llmagent.WithGenerationConfig(genConfig),
-        llmagent.WithMemory(memoryService), // Adds memory tools and prompts.
+        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
     )
 
-    // 4. Create the Runner.
+    // 4. Create the Runner with memory service.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // Set memory service.
     )
 
     // 5. Run a dialog (the Agent uses memory tools automatically).
