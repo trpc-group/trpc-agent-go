@@ -53,7 +53,7 @@ type sessionSummarizer struct {
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
 		prompt:           defaultSummarizerPrompt,
-		checks:           []Checker{checkEventThreshold(25)}, // Summarize after 25 events.
+		checks:           []Checker{CheckEventThreshold(25)}, // Summarize after 25 events.
 		maxSummaryLength: 0,                                  // The max summary length is 0 by default, which means no truncation.
 		windowSize:       10,                                 // The window size is 10 by default.
 	}

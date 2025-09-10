@@ -21,21 +21,21 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
-// checkEventThreshold creates a checker that triggers when the total number of
+// CheckEventThreshold creates a checker that triggers when the total number of
 // events in the session is greater than or equal to the specified threshold.
 // This is a simple proxy for conversation growth and is inexpensive to compute.
-// Example: checkEventThreshold(30) will trigger once there are at least 30 events.
-func checkEventThreshold(eventCount int) Checker {
+// Example: CheckEventThreshold(30) will trigger once there are at least 30 events.
+func CheckEventThreshold(eventCount int) Checker {
 	return func(sess *session.Session) bool {
 		return len(sess.Events) > eventCount
 	}
 }
 
-// checkTimeThreshold creates a checker that triggers when the time elapsed since
+// CheckTimeThreshold creates a checker that triggers when the time elapsed since
 // the last event is greater than or equal to the given interval.
 // This is useful to ensure periodic summarization in long-running sessions.
-// Example: checkTimeThreshold(5*time.Minute) triggers if no events occurred in five minutes.
-func checkTimeThreshold(interval time.Duration) Checker {
+// Example: CheckTimeThreshold(5*time.Minute) triggers if no events occurred in five minutes.
+func CheckTimeThreshold(interval time.Duration) Checker {
 	return func(sess *session.Session) bool {
 		if len(sess.Events) == 0 {
 			return false
@@ -45,11 +45,11 @@ func checkTimeThreshold(interval time.Duration) Checker {
 	}
 }
 
-// checkTokenThreshold creates a checker that triggers when the approximate token
+// CheckTokenThreshold creates a checker that triggers when the approximate token
 // count of the accumulated messages exceeds the given threshold.
 // Tokens are estimated naïvely as len(content)/4 for simplicity and speed.
 // This estimation is coarse and model-agnostic but good enough for gating.
-func checkTokenThreshold(tokenCount int) Checker {
+func CheckTokenThreshold(tokenCount int) Checker {
 	return func(sess *session.Session) bool {
 		if len(sess.Events) == 0 {
 			return false
@@ -67,10 +67,10 @@ func checkTokenThreshold(tokenCount int) Checker {
 	}
 }
 
-// checksAll composes multiple checkers using AND logic.
+// ChecksAll composes multiple checkers using AND logic.
 // It returns true only if all provided checkers return true.
 // Use this to enforce stricter summarization gates.
-func checksAll(checks []Checker) Checker {
+func ChecksAll(checks []Checker) Checker {
 	return func(sess *session.Session) bool {
 		for _, check := range checks {
 			if !check(sess) {
@@ -81,10 +81,10 @@ func checksAll(checks []Checker) Checker {
 	}
 }
 
-// checksAny composes multiple checkers using OR logic.
+// ChecksAny composes multiple checkers using OR logic.
 // It returns true if any one of the provided checkers returns true.
 // Use this to allow flexible, opportunistic summarization triggers.
-func checksAny(checks []Checker) Checker {
+func ChecksAny(checks []Checker) Checker {
 	return func(sess *session.Session) bool {
 		for _, check := range checks {
 			if check(sess) {

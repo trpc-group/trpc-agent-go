@@ -671,6 +671,50 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return nil
 	}
 
+	// Resolve stored session pointer once (under lock) to validate existence, then release lock.
+	app := s.getOrCreateAppSessions(key.AppName)
+	app.mu.Lock()
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+	swt, ok := userSessions[key.SessionID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession := getValidSession(swt)
+	if storedSession == nil {
+		app.mu.Unlock()
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	app.mu.Unlock()
+
+	// Always run summarization synchronously to populate manager cache.
+	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
+		return fmt.Errorf("failed to create summary: %w", err)
+	}
+	// Persist synchronously when force=true, or when async disabled.
+	if force || !s.opts.asyncSummaryPersist {
+		if err := s.persistSummaryFromCacheByKey(ctx, key); err != nil {
+			return err
+		}
+	} else {
+		// Async persist: do not block caller.
+		go func(k session.Key) {
+			if err := s.persistSummaryFromCacheByKey(context.Background(), k); err != nil {
+				log.Errorf("failed to persist summary from cache: %v", err)
+			}
+		}(key)
+	}
+
+	return nil
+}
+
+// persistSummaryFromCacheByKey persists the latest cached summary into session state when present.
+// It acquires the internal lock, updates the session's state, UpdatedAt, and TTL.
+func (s *SessionService) persistSummaryFromCacheByKey(_ context.Context, key session.Key) error {
 	app := s.getOrCreateAppSessions(key.AppName)
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -679,36 +723,21 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	if !ok {
 		return fmt.Errorf("user not found: %s", key.UserID)
 	}
-	storedSessionWithTTL, ok := userSessions[key.SessionID]
+	swt, ok := userSessions[key.SessionID]
 	if !ok {
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
-	storedSession := getValidSession(storedSessionWithTTL)
+	storedSession := getValidSession(swt)
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
 
-	if err := s.summarizeAndPersist(ctx, storedSession, force); err != nil {
-		return err
-	}
-
-	storedSession.UpdatedAt = time.Now()
-	storedSessionWithTTL.session = storedSession
-	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
-	return nil
-}
-
-// summarizeAndPersist runs the summarizer and, if a summary is available, persists it into session state.
-func (s *SessionService) summarizeAndPersist(ctx context.Context, storedSession *session.Session, force bool) error {
-	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
-		return fmt.Errorf("failed to create summary: %w", err)
-	}
 	sum, err := s.opts.summarizerManager.GetSummary(storedSession)
 	if err != nil {
 		return fmt.Errorf("get summary failed: %w", err)
 	}
 	if sum == nil || sum.Summary == "" {
-		log.Warnf("no summary text found for session %s", storedSession.ID)
+		log.Warnf("no summary text found for session %s", key.SessionID)
 		return nil
 	}
 	if storedSession.State == nil {
@@ -717,6 +746,9 @@ func (s *SessionService) summarizeAndPersist(ctx context.Context, storedSession 
 	now := time.Now().UTC()
 	storedSession.State[summaryTextKey] = []byte(sum.Summary)
 	storedSession.State[summaryUpdatedAtKey] = []byte(now.Format(time.RFC3339Nano))
+	storedSession.UpdatedAt = time.Now()
+	swt.session = storedSession
+	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
 }
 

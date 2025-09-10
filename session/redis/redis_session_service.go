@@ -415,14 +415,25 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
 
-	return s.summarizeAndPersist(ctx, key, fullSess, force)
-}
-
-// summarizeAndPersist runs the summarizer and persists the summary text into Redis state if available.
-func (s *Service) summarizeAndPersist(ctx context.Context, key session.Key, fullSess *session.Session, force bool) error {
+	// Always summarize synchronously to populate cache.
 	if err := s.opts.summarizerManager.Summarize(ctx, fullSess, force); err != nil {
 		return fmt.Errorf("failed to create summary: %w", err)
 	}
+	// Persist synchronously when force=true, or when async disabled.
+	if force || !s.opts.asyncSummaryPersist {
+		return s.persistSummaryFromCache(ctx, key)
+	}
+	// Async persist for non-force.
+	go func(k session.Key) {
+		if err := s.persistSummaryFromCache(context.Background(), k); err != nil {
+			log.Errorf("failed to persist summary from cache: %v", err)
+		}
+	}(key)
+	return nil
+}
+
+// persistSummaryFromCache writes the latest cached summary to Redis state if present.
+func (s *Service) persistSummaryFromCache(ctx context.Context, key session.Key) error {
 	summary, err := s.opts.summarizerManager.GetSummary(&session.Session{ID: key.SessionID, AppName: key.AppName, UserID: key.UserID})
 	if err != nil {
 		return fmt.Errorf("get summary failed: %w", err)

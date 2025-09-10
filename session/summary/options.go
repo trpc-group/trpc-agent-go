@@ -56,21 +56,21 @@ func WithWindowSize(windowSize int) Option {
 // WithTokenThreshold creates a token-based check function.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, checkTokenThreshold(tokenCount))
+		s.checks = append(s.checks, CheckTokenThreshold(tokenCount))
 	}
 }
 
 // WithEventThreshold creates an event-count-based check function.
 func WithEventThreshold(eventCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, checkEventThreshold(eventCount))
+		s.checks = append(s.checks, CheckEventThreshold(eventCount))
 	}
 }
 
 // WithTimeThreshold creates a time-based check function.
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, checkTimeThreshold(interval))
+		s.checks = append(s.checks, CheckTimeThreshold(interval))
 	}
 }
 
@@ -78,7 +78,7 @@ func WithTimeThreshold(interval time.Duration) Option {
 func WithChecksAll(checks []Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = []Checker{checksAll(checks)}
+			s.checks = []Checker{ChecksAll(checks)}
 		}
 	}
 }
@@ -87,7 +87,7 @@ func WithChecksAll(checks []Checker) Option {
 func WithChecksAny(checks []Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = []Checker{checksAny(checks)}
+			s.checks = []Checker{ChecksAny(checks)}
 		}
 	}
 }

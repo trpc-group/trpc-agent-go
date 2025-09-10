@@ -23,7 +23,7 @@ import (
 
 func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 	t.Run("OR logic triggers when any condition true", func(t *testing.T) {
-		checks := []Checker{checkTokenThreshold(10000), checkEventThreshold(3)}
+		checks := []Checker{CheckTokenThreshold(10000), CheckEventThreshold(3)}
 		s := NewSummarizer(&fakeModel{}, WithChecksAny(checks))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
@@ -33,7 +33,7 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 	})
 
 	t.Run("ALL logic fails when one condition false", func(t *testing.T) {
-		checks := []Checker{checkEventThreshold(100), checkTimeThreshold(24 * time.Hour)}
+		checks := []Checker{CheckEventThreshold(100), CheckTimeThreshold(24 * time.Hour)}
 		s := NewSummarizer(&fakeModel{}, WithChecksAll(checks))
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
 		assert.False(t, s.ShouldSummarize(sess))
