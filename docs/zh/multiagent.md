@@ -297,7 +297,10 @@ mathAgent := llmagent.New(
 // 将 Agent 包装成工具
 agentTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(false),
+    // 默认 skip summarization=true，会在 tool.response 后直接结束本轮
+    agenttool.WithSkipSummarization(true),
+    // 开启转发：把子 Agent 的流式事件内联到父流程
+    agenttool.WithStreamInner(true),
 )
 
 // 在主 Agent 中使用 Agent 工具
@@ -343,6 +346,41 @@ mainAgent := llmagent.New(
 
 ✅ 工具执行完成。
 ```
+
+#### 流式内部转发（StreamInner）
+
+当为 Agent 工具启用 `WithStreamInner(true)` 时：
+
+- 子 Agent 的事件会以流式形式转发到父流程（`event.Event`），可直接显示 `choice.Delta.Content`
+- 为避免重复打印，子 Agent 最终的整段文本默认不会作为转发事件再次输出；但会被聚合写入最终的 `tool.response`，用于满足模型“工具消息跟随”的要求
+- 建议在 UI 层：
+  - 展示子 Agent 转发的增量内容
+  - 如非调试，不再额外打印最终聚合的工具响应内容
+
+示例：在事件循环中区分外层助手/子 Agent/工具响应
+
+```go
+// 子 Agent 转发的增量（作者不是父 Agent）
+if ev.Author != parentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
+    if delta := ev.Response.Choices[0].Delta.Content; delta != "" {
+        fmt.Print(delta)
+    }
+    return
+}
+
+// 工具响应（包含聚合内容），默认不打印，避免重复
+if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
+    // ...按需展示或忽略
+    return
+}
+```
+
+#### 选项对照
+
+- `WithSkipSummarization(true)`：工具响应后不再让外层模型做额外总结（默认推荐）
+- `WithSkipSummarization(false)`：工具后再进行一次总结型 LLM 调用
+- `WithStreamInner(true)`：启用子 Agent 事件转发（父/子 Agent 建议都 `Stream: true`）
+- `WithStreamInner(false)`：按普通可调用工具处理，不转发内部流
 
 ### Agent 委托 (Agent Transfer)
 
