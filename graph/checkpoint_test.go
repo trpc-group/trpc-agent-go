@@ -179,9 +179,9 @@ func TestCheckpointManager_Put_Smoke(t *testing.T) {
 	cfg := CreateCheckpointConfig("ln-put", "", "ns")
 	ck := NewCheckpoint(map[string]any{"a": 1}, map[string]int64{"a": 1}, nil)
 	meta := NewCheckpointMetadata(CheckpointSourceUpdate, 3)
-	_, err := cm.Put(nil, PutRequest{Config: cfg, Checkpoint: ck, Metadata: meta, NewVersions: map[string]int64{"a": 1}})
+	_, err := cm.Put(context.Background(), PutRequest{Config: cfg, Checkpoint: ck, Metadata: meta, NewVersions: map[string]int64{"a": 1}})
 	require.NoError(t, err)
-	got, err := cm.Get(nil, CreateCheckpointConfig("ln-put", ck.ID, "ns"))
+	got, err := cm.Get(context.Background(), CreateCheckpointConfig("ln-put", ck.ID, "ns"))
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, ck.ID, got.ID)
@@ -193,7 +193,7 @@ type mockSaver struct{ byID map[string]*CheckpointTuple }
 func newMockSaver() *mockSaver { return &mockSaver{byID: map[string]*CheckpointTuple{}} }
 
 func (m *mockSaver) Get(_ context.Context, cfg map[string]any) (*Checkpoint, error) {
-	t, _ := m.GetTuple(nil, cfg)
+	t, _ := m.GetTuple(context.Background(), cfg)
 	if t == nil {
 		return nil, nil
 	}

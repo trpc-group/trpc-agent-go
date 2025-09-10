@@ -161,6 +161,7 @@ func (w *customerSupportWorkflow) startA2AServer() {
 	remoteAgent := w.buildRemoteAgent()
 	server, err := a2a.New(
 		a2a.WithHost(w.a2aHost),
+		// Enable A2A streaming to demonstrate live token streaming end-to-end.
 		a2a.WithAgent(remoteAgent, true),
 	)
 	if err != nil {
@@ -213,7 +214,8 @@ func (w *customerSupportWorkflow) buildRemoteAgent() agent.Agent {
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(1500),
 		Temperature: floatPtr(0.3),
-		Stream:      false,
+		// Enable streaming so A2A can forward live deltas
+		Stream: true,
 	}
 	desc := "A specialized technical support agent that can diagnose system issues, check logs, and provide detailed technical assistance."
 	llmAgent := llmagent.New(
@@ -239,7 +241,9 @@ func (w *customerSupportWorkflow) setup() error {
 	a2aURL := fmt.Sprintf("http://%s", w.a2aHost)
 	a2aAgent, err := a2aagent.New(
 		a2aagent.WithAgentCardURL(a2aURL),
-		a2aagent.WithName(agentTechnicalSupport),
+		// Important: use the same name as the agent node ID so the graph can
+		// resolve and invoke this sub-agent.
+		a2aagent.WithName(nodeTechnicalSupport),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create a2a agent: %w", err)
@@ -310,25 +314,6 @@ func (w *customerSupportWorkflow) createCustomerSupportGraph() (*graph.Graph, er
 		AddAgentNode(nodeTechnicalSupport,
 			graph.WithName(nodeTechnicalSupport),
 			graph.WithDescription("Routes to A2A technical support agent for specialized assistance"),
-			graph.WithPostNodeCallback(func(
-				ctx context.Context,
-				callbackCtx *graph.NodeCallbackContext,
-				state graph.State,
-				result any,
-				nodeErr error,
-			) (any, error) {
-				// Get last response from result, since state merge happens after
-				// post-node callback runs.
-				if resState, ok := result.(graph.State); ok {
-					if v, ok := resState[graph.StateKeyLastResponse].(string); ok {
-						fmt.Printf("🤖 A2A agent response: %s\n", v)
-					}
-				}
-				if nodeErr != nil {
-					fmt.Printf("🤖 A2A agent error: %v\n", nodeErr)
-				}
-				return result, nodeErr
-			}),
 		).
 		// Billing support node.
 		AddNode(nodeBillingSupport, w.handleBillingQuery,
@@ -376,7 +361,7 @@ func (w *customerSupportWorkflow) runDefaultExamples(ctx context.Context) error 
 	for i, query := range examples {
 		fmt.Printf("--- Example %d ---\n", i+1)
 		fmt.Printf("Customer: %s\n", query)
-		fmt.Printf("Response: ")
+		// Response content will stream/live-print below; avoid preface duplication.
 		if err := w.processQuery(ctx, query); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
@@ -415,7 +400,7 @@ func (w *customerSupportWorkflow) startInteractiveMode(ctx context.Context) erro
 			continue
 		}
 
-		fmt.Printf("Response: ")
+		// Response content will stream/live-print below; avoid preface duplication.
 		if err := w.processQuery(ctx, input); err != nil {
 			fmt.Printf("Error: %v\n", err)
 		}
@@ -448,6 +433,7 @@ func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *eve
 	var (
 		stageCount      int
 		responseStarted bool
+		a2aStreamed     bool // streaming seen from A2A agent
 	)
 
 	for event := range eventChan {
@@ -492,28 +478,36 @@ func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *eve
 			}
 		}
 
-		// Process streaming content from LLM nodes and A2A agents (events with model names as authors).
+		// Process streaming content from LLM nodes and A2A agents.
 		if len(event.Choices) > 0 {
 			choice := event.Choices[0]
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				if !responseStarted {
-					fmt.Print("🤖 Response: ")
+					if event.Author == nodeTechnicalSupport {
+						fmt.Print("🤖 A2A Stream: ")
+						a2aStreamed = true
+					} else {
+						fmt.Print("🤖 Response: ")
+					}
 					responseStarted = true
 				}
 				fmt.Print(choice.Delta.Content)
 			}
 			// Add newline when streaming is complete (when choice is done).
-			if choice.Delta.Content == "" && responseStarted {
+			if (choice.Delta.Content == "" || event.Done) && responseStarted {
 				fmt.Println()           // Add newline after streaming completes
 				responseStarted = false // Reset for next response
 			}
 		}
 
 		// Check for A2A agent responses in state updates.
-		if event.StateDelta != nil {
-			// Look for A2A agent responses in the state delta.
+		// Only label as A2A when the event author is the A2A agent to avoid
+		// mislabeling final formatted responses. If we've already streamed from A2A,
+		// skip this to avoid duplication.
+		if event.StateDelta != nil && event.Author == nodeTechnicalSupport && !a2aStreamed {
 			if responseData, exists := event.StateDelta[graph.StateKeyLastResponse]; exists {
+				// Try to decode as structured model.Response first
 				var response *model.Response
 				if err := json.Unmarshal(responseData, &response); err == nil && response != nil {
 					if len(response.Choices) > 0 && response.Choices[0].Message.Content != "" {
@@ -522,46 +516,52 @@ func (w *customerSupportWorkflow) processStreamingResponse(eventChan <-chan *eve
 							responseStarted = true
 						}
 						fmt.Print(response.Choices[0].Message.Content)
-						fmt.Println() // Add newline after A2A response
+						fmt.Println()
+						responseStarted = false
+					}
+				} else {
+					var s string
+					if err := json.Unmarshal(responseData, &s); err == nil && s != "" {
+						if !responseStarted {
+							fmt.Print("🤖 A2A Agent Response: ")
+							responseStarted = true
+						}
+						fmt.Println(s)
 						responseStarted = false
 					}
 				}
 			}
 		}
 
-		// Track workflow stages.
+		// Track workflow stages (concise to avoid duplicate long content).
 		if event.Author == graph.AuthorGraphExecutor {
 			stageCount++
-			if stageCount >= 1 && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				if content != "" {
-					fmt.Printf("\n🔄 Stage %d completed, %s\n", stageCount, content)
-				} else {
-					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
-				}
-			}
+			fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
 		}
 
 		// Handle completion and final response.
 		if event.Done {
-			// Check for final response in the completion event.
-			if event.Response != nil && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				if content != "" && !responseStarted {
-					fmt.Print("🤖 Final Response: ")
-					fmt.Println(content)
-				}
-			}
-
-			// Check for final answer in state delta.
-			if event.StateDelta != nil {
-				if finalAnswerData, exists := event.StateDelta[stateKeyFinalAnswer]; exists {
-					var finalAnswer string
-					if err := json.Unmarshal(finalAnswerData, &finalAnswer); err == nil && finalAnswer != "" {
-						if !responseStarted {
+			// If A2A streaming happened, avoid repeating the same content; show a concise completion mark.
+			if a2aStreamed {
+				fmt.Println("✅ A2A 完成")
+			} else {
+				// Print final response once: prefer formatted final_answer, otherwise fallback to completion response.
+				printed := false
+				if event.StateDelta != nil {
+					if finalAnswerData, exists := event.StateDelta[stateKeyFinalAnswer]; exists {
+						var finalAnswer string
+						if err := json.Unmarshal(finalAnswerData, &finalAnswer); err == nil && finalAnswer != "" {
 							fmt.Print("🤖 Final Response: ")
 							fmt.Println(finalAnswer)
+							printed = true
 						}
+					}
+				}
+				if !printed && event.Response != nil && len(event.Response.Choices) > 0 {
+					content := event.Response.Choices[0].Message.Content
+					if content != "" {
+						fmt.Print("🤖 Final Response: ")
+						fmt.Println(content)
 					}
 				}
 			}
@@ -700,10 +700,13 @@ func (w *customerSupportWorkflow) formatFinalResponse(ctx context.Context, state
 		"Thank you for contacting our support team!",
 		queryType, priority, response)
 
-	// Return state update with final response
-	return newStateBuilder().
-		SetFinalAnswer(finalResponse).
-		Build(), nil
+	// Return state update with final response. Also set graph.StateKeyLastResponse
+	// so completion events carry the final content for consumers that only read
+	// the standard last_response field.
+	return graph.State{
+		stateKeyFinalAnswer:        finalResponse,
+		graph.StateKeyLastResponse: finalResponse,
+	}, nil
 }
 
 // Helper functions.

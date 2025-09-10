@@ -1203,8 +1203,14 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	// consumers (including tests) can reconstruct state without additional logic.
 	if options.FinalState != nil {
 		for key, value := range options.FinalState {
+			// Skip internal/ephemeral keys that are not JSON-serializable or can race
+			// due to concurrent updates (e.g., execution context and callbacks).
 			if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
-				key == MetadataKeyState || key == MetadataKeyCompletion {
+				key == MetadataKeyState || key == MetadataKeyCompletion ||
+				key == StateKeyExecContext || key == StateKeyParentAgent ||
+				key == StateKeyToolCallbacks || key == StateKeyModelCallbacks ||
+				key == StateKeyAgentCallbacks || key == StateKeyCurrentNodeID ||
+				key == StateKeySession {
 				continue
 			}
 			if jsonData, err := json.Marshal(value); err == nil {
