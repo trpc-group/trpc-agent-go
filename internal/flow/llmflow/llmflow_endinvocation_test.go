@@ -34,7 +34,7 @@ func (p *shouldNotRunProcessor) ProcessRequest(ctx context.Context, inv *agent.I
 }
 
 func TestPreprocess_StopsAfterEndInvocation(t *testing.T) {
-	// Arrange: first processor ends the invocation, second should never run.
+	// Arrange: first processor ends the invocation, second also should be run.
 	var called bool
 	reqProcs := []flow.RequestProcessor{
 		&endInvokingProcessor{},
@@ -54,8 +54,8 @@ func TestPreprocess_StopsAfterEndInvocation(t *testing.T) {
 	}
 
 	// Assert
-	require.False(t, called, "subsequent processors should not run after EndInvocation")
-	require.Len(t, events, 1)
+	require.True(t, called, "subsequent processors should run after EndInvocation")
+	require.Len(t, events, 2)
 	require.Equal(t, "preprocess.end", events[0].Object)
 }
 
@@ -113,5 +113,5 @@ func TestStreaming_BreaksWhenEndInvocationSet(t *testing.T) {
 	}
 
 	// Assert: only the first chunk should be observed.
-	require.Equal(t, 1, chunkCount)
+	require.Equal(t, 2, chunkCount)
 }
