@@ -56,7 +56,7 @@ sessionService = inmemory.NewSessionService()
 
 // Option 2: Use Redis storage (production).
 sessionService, err = redis.NewService(
-    redis.WithURL("redis://127.0.0.1:6379/0"),
+    redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
 )
 
 // Create Runner and configure session service.
@@ -304,7 +304,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 
 // Create using Redis URL.
 sessionService, err := redis.NewService(
-    redis.WithURL("redis://localhost:6379/0"),
+    redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
     redis.WithSessionEventLimit(500),
 )
 

@@ -56,7 +56,7 @@ sessionService = inmemory.NewSessionService()
 
 // 方式2：使用 Redis 存储（生产环境）
 sessionService, err = redis.NewService(
-    redis.WithURL("redis://127.0.0.1:6379/0"),
+    redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
 )
 
 // 创建 Runner 并配置会话服务
@@ -310,7 +310,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 
 // 使用 Redis URL 创建
 sessionService, err := redis.NewService(
-    redis.WithURL("redis://localhost:6379/0"),
+    redis.WithRedisClientURL("redis://your-username:yourt-password@127.0.0.1:6379"),
     redis.WithSessionEventLimit(500),
 )
 
