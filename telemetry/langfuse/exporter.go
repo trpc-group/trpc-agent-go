@@ -44,7 +44,7 @@ func (e *exporter) ExportSpans(ctx context.Context, ss []trace.ReadOnlySpan) err
 
 	err := e.client.UploadTraces(ctx, protoSpans)
 	if err != nil {
-		return fmt.Errorf("traces export: %w", err)
+		return fmt.Errorf("exporting spans: uploading traces: %w", err)
 	}
 	return nil
 }
