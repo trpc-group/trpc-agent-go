@@ -253,11 +253,11 @@ func TestTransformCallLLM(t *testing.T) {
 				},
 			},
 			expected: map[string]string{
-				observationType:           "generation",
-				observationInput:          `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`,
-				observationOutput:         `{"text": "Hello! How can I help you?"}`,
+				observationType:            "generation",
+				observationInput:           `{"prompt": "Hello", "generation_config": {"temperature": 0.7}}`,
+				observationOutput:          `{"text": "Hello! How can I help you?"}`,
 				observationModelParameters: `{"temperature":0.7}`,
-				"other.attribute":         "keep-this",
+				"other.attribute":          "keep-this",
 			},
 		},
 		{
@@ -365,9 +365,9 @@ func TestTransformExecuteTool(t *testing.T) {
 				},
 			},
 			expected: map[string]string{
-				observationType:    "tool",
-				observationInput:   `{"arg1": "value1"}`,
-				observationOutput:  `{"result": "success"}`,
+				observationType:   "tool",
+				observationInput:  `{"arg1": "value1"}`,
+				observationOutput: `{"result": "success"}`,
 				"other.attribute": "keep-this",
 			},
 		},
@@ -597,16 +597,16 @@ func TestExporterMarshalLog(t *testing.T) {
 
 	// Check that it returns some kind of struct
 	require.NotNil(t, logData, "MarshalLog should return a non-nil value")
-	
+
 	// Use reflection to check the struct fields since we can't predict the exact anonymous struct type
 	logValue := reflect.ValueOf(logData)
 	require.Equal(t, reflect.Struct, logValue.Kind(), "should return a struct")
-	
+
 	// Check for Type field
 	typeField := logValue.FieldByName("Type")
 	require.True(t, typeField.IsValid(), "should have Type field")
 	assert.Equal(t, "otlptrace", typeField.String())
-	
+
 	// Check for Client field
 	clientField := logValue.FieldByName("Client")
 	require.True(t, clientField.IsValid(), "should have Client field")
@@ -616,13 +616,13 @@ func TestExporterMarshalLog(t *testing.T) {
 func TestExporterExportSpans(t *testing.T) {
 	client := &mockClient{}
 	exp := &exporter{client: client}
-	
+
 	ctx := context.Background()
-	
+
 	// Test with empty spans
 	err := exp.ExportSpans(ctx, nil)
 	assert.NoError(t, err)
-	
+
 	// Note: We can't easily test with real ReadOnlySpan objects without more complex setup
 	// The transformation logic is already tested in the other test functions
 }
