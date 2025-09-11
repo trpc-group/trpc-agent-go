@@ -105,16 +105,22 @@ func (a *ParallelAgent) createBranchInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create unique invocation ID for this branch.
-	eventFilterKey := baseInvocation.GetEventFilterKey()
-	if eventFilterKey == "" {
-		eventFilterKey = a.name + agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	branchSuffix := a.name + "." + subAgent.Info().Name
+	branchInvocationID := baseInvocation.InvocationID + "." + branchSuffix
+
+	// Set branch identifier for hierarchical event filtering.
+	// Use parent branch if available, otherwise fallback to InvocationID.
+	var branchID string
+	if baseInvocation.Branch != "" {
+		branchID = baseInvocation.Branch + "." + branchSuffix
 	} else {
-		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
+		branchID = branchInvocationID
 	}
 
 	branchInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
-		agent.WithInvocationEventFilterKey(eventFilterKey),
+		agent.WithInvocationID(branchInvocationID),
+		agent.WithInvocationBranch(branchID),
 	)
 
 	return branchInvocation
@@ -141,27 +147,34 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-	var evt *event.Event
-
 	if err != nil {
 		// Send error event.
-		evt = event.NewErrorEvent(
+		errorEvent := event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
+	}
+	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+		return true // Indicates early return
 	}
-
-	if evt == nil {
-		return false // Continue execution
-	}
-
-	agent.EmitEvent(ctx, invocation, eventChan, evt)
-	return true
+	return false // Continue execution
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -189,12 +202,16 @@ func (a *ParallelAgent) startSubAgents(
 			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+				errorEvent := event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
 					err.Error(),
-				))
+				)
+				select {
+				case eventChan <- errorEvent:
+				case <-ctx.Done():
+				}
 				return
 			}
 
@@ -218,21 +235,32 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
-	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		evt = event.NewErrorEvent(
+		errorEvent := event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-	} else if customResponse != nil {
-		// Create an event from the custom response.
-		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+		select {
+		case eventChan <- errorEvent:
+		case <-ctx.Done():
+		}
+		return
 	}
-
-	agent.EmitEvent(ctx, invocation, eventChan, evt)
+	if customResponse != nil {
+		// Create an event from the custom response.
+		customEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			customResponse,
+		)
+		select {
+		case eventChan <- customEvent:
+		case <-ctx.Done():
+		}
+	}
 }
 
 // Run implements the agent.Agent interface.
@@ -293,8 +321,18 @@ func (a *ParallelAgent) mergeEventStreams(
 		wg.Add(1)
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
-			for evt := range inputChan {
-				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
+			for {
+				select {
+				case evt, ok := <-inputChan:
+					if !ok {
+						return // Channel closed.
+					}
+					select {
+					case outputChan <- evt:
+					case <-ctx.Done():
+						return
+					}
+				case <-ctx.Done():
 					return
 				}
 			}

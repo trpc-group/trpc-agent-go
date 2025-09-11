@@ -285,7 +285,7 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 	events := []event.Event{
 		{
 			Author: "user",
-			Branch: "main",
+			Branch: "chain",
 			Response: &model.Response{
 				Choices: []model.Choice{
 					{
@@ -299,7 +299,7 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 		},
 		{
 			Author: "user",
-			Branch: "dev",
+			Branch: "other.branch",
 			Response: &model.Response{
 				Choices: []model.Choice{
 					{
@@ -313,9 +313,136 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 		},
 	}
 
-	// Current branch main/feature should include events whose branch is
-	// prefix of the current, i.e. "main" only.
-	msgs := p.getContents("main/feature", events, "agent-a")
+	// Current branch chain.parallel should include events whose branch is
+	// prefix of the current, i.e. "chain" only.
+	msgs := p.getContents("chain.parallel", events, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, "kept", msgs[0].Content)
+}
+
+func TestContentRequestProcessor_isEventBelongsToBranch(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	tests := []struct {
+		name             string
+		invocationBranch string
+		eventBranch      string
+		expected         bool
+		description      string
+	}{
+		// Original logic tests (backward compatibility).
+		{
+			name:             "empty branches",
+			invocationBranch: "",
+			eventBranch:      "",
+			expected:         true,
+			description:      "Empty branches should always return true",
+		},
+		{
+			name:             "empty invocation branch",
+			invocationBranch: "",
+			eventBranch:      "some.branch",
+			expected:         true,
+			description:      "Empty invocation branch should see all events",
+		},
+		{
+			name:             "empty event branch",
+			invocationBranch: "some.branch",
+			eventBranch:      "",
+			expected:         true,
+			description:      "Empty event branch should be visible to all",
+		},
+		{
+			name:             "parent event visibility",
+			invocationBranch: "root.chain.parallel.agent1",
+			eventBranch:      "root.chain",
+			expected:         true,
+			description:      "Agent should see parent/ancestor events",
+		},
+		{
+			name:             "self event visibility",
+			invocationBranch: "root.chain.parallel.agent1",
+			eventBranch:      "root.chain.parallel.agent1",
+			expected:         true,
+			description:      "Agent should see its own events",
+		},
+
+		// New logic tests (Sequential sees sub-agents).
+		{
+			name:             "sequential sees parallel sub-agents",
+			invocationBranch: "root.chain.sequential",
+			eventBranch:      "root.chain.sequential.parallel.agent1",
+			expected:         true,
+			description:      "Sequential agent should see its parallel sub-agent events",
+		},
+		{
+			name:             "chain sees nested parallel agents",
+			invocationBranch: "root.chain",
+			eventBranch:      "root.chain.parallel.agent1",
+			expected:         true,
+			description:      "Chain agent should see nested parallel agent events",
+		},
+		{
+			name:             "deep nesting sub-branch visibility",
+			invocationBranch: "root",
+			eventBranch:      "root.outerParallel.innerSequential.deepParallel.agent1",
+			expected:         true,
+			description:      "Root agent should see deeply nested sub-agent events",
+		},
+
+		// Isolation tests (parallel agents should not see each other).
+		{
+			name:             "parallel agent isolation",
+			invocationBranch: "root.chain.parallel.agent1",
+			eventBranch:      "root.chain.parallel.agent2",
+			expected:         false,
+			description:      "Parallel agents should not see each other's events",
+		},
+		{
+			name:             "cross-branch isolation",
+			invocationBranch: "root.branchA.agent1",
+			eventBranch:      "root.branchB.agent2",
+			expected:         false,
+			description:      "Agents in different branches should not see each other",
+		},
+		{
+			name:             "no common prefix",
+			invocationBranch: "teamA.sequential",
+			eventBranch:      "teamB.parallel.agent1",
+			expected:         false,
+			description:      "Agents with no common prefix should not see each other",
+		},
+
+		// Edge cases.
+		{
+			name:             "same depth different branch",
+			invocationBranch: "root.teamA.agent1",
+			eventBranch:      "root.teamB.agent2",
+			expected:         false,
+			description:      "Same depth but different branches should be isolated",
+		},
+		{
+			name:             "partial prefix match",
+			invocationBranch: "root.chainABC",
+			eventBranch:      "root.chainA.agent1",
+			expected:         false,
+			description:      "Partial prefix matches should not be allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a test event with the specified branch.
+			testEvent := &event.Event{
+				Branch: tt.eventBranch,
+			}
+
+			// Test the branch filtering logic.
+			result := p.isEventBelongsToBranch(tt.invocationBranch, testEvent)
+
+			assert.Equal(t, tt.expected, result,
+				"isEventBelongsToBranch(%q, %q) = %v, expected %v. %s",
+				tt.invocationBranch, tt.eventBranch, result, tt.expected, tt.description)
+		})
+	}
 }
