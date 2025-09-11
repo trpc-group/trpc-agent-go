@@ -244,7 +244,12 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	// run event tunnel
 	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
 	if err := tunnel.Run(ctx); err != nil {
-		log.Warnf("Event tunnel error: %v", err)
+		log.Warnf("Event transfer error: %v", err)
+		errMsg := protocol.NewMessage(
+			protocol.MessageRoleAgent,
+			[]protocol.Part{protocol.NewTextPart(fmt.Sprintf("Event transfer error: %v", err))},
+		)
+		subscriber.Send(protocol.StreamingMessageEvent{Result: &errMsg})
 		return
 	}
 }
@@ -255,33 +260,33 @@ func (m *messageProcessor) processBatchStreamingEvents(
 	batch []*event.Event,
 	subscriber taskmanager.TaskSubscriber,
 ) (bool, error) {
-	hasFinalEvent := false
 	for _, agentEvent := range batch {
 		if agentEvent.Response == nil {
+			log.Infof("received empty response event, continue, event: %v", agentEvent)
 			continue
 		}
 
 		// Convert event to A2A message for streaming
 		a2aMsg, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(ctx, agentEvent)
 		if err != nil {
-			log.Errorf("Failed to convert event to A2A message: %v", err)
-			continue
+			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
 		}
+
+		// Send message if conversion successful
 		if a2aMsg != nil {
 			if err := subscriber.Send(protocol.StreamingMessageEvent{Result: a2aMsg}); err != nil {
-				log.Errorf("Failed to send message event: %v", err)
+				return false, fmt.Errorf("failed to send streaming message event: %w", err)
 			}
 		}
 
-		// Check if this is the final event
+		// Check if this is the final event - stop processing if done
 		if agentEvent.Response.Done {
-			hasFinalEvent = true
-			break
+			return false, nil
 		}
 	}
 
-	// Return false to stop tunnel if we encountered the final event
-	return !hasFinalEvent, nil
+	// Continue processing - need more data
+	return true, nil
 }
 
 func (m *messageProcessor) processMessage(
@@ -308,7 +313,7 @@ func (m *messageProcessor) processMessage(
 		a2aMsg, err := m.eventToA2AConverter.ConvertToA2AMessage(ctx, agentEvent)
 		if err != nil {
 			log.Errorf("failed to convert event to A2A message: %v", err)
-			continue
+			return nil, err
 		}
 		if a2aMsg != nil {
 			allParts = append(allParts, a2aMsg.Parts...)
