@@ -31,6 +31,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 )
 
+// TracerProvider is the global tracer TracerProvider for telemetry.
 var TracerProvider trace.TracerProvider = noop.NewTracerProvider()
 
 // Tracer is the global tracer instance for telemetry.
