@@ -91,16 +91,20 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(KeyGenAIToolName, declaration.Name),
 		attribute.String(KeyGenAIToolDesc, declaration.Description),
-		attribute.String(KeyEventID, rspEvent.ID),
-		attribute.String(KeyToolID, rspEvent.Response.ID),
 	)
+	if rspEvent != nil {
+		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
+	}
 
 	// args is json-encoded.
 	span.SetAttributes(attribute.String(KeyToolCallArgs, string(args)))
-	if bts, err := json.Marshal(rspEvent.Response); err == nil {
-		span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
-	} else {
-		span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
+	if rspEvent != nil && rspEvent.Response != nil {
+		span.SetAttributes(attribute.String(KeyToolID, rspEvent.Response.ID))
+		if bts, err := json.Marshal(rspEvent.Response); err == nil {
+			span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
+		} else {
+			span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
+		}
 	}
 
 	// Setting empty llm request and response (as UI expect these) while not
