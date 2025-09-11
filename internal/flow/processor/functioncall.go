@@ -241,7 +241,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -375,7 +374,6 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -456,10 +454,11 @@ func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, i
 		return nil
 	}
 
+	completionID := agent.AppendEventNoticeKeyPrefix + lastEvent.ID
 	select {
-	case <-invocation.AddNoticeChannel(ctx, lastEvent.CompletionID):
+	case <-invocation.AddNoticeChannel(ctx, completionID):
 	case <-time.After(eventCompletionTimeout):
-		log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+		log.Warnf("Timeout waiting for completion of event %s", lastEvent.ID)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

@@ -260,8 +260,6 @@ type Event struct {
 	Branch string `json:"branch,omitempty"`
 	// RequiresCompletion 标识此事件是否需要完成信号
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
-	// CompletionID 用于此事件的完成信号
-	CompletionID string `json:"completionId,omitempty"`
 	// LongRunningToolIDs 是长时间运行函数调用的 ID 集合，Agent 客户端可以通过此字段了解哪个函数调用是长时间运行的，仅对函数调用事件有效
 	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }

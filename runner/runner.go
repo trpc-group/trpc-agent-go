@@ -191,7 +191,8 @@ func (r *runner) Run(
 			}
 
 			if agentEvent.RequiresCompletion {
-				invocation.NotifyCompletion(ctx, agentEvent.CompletionID)
+				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
+				invocation.NotifyCompletion(ctx, completionID)
 			}
 
 			// Forward the event to the output channel.

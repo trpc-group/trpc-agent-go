@@ -144,7 +144,6 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		event.WithStateDelta(stateDelta),
 	)
 	stateEvent.RequiresCompletion = true
-	stateEvent.CompletionID = stateEvent.ID
 	select {
 	case ch <- stateEvent:
 		log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
@@ -152,9 +151,10 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		return
 	}
 
-	if err := invocation.AddNoticeChannelAndWait(ctx, stateEvent.CompletionID,
+	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
+	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,
 		agent.WaitNoticeWithoutTimeout); err != nil {
-		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.CompletionID, err)
+		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.ID, err)
 	}
 }
 

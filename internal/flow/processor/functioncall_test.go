@@ -1056,7 +1056,6 @@ func TestWaitForCompletion_SignalReceived(t *testing.T) {
 	inv := agent.NewInvocation()
 	evt := event.New("inv-comp", "author")
 	evt.RequiresCompletion = true
-	evt.CompletionID = "done-1"
 	// send completion
 	ch <- "done-1"
 	err := f.waitForCompletion(ctx, inv, evt)
@@ -1070,7 +1069,6 @@ func TestWaitForCompletion_ContextCancelled(t *testing.T) {
 	inv := agent.NewInvocation()
 	evt := event.New("inv-comp2", "author")
 	evt.RequiresCompletion = true
-	evt.CompletionID = "x"
 	err := f.waitForCompletion(ctx, inv, evt)
 	require.Error(t, err)
 }

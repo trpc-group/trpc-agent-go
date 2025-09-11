@@ -28,6 +28,9 @@ import (
 const (
 	// WaitNoticeWithoutTimeout is the timeout duration for waiting without timeout
 	WaitNoticeWithoutTimeout = 0 * time.Second
+
+	// AppendEventNoticeKeyPrefix is the prefix for append event notice keys
+	AppendEventNoticeKeyPrefix = "append_event:"
 )
 
 // TransferInfo contains information about a pending agent transfer.
