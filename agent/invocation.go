@@ -95,7 +95,7 @@ func AsWaitNoticeTimeoutError(err error) (*WaitNoticeTimeoutError, bool) {
 	return waitNoticeTimeoutErr, ok
 }
 
-// NewStopError creates a new AsWaitNoticeTimeoutError with the given message.
+// NewWaitNoticeTimeoutError creates a new AsWaitNoticeTimeoutError with the given message.
 func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 	return &WaitNoticeTimeoutError{Message: message}
 }

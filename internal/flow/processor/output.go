@@ -144,6 +144,7 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		event.WithStateDelta(stateDelta),
 	)
 	stateEvent.RequiresCompletion = true
+	stateEvent.CompletionID = stateEvent.ID
 	select {
 	case ch <- stateEvent:
 		log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
@@ -151,7 +152,7 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		return
 	}
 	select {
-	case <-invocation.AddNoticeChannel(ctx, stateEvent.ID):
+	case <-invocation.AddNoticeChannel(ctx, stateEvent.CompletionID):
 	case <-ctx.Done():
 		return
 	}
