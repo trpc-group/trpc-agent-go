@@ -11,9 +11,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 
@@ -74,6 +76,29 @@ type Invocation struct {
 	noticeMu      *sync.Mutex
 }
 
+// WaitNoticeTimeoutError represents an error that signals the wait notice timeout.
+type WaitNoticeTimeoutError struct {
+	// Message contains the stop reason
+	Message string
+}
+
+// Error implements the error interface.
+func (e *WaitNoticeTimeoutError) Error() string {
+	return e.Message
+}
+
+// AsWaitNoticeTimeoutError checks if an error is a AsWaitNoticeTimeoutError using errors.As.
+func AsWaitNoticeTimeoutError(err error) (*WaitNoticeTimeoutError, bool) {
+	var waitNoticeTimeoutErr *WaitNoticeTimeoutError
+	ok := errors.As(err, &waitNoticeTimeoutErr)
+	return waitNoticeTimeoutErr, ok
+}
+
+// NewStopError creates a new AsWaitNoticeTimeoutError with the given message.
+func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
+	return &WaitNoticeTimeoutError{Message: message}
+}
+
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
 
@@ -129,6 +154,18 @@ func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
 	}
 
 	return &branchInvocation
+}
+
+// AddNoticeChannelAndWait add notice channel and wait it complete
+func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
+	select {
+	case <-inv.AddNoticeChannel(ctx, key):
+	case <-time.After(timeout):
+		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
 }
 
 // AddNoticeChannel add a new notice channel
