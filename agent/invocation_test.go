@@ -20,10 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// =========================
-// BeforeAgent Callback Tests
-// =========================
-
 func TestNewInvocation(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationID("test-invocation"),
