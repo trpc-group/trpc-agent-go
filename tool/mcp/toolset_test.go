@@ -13,6 +13,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewMCPToolSet(t *testing.T) {
@@ -235,4 +236,76 @@ func TestEmptyFilterList(t *testing.T) {
 	if len(filtered) != len(testTools) {
 		t.Errorf("Empty include filter should return all tools. Expected %d, got %d", len(testTools), len(filtered))
 	}
+}
+
+// TestTimeoutContextCreation tests the createTimeoutContext method
+func TestTimeoutContextCreation(t *testing.T) {
+	config := ConnectionConfig{
+		Transport: "stdio",
+		Command:   "echo",
+		Args:      []string{"hello"},
+		Timeout:   2 * time.Second,
+	}
+
+	manager := newMCPSessionManager(config, nil)
+
+	t.Run("adds timeout when context has no deadline", func(t *testing.T) {
+		ctx := context.Background() // No deadline
+		timeoutCtx, cancel := manager.createTimeoutContext(ctx, "test")
+		defer cancel()
+
+		deadline, hasDeadline := timeoutCtx.Deadline()
+		if !hasDeadline {
+			t.Error("Expected context to have deadline when timeout is configured")
+		}
+
+		// Check that deadline is approximately 2 seconds from now
+		expectedDeadline := time.Now().Add(2 * time.Second)
+		if deadline.Before(expectedDeadline.Add(-100*time.Millisecond)) ||
+			deadline.After(expectedDeadline.Add(100*time.Millisecond)) {
+			t.Errorf("Deadline not within expected range. Got: %v, Expected around: %v", deadline, expectedDeadline)
+		}
+	})
+
+	t.Run("preserves existing deadline", func(t *testing.T) {
+		originalDeadline := time.Now().Add(5 * time.Second)
+		ctx, cancel := context.WithDeadline(context.Background(), originalDeadline)
+		defer cancel()
+
+		timeoutCtx, timeoutCancel := manager.createTimeoutContext(ctx, "test")
+		defer timeoutCancel()
+
+		deadline, hasDeadline := timeoutCtx.Deadline()
+		if !hasDeadline {
+			t.Error("Expected context to preserve existing deadline")
+		}
+
+		if !deadline.Equal(originalDeadline) {
+			t.Errorf("Expected deadline to be preserved. Got: %v, Expected: %v", deadline, originalDeadline)
+		}
+	})
+
+	t.Run("no timeout when not configured", func(t *testing.T) {
+		configNoTimeout := ConnectionConfig{
+			Transport: "stdio",
+			Command:   "echo",
+			Args:      []string{"hello"},
+			// No Timeout specified
+		}
+		managerNoTimeout := newMCPSessionManager(configNoTimeout, nil)
+
+		ctx := context.Background()
+		timeoutCtx, cancel := managerNoTimeout.createTimeoutContext(ctx, "test")
+		defer cancel()
+
+		_, hasDeadline := timeoutCtx.Deadline()
+		if hasDeadline {
+			t.Error("Expected no deadline when timeout is not configured")
+		}
+
+		// Should return the same context
+		if timeoutCtx != ctx {
+			t.Error("Expected same context to be returned when no timeout is configured")
+		}
+	})
 }
