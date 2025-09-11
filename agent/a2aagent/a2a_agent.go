@@ -50,6 +50,7 @@ type A2AAgent struct {
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
+	transferStateKey     []string               // Keysa in session state to transfer to the A2A agent message by metadata
 
 	httpClient *http.Client
 	a2aClient  *client.A2AClient
@@ -182,6 +183,17 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	if err != nil || message == nil {
 		return nil, fmt.Errorf("custom A2A converter failed, msg:%v, err:%w", message, err)
 	}
+
+	if len(r.transferStateKey) > 0 {
+		if message.Metadata == nil {
+			message.Metadata = make(map[string]interface{})
+		}
+		for _, key := range r.transferStateKey {
+			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
+				message.Metadata[key] = value
+			}
+		}
+	}
 	return message, nil
 }
 
@@ -208,11 +220,12 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 			return
 		}
 
-		var aggregatedContent string
+		var aggregatedContentBuilder strings.Builder
 		for streamEvent := range streamChan {
 			select {
 			case <-ctx.Done():
-				r.sendErrorEvent(eventChan, invocation, "context cancelled")
+				// For streaming requests, treat caller cancellation as normal shutdown
+				// and stop without emitting an extra error event.
 				return
 			default:
 			}
@@ -232,10 +245,10 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 						return
 					}
 					if content != "" {
-						aggregatedContent += content
+						aggregatedContentBuilder.WriteString(content)
 					}
 				} else if event.Response.Choices[0].Delta.Content != "" {
-					aggregatedContent += event.Response.Choices[0].Delta.Content
+					aggregatedContentBuilder.WriteString(event.Response.Choices[0].Delta.Content)
 				}
 			}
 
@@ -257,7 +270,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 				Choices: []model.Choice{{
 					Message: model.Message{
 						Role:    model.RoleAssistant,
-						Content: aggregatedContent,
+						Content: aggregatedContentBuilder.String(),
 					},
 				}},
 			},
