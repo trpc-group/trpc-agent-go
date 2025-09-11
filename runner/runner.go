@@ -154,7 +154,8 @@ func (r *runner) Run(
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
-	invocation := agent.NewInvocation(invocationID, sess)
+	invocation := agent.NewInvocation()
+	invocation.Session = sess
 	invocation.Agent = r.agent
 	invocation.Message = message
 	invocation.RunOptions = ro

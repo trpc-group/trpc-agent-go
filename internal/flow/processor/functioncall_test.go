@@ -269,13 +269,11 @@ func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 		tool2.Declaration().Name: tool2,
 		tool3.Declaration().Name: tool3,
 	}
-	invocation := &agent.Invocation{
-		AgentName:    "test-agent",
-		InvocationID: "test-serial-execution",
-		Model:        mockModel,
-		Agent:        testAgent,
-		Session:      &session.Session{ID: "test-session"},
-	}
+	invocation := agent.NewInvocation()
+	invocation.Session = &session.Session{ID: "test-session"}
+	invocation.AgentName = "test-agent"
+	invocation.Model = mockModel
+	invocation.Agent = testAgent
 
 	// Test with EnableParallelTools = false (default)
 	startTime := time.Now()
@@ -413,13 +411,12 @@ func runParallelToolTest(t *testing.T, tc parallelTestCase) {
 		tools: tc.tools,
 	}
 
-	invocation := &agent.Invocation{
-		AgentName:    "test-agent",
-		InvocationID: fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-")),
-		Model:        mockModel,
-		Agent:        testAgent,
-		Session:      &session.Session{ID: "test-session"},
-	}
+	invocation := agent.NewInvocation()
+	invocation.AgentName = "test-agent"
+	invocation.InvocationID = fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-"))
+	invocation.Model = mockModel
+	invocation.Agent = testAgent
+	invocation.Session = &session.Session{ID: "test-session"}
 
 	// Run test with specified parallel setting
 	toolMap := map[string]tool.Tool{}
@@ -1056,7 +1053,7 @@ func TestWaitForCompletion_SignalReceived(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx := context.Background()
 	ch := make(chan string, 1)
-	inv := agent.NewInvocation("inv-comp", nil)
+	inv := agent.NewInvocation()
 	evt := event.New("inv-comp", "author")
 	evt.RequiresCompletion = true
 	evt.CompletionID = "done-1"
@@ -1070,7 +1067,7 @@ func TestWaitForCompletion_ContextCancelled(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	inv := agent.NewInvocation("inv-comp", nil)
+	inv := agent.NewInvocation()
 	evt := event.New("inv-comp2", "author")
 	evt.RequiresCompletion = true
 	evt.CompletionID = "x"

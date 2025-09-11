@@ -62,7 +62,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 	processor := NewOutputResponseProcessor("test_key", nil)
 
 	// Create a test invocation
-	invocation := agent.NewInvocation("test_invocation", nil)
+	invocation := agent.NewInvocation()
 	invocation.AgentName = "test_agent"
 
 	// Create a test response with content
@@ -138,7 +138,7 @@ func TestOutputResponseProcessor_ProcessResponse_NoOutputKey(t *testing.T) {
 	processor := NewOutputResponseProcessor("", nil)
 
 	// Create a test invocation
-	invocation := agent.NewInvocation("test_invocation", nil)
+	invocation := agent.NewInvocation()
 	invocation.AgentName = "test_agent"
 
 	// Create a test response with content
@@ -179,7 +179,7 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 	processor := NewOutputResponseProcessor("test_key", nil)
 
 	// Create a test invocation
-	invocation := agent.NewInvocation("test_invocation", nil)
+	invocation := agent.NewInvocation()
 	invocation.AgentName = "test_agent"
 
 	// Create a test response that is partial

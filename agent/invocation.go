@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -128,10 +129,9 @@ type RunOptions struct {
 }
 
 // NewInvocation create a new invocation
-func NewInvocation(invocationID string, session *session.Session) *Invocation {
+func NewInvocation() *Invocation {
 	return &Invocation{
-		InvocationID:  invocationID,
-		Session:       session,
+		InvocationID:  uuid.NewString(),
 		noticeMu:      &sync.Mutex{},
 		noticeChanMap: make(map[string]chan any),
 	}
