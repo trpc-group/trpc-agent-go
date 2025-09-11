@@ -368,18 +368,16 @@ Runner 创建并管理 Invocation 结构：
 
 ```go
 // Runner 创建的 Invocation 包含以下字段：
-invocation := &agent.Invocation{
-    Agent:             r.agent,                // Agent 实例
-    Session:           sess,                   // 会话对象
-    InvocationID:      invocationID,           // 唯一标识
-    EndInvocation:     false,                  // 结束标志
-    Message:           message,                // 用户消息
-    RunOptions:        ro,                     // 运行选项
-    EventCompletionCh: eventCompletionCh,      // 事件完成通道
-    // 注：Invocation 还包含其他字段如 AgentName、Branch、Model、
-    // TransferInfo、AgentCallbacks、ModelCallbacks、ToolCallbacks 等，
-    // 但这些字段由 Agent 内部使用和管理
-}
+invocation := agent.NewInvocation()
+invocation.Agent         = r.agent               // Agent 实例
+invocation.Session       =sess                   // 会话对象
+invocation.InvocationID  = invocationID           // 唯一标识
+invocation.EndInvocation = alse                  // 结束标志
+invocation.Message       = message                // 用户消息
+invocation.RunOptions    =ro                    // 运行选项
+// 注：Invocation 还包含其他字段如 AgentName、Branch、Model、
+// TransferInfo、AgentCallbacks、ModelCallbacks、ToolCallbacks 等，
+// 但这些字段由 Agent 内部使用和管理
 ```
 
 ## ✅ 使用注意事项
