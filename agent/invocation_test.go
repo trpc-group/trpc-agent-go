@@ -94,24 +94,108 @@ func TestAddNoticeChannel(t *testing.T) {
 }
 
 func TestAddNoticeChannelAndWait(t *testing.T) {
-	inv := NewInvocation()
-	ctx := context.Background()
-	// Wait for the channel to be closed
-	complete := false
-	startTime := time.Now()
-	go func() {
-		err := inv.AddNoticeChannelAndWait(ctx, "test-channel", 500*time.Millisecond)
-		require.NoError(t, err)
-		complete = true
-	}()
-	time.Sleep(100 * time.Millisecond)
-	inv.NotifyCompletion(ctx, "test-channel")
-	require.Equal(t, 0, len(inv.noticeChanMap))
-	for {
-		if complete {
-			break
-		}
+	type acualTime struct {
+		min time.Duration
+		max time.Duration
 	}
-	duration := time.Since(startTime)
-	require.True(t, duration > 100*time.Millisecond && duration < 500*time.Millisecond)
+	tests := []struct {
+		name        string
+		ctxDelay    time.Duration
+		noticeKey   string
+		waitTimeout time.Duration
+		errType     int // 0: no error, 1: timeout error, 2: context error
+		mainSleep   time.Duration
+		acualTime   acualTime
+	}{
+		{
+			name:        "wait_with_context_cancel_error",
+			ctxDelay:    50 * time.Millisecond,
+			noticeKey:   "test-channel-1",
+			waitTimeout: 100 * time.Millisecond,
+			errType:     2,
+			mainSleep:   300 * time.Millisecond,
+			acualTime: acualTime{
+				min: 50 * time.Millisecond,
+				max: 150 * time.Millisecond,
+			},
+		},
+		{
+			name:        "wait_with_timeout_err",
+			ctxDelay:    0,
+			noticeKey:   "test-channel-2",
+			errType:     1,
+			waitTimeout: 100 * time.Millisecond,
+			mainSleep:   300 * time.Millisecond,
+			acualTime: acualTime{
+				min: 100 * time.Millisecond,
+				max: 300 * time.Millisecond,
+			},
+		},
+		{
+			name:        "wait_normal_case_1",
+			ctxDelay:    0,
+			noticeKey:   "test-channel-3",
+			errType:     0,
+			waitTimeout: 1 * time.Second,
+			mainSleep:   300 * time.Millisecond,
+			acualTime: acualTime{
+				min: 30 * time.Millisecond,
+				max: 1 * time.Second,
+			},
+		},
+		{
+			name:        "wait_normal_case_4",
+			ctxDelay:    2 * time.Second,
+			noticeKey:   "test-channel-4",
+			errType:     0,
+			waitTimeout: 1 * time.Second,
+			mainSleep:   300 * time.Millisecond,
+			acualTime: acualTime{
+				min: 300 * time.Millisecond,
+				max: 1 * time.Second,
+			},
+		},
+	}
+
+	inv := NewInvocation()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tt.ctxDelay > 0 {
+				ctx, _ = context.WithTimeout(ctx, tt.ctxDelay)
+			}
+			complete := false
+			startTime := time.Now()
+			go func() {
+				startTime := time.Now()
+				err := inv.AddNoticeChannelAndWait(ctx, tt.noticeKey, tt.waitTimeout)
+				duration := time.Since(startTime)
+				complete = true
+				require.True(t, duration > tt.acualTime.min && duration < tt.acualTime.max)
+
+				switch tt.errType {
+				case 0:
+					require.NoError(t, err)
+				case 1:
+					require.Error(t, err)
+					_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
+					require.True(t, isWaitNoticeTimeoutError)
+				case 2:
+					require.Error(t, err)
+					_, isWaitNoticeTimeoutError := AsWaitNoticeTimeoutError(err)
+					require.False(t, isWaitNoticeTimeoutError)
+				}
+			}()
+			time.Sleep(tt.mainSleep)
+			inv.NotifyCompletion(ctx, tt.noticeKey)
+			require.Equal(t, 0, len(inv.noticeChanMap))
+			for {
+				if complete {
+					break
+				}
+			}
+			duration := time.Since(startTime)
+			require.True(t, duration > tt.mainSleep)
+		})
+	}
 }
