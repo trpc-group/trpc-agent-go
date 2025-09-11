@@ -86,10 +86,6 @@ type options struct {
 // Option is a function that configures a Server.
 type Option func(*options)
 
-var defaultOptions = &options{
-	host: "localhost:8080",
-}
-
 // WithSessionService sets the session service to use.
 func WithSessionService(service session.Service) Option {
 	return func(opts *options) {
