@@ -134,12 +134,18 @@ type RunOptions struct {
 }
 
 // NewInvocation create a new invocation
-func NewInvocation() *Invocation {
-	return &Invocation{
+func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
+	inv := &Invocation{
 		InvocationID:  uuid.NewString(),
 		noticeMu:      &sync.Mutex{},
 		noticeChanMap: make(map[string]chan any),
 	}
+
+	for _, opt := range invocationOpts {
+		opt(inv)
+	}
+
+	return inv
 }
 
 // CreateBranchInvocation create a new invocation for branch agent

@@ -269,11 +269,11 @@ func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 		tool2.Declaration().Name: tool2,
 		tool3.Declaration().Name: tool3,
 	}
-	invocation := agent.NewInvocation()
-	invocation.Session = &session.Session{ID: "test-session"}
-	invocation.AgentName = "test-agent"
-	invocation.Model = mockModel
-	invocation.Agent = testAgent
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(testAgent),
+		agent.WithInvocationModel(mockModel),
+	)
 
 	// Test with EnableParallelTools = false (default)
 	startTime := time.Now()
@@ -411,12 +411,12 @@ func runParallelToolTest(t *testing.T, tc parallelTestCase) {
 		tools: tc.tools,
 	}
 
-	invocation := agent.NewInvocation()
-	invocation.AgentName = "test-agent"
-	invocation.InvocationID = fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-"))
-	invocation.Model = mockModel
-	invocation.Agent = testAgent
-	invocation.Session = &session.Session{ID: "test-session"}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID(fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-"))),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(testAgent),
+		agent.WithInvocationModel(mockModel),
+	)
 
 	// Run test with specified parallel setting
 	toolMap := map[string]tool.Tool{}

@@ -154,13 +154,14 @@ func (r *runner) Run(
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
-	invocation := agent.NewInvocation()
-	invocation.InvocationID = invocationID
-	invocation.Session = sess
-	invocation.Agent = r.agent
-	invocation.Message = message
-	invocation.RunOptions = ro
-	invocation.ArtifactService = r.artifactService
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID(invocationID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationAgent(r.agent),
+		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationArtifactService(r.artifactService),
+	)
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like

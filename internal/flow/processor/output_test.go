@@ -63,8 +63,6 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 
 	// Create a test invocation
 	invocation := agent.NewInvocation()
-	invocation.InvocationID = "test_invocation"
-	invocation.AgentName = "test_agent"
 
 	// Create a test response with content
 	response := &model.Response{
@@ -140,7 +138,6 @@ func TestOutputResponseProcessor_ProcessResponse_NoOutputKey(t *testing.T) {
 
 	// Create a test invocation
 	invocation := agent.NewInvocation()
-	invocation.AgentName = "test_agent"
 
 	// Create a test response with content
 	response := &model.Response{
@@ -181,7 +178,6 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 
 	// Create a test invocation
 	invocation := agent.NewInvocation()
-	invocation.AgentName = "test_agent"
 
 	// Create a test response that is partial
 	response := &model.Response{
