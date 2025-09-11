@@ -151,21 +151,21 @@ func links(links []tracesdk.Link) []*tracepb.Span_Link {
 	}
 
 	sl := make([]*tracepb.Span_Link, 0, len(links))
-	for _, otLink := range links {
-		// This redefinition is necessary to prevent otLink.*ID[:] copies
-		// being reused -- in short we need a new otLink per iteration.
-		otLink := otLink
+	for _, link := range links {
+		// This redefinition is necessary to prevent link.*ID[:] copies
+		// being reused -- in short we need a new link per iteration.
+		link := link
 
-		tid := otLink.SpanContext.TraceID()
-		sid := otLink.SpanContext.SpanID()
+		tid := link.SpanContext.TraceID()
+		sid := link.SpanContext.SpanID()
 
-		flags := buildSpanFlags(otLink.SpanContext)
+		flags := buildSpanFlags(link.SpanContext)
 
 		sl = append(sl, &tracepb.Span_Link{
 			TraceId:                tid[:],
 			SpanId:                 sid[:],
-			Attributes:             KeyValues(otLink.Attributes),
-			DroppedAttributesCount: clampUint32(otLink.DroppedAttributeCount),
+			Attributes:             KeyValues(link.Attributes),
+			DroppedAttributesCount: clampUint32(link.DroppedAttributeCount),
 			Flags:                  flags,
 		})
 	}
