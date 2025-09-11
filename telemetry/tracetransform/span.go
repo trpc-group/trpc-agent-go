@@ -99,8 +99,8 @@ func span(sd tracesdk.ReadOnlySpan) *tracepb.Span {
 		SpanId:                 sid[:],
 		TraceState:             sd.SpanContext().TraceState().String(),
 		Status:                 status(sd.Status().Code, sd.Status().Description),
-		StartTimeUnixNano:      uint64(sd.StartTime().UnixNano()),
-		EndTimeUnixNano:        uint64(sd.EndTime().UnixNano()),
+		StartTimeUnixNano:      safeTimeToUint64(sd.StartTime().UnixNano()),
+		EndTimeUnixNano:        safeTimeToUint64(sd.EndTime().UnixNano()),
 		Links:                  links(sd.Links()),
 		Kind:                   spanKind(sd.SpanKind()),
 		Name:                   sd.Name(),
@@ -127,6 +127,22 @@ func clampUint32(v int) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(v) // nolint: gosec  // Overflow/Underflow checked.
+}
+
+// safeTimeToUint64 safely converts time.UnixNano() (int64) to uint64
+func safeTimeToUint64(nanos int64) uint64 {
+	if nanos < 0 {
+		return 0
+	}
+	return uint64(nanos) // nolint: gosec  // Negative values checked above.
+}
+
+// safeSpanFlagsToUint32 safely converts SpanFlags to uint32
+func safeSpanFlagsToUint32(v tracepb.SpanFlags) uint32 {
+	if int32(v) < 0 {
+		return 0
+	}
+	return uint32(v) // nolint: gosec  // Negative values checked above.
 }
 
 // status transform a span code and message into an OTLP span status.
@@ -180,7 +196,7 @@ func buildSpanFlags(sc trace.SpanContext) uint32 {
 		flags |= tracepb.SpanFlags_SPAN_FLAGS_CONTEXT_IS_REMOTE_MASK
 	}
 
-	return uint32(flags)
+	return safeSpanFlagsToUint32(flags)
 }
 
 // spanEvents transforms span Events to an OTLP span events.
@@ -194,7 +210,7 @@ func spanEvents(es []tracesdk.Event) []*tracepb.Span_Event {
 	for i := 0; i < len(es); i++ {
 		events[i] = &tracepb.Span_Event{
 			Name:                   es[i].Name,
-			TimeUnixNano:           uint64(es[i].Time.UnixNano()),
+			TimeUnixNano:           safeTimeToUint64(es[i].Time.UnixNano()),
 			Attributes:             KeyValues(es[i].Attributes),
 			DroppedAttributesCount: clampUint32(es[i].DroppedAttributeCount),
 		}
