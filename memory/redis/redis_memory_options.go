@@ -10,8 +10,8 @@
 package redis
 
 import (
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
 // ServiceOpts is the options for the redis memory service.
@@ -23,10 +23,7 @@ type ServiceOpts struct {
 	// Tool related settings.
 	toolCreators map[string]memory.ToolCreator
 	enabledTools map[string]bool
-	extraOptions []interface{}
-
-	// Instruction builder used to customize memory instruction.
-	instructionBuilder func(enabledTools []string, defaultPrompt string) string
+	extraOptions []any
 }
 
 // ServiceOpt is the option for the redis memory service.
@@ -81,16 +78,8 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 
 // WithExtraOptions sets the extra options for the redis session service.
 // this option mainly used for the customized redis client builder, it will be passed to the builder.
-func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
+func WithExtraOptions(extraOptions ...any) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
-	}
-}
-
-// WithInstructionBuilder sets a custom instruction builder used by internal GenerateInstruction.
-// The builder receives enabled tool names and the framework's default prompt, and should return the final prompt.
-func WithInstructionBuilder(builder func(enabledTools []string, defaultPrompt string) string) ServiceOpt {
-	return func(opts *ServiceOpts) {
-		opts.instructionBuilder = builder
 	}
 }

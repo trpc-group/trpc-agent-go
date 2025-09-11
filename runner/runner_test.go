@@ -18,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -84,7 +86,7 @@ func (m *mockAgent) Tools() []tool.Tool {
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -141,7 +143,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -181,7 +183,7 @@ func TestRunner_SessionCreateIfMissing(t *testing.T) {
 
 func TestRunner_EmptyMessageHandling(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -222,7 +224,7 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
 func TestRunner_InvocationInjection(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a simple mock agent that verifies invocation is in context.
 	mockAgent := &invocationVerificationAgent{name: "test-agent"}
@@ -336,4 +338,46 @@ func (m *invocationVerificationAgent) Run(ctx context.Context, invocation *agent
 
 func (m *invocationVerificationAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func TestWithMemoryService(t *testing.T) {
+	t.Run("sets memory service in options", func(t *testing.T) {
+		memoryService := memoryinmemory.NewMemoryService()
+		opts := &Options{}
+
+		option := WithMemoryService(memoryService)
+		option(opts)
+
+		assert.Equal(t, memoryService, opts.memoryService, "Memory service should be set in options")
+	})
+
+	t.Run("sets nil memory service", func(t *testing.T) {
+		opts := &Options{}
+
+		option := WithMemoryService(nil)
+		option(opts)
+
+		assert.Nil(t, opts.memoryService, "Memory service should be nil")
+	})
+}
+
+func TestWithArtifactService(t *testing.T) {
+	t.Run("sets artifact service in options", func(t *testing.T) {
+		artifactService := artifactinmemory.NewService()
+		opts := &Options{}
+
+		option := WithArtifactService(artifactService)
+		option(opts)
+
+		assert.Equal(t, artifactService, opts.artifactService, "Artifact service should be set in options")
+	})
+
+	t.Run("sets nil artifact service", func(t *testing.T) {
+		opts := &Options{}
+
+		option := WithArtifactService(nil)
+		option(opts)
+
+		assert.Nil(t, opts.artifactService, "Artifact service should be nil")
+	})
 }

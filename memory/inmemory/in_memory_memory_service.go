@@ -19,20 +19,12 @@ import (
 	"sync"
 	"time"
 
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var _ memory.Service = (*MemoryService)(nil)
-
-// defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = imemory.DefaultEnabledTools
-
-const (
-	// defaultMemoryLimit is the default limit of memories per user.
-	defaultMemoryLimit = imemory.DefaultMemoryLimit
-)
 
 // appMemories represents memories for a specific app.
 type appMemories struct {
@@ -55,8 +47,6 @@ type serviceOpts struct {
 	toolCreators map[string]memory.ToolCreator
 	// enabledTools are the names of tools to enable.
 	enabledTools map[string]bool
-	// instructionBuilder builds the memory instruction string from enabled tools and default prompt.
-	instructionBuilder func(enabledTools []string, defaultPrompt string) string
 }
 
 // MemoryService is an in-memory implementation of memory.Service.
@@ -74,13 +64,13 @@ type MemoryService struct {
 // NewMemoryService creates a new in-memory memory service.
 func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	opts := serviceOpts{
-		memoryLimit:  defaultMemoryLimit,
+		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
 
 	// Enable default tools first.
-	for toolName, creator := range defaultEnabledTools {
+	for toolName, creator := range imemory.DefaultEnabledTools {
 		opts.enabledTools[toolName] = true
 		opts.toolCreators[toolName] = creator
 	}
@@ -133,26 +123,6 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 	}
 }
 
-// WithInstructionBuilder sets a custom instruction builder used by internal GenerateInstruction.
-// The builder receives enabled tool names and the framework's default prompt, and should return the final prompt.
-func WithInstructionBuilder(builder func(enabledTools []string, defaultPrompt string) string) ServiceOpt {
-	return func(opts *serviceOpts) {
-		opts.instructionBuilder = builder
-	}
-}
-
-// BuildInstruction allows the internal memory package to obtain a customized instruction if provided.
-// Returns (prompt, true) when custom builder is configured; otherwise ("", false).
-func (s *MemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
-	s.mu.RLock()
-	builder := s.opts.instructionBuilder
-	s.mu.RUnlock()
-	if builder == nil {
-		return "", false
-	}
-	return builder(enabledTools, defaultPrompt), true
-}
-
 // getAppMemories gets or creates app memories for the given app name.
 func (s *MemoryService) getAppMemories(appName string) *appMemories {
 	s.mu.RLock()
@@ -188,7 +158,7 @@ func generateMemoryID(memory *memory.Memory) string {
 }
 
 // createMemoryEntry creates a new MemoryEntry from memory data.
-func createMemoryEntry(userID, memoryStr string, topics []string) *memory.Entry {
+func createMemoryEntry(appName, userID, memoryStr string, topics []string) *memory.Entry {
 	now := time.Now()
 
 	// Create Memory object.
@@ -199,11 +169,12 @@ func createMemoryEntry(userID, memoryStr string, topics []string) *memory.Entry 
 	}
 
 	return &memory.Entry{
-		Memory:    memoryObj,
+		ID:        generateMemoryID(memoryObj), // Generate ID.
+		AppName:   appName,
 		UserID:    userID,
+		Memory:    memoryObj,
 		CreatedAt: now,
 		UpdatedAt: now,
-		ID:        generateMemoryID(memoryObj), // Generate ID.
 	}
 }
 
@@ -216,7 +187,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	app := s.getAppMemories(userKey.AppName)
 
 	// Create memory entry with provided topics.
-	memoryEntry := createMemoryEntry(userKey.UserID, memoryStr, topics)
+	memoryEntry := createMemoryEntry(userKey.AppName, userKey.UserID, memoryStr, topics)
 
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -329,9 +300,12 @@ func (s *MemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey
 		memories = append(memories, memoryEntry)
 	}
 
-	// Sort by creation time (newest first).
+	// Sort by updated time (newest first), tie-breaker by created time.
 	sort.Slice(memories, func(i, j int) bool {
-		return memories[i].CreatedAt.After(memories[j].CreatedAt)
+		if memories[i].UpdatedAt.Equal(memories[j].UpdatedAt) {
+			return memories[i].CreatedAt.After(memories[j].CreatedAt)
+		}
+		return memories[i].UpdatedAt.After(memories[j].UpdatedAt)
 	})
 
 	// Apply limit if specified.
@@ -354,7 +328,6 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 	defer app.mu.RUnlock()
 
 	var results []*memory.Entry
-	queryLower := strings.ToLower(query)
 
 	userMemories := app.memories[userKey.UserID]
 	if userMemories == nil {
@@ -362,38 +335,42 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 	}
 
 	for _, memoryEntry := range userMemories {
-		// Simple string search in memory content.
-		if strings.Contains(strings.ToLower(memoryEntry.Memory.Memory), queryLower) {
+		if imemory.MatchMemoryEntry(memoryEntry, query) {
 			results = append(results, memoryEntry)
-			continue
-		}
-
-		// Search in topics.
-		for _, topic := range memoryEntry.Memory.Topics {
-			if strings.Contains(strings.ToLower(topic), queryLower) {
-				results = append(results, memoryEntry)
-				break
-			}
 		}
 	}
+
+	// Sort results by updated time (newest first), tie-breaker by created time.
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
+			return results[i].CreatedAt.After(results[j].CreatedAt)
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
 	return results, nil
 }
 
 // Tools returns the list of available memory tools.
 func (s *MemoryService) Tools() []tool.Tool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Ensure concurrency-safety and stable ordering.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	var tools []tool.Tool
-	for toolName, creator := range s.opts.toolCreators {
+	// Collect enabled tool names and sort for stable order.
+	var names []string
+	for toolName := range s.opts.toolCreators {
 		if s.opts.enabledTools[toolName] {
-			// Create the tool if not cached.
-			if _, exists := s.cachedTools[toolName]; !exists {
-				s.cachedTools[toolName] = creator(s)
-			}
-			tools = append(tools, s.cachedTools[toolName])
+			names = append(names, toolName)
 		}
 	}
+	sort.Strings(names)
 
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, exists := s.cachedTools[name]; !exists {
+			s.cachedTools[name] = s.opts.toolCreators[name]()
+		}
+		tools = append(tools, s.cachedTools[name])
+	}
 	return tools
 }

@@ -13,8 +13,9 @@
 🚀 **一个用于构建智能 agent 系统的强大 Go 框架**，彻底改变您创建 AI 应用的方式。构建能够思考、记忆、协作和行动的自主 agent，前所未有地简单。
 
 ✨ **为什么选择 tRPC-Agent-Go？**
+
 - 🧠 **智能推理**：先进的分层 planner 和多 agent 编排
-- 🧰 **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成  
+- 🧰 **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
 - 💾 **持久化 Memory**：长期状态管理和上下文感知
 - 🔗 **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
 - 📊 **生产就绪**：内置 telemetry、tracing 和企业级可靠性
@@ -23,8 +24,9 @@
 ## 🎯 使用场景
 
 **非常适合构建：**
+
 - 🤖 **客户支持机器人** - 理解上下文并解决复杂查询的智能 agent
-- 📊 **数据分析助手** - 查询数据库、生成报告并提供洞察的 agent  
+- 📊 **数据分析助手** - 查询数据库、生成报告并提供洞察的 agent
 - 🔧 **DevOps 自动化** - 智能部署、监控和事件响应系统
 - 💼 **业务流程自动化** - 具有 human-in-the-loop 能力的多步骤工作流
 - 🧠 **研究与知识管理** - 基于 RAG 的文档分析和问答 agent
@@ -36,6 +38,7 @@
 <td width="50%">
 
 ### 🎪 **多 Agent 编排**
+
 ```go
 // Chain agent 构建复杂工作流
 pipeline := chainagent.New("pipeline",
@@ -52,12 +55,17 @@ parallel := parallelagent.New("concurrent",
 <td width="50%">
 
 ### 🧠 **先进的 Memory 系统**
+
 ```go
 // 带搜索的持久化 memory
 memory := memorysvc.NewInMemoryService()
 agent := llmagent.New("assistant",
-    llmagent.WithMemory(memory),
+    llmagent.WithTools(memory.Tools()),
     llmagent.WithModel(model))
+
+// Memory service 在 runner 层管理
+runner := runner.NewRunner("app", agent,
+    runner.WithMemoryService(memory))
 
 // Agent 在会话间记住上下文
 ```
@@ -68,6 +76,7 @@ agent := llmagent.New("assistant",
 <td>
 
 ### 🛠️ **丰富的 Tool 集成**
+
 ```go
 // 任何函数都可以成为 tool
 calculator := function.NewFunctionTool(
@@ -83,6 +92,7 @@ mcpTool := mcptool.New(serverConn)
 <td>
 
 ### 📈 **生产监控**
+
 ```go
 // OpenTelemetry 集成
 runner := runner.NewRunner("app", agent,
@@ -124,7 +134,7 @@ runner := runner.NewRunner("app", agent,
 
 ## ⚡ 快速开始
 
-> 🎬 **实际演示**：*[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]*
+> 🎬 **实际演示**：_[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]_
 
 ### 📋 前置条件
 
@@ -151,12 +161,13 @@ go run . -model="gpt-4o-mini" -streaming=true
 ```
 
 **您将看到：**
+
 - 💬 **与您的 AI agent 互动聊天**
-- ⚡ **实时流式**响应  
+- ⚡ **实时流式**响应
 - 🧮 **Tool 使用**（计算器 + 时间工具）
 - 🔄 **带 memory 的多轮对话**
 
-试着问问：*"现在几点了？然后计算 15 * 23 + 100"*
+试着问问："现在几点了？然后计算 15 \* 23 + 100"
 
 ### 基本用法
 
@@ -315,7 +326,7 @@ type calculatorRsp struct {
 
 ## 🏗️ 架构概览
 
-架构图 
+架构图
 
 ![architecture](docs/assets/img/component_architecture.png)
 
@@ -330,31 +341,31 @@ type calculatorRsp struct {
 
 关键包：
 
-| Package     | 职责                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                                                                    |
-| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。                                           |
-| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                                                                     |
-| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                                                            |
-| `session`   | 管理用户会话状态与事件。                                                                                      |
-| `memory`    | 记录用户长期记忆与个性化信息。                                                                                |
-| `knowledge` | 实现 RAG 知识检索能力。                                                                                       |
-| `planner`   | 提供 agent 的规划与推理能力。                                                                                 |
+| Package     | 职责                                                               |
+| ----------- | ------------------------------------------------------------------ |
+| `agent`     | 核心执行单元，负责处理用户输入并生成响应。                         |
+| `runner`    | agent 执行器，负责管理执行流程并连接 Session/Memory Service 能力。 |
+| `model`     | 支持多种 LLM 模型（OpenAI、DeepSeek 等）。                         |
+| `tool`      | 提供多种工具能力（Function、MCP、DuckDuckGo 等）。                 |
+| `session`   | 管理用户会话状态与事件。                                           |
+| `memory`    | 记录用户长期记忆与个性化信息。                                     |
+| `knowledge` | 实现 RAG 知识检索能力。                                            |
+| `planner`   | 提供 agent 的规划与推理能力。                                      |
+
 - 时序图
 
 ![execution](docs/assets/img/timing_diagram.png)
-
 
 ## 使用内置 Agents
 
 对于大多数应用，你**不需要**自己实现 `agent.Agent` 接口。框架已经提供了若干可直接使用的 agent，你可以像搭积木一样组合：
 
-| Agent           | 目的                                                |
-| --------------- | --------------------------------------------------- |
-| `LLMAgent`      | 将 LLM chat-completion 模型封装为一个 agent。      |
-| `ChainAgent`    | 依次顺序执行子 agent。                              |
-| `ParallelAgent` | 并发执行子 agent 并合并输出。                      |
-| `CycleAgent`    | 围绕 planner + executor 循环，直到收到停止信号。   |
+| Agent           | 目的                                             |
+| --------------- | ------------------------------------------------ |
+| `LLMAgent`      | 将 LLM chat-completion 模型封装为一个 agent。    |
+| `ChainAgent`    | 依次顺序执行子 agent。                           |
+| `ParallelAgent` | 并发执行子 agent 并合并输出。                    |
+| `CycleAgent`    | 围绕 planner + executor 循环，直到收到停止信号。 |
 
 ### 多 Agent 协作示例
 
@@ -387,18 +398,19 @@ for ev := range events { /* ... */ }
 
 组合式 API 允许你将 chain、cycle 或 parallel 进行嵌套，从而在无需底层管线处理的情况下构建复杂工作流。
 
-
 ## 🤝 贡献
 
 我们 ❤️ 贡献！加入我们不断壮大的开发者社区，共同构建 AI agent 的未来。
 
 ### 🌟 **贡献方式**
+
 - 🐛 **报告 bug** 或通过 [Issues](https://github.com/trpc-group/trpc-agent-go/issues) 建议新功能
 - 📖 **改进文档** - 帮助他人更快学习
 - 🔧 **提交 PR** - bug 修复、新功能或示例
 - 💡 **分享您的用例** - 用您的 agent 应用启发他人
 
 ### 🚀 **快速贡献设置**
+
 ```bash
 # Fork 并克隆仓库
 git clone https://github.com/YOUR_USERNAME/trpc-agent-go.git
@@ -416,9 +428,11 @@ go vet ./...
 ## 🏆 致谢
 
 ### 🏢 **企业验证**
+
 特别感谢腾讯各业务单元，包括**腾讯元宝**、**腾讯视频**、**腾讯新闻**、**IMA** 和 **QQ 音乐**的宝贵支持和生产环境验证推动框架发展
 
-### 🌟 **开源灵感**  
+### 🌟 **开源灵感**
+
 感谢优秀的开源框架如 **ADK**、**Agno**、**CrewAI**、**AutoGen** 等的启发。站在巨人的肩膀上！🙏
 
 ---
@@ -435,8 +449,6 @@ go vet ./...
 
 **由 tRPC-Agent-Go 团队用 ❤️ 构建**
 
-*赋能开发者构建下一代智能应用*
+_赋能开发者构建下一代智能应用_
 
 </div>
-
-
