@@ -209,7 +209,29 @@ func (p *ContentRequestProcessor) isEventBelongsToBranch(
 	if invocationBranch == "" || evt.Branch == "" {
 		return true
 	}
-	return strings.HasPrefix(invocationBranch, evt.Branch)
+
+	// Original logic: can see parent/ancestor events.
+	if strings.HasPrefix(invocationBranch, evt.Branch) {
+		return true
+	}
+
+	// Improved logic: Sequential agents can see their sub-agent events.
+	// This fixes the context continuity issue when ChainAgent contains ParallelAgent.
+	invocationParts := strings.Split(invocationBranch, ".")
+	eventParts := strings.Split(evt.Branch, ".")
+
+	// If event is from a sub-branch (deeper level).
+	if len(eventParts) > len(invocationParts) {
+		// Check if it's actually a sub-branch by comparing prefix.
+		for i, part := range invocationParts {
+			if i >= len(eventParts) || eventParts[i] != part {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
