@@ -50,6 +50,7 @@ type A2AAgent struct {
 	extraA2AOptions      []client.Option        // Additional A2A client options
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
+	transferStateKey     []string               // Keysa in session state to transfer to the A2A agent message by metadata
 
 	httpClient *http.Client
 	a2aClient  *client.A2AClient
@@ -181,6 +182,17 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	message, err := r.a2aMessageConverter.ConvertToA2AMessage(isStream, r.name, invocation)
 	if err != nil || message == nil {
 		return nil, fmt.Errorf("custom A2A converter failed, msg:%v, err:%w", message, err)
+	}
+
+	if len(r.transferStateKey) > 0 {
+		if message.Metadata == nil {
+			message.Metadata = make(map[string]interface{})
+		}
+		for _, key := range r.transferStateKey {
+			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
+				message.Metadata[key] = value
+			}
+		}
 	}
 	return message, nil
 }

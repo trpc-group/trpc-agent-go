@@ -26,6 +26,8 @@ import (
 
 	"go.uber.org/zap"
 	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
@@ -85,6 +87,7 @@ const (
 // Agent names.
 const (
 	agentTechnicalSupport = "technical-support-agent"
+	a2aStateKeyMetadata   = "meta"
 )
 
 var (
@@ -156,6 +159,21 @@ func (w *customerSupportWorkflow) setupLogging() {
 	agentlog.Default = logger.Sugar()
 }
 
+type hookProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (h *hookProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	fmt.Printf("A2A Server: received message:%+v\n", message.MessageID)
+	fmt.Printf("A2A Server: received state: %+v\n", message.Metadata)
+	return h.next.ProcessMessage(ctx, message, options, handler)
+}
+
 // startA2AServer starts the A2A server with a specialized remote agent.
 func (w *customerSupportWorkflow) startA2AServer() {
 	remoteAgent := w.buildRemoteAgent()
@@ -163,6 +181,10 @@ func (w *customerSupportWorkflow) startA2AServer() {
 		a2a.WithHost(w.a2aHost),
 		// Enable A2A streaming to demonstrate live token streaming end-to-end.
 		a2a.WithAgent(remoteAgent, true),
+		a2a.WithProcessMessageHook(
+			func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+				return &hookProcessor{next: next}
+			}),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
@@ -244,6 +266,7 @@ func (w *customerSupportWorkflow) setup() error {
 		// Important: use the same name as the agent node ID so the graph can
 		// resolve and invoke this sub-agent.
 		a2aagent.WithName(nodeTechnicalSupport),
+		a2aagent.WithTransferStateKey(a2aStateKeyMetadata),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create a2a agent: %w", err)
@@ -419,7 +442,9 @@ func (w *customerSupportWorkflow) processQuery(ctx context.Context, query string
 	}
 
 	// Run the workflow.
-	events, err := w.runner.Run(ctx, w.userID, w.sessionID, userMessage)
+	events, err := w.runner.Run(
+		ctx, w.userID, w.sessionID, userMessage, agent.WithRuntimeState(map[string]any{a2aStateKeyMetadata: "test"}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run workflow: %w", err)
 	}

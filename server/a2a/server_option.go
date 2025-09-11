@@ -49,6 +49,9 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 // ProcessorBuilder returns a message processor for the given agent.
 type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
 
+// ProcessMessageHook is a function that wraps the message processor with additional functionality.
+type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
+
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
@@ -72,6 +75,7 @@ type options struct {
 	enableStreaming     bool
 	agentCard           *a2a.AgentCard
 	processorBuilder    ProcessorBuilder
+	processorHook       ProcessMessageHook
 	taskManagerBuilder  TaskManagerBuilder
 	a2aToAgentConverter A2AMessageToAgentMessage
 	eventToA2AConverter EventToA2AMessage
@@ -81,10 +85,6 @@ type options struct {
 
 // Option is a function that configures a Server.
 type Option func(*options)
-
-var defaultOptions = &options{
-	host: "localhost:8080",
-}
 
 // WithSessionService sets the session service to use.
 func WithSessionService(service session.Service) Option {
@@ -112,6 +112,14 @@ func WithAgentCard(agentCard a2a.AgentCard) Option {
 func WithProcessorBuilder(builder ProcessorBuilder) Option {
 	return func(opts *options) {
 		opts.processorBuilder = builder
+	}
+}
+
+// WithProcessMessageHook sets the process message hook to use.
+// The hook can be used to wrap the message processor with additional functionality.
+func WithProcessMessageHook(hook ProcessMessageHook) Option {
+	return func(opts *options) {
+		opts.processorHook = hook
 	}
 }
 
