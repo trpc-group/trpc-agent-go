@@ -143,6 +143,42 @@ func TestNew(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "success with transfer state keys",
+			opts: []Option{
+				WithTransferStateKey("session_key", "user_id"),
+			},
+			setupFunc: func(tc *testCase) *httptest.Server {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == AgentCardWellKnownPath {
+						agentCard := server.AgentCard{
+							Name:        "test-agent",
+							Description: "Test agent",
+							URL:         "http://test.com",
+						}
+						json.NewEncoder(w).Encode(agentCard)
+						return
+					}
+					w.WriteHeader(http.StatusNotFound)
+				}))
+				tc.opts = append(tc.opts, WithAgentCardURL(server.URL))
+				return server
+			},
+			validateFunc: func(t *testing.T, agent *A2AAgent, err error) {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+				if agent == nil {
+					t.Fatal("expected agent, got nil")
+				}
+				if len(agent.transferStateKey) != 2 {
+					t.Errorf("expected 2 transfer state keys, got %d", len(agent.transferStateKey))
+				}
+				if agent.transferStateKey[0] != "session_key" || agent.transferStateKey[1] != "user_id" {
+					t.Error("transfer state keys not set correctly")
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -660,6 +696,118 @@ func TestA2AAgent_Run_ErrorCases(t *testing.T) {
 			tc.validateFunc(t, eventChan, err)
 		})
 	}
+}
+
+func TestWithTransferStateKey(t *testing.T) {
+	t.Run("transfer state keys are set correctly", func(t *testing.T) {
+		agent := &A2AAgent{}
+
+		// Apply option
+		WithTransferStateKey("key1", "key2", "key3")(agent)
+
+		if len(agent.transferStateKey) != 3 {
+			t.Errorf("expected 3 transfer state keys, got %d", len(agent.transferStateKey))
+		}
+
+		expectedKeys := []string{"key1", "key2", "key3"}
+		for i, key := range agent.transferStateKey {
+			if key != expectedKeys[i] {
+				t.Errorf("expected key %s at index %d, got %s", expectedKeys[i], i, key)
+			}
+		}
+
+		// Test adding more keys
+		WithTransferStateKey("key4")(agent)
+		if len(agent.transferStateKey) != 4 {
+			t.Errorf("expected 4 transfer state keys after adding more, got %d", len(agent.transferStateKey))
+		}
+	})
+
+	t.Run("transfer state keys work with buildA2AMessage", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"session_key", "user_pref"},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "test message",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]interface{}{
+					"session_key": "session_value",
+					"user_pref":   "dark_mode",
+					"other_key":   "should_not_transfer",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		if err != nil {
+			t.Fatalf("buildA2AMessage failed: %v", err)
+		}
+
+		if msg.Metadata == nil {
+			t.Fatal("expected metadata to be set")
+		}
+
+		// Check that only the specified keys are transferred
+		if len(msg.Metadata) != 2 {
+			t.Errorf("expected 2 metadata items, got %d", len(msg.Metadata))
+		}
+
+		if msg.Metadata["session_key"] != "session_value" {
+			t.Error("session_key not transferred correctly")
+		}
+
+		if msg.Metadata["user_pref"] != "dark_mode" {
+			t.Error("user_pref not transferred correctly")
+		}
+
+		// Make sure other keys are not transferred
+		if _, exists := msg.Metadata["other_key"]; exists {
+			t.Error("other_key should not be transferred")
+		}
+	})
+}
+
+func TestWithStreamingRespHandler(t *testing.T) {
+	t.Run("streaming response handler is set correctly", func(t *testing.T) {
+		agent := &A2AAgent{}
+
+		// Mock handler
+		handler := func(resp *model.Response) (string, error) {
+			return "processed_content", nil
+		}
+
+		// Apply option
+		WithStreamingRespHandler(handler)(agent)
+
+		if agent.streamingRespHandler == nil {
+			t.Error("streaming response handler should be set")
+		}
+
+		// Test that the handler works
+		result, err := agent.streamingRespHandler(&model.Response{})
+		if err != nil {
+			t.Errorf("handler should not return error: %v", err)
+		}
+		if result != "processed_content" {
+			t.Errorf("expected 'processed_content', got '%s'", result)
+		}
+	})
+
+	t.Run("streaming response handler can be nil", func(t *testing.T) {
+		agent := &A2AAgent{}
+
+		// Apply nil handler
+		WithStreamingRespHandler(nil)(agent)
+
+		if agent.streamingRespHandler != nil {
+			t.Error("streaming response handler should be nil")
+		}
+	})
 }
 
 // Mock converter that always fails

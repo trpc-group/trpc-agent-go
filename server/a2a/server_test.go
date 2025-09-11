@@ -222,6 +222,17 @@ func TestNew(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "with process message hook",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
+				WithHost("localhost:8080"),
+				WithProcessMessageHook(func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+					return next
+				}),
+			},
+			wantErr: false,
+		},
+		{
 			name: "missing agent",
 			opts: []Option{
 				WithHost("localhost:9090"),
@@ -498,6 +509,127 @@ func TestBuildSkillsFromTools(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProcessMessageHook(t *testing.T) {
+	tests := []struct {
+		name                string
+		setupOptions        func() ([]Option, *bool, *bool)
+		expectCustomBuilder bool
+		expectHookCalled    bool
+		wantErr             bool
+	}{
+		{
+			name: "hook is applied during server creation",
+			setupOptions: func() ([]Option, *bool, *bool) {
+				mockHook := func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+					return &mockHookedProcessor{next: next}
+				}
+				return []Option{
+					WithAgent(&mockAgent{name: "test-agent", description: "test"}, false),
+					WithHost("localhost:8080"),
+					WithProcessMessageHook(mockHook),
+				}, nil, nil
+			},
+			expectCustomBuilder: false,
+			expectHookCalled:    false,
+			wantErr:             false,
+		},
+		{
+			name: "hook with custom processor builder",
+			setupOptions: func() ([]Option, *bool, *bool) {
+				customBuilderCalled := false
+				customBuilder := func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor {
+					customBuilderCalled = true
+					return &mockTaskManager{}
+				}
+
+				hookCalled := false
+				customHook := func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+					hookCalled = true
+					return &mockHookedProcessor{next: next}
+				}
+
+				return []Option{
+					WithAgent(&mockAgent{name: "test-agent", description: "test"}, false),
+					WithHost("localhost:8080"),
+					WithProcessorBuilder(customBuilder),
+					WithProcessMessageHook(customHook),
+				}, &customBuilderCalled, &hookCalled
+			},
+			expectCustomBuilder: true,
+			expectHookCalled:    true,
+			wantErr:             false,
+		},
+		{
+			name: "hook with default processor",
+			setupOptions: func() ([]Option, *bool, *bool) {
+				hookCalled := false
+				customHook := func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+					hookCalled = true
+					return &mockHookedProcessor{next: next}
+				}
+
+				return []Option{
+					WithAgent(&mockAgent{name: "test-agent", description: "test"}, false),
+					WithHost("localhost:8080"),
+					WithProcessMessageHook(customHook),
+				}, nil, &hookCalled
+			},
+			expectCustomBuilder: false,
+			expectHookCalled:    true,
+			wantErr:             false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, customBuilderPtr, hookCalledPtr := tt.setupOptions()
+
+			server, err := New(opts...)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("New() expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("New() failed: %v", err)
+			}
+			if server == nil {
+				t.Fatal("New() returned nil server")
+			}
+
+			// Check custom builder was called if expected
+			if tt.expectCustomBuilder && customBuilderPtr != nil {
+				if !*customBuilderPtr {
+					t.Error("Custom processor builder was not called")
+				}
+			}
+
+			// Check hook was called if expected
+			if tt.expectHookCalled && hookCalledPtr != nil {
+				if !*hookCalledPtr {
+					t.Error("Process message hook was not called")
+				}
+			}
+		})
+	}
+}
+
+// mockHookedProcessor is a mock processor for testing hooks
+type mockHookedProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (m *mockHookedProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	return m.next.ProcessMessage(ctx, message, options, handler)
 }
 
 // Helper functions

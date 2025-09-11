@@ -171,8 +171,8 @@ func (h *hookProcessor) ProcessMessage(
 	options taskmanager.ProcessOptions,
 	handler taskmanager.TaskHandler,
 ) (*taskmanager.MessageProcessingResult, error) {
-	fmt.Printf("original message, ID:%+v\n", message.MessageID)
-	fmt.Printf("received state: %+v\n", message.Metadata)
+	fmt.Printf("A2A Server: received message:%+v\n", message.MessageID)
+	fmt.Printf("A2A Server: received state: %+v\n", message.Metadata)
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
