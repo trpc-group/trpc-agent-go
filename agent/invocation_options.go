@@ -113,6 +113,7 @@ func WithInvocationStructuredOutput(structuredOutput *model.StructuredOutput) In
 	}
 }
 
+// WithInvocationStructuredOutputType set structuredOutputType for the Invocation.
 func WithInvocationStructuredOutputType(structuredOutputType reflect.Type) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.StructuredOutputType = structuredOutputType
