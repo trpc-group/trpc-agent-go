@@ -321,11 +321,12 @@ func (e *Executor) executeGraph(
 		startStep = resumedStep + 1
 	}
 
-	if err := e.runBspLoop(ctx, execCtx, &checkpointConfig, startStep); err != nil {
+	stepsExecuted, err := e.runBspLoop(ctx, execCtx, &checkpointConfig, startStep)
+	if err != nil {
 		return err
 	}
 
-	completionEvent := e.buildCompletionEvent(execCtx, startTime)
+	completionEvent := e.buildCompletionEvent(execCtx, startTime, stepsExecuted)
 	select {
 	case eventChan <- completionEvent:
 	default:
@@ -518,7 +519,8 @@ func (e *Executor) runBspLoop(
 	execCtx *ExecutionContext,
 	checkpointConfig *map[string]any,
 	startStep int,
-) error {
+) (int, error) {
+	var stepsExecuted int
 	for step := startStep; step < e.maxSteps; step++ {
 		var stepCtx context.Context
 		var stepCancel context.CancelFunc
@@ -536,7 +538,7 @@ func (e *Executor) runBspLoop(
 		}
 		if err != nil {
 			stepCancel()
-			return fmt.Errorf("planning failed at step %d: %w", step, err)
+			return stepsExecuted, fmt.Errorf("planning failed at step %d: %w", step, err)
 		}
 		if len(tasks) == 0 {
 			stepCancel()
@@ -545,14 +547,14 @@ func (e *Executor) runBspLoop(
 		if err := e.executeStep(stepCtx, execCtx, tasks, step); err != nil {
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
-				return e.handleInterrupt(stepCtx, execCtx, interrupt, step, *checkpointConfig)
+				return stepsExecuted, e.handleInterrupt(stepCtx, execCtx, interrupt, step, *checkpointConfig)
 			}
 			stepCancel()
-			return fmt.Errorf("execution failed at step %d: %w", step, err)
+			return stepsExecuted, fmt.Errorf("execution failed at step %d: %w", step, err)
 		}
 		if err := e.updateChannels(stepCtx, execCtx, step); err != nil {
 			stepCancel()
-			return fmt.Errorf("update failed at step %d: %w", step, err)
+			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
 		}
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.Debugf("Creating checkpoint at step %d", step)
@@ -563,14 +565,16 @@ func (e *Executor) runBspLoop(
 			}
 		}
 		stepCancel()
+		stepsExecuted++
 	}
-	return nil
+	return stepsExecuted, nil
 }
 
 // buildCompletionEvent prepares the completion event with a state snapshot.
 func (e *Executor) buildCompletionEvent(
 	execCtx *ExecutionContext,
 	startTime time.Time,
+	stepsExecuted int,
 ) *event.Event {
 	// Take a deep snapshot of the final state under read lock to avoid
 	// concurrent map iteration/write during later JSON marshaling.
@@ -580,7 +584,7 @@ func (e *Executor) buildCompletionEvent(
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
 		WithCompletionEventFinalState(finalStateCopy),
-		WithCompletionEventTotalSteps(e.maxSteps),
+		WithCompletionEventTotalSteps(stepsExecuted),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
 	if completionEvent.StateDelta == nil {
@@ -1639,11 +1643,6 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 	execCtx.stateMutex.Lock()
 	defer execCtx.stateMutex.Unlock()
 
-	// Special handling for message-related state to preserve GraphAgent functionality.
-	if _, hasMessages := stateResult[StateKeyMessages]; hasMessages {
-		maps.Copy(execCtx.State, stateResult)
-		return
-	}
 	// Use schema-based reducers when available for proper merging.
 	if e.graph != nil && e.graph.Schema() != nil {
 		execCtx.State = e.graph.Schema().ApplyUpdate(execCtx.State, stateResult)

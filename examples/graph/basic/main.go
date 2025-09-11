@@ -44,6 +44,7 @@ const (
 var (
 	modelName = flag.String("model", defaultModelName,
 		"Name of the model to use")
+	verbose = flag.Bool("verbose", false, "Enable verbose event logging")
 )
 
 func main() {
@@ -112,6 +113,10 @@ func (w *documentWorkflow) setup() error {
 	w.sessionID = fmt.Sprintf("workflow-session-%d", time.Now().Unix())
 
 	fmt.Printf("✅ Document workflow ready! Session: %s\n\n", w.sessionID)
+	// Provide a small hint if API key is missing to help new users.
+	if os.Getenv("OPENAI_API_KEY") == "" {
+		fmt.Println("💡 Hint: OPENAI_API_KEY is not set. If your model provider requires it, export it or configure base URL/API key accordingly.")
+	}
 	return nil
 }
 
@@ -295,7 +300,14 @@ func (w *documentWorkflow) createNodeCallbacks() *graph.NodeCallbacks {
 			if stateResult, ok := result.(graph.State); ok {
 				stateResult["last_executed_node"] = callbackCtx.NodeID
 				stateResult["last_execution_time"] = executionTime
-				stateResult["total_nodes_executed"] = len(state["node_execution_history"].([]map[string]any))
+				if history, ok := state["node_execution_history"].([]map[string]any); ok {
+					stateResult["total_nodes_executed"] = len(history)
+					// Persist execution history for later formatting
+					stateResult["node_execution_history"] = history
+				}
+				if ec, ok := state["error_count"].(int); ok {
+					stateResult["error_count"] = ec
+				}
 				return stateResult, nil
 			}
 		}
@@ -424,42 +436,73 @@ func (w *documentWorkflow) preprocessDocument(ctx context.Context, state graph.S
 }
 
 func (w *documentWorkflow) routeComplexity(ctx context.Context, state graph.State) (any, error) {
-	return graph.State{
+	// Prefer to pass original text directly to downstream nodes.
+	// Avoid wrapping to reduce prompt interference for summarizer/enhancer.
+	var newInput string
+	if orig, ok := state[stateKeyOriginalText].(string); ok && strings.TrimSpace(orig) != "" {
+		newInput = orig
+	} else if in, ok := state[graph.StateKeyUserInput].(string); ok {
+		newInput = in
+	}
+	out := graph.State{
 		stateKeyProcessingStage: "complexity_routing",
-		// Set the user input to the original text.
-		graph.StateKeyUserInput: fmt.Sprintf("The original text is: `%s`", state[stateKeyOriginalText].(string)),
-	}, nil
+	}
+	if newInput != "" {
+		out[graph.StateKeyUserInput] = newInput
+	}
+	return out, nil
 }
 
 func (w *documentWorkflow) complexityCondition(ctx context.Context, state graph.State) (level string, err error) {
-	defer func() {
-		state[stateKeyComplexityLevel] = level
-	}()
-	// First, try to extract complexity from the LLM's response after tool usage.
-	if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
-		responseLower := strings.ToLower(lastResponse)
-		if strings.Contains(responseLower, " complex ") {
-			return complexityComplex, nil
-		} else if strings.Contains(responseLower, " moderate ") {
-			return complexityModerate, nil
-		} else if strings.Contains(responseLower, " simple ") {
-			return complexitySimple, nil
-		}
-	}
-	// If no complexity found in LLM response, use the tool's analysis result.
-	// The tool result should be in the messages as a tool message.
+	// Ensure we persist whatever we decide for downstream formatting.
+	defer func() { state[stateKeyComplexityLevel] = level }()
+
+	// 1) Prefer tool-derived result when present (most reliable)
 	if msgs, ok := state[graph.StateKeyMessages].([]model.Message); ok {
-		for _, msg := range msgs {
-			if msg.Role == model.RoleTool {
-				// Parse the tool result to extract complexity level.
-				var result complexityResult
-				if err := json.Unmarshal([]byte(msg.Content), &result); err == nil {
-					return result.Level, nil
+		for i := len(msgs) - 1; i >= 0; i-- { // scan backwards for latest tool result
+			msg := msgs[i]
+			if msg.Role != model.RoleTool {
+				continue
+			}
+			var result complexityResult
+			if err := json.Unmarshal([]byte(msg.Content), &result); err == nil {
+				switch strings.ToLower(strings.TrimSpace(result.Level)) {
+				case complexityComplex:
+					return complexityComplex, nil
+				case complexityModerate:
+					return complexityModerate, nil
+				case complexitySimple:
+					return complexitySimple, nil
 				}
 			}
 		}
 	}
-	// Final fallback to document length heuristic (should rarely be used).
+
+	// 2) Try to parse the LLM textual response robustly
+	if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
+		normalized := strings.ToLower(strings.TrimSpace(lastResponse))
+		// Try exact token match first
+		switch normalized {
+		case complexitySimple:
+			return complexitySimple, nil
+		case complexityModerate:
+			return complexityModerate, nil
+		case complexityComplex:
+			return complexityComplex, nil
+		}
+		// Fallback: contains any (no surrounding spaces requirement)
+		if strings.Contains(normalized, "complex") {
+			return complexityComplex, nil
+		}
+		if strings.Contains(normalized, "moderate") {
+			return complexityModerate, nil
+		}
+		if strings.Contains(normalized, "simple") {
+			return complexitySimple, nil
+		}
+	}
+
+	// 3) Final fallback: heuristic on word count
 	const complexityThreshold = 200
 	if wordCount, ok := state[stateKeyWordCount].(int); ok {
 		if wordCount > complexityThreshold {
@@ -472,9 +515,28 @@ func (w *documentWorkflow) complexityCondition(ctx context.Context, state graph.
 }
 
 func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) (any, error) {
+	// Try last_response first
 	content, ok := state[graph.StateKeyLastResponse].(string)
-	if !ok {
-		return nil, fmt.Errorf("no content found for formatting")
+	if !ok || strings.TrimSpace(content) == "" {
+		// Fallback to node_responses for summarize/enhance outputs
+		if nr, ok := state[graph.StateKeyNodeResponses].(map[string]any); ok && nr != nil {
+			if v, ok := nr["summarize"]; ok {
+				if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+					content = s
+				}
+			}
+			if content == "" {
+				if v, ok := nr["enhance"]; ok {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						content = s
+					}
+				}
+			}
+		}
+		if strings.TrimSpace(content) == "" {
+			// As a last resort, keep friendly message
+			content = "(No content produced by the workflow)"
+		}
 	}
 	// Create final formatted output.
 	complexityLevel, _ := state[stateKeyComplexityLevel].(string)
@@ -623,6 +685,9 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 	var (
 		workflowStarted bool
 		stageCount      int
+		// Track if we are between analyze and next hop to assert tool usage
+		inAnalyze              bool
+		toolSeenForThisAnalyze bool
 	)
 	for event := range eventChan {
 		// Handle errors.
@@ -630,50 +695,77 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 			fmt.Printf("❌ Error: %s\n", event.Error.Message)
 			continue
 		}
-		// Track node execution events.
-		if event.Author == graph.AuthorGraphNode {
+		// Track node/tool/model execution events via metadata (author may be nodeID).
+		if event.StateDelta != nil {
 			// Try to extract node metadata from StateDelta.
-			if event.StateDelta != nil {
-				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
-					var nodeMetadata graph.NodeExecutionMetadata
-					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
-						switch nodeMetadata.Phase {
-						case graph.ExecutionPhaseStart:
+			if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+				var nodeMetadata graph.NodeExecutionMetadata
+				if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+					switch nodeMetadata.Phase {
+					case graph.ExecutionPhaseStart:
+						if *verbose {
 							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-
-							// Add model information for LLM nodes.
-							if nodeMetadata.NodeType == graph.NodeTypeLLM {
-								fmt.Printf("   🤖 Using model: %s\n", w.modelName)
-
-								// Display model input if available.
-								if nodeMetadata.ModelInput != "" {
-									fmt.Printf("   📝 Model Input: %s\n", truncateString(nodeMetadata.ModelInput, 100))
-								}
-							}
-
-							// Add tool information for tool nodes.
-							if nodeMetadata.NodeType == graph.NodeTypeTool {
-								fmt.Printf("   🔧 Executing tool node\n")
-							}
-						case graph.ExecutionPhaseComplete:
-							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						case graph.ExecutionPhaseError:
-							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 						}
+
+						// Add model information for LLM nodes.
+						if nodeMetadata.NodeType == graph.NodeTypeLLM {
+							if *verbose {
+								fmt.Printf("   🤖 Using model: %s\n", w.modelName)
+							}
+
+							// Display model input if available.
+							if *verbose && nodeMetadata.ModelInput != "" {
+								fmt.Printf("   📝 Model Input: %s\n", truncateString(nodeMetadata.ModelInput, 100))
+							}
+							if nodeMetadata.NodeID == "analyze" {
+								inAnalyze = true
+								toolSeenForThisAnalyze = false
+							}
+						}
+
+						// Add tool information for tool nodes.
+						if *verbose && nodeMetadata.NodeType == graph.NodeTypeTool {
+							fmt.Printf("   🔧 Executing tool node\n")
+						}
+						// If we started routing without seeing tools after analyze, warn
+						if nodeMetadata.NodeID == "route_complexity" && inAnalyze && !toolSeenForThisAnalyze {
+							fmt.Printf("⚠️  analyze node produced no tool-calls; using fallback path.\n")
+							inAnalyze = false
+						}
+					case graph.ExecutionPhaseComplete:
+						if *verbose {
+							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						}
+						// Count stages on node completions for clarity
+						stageCount++
+						fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
+						if nodeMetadata.NodeID == "analyze" {
+							// If analyze completes but tools start next, we will handle in the next Start
+							// If no tools happen and we go to fallback, we warned at route start
+						}
+					case graph.ExecutionPhaseError:
+						fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 					}
 				}
+			}
 
-				// Handle tool execution events for input/output display.
-				if toolData, exists := event.StateDelta[graph.MetadataKeyTool]; exists {
-					var toolMetadata graph.ToolExecutionMetadata
-					if err := json.Unmarshal(toolData, &toolMetadata); err == nil {
-						switch toolMetadata.Phase {
-						case graph.ToolExecutionPhaseStart:
+			// Handle tool execution events for input/output display.
+			if toolData, exists := event.StateDelta[graph.MetadataKeyTool]; exists {
+				var toolMetadata graph.ToolExecutionMetadata
+				if err := json.Unmarshal(toolData, &toolMetadata); err == nil {
+					switch toolMetadata.Phase {
+					case graph.ToolExecutionPhaseStart:
+						if *verbose {
 							fmt.Printf("🔧 [TOOL] Starting: %s (ID: %s)\n", toolMetadata.ToolName, toolMetadata.ToolID)
 							if toolMetadata.Input != "" {
 								fmt.Printf("   📥 Input: %s\n", formatJSON(toolMetadata.Input))
 							}
-						case graph.ToolExecutionPhaseComplete:
+						}
+						if inAnalyze {
+							toolSeenForThisAnalyze = true
+						}
+					case graph.ToolExecutionPhaseComplete:
+						if *verbose {
 							fmt.Printf("✅ [TOOL] Completed: %s (ID: %s) in %v\n",
 								toolMetadata.ToolName, toolMetadata.ToolID, toolMetadata.Duration)
 							if toolMetadata.Output != "" {
@@ -682,24 +774,28 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 							if toolMetadata.Error != "" {
 								fmt.Printf("   ❌ Error: %s\n", toolMetadata.Error)
 							}
-						case graph.ToolExecutionPhaseError:
-							fmt.Printf("❌ [TOOL] Error: %s (ID: %s) - %s\n",
-								toolMetadata.ToolName, toolMetadata.ToolID, toolMetadata.Error)
 						}
+					case graph.ToolExecutionPhaseError:
+						fmt.Printf("❌ [TOOL] Error: %s (ID: %s) - %s\n",
+							toolMetadata.ToolName, toolMetadata.ToolID, toolMetadata.Error)
 					}
 				}
+			}
 
-				// Handle model execution events for input/output display.
-				if modelData, exists := event.StateDelta[graph.MetadataKeyModel]; exists {
-					var modelMetadata graph.ModelExecutionMetadata
-					if err := json.Unmarshal(modelData, &modelMetadata); err == nil {
-						switch modelMetadata.Phase {
-						case graph.ModelExecutionPhaseStart:
+			// Handle model execution events for input/output display.
+			if modelData, exists := event.StateDelta[graph.MetadataKeyModel]; exists {
+				var modelMetadata graph.ModelExecutionMetadata
+				if err := json.Unmarshal(modelData, &modelMetadata); err == nil {
+					switch modelMetadata.Phase {
+					case graph.ModelExecutionPhaseStart:
+						if *verbose {
 							fmt.Printf("🤖 [MODEL] Starting: %s (Node: %s)\n", modelMetadata.ModelName, modelMetadata.NodeID)
 							if modelMetadata.Input != "" {
 								fmt.Printf("   📝 Input: %s\n", truncateString(modelMetadata.Input, 100))
 							}
-						case graph.ModelExecutionPhaseComplete:
+						}
+					case graph.ModelExecutionPhaseComplete:
+						if *verbose {
 							fmt.Printf("✅ [MODEL] Completed: %s (Node: %s) in %v\n",
 								modelMetadata.ModelName, modelMetadata.NodeID, modelMetadata.Duration)
 							if modelMetadata.Output != "" {
@@ -708,10 +804,10 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 							if modelMetadata.Error != "" {
 								fmt.Printf("   ❌ Error: %s\n", modelMetadata.Error)
 							}
-						case graph.ModelExecutionPhaseError:
-							fmt.Printf("❌ [MODEL] Error: %s (Node: %s) - %s\n",
-								modelMetadata.ModelName, modelMetadata.NodeID, modelMetadata.Error)
 						}
+					case graph.ModelExecutionPhaseError:
+						fmt.Printf("❌ [MODEL] Error: %s (Node: %s) - %s\n",
+							modelMetadata.ModelName, modelMetadata.NodeID, modelMetadata.Error)
 					}
 				}
 			}
@@ -733,18 +829,7 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
 				workflowStarted = false // Reset for next LLM node
 			}
 		}
-		// Track workflow stages.
-		if event.Author == graph.AuthorGraphExecutor {
-			stageCount++
-			if stageCount >= 1 && len(event.Response.Choices) > 0 {
-				content := event.Response.Choices[0].Message.Content
-				if content != "" {
-					fmt.Printf("\n🔄 Stage %d completed, %s\n", stageCount, content)
-				} else {
-					fmt.Printf("\n🔄 Stage %d completed\n", stageCount)
-				}
-			}
-		}
+		// Stage counting now handled on node-complete events for clarity.
 		// Handle completion.
 		if event.Done {
 			break
