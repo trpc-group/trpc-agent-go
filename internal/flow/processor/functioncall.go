@@ -101,10 +101,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if err := p.checkContextCancelled(ctx); err != nil {
-		return
-	}
-
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
 		errorEvent := event.NewErrorEvent(
@@ -744,16 +740,6 @@ func (p *FunctionCallResponseProcessor) filterNilEvents(results []*event.Event) 
 		}
 	}
 	return filtered
-}
-
-// checkContextCancelled checks if the context is cancelled and returns error if so.
-func (p *FunctionCallResponseProcessor) checkContextCancelled(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
 }
 
 func newToolCallResponseEvent(
