@@ -13,6 +13,7 @@ package parallelagent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -111,9 +112,36 @@ func (a *ParallelAgent) createBranchInvocation(
 	branchInvocation.InvocationID = baseInvocation.InvocationID + "." + branchSuffix
 
 	// Set branch identifier for hierarchical event filtering.
-	branchInvocation.Branch = branchInvocation.InvocationID
+	// Use parent branch path instead of invocation ID for better hierarchy.
+	parentBranch := getParentBranch(baseInvocation)
+	if parentBranch != "" {
+		branchInvocation.Branch = parentBranch + "." + branchSuffix
+	} else {
+		branchInvocation.Branch = branchInvocation.InvocationID
+	}
 
 	return branchInvocation
+}
+
+// getParentBranch gets the parent branch path for creating proper hierarchy.
+// This ensures nested agents maintain the correct branch structure.
+func getParentBranch(invocation *agent.Invocation) string {
+	// If we have a branch, use it as the parent.
+	if invocation.Branch != "" {
+		return invocation.Branch
+	}
+
+	// Fallback: try to find the parent agent name from the current agent.
+	// For a chain agent, this would be the chain agent's name.
+	if invocation.Agent != nil {
+		agentName := invocation.Agent.Info().Name
+		// If the agent name doesn't contain dots, it might be the root.
+		if !strings.Contains(agentName, ".") {
+			return agentName
+		}
+	}
+
+	return ""
 }
 
 // setupInvocation prepares the invocation for execution.
