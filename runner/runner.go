@@ -155,6 +155,7 @@ func (r *runner) Run(
 		opt(&ro)
 	}
 	invocation := agent.NewInvocation()
+	invocation.InvocationID = invocationID
 	invocation.Session = sess
 	invocation.Agent = r.agent
 	invocation.Message = message

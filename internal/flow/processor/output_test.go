@@ -63,6 +63,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 
 	// Create a test invocation
 	invocation := agent.NewInvocation()
+	invocation.InvocationID = "test_invocation"
 	invocation.AgentName = "test_agent"
 
 	// Create a test response with content
@@ -93,7 +94,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 		emittedEvent = event
 		// Send completion signal for the event
 		if event.RequiresCompletion {
-			invocation.NotifyCompletion(ctx, event.CompletionID)
+			invocation.NotifyCompletion(ctx, event.ID)
 		}
 	case <-ctx.Done():
 		t.Fatal("Test timed out waiting for event")
