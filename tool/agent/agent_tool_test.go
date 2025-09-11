@@ -12,6 +12,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -161,5 +163,152 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 
 	if !agentTool.skipSummarization {
 		t.Error("Expected skip summarization to be true")
+	}
+}
+
+// streamingMockAgent streams a few delta events then a final full message.
+type streamingMockAgent struct {
+	name string
+}
+
+func (m *streamingMockAgent) Run(ctx context.Context, _ *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+	go func() {
+		defer close(ch)
+		// delta 1
+		ch <- &event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: "hello"}}}}}
+		// delta 2
+		ch <- &event.Event{Response: &model.Response{IsPartial: true, Choices: []model.Choice{{Delta: model.Message{Content: " world"}}}}}
+		// final full assistant message (should not be forwarded by UI typically)
+		ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "ignored full"}}}}}
+	}()
+	return ch, nil
+}
+
+func (m *streamingMockAgent) Tools() []tool.Tool { return nil }
+func (m *streamingMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "streaming mock"}
+}
+func (m *streamingMockAgent) SubAgents() []agent.Agent        { return nil }
+func (m *streamingMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
+	sa := &streamingMockAgent{name: "stream-agent"}
+	at := NewTool(sa, WithStreamInner(true))
+
+	if !at.StreamInner() {
+		t.Fatalf("expected StreamInner to be true")
+	}
+
+	// Invoke stream
+	reader, err := at.StreamableCall(context.Background(), []byte(`{"request":"hi"}`))
+	if err != nil {
+		t.Fatalf("StreamableCall error: %v", err)
+	}
+	defer reader.Close()
+
+	// Expect to receive forwarded event chunks
+	var got []string
+	for i := 0; i < 3; i++ {
+		chunk, err := reader.Recv()
+		if err != nil {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+		if ev, ok := chunk.Content.(*event.Event); ok {
+			if len(ev.Choices) > 0 {
+				if ev.Choices[0].Delta.Content != "" {
+					got = append(got, ev.Choices[0].Delta.Content)
+				} else if ev.Choices[0].Message.Content != "" {
+					got = append(got, ev.Choices[0].Message.Content)
+				}
+			}
+		} else {
+			t.Fatalf("expected chunk content to be *event.Event, got %T", chunk.Content)
+		}
+	}
+	// We pushed 3 events; delta1, delta2, final full
+	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
+		t.Fatalf("unexpected forwarded contents: %#v", got)
+	}
+}
+
+func TestTool_StreamInner_FlagFalse(t *testing.T) {
+	a := &mockAgent{name: "agent-x", description: "d"}
+	at := NewTool(a, WithStreamInner(false))
+	if at.StreamInner() {
+		t.Fatalf("expected StreamInner to be false")
+	}
+}
+
+// errorMockAgent returns error from Run
+type errorMockAgent struct{ name string }
+
+func (m *errorMockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return nil, fmt.Errorf("boom")
+}
+func (m *errorMockAgent) Tools() []tool.Tool              { return nil }
+func (m *errorMockAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "err"} }
+func (m *errorMockAgent) SubAgents() []agent.Agent        { return nil }
+func (m *errorMockAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func TestTool_Call_RunError(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"})
+	_, err := at.Call(context.Background(), []byte(`{"request":"x"}`))
+	if err == nil {
+		t.Fatalf("expected error from Call when agent run fails")
+	}
+}
+
+func TestTool_StreamableCall_RunErrorEmitsChunk(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"}, WithStreamInner(true))
+	r, err := at.StreamableCall(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("unexpected StreamableCall error: %v", err)
+	}
+	defer r.Close()
+	ch, err := r.Recv()
+	if err != nil {
+		t.Fatalf("unexpected stream read error: %v", err)
+	}
+	if s, ok := ch.Content.(string); !ok || !strings.Contains(s, "agent tool run error") {
+		t.Fatalf("expected error chunk, got: %#v", ch.Content)
+	}
+}
+
+// agentWithSchemaMock returns input/output schema maps in Info()
+type agentWithSchemaMock struct{ name, desc string }
+
+func (m *agentWithSchemaMock) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+func (m *agentWithSchemaMock) Tools() []tool.Tool { return nil }
+func (m *agentWithSchemaMock) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: m.desc,
+		InputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"request": map[string]any{"type": "string"}},
+			"required":   []any{"request"},
+		},
+		OutputSchema: map[string]any{
+			"type":        "string",
+			"description": "out",
+		},
+	}
+}
+func (m *agentWithSchemaMock) SubAgents() []agent.Agent        { return nil }
+func (m *agentWithSchemaMock) FindSubAgent(string) agent.Agent { return nil }
+
+func TestNewTool_UsesAgentSchemas(t *testing.T) {
+	at := NewTool(&agentWithSchemaMock{name: "s-agent", desc: "d"})
+	decl := at.Declaration()
+	if decl.InputSchema == nil || decl.InputSchema.Type != "object" {
+		t.Fatalf("expected converted input schema, got: %#v", decl.InputSchema)
+	}
+	if decl.OutputSchema == nil || decl.OutputSchema.Type != "string" {
+		t.Fatalf("expected converted output schema, got: %#v", decl.OutputSchema)
 	}
 }

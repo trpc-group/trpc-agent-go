@@ -30,6 +30,7 @@ import (
 type Tool struct {
 	agent             agent.Agent
 	skipSummarization bool
+	streamInner       bool
 	name              string
 	description       string
 	inputSchema       *tool.Schema
@@ -42,6 +43,7 @@ type Option func(*agentToolOptions)
 // agentToolOptions holds the configuration options for AgentTool.
 type agentToolOptions struct {
 	skipSummarization bool
+	streamInner       bool
 }
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
@@ -51,9 +53,21 @@ func WithSkipSummarization(skip bool) Option {
 	}
 }
 
+// WithStreamInner controls whether the AgentTool should forward inner agent
+// streaming events up to the parent flow. When false, the flow will treat the
+// tool as callable-only (no inner streaming in the parent transcript).
+func WithStreamInner(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.streamInner = enabled
+	}
+}
+
 // NewTool creates a new Tool that wraps the given agent.
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
-	options := &agentToolOptions{}
+	// Default to skipping summarization for AgentTool to avoid redundant
+	// outer-agent summaries after tool.response. This mirrors ADK-style
+	// behavior where the tool result is the end of the turn by default.
+	options := &agentToolOptions{skipSummarization: true}
 	for _, opt := range opts {
 		opt(options)
 	}
@@ -90,6 +104,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	return &Tool{
 		agent:             agent,
 		skipSummarization: options.skipSummarization,
+		streamInner:       options.streamInner,
 		name:              info.Name,
 		description:       info.Description,
 		inputSchema:       inputSchema,
@@ -129,6 +144,77 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	}
 	return response.String(), nil
 }
+
+// StreamableCall executes the agent tool with streaming support and returns a stream reader.
+// It runs the wrapped agent and forwards its streaming text output as chunks.
+// The returned chunks' Content are plain strings representing incremental text.
+func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	stream := tool.NewStream(64)
+
+	go func() {
+		defer stream.Writer.Close()
+
+		// Try to reuse parent invocation for consistent invocationId/session
+		parentInv, ok := agent.InvocationFromContext(ctx)
+		message := model.NewUserMessage(string(jsonArgs))
+
+		if ok && parentInv != nil && parentInv.Session != nil {
+			subInv := &agent.Invocation{
+				Agent:             at.agent,
+				AgentName:         at.agent.Info().Name,
+				InvocationID:      parentInv.InvocationID,
+				Branch:            parentInv.Branch,
+				EndInvocation:     false,
+				Session:           parentInv.Session,
+				Message:           message,
+				EventCompletionCh: parentInv.EventCompletionCh,
+				RunOptions:        parentInv.RunOptions,
+				ArtifactService:   parentInv.ArtifactService,
+			}
+			subCtx := agent.NewInvocationContext(ctx, subInv)
+			evCh, err := at.agent.Run(subCtx, subInv)
+			if err != nil {
+				_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
+				return
+			}
+			for ev := range evCh {
+				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
+					return
+				}
+			}
+			return
+		}
+
+		// Fallback: run with ad-hoc runner
+		r := runner.NewRunner(
+			at.name,
+			at.agent,
+			runner.WithSessionService(inmemory.NewSessionService()),
+		)
+		evCh, err := r.Run(ctx, "tool_user", "tool_session", message)
+		if err != nil {
+			_ = stream.Writer.Send(tool.StreamChunk{Content: fmt.Sprintf("agent tool run error: %v", err)}, nil)
+			return
+		}
+		for ev := range evCh {
+			if ev != nil {
+				if stream.Writer.Send(tool.StreamChunk{Content: ev}, nil) {
+					return
+				}
+			}
+		}
+	}()
+
+	return stream.Reader, nil
+}
+
+// SkipSummarization exposes whether the AgentTool prefers skipping
+// outer-agent summarization after its tool.response.
+func (at *Tool) SkipSummarization() bool { return at.skipSummarization }
+
+// StreamInner exposes whether this AgentTool prefers the flow to treat it as
+// streamable (forwarding inner deltas) versus callable-only.
+func (at *Tool) StreamInner() bool { return at.streamInner }
 
 // Declaration returns the tool's declaration information.
 func (at *Tool) Declaration() *tool.Declaration {

@@ -109,6 +109,10 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		processor = buildProcessor(agent, sessionService, options)
 	}
 
+	if options.processorHook != nil {
+		processor = options.processorHook(processor)
+	}
+
 	// Create a task manager that wraps the session service
 	var taskManager taskmanager.TaskManager
 	var err error
@@ -165,10 +169,14 @@ func (m *messageProcessor) ProcessMessage(
 		return nil, fmt.Errorf("failed to convert A2A message to agent message: %w", err)
 	}
 
-	if options.Streaming {
-		return m.processStreamingMessage(ctx, userID, ctxID, agentMsg, handler)
+	runnerOpts := []agent.RunOption{
+		agent.WithRuntimeState(message.Metadata),
 	}
-	return m.processMessage(ctx, userID, ctxID, agentMsg, handler)
+
+	if options.Streaming {
+		return m.processStreamingMessage(ctx, userID, ctxID, agentMsg, handler, runnerOpts)
+	}
+	return m.processMessage(ctx, userID, ctxID, agentMsg, handler, runnerOpts)
 }
 
 func (m *messageProcessor) processStreamingMessage(
@@ -177,6 +185,7 @@ func (m *messageProcessor) processStreamingMessage(
 	ctxID string,
 	agentMsg *model.Message,
 	handler taskmanager.TaskHandler,
+	runnerOpts []agent.RunOption,
 ) (*taskmanager.MessageProcessingResult, error) {
 	if agentMsg == nil {
 		return nil, errors.New("a2aserver: agent message is nil")
@@ -193,7 +202,7 @@ func (m *messageProcessor) processStreamingMessage(
 	}
 
 	// Run the agent and get streaming events
-	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, *agentMsg)
+	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, *agentMsg, runnerOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -281,12 +290,13 @@ func (m *messageProcessor) processMessage(
 	ctxID string,
 	agentMsg *model.Message,
 	handler taskmanager.TaskHandler,
+	runnerOpts []agent.RunOption,
 ) (*taskmanager.MessageProcessingResult, error) {
 	if agentMsg == nil {
 		return nil, errors.New("a2aserver: agent message is nil")
 	}
 
-	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, *agentMsg)
+	agentMsgChan, err := m.runner.Run(ctx, userID, ctxID, *agentMsg, runnerOpts...)
 	if err != nil {
 		log.Errorf("failed to run agent: %v", err)
 		return nil, err

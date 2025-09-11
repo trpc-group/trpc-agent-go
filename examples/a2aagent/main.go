@@ -19,22 +19,29 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
+	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	a2a "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 var (
 	modelName = flag.String("model", "deepseek-chat", "Model to use")
 	host      = flag.String("host", "0.0.0.0:8888", "Host to use")
 	streaming = flag.Bool("streaming", true, "Streaming to use")
+)
+
+const (
+	optionalStateKey = "meta"
 )
 
 func main() {
@@ -44,6 +51,7 @@ func main() {
 	logger, _ := config.Build()
 	a2alog.Default = logger.Sugar()
 
+	// runRemoteAgent will start a a2a server that build with the agent it returns
 	localAgent := runRemoteAgent("agent_joker", "i am a remote agent, i can tell a joke", *host)
 
 	time.Sleep(1 * time.Second)
@@ -52,7 +60,12 @@ func main() {
 
 func startChat(localAgent agent.Agent) {
 	httpURL := fmt.Sprintf("http://%s", *host)
-	a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL(httpURL))
+	a2aAgent, err := a2aagent.New(
+		a2aagent.WithAgentCardURL(httpURL),
+
+		// optional: specify the state key that transferred to the remote agent by metadata
+		a2aagent.WithTransferStateKey(optionalStateKey),
+	)
 	if err != nil {
 		fmt.Printf("Failed to create a2a agent: %v", err)
 		return
@@ -64,8 +77,11 @@ func startChat(localAgent agent.Agent) {
 	fmt.Printf("URL: %s\n", httpURL)
 	fmt.Printf("------------------------\n")
 
-	remoteRunner := runner.NewRunner("test", a2aAgent)
-	localRunner := runner.NewRunner("test", localAgent)
+	localSessionService := inmemory.NewSessionService()
+	remoteSessionService := inmemory.NewSessionService()
+
+	remoteRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(remoteSessionService))
+	localRunner := runner.NewRunner("test", localAgent, runner.WithSessionService(localSessionService))
 
 	userID := "user1"
 	sessionID := "session1"
@@ -106,7 +122,13 @@ func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userI
 	}
 
 	fmt.Printf("%s remote agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
-	events, err := remoteRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	events, err := remoteRunner.Run(
+		context.Background(),
+		userID,
+		*sessionID,
+		model.NewUserMessage(userInput),
+		agent.WithRuntimeState(map[string]any{optionalStateKey: "test"}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -115,7 +137,13 @@ func processMessage(remoteRunner runner.Runner, localRunner runner.Runner, userI
 	}
 
 	fmt.Printf("\n%s local agent %s\n", strings.Repeat("=", 8), strings.Repeat("=", 8))
-	events, err = localRunner.Run(context.Background(), userID, *sessionID, model.NewUserMessage(userInput))
+	events, err = localRunner.Run(
+		context.Background(),
+		userID,
+		*sessionID,
+		model.NewUserMessage(userInput),
+		agent.WithRuntimeState(map[string]any{optionalStateKey: "test"}),
+	)
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}
@@ -133,11 +161,31 @@ func startNewSession() string {
 	return newSessionID
 }
 
+type hookProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (h *hookProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	fmt.Printf("A2A Server: received message:%+v\n", message.MessageID)
+	fmt.Printf("A2A Server: received state: %+v\n", message.Metadata)
+	return h.next.ProcessMessage(ctx, message, options, handler)
+}
+
 func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
 		a2a.WithHost(host),
 		a2a.WithAgent(remoteAgent, *streaming),
+		a2a.WithProcessMessageHook(
+			func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+				return &hookProcessor{next: next}
+			},
+		),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)

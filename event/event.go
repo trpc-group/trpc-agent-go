@@ -54,6 +54,20 @@ type Event struct {
 	// StructuredOutput carries a typed, in-memory structured output payload.
 	// This is not serialized and is meant for immediate consumer access.
 	StructuredOutput any `json:"-"`
+
+	// Actions carry flow-level hints that influence how this event is treated
+	// by the runner/flow (e.g., skip summarization after a tool response).
+	Actions *EventActions `json:"actions,omitempty"`
+}
+
+// EventActions represents optional actions/hints attached to an event.
+// These are used by the flow to adjust control behavior without
+// overloading Response fields.
+type EventActions struct {
+	// SkipSummarization indicates that the flow should not run an
+	// additional summarization step after this event. Commonly used
+	// for final tool.response events returned by AgentTool.
+	SkipSummarization bool `json:"skipSummarization,omitempty"`
 }
 
 // Clone creates a deep copy of the event.
@@ -72,6 +86,11 @@ func (e *Event) Clone() *Event {
 		for k, v := range e.StateDelta {
 			clone.StateDelta[k] = make([]byte, len(v))
 			copy(clone.StateDelta[k], v)
+		}
+	}
+	if e.Actions != nil {
+		clone.Actions = &EventActions{
+			SkipSummarization: e.Actions.SkipSummarization,
 		}
 	}
 	return &clone
@@ -113,6 +132,16 @@ func WithStateDelta(stateDelta map[string][]byte) Option {
 func WithStructuredOutputPayload(payload any) Option {
 	return func(e *Event) {
 		e.StructuredOutput = payload
+	}
+}
+
+// WithSkipSummarization sets the SkipSummarization action on the event.
+func WithSkipSummarization() Option {
+	return func(e *Event) {
+		if e.Actions == nil {
+			e.Actions = &EventActions{}
+		}
+		e.Actions.SkipSummarization = true
 	}
 }
 

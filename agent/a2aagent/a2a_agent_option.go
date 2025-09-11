@@ -87,3 +87,10 @@ func WithStreamingRespHandler(handler StreamingRespHandler) Option {
 		a.streamingRespHandler = handler
 	}
 }
+
+// WithTransferStateKey sets the keys in session state to transfer to the A2A agent message by metadata
+func WithTransferStateKey(key ...string) Option {
+	return func(a *A2AAgent) {
+		a.transferStateKey = append(a.transferStateKey, key...)
+	}
+}

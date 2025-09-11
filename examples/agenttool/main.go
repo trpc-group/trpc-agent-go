@@ -32,7 +32,10 @@ import (
 )
 
 var (
-	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName    = flag.String("model", "deepseek-chat", "Name of the model to use")
+	debugAuthors = flag.Bool("debug", false, "Print event author names with streamed text")
+	showTool     = flag.Bool("show-tool", false, "Show tool outputs (tool.response) in the transcript")
+	showInner    = flag.Bool("show-inner", true, "Show inner agent transcript forwarded by agent tool")
 )
 
 func main() {
@@ -46,7 +49,10 @@ func main() {
 
 	// Create and run the chat.
 	chat := &agentToolChat{
-		modelName: *modelName,
+		modelName:    *modelName,
+		debugAuthors: *debugAuthors,
+		showTool:     *showTool,
+		showInner:    *showInner,
 	}
 
 	if err := chat.run(); err != nil {
@@ -56,10 +62,15 @@ func main() {
 
 // agentToolChat manages the conversation with agent tools.
 type agentToolChat struct {
-	modelName string
-	runner    runner.Runner
-	userID    string
-	sessionID string
+	modelName    string
+	runner       runner.Runner
+	userID       string
+	sessionID    string
+	debugAuthors bool
+	agentName    string
+	streaming    bool
+	showTool     bool
+	showInner    bool
 }
 
 // run starts the interactive chat session.
@@ -93,30 +104,15 @@ func (c *agentToolChat) setup(_ context.Context) error {
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A specialized agent for mathematical operations and calculations"),
 		llmagent.WithInstruction("You are a math specialist. Focus on mathematical operations, "+
-			"calculations, and numerical reasoning. Provide clear, step-by-step solutions. "+
-			"You have access to a calculator tool for basic operations."),
+			"calculations, and numerical reasoning. When you receive a calculation request, "+
+			"use your calculator tool to compute the result, then provide a clear, natural language response "+
+			"explaining the calculation and result. Always explain what you calculated and present the answer clearly."),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			MaxTokens:   intPtr(1000),
 			Temperature: floatPtr(0.3),
 			Stream:      true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
-		// Use input schema to specify the input format of the agent.
-		llmagent.WithInputSchema(map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"operation": map[string]interface{}{
-					"type": "string",
-					"enum": []interface{}{"add", "subtract", "multiply", "divide"},
-				},
-				"a": map[string]interface{}{
-					"type": "number",
-				},
-				"b": map[string]interface{}{
-					"type": "number",
-				},
-			},
-		}),
 	)
 
 	// Create tools.
@@ -129,7 +125,8 @@ func (c *agentToolChat) setup(_ context.Context) error {
 	// Create agent tool that wraps the math specialist agent.
 	agentTool := agenttool.NewTool(
 		mathAgent,
-		agenttool.WithSkipSummarization(false),
+		agenttool.WithSkipSummarization(true),  // Skip summarization to get raw response
+		agenttool.WithStreamInner(c.showInner), // Stream inner agent deltas when requested
 	)
 
 	// Create LLM agent with tools including the agent tool.
@@ -139,17 +136,21 @@ func (c *agentToolChat) setup(_ context.Context) error {
 		Stream:      true, // Enable streaming
 	}
 
-	agentName := "chat-assistant"
+	c.agentName = "chat-assistant"
 	llmAgent := llmagent.New(
-		agentName,
+		c.agentName,
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("A helpful AI assistant with time tools and agent tools"),
 		llmagent.WithInstruction("Use tools when appropriate for time queries or "+
-			"complex mathematical operations. For complex math problems, use the math-specialist agent tool. "+
+			"mathematical operations. For any math calculations, always use the math-specialist agent tool. "+
+			"After receiving the math-specialist's response, present the result clearly to the user. "+
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithTools([]tool.Tool{timeTool, agentTool}),
 	)
+
+	// Remember streaming mode for printing logic.
+	c.streaming = genConfig.Stream
 
 	// Create runner.
 	appName := "agent-tool-chat"
@@ -234,59 +235,91 @@ func (c *agentToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	fmt.Print("🤖 Assistant: ")
 
 	var (
-		fullContent       string
-		toolCallsDetected bool
-		assistantStarted  bool
+		assistantStarted bool
+		fullContent      strings.Builder
 	)
 
-	for event := range eventChan {
-		// Handle errors.
-		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+	for ev := range eventChan {
+		// Errors
+		if ev.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", ev.Error.Message)
 			continue
 		}
 
-		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-			toolCallsDetected = true
-			if assistantStarted {
-				fmt.Printf("\n")
-			}
-			fmt.Printf("🔧 Tool calls initiated:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
-				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
-				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
+		// Show tool calls (assistant tool_calls)
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			ch := ev.Response.Choices[0]
+			if len(ch.Message.ToolCalls) > 0 {
+				if assistantStarted {
+					fmt.Printf("\n")
 				}
+				if c.showTool {
+					fmt.Printf("🔧 Tools: ")
+					for i, tc := range ch.Message.ToolCalls {
+						if i > 0 {
+							fmt.Print(", ")
+						}
+						if len(tc.Function.Arguments) > 0 {
+							fmt.Printf("%s(%s)", tc.Function.Name, string(tc.Function.Arguments))
+						} else {
+							fmt.Printf("%s", tc.Function.Name)
+						}
+					}
+					fmt.Printf("\n")
+				}
+				continue
 			}
-			fmt.Printf("\n🔄 Executing tools...\n")
 		}
 
-		// Display tool results.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
-			// Display tool call results.
-			if len(choice.Message.ToolCalls) > 0 {
-				for _, toolCall := range choice.Message.ToolCalls {
-					fmt.Printf("✅ Tool response (ID: %s): %s\n", toolCall.ID, toolCall.Function.Arguments)
+		// Forwarded inner agent deltas (from AgentTool streaming)
+		if c.showInner && ev.Author != c.agentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
+			ch := ev.Response.Choices[0]
+			if ch.Delta.Content != "" {
+				if c.debugAuthors {
+					fmt.Printf("[%s] ", ev.Author)
 				}
+				fmt.Print(ch.Delta.Content)
 			}
+			continue
+		}
 
-			// Display assistant content.
-			if choice.Message.Content != "" {
-				if !assistantStarted {
-					assistantStarted = true
+		// Outer assistant streaming
+		if ev.Author == c.agentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
+			ch := ev.Response.Choices[0]
+			if ch.Delta.Content != "" {
+				if c.debugAuthors && !assistantStarted {
+					fmt.Printf("[%s] ", ev.Author)
 				}
-				fmt.Println(choice.Message.Content)
-				fullContent += choice.Message.Content
+				assistantStarted = true
+				fmt.Print(ch.Delta.Content)
+				fullContent.WriteString(ch.Delta.Content)
+				continue
 			}
+		}
+
+		// Tool response events
+		if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse && len(ev.Response.Choices) > 0 {
+			// The final (non-partial) tool.response includes the merged content for history.
+			// To avoid duplication, don’t print aggregated content unless showTool is requested.
+			if c.showTool {
+				ch := ev.Response.Choices[0]
+				if ch.Delta.Content != "" {
+					// Partial tool delta
+					fmt.Printf("\n🛠️  tool> %s", ch.Delta.Content)
+				} else if ch.Message.Content != "" {
+					fmt.Printf("\n🛠️  tool (final)> %s\n", ch.Message.Content)
+				} else {
+					fmt.Printf("\n🛠️  tool> (completed)\n")
+				}
+			} else {
+				// Minimal marker when not showing tool details
+				fmt.Printf("\n✅ Tool completed\n")
+			}
+			continue
 		}
 	}
 
-	if toolCallsDetected {
-		fmt.Printf("\n\n✅ Tool execution completed.\n")
-	}
-
+	fmt.Println()
 	return nil
 }
 

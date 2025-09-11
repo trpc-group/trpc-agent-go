@@ -1260,6 +1260,7 @@ func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *
 		Session:        sessionData,
 		InvocationID:   invocationID,
 		AgentCallbacks: agentCallbacks,
+		RunOptions:     agent.RunOptions{RuntimeState: state},
 	}
 	return invocation
 }
