@@ -104,10 +104,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Create new invocation for the target agent.
-	targetInvocation := invocation.CreateBranchInvocation(targetAgent)
-
-	targetInvocation.EndInvocation = transferInfo.EndInvocation
-	targetInvocation.Branch = invocation.Branch
+	targetInvocation := invocation.Clone(
+		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationEndInvocation(transferInfo.EndInvocation),
+		agent.WithInvocationBranch(invocation.Branch),
+	)
 
 	// Set the message for the target agent.
 	if transferInfo.Message != "" {

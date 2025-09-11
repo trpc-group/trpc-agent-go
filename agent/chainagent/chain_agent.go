@@ -106,7 +106,7 @@ func (a *ChainAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
+	subInvocation := baseInvocation.Clone(agent.WithInvocationAgent(subAgent))
 
 	// Set branch info to track sequence in multi-agent scenarios.
 	// Do not include sub-agent name in branch, so that the chain sub-agents can

@@ -56,14 +56,14 @@ func (m *mockAgent) FindSubAgent(name string) Agent {
 	return nil
 }
 
-func TestCreateBranchInvocation(t *testing.T) {
+func TestInvocation_Clone(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationID("test-invocation"),
 		WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "Hello"}),
 	)
 
 	subAgent := &mockAgent{name: "test-agent"}
-	subInv := inv.CreateBranchInvocation(subAgent)
+	subInv := inv.Clone(WithInvocationAgent(subAgent))
 	require.NotNil(t, subInv)
 	require.Equal(t, "test-invocation", subInv.InvocationID)
 	require.Equal(t, "test-agent", subInv.AgentName)

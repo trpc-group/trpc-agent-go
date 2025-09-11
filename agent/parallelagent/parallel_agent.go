@@ -104,14 +104,15 @@ func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	branchInvocation := baseInvocation.CreateBranchInvocation(subAgent)
-
 	// Create unique invocation ID for this branch.
 	branchSuffix := a.name + "." + subAgent.Info().Name
-	branchInvocation.InvocationID = baseInvocation.InvocationID + "." + branchSuffix
+	branchInvocationID := baseInvocation.InvocationID + "." + branchSuffix
 
-	// Set branch identifier for hierarchical event filtering.
-	branchInvocation.Branch = branchInvocation.InvocationID
+	branchInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationID(branchInvocationID),
+		agent.WithInvocationBranch(branchInvocationID),
+	)
 
 	return branchInvocation
 }
