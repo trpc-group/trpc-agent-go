@@ -195,3 +195,11 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 		})
 	}
 }
+
+func TestNotifyCompletion(t *testing.T) {
+	inv := NewInvocation()
+	noticeKey := "test-channel-1"
+	err := inv.NotifyCompletion(context.Background(), noticeKey)
+	require.Error(t, err)
+	require.Equal(t, 0, len(inv.noticeChanMap))
+}
