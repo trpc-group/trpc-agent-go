@@ -25,6 +25,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	// WaitNoticeWithoutTimeout is the timeout duration for waiting without timeout
+	WaitNoticeWithoutTimeout = 0 * time.Second
+)
+
 // TransferInfo contains information about a pending agent transfer.
 type TransferInfo struct {
 	// TargetAgentName is the name of the agent to transfer control to.
@@ -158,6 +163,16 @@ func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
+	if timeout == WaitNoticeWithoutTimeout {
+		// no timeout, maybe wait for ever
+		select {
+		case <-inv.AddNoticeChannel(ctx, key):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
 	select {
 	case <-inv.AddNoticeChannel(ctx, key):
 	case <-time.After(timeout):

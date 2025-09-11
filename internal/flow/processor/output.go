@@ -151,10 +151,10 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	case <-ctx.Done():
 		return
 	}
-	select {
-	case <-invocation.AddNoticeChannel(ctx, stateEvent.CompletionID):
-	case <-ctx.Done():
-		return
+
+	if err := invocation.AddNoticeChannelAndWait(ctx, stateEvent.CompletionID,
+		agent.WaitNoticeWithoutTimeout); err != nil {
+		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.CompletionID, err)
 	}
 }
 
