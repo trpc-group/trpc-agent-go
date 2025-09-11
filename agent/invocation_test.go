@@ -94,7 +94,7 @@ func TestAddNoticeChannel(t *testing.T) {
 }
 
 func TestAddNoticeChannelAndWait(t *testing.T) {
-	type acualTime struct {
+	type execTime struct {
 		min time.Duration
 		max time.Duration
 	}
@@ -105,7 +105,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 		waitTimeout time.Duration
 		errType     int // 0: no error, 1: timeout error, 2: context error
 		mainSleep   time.Duration
-		acualTime   acualTime
+		execTime    execTime
 	}{
 		{
 			name:        "wait_with_context_cancel_error",
@@ -114,7 +114,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 			waitTimeout: 100 * time.Millisecond,
 			errType:     2,
 			mainSleep:   300 * time.Millisecond,
-			acualTime: acualTime{
+			execTime: execTime{
 				min: 50 * time.Millisecond,
 				max: 150 * time.Millisecond,
 			},
@@ -126,7 +126,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 			errType:     1,
 			waitTimeout: 100 * time.Millisecond,
 			mainSleep:   300 * time.Millisecond,
-			acualTime: acualTime{
+			execTime: execTime{
 				min: 100 * time.Millisecond,
 				max: 300 * time.Millisecond,
 			},
@@ -138,7 +138,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 			errType:     0,
 			waitTimeout: 1 * time.Second,
 			mainSleep:   300 * time.Millisecond,
-			acualTime: acualTime{
+			execTime: execTime{
 				min: 30 * time.Millisecond,
 				max: 1 * time.Second,
 			},
@@ -150,7 +150,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 			errType:     0,
 			waitTimeout: 1 * time.Second,
 			mainSleep:   300 * time.Millisecond,
-			acualTime: acualTime{
+			execTime: execTime{
 				min: 300 * time.Millisecond,
 				max: 1 * time.Second,
 			},
@@ -171,7 +171,7 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 				err := inv.AddNoticeChannelAndWait(ctx, tt.noticeKey, tt.waitTimeout)
 				duration := time.Since(startTime)
 				complete = true
-				require.True(t, duration > tt.acualTime.min && duration < tt.acualTime.max)
+				require.True(t, duration > tt.execTime.min && duration < tt.execTime.max)
 
 				switch tt.errType {
 				case 0:
