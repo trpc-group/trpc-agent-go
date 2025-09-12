@@ -177,12 +177,29 @@ func TestService_CreateSession(t *testing.T) {
 
 func TestService_AppendEvent_UpdateTime(t *testing.T) {
 	tests := []struct {
-		name        string
-		setupEvents func() []*event.Event
-		validate    func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event)
+		name                   string
+		enableAsyncPersistence bool
+		setupEvents            func() []*event.Event
+		validate               func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event)
 	}{
 		{
 			name: "single_event_updates_time",
+			setupEvents: func() []*event.Event {
+				return []*event.Event{
+					createTestEvent("event123", "test-agent", "Test message for append event test", time.Now(), false),
+				}
+			},
+			validate: func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event) {
+				assert.True(t, finalSess.UpdatedAt.After(initialTime),
+					"UpdatedAt should be updated after appending event. Initial: %v, Updated: %v",
+					initialTime, finalSess.UpdatedAt)
+				assert.Equal(t, 1, len(finalSess.Events))
+				assert.Equal(t, events[0].ID, finalSess.Events[0].ID)
+			},
+		},
+		{
+			name:                   "single_event_updates_time_async_persistence",
+			enableAsyncPersistence: true,
 			setupEvents: func() []*event.Event {
 				return []*event.Event{
 					createTestEvent("event123", "test-agent", "Test message for append event test", time.Now(), false),
@@ -246,7 +263,8 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClientURL(redisURL))
+			service, err := NewService(WithRedisClientURL(redisURL),
+				WithEnableAsyncPersistence(tt.enableAsyncPersistence))
 			require.NoError(t, err)
 			defer service.Close()
 
