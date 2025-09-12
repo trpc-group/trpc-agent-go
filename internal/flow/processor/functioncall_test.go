@@ -1152,3 +1152,161 @@ func (m *mockTransferAgent) FindSubAgent(name string) agent.Agent {
 	}
 	return nil
 }
+
+func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false)
+
+	inv := &agent.Invocation{
+		AgentName:         "test-agent",
+		InvocationID:      "inv-err",
+		EventCompletionCh: make(chan string),
+	}
+
+	// Tool returns StopError so executeToolCall propagates error.
+	errTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "err"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, agent.NewStopError("stop")
+		},
+	}
+	tools := map[string]tool.Tool{"err": errTool}
+
+	rsp := &model.Response{
+		Model: "m",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				ToolCalls: []model.ToolCall{{
+					ID: "c1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "err",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	evtCh := make(chan *event.Event, 1)
+	_, err := p.handleFunctionCallsAndSendEvent(ctx, inv, rsp, tools, evtCh)
+	require.Error(t, err)
+	select {
+	case e := <-evtCh:
+		require.NotNil(t, e)
+		require.Equal(t, model.ObjectTypeError, e.Object)
+	default:
+		t.Fatalf("expected error event to be sent")
+	}
+}
+
+func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := p.collectParallelToolResults(ctx, make(chan toolResult),
+		make(chan struct{}), 2)
+	require.NotNil(t, res)
+}
+
+func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
+	inv.ToolCallbacks.RegisterBeforeTool(func(_ context.Context, _ string,
+		_ *tool.Declaration, _ []byte) (any, error) {
+		return map[string]any{"v": 1}, nil
+	})
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
+	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	require.NoError(t, err)
+	b, _ := json.Marshal(map[string]any{"v": 1})
+	require.JSONEq(t, string(b), string(mustJSON(res)))
+}
+
+func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
+	inv.ToolCallbacks.RegisterBeforeTool(func(_ context.Context, _ string,
+		_ *tool.Declaration, _ []byte) (any, error) {
+		return nil, fmt.Errorf("fail")
+	})
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
+	_, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	require.Error(t, err)
+}
+
+func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
+	inv.ToolCallbacks.RegisterAfterTool(func(_ context.Context, _ string,
+		_ *tool.Declaration, _ []byte, _ any, _ error) (any, error) {
+		return map[string]any{"ok": true}, nil
+	})
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
+	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	require.NoError(t, err)
+	b, _ := json.Marshal(map[string]any{"ok": true})
+	require.JSONEq(t, string(b), string(mustJSON(res)))
+
+	// AfterError branch.
+	inv2 := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
+	inv2.ToolCallbacks.RegisterAfterTool(func(_ context.Context, _ string,
+		_ *tool.Declaration, _ []byte, _ any, _ error) (any, error) {
+		return nil, fmt.Errorf("bad")
+	})
+	_, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	require.Error(t, err)
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func TestTrySendEvent_NilAndBuffered(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	// Nil channel is no-op.
+	require.NoError(t, p.trySendEvent(ctx, nil, event.New("inv", "a")))
+	// Buffered channel should accept send.
+	ch := make(chan *event.Event, 1)
+	require.NoError(t, p.trySendEvent(ctx, ch, event.New("inv", "a")))
+}
+
+// stream tool that returns error on StreamableCall.
+type errStreamTool struct{ name string }
+
+func (e *errStreamTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: e.name} }
+func (e *errStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	return nil, fmt.Errorf("stream call error")
+}
+
+func TestExecuteStreamableTool_StreamableCallError(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-s", AgentName: "tester", Branch: "b", Model: &mockModel{}}
+	tc := model.ToolCall{ID: "x", Function: model.FunctionDefinitionParam{Name: "s"}}
+	st := &errStreamTool{name: "s"}
+	ch := make(chan *event.Event, 1)
+	res, err := f.executeStreamableTool(ctx, inv, tc, st, ch)
+	require.Error(t, err)
+	require.Nil(t, res)
+}
+
+func TestMarshalChunkToText_MarshalError(t *testing.T) {
+	// Passing a function is not JSON-serializable, forcing fmt.Sprintf path.
+	text := marshalChunkToText(func() {})
+	require.NotEmpty(t, text)
+}
+
+func TestCheckContextCancelled(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false)
+	require.NoError(t, p.checkContextCancelled(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, p.checkContextCancelled(ctx))
+}
