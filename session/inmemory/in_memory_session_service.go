@@ -695,20 +695,20 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
 		return fmt.Errorf("failed to create summary: %w", err)
 	}
-	// Persist synchronously when force=true, or when async disabled.
-	if force || !s.opts.asyncSummaryPersist {
+	// Persist synchronously when force=true, async otherwise.
+	if force {
 		if err := s.persistSummaryFromCacheByKey(ctx, key); err != nil {
 			return err
 		}
-	} else {
-		// Async persist: do not block caller.
-		go func(k session.Key) {
-			if err := s.persistSummaryFromCacheByKey(context.Background(), k); err != nil {
-				log.Errorf("failed to persist summary from cache: %v", err)
-			}
-		}(key)
+		return nil
 	}
 
+	// Async persist in order not to block caller.
+	go func(k session.Key) {
+		if err := s.persistSummaryFromCacheByKey(context.Background(), k); err != nil {
+			log.Errorf("failed to persist summary from cache: %v", err)
+		}
+	}(key)
 	return nil
 }
 

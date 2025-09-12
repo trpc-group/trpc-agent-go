@@ -30,8 +30,6 @@ type serviceOpts struct {
 	cleanupInterval time.Duration
 	// summarizerManager integrates LLM summarization.
 	summarizerManager summary.SummarizerManager
-	// asyncSummaryPersist controls whether to persist summary asynchronously when not forced.
-	asyncSummaryPersist bool
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -81,13 +79,5 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.summarizerManager = m
-	}
-}
-
-// WithAsyncSummaryPersist enables or disables async persistence of summaries (non-force only).
-// Default is false (synchronous persist).
-func WithAsyncSummaryPersist(enabled bool) ServiceOpt {
-	return func(opts *serviceOpts) {
-		opts.asyncSummaryPersist = enabled
 	}
 }

@@ -30,22 +30,20 @@ import (
 )
 
 var (
-	flagModel        = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
-	flagWindow       = flag.Int("window", 50, "Event window size for summarization input")
-	flagEvents       = flag.Int("events", 1, "Event count threshold to trigger summarization")
-	flagTokens       = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
-	flagTimeSec      = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
-	flagMaxLen       = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
-	flagAsyncPersist = flag.Bool("async", false, "Enable async summary persistence on non-force runs")
-	streaming        = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	modelName   = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
+	streaming   = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	flagWindow  = flag.Int("window", 50, "Event window size for summarization input")
+	flagEvents  = flag.Int("events", 1, "Event count threshold to trigger summarization")
+	flagTokens  = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
+	flagTimeSec = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
+	flagMaxLen  = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
 )
 
 func main() {
 	flag.Parse()
 
 	chat := &summaryChat{
-		modelName: *flagModel,
-		window:    *flagWindow,
+		modelName: *modelName,
 	}
 	if err := chat.run(); err != nil {
 		fmt.Printf("❌ Error: %v\n", err)
@@ -56,7 +54,6 @@ func main() {
 // summaryChat manages the conversation and summarization demo.
 type summaryChat struct {
 	modelName      string
-	window         int
 	runner         runner.Runner
 	sessionService session.Service
 	app            string
@@ -83,7 +80,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 		summary.CheckTokenThreshold(*flagTokens),
 		summary.CheckTimeThreshold(time.Duration(*flagTimeSec) * time.Second),
 	}
-	sumOpts := []summary.Option{summary.WithWindowSize(c.window)}
+	sumOpts := []summary.Option{summary.WithWindowSize(*flagWindow)}
 	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
 	sumOpts = append(sumOpts, summary.WithChecksAny(checks))
 	sum := summary.NewSummarizer(llm, sumOpts...)
@@ -92,7 +89,6 @@ func (c *summaryChat) setup(_ context.Context) error {
 	// In-memory session service with summarizer manager.
 	sessService := inmemory.NewSessionService(
 		inmemory.WithSummarizerManager(mgr),
-		inmemory.WithAsyncSummaryPersist(*flagAsyncPersist),
 	)
 	c.sessionService = sessService
 
@@ -112,12 +108,11 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("📝 Session Summarization Chat\n")
 	fmt.Printf("Model: %s\n", c.modelName)
 	fmt.Printf("Service: inmemory\n")
-	fmt.Printf("Window: %d\n", c.window)
+	fmt.Printf("Window: %d\n", *flagWindow)
 	fmt.Printf("EventThreshold: %d\n", *flagEvents)
 	fmt.Printf("TokenThreshold: %d\n", *flagTokens)
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
 	fmt.Printf("MaxLen: %d\n", *flagMaxLen)
-	fmt.Printf("AsyncPersist: %v\n", *flagAsyncPersist)
 	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("✅ Summary chat ready! Session: %s\n\n", c.sessionID)
