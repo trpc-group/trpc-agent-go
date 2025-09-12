@@ -1534,7 +1534,9 @@
 <span class="normal"><a href="#__codelineno-9-28">28</a></span>
 <span class="normal"><a href="#__codelineno-9-29">29</a></span>
 <span class="normal"><a href="#__codelineno-9-30">30</a></span>
-<span class="normal"><a href="#__codelineno-9-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="c1">// Invocation is the context object for Agent execution flow, containing all information needed for a single call.</span>
+<span class="normal"><a href="#__codelineno-9-31">31</a></span>
+<span class="normal"><a href="#__codelineno-9-32">32</a></span>
+<span class="normal"><a href="#__codelineno-9-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="c1">// Invocation is the context object for Agent execution flow, containing all information needed for a single call.</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="c1">// Agent specifies the Agent instance to call.</span>
 </span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">Agent</span><span class="w"> </span><span class="nx">Agent</span>
@@ -1552,19 +1554,21 @@
 </span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">Model</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span>
 </span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="c1">// Message is the specific content sent by the user to the Agent.</span>
 </span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="w">    </span><span class="nx">Message</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span>
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// EventCompletionCh is used to signal when events are written to the session.</span>
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">EventCompletionCh</span><span class="w"> </span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// RunOptions are option configurations for the Run method.</span>
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">RunOptions</span><span class="w"> </span><span class="nx">RunOptions</span>
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// TransferInfo supports control transfer between Agents.</span>
-</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">TransferInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TransferInfo</span>
-</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="c1">// AgentCallbacks allows inserting custom logic at different stages of Agent execution.</span>
-</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="nx">AgentCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">AgentCallbacks</span>
-</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="w">    </span><span class="c1">// ModelCallbacks allows inserting custom logic at different stages of model calls.</span>
-</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a><span class="w">    </span><span class="nx">ModelCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">ModelCallbacks</span>
-</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a><span class="w">    </span><span class="c1">// ToolCallbacks allows inserting custom logic at different stages of tool calls.</span>
-</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="w">    </span><span class="nx">ToolCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolCallbacks</span>
-</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="p">}</span>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// RunOptions are option configurations for the Run method.</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">RunOptions</span><span class="w"> </span><span class="nx">RunOptions</span>
+</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// TransferInfo supports control transfer between Agents.</span>
+</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">TransferInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TransferInfo</span>
+</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a><span class="w">    </span><span class="c1">// AgentCallbacks allows inserting custom logic at different stages of Agent execution.</span>
+</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="nx">AgentCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">AgentCallbacks</span>
+</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="c1">// ModelCallbacks allows inserting custom logic at different stages of model calls.</span>
+</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="nx">ModelCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">ModelCallbacks</span>
+</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="w">    </span><span class="c1">// ToolCallbacks allows inserting custom logic at different stages of tool calls.</span>
+</span><span id="__span-9-28"><a id="__codelineno-9-28" name="__codelineno-9-28"></a><span class="w">    </span><span class="nx">ToolCallbacks</span><span class="w"> </span><span class="o">*</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolCallbacks</span>
+</span><span id="__span-9-29"><a id="__codelineno-9-29" name="__codelineno-9-29"></a>
+</span><span id="__span-9-30"><a id="__codelineno-9-30" name="__codelineno-9-30"></a><span class="w">    </span><span class="c1">// notice</span>
+</span><span id="__span-9-31"><a id="__codelineno-9-31" name="__codelineno-9-31"></a><span class="w">    </span><span class="nx">noticeChanMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">chan</span><span class="w"> </span><span class="kt">any</span>
+</span><span id="__span-9-32"><a id="__codelineno-9-32" name="__codelineno-9-32"></a><span class="w">    </span><span class="nx">noticeMu</span><span class="w">      </span><span class="o">*</span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+</span><span id="__span-9-33"><a id="__codelineno-9-33" name="__codelineno-9-33"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="event">Event</h3>
 <p>Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</p>
@@ -1593,9 +1597,7 @@
 <span class="normal"><a href="#__codelineno-10-16">16</a></span>
 <span class="normal"><a href="#__codelineno-10-17">17</a></span>
 <span class="normal"><a href="#__codelineno-10-18">18</a></span>
-<span class="normal"><a href="#__codelineno-10-19">19</a></span>
-<span class="normal"><a href="#__codelineno-10-20">20</a></span>
-<span class="normal"><a href="#__codelineno-10-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="c1">// Response contains model response content, tool call results and statistics.</span>
 </span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
@@ -1611,11 +1613,9 @@
 </span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
 </span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="c1">// RequiresCompletion identifies whether this event requires a completion signal.</span>
 </span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="c1">// CompletionID is used for the completion signal of this event.</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">CompletionID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;completionId,omitempty&quot;`</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.</span>
-</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
-</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="p">}</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The streaming nature of Events allows you to see the Agent's working process in real-time, just like having a natural conversation with a real person. You only need to iterate through the Event stream, check the content and status of each Event, and you can completely handle the Agent's execution results.</p>
 <h3 id="agent-interface">Agent Interface</h3>
@@ -1775,7 +1775,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 10, 2025 07:34:13 UTC">2025-09-10 07:34:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 12, 2025 07:24:03 UTC">2025-09-12 07:24:03</span>
   </span>
 
     
