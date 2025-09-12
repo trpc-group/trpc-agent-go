@@ -234,8 +234,8 @@ func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
-	for key, ch := range inv.noticeChanMap {
+	for _, ch := range inv.noticeChanMap {
 		close(ch)
-		delete(inv.noticeChanMap, key)
 	}
+	inv.noticeChanMap = nil
 }
