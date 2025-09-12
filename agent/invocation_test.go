@@ -158,7 +158,9 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			if tt.ctxDelay > 0 {
-				ctx, _ = context.WithTimeout(ctx, tt.ctxDelay)
+				innerCtx, cancel := context.WithTimeout(ctx, tt.ctxDelay)
+				defer cancel()
+				ctx = innerCtx
 			}
 			complete := false
 			startTime := time.Now()
