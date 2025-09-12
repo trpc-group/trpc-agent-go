@@ -11,6 +11,8 @@ package a2a
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -181,10 +183,468 @@ func (m *mockEventToA2AConverter) ConvertStreamingToA2AMessage(ctx context.Conte
 	}, nil
 }
 
-type mockTaskManager struct{}
+type mockTaskManager struct {
+	processMessageFunc func(ctx context.Context, message protocol.Message, options taskmanager.ProcessOptions, handler taskmanager.TaskHandler) (*taskmanager.MessageProcessingResult, error)
+}
 
 func (m *mockTaskManager) ProcessMessage(ctx context.Context, message protocol.Message, options taskmanager.ProcessOptions, handler taskmanager.TaskHandler) (*taskmanager.MessageProcessingResult, error) {
+	if m.processMessageFunc != nil {
+		return m.processMessageFunc(ctx, message, options, handler)
+	}
 	return &taskmanager.MessageProcessingResult{}, nil
+}
+
+// mockTaskHandler implements TaskHandler interface for testing
+type mockTaskHandler struct {
+	buildTaskFunc         func(specificTaskID *string, contextID *string) (string, error)
+	updateTaskStateFunc   func(taskID *string, state protocol.TaskState, message *protocol.Message) error
+	addArtifactFunc       func(taskID *string, artifact protocol.Artifact, isFinal bool, needMoreData bool) error
+	subscribeTaskFunc     func(taskID *string) (taskmanager.TaskSubscriber, error)
+	getTaskFunc           func(taskID *string) (taskmanager.CancellableTask, error)
+	cleanTaskFunc         func(taskID *string) error
+	getMessageHistoryFunc func() []protocol.Message
+	getContextIDFunc      func() string
+	getMetadataFunc       func() (map[string]interface{}, error)
+}
+
+func (m *mockTaskHandler) BuildTask(specificTaskID *string, contextID *string) (string, error) {
+	if m.buildTaskFunc != nil {
+		return m.buildTaskFunc(specificTaskID, contextID)
+	}
+	return "test-task-id", nil
+}
+
+func (m *mockTaskHandler) UpdateTaskState(taskID *string, state protocol.TaskState, message *protocol.Message) error {
+	if m.updateTaskStateFunc != nil {
+		return m.updateTaskStateFunc(taskID, state, message)
+	}
+	return nil
+}
+
+func (m *mockTaskHandler) AddArtifact(taskID *string, artifact protocol.Artifact, isFinal bool, needMoreData bool) error {
+	if m.addArtifactFunc != nil {
+		return m.addArtifactFunc(taskID, artifact, isFinal, needMoreData)
+	}
+	return nil
+}
+
+func (m *mockTaskHandler) SubscribeTask(taskID *string) (taskmanager.TaskSubscriber, error) {
+	if m.subscribeTaskFunc != nil {
+		return m.subscribeTaskFunc(taskID)
+	}
+	return &mockTaskSubscriber{}, nil
+}
+
+func (m *mockTaskHandler) GetTask(taskID *string) (taskmanager.CancellableTask, error) {
+	if m.getTaskFunc != nil {
+		return m.getTaskFunc(taskID)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskHandler) CleanTask(taskID *string) error {
+	if m.cleanTaskFunc != nil {
+		return m.cleanTaskFunc(taskID)
+	}
+	return nil
+}
+
+func (m *mockTaskHandler) GetMessageHistory() []protocol.Message {
+	if m.getMessageHistoryFunc != nil {
+		return m.getMessageHistoryFunc()
+	}
+	return []protocol.Message{}
+}
+
+func (m *mockTaskHandler) GetContextID() string {
+	if m.getContextIDFunc != nil {
+		return m.getContextIDFunc()
+	}
+	return "test-context-id"
+}
+
+func (m *mockTaskHandler) GetMetadata() (map[string]interface{}, error) {
+	if m.getMetadataFunc != nil {
+		return m.getMetadataFunc()
+	}
+	return map[string]interface{}{}, nil
+}
+
+// mockTaskSubscriber implements TaskSubscriber interface for testing
+type mockTaskSubscriber struct {
+	sendFunc    func(event protocol.StreamingMessageEvent) error
+	channelFunc func() <-chan protocol.StreamingMessageEvent
+	closedFunc  func() bool
+	closeFunc   func()
+	channel     chan protocol.StreamingMessageEvent
+	closed      bool
+}
+
+func (m *mockTaskSubscriber) Send(event protocol.StreamingMessageEvent) error {
+	if m.sendFunc != nil {
+		return m.sendFunc(event)
+	}
+	if m.channel != nil {
+		select {
+		case m.channel <- event:
+			return nil
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *mockTaskSubscriber) Channel() <-chan protocol.StreamingMessageEvent {
+	if m.channelFunc != nil {
+		return m.channelFunc()
+	}
+	if m.channel == nil {
+		m.channel = make(chan protocol.StreamingMessageEvent, 10)
+	}
+	return m.channel
+}
+
+func (m *mockTaskSubscriber) Closed() bool {
+	if m.closedFunc != nil {
+		return m.closedFunc()
+	}
+	return m.closed
+}
+
+func (m *mockTaskSubscriber) Close() {
+	if m.closeFunc != nil {
+		m.closeFunc()
+		return
+	}
+	m.closed = true
+	if m.channel != nil {
+		close(m.channel)
+	}
+}
+
+// TestMessageProcessor_ProcessMessage tests the ProcessMessage method with table-driven approach
+func TestMessageProcessor_ProcessMessage(t *testing.T) {
+	ctxID := "ctx123"
+	taskID := "task123"
+
+	tests := []struct {
+		name           string
+		message        protocol.Message
+		options        taskmanager.ProcessOptions
+		setupHandler   func() *mockTaskHandler
+		setupProcessor func() *messageProcessor
+		expectError    bool
+		errorContains  string
+		validateResult func(*testing.T, *taskmanager.MessageProcessingResult)
+	}{
+		{
+			name: "successful_message_processing",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "msg123",
+				ContextID: &ctxID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Hello, world!"},
+				},
+			},
+			options: taskmanager.ProcessOptions{
+				Streaming: false,
+			},
+			setupHandler: func() *mockTaskHandler {
+				return &mockTaskHandler{
+					buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+						return "task-123", nil
+					},
+				}
+			},
+			setupProcessor: func() *messageProcessor {
+				return createTestMessageProcessor()
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *taskmanager.MessageProcessingResult) {
+				if result == nil {
+					t.Error("Expected non-nil result")
+					return
+				}
+				if result.Result == nil {
+					t.Error("Expected non-nil result message")
+					return
+				}
+				if result.StreamingEvents != nil {
+					t.Error("Expected nil streaming events for non-streaming processing")
+				}
+				msg, ok := result.Result.(*protocol.Message)
+				if !ok {
+					t.Error("Expected protocol.Message type")
+					return
+				}
+				if msg.Role != protocol.MessageRoleAgent {
+					t.Errorf("Expected agent role, got: %v", msg.Role)
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected non-empty message parts")
+				}
+			},
+		},
+		{
+			name: "streaming_message_processing",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "msg456",
+				ContextID: &ctxID,
+				TaskID:    &taskID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Hello, streaming!"},
+				},
+			},
+			options: taskmanager.ProcessOptions{
+				Streaming: true,
+			},
+			setupHandler: func() *mockTaskHandler {
+				return &mockTaskHandler{
+					buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+						return "stream-task-123", nil
+					},
+					subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+						return &mockTaskSubscriber{}, nil
+					},
+				}
+			},
+			setupProcessor: func() *messageProcessor {
+				return createTestMessageProcessor()
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *taskmanager.MessageProcessingResult) {
+				if result == nil {
+					t.Error("Expected non-nil result")
+					return
+				}
+				if result.StreamingEvents == nil {
+					t.Error("Expected non-nil streaming events for streaming processing")
+					return
+				}
+				if result.Result != nil {
+					t.Error("Expected nil result for streaming processing")
+				}
+				subscriber := result.StreamingEvents
+				if subscriber == nil {
+					t.Error("Expected non-nil subscriber")
+					return
+				}
+				// Verify subscriber channel is available
+				if subscriber.Channel() == nil {
+					t.Error("Expected non-nil subscriber channel")
+				}
+			},
+		},
+		{
+			name: "custom_error_handler_non_streaming",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "msg789",
+				ContextID: &ctxID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Error test"},
+				},
+			},
+			options: taskmanager.ProcessOptions{
+				Streaming: false,
+			},
+			setupHandler: func() *mockTaskHandler {
+				return &mockTaskHandler{
+					buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+						return "", errors.New("build task failed")
+					},
+				}
+			},
+			setupProcessor: func() *messageProcessor {
+				return createTestMessageProcessorWithCustomErrorHandler()
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *taskmanager.MessageProcessingResult) {
+				if result == nil {
+					t.Error("Expected non-nil result")
+					return
+				}
+				if result.Result == nil {
+					t.Error("Expected non-nil result message")
+					return
+				}
+				// Verify custom error handler was used
+				msg, ok := result.Result.(*protocol.Message)
+				if !ok {
+					t.Error("Expected protocol.Message type")
+					return
+				}
+				if len(msg.Parts) == 0 {
+					t.Error("Expected error message parts")
+					return
+				}
+				textPart, ok := msg.Parts[0].(*protocol.TextPart)
+				if !ok {
+					t.Error("Expected text part")
+					return
+				}
+				// The actual error will be "user is nil" since we don't set up auth context
+				if textPart.Text != "Custom error: a2aserver: user is nil" {
+					t.Errorf("Expected custom error message, got: %s", textPart.Text)
+				}
+			},
+		},
+		{
+			name: "custom_error_handler_streaming",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "msg890",
+				ContextID: &ctxID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "Streaming error test"},
+				},
+			},
+			options: taskmanager.ProcessOptions{
+				Streaming: true,
+			},
+			setupHandler: func() *mockTaskHandler {
+				return &mockTaskHandler{
+					buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+						return "", errors.New("streaming build task failed")
+					},
+				}
+			},
+			setupProcessor: func() *messageProcessor {
+				return createTestMessageProcessorWithCustomErrorHandler()
+			},
+			expectError: false,
+			validateResult: func(t *testing.T, result *taskmanager.MessageProcessingResult) {
+				if result == nil {
+					t.Error("Expected non-nil result")
+					return
+				}
+				if result.StreamingEvents == nil {
+					t.Error("Expected non-nil streaming events")
+					return
+				}
+				// Verify streaming subscriber was created for error handling
+				subscriber := result.StreamingEvents
+				// The subscriber should be available for error streaming
+				if subscriber == nil {
+					t.Error("Expected non-nil subscriber")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler := tt.setupHandler()
+			processor := tt.setupProcessor()
+
+			result, err := processor.ProcessMessage(ctx, tt.message, tt.options, handler)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				}
+				if tt.errorContains != "" && !containsString(err.Error(), tt.errorContains) {
+					t.Errorf("Expected error to contain '%s', got: %v", tt.errorContains, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if tt.validateResult != nil {
+					tt.validateResult(t, result)
+				}
+			}
+		})
+	}
+}
+
+// Helper functions for testing
+func createTestMessageProcessor() *messageProcessor {
+	return &messageProcessor{
+		runner:              &mockRunner{},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		debugLogging:        false,
+	}
+}
+
+// createTestMessageProcessorWithCustomErrorHandler creates a message processor with custom error handler
+func createTestMessageProcessorWithCustomErrorHandler() *messageProcessor {
+	customErrorHandler := func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		errorText := fmt.Sprintf("Custom error: %s", err.Error())
+		errorMsg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
+			&protocol.TextPart{Text: errorText},
+		})
+		return &errorMsg, nil
+	}
+
+	return &messageProcessor{
+		runner:              &mockRunner{},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        customErrorHandler,
+		debugLogging:        false,
+	}
+}
+
+// mockRunner for testing
+type mockRunner struct {
+	runFunc func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error)
+}
+
+func (m *mockRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+	if m.runFunc != nil {
+		return m.runFunc(ctx, userID, sessionID, message, opts...)
+	}
+	// Return a channel with a simple completion event
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:        "test-response-id",
+			Object:    "chat.completion",
+			Created:   time.Now().Unix(),
+			Model:     "test-model",
+			Choices:   []model.Choice{},
+			Timestamp: time.Now(),
+			Done:      true,
+		},
+		InvocationID: "test-invocation",
+		Author:       "test-agent",
+		ID:           "test-event-id",
+		Timestamp:    time.Now(),
+	}
+	close(ch)
+	return ch, nil
+}
+
+// errorA2AMessageConverter for testing conversion errors
+type errorA2AMessageConverter struct{}
+
+func (e *errorA2AMessageConverter) ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error) {
+	return nil, errors.New("conversion failed")
+}
+
+// containsString checks if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || (len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNew(t *testing.T) {
