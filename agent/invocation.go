@@ -246,3 +246,16 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 
 	return nil
 }
+
+// CleanupNotice cleanup all notice channel
+// The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
+// upon completion to prevent resource leaks.
+func (inv *Invocation) CleanupNotice(ctx context.Context) {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	for key, ch := range inv.noticeChanMap {
+		close(ch)
+		delete(inv.noticeChanMap, key)
+	}
+}
