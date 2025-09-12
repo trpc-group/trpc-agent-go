@@ -14,89 +14,150 @@
 package main
 
 import (
-    "context"
-    "flag"
-    "fmt"
-    "log"
-    "strings"
+	"bufio"
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
 
-    "trpc.group/trpc-go/trpc-agent-go/event"
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 var (
-    modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
-    query     = flag.String("q", "今天天气怎么样，随便聊聊~", "User input text")
+	modelName = flag.String("model", "deepseek-chat", "Name of the model to use")
 )
 
 func main() {
-    flag.Parse()
+	flag.Parse()
 
-    fmt.Printf("🚀 Custom Agent (intent-branching)\n")
-    fmt.Printf("Model: %s\n", *modelName)
-    fmt.Printf("Query: %s\n", *query)
-    fmt.Println(strings.Repeat("=", 50))
+	fmt.Printf("🚀 Custom Agent (intent-branching)\n")
+	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Println(strings.Repeat("=", 50))
 
-    // Build model and custom agent.
-    m := openai.New(*modelName)
-    ag := NewSimpleIntentAgent(
-        "biz-agent",
-        "A custom agent demonstrating business flow branching by intent",
-        m,
-    )
+	// Build model and custom agent.
+	m := openai.New(*modelName)
+	ag := NewSimpleIntentAgent(
+		"biz-agent",
+		"A custom agent demonstrating business flow branching by intent",
+		m,
+	)
 
-    // Use Runner for session + event handling.
-    r := runner.NewRunner("customagent-app", ag)
-    ctx := context.Background()
+	// Use Runner for session + event handling.
+	r := runner.NewRunner("customagent-app", ag)
+	ctx := context.Background()
 
-    ch, err := r.Run(ctx, "user-001", "session-001", model.NewUserMessage(*query))
-    if err != nil {
-        log.Fatalf("run failed: %v", err)
-    }
+	chat := &interactiveChat{
+		runner:    r,
+		modelName: *modelName,
+		userID:    "user",
+		sessionID: fmt.Sprintf("custom-session-%d", time.Now().Unix()),
+	}
 
-    // Stream events.
-    fmt.Print("🤖 Assistant: ")
-    for evt := range ch {
-        if evt.Error != nil {
-            fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
-            continue
-        }
-        printContent(evt)
-        if evt.Done && !isToolLike(evt) {
-            fmt.Println()
-        }
-    }
+	if err := chat.start(ctx); err != nil {
+		log.Fatalf("chat failed: %v", err)
+	}
+}
+
+type interactiveChat struct {
+	runner    runner.Runner
+	modelName string
+	userID    string
+	sessionID string
+}
+
+func (c *interactiveChat) start(ctx context.Context) error {
+	fmt.Printf("✅ Chat ready! Session: %s\n", c.sessionID)
+	fmt.Println()
+	fmt.Println("💡 Commands: /history, /new, /exit")
+	fmt.Println()
+
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("👤 You: ")
+		if !scanner.Scan() {
+			break
+		}
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "" {
+			continue
+		}
+		switch strings.ToLower(userInput) {
+		case "/exit":
+			fmt.Println("👋 Bye!")
+			return nil
+		case "/new":
+			c.startNewSession()
+			continue
+		case "/history":
+			userInput = "show our conversation history"
+		}
+
+		if err := c.handle(ctx, userInput); err != nil {
+			fmt.Printf("❌ Error: %v\n", err)
+		}
+		fmt.Println()
+	}
+	return scanner.Err()
+}
+
+func (c *interactiveChat) handle(ctx context.Context, text string) error {
+	fmt.Print("🤖 Assistant: ")
+	ch, err := c.runner.Run(ctx, c.userID, c.sessionID, model.NewUserMessage(text))
+	if err != nil {
+		return err
+	}
+	finished := false
+	for evt := range ch {
+		if evt.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", evt.Error.Message)
+			continue
+		}
+		if !finished {
+			printContent(evt)
+		}
+		if evt.Done && !isToolLike(evt) {
+			finished = true
+		}
+	}
+	return nil
+}
+
+func (c *interactiveChat) startNewSession() {
+	old := c.sessionID
+	c.sessionID = fmt.Sprintf("custom-session-%d", time.Now().Unix())
+	fmt.Printf("🆕 New session started.\n   Previous: %s\n   Current:  %s\n\n", old, c.sessionID)
 }
 
 func printContent(evt *event.Event) {
-    if evt.Response == nil || len(evt.Response.Choices) == 0 {
-        return
-    }
-    c := evt.Response.Choices[0]
-    if c.Delta.Content != "" {
-        fmt.Print(c.Delta.Content)
-    }
-    if c.Message.Content != "" && !evt.Response.IsPartial {
-        fmt.Print(c.Message.Content)
-    }
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return
+	}
+	c := evt.Response.Choices[0]
+	// Default streaming: print only delta to avoid duplicating final content.
+	if c.Delta.Content != "" {
+		fmt.Print(c.Delta.Content)
+	}
 }
 
 func isToolLike(evt *event.Event) bool {
-    if evt.Response == nil {
-        return false
-    }
-    // Minimal check: tool calls or tool role messages.
-    if len(evt.Response.Choices) > 0 {
-        ch := evt.Response.Choices[0]
-        if len(ch.Message.ToolCalls) > 0 {
-            return true
-        }
-        if ch.Message.Role == model.RoleTool {
-            return true
-        }
-    }
-    return false
+	if evt.Response == nil {
+		return false
+	}
+	// Minimal check: tool calls or tool role messages.
+	if len(evt.Response.Choices) > 0 {
+		ch := evt.Response.Choices[0]
+		if len(ch.Message.ToolCalls) > 0 {
+			return true
+		}
+		if ch.Message.Role == model.RoleTool {
+			return true
+		}
+	}
+	return false
 }
-

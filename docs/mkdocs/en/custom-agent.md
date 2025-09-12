@@ -89,12 +89,17 @@ ch, err := r.Run(ctx, "user-001", "session-001", model.NewUserMessage("Hi there"
 // consume events...
 ```
 
-## Run the example
+## Run the example (interactive)
 
 ```bash
 cd examples/customagent
 export OPENAI_API_KEY="your_api_key"
-go run . -model deepseek-chat -q "Plan a 2-day weekend in Shanghai for kids"
+go run . -model deepseek-chat
+
+# Inside the interactive session:
+# /history  - Ask to show conversation history
+# /new      - Start a new session
+# /exit     - Quit
 ```
 
 ## Extensions
@@ -102,4 +107,3 @@ go run . -model deepseek-chat -q "Plan a 2-day weekend in Shanghai for kids"
 - Add tools: return `[]tool.Tool` (e.g., `function.NewFunctionTool(...)`) to call DB/HTTP/internal services
 - Add validation: enforce checks and guards before branching
 - Evolve gradually: when if-else grows or you need collaboration, move to `ChainAgent`/`ParallelAgent` or `Graph`
-
