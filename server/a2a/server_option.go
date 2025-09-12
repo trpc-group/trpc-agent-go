@@ -181,7 +181,13 @@ type ErrorHandler func(ctx context.Context, msg *protocol.Message, err error) (*
 
 // DefaultErrorHandler provides intelligent error handling based on error type
 func defaultErrorHandler(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
-	return nil, err
+	outputMsg := protocol.NewMessage(
+		protocol.MessageRoleAgent,
+		[]protocol.Part{
+			protocol.NewTextPart("An error occurred while processing your request."),
+		},
+	)
+	return &outputMsg, nil
 }
 
 type singleMsgSubscriber struct {

@@ -160,18 +160,12 @@ func (m *messageProcessor) handleError(
 	err error,
 ) (*taskmanager.MessageProcessingResult, error) {
 	if m.debugLogging {
-		msgJson, _ := json.Marshal(msg)
-		log.Debugf("handling error: req msg id: %s, error: %v, msg: %s", msg.MessageID, err, string(msgJson))
+		log.Debugf("handling error: req msg id: %s, error: %v", msg.MessageID, err)
 	}
 
-	errMsg, err := m.errorHandler(ctx, msg, err)
-	if err != nil {
-		return nil, err
-	}
-
-	// if error handler keep return error, return this error to trpc-a2a-go
-	if err != nil {
-		return nil, err
+	errMsg, handlerErr := m.errorHandler(ctx, msg, err)
+	if handlerErr != nil {
+		return nil, handlerErr
 	}
 
 	if streaming {
@@ -189,6 +183,11 @@ func (m *messageProcessor) handleStreamingProcessingError(
 	subscriber taskmanager.TaskSubscriber,
 	err error,
 ) (*taskmanager.MessageProcessingResult, error) {
+	if m.debugLogging {
+		msgJson, _ := json.Marshal(msg)
+		log.Debugf("handling error: req msg id: %s, error: %v, msg: %s", msg.MessageID, err, string(msgJson))
+	}
+
 	errMsg, err := m.errorHandler(ctx, msg, err)
 	if err != nil {
 		log.Warnf("handle streaming processing error: %v", err)
@@ -211,7 +210,7 @@ func (m *messageProcessor) ProcessMessage(
 ) (*taskmanager.MessageProcessingResult, error) {
 	if m.debugLogging {
 		msgJson, _ := json.Marshal(message)
-		log.Debugf("received A2A id:message: %s", string(msgJson))
+		log.Debugf("received A2A message: msg id: %s, message: %s", message.MessageID, string(msgJson))
 	}
 
 	user, ok := ctx.Value(auth.AuthUserKey).(*auth.User)
@@ -220,7 +219,7 @@ func (m *messageProcessor) ProcessMessage(
 		return m.handleError(ctx, &message, options.Streaming, errors.New("a2aserver: user is nil"))
 	}
 	if message.ContextID == nil {
-		// It's should not reach here, if client transfer a empty ctx id, trpc-a2a-go will generate one
+		// It should not reach here, if client transfers an empty ctx id, trpc-a2a-go will generate one
 		log.Warnf("a2aserver: context id not exists")
 		return m.handleError(ctx, &message, options.Streaming, errors.New("context id not exists"))
 	}
@@ -351,7 +350,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 
 		if m.debugLogging {
 			agentEventJson, _ := json.Marshal(agentEvent)
-			log.Debugf("sending agent response to client: req msg id: %s, event: %s", msg.MessageID, string(agentEventJson))
+			log.Debugf("get agent event: req msg id: %s, event: %s", msg.MessageID, string(agentEventJson))
 		}
 
 		if agentEvent == nil {
@@ -431,7 +430,7 @@ func (m *messageProcessor) processMessage(
 
 		if m.debugLogging {
 			agentEventJson, _ := json.Marshal(agentEvent)
-			log.Debugf("sending agent event to client: req msg id: %s, event: %s", a2aMsg.MessageID, string(agentEventJson))
+			log.Debugf("get agent event: req msg id: %s, event: %s", a2aMsg.MessageID, string(agentEventJson))
 		}
 
 		if agentEvent == nil || agentEvent.Response == nil {
