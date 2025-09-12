@@ -171,26 +171,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	return newInv
 }
 
-// CreateBranchInvocation create a new invocation for branch agent
-// deprecated please use Clone method
-func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	branchInvocation := Invocation{
-		Agent:           branchAgent,
-		AgentName:       branchAgent.Info().Name,
-		InvocationID:    inv.InvocationID,
-		Branch:          inv.Branch,
-		Session:         inv.Session,
-		Message:         inv.Message,
-		RunOptions:      inv.RunOptions,
-		ArtifactService: inv.ArtifactService,
-		noticeMu:        inv.noticeMu,
-		noticeChanMap:   inv.noticeChanMap,
-	}
-
-	return &branchInvocation
-}
-
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
 	if timeout == WaitNoticeWithoutTimeout {
