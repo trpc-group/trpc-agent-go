@@ -20,12 +20,17 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
 	defaultSessionEventLimit     = 1000
 	defaultCleanupIntervalSecond = 300 // 5 min
+
+	// summary state keys.
+	summaryTextKey      = "summary_text"
+	summaryUpdatedAtKey = "summary_updated_at"
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -647,6 +652,145 @@ func (s *SessionService) stopCleanupRoutine() {
 func (s *SessionService) Close() error {
 	s.stopCleanupRoutine()
 	return nil
+}
+
+// CreateSessionSummary generates a simple in-memory summary and stores it in session state.
+// This implementation preserves original events and writes summary metadata to state only.
+func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+
+	// If no summarizer manager configured, warn and no-op.
+	if s.opts.summarizerManager == nil {
+		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		return nil
+	}
+
+	// Resolve stored session pointer once (under lock) to validate existence, then release lock.
+	app := s.getOrCreateAppSessions(key.AppName)
+	app.mu.Lock()
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+	swt, ok := userSessions[key.SessionID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession := getValidSession(swt)
+	if storedSession == nil {
+		app.mu.Unlock()
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	app.mu.Unlock()
+
+	// Always run summarization synchronously to populate manager cache.
+	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
+		return fmt.Errorf("failed to create summary: %w", err)
+	}
+	// Persist synchronously when force=true, async otherwise.
+	if force {
+		if err := s.persistSummaryFromCacheByKey(ctx, key); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Async persist in order not to block caller.
+	go func(k session.Key) {
+		if err := s.persistSummaryFromCacheByKey(context.Background(), k); err != nil {
+			log.Errorf("failed to persist summary from cache: %v", err)
+		}
+	}(key)
+	return nil
+}
+
+// persistSummaryFromCacheByKey persists the latest cached summary into session state when present.
+// It acquires the internal lock, updates the session's state, UpdatedAt, and TTL.
+func (s *SessionService) persistSummaryFromCacheByKey(_ context.Context, key session.Key) error {
+	app := s.getOrCreateAppSessions(key.AppName)
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+	swt, ok := userSessions[key.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession := getValidSession(swt)
+	if storedSession == nil {
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+
+	sum, err := s.opts.summarizerManager.GetSummary(storedSession)
+	if err != nil {
+		return fmt.Errorf("get summary failed: %w", err)
+	}
+	if sum == nil || sum.Summary == "" {
+		log.Warnf("no summary text found for session %s", key.SessionID)
+		return nil
+	}
+	if storedSession.State == nil {
+		storedSession.State = make(session.StateMap)
+	}
+	now := time.Now().UTC()
+	storedSession.State[summaryTextKey] = []byte(sum.Summary)
+	storedSession.State[summaryUpdatedAtKey] = []byte(now.Format(time.RFC3339Nano))
+	storedSession.UpdatedAt = time.Now()
+	swt.session = storedSession
+	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	return nil
+}
+
+// GetSessionSummaryText returns previously stored summary from session state if present.
+func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	// Prefer manager cache.
+	if s.opts.summarizerManager != nil {
+		if summary, err := s.opts.summarizerManager.GetSummary(sess); err == nil && summary != nil && summary.Summary != "" {
+			return summary.Summary, true
+		}
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+
+	app, ok := s.getAppSessions(key.AppName)
+	if !ok {
+		return "", false
+	}
+	app.mu.RLock()
+	defer app.mu.RUnlock()
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		return "", false
+	}
+	sWithTTL, ok := userSessions[key.SessionID]
+	if !ok {
+		return "", false
+	}
+	storedSession := getValidSession(sWithTTL)
+	if storedSession == nil || storedSession.State == nil {
+		return "", false
+	}
+	val, ok := storedSession.State[summaryTextKey]
+	if !ok {
+		return "", false
+	}
+	return string(val), true
 }
 
 // updateStoredSession updates the stored session with the given event.

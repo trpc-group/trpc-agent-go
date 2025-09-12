@@ -9,7 +9,11 @@
 
 package inmemory
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
 
 // serviceOpts is the options for session service.
 type serviceOpts struct {
@@ -24,6 +28,8 @@ type serviceOpts struct {
 	// cleanupInterval is the interval for automatic cleanup of expired data.
 	// If set to 0, automatic cleanup is disabled.
 	cleanupInterval time.Duration
+	// summarizerManager integrates LLM summarization.
+	summarizerManager summary.SummarizerManager
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -66,5 +72,12 @@ func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.cleanupInterval = interval
+	}
+}
+
+// WithSummarizerManager injects a summarizer manager for LLM-based summaries.
+func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.summarizerManager = m
 	}
 }
