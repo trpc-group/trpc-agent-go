@@ -397,14 +397,6 @@ func (m *MockService) GetSessionSummaryText(ctx context.Context, sess *Session) 
 	return "", false
 }
 
-func (m *MockService) GetSummaryRecord(ctx context.Context, sess *Session) (*SummaryRecord, bool) {
-	return nil, false
-}
-
-func (m *MockService) SaveSummaryRecord(ctx context.Context, sess *Session, rec *SummaryRecord) error {
-	return nil
-}
-
 func (m *MockService) Close() error {
 	return nil
 }

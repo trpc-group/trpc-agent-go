@@ -95,7 +95,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.AgentName, // Current agent name for filtering.
 		)
 
-		// Always prepend summary if present, aligning with agno behavior.
+		// Always prepend summary if present.
 		const summaryTextStateKey = "summary_text"
 		var summaryText string
 		if invocation.Session.State != nil {

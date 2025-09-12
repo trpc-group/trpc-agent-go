@@ -165,14 +165,6 @@ func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *se
 	return "", false
 }
 
-func (m *mockSessionService) GetSummaryRecord(ctx context.Context, sess *session.Session) (*session.SummaryRecord, bool) {
-	return nil, false
-}
-
-func (m *mockSessionService) SaveSummaryRecord(ctx context.Context, sess *session.Session, rec *session.SummaryRecord) error {
-	return nil
-}
-
 type mockA2AToAgentConverter struct{}
 
 func (m *mockA2AToAgentConverter) ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error) {

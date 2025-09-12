@@ -184,12 +184,6 @@ func (f *fakeService) CreateSessionSummary(ctx context.Context, sess *session.Se
 func (f *fakeService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
 	return "", false
 }
-func (f *fakeService) GetSummaryRecord(ctx context.Context, sess *session.Session) (*session.SummaryRecord, bool) {
-	return nil, false
-}
-func (f *fakeService) SaveSummaryRecord(ctx context.Context, sess *session.Session, rec *session.SummaryRecord) error {
-	return nil
-}
 func (f *fakeService) Close() error { return nil }
 
 func TestManager_WithBaseService_AppendsAndMetadata(t *testing.T) {

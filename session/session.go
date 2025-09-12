@@ -136,12 +136,6 @@ type Service interface {
 	// The boolean indicates whether a summary exists.
 	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
 
-	// Optional: read a full persistent summary record if available.
-	GetSummaryRecord(ctx context.Context, sess *Session) (*SummaryRecord, bool)
-
-	// Optional: save a full persistent summary record if supported by backend.
-	SaveSummaryRecord(ctx context.Context, sess *Session, rec *SummaryRecord) error
-
 	// Close closes the service.
 	Close() error
 }
