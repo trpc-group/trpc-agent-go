@@ -104,11 +104,11 @@ func transformSpan(span *tracepb.Span) {
 	}
 
 	switch operationName {
-	case "call_llm":
+	case itelemetry.OperationCallLLM:
 		transformCallLLM(span)
-	case "execute_tool":
+	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
-	case "run_runner":
+	case itelemetry.OperationRunRunner:
 		transformRunRunner(span)
 	}
 }

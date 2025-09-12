@@ -364,7 +364,7 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("[execute_llm_node]: %s", runner.nodeID))
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
@@ -1073,7 +1073,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	)
 
 	// Execute the tool.
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("[execute_tool]:%s", config.ToolCall.Function.Name))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
 	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(toolCompleteEventConfig{

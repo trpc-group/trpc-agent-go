@@ -35,6 +35,12 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
+	SpanNamePrefixAgentRun    = "agent_run"
+	SpanNameInvocation        = "invocation"
+
+	OperationExecuteTool = "execute_tool"
+	OperationCallLLM     = "call_llm"
+	OperationRunRunner   = "run_runner" // attribute of SpanNameInvocation
 )
 
 const (
@@ -74,11 +80,6 @@ var (
 	KeyGenAIToolName      = "gen_ai.tool.name"
 	KeyGenAIToolDesc      = "gen_ai.tool.description"
 	KeyGenAIRequestModel  = "gen_ai.request.model"
-
-	// Operation values
-	OperationExecuteTool = "execute_tool"
-	OperationCallLLM     = "call_llm"
-	OperationRunRunner   = "run_runner"
 
 	// System value
 	SystemTRPCGoAgent = "trpc.go.agent"
@@ -142,23 +143,13 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 }
 
 // TraceRunner traces the invocation of a runner.
-func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message, event *event.Event) {
-	input := message.Content
-	for _, part := range message.ContentParts {
-		if part.Text != nil {
-			input += "\n" + *part.Text
-		}
-	}
-
-	var output string
-	if event != nil && event.Response != nil && len(event.Response.Choices) > 0 {
-		m := event.Response.Choices[0].Message
-		output = m.Content
-		for _, part := range m.ContentParts {
-			if part.Text != nil {
-				output += "\n" + *part.Text
-			}
-		}
+func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message) {
+	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{message}}); err == nil {
+		span.SetAttributes(
+			attribute.String(KeyRunnerInput, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(KeyRunnerInput, "<not json serializable>"))
 	}
 
 	span.SetAttributes(
@@ -168,8 +159,6 @@ func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, mess
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyRunnerSessionID, invoke.Session.ID),
 		attribute.String(KeyRunnerUserID, invoke.Session.UserID),
-		attribute.String(KeyRunnerInput, input),
-		attribute.String(KeyRunnerOutput, output),
 	)
 }
 

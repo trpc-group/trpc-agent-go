@@ -170,7 +170,7 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, "run_runner")
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
 	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
@@ -180,8 +180,6 @@ func (r *runner) Run(
 
 	// Create a new channel for processed events.
 	processedEventCh := make(chan *event.Event)
-	//  Track the last non-streaming event for tracing
-	var lastNonStreamingEvent *event.Event
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer close(processedEventCh)
@@ -190,7 +188,6 @@ func (r *runner) Run(
 			// Append event to session if it's complete (not partial).
 			if agentEvent.StateDelta != nil ||
 				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
-				lastNonStreamingEvent = agentEvent
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
@@ -237,7 +234,7 @@ func (r *runner) Run(
 		}
 	}()
 
-	itelemetry.TraceRunner(span, r.appName, invocation, message, lastNonStreamingEvent)
+	itelemetry.TraceRunner(span, r.appName, invocation, message)
 
 	return processedEventCh, nil
 }

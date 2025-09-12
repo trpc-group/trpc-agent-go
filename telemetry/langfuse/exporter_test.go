@@ -137,14 +137,14 @@ func TestTransformSpan(t *testing.T) {
 		},
 		{
 			name:          "call_llm operation",
-			operationName: "call_llm",
+			operationName: itelemetry.OperationCallLLM,
 			inputSpan: &tracepb.Span{
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
 						Key: itelemetry.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "call_llm"},
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationCallLLM},
 						},
 					},
 				},
@@ -153,14 +153,14 @@ func TestTransformSpan(t *testing.T) {
 		},
 		{
 			name:          "execute_tool operation",
-			operationName: "execute_tool",
+			operationName: itelemetry.OperationExecuteTool,
 			inputSpan: &tracepb.Span{
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
 						Key: itelemetry.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "execute_tool"},
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationExecuteTool},
 						},
 					},
 				},
@@ -169,14 +169,14 @@ func TestTransformSpan(t *testing.T) {
 		},
 		{
 			name:          "run_runner operation",
-			operationName: "run_runner",
+			operationName: itelemetry.OperationRunRunner,
 			inputSpan: &tracepb.Span{
 				Name: "test-span",
 				Attributes: []*commonpb.KeyValue{
 					{
 						Key: itelemetry.KeyGenAIOperationName,
 						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: "run_runner"},
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationRunRunner},
 						},
 					},
 				},
@@ -736,7 +736,7 @@ func BenchmarkTransform(b *testing.B) {
 								{
 									Key: itelemetry.KeyGenAIOperationName,
 									Value: &commonpb.AnyValue{
-										Value: &commonpb.AnyValue_StringValue{StringValue: "call_llm"},
+										Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationCallLLM},
 									},
 								},
 								{
