@@ -29,6 +29,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/artifact/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/custom-agent/</loc>
+        <lastmod>2025-09-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/custom-agent/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/custom-agent/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/debugserver/</loc>
         <lastmod>2025-09-12</lastmod>
         <changefreq>daily</changefreq>
@@ -146,6 +153,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/artifact/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/artifact/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/custom-agent/</loc>
+        <lastmod>2025-09-12</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/custom-agent/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/custom-agent/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/debugserver/</loc>

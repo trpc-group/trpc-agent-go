@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/debugserver/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/custom-agent/">
       
       
-        <link rel="prev" href="../event/">
+        <link rel="prev" href="../agent/">
       
       
-        <link rel="next" href="../observability/">
+        <link rel="next" href="../multiagent/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Debug - tRPC-Agent-Go</title>
+        <title>Custom Agent - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#debug-server-usage-guide" class="md-skip">
+        <a href="#custom-agent" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Debug
+              Custom Agent
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../zh/debugserver/" hreflang="zh" class="md-select__link">
+            <a href="../zh/custom-agent/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -280,10 +280,12 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../agent/" class="md-tabs__link">
           
   
@@ -300,11 +302,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="./" class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../debugserver/" class="md-tabs__link">
         
   
   
@@ -444,24 +444,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -474,7 +479,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Components
@@ -508,10 +513,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../custom-agent/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Custom Agent
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -522,6 +549,80 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-choose-a-custom-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      When to choose a custom Agent
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-to-implement" class="md-nav__link">
+    <span class="md-ellipsis">
+      What to implement
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runner-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runner integration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-the-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Run the example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extensions
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -791,32 +892,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Debug
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../debugserver/" class="md-nav__link">
         
   
   
@@ -827,71 +906,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
-    <span class="md-ellipsis">
-      Overview
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#main-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Main Features
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#architecture-diagram" class="md-nav__link">
-    <span class="md-ellipsis">
-      Architecture Diagram
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#usage-steps" class="md-nav__link">
-    <span class="md-ellipsis">
-      Usage Steps
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#debug-results-display" class="md-nav__link">
-    <span class="md-ellipsis">
-      Debug Results Display
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -989,45 +1003,54 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#when-to-choose-a-custom-agent" class="md-nav__link">
     <span class="md-ellipsis">
-      Overview
+      When to choose a custom Agent
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#main-features" class="md-nav__link">
+  <a href="#what-to-implement" class="md-nav__link">
     <span class="md-ellipsis">
-      Main Features
+      What to implement
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#architecture-diagram" class="md-nav__link">
+  <a href="#code-example" class="md-nav__link">
     <span class="md-ellipsis">
-      Architecture Diagram
+      Code example
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-steps" class="md-nav__link">
+  <a href="#runner-integration" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Steps
+      Runner integration
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#debug-results-display" class="md-nav__link">
+  <a href="#run-the-example" class="md-nav__link">
     <span class="md-ellipsis">
-      Debug Results Display
+      Run the example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extensions
     </span>
   </a>
   
@@ -1049,7 +1072,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/en/debugserver.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/en/custom-agent.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1058,28 +1081,42 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/en/debugserver.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/en/custom-agent.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="debug-server-usage-guide">Debug Server Usage Guide</h1>
-<h2 id="overview">Overview</h2>
-<p>Debug Server is a debugging tool provided by the trpc-agent-go framework. 
-It helps developers quickly test and debug Agent functionality.
-It can be combined with <a href="https://github.com/google/adk-web">ADK Web UI</a> to allow you to verify Agent behavior and tool calls through a visual interactive interface.</p>
-<h2 id="main-features">Main Features</h2>
+<h1 id="custom-agent">Custom Agent</h1>
+<p>If you don’t want to start with Graph or multi-Agent orchestration and prefer embedding LLM into your existing service logic, implement the <code>agent.Agent</code> interface directly and control the flow yourself.</p>
+<p>This example shows a small “intent branching” agent:</p>
 <ul>
-<li><strong>Visual Debug Interface</strong>: Provides a user-friendly graphical interface through ADK Web UI</li>
-<li><strong>Real-time Interactive Testing</strong>: Supports real-time conversation and tool calls with Agents</li>
-<li><strong>Streaming Response</strong>: Supports Server-Sent Events (SSE) streaming response</li>
-<li><strong>Session Management</strong>: Supports creating and managing multiple conversation sessions</li>
-<li><strong>Tool Validation</strong>: Can intuitively test and verify various tool functions of Agents</li>
+<li>First classify intent using the LLM: <code>chitchat</code> or <code>task</code></li>
+<li>If chitchat: reply conversationally</li>
+<li>If task: output a short actionable plan (in real apps, you can route to tools or downstream services)</li>
 </ul>
-<h2 id="architecture-diagram">Architecture Diagram</h2>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<h2 id="when-to-choose-a-custom-agent">When to choose a custom Agent</h2>
+<ul>
+<li>Logic is simple but you need precise control (validation, fallbacks, branching)</li>
+<li>You don’t need visual orchestration or complex teams yet (you can later evolve to Chain/Parallel/Graph)</li>
+</ul>
+<h2 id="what-to-implement">What to implement</h2>
+<p>You must implement:</p>
+<ul>
+<li><code>Run(ctx, *Invocation) (&lt;-chan *event.Event, error)</code>: execute your flow and emit events (forward model streaming to events)</li>
+<li><code>Tools() []tool.Tool</code>: return available tools (empty if none)</li>
+<li><code>Info() Info</code>: basic agent info</li>
+<li><code>SubAgents()/FindSubAgent()</code>: return empty/nil if not used</li>
+</ul>
+<p>Core pattern:</p>
+<p>1) Use <code>invocation.Message</code> as user input</p>
+<p>2) Share framework capabilities via <code>invocation</code> (Session, Callbacks, Artifact, etc.)</p>
+<p>3) Call <code>model.Model.GenerateContent(ctx, *model.Request)</code> for streaming responses; forward via <code>event.NewResponseEvent(...)</code></p>
+<h2 id="code-example">Code example</h2>
+<p>Full example: <code>examples/customagent</code></p>
+<p>Key snippet (simplified):</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
@@ -1111,63 +1148,72 @@ It can be combined with <a href="https://github.com/google/adk-web">ADK Web UI</
 <span class="normal"><a href="#__codelineno-0-30">30</a></span>
 <span class="normal"><a href="#__codelineno-0-31">31</a></span>
 <span class="normal"><a href="#__codelineno-0-32">32</a></span>
-<span class="normal"><a href="#__codelineno-0-33">33</a></span>
-<span class="normal"><a href="#__codelineno-0-34">34</a></span>
-<span class="normal"><a href="#__codelineno-0-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>User Interface
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>+---------------------------+
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>|      ADK Web UI           |  ← Access via browser: http://localhost:4200
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>|        (React)            |
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>+-----------+---------------+
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>            | HTTP/SSE Request
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>            v
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>+-----------------------------+
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a>|     Debug Server            |  ← Listening on http://localhost:8000
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>|                             |
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a>|       API Routing           | 
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a>|       Session Management    | 
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>|       CORS Handling         |
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>+-----------+-----------------+
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a>            | Call Agent
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a>            v
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a>+---------------------------------+
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a>|    tRPC-Agent-Go                |
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a>|                                 |
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a>| +-------------+ +--------------+| 
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>| | LLM Agent   | | Tool System  ||
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a>| | • Model Call| | • Calculator ||
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a>| | • Streaming | | • Time Query ||
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a>| | • Prompting | | • Custom Tool||
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a>| +-------------+ +--------------+|
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a>+-----------+---------------------+
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a>            | External Call
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a>            v
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a>+----------------------------------+
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a>|     External Services            |
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a>|                                  |
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a>| • LLM API   (OpenAI/DeepSeek)    | 
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>| • Database   (Redis/MySQL)       | 
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a>| • Other API  (Search/File System)|
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a>+----------------------------------+
+<span class="normal"><a href="#__codelineno-0-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">SimpleIntentAgent</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="nx">name</span><span class="w">        </span><span class="kt">string</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">description</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">model</span><span class="w">       </span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="p">}</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="w"> </span><span class="o">*</span><span class="nx">SimpleIntentAgent</span><span class="p">)</span><span class="w"> </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">out</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="mi">64</span><span class="p">)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">        </span><span class="k">defer</span><span class="w"> </span><span class="nb">close</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">        </span><span class="nx">intent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a</span><span class="p">.</span><span class="nx">classifyIntent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="p">)</span><span class="w"> </span><span class="c1">// chitchat | task</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;task&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">            </span><span class="nx">a</span><span class="p">.</span><span class="nx">replyTaskPlan</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">out</span><span class="p">)</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">            </span><span class="nx">a</span><span class="p">.</span><span class="nx">replyChitChat</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="p">,</span><span class="w"> </span><span class="nx">out</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="p">}()</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="p">}</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">a</span><span class="w"> </span><span class="o">*</span><span class="nx">SimpleIntentAgent</span><span class="p">)</span><span class="w"> </span><span class="nx">replyChitChat</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">inv</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">out</span><span class="w"> </span><span class="kd">chan</span><span class="o">&lt;-</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="w">    </span><span class="nx">req</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">        </span><span class="nx">Messages</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">            </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewSystemMessage</span><span class="p">(</span><span class="s">&quot;Be concise and friendly.&quot;</span><span class="p">),</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">            </span><span class="nx">inv</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">        </span><span class="nx">GenerationConfig</span><span class="p">:</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">},</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="nx">rspCh</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a</span><span class="p">.</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerateContent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">)</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">rsp</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspCh</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">        </span><span class="nx">out</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">NewResponseEvent</span><span class="p">(</span><span class="nx">inv</span><span class="p">.</span><span class="nx">InvocationID</span><span class="p">,</span><span class="w"> </span><span class="nx">a</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="nx">rsp</span><span class="p">)</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>Data Flow:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>User Input → Web UI → Debug Server → Agent → LLM/Tools → Streaming Response → Web UI
+<h2 id="runner-integration">Runner integration</h2>
+<p>While you can call Agent directly, we recommend running agents via <code>Runner</code> which manages session and appends events for you.</p>
+<p>Example:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span>
+<span class="normal"><a href="#__codelineno-1-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="c1">// Build model and agent</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">)</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewSimpleIntentAgent</span><span class="p">(</span><span class="s">&quot;biz-agent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;intent branching&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="c1">// Run with Runner</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;customagent-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hi there&quot;</span><span class="p">))</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="c1">// consume events...</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="usage-steps">Usage Steps</h2>
-<ol>
-<li>Create an Agent.</li>
-<li>Create a Debug Server with the Agent as a constructor parameter. The Debug Server itself can provide http Handler functions.</li>
-<li>Create a tRPC HTTP service and register the Debug Server's http Handler as the handler function for the tRPC HTTP service.</li>
-<li>Start the tRPC HTTP service as a backend service.</li>
-<li>Install ADK Web UI for convenient frontend visual debugging.</li>
-<li>Start ADK Web UI and specify the tRPC HTTP service as the backend service.</li>
-<li>You can directly input user requests through ADK Web UI in the browser frontend for debugging. The frontend page will display observable data.</li>
-</ol>
-<p>For specific runnable examples, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/debugserver">examples/debugserver</a></p>
-<h2 id="debug-results-display">Debug Results Display</h2>
-<p>Through ADK Web UI, you can directly test call scenarios. The Web interface will display event and trace information.
-For example, the following shows debugging an agent with calculator functionality.</p>
-<p><img alt="event" src="../assets/img/debugserver/event.png" /></p>
-<p><img alt="trace" src="../assets/img/debugserver/trace.png" /></p>
+<h2 id="run-the-example">Run the example</h2>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>examples/customagent
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your_api_key&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-model<span class="w"> </span>deepseek-chat<span class="w"> </span>-q<span class="w"> </span><span class="s2">&quot;Plan a 2-day weekend in Shanghai for kids&quot;</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="extensions">Extensions</h2>
+<ul>
+<li>Add tools: return <code>[]tool.Tool</code> (e.g., <code>function.NewFunctionTool(...)</code>) to call DB/HTTP/internal services</li>
+<li>Add validation: enforce checks and guards before branching</li>
+<li>Evolve gradually: when if-else grows or you need collaboration, move to <code>ChainAgent</code>/<code>ParallelAgent</code> or <code>Graph</code></li>
+</ul>
 
 
 
@@ -1190,7 +1236,7 @@ For example, the following shows debugging an agent with calculator functionalit
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 10, 2025 07:34:13 UTC">2025-09-10 07:34:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 12, 2025 08:27:51 UTC">2025-09-12 08:27:51</span>
   </span>
 
     
@@ -1200,7 +1246,7 @@ For example, the following shows debugging an agent with calculator functionalit
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="August 25, 2025 07:06:16 UTC">2025-08-25 07:06:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 12, 2025 08:27:51 UTC">2025-09-12 08:27:51</span>
   </span>
 
     
@@ -1281,7 +1327,7 @@ For example, the following shows debugging an agent with calculator functionalit
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../event/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Event">
+          <a href="../agent/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Agent">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1291,20 +1337,20 @@ For example, the following shows debugging an agent with calculator functionalit
                 Previous
               </span>
               <div class="md-ellipsis">
-                Event
+                Agent
               </div>
             </div>
           </a>
         
         
           
-          <a href="../observability/" class="md-footer__link md-footer__link--next" aria-label="Next: Observability">
+          <a href="../multiagent/" class="md-footer__link md-footer__link--next" aria-label="Next: Multi-Agent">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Observability
+                Multi-Agent
               </div>
             </div>
             <div class="md-footer__button md-icon">
