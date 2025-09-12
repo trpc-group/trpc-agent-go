@@ -126,7 +126,7 @@ func (a *CycleAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.CreateBranchInvocation(subAgent)
+	subInvocation := baseInvocation.Clone(agent.WithInvocationAgent(subAgent))
 
 	// Set branch info for hierarchical event filtering.
 	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the

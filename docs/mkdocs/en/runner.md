@@ -375,7 +375,6 @@ invocation := &agent.Invocation{
     EndInvocation:     false,                  // End flag.
     Message:           message,                // User message.
     RunOptions:        ro,                     // Run options.
-    EventCompletionCh: eventCompletionCh,      // Event completion channel.
     // Note: Invocation also includes other fields such as AgentName, Branch, Model,
     // TransferInfo, AgentCallbacks, ModelCallbacks, ToolCallbacks, etc.,
     // but these fields are used and managed internally by the Agent.

@@ -215,8 +215,6 @@ type Invocation struct {
 	Model model.Model
 	// Message 是用户发送给 Agent 的具体内容
 	Message model.Message
-	// EventCompletionCh 用于在事件写入会话时发出信号
-	EventCompletionCh <-chan string
 	// RunOptions 是 Run 方法的选项配置
 	RunOptions RunOptions
 	// TransferInfo 支持 Agent 之间的控制权转移
@@ -227,6 +225,10 @@ type Invocation struct {
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks 允许在工具调用的不同阶段插入自定义逻辑
 	ToolCallbacks *tool.ToolCallbacks
+
+    // notice
+	noticeChanMap map[string]chan any
+	noticeMu      *sync.Mutex
 }
 ```
 
@@ -258,8 +260,6 @@ type Event struct {
 	Branch string `json:"branch,omitempty"`
 	// RequiresCompletion 标识此事件是否需要完成信号
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
-	// CompletionID 用于此事件的完成信号
-	CompletionID string `json:"completionId,omitempty"`
 	// LongRunningToolIDs 是长时间运行函数调用的 ID 集合，Agent 客户端可以通过此字段了解哪个函数调用是长时间运行的，仅对函数调用事件有效
 	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }

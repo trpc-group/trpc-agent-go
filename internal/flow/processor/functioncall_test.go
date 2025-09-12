@@ -269,13 +269,11 @@ func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 		tool2.Declaration().Name: tool2,
 		tool3.Declaration().Name: tool3,
 	}
-	invocation := &agent.Invocation{
-		AgentName:    "test-agent",
-		InvocationID: "test-serial-execution",
-		Model:        mockModel,
-		Agent:        testAgent,
-		Session:      &session.Session{ID: "test-session"},
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(testAgent),
+		agent.WithInvocationModel(mockModel),
+	)
 
 	// Test with EnableParallelTools = false (default)
 	startTime := time.Now()
@@ -413,13 +411,12 @@ func runParallelToolTest(t *testing.T, tc parallelTestCase) {
 		tools: tc.tools,
 	}
 
-	invocation := &agent.Invocation{
-		AgentName:    "test-agent",
-		InvocationID: fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-")),
-		Model:        mockModel,
-		Agent:        testAgent,
-		Session:      &session.Session{ID: "test-session"},
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID(fmt.Sprintf("test-%s", strings.ReplaceAll(tc.name, " ", "-"))),
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(testAgent),
+		agent.WithInvocationModel(mockModel),
+	)
 
 	// Run test with specified parallel setting
 	toolMap := map[string]tool.Tool{}
@@ -1056,10 +1053,9 @@ func TestWaitForCompletion_SignalReceived(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx := context.Background()
 	ch := make(chan string, 1)
-	inv := &agent.Invocation{InvocationID: "inv-comp", EventCompletionCh: ch}
+	inv := agent.NewInvocation()
 	evt := event.New("inv-comp", "author")
 	evt.RequiresCompletion = true
-	evt.CompletionID = "done-1"
 	// send completion
 	ch <- "done-1"
 	err := f.waitForCompletion(ctx, inv, evt)
@@ -1070,10 +1066,9 @@ func TestWaitForCompletion_ContextCancelled(t *testing.T) {
 	f := NewFunctionCallResponseProcessor(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	inv := &agent.Invocation{InvocationID: "inv-comp2", EventCompletionCh: make(chan string)}
+	inv := agent.NewInvocation()
 	evt := event.New("inv-comp2", "author")
 	evt.RequiresCompletion = true
-	evt.CompletionID = "x"
 	err := f.waitForCompletion(ctx, inv, evt)
 	require.Error(t, err)
 }
