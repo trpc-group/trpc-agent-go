@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -577,7 +578,7 @@ func registerTools(options *Options) []tool.Tool {
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s [%s]", itelemetry.SpanNamePrefixAgentRun, a.name))
 	defer span.End()
 
 	// Setup invocation

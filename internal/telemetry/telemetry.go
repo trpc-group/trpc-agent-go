@@ -35,6 +35,12 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
+	SpanNamePrefixAgentRun    = "agent_run"
+	SpanNameInvocation        = "invocation"
+
+	OperationExecuteTool = "execute_tool"
+	OperationCallLLM     = "call_llm"
+	OperationRunRunner   = "run_runner" // attribute of SpanNameInvocation
 )
 
 const (
@@ -46,34 +52,60 @@ const (
 
 // telemetry attributes constants.
 var (
+	ResourceServiceNamespace = "trpc-go-agent"
+	ResourceServiceName      = "telemetry"
+	ResourceServiceVersion   = "v0.1.0"
+
 	KeyEventID      = "trpc.go.agent.event_id"
 	KeySessionID    = "trpc.go.agent.session_id"
 	KeyInvocationID = "trpc.go.agent.invocation_id"
 	KeyLLMRequest   = "trpc.go.agent.llm_request"
 	KeyLLMResponse  = "trpc.go.agent.llm_response"
+
+	// Runner-related attributes
+	KeyRunnerName      = "trpc.go.agent.runner.name"
+	KeyRunnerUserID    = "trpc.go.agent.runner.user_id"
+	KeyRunnerSessionID = "trpc.go.agent.runner.session_id"
+	KeyRunnerInput     = "trpc.go.agent.runner.input"
+	KeyRunnerOutput    = "trpc.go.agent.runner.output"
+
+	// Tool-related attributes
+	KeyToolCallArgs = "trpc.go.agent.tool_call_args"
+	KeyToolResponse = "trpc.go.agent.tool_response"
+	KeyToolID       = "trpc.go.agent.tool_id"
+
+	// GenAI operation attributes
+	KeyGenAIOperationName = "gen_ai.operation.name"
+	KeyGenAISystem        = "gen_ai.system"
+	KeyGenAIToolName      = "gen_ai.tool.name"
+	KeyGenAIToolDesc      = "gen_ai.tool.description"
+	KeyGenAIRequestModel  = "gen_ai.request.model"
+
+	// System value
+	SystemTRPCGoAgent = "trpc.go.agent"
 )
 
 // TraceToolCall traces the invocation of a tool call.
 func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, rspEvent *event.Event) {
 	span.SetAttributes(
-		attribute.String("gen_ai.system", "trpc.go.agent"),
-		attribute.String("gen_ai.operation.name", "tool.execute"),
-		attribute.String("gen_ai.tool.name", declaration.Name),
-		attribute.String("gen_ai.tool.description", declaration.Description),
-		attribute.String(KeyEventID, rspEvent.ID),
-		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
+		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
+		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
+		attribute.String(KeyGenAIToolName, declaration.Name),
+		attribute.String(KeyGenAIToolDesc, declaration.Description),
 	)
-
-	if bts, err := json.Marshal(args); err == nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_call_args", string(bts)))
-	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_call_args", "<not json serializable>"))
+	if rspEvent != nil {
+		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
 	}
 
-	if bts, err := json.Marshal(rspEvent.Response); err == nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_response", string(bts)))
-	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_response", "<not json serializable>"))
+	// args is json-encoded.
+	span.SetAttributes(attribute.String(KeyToolCallArgs, string(args)))
+	if rspEvent != nil && rspEvent.Response != nil {
+		span.SetAttributes(attribute.String(KeyToolID, rspEvent.Response.ID))
+		if bts, err := json.Marshal(rspEvent.Response); err == nil {
+			span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
+		} else {
+			span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
+		}
 	}
 
 	// Setting empty llm request and response (as UI expect these) while not
@@ -87,19 +119,19 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 // TraceMergedToolCalls traces the invocation of a merged tool call.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
-		attribute.String("gen_ai.system", "trpc.go.agent"),
-		attribute.String("gen_ai.operation.name", "tool.execute"),
-		attribute.String("gen_ai.tool.name", "(merged tools)"),
-		attribute.String("gen_ai.tool.description", "(merged tools)"),
+		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
+		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
+		attribute.String(KeyGenAIToolName, "(merged tools)"),
+		attribute.String(KeyGenAIToolDesc, "(merged tools)"),
 		attribute.String(KeyEventID, rspEvent.ID),
-		attribute.String("trpc.go.agent.tool_id", rspEvent.Response.ID),
-		attribute.String("trpc.go.agent.tool_call_args", "N/A"),
+		attribute.String(KeyToolID, rspEvent.Response.ID),
+		attribute.String(KeyToolCallArgs, "N/A"),
 	)
 
 	if bts, err := json.Marshal(rspEvent.Response); err == nil {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_response", string(bts)))
+		span.SetAttributes(attribute.String(KeyToolResponse, string(bts)))
 	} else {
-		span.SetAttributes(attribute.String("trpc.go.agent.tool_response", "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyToolResponse, "<not json serializable>"))
 	}
 
 	// Setting empty llm request and response (as UI expect these) while not
@@ -110,10 +142,31 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+// TraceRunner traces the invocation of a runner.
+func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message) {
+	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{message}}); err == nil {
+		span.SetAttributes(
+			attribute.String(KeyRunnerInput, string(bts)),
+		)
+	} else {
+		span.SetAttributes(attribute.String(KeyRunnerInput, "<not json serializable>"))
+	}
+
+	span.SetAttributes(
+		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
+		attribute.String(KeyGenAIOperationName, OperationRunRunner),
+		attribute.String(KeyRunnerName, fmt.Sprintf("[trpc-go-agent]: %s/%s", appName, invoke.AgentName)),
+		attribute.String(KeyInvocationID, invoke.InvocationID),
+		attribute.String(KeyRunnerSessionID, invoke.Session.ID),
+		attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+	)
+}
+
 // TraceCallLLM traces the invocation of an LLM call.
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	attrs := []attribute.KeyValue{
-		attribute.String("gen_ai.system", "trpc.go.agent"),
+		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
+		attribute.String(KeyGenAIOperationName, OperationCallLLM),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyEventID, eventID),
 	}
@@ -127,9 +180,9 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 
 	// Add model name if model exists
 	if invoke.Model != nil {
-		attrs = append(attrs, attribute.String("gen_ai.request.model", invoke.Model.Info().Name))
+		attrs = append(attrs, attribute.String(KeyGenAIRequestModel, invoke.Model.Info().Name))
 	} else {
-		attrs = append(attrs, attribute.String("gen_ai.request.model", ""))
+		attrs = append(attrs, attribute.String(KeyGenAIRequestModel, ""))
 	}
 
 	span.SetAttributes(attrs...)

@@ -20,9 +20,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -94,12 +94,17 @@ func New(agents map[string]agent.Agent, opts ...Option) *Server {
 	})
 	s.router.Use(c.Handler)
 	s.registerRoutes()
+	var tp *sdktrace.TracerProvider
 
-	provider := sdktrace.NewTracerProvider()
-	provider.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(newApiServerSpanExporter(s.traces)))
-	provider.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(s.memoryExporter))
-	otel.SetTracerProvider(provider)
-	atrace.Tracer = otel.Tracer(itelemetry.InstrumentName)
+	if _, ok := atrace.TracerProvider.(noop.TracerProvider); ok {
+		tp = sdktrace.NewTracerProvider()
+	} else if tp, ok = atrace.TracerProvider.(*sdktrace.TracerProvider); !ok {
+		log.Errorf("atrace.Tracer: %T provider is not the type of sdktrace.TracerProvider", atrace.TracerProvider)
+	}
+	tp.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(newApiServerSpanExporter(s.traces)))
+	tp.RegisterSpanProcessor(sdktrace.NewSimpleSpanProcessor(s.memoryExporter))
+	atrace.TracerProvider = tp
+	atrace.Tracer = atrace.TracerProvider.Tracer(itelemetry.InstrumentName)
 	setTraceInfo()
 	return s
 }
@@ -118,6 +123,9 @@ func setTraceInfo() {
 	itelemetry.KeyLLMRequest = keyLLMRequest
 	itelemetry.KeyLLMResponse = keyLLMResponse
 	itelemetry.KeyInvocationID = keyInvocationID
+	itelemetry.KeyRunnerInput = keyLLMRequest
+	itelemetry.KeyRunnerOutput = keyLLMResponse
+	itelemetry.KeyRunnerSessionID = keySessionID
 }
 
 type apiServerSpanExporter struct {
@@ -291,9 +299,12 @@ func buildTraceAttributes(attributes attribute.Set) map[string]any {
 						},
 					})
 				}
-				result[string(attr.Key)] = schema.TraceLLMRequest{
+				bts, _ := json.Marshal(&schema.TraceLLMRequest{
 					Contents: contents,
-				}
+				})
+				result[string(attr.Key)] = string(bts)
+			} else {
+				log.Debugf("failed to unmarshal LLM request: %s", attr.Value.AsString())
 			}
 		} else {
 			result[string(attr.Key)] = attr.Value.AsString()
@@ -569,7 +580,6 @@ func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
 
 // buildADKEventEnvelope creates the basic ADK event envelope.
 func buildADKEventEnvelope(e *event.Event) map[string]interface{} {
-	id := eventID(e)
 	return map[string]interface{}{
 		"invocationId": e.InvocationID,
 		"author":       e.Author,
@@ -578,7 +588,7 @@ func buildADKEventEnvelope(e *event.Event) map[string]interface{} {
 			"artifactDelta":        map[string]interface{}{},
 			"requestedAuthConfigs": map[string]interface{}{},
 		},
-		"id":        id,
+		"id":        e.ID,
 		"timestamp": e.Timestamp.Unix(),
 	}
 }
@@ -787,16 +797,6 @@ const (
 	keyFunctionCall     = "functionCall"     // Function call part key.
 	keyFunctionResponse = "functionResponse" // Function response part key.
 )
-
-// eventID returns the canonical identifier for an event.
-// If the underlying model.Response already contains a non-empty ID we
-// prefer it; otherwise we fall back to the envelope‐level event ID.
-func eventID(e *event.Event) string {
-	if e.Response != nil && e.Response.ID != "" {
-		return e.Response.ID
-	}
-	return e.ID
-}
 
 // isToolResponse reports whether the supplied event represents a tool
 // response produced by the LLM flow.
