@@ -20,22 +20,16 @@ import (
 
 // summarizerManager implements the SummarizerManager interface.
 type summarizerManager struct {
-	mu            sync.RWMutex
-	summarizer    SessionSummarizer
-	cache         map[string]map[string]map[string]*SessionSummary // app -> user -> sessionID -> summary
-	autoSummarize bool
+	mu         sync.RWMutex
+	summarizer SessionSummarizer
+	cache      map[string]map[string]map[string]*SessionSummary // app -> user -> sessionID -> summary
 }
 
 // NewManager creates a new summarizer manager.
-func NewManager(summarizer SessionSummarizer, opts ...ManagerOption) SummarizerManager {
+func NewManager(summarizer SessionSummarizer) SummarizerManager {
 	m := &summarizerManager{
-		summarizer:    summarizer,
-		autoSummarize: true, // Default to true
-		cache:         make(map[string]map[string]map[string]*SessionSummary),
-	}
-
-	for _, opt := range opts {
-		opt(m)
+		summarizer: summarizer,
+		cache:      make(map[string]map[string]map[string]*SessionSummary),
 	}
 
 	return m
@@ -130,7 +124,6 @@ func (m *summarizerManager) Metadata() map[string]any {
 	}
 
 	metadata := m.summarizer.Metadata()
-	metadata[metadataKeyAutoSummarize] = m.autoSummarize
 
 	// Add cache statistics.
 	totalSummaries := 0
@@ -149,7 +142,7 @@ func (m *summarizerManager) ShouldSummarize(sess *session.Session) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.summarizer == nil || !m.autoSummarize {
+	if m.summarizer == nil {
 		return false
 	}
 

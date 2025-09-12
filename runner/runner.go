@@ -205,34 +205,56 @@ func (r *runner) Run(
 			}
 		}
 
-		// Emit final runner completion event after all agent events are processed.
-		runnerCompletionEvent := &event.Event{
-			Response: &model.Response{
-				ID:        "runner-completion-" + uuid.New().String(),
-				Object:    model.ObjectTypeRunnerCompletion,
-				Created:   time.Now().Unix(),
-				Done:      true,
-				IsPartial: false,
-			},
-			InvocationID: invocationID,
-			Author:       r.appName,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-		}
-
-		// Append runner completion event to session.
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, runnerCompletionEvent,
-		); err != nil {
-			log.Errorf("Failed to append runner completion event to session: %v", err)
-		}
-
-		// Send the runner completion event to output channel.
-		select {
-		case processedEventCh <- runnerCompletionEvent:
-		case <-ctx.Done():
-		}
+		// Finalize the run: emit completion event and trigger summarization.
+		r.finalizeRun(ctx, sess, invocationID, processedEventCh)
 	}()
 
 	return processedEventCh, nil
+}
+
+// finalizeRun emits a runner completion event, appends it to the session,
+// forwards it to the output channel, and then triggers summarization.
+func (r *runner) finalizeRun(
+	ctx context.Context,
+	sess *session.Session,
+	invocationID string,
+	out chan<- *event.Event,
+) {
+	// Emit final runner completion event after all agent events are processed.
+	completion := &event.Event{
+		Response: &model.Response{
+			ID:        "runner-completion-" + uuid.New().String(),
+			Object:    model.ObjectTypeRunnerCompletion,
+			Created:   time.Now().Unix(),
+			Done:      true,
+			IsPartial: false,
+		},
+		InvocationID: invocationID,
+		Author:       r.appName,
+		ID:           uuid.New().String(),
+		Timestamp:    time.Now(),
+	}
+
+	// Append completion event to session.
+	if r.sessionService != nil && sess != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, completion); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+	}
+
+	// Forward completion event to output channel.
+	select {
+	case out <- completion:
+	case <-ctx.Done():
+		return
+	}
+
+	// Trigger non-forced summarization if possible.
+	if r.sessionService != nil && sess != nil {
+		go func() {
+			if err := r.sessionService.CreateSessionSummary(ctx, sess, false); err != nil {
+				log.Warnf("Runner: CreateSessionSummary failed: %v", err)
+			}
+		}()
+	}
 }

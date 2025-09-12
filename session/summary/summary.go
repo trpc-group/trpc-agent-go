@@ -15,28 +15,7 @@ import (
 	"context"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-)
-
-// Common metadata field keys.
-const (
-	// metadataKeyModelName is the key for model name in metadata.
-	metadataKeyModelName = "model_name"
-	// metadataKeyMaxSummaryLength is the key for max summary length in metadata.
-	metadataKeyMaxSummaryLength = "max_summary_length"
-	// metadataKeyWindowSize is the key for keep recent count in metadata.
-	metadataKeyWindowSize = "window_size"
-	// metadataKeyModelAvailable is the key for model availability in metadata.
-	metadataKeyModelAvailable = "model_available"
-	// metadataKeyCheckFunctions is the key for check functions count in metadata.
-	metadataKeyCheckFunctions = "check_functions"
-	// metadataKeyAutoSummarize is the key for auto summarization setting in metadata.
-	metadataKeyAutoSummarize = "auto_summarize"
-	// metadataKeyCachedSummaries is the key for cached summaries count in metadata.
-	metadataKeyCachedSummaries = "cached_summaries"
-	// metadataKeySummarizerConfigured is the key for summarizer configuration in metadata.
-	metadataKeySummarizerConfigured = "summarizer_configured"
 )
 
 // SessionSummarizer defines the interface for generating session summaries.
@@ -80,58 +59,4 @@ type SessionSummary struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Metadata is the metadata of the summary.
 	Metadata map[string]any `json:"metadata"`
-}
-
-// BuildPromptMessages constructs messages for the model without modifying session events.
-// It includes the summary as a system message and appends recent events after the anchor.
-func buildPromptMessages(
-	sess *session.Session,
-	summaryText string,
-	anchorEventID string,
-	windowSize int,
-) []model.Message {
-	var messages []model.Message
-
-	// Add summary as system message if available.
-	if summaryText != "" {
-		messages = append(messages, model.Message{
-			Role:    "system",
-			Content: "Previous conversation summary: " + summaryText,
-		})
-	}
-
-	// Find the start index after the anchor event.
-	start := 0
-	if anchorEventID != "" {
-		for i := range sess.Events {
-			if sess.Events[i].ID == anchorEventID {
-				start = i + 1
-				break
-			}
-		}
-	}
-
-	// Apply window size limit.
-	end := len(sess.Events)
-	if windowSize > 0 && end-start > windowSize {
-		start = end - windowSize
-	}
-
-	// Add recent events as conversation messages.
-	for i := start; i < end; i++ {
-		content := ""
-		if sess.Events[i].Response != nil && len(sess.Events[i].Response.Choices) > 0 {
-			content = sess.Events[i].Response.Choices[0].Message.Content
-		}
-		if content == "" {
-			continue
-		}
-		role := sess.Events[i].Author
-		if role == "" {
-			role = "user"
-		}
-		messages = append(messages, model.Message{Role: model.Role(role), Content: content})
-	}
-
-	return messages
 }

@@ -88,12 +88,24 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Process session events if available and includeContents is not "none".
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
+		// Build messages from session events.
 		sessionMessages := p.getContents(
-			invocation.Branch, // Current branch for filtering
+			invocation.Branch, // Current branch for filtering.
 			invocation.Session.Events,
-			invocation.AgentName, // Current agent name for filtering
+			invocation.AgentName, // Current agent name for filtering.
 		)
-		req.Messages = append(req.Messages, sessionMessages...)
+
+		// Always prepend summary if present, aligning with agno behavior.
+		const summaryTextStateKey = "summary_text"
+		var summaryText string
+		if invocation.Session.State != nil {
+			if b, ok := invocation.Session.State[summaryTextStateKey]; ok && len(b) > 0 {
+				summaryText = string(b)
+			}
+		}
+
+		combined := p.buildWithOptionalSummary(summaryText, sessionMessages)
+		req.Messages = append(req.Messages, combined...)
 	}
 
 	// Include the current invocation message if:
@@ -121,6 +133,26 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			log.Debugf("Content request processor: context cancelled")
 		}
 	}
+}
+
+// buildWithOptionalSummary returns messages with an optional system summary prepended
+// and an optional window applied to the recent session messages.
+func (p *ContentRequestProcessor) buildWithOptionalSummary(summaryText string, sessionMessages []model.Message) []model.Message {
+	if summaryText == "" {
+		// No summary, return messages as-is.
+		return sessionMessages
+	}
+
+	// Prepend system summary message.
+	messages := make([]model.Message, 0, 1+len(sessionMessages))
+	messages = append(messages, model.Message{
+		Role:    model.RoleSystem,
+		Content: "Previous conversation summary: " + summaryText,
+	})
+
+	// Append all session messages after the summary.
+	messages = append(messages, sessionMessages...)
+	return messages
 }
 
 // getContents gets the contents for the LLM request from session events.

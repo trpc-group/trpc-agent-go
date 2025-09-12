@@ -91,13 +91,3 @@ func WithChecksAny(checks []Checker) Option {
 		}
 	}
 }
-
-// ManagerOption is a function that configures a SummarizerManager.
-type ManagerOption func(*summarizerManager)
-
-// WithAutoSummarize enables or disables automatic summarization.
-func WithAutoSummarize(enabled bool) ManagerOption {
-	return func(m *summarizerManager) {
-		m.autoSummarize = enabled
-	}
-}

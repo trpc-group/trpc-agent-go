@@ -19,17 +19,35 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// Common metadata field keys.
+const (
+	// metadataKeyModelName is the key for model name in metadata.
+	metadataKeyModelName = "model_name"
+	// metadataKeyMaxSummaryLength is the key for max summary length in metadata.
+	metadataKeyMaxSummaryLength = "max_summary_length"
+	// metadataKeyWindowSize is the key for keep recent count in metadata.
+	metadataKeyWindowSize = "window_size"
+	// metadataKeyModelAvailable is the key for model availability in metadata.
+	metadataKeyModelAvailable = "model_available"
+	// metadataKeyCheckFunctions is the key for check functions count in metadata.
+	metadataKeyCheckFunctions = "check_functions"
+	// metadataKeyCachedSummaries is the key for cached summaries count in metadata.
+	metadataKeyCachedSummaries = "cached_summaries"
+	// metadataKeySummarizerConfigured is the key for summarizer configuration in metadata.
+	metadataKeySummarizerConfigured = "summarizer_configured"
+)
+
 const (
 	// conversationTextPlaceholder is the placeholder for conversation text.
 	conversationTextPlaceholder = "{conversation_text}"
 	// default summarizer prompt is the default prompt for summarization.
-	defaultSummarizerPrompt = "Please summarize the following conversation, focusing on:\n" +
-		"1. Key decisions made\n" +
-		"2. Important information shared\n" +
-		"3. Actions taken or planned\n" +
-		"4. Context that should be remembered for future interactions\n\n" +
-		"Keep the summary concise but comprehensive. Focus on what would be most important to remember for continuing the conversation.\n\n" +
-		"Conversation:\n" + conversationTextPlaceholder + "\n\n" +
+	defaultSummarizerPrompt = "Analyze the following conversation between a user and an " +
+		"assistant, and provide a concise summary focusing on important " +
+		"information that would be helpful for future interactions. Keep the " +
+		"summary concise and to the point. Only include relevant information. " +
+		"Do not make anything up.\n\n" +
+		"<conversation>\n" + conversationTextPlaceholder + "\n" +
+		"</conversation>\n\n" +
 		"Summary:"
 
 	// authorSystem is the system author.

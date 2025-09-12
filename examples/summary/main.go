@@ -37,6 +37,7 @@ var (
 	flagTimeSec      = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
 	flagMaxLen       = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
 	flagAsyncPersist = flag.Bool("async", false, "Enable async summary persistence on non-force runs")
+	streaming        = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
 func main() {
@@ -77,23 +78,14 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer and manager.
-	var checks []summary.Checker
-	if *flagEvents > 0 {
-		checks = append(checks, summary.CheckEventThreshold(*flagEvents))
-	}
-	if *flagTokens > 0 {
-		checks = append(checks, summary.CheckTokenThreshold(*flagTokens))
-	}
-	if *flagTimeSec > 0 {
-		checks = append(checks, summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second))
+	checks := []summary.Checker{
+		summary.CheckEventThreshold(*flagEvents),
+		summary.CheckTokenThreshold(*flagTokens),
+		summary.CheckTimeThreshold(time.Duration(*flagTimeSec) * time.Second),
 	}
 	sumOpts := []summary.Option{summary.WithWindowSize(c.window)}
-	if *flagMaxLen > 0 {
-		sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
-	}
-	if len(checks) > 0 {
-		sumOpts = append(sumOpts, summary.WithChecksAny(checks))
-	}
+	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
+	sumOpts = append(sumOpts, summary.WithChecksAny(checks))
 	sum := summary.NewSummarizer(llm, sumOpts...)
 	mgr := summary.NewManager(sum)
 
@@ -108,7 +100,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	ag := llmagent.New(
 		"summary-demo-agent",
 		llmagent.WithModel(llm),
-		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: false, MaxTokens: intPtr(800)}),
+		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming, MaxTokens: intPtr(4000)}),
 	)
 	c.app = "summary-demo-app"
 	c.runner = runner.NewRunner(c.app, ag, runner.WithSessionService(sessService))
@@ -126,6 +118,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
 	fmt.Printf("MaxLen: %d\n", *flagMaxLen)
 	fmt.Printf("AsyncPersist: %v\n", *flagAsyncPersist)
+	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("✅ Summary chat ready! Session: %s\n\n", c.sessionID)
 
@@ -204,31 +197,55 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 	if err != nil {
 		return fmt.Errorf("run failed: %w", err)
 	}
-	final := c.consumeResponse(evtCh)
-	fmt.Printf("🤖 Assistant: %s\n", strings.TrimSpace(final))
+	c.consumeResponse(evtCh)
 	return nil
 }
 
 // consumeResponse reads the event stream and returns the final assistant content.
 func (c *summaryChat) consumeResponse(evtCh <-chan *event.Event) string {
-	var final string
-	for e := range evtCh {
-		if e == nil {
+	fmt.Print("🤖 Assistant: ")
+
+	var (
+		fullContent      string
+		assistantStarted bool
+	)
+
+	for event := range evtCh {
+		// Handle errors.
+		if event.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
 			continue
 		}
-		if e.Error != nil {
-			fmt.Printf("❌ %s\n", e.Error.Message)
-			final = ""
-			break
+
+		// Handle content.
+		if content := c.extractContent(event); content != "" {
+			if !assistantStarted {
+				assistantStarted = true
+			}
+			fmt.Print(content)
+			fullContent += content
 		}
-		if e.Response != nil && len(e.Response.Choices) > 0 {
-			final = e.Response.Choices[0].Message.Content
-		}
-		if e.Done {
-			break
+
+		// Don't break on Done - wait for all events including finalizeRun.
+		if event.Done {
+			fmt.Printf("\n")
 		}
 	}
-	return final
+
+	return fullContent
+}
+
+// extractContent extracts content from the event based on streaming mode.
+func (c *summaryChat) extractContent(event *event.Event) string {
+	if event.Response == nil || len(event.Response.Choices) == 0 {
+		return ""
+	}
+
+	choice := event.Response.Choices[0]
+	if *streaming {
+		return choice.Delta.Content
+	}
+	return choice.Message.Content
 }
 
 // Helper.

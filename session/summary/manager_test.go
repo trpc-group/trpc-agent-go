@@ -192,13 +192,6 @@ func (f *fakeService) SaveSummaryRecord(ctx context.Context, sess *session.Sessi
 }
 func (f *fakeService) Close() error { return nil }
 
-func TestManager_WithAutoSummarize_Disable(t *testing.T) {
-	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithEventThreshold(1))
-	m := NewManager(s, WithAutoSummarize(false))
-	sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
-	assert.False(t, m.ShouldSummarize(sess))
-}
-
 func TestManager_WithBaseService_AppendsAndMetadata(t *testing.T) {
 	// Build a session that will summarize without compression.
 	s := NewSummarizer(&mockModel{name: "mock", resp: "ok"}, WithWindowSize(1))
