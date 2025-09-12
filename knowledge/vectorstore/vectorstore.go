@@ -12,6 +12,7 @@ package vectorstore
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
@@ -31,10 +32,149 @@ type VectorStore interface {
 	Delete(ctx context.Context, id string) error
 
 	// Search performs similarity search and returns the most similar documents.
+	// Used for search tool
 	Search(ctx context.Context, query *SearchQuery) (*SearchResult, error)
+
+	// DeleteByFilter deletes documents by filter.
+	DeleteByFilter(ctx context.Context, opts ...DeleteOption) error
+
+	// Count counts documents in the vector store.
+	Count(ctx context.Context, opts ...CountOption) (int, error)
+
+	// GetMetadata retrieves metadata from the vector store.
+	GetMetadata(ctx context.Context, opts ...GetMetadataOption) (map[string]DocumentMetadata, error)
 
 	// Close closes the vector store connection.
 	Close() error
+}
+
+// DeleteOption represents a functional option for DeleteByFilter.
+type DeleteOption func(*DeleteConfig)
+
+// DeleteConfig holds the configuration for delete operations.
+type DeleteConfig struct {
+	DocumentIDs []string
+	Filter      map[string]interface{}
+	DeleteAll   bool
+}
+
+// WithDeleteDocumentIDs sets the document IDs to delete.
+func WithDeleteDocumentIDs(ids []string) DeleteOption {
+	return func(c *DeleteConfig) {
+		c.DocumentIDs = ids
+	}
+}
+
+// WithDeleteFilter sets the filter for delete operations.
+func WithDeleteFilter(filter map[string]interface{}) DeleteOption {
+	return func(c *DeleteConfig) {
+		c.Filter = filter
+	}
+}
+
+// WithDeleteAll enables deleting all matching documents.
+func WithDeleteAll(deleteAll bool) DeleteOption {
+	return func(c *DeleteConfig) {
+		c.DeleteAll = deleteAll
+	}
+}
+
+// CountOption represents a functional option for Count.
+type CountOption func(*CountConfig)
+
+// CountConfig holds the configuration for count operations.
+type CountConfig struct {
+	Filter map[string]interface{}
+}
+
+// WithCountFilter sets the filter for count operations.
+func WithCountFilter(filter map[string]interface{}) CountOption {
+	return func(c *CountConfig) {
+		c.Filter = filter
+	}
+}
+
+// GetMetadataOption represents a functional option for GetMetadata.
+type GetMetadataOption func(*GetMetadataConfig)
+
+// GetMetadataConfig holds the configuration for get metadata operations.
+type GetMetadataConfig struct {
+	IDs    []string
+	Filter map[string]interface{}
+	Limit  int
+	Offset int
+}
+
+// WithGetMetadataIDs sets the document IDs to retrieve metadata for.
+func WithGetMetadataIDs(ids []string) GetMetadataOption {
+	return func(c *GetMetadataConfig) {
+		c.IDs = ids
+	}
+}
+
+// WithGetMetadataFilter sets the filter for get metadata operations.
+func WithGetMetadataFilter(filter map[string]interface{}) GetMetadataOption {
+	return func(c *GetMetadataConfig) {
+		c.Filter = filter
+	}
+}
+
+// WithGetMetadataLimit sets the limit for get metadata operations.
+func WithGetMetadataLimit(limit int) GetMetadataOption {
+	return func(c *GetMetadataConfig) {
+		c.Limit = limit
+	}
+}
+
+// WithGetMetadataOffset sets the offset for get metadata operations.
+func WithGetMetadataOffset(offset int) GetMetadataOption {
+	return func(c *GetMetadataConfig) {
+		c.Offset = offset
+	}
+}
+
+// ApplyDeleteOptions parses delete options and returns a DeleteConfig.
+func ApplyDeleteOptions(opts ...DeleteOption) *DeleteConfig {
+	config := &DeleteConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+	return config
+}
+
+// ApplyCountOptions parses count options and returns a CountConfig.
+func ApplyCountOptions(opts ...CountOption) *CountConfig {
+	config := &CountConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+	return config
+}
+
+// ApplyGetMetadataOptions parses get metadata options and returns a GetMetadataConfig.
+func ApplyGetMetadataOptions(opts ...GetMetadataOption) (*GetMetadataConfig, error) {
+	config := &GetMetadataConfig{
+		Limit:  -1,
+		Offset: -1,
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	if config.Limit == 0 {
+		return nil, fmt.Errorf("get metadata limit should be greater than 0")
+	}
+
+	if config.Limit < 0 && config.Offset > 0 {
+		return nil, fmt.Errorf("get metadata limit should be greater than 0 when offset is greater than 0")
+	}
+
+	if config.Limit > 0 && config.Offset < 0 {
+		// reset offset to 0
+		config.Offset = 0
+	}
+
+	return config, nil
 }
 
 // SearchQuery represents a vector similarity search query.
@@ -94,4 +234,10 @@ type ScoredDocument struct {
 
 	// Score is the similarity score (0.0 to 1.0, higher is more similar).
 	Score float64
+}
+
+// DocumentMetadata represents a document metadata.
+type DocumentMetadata struct {
+	// Metadata is the document metadata.
+	Metadata map[string]interface{}
 }

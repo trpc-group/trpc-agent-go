@@ -16,6 +16,7 @@ import (
 	"strconv"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // JSONChunking implements a chunking strategy optimized for JSON documents.
@@ -83,8 +84,7 @@ func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, erro
 		}
 
 		chunkDoc := createChunk(doc, string(chunkJSON), i+1)
-		chunkDoc.Metadata["json_chunk"] = true
-		chunkDoc.Metadata["chunk_type"] = "json"
+		chunkDoc.Metadata[source.MetaChunkType] = "json"
 		documents = append(documents, chunkDoc)
 	}
 

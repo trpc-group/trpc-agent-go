@@ -16,6 +16,8 @@ import (
 	neturl "net/url"
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // TestReadDocuments verifies URL Source with and without custom chunk
@@ -65,7 +67,7 @@ func TestReadDocuments(t *testing.T) {
 			t.Fatalf("expected documents, got 0")
 		}
 		for _, d := range docs {
-			if sz, ok := d.Metadata["chunk_size"].(int); ok && sz > chunkSize {
+			if sz, ok := d.Metadata[source.MetaChunkSize].(int); ok && sz > chunkSize {
 				t.Fatalf("chunk size %d exceeds expected max %d", sz, chunkSize)
 			}
 		}

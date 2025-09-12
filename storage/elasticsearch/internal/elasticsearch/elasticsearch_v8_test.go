@@ -115,6 +115,79 @@ func TestClientV8_CRUD(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestClientV8_Count(t *testing.T) {
+	rt := roundTripper(func(r *http.Request) *http.Response {
+		ok := func(code int, body string) *http.Response {
+			resp := &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		}
+
+		// POST /{index}/_count
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_count") {
+			return ok(http.StatusOK, `{"count":3}`)
+		}
+		return ok(http.StatusOK, `{}`)
+	})
+
+	es, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	require.NoError(t, err)
+	c := &clientV8{esClient: es}
+
+	ctx := context.Background()
+	count, err := c.Count(ctx, "test-index", []byte(`{"query":{"match_all":{}}}`))
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
+}
+
+func TestClientV8_DeleteByQuery(t *testing.T) {
+	rt := roundTripper(func(r *http.Request) *http.Response {
+		ok := func(code int, body string) *http.Response {
+			resp := &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		}
+
+		// POST /{index}/_delete_by_query
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_delete_by_query") {
+			return ok(http.StatusOK, `{"deleted":2}`)
+		}
+		return ok(http.StatusOK, `{}`)
+	})
+
+	es, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	require.NoError(t, err)
+	c := &clientV8{esClient: es}
+
+	ctx := context.Background()
+	err = c.DeleteByQuery(ctx, "test-index", []byte(`{"query":{"match":{"status":"deleted"}}}`))
+	require.NoError(t, err)
+}
+
+func TestClientV8_Refresh(t *testing.T) {
+	rt := roundTripper(func(r *http.Request) *http.Response {
+		ok := func(code int, body string) *http.Response {
+			resp := &http.Response{StatusCode: code, Status: http.StatusText(code), Body: io.NopCloser(bytes.NewBufferString(body)), Header: make(http.Header)}
+			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
+			return resp
+		}
+
+		// POST /{index}/_refresh
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_refresh") {
+			return ok(http.StatusOK, `{}`)
+		}
+		return ok(http.StatusOK, `{}`)
+	})
+
+	es, err := esv8.NewClient(esv8.Config{Addresses: []string{"http://mock"}, Transport: rt})
+	require.NoError(t, err)
+	c := &clientV8{esClient: es}
+
+	ctx := context.Background()
+	err = c.Refresh(ctx, "test-index")
+	require.NoError(t, err)
+}
+
 func TestClientV8_Ping(t *testing.T) {
 	rt := roundTripper(func(r *http.Request) *http.Response {
 		ok := func(code int, body string) *http.Response {

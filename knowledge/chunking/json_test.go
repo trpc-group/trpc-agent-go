@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 func TestJSONChunking(t *testing.T) {
@@ -143,11 +144,7 @@ func TestJSONChunkingLargeDocument(t *testing.T) {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
 
-		// Verify chunk metadata.
-		if chunk.Metadata["json_chunk"] != true {
-			t.Errorf("Chunk %d missing json_chunk metadata", i)
-		}
-		if chunk.Metadata["chunk_type"] != "json" {
+		if chunk.Metadata[source.MetaChunkType] != "json" {
 			t.Errorf("Chunk %d missing chunk_type metadata", i)
 		}
 	}
