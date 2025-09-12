@@ -23,7 +23,7 @@ This implementation showcases the essential features for building conversational
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
@@ -35,13 +35,13 @@ This implementation showcases the essential features for building conversational
 
 ## Command Line Arguments
 
-| Argument      | Description                                     | Default Value    |
-| ------------- | ----------------------------------------------- | ---------------- |
-| `-model`      | Name of the model to use                        | `deepseek-chat`  |
-| `-session`    | Session service: `inmemory` or `redis`          | `inmemory`       |
-| `-redis-addr` | Redis server address (when using redis session) | `localhost:6379` |
-| `-streaming`  | Enable streaming mode for responses             | `true`           |
-| `-enable-parallel` | Enable parallel tool execution (faster performance) | `false` |
+| Argument           | Description                                         | Default Value    |
+| ------------------ | --------------------------------------------------- | ---------------- |
+| `-model`           | Name of the model to use                            | `deepseek-chat`  |
+| `-session`         | Session service: `inmemory` or `redis`              | `inmemory`       |
+| `-redis-addr`      | Redis server address (when using redis session)     | `localhost:6379` |
+| `-streaming`       | Enable streaming mode for responses                 | `true`           |
+| `-enable-parallel` | Enable parallel tool execution (faster performance) | `false`          |
 
 ## Usage
 
@@ -108,15 +108,15 @@ go run main.go -enable-parallel=true
 ```
 
 **When to use each mode:**
+
 - **Serial execution** (default, no flag needed):
-  - 🔄 Tools execute one by one in sequence  
+  - 🔄 Tools execute one by one in sequence
   - 🛡️ **Safe and compatible** default behavior
   - 🐛 Better for debugging tool execution issues
-- **Parallel execution** (`-enable-parallel=true`): 
+- **Parallel execution** (`-enable-parallel=true`):
   - ⚡ **faster performance** when multiple tools are called
   - ✅ Best for independent tools (calculator + time, weather + population)
   - ✅ Tools execute simultaneously using goroutines
-
 
 ### Help and Available Options
 
@@ -183,6 +183,7 @@ The interface is simple and intuitive:
 🚀 Multi-turn Chat with Runner + Tools
 Model: gpt-4o-mini
 Streaming: true
+Parallel Tools: disabled (serial execution)
 Type 'exit' to end the conversation
 Available tools: calculator, current_time
 ==================================================

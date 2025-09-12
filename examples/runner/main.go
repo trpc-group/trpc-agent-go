@@ -27,7 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -48,12 +48,14 @@ func main() {
 	fmt.Printf("🚀 Multi-turn Chat with Runner + Tools\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
-	fmt.Printf("Parallel Tools: %s\n", func() string {
-		if !*enableParallel {
-			return "disabled (serial execution)"
-		}
-		return "enabled (parallel execution)"
-	}())
+	parallelStatus := "disabled (serial execution)"
+	if *enableParallel {
+		parallelStatus = "enabled (parallel execution)"
+	}
+	fmt.Printf("Parallel Tools: %s\n", parallelStatus)
+	if *sessServiceName == "redis" {
+		fmt.Printf("Redis: %s\n", *redisAddr)
+	}
 	fmt.Printf("Type 'exit' to end the conversation\n")
 	fmt.Printf("Available tools: calculator, current_time\n")
 	fmt.Println(strings.Repeat("=", 50))
@@ -96,6 +98,25 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	// Create OpenAI model.
 	modelInstance := openai.New(c.modelName)
 
+	// Create session service based on configuration.
+	var (
+		sessionService session.Service
+		err            error
+	)
+	switch *sessServiceName {
+	case "inmemory":
+		sessionService = sessioninmemory.NewSessionService()
+
+	case "redis":
+		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
+		sessionService, err = redis.NewService(redis.WithRedisClientURL(redisURL))
+		if err != nil {
+			return fmt.Errorf("failed to create session service: %w", err)
+		}
+	default:
+		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
+	}
+
 	// Create tools.
 	calculatorTool := function.NewFunctionTool(
 		c.calculate,
@@ -114,11 +135,12 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		Stream:      c.streaming,
 	}
 
+	appName := "multi-turn-chat"
 	agentName := "chat-assistant"
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("A helpful AI assistant with calculator and time tools"),
+		llmagent.WithDescription("A helpful AI assistant with calculator and time tools."),
 		llmagent.WithInstruction("Use tools when appropriate for calculations or time queries. "+
 			"Be helpful and conversational."),
 		llmagent.WithGenerationConfig(genConfig),
@@ -126,24 +148,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 		llmagent.WithEnableParallelTools(*enableParallel),
 	)
 
-	var sessionService session.Service
-	var err error
-	switch *sessServiceName {
-	case "inmemory":
-		sessionService = inmemory.NewSessionService()
-	case "redis":
-		redisURL := fmt.Sprintf("redis://%s", *redisAddr)
-		sessionService, err = redis.NewService(redis.WithRedisClientURL(redisURL))
-	default:
-		return fmt.Errorf("invalid session service name: %s", *sessServiceName)
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to create session service: %w", err)
-	}
-
 	// Create runner.
-	appName := "multi-turn-chat"
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
@@ -197,7 +202,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			fmt.Printf("❌ Error: %v\n", err)
 		}
 
-		fmt.Println() // Add spacing between turns
+		fmt.Println() // Add spacing between turns.
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -237,7 +242,7 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
 		}
 
 		// Check if this is the final event.
-		// Don't break on tool response events (Done=true but not final assistant response).
+		// Do not break on tool response events (Done=true but not final assistant response).
 		if event.Done && !c.isToolEvent(event) {
 			fmt.Printf("\n")
 			break
@@ -394,104 +399,4 @@ func (c *multiTurnChat) startNewSession() {
 	fmt.Printf("   Current:  %s\n", c.sessionID)
 	fmt.Printf("   (Conversation history has been reset)\n")
 	fmt.Println()
-}
-
-// CallableTool implementations.
-
-// calculate performs basic mathematical operations.
-func (c *multiTurnChat) calculate(ctx context.Context, args calculatorArgs) (calculatorResult, error) {
-	var result float64
-
-	switch strings.ToLower(args.Operation) {
-	case "add", "+":
-		result = args.A + args.B
-	case "subtract", "-":
-		result = args.A - args.B
-	case "multiply", "*":
-		result = args.A * args.B
-	case "divide", "/":
-		if args.B != 0 {
-			result = args.A / args.B
-		} else {
-			result = 0 // Handle division by zero
-		}
-	default:
-		result = 0
-	}
-
-	return calculatorResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// getCurrentTime returns current time information.
-func (c *multiTurnChat) getCurrentTime(_ context.Context, args timeArgs) (timeResult, error) {
-	now := time.Now()
-	var t time.Time
-	timezone := args.Timezone
-
-	// Handle timezone conversion.
-	switch strings.ToUpper(args.Timezone) {
-	case "UTC":
-		t = now.UTC()
-	case "EST", "EASTERN":
-		t = now.Add(-5 * time.Hour) // Simplified EST
-	case "PST", "PACIFIC":
-		t = now.Add(-8 * time.Hour) // Simplified PST
-	case "CST", "CENTRAL":
-		t = now.Add(-6 * time.Hour) // Simplified CST
-	case "":
-		t = now
-		timezone = "Local"
-	default:
-		t = now.UTC()
-		timezone = "UTC"
-	}
-
-	return timeResult{
-		Timezone: timezone,
-		Time:     t.Format("15:04:05"),
-		Date:     t.Format("2006-01-02"),
-		Weekday:  t.Weekday().String(),
-	}, nil
-}
-
-// calculatorArgs represents arguments for the calculator tool.
-type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-// calculatorResult represents the result of a calculation.
-type calculatorResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-}
-
-// timeArgs represents arguments for the time tool.
-type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
-}
-
-// timeResult represents the current time information.
-type timeResult struct {
-	Timezone string `json:"timezone"`
-	Time     string `json:"time"`
-	Date     string `json:"date"`
-	Weekday  string `json:"weekday"`
-}
-
-// Helper functions for creating pointers to primitive types.
-func intPtr(i int) *int {
-	return &i
-}
-
-func floatPtr(f float64) *float64 {
-	return &f
 }
