@@ -21,6 +21,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -29,6 +30,8 @@ var _ session.Service = (*Service)(nil)
 
 const (
 	defaultSessionEventLimit = 1000
+	defaultTimeout           = 2 * time.Second
+	defaultChanBufferSize    = 100
 )
 
 // SessionState is the state of a session.
@@ -46,11 +49,16 @@ type SessionState struct {
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
 type Service struct {
-	opts         ServiceOpts
-	redisClient  redis.UniversalClient
-	sessionTTL   time.Duration // TTL for session state and event list
-	appStateTTL  time.Duration // TTL for app state
-	userStateTTL time.Duration // TTL for user state
+	opts          ServiceOpts
+	redisClient   redis.UniversalClient
+	sessionTTL    time.Duration         // TTL for session state and event list
+	appStateTTL   time.Duration         // TTL for app state
+	userStateTTL  time.Duration         // TTL for user state
+	eventPairChan chan sessionEventPair // channel for session events to persistence
+}
+type sessionEventPair struct {
+	key   session.Key
+	event *event.Event
 }
 
 // NewService creates a new redis session service.
@@ -79,13 +87,18 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		return &Service{
-			opts:         opts,
-			redisClient:  redisClient,
-			sessionTTL:   opts.sessionTTL,
-			appStateTTL:  opts.appStateTTL,
-			userStateTTL: opts.userStateTTL,
-		}, nil
+		s := &Service{
+			opts:          opts,
+			redisClient:   redisClient,
+			sessionTTL:    opts.sessionTTL,
+			appStateTTL:   opts.appStateTTL,
+			userStateTTL:  opts.userStateTTL,
+			eventPairChan: make(chan sessionEventPair, defaultChanBufferSize),
+		}
+		if opts.enableAsyncPersistence {
+			s.startAsyncPersistenceWorker()
+		}
+		return s, nil
 	}
 
 	redisClient, err = builder(
@@ -95,13 +108,19 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	return &Service{
-		opts:         opts,
-		redisClient:  redisClient,
-		sessionTTL:   opts.sessionTTL,
-		appStateTTL:  opts.appStateTTL,
-		userStateTTL: opts.userStateTTL,
-	}, nil
+
+	s := &Service{
+		opts:          opts,
+		redisClient:   redisClient,
+		sessionTTL:    opts.sessionTTL,
+		appStateTTL:   opts.appStateTTL,
+		userStateTTL:  opts.userStateTTL,
+		eventPairChan: make(chan sessionEventPair, defaultChanBufferSize),
+	}
+	if opts.enableAsyncPersistence {
+		s.startAsyncPersistenceWorker()
+	}
+	return s, nil
 }
 
 // CreateSession creates a new session.
@@ -380,9 +399,20 @@ func (s *Service) AppendEvent(
 	// update user session with the given event
 	isession.UpdateUserSession(sess, event, opts...)
 
+	// persist event to redis asynchronously
+	if s.opts.enableAsyncPersistence {
+		select {
+		case s.eventPairChan <- sessionEventPair{key: key, event: event}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
 	if err := s.addEvent(ctx, key, event); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
+
 	return nil
 }
 
@@ -721,6 +751,17 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 		return fmt.Errorf("redis session service delete session state failed: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) startAsyncPersistenceWorker() {
+	go func() {
+		for eventPair := range s.eventPairChan {
+			ctx, _ := context.WithTimeout(context.Background(), defaultTimeout)
+			if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+				log.Errorf("redis session service persistence event failed: %w", err)
+			}
+		}
+	}()
 }
 
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {
