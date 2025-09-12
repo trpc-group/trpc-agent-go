@@ -61,15 +61,8 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 	// Create a test processor with output_key
 	processor := NewOutputResponseProcessor("test_key", nil)
 
-	// Create a completion channel for the invocation
-	eventCompletionCh := make(chan string, 1)
-
 	// Create a test invocation
-	invocation := &agent.Invocation{
-		InvocationID:      "test_invocation",
-		AgentName:         "test_agent",
-		EventCompletionCh: eventCompletionCh,
-	}
+	invocation := agent.NewInvocation()
 
 	// Create a test response with content
 	response := &model.Response{
@@ -99,7 +92,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 		emittedEvent = event
 		// Send completion signal for the event
 		if event.RequiresCompletion {
-			eventCompletionCh <- event.ID
+			invocation.NotifyCompletion(ctx, agent.AppendEventNoticeKeyPrefix+event.ID)
 		}
 	case <-ctx.Done():
 		t.Fatal("Test timed out waiting for event")
@@ -143,15 +136,8 @@ func TestOutputResponseProcessor_ProcessResponse_NoOutputKey(t *testing.T) {
 	// Create a test processor without output_key
 	processor := NewOutputResponseProcessor("", nil)
 
-	// Create a completion channel for the invocation
-	eventCompletionCh := make(chan string, 1)
-
 	// Create a test invocation
-	invocation := &agent.Invocation{
-		InvocationID:      "test_invocation",
-		AgentName:         "test_agent",
-		EventCompletionCh: eventCompletionCh,
-	}
+	invocation := agent.NewInvocation()
 
 	// Create a test response with content
 	response := &model.Response{
@@ -190,15 +176,8 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 	// Create a test processor with output_key
 	processor := NewOutputResponseProcessor("test_key", nil)
 
-	// Create a completion channel for the invocation
-	eventCompletionCh := make(chan string, 1)
-
 	// Create a test invocation
-	invocation := &agent.Invocation{
-		InvocationID:      "test_invocation",
-		AgentName:         "test_agent",
-		EventCompletionCh: eventCompletionCh,
-	}
+	invocation := agent.NewInvocation()
 
 	// Create a test response that is partial
 	response := &model.Response{

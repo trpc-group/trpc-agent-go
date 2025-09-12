@@ -215,8 +215,6 @@ type Invocation struct {
 	Model model.Model
 	// Message is the specific content sent by the user to the Agent.
 	Message model.Message
-	// EventCompletionCh is used to signal when events are written to the session.
-	EventCompletionCh <-chan string
 	// RunOptions are option configurations for the Run method.
 	RunOptions RunOptions
 	// TransferInfo supports control transfer between Agents.
@@ -227,6 +225,10 @@ type Invocation struct {
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks allows inserting custom logic at different stages of tool calls.
 	ToolCallbacks *tool.ToolCallbacks
+
+    // notice
+	noticeChanMap map[string]chan any
+	noticeMu      *sync.Mutex
 }
 ```
 
@@ -258,8 +260,6 @@ type Event struct {
 	Branch string `json:"branch,omitempty"`
 	// RequiresCompletion identifies whether this event requires a completion signal.
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
-	// CompletionID is used for the completion signal of this event.
-	CompletionID string `json:"completionId,omitempty"`
 	// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.
 	LongRunningToolIDs map[string]struct{} `json:"longRunningToolIDs,omitempty"`
 }

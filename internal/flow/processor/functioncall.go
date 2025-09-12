@@ -101,10 +101,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if err := p.checkContextCancelled(ctx); err != nil {
-		return
-	}
-
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
 		errorEvent := event.NewErrorEvent(
@@ -245,7 +241,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -379,7 +374,6 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -460,13 +454,11 @@ func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, i
 		return nil
 	}
 
+	completionID := agent.AppendEventNoticeKeyPrefix + lastEvent.ID
 	select {
-	case completedID := <-invocation.EventCompletionCh:
-		if completedID == lastEvent.CompletionID {
-			log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
-		}
+	case <-invocation.AddNoticeChannel(ctx, completionID):
 	case <-time.After(eventCompletionTimeout):
-		log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+		log.Warnf("Timeout waiting for completion of event %s", lastEvent.ID)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -747,16 +739,6 @@ func (p *FunctionCallResponseProcessor) filterNilEvents(results []*event.Event) 
 		}
 	}
 	return filtered
-}
-
-// checkContextCancelled checks if the context is cancelled and returns error if so.
-func (p *FunctionCallResponseProcessor) checkContextCancelled(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
 }
 
 func newToolCallResponseEvent(

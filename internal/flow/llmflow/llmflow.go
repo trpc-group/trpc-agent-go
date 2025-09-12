@@ -185,13 +185,13 @@ func (f *Flow) processStreamingResponses(
 		lastEvent = llmResponseEvent
 
 		// 5. Check context cancellation.
-		if err := f.checkContextCancelled(ctx); err != nil {
+		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
 		// 6. Postprocess response.
 		f.postprocess(ctx, invocation, llmRequest, response, eventChan)
-		if err := f.checkContextCancelled(ctx); err != nil {
+		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
 		}
 
@@ -265,16 +265,6 @@ func runAfterModelCallbacks(
 		return response, nil
 	}
 	return invocation.ModelCallbacks.RunAfterModel(ctx, req, response, nil)
-}
-
-// checkContextCancelled checks if the context is cancelled and returns error if so.
-func (f *Flow) checkContextCancelled(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
