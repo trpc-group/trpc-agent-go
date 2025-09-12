@@ -1158,9 +1158,8 @@ func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) 
 	p := NewFunctionCallResponseProcessor(false)
 
 	inv := &agent.Invocation{
-		AgentName:         "test-agent",
-		InvocationID:      "inv-err",
-		EventCompletionCh: make(chan string),
+		AgentName:    "test-agent",
+		InvocationID: "inv-err",
 	}
 
 	// Tool returns StopError so executeToolCall propagates error.
@@ -1301,12 +1300,4 @@ func TestMarshalChunkToText_MarshalError(t *testing.T) {
 	// Passing a function is not JSON-serializable, forcing fmt.Sprintf path.
 	text := marshalChunkToText(func() {})
 	require.NotEmpty(t, text)
-}
-
-func TestCheckContextCancelled(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(false)
-	require.NoError(t, p.checkContextCancelled(context.Background()))
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	require.Error(t, p.checkContextCancelled(ctx))
 }
