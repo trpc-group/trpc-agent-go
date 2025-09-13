@@ -27,8 +27,10 @@ const (
 	InitVersion int = iota // 0
 
 	// CurrentVersion is the current version of the event format.
-	CurrentVersion // 1
+	CurrentVersion
+)
 
+const (
 	// EmitWithoutTimeout is the default timeout for emitting events.
 	EmitWithoutTimeout = 0 * time.Second
 )

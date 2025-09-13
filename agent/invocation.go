@@ -204,6 +204,9 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 
 // GetEventFilterKey get event filter key
 func (inv *Invocation) GetEventFilterKey() string {
+	if inv == nil {
+		return ""
+	}
 	return inv.eventFilterKey
 }
 
