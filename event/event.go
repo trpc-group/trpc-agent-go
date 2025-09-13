@@ -13,7 +13,7 @@ package event
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strings"
 	"time"
 
@@ -242,6 +242,32 @@ func NewResponseEvent(invocationID, author string, response *model.Response,
 	return New(invocationID, author, opts...)
 }
 
+// DefaultEmitTimeoutErr is the default error returned when a wait notice times out.
+var DefaultEmitTimeoutErr = NewEmitEventTimeoutError("emit event timeout.")
+
+// EmitEventTimeoutError represents an error that signals the emit event timeout.
+type EmitEventTimeoutError struct {
+	// Message contains the stop reason
+	Message string
+}
+
+// Error implements the error interface.
+func (e *EmitEventTimeoutError) Error() string {
+	return e.Message
+}
+
+// AsEmitEventTimeoutError checks if an error is a EmitEventTimeoutError using errors.As.
+func AsEmitEventTimeoutError(err error) (*EmitEventTimeoutError, bool) {
+	var waitNoticeTimeoutErr *EmitEventTimeoutError
+	ok := errors.As(err, &waitNoticeTimeoutErr)
+	return waitNoticeTimeoutErr, ok
+}
+
+// NewEmitEventTimeoutError creates a new EmitEventTimeoutError with the given message.
+func NewEmitEventTimeoutError(message string) *EmitEventTimeoutError {
+	return &EmitEventTimeoutError{Message: message}
+}
+
 // EmitEventToChannel sends an event to the channel without timeout.
 func EmitEventToChannel(ctx context.Context, ch chan *Event, e *Event) error {
 	return EmitEventToChannelWithTimeout(ctx, ch, e, EmitWithoutTimeout)
@@ -259,7 +285,7 @@ func EmitEventToChannelWithTimeout(ctx context.Context, ch chan *Event,
 		case ch <- e:
 			log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
 		case <-ctx.Done():
-
+			log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
 			return ctx.Err()
 		}
 		return nil
@@ -273,7 +299,7 @@ func EmitEventToChannelWithTimeout(ctx context.Context, ch chan *Event,
 		return ctx.Err()
 	case <-time.After(timeout):
 		log.Warnf("EmitEventToChannelWithTimeout: timeout, event: %+v", *e)
-		return fmt.Errorf("timeout")
+		return DefaultEmitTimeoutErr
 	}
 	return nil
 }

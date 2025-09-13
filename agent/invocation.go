@@ -95,6 +95,9 @@ type Invocation struct {
 	eventFilterKey string
 }
 
+// DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
+var DefaultWaitNoticeTimeoutErr = NewWaitNoticeTimeoutError("wait notice timeout.")
+
 // WaitNoticeTimeoutError represents an error that signals the wait notice timeout.
 type WaitNoticeTimeoutError struct {
 	// Message contains the stop reason
