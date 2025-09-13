@@ -46,12 +46,13 @@ func (d *defaultA2AEventConverter) ConvertToEvent(
 	invocation *agent.Invocation,
 ) (*event.Event, error) {
 	if result.Result == nil {
-		return &event.Event{
-			Author:       agentName,
-			InvocationID: invocation.InvocationID,
-			Response: &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		}, nil
+		return event.NewResponseEvent(
+			invocation.InvocationID,
+			agentName,
+			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		), nil
 	}
 
 	var responseMsg *protocol.Message
@@ -82,12 +83,13 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvent(
 	invocation *agent.Invocation,
 ) (*event.Event, error) {
 	if result.Result == nil {
-		return &event.Event{
-			Author:       agentName,
-			InvocationID: invocation.InvocationID,
-			Response: &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		}, nil
+		return event.NewResponseEvent(
+			invocation.InvocationID,
+			agentName,
+			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		), nil
 	}
 
 	var event *event.Event

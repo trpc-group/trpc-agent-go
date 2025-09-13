@@ -123,39 +123,12 @@ func (r *runner) Run(
 		}
 	}
 
-	// Generate invocation ID.
-	invocationID := uuid.New().String()
-
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" {
-		userEvent := &event.Event{
-			Response:     &model.Response{Done: false},
-			InvocationID: invocationID,
-			Author:       authorUser,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-			Branch:       "", // User events typically don't have branch constraints
-		}
-		// Set the user message content in the response.
-		userEvent.Response.Choices = []model.Choice{
-			{
-				Index:   0,
-				Message: message,
-			},
-		}
-
-		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
-			return nil, err
-		}
-	}
-
 	// Create invocation.
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
 	invocation := agent.NewInvocation(
-		agent.WithInvocationID(invocationID),
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),
@@ -163,6 +136,20 @@ func (r *runner) Run(
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey("runner"),
 	)
+
+	// Append the incoming user message to the session if it has content.
+	if message.Content != "" {
+		if err := r.sessionService.AppendEvent(ctx, sess, event.NewResponseEvent(
+			invocation.InvocationID,
+			authorUser,
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		)); err != nil {
+			return nil, err
+		}
+
+	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -203,7 +190,7 @@ func (r *runner) Run(
 
 		// Emit final runner completion event after all agent events are processed.
 		runnerCompletionEvent := event.NewResponseEvent(
-			invocationID,
+			invocation.InvocationID,
 			r.appName,
 			&model.Response{
 				ID:        "runner-completion-" + uuid.New().String(),
@@ -217,9 +204,7 @@ func (r *runner) Run(
 		)
 
 		// Append runner completion event to session.
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, runnerCompletionEvent,
-		); err != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
 
