@@ -10,6 +10,8 @@
 package event
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -197,4 +199,87 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, nullEvt)
+}
+
+func TestEmitEventToChannelWithTimeout(t *testing.T) {
+	type args struct {
+		ctx     context.Context
+		ch      chan<- *Event
+		e       *Event
+		timeout time.Duration
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+		errType error
+	}{
+		{
+			name: "nil event",
+			args: args{
+				ctx:     context.Background(),
+				ch:      make(chan *Event),
+				e:       nil,
+				timeout: EmitWithoutTimeout,
+			},
+			wantErr: false,
+			errType: nil,
+		},
+		{
+			name: "emit without timeout success",
+			args: args{
+				ctx:     context.Background(),
+				ch:      make(chan *Event, 1),
+				e:       New("invocationID", "author"),
+				timeout: EmitWithoutTimeout,
+			},
+			wantErr: false,
+			errType: nil,
+		},
+		{
+			name: "emit with timeout success",
+			args: args{
+				ctx:     context.Background(),
+				ch:      make(chan *Event, 1),
+				e:       New("invocationID", "author"),
+				timeout: 1 * time.Second,
+			},
+			wantErr: false,
+			errType: nil,
+		},
+		{
+			name: "context cancelled",
+			args: args{
+				ctx:     func() context.Context { ctx, cancel := context.WithCancel(context.Background()); cancel(); return ctx }(),
+				ch:      make(chan *Event),
+				e:       New("invocationID", "author"),
+				timeout: 1 * time.Second,
+			},
+			wantErr: true,
+			errType: context.Canceled,
+		},
+		{
+			name: "emit timeout",
+			args: args{
+				ctx:     context.Background(),
+				ch:      make(chan *Event),
+				e:       New("invocationID", "author"),
+				timeout: 1 * time.Millisecond,
+			},
+			wantErr: true,
+			errType: DefaultEmitTimeoutErr,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := EmitEventToChannelWithTimeout(tt.args.ctx, tt.args.ch, tt.args.e, tt.args.timeout)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("EmitEventToChannelWithTimeout() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr && !errors.Is(err, tt.errType) {
+				t.Errorf("EmitEventToChannelWithTimeout() error = %v, wantErr %v", err, tt.errType)
+			}
+		})
+	}
 }
