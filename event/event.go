@@ -29,7 +29,7 @@ const (
 	// CurrentVersion is the current version of the event format.
 	CurrentVersion // 1
 
-	// EmitWithTimeout is the default timeout for emitting events.
+	// EmitWithoutTimeout is the default timeout for emitting events.
 	EmitWithoutTimeout = 0 * time.Second
 )
 

@@ -181,11 +181,11 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	evtUmarshalValue := &Event{}
-	err = evtUmarshalValue.Unmarshal(data)
+	evtUnmarshalValue := &Event{}
+	err = evtUnmarshalValue.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, "b1", evtUmarshalValue.Branch)
-	require.Equal(t, "fk/fk2", evtUmarshalValue.filterKey)
+	require.Equal(t, "b1", evtUnmarshalValue.Branch)
+	require.Equal(t, "fk/fk2", evtUnmarshalValue.filterKey)
 
 	var nilEnt *Event
 	mNilEvt, err := nilEnt.Marshal()
