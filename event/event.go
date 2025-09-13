@@ -109,7 +109,7 @@ func (e *Event) Clone() *Event {
 	clone.Response = e.Response.Clone()
 	clone.LongRunningToolIDs = make(map[string]struct{})
 	clone.filterKey = e.filterKey
-	clone.version = e.version
+	clone.version = CurrentVersion
 	clone.Branch = e.Branch
 	clone.Tag = e.Tag
 	clone.ID = uuid.NewString()
@@ -181,6 +181,10 @@ func (e *Event) Marshal() ([]byte, error) {
 
 // Unmarshal deserializes the event from JSON with error
 func (e *Event) Unmarshal(data []byte) error {
+	if e == nil {
+		return nil
+	}
+
 	eJSON := eventJSON{}
 	if err := json.Unmarshal(data, &eJSON); err != nil {
 		return err
@@ -190,63 +194,6 @@ func (e *Event) Unmarshal(data []byte) error {
 	e.filterKey = eJSON.FilterKey
 
 	return nil
-}
-
-// Option is a function that can be used to configure the Event.
-type Option func(*Event)
-
-// WithBranch sets the branch for the event.
-func WithBranch(branch string) Option {
-	return func(e *Event) {
-		e.Branch = branch
-	}
-}
-
-// WithResponse sets the response for the event.
-func WithResponse(response *model.Response) Option {
-	return func(e *Event) {
-		e.Response = response
-	}
-}
-
-// WithObject sets the object for the event.
-func WithObject(o string) Option {
-	return func(e *Event) {
-		e.Object = o
-	}
-}
-
-// WithStateDelta sets state delta for the event.
-func WithStateDelta(stateDelta map[string][]byte) Option {
-	return func(e *Event) {
-		e.StateDelta = stateDelta
-	}
-}
-
-// WithStructuredOutputPayload sets a typed structured output payload on the event.
-// This data is not serialized and is intended for immediate consumption.
-func WithStructuredOutputPayload(payload any) Option {
-	return func(e *Event) {
-		e.StructuredOutput = payload
-	}
-}
-
-// WithSkipSummarization sets the SkipSummarization action on the event.
-func WithSkipSummarization() Option {
-	return func(e *Event) {
-		if e.Actions == nil {
-			e.Actions = &EventActions{}
-		}
-		e.Actions.SkipSummarization = true
-	}
-}
-
-// WithFilterKey sets the filter key for the event.
-// Please initialize this field correctly using Invocation.eventFilterKey.
-func WithFilterKey(key string) Option {
-	return func(e *Event) {
-		e.filterKey = key
-	}
 }
 
 // New creates a new Event with generated ID and timestamp.
@@ -268,40 +215,24 @@ func New(invocationID, author string, opts ...Option) *Event {
 // This provides a clean way to create error events without manual field assignment.
 func NewErrorEvent(invocationID, author, errorType, errorMessage string,
 	opts ...Option) *Event {
-	e := &Event{
-		Response: &model.Response{
-			Object: model.ObjectTypeError,
-			Done:   true,
-			Error: &model.ResponseError{
-				Type:    errorType,
-				Message: errorMessage,
-			},
+	rsp := &model.Response{
+		Object: model.ObjectTypeError,
+		Done:   true,
+		Error: &model.ResponseError{
+			Type:    errorType,
+			Message: errorMessage,
 		},
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		InvocationID: invocationID,
-		Author:       author,
 	}
-
-	for _, opt := range opts {
-		opt(e)
-	}
-	return e
+	opts = append(opts, WithResponse(rsp))
+	return New(
+		invocationID, author,
+		opts...,
+	)
 }
 
 // NewResponseEvent creates a new Event from a model Response.
 func NewResponseEvent(invocationID, author string, response *model.Response,
 	opts ...Option) *Event {
-	e := &Event{
-		Response:     response,
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		InvocationID: invocationID,
-		Author:       author,
-	}
-
-	for _, opt := range opts {
-		opt(e)
-	}
-	return e
+	opts = append(opts, WithResponse(response))
+	return New(invocationID, author, opts...)
 }
