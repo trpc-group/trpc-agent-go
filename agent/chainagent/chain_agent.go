@@ -106,9 +106,6 @@ func (a *ChainAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	eventFilterKey := baseInvocation.GetEventFilterKey()
-	if eventFilterKey == "" {
-		eventFilterKey = subAgent.Info().Name
-	}
 	// Create a copy of the invocation - no shared state mutation.
 	subInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
