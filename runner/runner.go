@@ -124,7 +124,7 @@ func (r *runner) Run(
 	}
 
 	// Generate invocation ID.
-	invocationID := "invocation-" + uuid.New().String()
+	invocationID := uuid.New().String()
 
 	// Append the incoming user message to the session if it has content.
 	if message.Content != "" {
@@ -161,6 +161,7 @@ func (r *runner) Run(
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey("runner"),
 	)
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)

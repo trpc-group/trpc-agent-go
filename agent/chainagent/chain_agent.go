@@ -105,15 +105,15 @@ func (a *ChainAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.Clone(agent.WithInvocationAgent(subAgent))
-
-	// Set branch info to track sequence in multi-agent scenarios.
-	// Do not include sub-agent name in branch, so that the chain sub-agents can
-	// observe each other's events.
-	if subInvocation.Branch == "" {
-		subInvocation.Branch = a.name
+	eventFilterKey := baseInvocation.GetEventFilterKey()
+	if eventFilterKey == "" {
+		eventFilterKey = subAgent.Info().Name
 	}
+	// Create a copy of the invocation - no shared state mutation.
+	subInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
+	)
 
 	return subInvocation
 }

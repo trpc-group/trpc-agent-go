@@ -75,8 +75,13 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Create transfer event to notify about the handoff.
-	transferEvent := event.New(invocation.InvocationID, invocation.AgentName)
-	transferEvent.Object = model.ObjectTypeTransfer
+	transferEvent := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+		event.WithObject(model.ObjectTypeTransfer),
+	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
 		Object:    model.ObjectTypeTransfer,
@@ -107,7 +112,6 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	targetInvocation := invocation.Clone(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationEndInvocation(transferInfo.EndInvocation),
-		agent.WithInvocationBranch(invocation.Branch),
 	)
 
 	// Set the message for the target agent.

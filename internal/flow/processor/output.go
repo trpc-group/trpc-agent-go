@@ -100,9 +100,14 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		log.Errorf("Structured output unmarshal failed: %v", err)
 		return
 	}
-	typedEvt := event.New(invocation.InvocationID, invocation.AgentName,
+	typedEvt := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStructuredOutputPayload(instance),
+		event.WithStructuredOutputPayload(instance),
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	typedEvt.RequiresCompletion = true
 	select {
@@ -142,6 +147,8 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	stateEvent := event.New(invocation.InvocationID, invocation.AgentName,
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStateDelta(stateDelta),
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	stateEvent.RequiresCompletion = true
 	select {

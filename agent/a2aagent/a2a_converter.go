@@ -212,7 +212,12 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 		Role:    model.RoleAssistant,
 		Content: content,
 	}
-	event := event.New(invocation.InvocationID, agentName)
+	event := event.New(
+		invocation.InvocationID,
+		agentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+	)
 	if isStreaming {
 		event.Response = &model.Response{
 			Choices:   []model.Choice{{Delta: message}},

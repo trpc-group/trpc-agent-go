@@ -105,13 +105,16 @@ func (a *ParallelAgent) createBranchInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create unique invocation ID for this branch.
-	branchSuffix := a.name + "." + subAgent.Info().Name
-	branchInvocationID := baseInvocation.InvocationID + "." + branchSuffix
+	eventFilterKey := baseInvocation.GetEventFilterKey()
+	if eventFilterKey == "" {
+		eventFilterKey = a.name + agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	} else {
+		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	}
 
 	branchInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
-		agent.WithInvocationID(branchInvocationID),
-		agent.WithInvocationBranch(branchInvocationID),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
 	)
 
 	return branchInvocation

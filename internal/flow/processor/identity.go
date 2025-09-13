@@ -104,8 +104,13 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 
 	// Send a preprocessing event.
 	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePreprocessingIdentity
+		evt := event.New(
+			invocation.InvocationID,
+			invocation.AgentName,
+			event.WithObject(model.ObjectTypePreprocessingIdentity),
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		)
 
 		select {
 		case ch <- evt:

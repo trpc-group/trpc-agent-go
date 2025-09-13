@@ -167,9 +167,64 @@ func (r *Response) Clone() *Response {
 	return &clone
 }
 
+// ValidContent checks if the response has valid content for message generation.
+func (rsp *Response) ValidContent() bool {
+	if rsp.HasToolCalls() || rsp.IsToolResultReponse() {
+		return true
+	}
+	// Check if event has choices with content.
+	for _, choice := range rsp.Choices {
+		if choice.Message.Content != "" {
+			return true
+		}
+		if choice.Delta.Content != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // HasToolCalls checks if the response contains tool calls.
 func (rsp *Response) HasToolCalls() bool {
-	return len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+	return rsp != nil && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+}
+
+// IsToolResultReponse  checks if the response is a tool call result response.
+func (rsp *Response) IsToolResultReponse() bool {
+	return rsp != nil && len(rsp.Choices) > 0 && rsp.Choices[0].Message.ToolID != ""
+}
+
+// IsToolCallReponse checks if the response is related to tool calls.
+func (rsp *Response) IsToolCallReponse() bool {
+	return rsp.HasToolCalls() || rsp.IsToolResultReponse()
+}
+
+// GetToolCallIDs gets the IDs of tool calls from the response.
+func (rsp *Response) GetToolCallIDs() []string {
+	ids := make([]string, 0)
+	if rsp == nil || len(rsp.Choices) <= 0 {
+		return ids
+	}
+	for _, choice := range rsp.Choices {
+		for _, toolCall := range choice.Message.ToolCalls {
+			ids = append(ids, toolCall.ID)
+		}
+	}
+	return ids
+}
+
+// GetToolResultIDs gets the IDs of tool results from the response.
+func (rsp *Response) GetToolResultIDs() []string {
+	ids := make([]string, 0)
+	if rsp == nil || len(rsp.Choices) <= 0 {
+		return ids
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ToolID != "" {
+			ids = append(ids, choice.Message.ToolID)
+		}
+	}
+	return ids
 }
 
 // IsFinalResponse checks if the Response is a final response.

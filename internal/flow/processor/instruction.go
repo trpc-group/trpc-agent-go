@@ -217,8 +217,13 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 		return
 	}
 
-	evt := event.New(invocation.InvocationID, invocation.AgentName)
-	evt.Object = model.ObjectTypePreprocessingInstruction
+	evt := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+		event.WithObject(model.ObjectTypePreprocessingInstruction),
+	)
 
 	select {
 	case ch <- evt:

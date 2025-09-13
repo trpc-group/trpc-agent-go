@@ -126,3 +126,10 @@ func WithInvocationArtifactService(artifactService artifact.Service) InvocationO
 		inv.ArtifactService = artifactService
 	}
 }
+
+// WithInvocationEventFilterKey set eventFilterKey for the Invocation.
+func WithInvocationEventFilterKey(key string) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.eventFilterKey = key
+	}
+}

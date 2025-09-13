@@ -73,8 +73,13 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 
 	// Send a preprocessing event.
 	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePreprocessingPlanning
+		evt := event.New(
+			invocation.InvocationID,
+			invocation.AgentName,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+			event.WithObject(model.ObjectTypePreprocessingPlanning),
+		)
 
 		select {
 		case ch <- evt:
@@ -156,8 +161,13 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 
 	// Send a postprocessing event.
 	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePostprocessingPlanning
+		evt := event.New(
+			invocation.InvocationID,
+			invocation.AgentName,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+			event.WithObject(model.ObjectTypePostprocessingPlanning),
+		)
 
 		select {
 		case ch <- evt:
