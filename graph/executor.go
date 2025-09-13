@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1484,7 +1485,18 @@ func (e *Executor) emitNodeStartEvent(
 // executeNodeFunction executes the actual node function.
 func (e *Executor) executeNodeFunction(
 	ctx context.Context, execCtx *ExecutionContext, t *Task,
-) (any, error) {
+) (res any, err error) {
+	// Recover from panics in user-provided node functions to prevent
+	// the whole service from crashing. Convert to error so the normal
+	// error handling path (callbacks, events, checkpointing) can run.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.Errorf("panic in node %s: %v\n%s", t.NodeID, r, string(stack))
+			err = fmt.Errorf("node %s panic: %v", t.NodeID, r)
+			res = nil
+		}
+	}()
 	nodeID := t.NodeID
 	node, exists := e.graph.Node(nodeID)
 	if !exists {
