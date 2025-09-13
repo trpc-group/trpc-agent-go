@@ -265,7 +265,7 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 
 	// Check if latest event is a function response.
 	lastEvent := events[len(events)-1]
-	if !lastEvent.IsToolResultReponse() {
+	if !lastEvent.IsToolResultResponse() {
 		return events
 	}
 
@@ -278,7 +278,7 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	functionCallEventIdx := -1
 	for i := len(events) - 2; i >= 0; i-- {
 		evt := &events[i]
-		if evt.IsToolCallReponse() {
+		if evt.IsToolCallResponse() {
 			functionCallIDs := toMap(evt.GetToolCallIDs())
 			for _, responseID := range functionResponseIDs {
 				if functionCallIDs[responseID] {
@@ -300,7 +300,7 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	var functionResponseEvents []event.Event
 	for i := functionCallEventIdx + 1; i < len(events); i++ {
 		evt := &events[i]
-		if evt.IsToolResultReponse() {
+		if evt.IsToolResultResponse() {
 			responseIDs := toMap(evt.GetToolResultIDs())
 			for _, responseID := range functionResponseIDs {
 				if responseIDs[responseID] {
@@ -334,7 +334,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		// Create a local copy to avoid implicit memory aliasing.
 		evt := evt
 
-		if evt.IsToolResultReponse() {
+		if evt.IsToolResultResponse() {
 			responseIDs := evt.GetToolResultIDs()
 			for _, responseID := range responseIDs {
 				functionCallIDToResponseEventIndex[responseID] = i
@@ -347,10 +347,10 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		// Create a local copy to avoid implicit memory aliasing.
 		evt := evt
 
-		if evt.IsToolResultReponse() {
+		if evt.IsToolResultResponse() {
 			// Function response should be handled with function call below.
 			continue
-		} else if evt.IsToolCallReponse() {
+		} else if evt.IsToolCallResponse() {
 			functionCallIDs := evt.GetToolCallIDs()
 			var responseEventIndices []int
 			for _, callID := range functionCallIDs {
