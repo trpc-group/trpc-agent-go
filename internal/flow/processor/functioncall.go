@@ -92,7 +92,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if !rsp.HasToolCalls() {
+	if !rsp.IsToolCallResponse() {
 		return
 	}
 

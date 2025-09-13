@@ -169,7 +169,7 @@ func (r *Response) Clone() *Response {
 
 // IsValidContent checks if the response has valid content for message generation.
 func (rsp *Response) IsValidContent() bool {
-	if rsp.HasToolCalls() || rsp.IsToolResultResponse() {
+	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return true
 	}
 	// Check if event has choices with content.
@@ -184,11 +184,6 @@ func (rsp *Response) IsValidContent() bool {
 	return false
 }
 
-// HasToolCalls checks if the response contains tool calls.
-func (rsp *Response) HasToolCalls() bool {
-	return rsp != nil && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
-}
-
 // IsToolResultResponse  checks if the response is a tool call result response.
 func (rsp *Response) IsToolResultResponse() bool {
 	return rsp != nil && len(rsp.Choices) > 0 && rsp.Choices[0].Message.ToolID != ""
@@ -196,7 +191,7 @@ func (rsp *Response) IsToolResultResponse() bool {
 
 // IsToolCallResponse checks if the response is related to tool calls.
 func (rsp *Response) IsToolCallResponse() bool {
-	return rsp.HasToolCalls() || rsp.IsToolResultResponse()
+	return rsp != nil && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
 }
 
 // GetToolCallIDs gets the IDs of tool calls from the response.
@@ -233,7 +228,7 @@ func (rsp *Response) IsFinalResponse() bool {
 		return true
 	}
 
-	if rsp.HasToolCalls() {
+	if rsp.IsToolCallResponse() {
 		return false
 	}
 
