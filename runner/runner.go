@@ -123,45 +123,33 @@ func (r *runner) Run(
 		}
 	}
 
-	// Generate invocation ID.
-	invocationID := "invocation-" + uuid.New().String()
-
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" {
-		userEvent := &event.Event{
-			Response:     &model.Response{Done: false},
-			InvocationID: invocationID,
-			Author:       authorUser,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-			Branch:       "", // User events typically don't have branch constraints
-		}
-		// Set the user message content in the response.
-		userEvent.Response.Choices = []model.Choice{
-			{
-				Index:   0,
-				Message: message,
-			},
-		}
-
-		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
-			return nil, err
-		}
-	}
-
 	// Create invocation.
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
 	invocation := agent.NewInvocation(
-		agent.WithInvocationID(invocationID),
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey("runner"),
 	)
+
+	// Append the incoming user message to the session if it has content.
+	if message.Content != "" {
+		if err := r.sessionService.AppendEvent(ctx, sess, event.NewResponseEvent(
+			invocation.InvocationID,
+			authorUser,
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		)); err != nil {
+			return nil, err
+		}
+
+	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -195,41 +183,33 @@ func (r *runner) Run(
 				invocation.NotifyCompletion(ctx, completionID)
 			}
 
-			// Forward the event to the output channel.
-			select {
-			case processedEventCh <- agentEvent:
-			case <-ctx.Done():
+			if err := event.EmitEventToChannel(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
 		}
 
 		// Emit final runner completion event after all agent events are processed.
-		runnerCompletionEvent := &event.Event{
-			Response: &model.Response{
+		runnerCompletionEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			r.appName,
+			&model.Response{
 				ID:        "runner-completion-" + uuid.New().String(),
 				Object:    model.ObjectTypeRunnerCompletion,
 				Created:   time.Now().Unix(),
 				Done:      true,
 				IsPartial: false,
 			},
-			InvocationID: invocationID,
-			Author:       r.appName,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		)
 
 		// Append runner completion event to session.
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, runnerCompletionEvent,
-		); err != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
 
 		// Send the runner completion event to output channel.
-		select {
-		case processedEventCh <- runnerCompletionEvent:
-		case <-ctx.Done():
-		}
+		event.EmitEventToChannel(ctx, processedEventCh, runnerCompletionEvent)
 	}()
 
 	return processedEventCh, nil

@@ -351,34 +351,22 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	parent := New(
 		"parent",
 	)
-	base := &agent.Invocation{
-		InvocationID: "inv-1",
-		AgentName:    "parent",
-		Message:      model.Message{Role: model.RoleUser, Content: "hi"},
-		Branch:       "root",
-	}
-
-	sub := &mockMinimalAgent{name: "child"}
-	inv := parent.createSubAgentInvocation(sub, base)
-
-	require.Equal(t, "child", inv.AgentName)
-	require.Equal(t, "root", inv.Branch)
-	// Ensure original invocation not mutated.
-	require.Equal(t, "parent", base.AgentName)
-	require.Equal(t, "root", base.Branch)
-}
-
-func TestCreateSubAgentInvokeNoBranch(t *testing.T) {
-	parent := New(
-		"parent",
+	base := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationEventFilterKey("root"),
+		agent.WithInvocationMessage(model.Message{Role: model.RoleUser, Content: "hi"}),
 	)
-	base := &agent.Invocation{InvocationID: "id", AgentName: "parent"}
-	sub := &mockMinimalAgent{name: "child"}
+	require.Equal(t, "parent", base.AgentName)
+	require.Equal(t, "parent", base.Branch)
+	require.Equal(t, "root", base.GetEventFilterKey())
 
+	sub := &mockMinimalAgent{name: "child"}
 	inv := parent.createSubAgentInvocation(sub, base)
 
 	require.Equal(t, "child", inv.AgentName)
-	require.Equal(t, "parent", inv.Branch)
+	require.Equal(t, "root", base.GetEventFilterKey())
+	// Ensure original invocation not mutated.
+	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
 }
 
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {

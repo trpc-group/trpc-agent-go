@@ -57,7 +57,11 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
+	ch <- event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
@@ -72,7 +76,11 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		ExecutionID: invocation.Session.ID,
 	})
 	if err != nil {
-		ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
+		ch <- event.New(
+			invocation.InvocationID,
+			invocation.AgentName,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 			event.WithResponse(&model.Response{
 				Choices: []model.Choice{
@@ -83,7 +91,11 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 			}))
 		return
 	}
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
+	ch <- event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{

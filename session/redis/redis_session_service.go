@@ -690,7 +690,7 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	events := make([]event.Event, 0, len(eventsBytes))
 	for _, eventBytes := range eventsBytes {
 		event := &event.Event{}
-		if err := json.Unmarshal([]byte(eventBytes), &event); err != nil {
+		if err := event.Unmarshal([]byte(eventBytes)); err != nil {
 			return nil, fmt.Errorf("unmarshal event failed: %w", err)
 		}
 		events = append(events, *event)
@@ -718,7 +718,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		return fmt.Errorf("marshal session state failed: %w", err)
 	}
 
-	eventBytes, err := json.Marshal(event)
+	eventBytes, err := event.Marshal()
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}

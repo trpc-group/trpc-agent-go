@@ -125,15 +125,12 @@ func (a *CycleAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
+	eventFilterKey := baseInvocation.GetEventFilterKey()
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.Clone(agent.WithInvocationAgent(subAgent))
-
-	// Set branch info for hierarchical event filtering.
-	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the
-	// previous agent's conversation history.
-	if subInvocation.Branch == "" {
-		subInvocation.Branch = a.name
-	}
+	subInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
+	)
 
 	return subInvocation
 }
@@ -208,29 +205,25 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return true // Indicates early return
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
+		event.EmitEventToChannel(ctx, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return true // Indicates early return
 	}
 	return false // Continue execution
@@ -253,25 +246,21 @@ func (a *CycleAgent) runSubAgent(
 	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return true // Indicates escalation
 	}
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
-		select {
-		case eventChan <- subEvent:
-		case <-ctx.Done():
-			return true // Indicates early return
+		if err := event.EmitEventToChannel(ctx, eventChan, subEvent); err != nil {
+			return true
 		}
 
 		// Check if this event indicates escalation.
@@ -291,10 +280,8 @@ func (a *CycleAgent) runSubAgentsLoop(
 ) bool {
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
-			return true // Indicates early return
-		default:
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return true
 		}
 
 		// Run the sub-agent.
@@ -303,10 +290,8 @@ func (a *CycleAgent) runSubAgentsLoop(
 		}
 
 		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
-			return true // Indicates early return
-		default:
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return true
 		}
 	}
 	return false // No escalation
@@ -323,32 +308,29 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
 	}
+
+	event.EmitEventToChannel(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
@@ -372,10 +354,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
 			// Check if context was cancelled.
-			select {
-			case <-ctx.Done():
+			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
-			default:
 			}
 
 			// Run sub-agents loop.

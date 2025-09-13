@@ -217,13 +217,15 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 		return
 	}
 
-	evt := event.New(invocation.InvocationID, invocation.AgentName)
-	evt.Object = model.ObjectTypePreprocessingInstruction
+	log.Debugf("Instruction request processor: sent preprocessing event")
 
-	select {
-	case ch <- evt:
-		log.Debugf("Instruction request processor: sent preprocessing event")
-	case <-ctx.Done():
+	if err := event.EmitEventToChannel(ctx, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+		event.WithObject(model.ObjectTypePreprocessingInstruction),
+	)); err != nil {
 		log.Debugf("Instruction request processor: context cancelled")
 	}
 }

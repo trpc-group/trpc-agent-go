@@ -11,10 +11,28 @@
 package event
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	// InitVersion is the initial version of the event format.
+	InitVersion int = iota // 0
+
+	// CurrentVersion is the current version of the event format.
+	CurrentVersion
+)
+
+const (
+	// EmitWithoutTimeout is the default timeout for emitting events.
+	EmitWithoutTimeout = 0 * time.Second
 )
 
 // Event represents an event in conversation between agents and users.
@@ -34,8 +52,12 @@ type Event struct {
 	// Timestamp is the timestamp of the event.
 	Timestamp time.Time `json:"timestamp"`
 
-	// Branch is the branch identifier for hierarchical event filtering.
+	// Branch records agent execution chain information.
+	// In multi-agent mode, this is useful for tracing agent execution trajectories.
 	Branch string `json:"branch,omitempty"`
+
+	// Tag Uses tags to annotate events with business-specific labels.
+	Tag string `json:"tag,omitempty"`
 
 	// RequiresCompletion indicates if this event needs completion signaling.
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
@@ -55,6 +77,24 @@ type Event struct {
 	// Actions carry flow-level hints that influence how this event is treated
 	// by the runner/flow (e.g., skip summarization after a tool response).
 	Actions *EventActions `json:"actions,omitempty"`
+
+	// filterKey is identifier for hierarchical event filtering.
+	filterKey string
+
+	// version for handling version compatibility issues.
+	version int
+}
+
+// eventJSON is a temporary struct to hold the JSON representation of an event.
+// Used only in Event serialization/deserialization scenarios.
+type eventJSON struct {
+	// Event
+	Event
+	// Version is used to handle version compatibility issues.
+	Version int `json:"version"`
+
+	// FilterKey is used to handle hierarchical event filtering.
+	FilterKey string `json:"filterKey"`
 }
 
 // EventActions represents optional actions/hints attached to an event.
@@ -75,6 +115,11 @@ func (e *Event) Clone() *Event {
 	clone := *e
 	clone.Response = e.Response.Clone()
 	clone.LongRunningToolIDs = make(map[string]struct{})
+	clone.filterKey = e.GetFilterKey()
+	clone.version = CurrentVersion
+	clone.Branch = e.Branch
+	clone.Tag = e.Tag
+	clone.ID = uuid.NewString()
 	for k := range e.LongRunningToolIDs {
 		clone.LongRunningToolIDs[k] = struct{}{}
 	}
@@ -93,53 +138,69 @@ func (e *Event) Clone() *Event {
 	return &clone
 }
 
-// Option is a function that can be used to configure the Event.
-type Option func(*Event)
-
-// WithBranch sets the branch for the event.
-func WithBranch(branch string) Option {
-	return func(e *Event) {
-		e.Branch = branch
+// GetFilterKey returns the filter key for the event.
+func (e *Event) GetFilterKey() string {
+	if e == nil {
+		return ""
 	}
+
+	if e.version != CurrentVersion {
+		return e.Branch
+	}
+
+	return e.filterKey
 }
 
-// WithResponse sets the response for the event.
-func WithResponse(response *model.Response) Option {
-	return func(e *Event) {
-		e.Response = response
+// Filter checks if the event matches the specified filter key.
+func (e *Event) Filter(filterKey string) bool {
+	if e == nil {
+		return true
 	}
+
+	eFilterKey := e.filterKey
+	if e.version != CurrentVersion {
+		eFilterKey = e.Branch
+	}
+
+	if filterKey == "" || eFilterKey == "" {
+		return true
+	}
+
+	filterKey += "/"
+	eFilterKey = eFilterKey + "/"
+	return strings.HasPrefix(filterKey, eFilterKey) || strings.HasPrefix(eFilterKey, filterKey)
 }
 
-// WithObject sets the object for the event.
-func WithObject(o string) Option {
-	return func(e *Event) {
-		e.Object = o
+// Marshal serializes the event to JSON with error
+func (e *Event) Marshal() ([]byte, error) {
+	if e == nil {
+		return json.Marshal(e)
 	}
+
+	eJSON := eventJSON{
+		Event:     *e,
+		Version:   e.version,
+		FilterKey: e.filterKey,
+	}
+
+	return json.Marshal(eJSON)
 }
 
-// WithStateDelta sets state delta for the event.
-func WithStateDelta(stateDelta map[string][]byte) Option {
-	return func(e *Event) {
-		e.StateDelta = stateDelta
+// Unmarshal deserializes the event from JSON with error
+func (e *Event) Unmarshal(data []byte) error {
+	if e == nil {
+		return nil
 	}
-}
 
-// WithStructuredOutputPayload sets a typed structured output payload on the event.
-// This data is not serialized and is intended for immediate consumption.
-func WithStructuredOutputPayload(payload any) Option {
-	return func(e *Event) {
-		e.StructuredOutput = payload
+	eJSON := eventJSON{}
+	if err := json.Unmarshal(data, &eJSON); err != nil {
+		return err
 	}
-}
+	*e = eJSON.Event
+	e.version = eJSON.Version
+	e.filterKey = eJSON.FilterKey
 
-// WithSkipSummarization sets the SkipSummarization action on the event.
-func WithSkipSummarization() Option {
-	return func(e *Event) {
-		if e.Actions == nil {
-			e.Actions = &EventActions{}
-		}
-		e.Actions.SkipSummarization = true
-	}
+	return nil
 }
 
 // New creates a new Event with generated ID and timestamp.
@@ -150,6 +211,7 @@ func New(invocationID, author string, opts ...Option) *Event {
 		Timestamp:    time.Now(),
 		InvocationID: invocationID,
 		Author:       author,
+		version:      CurrentVersion,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -159,30 +221,88 @@ func New(invocationID, author string, opts ...Option) *Event {
 
 // NewErrorEvent creates a new error Event with the specified error details.
 // This provides a clean way to create error events without manual field assignment.
-func NewErrorEvent(invocationID, author, errorType, errorMessage string) *Event {
-	return &Event{
-		Response: &model.Response{
-			Object: model.ObjectTypeError,
-			Done:   true,
-			Error: &model.ResponseError{
-				Type:    errorType,
-				Message: errorMessage,
-			},
+func NewErrorEvent(invocationID, author, errorType, errorMessage string,
+	opts ...Option) *Event {
+	rsp := &model.Response{
+		Object: model.ObjectTypeError,
+		Done:   true,
+		Error: &model.ResponseError{
+			Type:    errorType,
+			Message: errorMessage,
 		},
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		InvocationID: invocationID,
-		Author:       author,
 	}
+	opts = append(opts, WithResponse(rsp))
+	return New(
+		invocationID, author,
+		opts...,
+	)
 }
 
 // NewResponseEvent creates a new Event from a model Response.
-func NewResponseEvent(invocationID, author string, response *model.Response) *Event {
-	return &Event{
-		Response:     response,
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-		InvocationID: invocationID,
-		Author:       author,
+func NewResponseEvent(invocationID, author string, response *model.Response,
+	opts ...Option) *Event {
+	opts = append(opts, WithResponse(response))
+	return New(invocationID, author, opts...)
+}
+
+// DefaultEmitTimeoutErr is the default error returned when a wait notice times out.
+var DefaultEmitTimeoutErr = NewEmitEventTimeoutError("emit event timeout.")
+
+// EmitEventTimeoutError represents an error that signals the emit event timeout.
+type EmitEventTimeoutError struct {
+	// Message contains the stop reason
+	Message string
+}
+
+// Error implements the error interface.
+func (e *EmitEventTimeoutError) Error() string {
+	return e.Message
+}
+
+// AsEmitEventTimeoutError checks if an error is a EmitEventTimeoutError using errors.As.
+func AsEmitEventTimeoutError(err error) (*EmitEventTimeoutError, bool) {
+	var waitNoticeTimeoutErr *EmitEventTimeoutError
+	ok := errors.As(err, &waitNoticeTimeoutErr)
+	return waitNoticeTimeoutErr, ok
+}
+
+// NewEmitEventTimeoutError creates a new EmitEventTimeoutError with the given message.
+func NewEmitEventTimeoutError(message string) *EmitEventTimeoutError {
+	return &EmitEventTimeoutError{Message: message}
+}
+
+// EmitEventToChannel sends an event to the channel without timeout.
+func EmitEventToChannel(ctx context.Context, ch chan<- *Event, e *Event) error {
+	return EmitEventToChannelWithTimeout(ctx, ch, e, EmitWithoutTimeout)
+}
+
+// EmitEventToChannelWithTimeout sends an event to the channel with optional timeout.
+func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
+	e *Event, timeout time.Duration) error {
+	if e == nil {
+		return nil
 	}
+
+	if timeout == EmitWithoutTimeout {
+		select {
+		case ch <- e:
+			log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+		case <-ctx.Done():
+			log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	select {
+	case ch <- e:
+		log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+	case <-ctx.Done():
+		log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
+		return ctx.Err()
+	case <-time.After(timeout):
+		log.Warnf("EmitEventToChannelWithTimeout: timeout, event: %+v", *e)
+		return DefaultEmitTimeoutErr
+	}
+	return nil
 }
