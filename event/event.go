@@ -11,11 +11,14 @@
 package event
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -26,6 +29,8 @@ const (
 	// CurrentVersion is the current version of the event format.
 	CurrentVersion // 1
 
+	// EmitWithTimeout is the default timeout for emitting events.
+	EmitWithoutTimeout = 0 * time.Second
 )
 
 // Event represents an event in conversation between agents and users.
@@ -235,4 +240,40 @@ func NewResponseEvent(invocationID, author string, response *model.Response,
 	opts ...Option) *Event {
 	opts = append(opts, WithResponse(response))
 	return New(invocationID, author, opts...)
+}
+
+// EmitEventToChannel sends an event to the channel without timeout.
+func EmitEventToChannel(ctx context.Context, ch chan *Event, e *Event) error {
+	return EmitEventToChannelWithTimeout(ctx, ch, e, EmitWithoutTimeout)
+}
+
+// EmitEventToChannelWithTimeout sends an event to the channel with optional timeout.
+func EmitEventToChannelWithTimeout(ctx context.Context, ch chan *Event,
+	e *Event, timeout time.Duration) error {
+	if e == nil {
+		return nil
+	}
+
+	if timeout == EmitWithoutTimeout {
+		select {
+		case ch <- e:
+			log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+		case <-ctx.Done():
+
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	select {
+	case ch <- e:
+		log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+	case <-ctx.Done():
+		log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
+		return ctx.Err()
+	case <-time.After(timeout):
+		log.Warnf("EmitEventToChannelWithTimeout: timeout, event: %+v", *e)
+		return fmt.Errorf("timeout")
+	}
+	return nil
 }
