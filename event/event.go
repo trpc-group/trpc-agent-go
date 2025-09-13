@@ -113,7 +113,7 @@ func (e *Event) Clone() *Event {
 	clone := *e
 	clone.Response = e.Response.Clone()
 	clone.LongRunningToolIDs = make(map[string]struct{})
-	clone.filterKey = e.filterKey
+	clone.filterKey = e.GetFilterKey()
 	clone.version = CurrentVersion
 	clone.Branch = e.Branch
 	clone.Tag = e.Tag
@@ -209,6 +209,7 @@ func New(invocationID, author string, opts ...Option) *Event {
 		Timestamp:    time.Now(),
 		InvocationID: invocationID,
 		Author:       author,
+		version:      CurrentVersion,
 	}
 	for _, opt := range opts {
 		opt(e)

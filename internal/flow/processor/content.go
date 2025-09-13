@@ -138,7 +138,7 @@ func (p *ContentRequestProcessor) getContents(
 
 		// Skip events without content, or generated neither by user nor by model
 		// or has empty text. E.g. events purely for mutating session states.
-		if p.IncludeContents == IncludeContentsFiltered && !evt.ValidContent() {
+		if !evt.IsValidContent() {
 			continue
 		}
 

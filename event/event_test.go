@@ -58,10 +58,12 @@ func TestNewResponseEvent(t *testing.T) {
 		Done:   true,
 	}
 
-	evt := NewResponseEvent(invocationID, author, resp)
+	evt := NewResponseEvent(invocationID, author, resp, WithBranch("b1"), WithFilterKey("fk"))
 	require.Equal(t, resp, evt.Response)
 	require.Equal(t, invocationID, evt.InvocationID)
 	require.Equal(t, author, evt.Author)
+	require.Equal(t, "b1", evt.Branch)
+	require.Equal(t, "fk", evt.filterKey)
 }
 
 func TestEvent_WithOptions_And_Clone(t *testing.T) {
@@ -108,4 +110,91 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	if _, ok := clone.LongRunningToolIDs["id2"]; ok {
 		t.Fatalf("clone should not contain id2")
 	}
+}
+
+func TestEvent_GetFilterKey(t *testing.T) {
+	evt := New("inv-1", "author",
+		WithBranch("b1"),
+	)
+	require.Equal(t, "", evt.GetFilterKey())
+
+	evt = New("inv-1", "author", WithFilterKey("fk"))
+	require.Equal(t, "fk", evt.GetFilterKey())
+
+	newEvt := evt.Clone()
+	require.Equal(t, "fk", newEvt.GetFilterKey())
+
+	// old Version
+	oldEvt1 := &Event{Branch: "fk", filterKey: ""}
+	require.Equal(t, "fk", oldEvt1.GetFilterKey())
+	require.Equal(t, "", oldEvt1.filterKey)
+	require.Equal(t, "fk", oldEvt1.Branch)
+	require.Equal(t, InitVersion, oldEvt1.version)
+
+	// old Version
+	oldEvtClone := oldEvt1.Clone()
+	require.Equal(t, "fk", oldEvtClone.GetFilterKey())
+	require.Equal(t, "fk", oldEvtClone.filterKey)
+	require.Equal(t, "fk", oldEvtClone.Branch)
+	require.Equal(t, CurrentVersion, oldEvtClone.version)
+
+}
+
+func TestEvent_Filter(t *testing.T) {
+	evt1 := New("inv-1", "author",
+		WithBranch("b1"),
+		WithFilterKey("fk/fk2"),
+	)
+	require.True(t, evt1.Filter(""))
+	require.False(t, evt1.Filter("b1"))
+	require.True(t, evt1.Filter("fk"))
+	require.True(t, evt1.Filter("fk/fk2"))
+	require.True(t, evt1.Filter("fk/fk2/fk3"))
+	require.False(t, evt1.Filter("fk/fk"))
+
+	newEvt1 := evt1.Clone()
+	require.True(t, newEvt1.Filter(""))
+	require.False(t, newEvt1.Filter("b1"))
+	require.True(t, newEvt1.Filter("fk"))
+	require.True(t, newEvt1.Filter("fk/fk2"))
+	require.True(t, evt1.Filter("fk/fk2/fk3"))
+	require.False(t, evt1.Filter("fk/fk"))
+
+	evt2 := New("inv-1", "author")
+	require.True(t, evt2.Filter("fk"))
+	require.True(t, evt2.Filter("fk2"))
+	require.True(t, evt2.Filter(""))
+
+	newEvt2 := evt2.Clone()
+	require.True(t, newEvt2.Filter("fk"))
+	require.True(t, newEvt2.Filter("fk2"))
+	require.True(t, newEvt2.Filter(""))
+}
+
+func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
+	evt := New("inv-1", "author",
+		WithBranch("b1"),
+		WithFilterKey("fk/fk2"),
+	)
+
+	data, err := evt.Marshal()
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	evtUmarshalValue := &Event{}
+	err = evtUmarshalValue.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, "b1", evtUmarshalValue.Branch)
+	require.Equal(t, "fk/fk2", evtUmarshalValue.filterKey)
+
+	var nilEnt *Event
+	mNilEvt, err := nilEnt.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, "null", string(mNilEvt))
+
+	nullEvt := &Event{}
+	err = nullEvt.Unmarshal([]byte("null"))
+	require.NoError(t, err)
+
+	require.Empty(t, nullEvt)
 }

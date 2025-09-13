@@ -167,8 +167,8 @@ func (r *Response) Clone() *Response {
 	return &clone
 }
 
-// ValidContent checks if the response has valid content for message generation.
-func (rsp *Response) ValidContent() bool {
+// IsValidContent checks if the response has valid content for message generation.
+func (rsp *Response) IsValidContent() bool {
 	if rsp.HasToolCalls() || rsp.IsToolResultResponse() {
 		return true
 	}
