@@ -136,32 +136,32 @@ type Response struct {
 }
 
 // Clone creates a deep copy of the response.
-func (r *Response) Clone() *Response {
-	if r == nil {
+func (rsp *Response) Clone() *Response {
+	if rsp == nil {
 		return nil
 	}
-	clone := *r
-	clone.Choices = make([]Choice, len(r.Choices))
-	copy(clone.Choices, r.Choices)
-	if r.Usage != nil {
+	clone := *rsp
+	clone.Choices = make([]Choice, len(rsp.Choices))
+	copy(clone.Choices, rsp.Choices)
+	if rsp.Usage != nil {
 		clone.Usage = &Usage{
-			PromptTokens:     r.Usage.PromptTokens,
-			CompletionTokens: r.Usage.CompletionTokens,
-			TotalTokens:      r.Usage.TotalTokens,
+			PromptTokens:     rsp.Usage.PromptTokens,
+			CompletionTokens: rsp.Usage.CompletionTokens,
+			TotalTokens:      rsp.Usage.TotalTokens,
 		}
 	}
 	// Deep copy Error if present.
-	if r.Error != nil {
+	if rsp.Error != nil {
 		clone.Error = &ResponseError{
-			Message: r.Error.Message,
-			Type:    r.Error.Type,
-			Param:   r.Error.Param,
-			Code:    r.Error.Code,
+			Message: rsp.Error.Message,
+			Type:    rsp.Error.Type,
+			Param:   rsp.Error.Param,
+			Code:    rsp.Error.Code,
 		}
 	}
 	// Deep copy SystemFingerprint if present.
-	if r.SystemFingerprint != nil {
-		fp := *r.SystemFingerprint
+	if rsp.SystemFingerprint != nil {
+		fp := *rsp.SystemFingerprint
 		clone.SystemFingerprint = &fp
 	}
 	return &clone
@@ -169,6 +169,10 @@ func (r *Response) Clone() *Response {
 
 // IsValidContent checks if the response has valid content for message generation.
 func (rsp *Response) IsValidContent() bool {
+	if rsp == nil {
+		return false
+	}
+
 	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
 		return true
 	}
