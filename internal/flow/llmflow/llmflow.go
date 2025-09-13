@@ -94,6 +94,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						invocation.AgentName,
 						agent.ErrorTypeStopAgentError,
 						err.Error(),
+						event.WithBranch(invocation.Branch),
+						event.WithFilterKey(invocation.GetEventFilterKey()),
 					)
 					log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)
 				} else {
@@ -103,14 +105,13 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						invocation.AgentName,
 						model.ErrorTypeFlowError,
 						err.Error(),
+						event.WithBranch(invocation.Branch),
+						event.WithFilterKey(invocation.GetEventFilterKey()),
 					)
 					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
 				}
 
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
+				event.EmitEventToChannel(ctx, eventChan, errorEvent)
 				return
 			}
 
@@ -181,7 +182,7 @@ func (f *Flow) processStreamingResponses(
 
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
-		eventChan <- llmResponseEvent
+		event.EmitEventToChannel(ctx, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 
 		// 5. Check context cancellation.
@@ -216,13 +217,14 @@ func (f *Flow) handleAfterModelCallbacks(
 		}
 
 		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-		lastEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		eventChan <- lastEvent
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return nil, err
 	}
 	return customResp, nil

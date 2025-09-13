@@ -196,28 +196,25 @@ func (r *runner) Run(
 				invocation.NotifyCompletion(ctx, completionID)
 			}
 
-			// Forward the event to the output channel.
-			select {
-			case processedEventCh <- agentEvent:
-			case <-ctx.Done():
+			if err := event.EmitEventToChannel(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
 		}
 
 		// Emit final runner completion event after all agent events are processed.
-		runnerCompletionEvent := &event.Event{
-			Response: &model.Response{
+		runnerCompletionEvent := event.NewResponseEvent(
+			invocationID,
+			r.appName,
+			&model.Response{
 				ID:        "runner-completion-" + uuid.New().String(),
 				Object:    model.ObjectTypeRunnerCompletion,
 				Created:   time.Now().Unix(),
 				Done:      true,
 				IsPartial: false,
 			},
-			InvocationID: invocationID,
-			Author:       r.appName,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		)
 
 		// Append runner completion event to session.
 		if err := r.sessionService.AppendEvent(
@@ -227,10 +224,7 @@ func (r *runner) Run(
 		}
 
 		// Send the runner completion event to output channel.
-		select {
-		case processedEventCh <- runnerCompletionEvent:
-		case <-ctx.Done():
-		}
+		event.EmitEventToChannel(ctx, processedEventCh, runnerCompletionEvent)
 	}()
 
 	return processedEventCh, nil

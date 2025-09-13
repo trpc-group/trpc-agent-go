@@ -269,12 +269,12 @@ func NewEmitEventTimeoutError(message string) *EmitEventTimeoutError {
 }
 
 // EmitEventToChannel sends an event to the channel without timeout.
-func EmitEventToChannel(ctx context.Context, ch chan *Event, e *Event) error {
+func EmitEventToChannel(ctx context.Context, ch chan<- *Event, e *Event) error {
 	return EmitEventToChannelWithTimeout(ctx, ch, e, EmitWithoutTimeout)
 }
 
 // EmitEventToChannelWithTimeout sends an event to the channel with optional timeout.
-func EmitEventToChannelWithTimeout(ctx context.Context, ch chan *Event,
+func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration) error {
 	if e == nil {
 		return nil

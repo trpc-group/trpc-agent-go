@@ -110,12 +110,9 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	typedEvt.RequiresCompletion = true
-	select {
-	case ch <- typedEvt:
-		log.Debugf("Emitted typed structured output payload event.")
-	case <-ctx.Done():
-		return
-	}
+
+	log.Debugf("Emitted typed structured output payload event.")
+	event.EmitEventToChannel(ctx, ch, typedEvt)
 }
 
 // handleOutputKey validates and emits state delta for output_key/output_schema cases.
@@ -151,12 +148,9 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	stateEvent.RequiresCompletion = true
-	select {
-	case ch <- stateEvent:
-		log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
-	case <-ctx.Done():
-		return
-	}
+
+	log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
+	event.EmitEventToChannel(ctx, ch, stateEvent)
 
 	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,

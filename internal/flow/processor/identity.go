@@ -102,22 +102,20 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// Send a preprocessing event.
-	if invocation != nil {
-		evt := event.New(
-			invocation.InvocationID,
-			invocation.AgentName,
-			event.WithObject(model.ObjectTypePreprocessingIdentity),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-		)
+	if invocation == nil {
+		return
+	}
 
-		select {
-		case ch <- evt:
-			log.Debugf("Identity request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Identity request processor: context cancelled")
-		}
+	log.Debugf("Identity request processor: sent preprocessing event")
+
+	if err := event.EmitEventToChannel(ctx, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypePreprocessingIdentity),
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+	)); err != nil {
+		log.Debugf("Identity request processor: context cancelled")
 	}
 }
 

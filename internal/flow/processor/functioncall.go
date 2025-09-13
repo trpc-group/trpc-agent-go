@@ -103,16 +103,14 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return
 	}
 }
@@ -133,26 +131,18 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		return nil, err
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 	} else if functionResponseEvent != nil {
-		select {
-		case eventChan <- functionResponseEvent:
-		case <-ctx.Done():
-			return functionResponseEvent, ctx.Err()
-		}
+		err = event.EmitEventToChannel(ctx, eventChan, functionResponseEvent)
 	}
-	return functionResponseEvent, nil
+	return functionResponseEvent, err
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
@@ -733,25 +723,6 @@ func (f *FunctionCallResponseProcessor) buildPartialToolResponseEvent(
 	)
 }
 
-// trySendEvent attempts to send an event to the channel without blocking.
-func (f *FunctionCallResponseProcessor) trySendEvent(
-	ctx context.Context,
-	ch chan<- *event.Event,
-	e *event.Event,
-) error {
-	if ch == nil {
-		return nil
-	}
-	select {
-	case ch <- e:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
-}
-
 // marshalChunkToText converts a chunk content into a string representation.
 func marshalChunkToText(content any) string {
 	switch v := content.(type) {
@@ -782,24 +753,20 @@ func newToolCallResponseEvent(
 	invocation *agent.Invocation,
 	functionCallResponse *model.Response,
 	functionResponses []model.Choice) *event.Event {
-	// Generate a proper unique ID.
-	eventID := uuid.New().String()
 	// Create function response event.
-	return &event.Event{
-		Response: &model.Response{
-			ID:        eventID,
+	return event.NewResponseEvent(
+		invocation.InvocationID,
+		invocation.AgentName,
+		&model.Response{
 			Object:    model.ObjectTypeToolResponse,
 			Created:   time.Now().Unix(),
 			Model:     functionCallResponse.Model,
 			Choices:   functionResponses,
 			Timestamp: time.Now(),
 		},
-		InvocationID: invocation.InvocationID,
-		Author:       invocation.AgentName,
-		ID:           eventID,
-		Timestamp:    time.Now(),
-		Branch:       invocation.Branch, // Set branch for hierarchical event filtering.
-	}
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+	)
 }
 
 func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
@@ -941,8 +908,8 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
 		if f.shouldForwardInnerEvent(ev) {
-			if f.trySendEvent(ctx, eventChan, ev) != nil {
-				return ctx.Err()
+			if err := event.EmitEventToChannel(ctx, eventChan, ev); err != nil {
+				return err
 			}
 		}
 		f.appendInnerEventContent(ev, contents)
@@ -957,8 +924,8 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	*contents = append(*contents, text)
 	if eventChan != nil {
 		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
-		if f.trySendEvent(ctx, eventChan, partial) != nil {
-			return ctx.Err()
+		if err := event.EmitEventToChannel(ctx, eventChan, partial); err != nil {
+			return err
 		}
 	}
 	return nil

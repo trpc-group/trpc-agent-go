@@ -71,22 +71,20 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// Send a preprocessing event.
-	if invocation != nil {
-		evt := event.New(
-			invocation.InvocationID,
-			invocation.AgentName,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-			event.WithObject(model.ObjectTypePreprocessingPlanning),
-		)
+	if invocation == nil {
+		return
+	}
 
-		select {
-		case ch <- evt:
-			log.Debugf("Planning request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Planning request processor: context cancelled")
-		}
+	log.Debugf("Planning request processor: sent preprocessing event")
+
+	if err := event.EmitEventToChannel(ctx, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+		event.WithObject(model.ObjectTypePreprocessingPlanning),
+	)); err != nil {
+		log.Debugf("Planning request processor: context cancelled")
 	}
 }
 
@@ -159,21 +157,19 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 		log.Debugf("Planning response processor: processed response successfully")
 	}
 
-	// Send a postprocessing event.
-	if invocation != nil {
-		evt := event.New(
-			invocation.InvocationID,
-			invocation.AgentName,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-			event.WithObject(model.ObjectTypePostprocessingPlanning),
-		)
+	if invocation == nil {
+		return
+	}
 
-		select {
-		case ch <- evt:
-			log.Debugf("Planning response processor: sent postprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Planning response processor: context cancelled")
-		}
+	log.Debugf("Planning response processor: sent postprocessing event")
+
+	if err := event.EmitEventToChannel(ctx, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+		event.WithFilterKey(invocation.GetEventFilterKey()),
+		event.WithObject(model.ObjectTypePostprocessingPlanning),
+	)); err != nil {
+		log.Debugf("Planning response processor: context cancelled")
 	}
 }

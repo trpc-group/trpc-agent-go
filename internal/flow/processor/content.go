@@ -110,18 +110,13 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Send a preprocessing event.
 	if invocation != nil {
-		select {
-		case ch <- event.New(
+		event.EmitEventToChannel(ctx, ch, event.New(
 			invocation.InvocationID,
 			invocation.AgentName,
 			event.WithBranch(invocation.Branch),
 			event.WithFilterKey(invocation.GetEventFilterKey()),
 			event.WithObject(model.ObjectTypePreprocessingContent),
-		):
-			log.Debugf("Content request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Content request processor: context cancelled")
-		}
+		))
 	}
 }
 

@@ -141,34 +141,35 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	var evt *event.Event
+
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
 	}
-	return false // Continue execution
+
+	if evt == nil {
+		return false // Continue execution
+	}
+
+	event.EmitEventToChannel(ctx, eventChan, evt)
+	return true
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -196,16 +197,14 @@ func (a *ParallelAgent) startSubAgents(
 			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				errorEvent := event.NewErrorEvent(
+				event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
 					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
+					event.WithBranch(invocation.Branch),
+					event.WithFilterKey(invocation.GetEventFilterKey()),
+				))
 				return
 			}
 
@@ -229,32 +228,29 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
 	}
+
+	event.EmitEventToChannel(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
@@ -315,18 +311,8 @@ func (a *ParallelAgent) mergeEventStreams(
 		wg.Add(1)
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
-			for {
-				select {
-				case evt, ok := <-inputChan:
-					if !ok {
-						return // Channel closed.
-					}
-					select {
-					case outputChan <- evt:
-					case <-ctx.Done():
-						return
-					}
-				case <-ctx.Done():
+			for evt := range inputChan {
+				if err := event.EmitEventToChannel(ctx, outputChan, evt); err != nil {
 					return
 				}
 			}

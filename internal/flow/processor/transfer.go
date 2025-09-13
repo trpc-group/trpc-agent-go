@@ -61,16 +61,14 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if targetAgent == nil {
 		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return
 	}
 
@@ -100,11 +98,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Send transfer event.
-	select {
-	case ch <- transferEvent:
-		log.Debugf("Transfer response processor: sent transfer event")
-	case <-ctx.Done():
-		log.Debugf("Transfer response processor: context cancelled")
+	if err := event.EmitEventToChannel(ctx, ch, transferEvent); err != nil {
 		return
 	}
 
@@ -130,27 +124,23 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if err != nil {
 		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: "+err.Error(),
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+			event.WithBranch(invocation.Branch),
+			event.WithFilterKey(invocation.GetEventFilterKey()),
+		))
 		return
 	}
 
 	// Forward all events from the target agent.
 	for targetEvent := range targetEventChan {
-		select {
-		case ch <- targetEvent:
-			log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
-		case <-ctx.Done():
+		if err := event.EmitEventToChannel(ctx, ch, targetEvent); err != nil {
 			return
 		}
+		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 	}
 
 	// Clear the transfer info and end the original invocation to stop further LLM calls.
