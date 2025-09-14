@@ -108,7 +108,6 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStructuredOutputPayload(instance),
-		event.WithStructuredOutputPayload(instance),
 	)
 	typedEvt.RequiresCompletion = true
 
