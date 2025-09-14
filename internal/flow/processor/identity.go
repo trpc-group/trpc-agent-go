@@ -59,6 +59,10 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	req *model.Request,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
+
 	if req == nil {
 		log.Errorf("Identity request processor: request is nil")
 		return
@@ -100,10 +104,6 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 			req.Messages = append([]model.Message{identityMsg}, req.Messages...)
 			log.Debugf("Identity request processor: added identity message")
 		}
-	}
-
-	if invocation == nil {
-		return
 	}
 
 	log.Debugf("Identity request processor: sent preprocessing event")

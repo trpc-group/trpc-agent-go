@@ -64,6 +64,10 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		return
 	}
 
+	if invocation == nil {
+		return
+	}
+
 	log.Debugf("Basic request processor: processing request for agent %s", invocation.AgentName)
 
 	// Set generation configuration.
@@ -72,10 +76,6 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	// Propagate structured output from invocation to request if present.
 	if invocation != nil && invocation.StructuredOutput != nil {
 		req.StructuredOutput = invocation.StructuredOutput
-	}
-
-	if invocation == nil {
-		return
 	}
 
 	log.Debugf("Basic request processor: sent preprocessing event")

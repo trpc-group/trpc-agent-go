@@ -32,6 +32,9 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 // and emits events for the code execution result.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
+	if invocation == nil {
+		return
+	}
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
 	if !ok || ce == nil {
 		return

@@ -47,6 +47,9 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
 	// Only process complete (non-partial) responses.
 	// Extract text content from the response.
 	content, ok := p.extractFinalContent(rsp)

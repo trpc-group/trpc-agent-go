@@ -86,6 +86,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
+	if invocation == nil {
+		return
+	}
+
 	// Process session events if available and includeContents is not "none".
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		sessionMessages := p.getContents(
@@ -109,13 +113,11 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Send a preprocessing event.
-	if invocation != nil {
-		invocation.AugmentEventAndEmit(ctx, ch, event.New(
-			invocation.InvocationID,
-			invocation.AgentName,
-			event.WithBranch(invocation.Branch),
-		))
-	}
+	invocation.AugmentEventAndEmit(ctx, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithBranch(invocation.Branch),
+	))
 }
 
 // getContents gets the contents for the LLM request from session events.

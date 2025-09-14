@@ -78,15 +78,15 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	req *model.Request,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
 	if req == nil {
 		log.Errorf("Instruction request processor: request is nil")
 		return
 	}
 
-	agentName := ""
-	if invocation != nil {
-		agentName = invocation.AgentName
-	}
+	agentName := invocation.AgentName
 	log.Debugf("Instruction request processor: processing request for agent %s", agentName)
 
 	// Process instruction and system prompt with state injection.

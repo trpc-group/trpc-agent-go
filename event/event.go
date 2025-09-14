@@ -238,10 +238,7 @@ func NewErrorEvent(invocationID, author, errorType, errorMessage string,
 		},
 	}
 	opts = append(opts, WithResponse(rsp))
-	return New(
-		invocationID, author,
-		opts...,
-	)
+	return New(invocationID, author, opts...)
 }
 
 // NewResponseEvent creates a new Event from a model Response.

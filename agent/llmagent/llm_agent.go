@@ -593,11 +593,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				customResponse,
-			)
+			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			invocation.AugmentEventAndEmit(ctx, eventChan, customEvent)
 			close(eventChan)
 			return eventChan, nil
@@ -671,11 +667,7 @@ func (a *LLMAgent) wrapEventChannel(
 				)
 			} else if customResponse != nil {
 				// Create an event from the custom response.
-				evt = event.NewResponseEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					customResponse,
-				)
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
 
 			invocation.AugmentEventAndEmit(ctx, wrappedChan, evt)

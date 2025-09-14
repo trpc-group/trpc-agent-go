@@ -172,11 +172,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customevent := event.NewResponseEvent(
-				invocation.InvocationID,
-				invocation.AgentName,
-				customResponse,
-			)
+			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			invocation.AugmentEventAndEmit(ctx, eventChan, customevent)
 			close(eventChan)
 			return eventChan, nil

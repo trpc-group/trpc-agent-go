@@ -226,11 +226,7 @@ func (f *Flow) handleAfterModelCallbacks(
 
 // createLLMResponseEvent creates a new LLM response event.
 func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *model.Response, llmRequest *model.Request) *event.Event {
-	llmResponseEvent := event.New(
-		invocation.InvocationID,
-		invocation.AgentName,
-		event.WithResponse(response),
-	)
+	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response))
 	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}

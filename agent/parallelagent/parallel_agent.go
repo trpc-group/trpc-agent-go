@@ -153,11 +153,7 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 		)
 	} else if customResponse != nil {
 		// Create an event from the custom response and then close.
-		evt = event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
 
 	if evt == nil {
@@ -233,11 +229,7 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 		)
 	} else if customResponse != nil {
 		// Create an event from the custom response.
-		evt = event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
 
 	invocation.AugmentEventAndEmit(ctx, eventChan, evt)

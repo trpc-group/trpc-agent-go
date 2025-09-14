@@ -132,6 +132,9 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
 	if rsp == nil {
 		log.Errorf("Planning response processor: response is nil")
 		return
@@ -153,10 +156,6 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 		// Update the original response with processed content.
 		*rsp = *processedResponse
 		log.Debugf("Planning response processor: processed response successfully")
-	}
-
-	if invocation == nil {
-		return
 	}
 
 	log.Debugf("Planning response processor: sent postprocessing event")
