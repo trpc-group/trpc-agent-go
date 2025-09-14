@@ -61,13 +61,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if targetAgent == nil {
 		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
 		// Send error event.
-		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return
 	}
@@ -77,8 +75,6 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
-		event.WithObject(model.ObjectTypeTransfer),
 	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
@@ -98,7 +94,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Send transfer event.
-	if err := event.EmitEventToChannel(ctx, ch, transferEvent); err != nil {
+	if err := invocation.ExtraEventAndEmit(ctx, ch, transferEvent); err != nil {
 		return
 	}
 
@@ -124,13 +120,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if err != nil {
 		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
-		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: "+err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return
 	}

@@ -77,12 +77,10 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 
 	log.Debugf("Planning request processor: sent preprocessing event")
 
-	if err := event.EmitEventToChannel(ctx, ch, event.New(
+	if err := invocation.ExtraEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
-		event.WithObject(model.ObjectTypePreprocessingPlanning),
 	)); err != nil {
 		log.Debugf("Planning request processor: context cancelled")
 	}
@@ -163,12 +161,10 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 
 	log.Debugf("Planning response processor: sent postprocessing event")
 
-	if err := event.EmitEventToChannel(ctx, ch, event.New(
+	if err := invocation.ExtraEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
-		event.WithObject(model.ObjectTypePostprocessingPlanning),
 	)); err != nil {
 		log.Debugf("Planning response processor: context cancelled")
 	}

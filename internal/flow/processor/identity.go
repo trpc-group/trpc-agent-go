@@ -108,12 +108,10 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 
 	log.Debugf("Identity request processor: sent preprocessing event")
 
-	if err := event.EmitEventToChannel(ctx, ch, event.New(
+	if err := invocation.ExtraEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingIdentity),
-		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)); err != nil {
 		log.Debugf("Identity request processor: context cancelled")
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -174,6 +175,9 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 
 // Clone clone a new invocation
 func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
+	if inv == nil {
+		return nil
+	}
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
@@ -208,6 +212,19 @@ func (inv *Invocation) GetEventFilterKey() string {
 		return ""
 	}
 	return inv.eventFilterKey
+}
+
+// ExtraEventAndEmit extra event and emit it.
+// To complete the invocation information.
+func (inv *Invocation) ExtraEventAndEmit(ctx context.Context, ch chan<- *event.Event,
+	e *event.Event) error {
+	if e != nil && inv != nil {
+		e.InvocationID = inv.InvocationID
+		e.Branch = inv.Branch
+		e.SetFilterKey(inv.GetEventFilterKey())
+	}
+
+	return event.EmitEventToChannel(ctx, ch, e)
 }
 
 // CreateBranchInvocation create a new invocation for branch agent

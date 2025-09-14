@@ -110,12 +110,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Send a preprocessing event.
 	if invocation != nil {
-		event.EmitEventToChannel(ctx, ch, event.New(
+		invocation.ExtraEventAndEmit(ctx, ch, event.New(
 			invocation.InvocationID,
 			invocation.AgentName,
 			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-			event.WithObject(model.ObjectTypePreprocessingContent),
 		))
 	}
 }

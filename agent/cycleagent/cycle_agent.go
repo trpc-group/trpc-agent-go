@@ -205,24 +205,20 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return true // Indicates early return
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		event.EmitEventToChannel(ctx, eventChan, event.NewResponseEvent(
+		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return true // Indicates early return
 	}
@@ -246,13 +242,11 @@ func (a *CycleAgent) runSubAgent(
 	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
-		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return true // Indicates escalation
 	}
@@ -316,8 +310,6 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	} else if customResponse != nil {
 		// Create an event from the custom response.
@@ -325,12 +317,10 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	}
 
-	event.EmitEventToChannel(ctx, eventChan, evt)
+	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.

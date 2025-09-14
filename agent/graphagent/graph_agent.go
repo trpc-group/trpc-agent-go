@@ -300,8 +300,6 @@ func (ga *GraphAgent) wrapEventChannel(
 				invocation.AgentName,
 				agent.ErrorTypeAgentCallbackError,
 				err.Error(),
-				event.WithBranch(invocation.Branch),
-				event.WithFilterKey(invocation.GetEventFilterKey()),
 			)
 		} else if customResponse != nil {
 			// Create an event from the custom response.
@@ -309,12 +307,10 @@ func (ga *GraphAgent) wrapEventChannel(
 				invocation.InvocationID,
 				invocation.AgentName,
 				customResponse,
-				event.WithBranch(invocation.Branch),
-				event.WithFilterKey(invocation.GetEventFilterKey()),
 			)
 		}
 
-		event.EmitEventToChannel(ctx, wrappedChan, evt)
+		invocation.ExtraEventAndEmit(ctx, wrappedChan, evt)
 	}()
 	return wrappedChan
 }

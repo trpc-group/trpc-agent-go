@@ -219,12 +219,10 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 
 	log.Debugf("Instruction request processor: sent preprocessing event")
 
-	if err := event.EmitEventToChannel(ctx, ch, event.New(
+	if err := invocation.ExtraEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
-		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	)); err != nil {
 		log.Debugf("Instruction request processor: context cancelled")
 	}

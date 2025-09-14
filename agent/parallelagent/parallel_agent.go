@@ -150,8 +150,6 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	} else if customResponse != nil {
 		// Create an event from the custom response and then close.
@@ -159,8 +157,6 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	}
 
@@ -168,7 +164,7 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 		return false // Continue execution
 	}
 
-	event.EmitEventToChannel(ctx, eventChan, evt)
+	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
 	return true
 }
 
@@ -197,13 +193,11 @@ func (a *ParallelAgent) startSubAgents(
 			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
+				invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
 					err.Error(),
-					event.WithBranch(invocation.Branch),
-					event.WithFilterKey(invocation.GetEventFilterKey()),
 				))
 				return
 			}
@@ -236,8 +230,6 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	} else if customResponse != nil {
 		// Create an event from the custom response.
@@ -245,12 +237,10 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 	}
 
-	event.EmitEventToChannel(ctx, eventChan, evt)
+	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.

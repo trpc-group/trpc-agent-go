@@ -117,8 +117,6 @@ func (e *Event) Clone() *Event {
 	clone.LongRunningToolIDs = make(map[string]struct{})
 	clone.filterKey = e.GetFilterKey()
 	clone.version = CurrentVersion
-	clone.Branch = e.Branch
-	clone.Tag = e.Tag
 	clone.ID = uuid.NewString()
 	for k := range e.LongRunningToolIDs {
 		clone.LongRunningToolIDs[k] = struct{}{}
@@ -136,6 +134,14 @@ func (e *Event) Clone() *Event {
 		}
 	}
 	return &clone
+}
+
+// SetFilterKey sets the filter key for the event.
+func (e *Event) SetFilterKey(filterKey string) {
+	if e == nil {
+		return
+	}
+	e.filterKey = filterKey
 }
 
 // GetFilterKey returns the filter key for the event.
@@ -279,7 +285,7 @@ func EmitEventToChannel(ctx context.Context, ch chan<- *Event, e *Event) error {
 // EmitEventToChannelWithTimeout sends an event to the channel with optional timeout.
 func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration) error {
-	if e == nil {
+	if e == nil || ch == nil {
 		return nil
 	}
 

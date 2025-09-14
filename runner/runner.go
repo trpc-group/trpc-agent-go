@@ -199,8 +199,6 @@ func (r *runner) Run(
 				Done:      true,
 				IsPartial: false,
 			},
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		)
 
 		// Append runner completion event to session.
@@ -209,7 +207,7 @@ func (r *runner) Run(
 		}
 
 		// Send the runner completion event to output channel.
-		event.EmitEventToChannel(ctx, processedEventCh, runnerCompletionEvent)
+		invocation.ExtraEventAndEmit(ctx, processedEventCh, runnerCompletionEvent)
 	}()
 
 	return processedEventCh, nil

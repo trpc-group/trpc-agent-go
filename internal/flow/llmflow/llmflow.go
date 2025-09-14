@@ -94,8 +94,6 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						invocation.AgentName,
 						agent.ErrorTypeStopAgentError,
 						err.Error(),
-						event.WithBranch(invocation.Branch),
-						event.WithFilterKey(invocation.GetEventFilterKey()),
 					)
 					log.Errorf("Flow step stopped for agent %s: %v", invocation.AgentName, err)
 				} else {
@@ -105,13 +103,11 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 						invocation.AgentName,
 						model.ErrorTypeFlowError,
 						err.Error(),
-						event.WithBranch(invocation.Branch),
-						event.WithFilterKey(invocation.GetEventFilterKey()),
 					)
 					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
 				}
 
-				event.EmitEventToChannel(ctx, eventChan, errorEvent)
+				invocation.ExtraEventAndEmit(ctx, eventChan, errorEvent)
 				return
 			}
 
@@ -182,7 +178,7 @@ func (f *Flow) processStreamingResponses(
 
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
-		event.EmitEventToChannel(ctx, eventChan, llmResponseEvent)
+		invocation.ExtraEventAndEmit(ctx, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 
 		// 5. Check context cancellation.
@@ -217,13 +213,11 @@ func (f *Flow) handleAfterModelCallbacks(
 		}
 
 		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return nil, err
 	}
@@ -236,8 +230,6 @@ func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *mo
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithResponse(response),
-		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)

@@ -103,13 +103,11 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		event.EmitEventToChannel(ctx, ch, event.NewErrorEvent(
+		invocation.ExtraEventAndEmit(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		))
 		return
 	}
@@ -131,18 +129,18 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		event.EmitEventToChannel(ctx, eventChan, event.NewErrorEvent(
+		if emitErr := invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-		))
-	} else if functionResponseEvent != nil {
-		err = event.EmitEventToChannel(ctx, eventChan, functionResponseEvent)
+		)); emitErr != nil {
+			err = emitErr
+		}
+		return nil, err
 	}
-	return functionResponseEvent, err
+	err = invocation.ExtraEventAndEmit(ctx, eventChan, functionResponseEvent)
+	return functionResponseEvent, nil
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
@@ -908,7 +906,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
 		if f.shouldForwardInnerEvent(ev) {
-			if err := event.EmitEventToChannel(ctx, eventChan, ev); err != nil {
+			if err := invocation.ExtraEventAndEmit(ctx, eventChan, ev); err != nil {
 				return err
 			}
 		}
@@ -924,7 +922,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	*contents = append(*contents, text)
 	if eventChan != nil {
 		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
-		if err := event.EmitEventToChannel(ctx, eventChan, partial); err != nil {
+		if err := invocation.ExtraEventAndEmit(ctx, eventChan, partial); err != nil {
 			return err
 		}
 	}
