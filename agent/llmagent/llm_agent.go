@@ -597,10 +597,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 				invocation.InvocationID,
 				invocation.AgentName,
 				customResponse,
-				event.WithBranch(invocation.Branch),
-				event.WithFilterKey(invocation.GetEventFilterKey()),
 			)
-			eventChan <- customEvent
+			invocation.AugmentEventAndEmit(ctx, eventChan, customEvent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -680,7 +678,7 @@ func (a *LLMAgent) wrapEventChannel(
 				)
 			}
 
-			invocation.ExtraEventAndEmit(ctx, wrappedChan, evt)
+			invocation.AugmentEventAndEmit(ctx, wrappedChan, evt)
 		}
 	}()
 

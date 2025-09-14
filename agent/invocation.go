@@ -214,16 +214,22 @@ func (inv *Invocation) GetEventFilterKey() string {
 	return inv.eventFilterKey
 }
 
-// ExtraEventAndEmit extra event and emit it.
-// To complete the invocation information.
-func (inv *Invocation) ExtraEventAndEmit(ctx context.Context, ch chan<- *event.Event,
-	e *event.Event) error {
-	if e != nil && inv != nil {
-		e.InvocationID = inv.InvocationID
-		e.Branch = inv.Branch
-		e.SetFilterKey(inv.GetEventFilterKey())
+// AugmentEvent extra event invocation info.
+func (inv *Invocation) AugmentEvent(e *event.Event) {
+	if e == nil || inv == nil {
+		return
 	}
 
+	e.InvocationID = inv.InvocationID
+	e.Branch = inv.Branch
+	e.SetFilterKey(inv.GetEventFilterKey())
+}
+
+// AugmentEventAndEmit extra event and emit it.
+// To complete the invocation information.
+func (inv *Invocation) AugmentEventAndEmit(ctx context.Context, ch chan<- *event.Event,
+	e *event.Event) error {
+	inv.AugmentEvent(e)
 	return event.EmitEventToChannel(ctx, ch, e)
 }
 

@@ -139,13 +139,13 @@ func (r *runner) Run(
 
 	// Append the incoming user message to the session if it has content.
 	if message.Content != "" {
-		if err := r.sessionService.AppendEvent(ctx, sess, event.NewResponseEvent(
+		evt := event.NewResponseEvent(
 			invocation.InvocationID,
 			authorUser,
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
-		)); err != nil {
+		)
+		invocation.AugmentEvent(evt)
+		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return nil, err
 		}
 
@@ -207,7 +207,7 @@ func (r *runner) Run(
 		}
 
 		// Send the runner completion event to output channel.
-		invocation.ExtraEventAndEmit(ctx, processedEventCh, runnerCompletionEvent)
+		invocation.AugmentEventAndEmit(ctx, processedEventCh, runnerCompletionEvent)
 	}()
 
 	return processedEventCh, nil

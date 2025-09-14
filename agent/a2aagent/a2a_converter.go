@@ -50,8 +50,6 @@ func (d *defaultA2AEventConverter) ConvertToEvent(
 			invocation.InvocationID,
 			agentName,
 			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		), nil
 	}
 
@@ -87,8 +85,6 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvent(
 			invocation.InvocationID,
 			agentName,
 			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-			event.WithBranch(invocation.Branch),
-			event.WithFilterKey(invocation.GetEventFilterKey()),
 		), nil
 	}
 
@@ -217,8 +213,6 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	event := event.New(
 		invocation.InvocationID,
 		agentName,
-		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
 	if isStreaming {
 		event.Response = &model.Response{

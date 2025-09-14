@@ -141,11 +141,9 @@ func (r *A2AAgent) resolveAgentCardFromURL() (*server.AgentCard, error) {
 // sendErrorEvent sends an error event to the event channel
 func (r *A2AAgent) sendErrorEvent(ctx context.Context, eventChan chan<- *event.Event,
 	invocation *agent.Invocation, errorMessage string) {
-	invocation.ExtraEventAndEmit(ctx, eventChan, event.New(
+	invocation.AugmentEventAndEmit(ctx, eventChan, event.New(
 		invocation.InvocationID,
 		r.name,
-		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
 		event.WithResponse(&model.Response{
 			Error: &model.ResponseError{
 				Message: errorMessage,
@@ -251,10 +249,10 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 				}
 			}
 
-			invocation.ExtraEventAndEmit(ctx, eventChan, evt)
+			invocation.AugmentEventAndEmit(ctx, eventChan, evt)
 		}
 
-		invocation.ExtraEventAndEmit(ctx, eventChan, event.New(
+		invocation.AugmentEventAndEmit(ctx, eventChan, event.New(
 			invocation.InvocationID,
 			r.name,
 			event.WithResponse(&model.Response{
@@ -304,7 +302,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 			return
 		}
 
-		invocation.ExtraEventAndEmit(ctx, eventChan, evt)
+		invocation.AugmentEventAndEmit(ctx, eventChan, evt)
 	}()
 	return eventChan, nil
 }

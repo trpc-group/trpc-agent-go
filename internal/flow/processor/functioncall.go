@@ -103,7 +103,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		invocation.ExtraEventAndEmit(ctx, ch, event.NewErrorEvent(
+		invocation.AugmentEventAndEmit(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -129,7 +129,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		if emitErr := invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		if emitErr := invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -139,7 +139,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		}
 		return nil, err
 	}
-	err = invocation.ExtraEventAndEmit(ctx, eventChan, functionResponseEvent)
+	err = invocation.AugmentEventAndEmit(ctx, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
 
@@ -716,8 +716,6 @@ func (f *FunctionCallResponseProcessor) buildPartialToolResponseEvent(
 		inv.InvocationID,
 		inv.AgentName,
 		event.WithResponse(resp),
-		event.WithBranch(inv.Branch),
-		event.WithFilterKey(inv.GetEventFilterKey()),
 	)
 }
 
@@ -752,7 +750,7 @@ func newToolCallResponseEvent(
 	functionCallResponse *model.Response,
 	functionResponses []model.Choice) *event.Event {
 	// Create function response event.
-	return event.NewResponseEvent(
+	e := event.NewResponseEvent(
 		invocation.InvocationID,
 		invocation.AgentName,
 		&model.Response{
@@ -762,9 +760,9 @@ func newToolCallResponseEvent(
 			Choices:   functionResponses,
 			Timestamp: time.Now(),
 		},
-		event.WithBranch(invocation.Branch),
-		event.WithFilterKey(invocation.GetEventFilterKey()),
 	)
+	invocation.AugmentEvent(e)
+	return e
 }
 
 func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
@@ -906,7 +904,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
 		if f.shouldForwardInnerEvent(ev) {
-			if err := invocation.ExtraEventAndEmit(ctx, eventChan, ev); err != nil {
+			if err := invocation.AugmentEventAndEmit(ctx, eventChan, ev); err != nil {
 				return err
 			}
 		}
@@ -922,7 +920,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	*contents = append(*contents, text)
 	if eventChan != nil {
 		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
-		if err := invocation.ExtraEventAndEmit(ctx, eventChan, partial); err != nil {
+		if err := invocation.AugmentEventAndEmit(ctx, eventChan, partial); err != nil {
 			return err
 		}
 	}

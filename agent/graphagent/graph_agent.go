@@ -176,10 +176,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 				invocation.InvocationID,
 				invocation.AgentName,
 				customResponse,
-				event.WithBranch(invocation.Branch),
-				event.WithFilterKey(invocation.GetEventFilterKey()),
 			)
-			eventChan <- customevent
+			invocation.AugmentEventAndEmit(ctx, eventChan, customevent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -310,7 +308,7 @@ func (ga *GraphAgent) wrapEventChannel(
 			)
 		}
 
-		invocation.ExtraEventAndEmit(ctx, wrappedChan, evt)
+		invocation.AugmentEventAndEmit(ctx, wrappedChan, evt)
 	}()
 	return wrappedChan
 }

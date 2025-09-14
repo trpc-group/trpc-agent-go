@@ -125,11 +125,9 @@ func (a *CycleAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	eventFilterKey := baseInvocation.GetEventFilterKey()
 	// Create a copy of the invocation - no shared state mutation.
 	subInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
-		agent.WithInvocationEventFilterKey(eventFilterKey),
 	)
 
 	return subInvocation
@@ -205,7 +203,7 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
@@ -215,7 +213,7 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewResponseEvent(
+		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
@@ -242,7 +240,7 @@ func (a *CycleAgent) runSubAgent(
 	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
-		invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -320,7 +318,7 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 		)
 	}
 
-	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
+	invocation.AugmentEventAndEmit(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.

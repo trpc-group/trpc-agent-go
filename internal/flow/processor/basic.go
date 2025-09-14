@@ -80,7 +80,7 @@ func (p *BasicRequestProcessor) ProcessRequest(
 
 	log.Debugf("Basic request processor: sent preprocessing event")
 	// Send a preprocessing event.
-	if err := invocation.ExtraEventAndEmit(ctx, ch, event.New(
+	if err := invocation.AugmentEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingBasic),

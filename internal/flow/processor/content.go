@@ -110,7 +110,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 
 	// Send a preprocessing event.
 	if invocation != nil {
-		invocation.ExtraEventAndEmit(ctx, ch, event.New(
+		invocation.AugmentEventAndEmit(ctx, ch, event.New(
 			invocation.InvocationID,
 			invocation.AgentName,
 			event.WithBranch(invocation.Branch),

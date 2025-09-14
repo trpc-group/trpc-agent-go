@@ -141,23 +141,19 @@ func (a *SimpleIntentAgent) replyChitChat(ctx context.Context, inv *agent.Invoca
 
 	rspCh, err := a.model.GenerateContent(ctx, req)
 	if err != nil {
-		event.EmitEventToChannel(ctx, out, event.NewErrorEvent(
+		inv.AugmentEventAndEmit(ctx, out, event.NewErrorEvent(
 			inv.InvocationID,
 			a.name,
 			model.ErrorTypeFlowError,
 			err.Error(),
-			event.WithBranch(inv.Branch),
-			event.WithFilterKey(inv.GetEventFilterKey()),
 		))
 		return
 	}
 	for rsp := range rspCh {
-		if err := event.EmitEventToChannel(ctx, out, event.NewResponseEvent(
+		if err := inv.AugmentEventAndEmit(ctx, out, event.NewResponseEvent(
 			inv.InvocationID,
 			a.name,
 			rsp,
-			event.WithBranch(inv.Branch),
-			event.WithFilterKey(inv.GetEventFilterKey()),
 		)); err != nil {
 			return
 		}
@@ -179,22 +175,18 @@ func (a *SimpleIntentAgent) replyTaskPlan(ctx context.Context, inv *agent.Invoca
 
 	rspCh, err := a.model.GenerateContent(ctx, req)
 	if err != nil {
-		event.EmitEventToChannel(ctx, out, event.NewErrorEvent(
+		inv.AugmentEventAndEmit(ctx, out, event.NewErrorEvent(
 			inv.InvocationID,
 			a.name,
 			model.ErrorTypeFlowError, err.Error(),
-			event.WithBranch(inv.Branch),
-			event.WithFilterKey(inv.GetEventFilterKey()),
 		))
 		return
 	}
 	for rsp := range rspCh {
-		if err := event.EmitEventToChannel(ctx, out, event.NewResponseEvent(
+		if err := inv.AugmentEventAndEmit(ctx, out, event.NewResponseEvent(
 			inv.InvocationID,
 			a.name,
 			rsp,
-			event.WithBranch(inv.Branch),
-			event.WithFilterKey(inv.GetEventFilterKey()),
 		)); err != nil {
 			return
 		}

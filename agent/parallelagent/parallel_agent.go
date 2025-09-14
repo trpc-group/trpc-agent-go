@@ -164,7 +164,7 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 		return false // Continue execution
 	}
 
-	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
+	invocation.AugmentEventAndEmit(ctx, eventChan, evt)
 	return true
 }
 
@@ -193,7 +193,7 @@ func (a *ParallelAgent) startSubAgents(
 			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				invocation.ExtraEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+				invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
@@ -240,7 +240,7 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 		)
 	}
 
-	invocation.ExtraEventAndEmit(ctx, eventChan, evt)
+	invocation.AugmentEventAndEmit(ctx, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
