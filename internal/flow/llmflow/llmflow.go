@@ -72,10 +72,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 		for {
 			// Check if context is cancelled.
-			select {
-			case <-ctx.Done():
+			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
-			default:
 			}
 
 			// Run one step (one LLM call cycle).
@@ -107,7 +105,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
 				}
 
-				invocation.AugmentEventAndEmit(ctx, eventChan, errorEvent)
+				invocation.EmitEventWithInvocation(ctx, eventChan, errorEvent)
 				return
 			}
 
@@ -178,7 +176,7 @@ func (f *Flow) processStreamingResponses(
 
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
-		invocation.AugmentEventAndEmit(ctx, eventChan, llmResponseEvent)
+		invocation.EmitEventWithInvocation(ctx, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 
 		// 5. Check context cancellation.
@@ -213,7 +211,7 @@ func (f *Flow) handleAfterModelCallbacks(
 		}
 
 		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,

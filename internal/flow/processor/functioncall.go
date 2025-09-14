@@ -103,7 +103,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		invocation.AugmentEventAndEmit(ctx, ch, event.NewErrorEvent(
+		invocation.EmitEventWithInvocation(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -129,7 +129,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		if emitErr := invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		if emitErr := invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -139,7 +139,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		}
 		return nil, err
 	}
-	err = invocation.AugmentEventAndEmit(ctx, eventChan, functionResponseEvent)
+	err = invocation.EmitEventWithInvocation(ctx, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
 
@@ -761,7 +761,7 @@ func newToolCallResponseEvent(
 			Timestamp: time.Now(),
 		},
 	)
-	invocation.AugmentEvent(e)
+	invocation.InjectInvocationIntoEvent(e)
 	return e
 }
 
@@ -901,7 +901,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
 		if f.shouldForwardInnerEvent(ev) {
-			if err := invocation.AugmentEventAndEmit(ctx, eventChan, ev); err != nil {
+			if err := invocation.EmitEventWithInvocation(ctx, eventChan, ev); err != nil {
 				return err
 			}
 		}
@@ -917,7 +917,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	*contents = append(*contents, text)
 	if eventChan != nil {
 		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
-		if err := invocation.AugmentEventAndEmit(ctx, eventChan, partial); err != nil {
+		if err := invocation.EmitEventWithInvocation(ctx, eventChan, partial); err != nil {
 			return err
 		}
 	}

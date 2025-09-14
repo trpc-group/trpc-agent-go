@@ -206,7 +206,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	return newInv
 }
 
-// GetEventFilterKey get event filter key
+// GetEventFilterKey get event filter key.
 func (inv *Invocation) GetEventFilterKey() string {
 	if inv == nil {
 		return ""
@@ -214,8 +214,8 @@ func (inv *Invocation) GetEventFilterKey() string {
 	return inv.eventFilterKey
 }
 
-// AugmentEvent extra event invocation info.
-func (inv *Invocation) AugmentEvent(e *event.Event) {
+// InjectInvocationIntoEvent inject invocation information into event.
+func (inv *Invocation) InjectInvocationIntoEvent(e *event.Event) {
 	if e == nil || inv == nil {
 		return
 	}
@@ -225,11 +225,10 @@ func (inv *Invocation) AugmentEvent(e *event.Event) {
 	e.SetFilterKey(inv.GetEventFilterKey())
 }
 
-// AugmentEventAndEmit extra event and emit it.
-// To complete the invocation information.
-func (inv *Invocation) AugmentEventAndEmit(ctx context.Context, ch chan<- *event.Event,
+// EmitEventWithInvocation inject invocation information into event and emit it to channel.
+func (inv *Invocation) EmitEventWithInvocation(ctx context.Context, ch chan<- *event.Event,
 	e *event.Event) error {
-	inv.AugmentEvent(e)
+	inv.InjectInvocationIntoEvent(e)
 	return event.EmitEventToChannel(ctx, ch, e)
 }
 

@@ -171,7 +171,7 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
@@ -181,7 +181,7 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		invocation.AugmentEventAndEmit(ctx, eventChan, event.NewResponseEvent(
+		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
@@ -208,7 +208,7 @@ func (a *ChainAgent) executeSubAgents(
 		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 		log.Warnf("subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
 		if err != nil {
-			invocation.AugmentEventAndEmit(ctx, eventChan, event.NewErrorEvent(
+			invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				model.ErrorTypeFlowError,
@@ -259,7 +259,7 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 			customResponse,
 		)
 	}
-	invocation.AugmentEventAndEmit(ctx, eventChan, evt)
+	invocation.EmitEventWithInvocation(ctx, eventChan, evt)
 }
 
 // Tools implements the agent.Agent interface.

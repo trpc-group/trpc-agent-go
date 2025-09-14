@@ -64,7 +64,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if targetAgent == nil {
 		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
 		// Send error event.
-		invocation.AugmentEventAndEmit(ctx, ch, event.NewErrorEvent(
+		invocation.EmitEventWithInvocation(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -97,7 +97,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Send transfer event.
-	if err := invocation.AugmentEventAndEmit(ctx, ch, transferEvent); err != nil {
+	if err := invocation.EmitEventWithInvocation(ctx, ch, transferEvent); err != nil {
 		return
 	}
 
@@ -123,7 +123,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if err != nil {
 		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
-		invocation.AugmentEventAndEmit(ctx, ch, event.NewErrorEvent(
+		invocation.EmitEventWithInvocation(ctx, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,

@@ -219,7 +219,7 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 
 	log.Debugf("Instruction request processor: sent preprocessing event")
 
-	if err := invocation.AugmentEventAndEmit(ctx, ch, event.New(
+	if err := invocation.EmitEventWithInvocation(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),

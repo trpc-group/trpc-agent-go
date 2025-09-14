@@ -113,7 +113,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Send a preprocessing event.
-	invocation.AugmentEventAndEmit(ctx, ch, event.New(
+	invocation.EmitEventWithInvocation(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingPlanning),
