@@ -274,13 +274,13 @@ func NewEmitEventTimeoutError(message string) *EmitEventTimeoutError {
 	return &EmitEventTimeoutError{Message: message}
 }
 
-// EmitEventToChannel sends an event to the channel without timeout.
-func EmitEventToChannel(ctx context.Context, ch chan<- *Event, e *Event) error {
-	return EmitEventToChannelWithTimeout(ctx, ch, e, EmitWithoutTimeout)
+// EmitEvent sends an event to the channel without timeout.
+func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
+	return EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
 }
 
-// EmitEventToChannelWithTimeout sends an event to the channel with optional timeout.
-func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
+// EmitEventWithTimeout sends an event to the channel with optional timeout.
+func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration) error {
 	if e == nil || ch == nil {
 		return nil
@@ -289,9 +289,9 @@ func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
 	if timeout == EmitWithoutTimeout {
 		select {
 		case ch <- e:
-			log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+			log.Debugf("EmitEventWithTimeout: event sent, event: %+v", *e)
 		case <-ctx.Done():
-			log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
+			log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
 			return ctx.Err()
 		}
 		return nil
@@ -299,12 +299,12 @@ func EmitEventToChannelWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	select {
 	case ch <- e:
-		log.Debugf("EmitEventToChannelWithTimeout: event sent, event: %+v", *e)
+		log.Debugf("EmitEventWithTimeout: event sent, event: %+v", *e)
 	case <-ctx.Done():
-		log.Warnf("EmitEventToChannelWithTimeout: context cancelled, event: %+v", *e)
+		log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
 		return ctx.Err()
 	case <-time.After(timeout):
-		log.Warnf("EmitEventToChannelWithTimeout: timeout, event: %+v", *e)
+		log.Warnf("EmitEventWithTimeout: timeout, event: %+v", *e)
 		return DefaultEmitTimeoutErr
 	}
 	return nil

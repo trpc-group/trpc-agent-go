@@ -294,7 +294,7 @@ func (a *ParallelAgent) mergeEventStreams(
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
 			for evt := range inputChan {
-				if err := event.EmitEventToChannel(ctx, outputChan, evt); err != nil {
+				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
 				}
 			}

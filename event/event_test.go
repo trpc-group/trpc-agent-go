@@ -201,7 +201,7 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.Empty(t, nullEvt)
 }
 
-func TestEmitEventToChannelWithTimeout(t *testing.T) {
+func TestEmitEventWithTimeout(t *testing.T) {
 	type args struct {
 		ctx     context.Context
 		ch      chan<- *Event
@@ -272,13 +272,13 @@ func TestEmitEventToChannelWithTimeout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := EmitEventToChannelWithTimeout(tt.args.ctx, tt.args.ch, tt.args.e, tt.args.timeout)
+			err := EmitEventWithTimeout(tt.args.ctx, tt.args.ch, tt.args.e, tt.args.timeout)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("EmitEventToChannelWithTimeout() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("EmitEventWithTimeout() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.wantErr && !errors.Is(err, tt.errType) {
-				t.Errorf("EmitEventToChannelWithTimeout() error = %v, wantErr %v", err, tt.errType)
+				t.Errorf("EmitEventWithTimeout() error = %v, wantErr %v", err, tt.errType)
 			}
 		})
 	}

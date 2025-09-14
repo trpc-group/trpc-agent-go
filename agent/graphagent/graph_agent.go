@@ -280,7 +280,7 @@ func (ga *GraphAgent) wrapEventChannel(
 		defer close(wrappedChan)
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			if err := event.EmitEventToChannel(ctx, wrappedChan, evt); err != nil {
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}

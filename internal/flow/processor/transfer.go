@@ -134,7 +134,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 
 	// Forward all events from the target agent.
 	for targetEvent := range targetEventChan {
-		if err := event.EmitEventToChannel(ctx, ch, targetEvent); err != nil {
+		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
 			return
 		}
 		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)

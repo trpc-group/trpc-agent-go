@@ -251,7 +251,7 @@ func (a *CycleAgent) runSubAgent(
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
-		if err := event.EmitEventToChannel(ctx, eventChan, subEvent); err != nil {
+		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 			return true
 		}
 

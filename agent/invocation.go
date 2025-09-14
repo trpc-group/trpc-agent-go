@@ -229,7 +229,7 @@ func (inv *Invocation) InjectInvocationIntoEvent(e *event.Event) {
 func (inv *Invocation) EmitEventWithInvocation(ctx context.Context, ch chan<- *event.Event,
 	e *event.Event) error {
 	inv.InjectInvocationIntoEvent(e)
-	return event.EmitEventToChannel(ctx, ch, e)
+	return event.EmitEvent(ctx, ch, e)
 }
 
 // CreateBranchInvocation create a new invocation for branch agent

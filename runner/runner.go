@@ -183,7 +183,7 @@ func (r *runner) Run(
 				invocation.NotifyCompletion(ctx, completionID)
 			}
 
-			if err := event.EmitEventToChannel(ctx, processedEventCh, agentEvent); err != nil {
+			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
 		}

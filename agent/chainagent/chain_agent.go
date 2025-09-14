@@ -219,7 +219,7 @@ func (a *ChainAgent) executeSubAgents(
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
-			if err := event.EmitEventToChannel(ctx, eventChan, subEvent); err != nil {
+			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return
 			}
 		}
