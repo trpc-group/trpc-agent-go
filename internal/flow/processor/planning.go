@@ -80,7 +80,7 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 	if err := invocation.AugmentEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePreprocessingPlanning),
 	)); err != nil {
 		log.Debugf("Planning request processor: context cancelled")
 	}

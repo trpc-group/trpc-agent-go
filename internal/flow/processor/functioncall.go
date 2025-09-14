@@ -821,12 +821,9 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			baseEvent.InvocationID,
 			baseEvent.Author,
 			event.WithResponse(resp),
-			event.WithBranch(baseEvent.Branch),
-			event.WithFilterKey(baseEvent.GetFilterKey()),
 		)
 	} else {
 		// Fallback: construct without base metadata.
-		// TODO: filterKey not set
 		merged = event.New("", "", event.WithResponse(resp))
 	}
 	// If any child event prefers skipping summarization, propagate it.
