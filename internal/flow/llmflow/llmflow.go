@@ -110,7 +110,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 
 			// Exit conditions.
-			if invocation.EndInvocation || lastEvent.IsFinalResponse() {
+			if lastEvent == nil || invocation.EndInvocation || lastEvent.IsFinalResponse() {
 				break
 			}
 		}
