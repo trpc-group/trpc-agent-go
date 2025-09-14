@@ -222,7 +222,7 @@ func (p *InstructionRequestProcessor) sendPreprocessingEvent(
 	if err := invocation.AugmentEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	)); err != nil {
 		log.Debugf("Instruction request processor: context cancelled")
 	}

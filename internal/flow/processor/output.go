@@ -148,7 +148,9 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	stateEvent.RequiresCompletion = true
 
 	log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
-	invocation.AugmentEventAndEmit(ctx, ch, stateEvent)
+	if err := invocation.AugmentEventAndEmit(ctx, ch, stateEvent); err != nil {
+		return
+	}
 
 	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,

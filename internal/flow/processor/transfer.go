@@ -77,7 +77,7 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	transferEvent := event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypeTransfer),
 	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,

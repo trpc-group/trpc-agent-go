@@ -116,7 +116,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	invocation.AugmentEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePreprocessingPlanning),
 	))
 }
 

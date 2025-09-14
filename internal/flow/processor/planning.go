@@ -163,7 +163,7 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 	if err := invocation.AugmentEventAndEmit(ctx, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePostprocessingPlanning),
 	)); err != nil {
 		log.Debugf("Planning response processor: context cancelled")
 	}
