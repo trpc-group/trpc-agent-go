@@ -715,7 +715,7 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	events := make([]event.Event, 0, len(eventsBytes))
 	for _, eventBytes := range eventsBytes {
 		event := &event.Event{}
-		if err := json.Unmarshal([]byte(eventBytes), event); err != nil {
+		if err := json.Unmarshal([]byte(eventBytes), &event); err != nil {
 			return nil, fmt.Errorf("unmarshal event failed: %w", err)
 		}
 		events = append(events, *event)
