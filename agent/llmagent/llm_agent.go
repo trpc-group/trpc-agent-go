@@ -23,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"

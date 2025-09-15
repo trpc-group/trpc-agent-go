@@ -170,7 +170,7 @@ func (r *runner) Run(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
-		agent.WithMemoryService(r.memoryService),
+		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
 	)
 
