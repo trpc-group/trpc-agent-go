@@ -350,7 +350,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	}()
 
 	// Collect results and maintain original order.
-	toolCallResponsesEvents := p.collectParallelToolResults(ctx, resultChan, done, len(toolCalls))
+	toolCallResponsesEvents := p.collectParallelToolResults(ctx, resultChan, len(toolCalls))
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
@@ -478,15 +478,14 @@ func (p *FunctionCallResponseProcessor) createErrorChoice(index int, toolID stri
 	}
 }
 
-// collectParallelToolResults collects results from the result channel and filters out nil events.
+// collectParallelToolResults drains resultChan and preserves order by index.
+// It returns only non-nil events.
 func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
-	done <-chan struct{},
 	toolCallsCount int,
 ) []*event.Event {
 	results := make([]*event.Event, toolCallsCount)
-
 	for {
 		select {
 		case result, ok := <-resultChan:
@@ -494,18 +493,14 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				// Channel closed, all results received.
 				return p.filterNilEvents(results)
 			}
-			// Add bounds checking to prevent index out of range
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
 			} else {
 				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
 			}
 		case <-ctx.Done():
-			// Context cancelled, stop waiting for more results.
+			// Context cancelled, return what we have.
 			log.Warnf("Context cancelled while waiting for tool results")
-			return p.filterNilEvents(results)
-		case <-done:
-			// All goroutines completed.
 			return p.filterNilEvents(results)
 		}
 	}
