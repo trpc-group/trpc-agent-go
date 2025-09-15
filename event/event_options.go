@@ -60,11 +60,3 @@ func WithSkipSummarization() Option {
 		e.Actions.SkipSummarization = true
 	}
 }
-
-// WithFilterKey sets the filter key for the event.
-// Please initialize this field correctly using Invocation.eventFilterKey.
-func WithFilterKey(key string) Option {
-	return func(e *Event) {
-		e.filterKey = key
-	}
-}

@@ -12,7 +12,6 @@ package event
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -79,10 +78,10 @@ type Event struct {
 	Actions *EventActions `json:"actions,omitempty"`
 
 	// filterKey is identifier for hierarchical event filtering.
-	filterKey string
+	FilterKey string `json:"filterKey,omitempty"`
 
 	// version for handling version compatibility issues.
-	version int
+	Version int `json:"version,omitempty"`
 }
 
 // eventJSON is a temporary struct to hold the JSON representation of an event.
@@ -115,9 +114,11 @@ func (e *Event) Clone() *Event {
 	clone := *e
 	clone.Response = e.Response.Clone()
 	clone.LongRunningToolIDs = make(map[string]struct{})
-	clone.filterKey = e.GetFilterKey()
-	clone.version = CurrentVersion
+	clone.Version = CurrentVersion
 	clone.ID = uuid.NewString()
+	if e.Version != CurrentVersion {
+		clone.FilterKey = e.Branch
+	}
 	for k := range e.LongRunningToolIDs {
 		clone.LongRunningToolIDs[k] = struct{}{}
 	}
@@ -136,30 +137,16 @@ func (e *Event) Clone() *Event {
 	return &clone
 }
 
-// SetFilterKey sets the filter key for the event.
-func (e *Event) SetFilterKey(filterKey string) {
-	if e == nil {
-		return
-	}
-	e.filterKey = filterKey
-}
-
-// GetFilterKey returns the filter key for the event.
-func (e *Event) GetFilterKey() string {
-	if e == nil {
-		return ""
-	}
-
-	if e.version != CurrentVersion {
-		return e.Branch
-	}
-
-	return e.filterKey
-}
-
 // Filter checks if the event matches the specified filter key.
 func (e *Event) Filter(filterKey string) bool {
-	eFilterKey := e.GetFilterKey()
+	if e == nil {
+		return false
+	}
+
+	eFilterKey := e.FilterKey
+	if e.Version != CurrentVersion {
+		eFilterKey = e.Branch
+	}
 
 	if filterKey == "" || eFilterKey == "" {
 		return true
@@ -170,38 +157,6 @@ func (e *Event) Filter(filterKey string) bool {
 	return strings.HasPrefix(filterKey, eFilterKey) || strings.HasPrefix(eFilterKey, filterKey)
 }
 
-// Marshal serializes the event to JSON with error
-func (e *Event) Marshal() ([]byte, error) {
-	if e == nil {
-		return json.Marshal(e)
-	}
-
-	eJSON := eventJSON{
-		Event:     *e,
-		Version:   e.version,
-		FilterKey: e.filterKey,
-	}
-
-	return json.Marshal(eJSON)
-}
-
-// Unmarshal deserializes the event from JSON with error
-func (e *Event) Unmarshal(data []byte) error {
-	if e == nil {
-		return nil
-	}
-
-	eJSON := eventJSON{}
-	if err := json.Unmarshal(data, &eJSON); err != nil {
-		return err
-	}
-	*e = eJSON.Event
-	e.version = eJSON.Version
-	e.filterKey = eJSON.FilterKey
-
-	return nil
-}
-
 // New creates a new Event with generated ID and timestamp.
 func New(invocationID, author string, opts ...Option) *Event {
 	e := &Event{
@@ -210,7 +165,7 @@ func New(invocationID, author string, opts ...Option) *Event {
 		Timestamp:    time.Now(),
 		InvocationID: invocationID,
 		Author:       author,
-		version:      CurrentVersion,
+		Version:      CurrentVersion,
 	}
 	for _, opt := range opts {
 		opt(e)

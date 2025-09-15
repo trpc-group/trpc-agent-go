@@ -242,7 +242,7 @@ func (inv *Invocation) InjectInvocationIntoEvent(e *event.Event) {
 
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
-	e.SetFilterKey(inv.GetEventFilterKey())
+	e.FilterKey = inv.GetEventFilterKey()
 }
 
 // EmitEventWithInvocation inject invocation information into event and emit it to channel.

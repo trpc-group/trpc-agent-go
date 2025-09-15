@@ -11,6 +11,7 @@ package event
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -60,12 +61,13 @@ func TestNewResponseEvent(t *testing.T) {
 		Done:   true,
 	}
 
-	evt := NewResponseEvent(invocationID, author, resp, WithBranch("b1"), WithFilterKey("fk"))
+	evt := NewResponseEvent(invocationID, author, resp, WithBranch("b1"))
+	evt.FilterKey = "fk"
 	require.Equal(t, resp, evt.Response)
 	require.Equal(t, invocationID, evt.InvocationID)
 	require.Equal(t, author, evt.Author)
 	require.Equal(t, "b1", evt.Branch)
-	require.Equal(t, "fk", evt.filterKey)
+	require.Equal(t, "fk", evt.FilterKey)
 }
 
 func TestEvent_WithOptions_And_Clone(t *testing.T) {
@@ -114,39 +116,11 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	}
 }
 
-func TestEvent_GetFilterKey(t *testing.T) {
-	evt := New("inv-1", "author",
-		WithBranch("b1"),
-	)
-	require.Equal(t, "", evt.GetFilterKey())
-
-	evt = New("inv-1", "author", WithFilterKey("fk"))
-	require.Equal(t, "fk", evt.GetFilterKey())
-
-	newEvt := evt.Clone()
-	require.Equal(t, "fk", newEvt.GetFilterKey())
-
-	// old Version
-	oldEvt1 := &Event{Branch: "fk", filterKey: ""}
-	require.Equal(t, "fk", oldEvt1.GetFilterKey())
-	require.Equal(t, "", oldEvt1.filterKey)
-	require.Equal(t, "fk", oldEvt1.Branch)
-	require.Equal(t, InitVersion, oldEvt1.version)
-
-	// old Version
-	oldEvtClone := oldEvt1.Clone()
-	require.Equal(t, "fk", oldEvtClone.GetFilterKey())
-	require.Equal(t, "fk", oldEvtClone.filterKey)
-	require.Equal(t, "fk", oldEvtClone.Branch)
-	require.Equal(t, CurrentVersion, oldEvtClone.version)
-
-}
-
 func TestEvent_Filter(t *testing.T) {
 	evt1 := New("inv-1", "author",
 		WithBranch("b1"),
-		WithFilterKey("fk/fk2"),
 	)
+	evt1.FilterKey = "fk/fk2"
 	require.True(t, evt1.Filter(""))
 	require.False(t, evt1.Filter("b1"))
 	require.True(t, evt1.Filter("fk"))
@@ -176,26 +150,25 @@ func TestEvent_Filter(t *testing.T) {
 func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	evt := New("inv-1", "author",
 		WithBranch("b1"),
-		WithFilterKey("fk/fk2"),
 	)
-
-	data, err := evt.Marshal()
+	evt.FilterKey = "fk/fk2"
+	data, err := json.Marshal(evt)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
 	evtUnmarshalValue := &Event{}
-	err = evtUnmarshalValue.Unmarshal(data)
+	err = json.Unmarshal(data, evtUnmarshalValue)
 	require.NoError(t, err)
 	require.Equal(t, "b1", evtUnmarshalValue.Branch)
-	require.Equal(t, "fk/fk2", evtUnmarshalValue.filterKey)
+	require.Equal(t, "fk/fk2", evtUnmarshalValue.FilterKey)
 
-	var nilEnt *Event
-	mNilEvt, err := nilEnt.Marshal()
+	var nilEvt *Event
+	mNilEvt, err := json.Marshal(nilEvt)
 	require.NoError(t, err)
 	require.Equal(t, "null", string(mNilEvt))
 
 	nullEvt := &Event{}
-	err = nullEvt.Unmarshal([]byte("null"))
+	err = json.Unmarshal([]byte("null"), nullEvt)
 	require.NoError(t, err)
 
 	require.Empty(t, nullEvt)
