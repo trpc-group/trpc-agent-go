@@ -8,17 +8,63 @@ the memory service, session management, and memory tools, the Memory system
 helps Agents remember user information, maintain conversation context, and
 offer personalized responses across multi-turn dialogs.
 
+## ⚠️ Breaking Changes Notice
+
+**Important**: The memory integration approach has been updated to provide better separation of concerns and explicit control. This is a **breaking change** that affects how memory services are integrated with Agents.
+
+### What Changed
+
+- **Removed**: `llmagent.WithMemory(memoryService)` - automatic memory tool registration
+- **Added**: Two-step integration approach:
+  1. `llmagent.WithTools(memoryService.Tools())` - manual tool registration
+  2. `runner.WithMemoryService(memoryService)` - service management in runner
+
+### Migration Guide
+
+**Before (old approach)**:
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithMemory(memoryService), // ❌ No longer supported
+)
+```
+
+**After (new approach)**:
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithTools(memoryService.Tools()), // ✅ Step 1: Register tools
+)
+
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // ✅ Step 2: Set service
+)
+```
+
+### Benefits of the New Approach
+
+- **Explicit Control**: Applications have full control over which tools to register
+- **Better Separation**: Clear separation between framework and business logic
+- **Service Management**: Memory service is managed at the appropriate level (runner)
+- **No Automatic Injection**: Framework doesn't automatically inject tools or prompts, which can be used as needed.
+
 ### Usage Pattern
 
 The Memory system follows this pattern:
 
 1. Create the Memory Service: configure the storage backend (in-memory or
    Redis).
-2. Integrate into the Agent: use `WithMemory()` to attach the Memory Service
-   to an LLM Agent.
-3. Agent auto-invocation: the Agent manages memory automatically via built-in
+2. Register memory tools: manually register memory tools with the Agent using
+   `llmagent.WithTools(memoryService.Tools())`.
+3. Set memory service in runner: configure the memory service in the runner
+   using `runner.WithMemoryService(memoryService)`.
+4. Agent auto-invocation: the Agent manages memory automatically via registered
    memory tools.
-4. Session persistence: memory persists across sessions and supports
+5. Session persistence: memory persists across sessions and supports
    multi-turn dialogs.
 
 This provides:
@@ -27,25 +73,27 @@ This provides:
   context.
 - Multi-turn dialogues: maintain dialog state and memory continuity.
 - Flexible storage: supports multiple backends such as in-memory and Redis.
-- Tool integration: memory management tools are registered automatically.
+- Tool integration: memory management tools are registered manually for explicit control.
 - Session management: supports creating, switching, and resetting sessions.
 
 ### Agent Integration
 
 Memory integrates with Agents as follows:
 
-- Automatic tool registration: `WithMemory()` automatically adds memory
-  management tools.
+- Manual tool registration: memory tools are explicitly registered using
+  `llmagent.WithTools(memoryService.Tools())`.
+- Service management: memory service is managed at the runner level using
+  `runner.WithMemoryService(memoryService)`.
 - Tool invocation: the Agent uses memory tools to store, retrieve, and manage
   information.
-- Context enrichment: memory is automatically injected into the Agent's
-  context.
+- Explicit control: applications have full control over which tools to register
+  and how to use them.
 
 ## Quick Start
 
 ### Requirements
 
-- Go 1.24.1 or later.
+- Go 1.21 or later.
 - A valid LLM API key (OpenAI-compatible endpoint).
 - Redis service (optional for production).
 
@@ -84,7 +132,7 @@ func main() {
     // 2. Create the LLM model.
     modelInstance := openai.New("deepseek-chat")
 
-    // 3. Create the Agent and integrate Memory.
+    // 3. Create the Agent and register memory tools.
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
@@ -92,15 +140,16 @@ func main() {
         llmagent.WithInstruction(
             "Remember important user info and recall it when needed.",
         ),
-        llmagent.WithMemory(memoryService), // Automatically adds memory tools.
+        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
     )
 
-    // 4. Create the Runner.
+    // 4. Create the Runner with memory service.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // Set memory service.
     )
 
     // 5. Run a dialog (the Agent uses memory tools automatically).
@@ -139,21 +188,23 @@ memory/
 
 ### Integrate with Agent
 
-Use `llmagent.WithMemory(memoryService)` to integrate the Memory Service with
-an Agent. The framework automatically registers memory tools. No custom tool
-setup is needed.
+Use a two-step approach to integrate the Memory Service with an Agent:
+
+1. Register memory tools with the Agent using `llmagent.WithTools(memoryService.Tools())`
+2. Set the memory service in the runner using `runner.WithMemoryService(memoryService)`
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // Create the memory service.
 memoryService := memoryinmemory.NewMemoryService()
 
-// Create the Agent and integrate Memory.
+// Create the Agent and register memory tools.
 llmAgent := llmagent.New(
     "memory-assistant",
     llmagent.WithModel(modelInstance),
@@ -161,7 +212,14 @@ llmAgent := llmagent.New(
     llmagent.WithInstruction(
         "Remember important user info and recall it when needed.",
     ),
-    llmagent.WithMemory(memoryService), // Automatically adds memory tools.
+    llmagent.WithTools(memoryService.Tools()), // Register memory tools.
+)
+
+// Create the runner with memory service.
+appRunner := runner.NewRunner(
+    "memory-chat",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // Set memory service.
 )
 ```
 
@@ -190,10 +248,17 @@ if err != nil {
     // Handle error.
 }
 
-// Pass the service to the Agent.
+// Register memory tools with the Agent.
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithMemory(memService), // Or use redisService.
+    llmagent.WithTools(memService.Tools()), // Or use redisService.Tools().
+)
+
+// Set memory service in the Runner.
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memService), // Or use redisService.
 )
 ```
 
@@ -219,24 +284,12 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-### Custom Memory Instruction Prompt
+### Overwrite Semantics (IDs and duplicates)
 
-You can provide a custom instruction builder for memory prompts.
-
-```go
-memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithInstructionBuilder(
-        func(enabledTools []string, defaultPrompt string) string {
-            header := "[Memory Instructions] Follow these guidelines to manage user memory.\n\n"
-            // Example A: Wrap the default content.
-            return header + defaultPrompt
-            // Example B: Replace with your own content.
-            // return fmt.Sprintf("[Memory Instructions] Tools: %s\n...",
-            //     strings.Join(enabledTools, ", "))
-        },
-    ),
-)
-```
+- Memory IDs are generated from content + topics. Adding the same content and topics
+  is idempotent and overwrites the existing entry (not append). UpdatedAt is refreshed.
+- If you need append semantics or different duplicate-handling strategies, you can
+  implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
 
 ### Custom Tool Implementation
 
@@ -249,36 +302,39 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/memory"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// A custom clear tool with a playful output.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-    clearFunc := func(ctx context.Context, _ struct{}) (
-        toolmemory.ClearMemoryResponse, error,
-    ) {
-        fmt.Println(
-            "🧹 [Custom Clear Tool] Running sudo rm -rf /... just kidding! 😄",
-        )
-        // ... your implementation logic ...
-        return toolmemory.ClearMemoryResponse{
-            Success: true,
-            Message: "🎉 All memories cleared successfully! Just kidding, they are safe.",
-        }, nil
+// A custom clear tool with real logic using the invocation context.
+func customClearMemoryTool() tool.Tool {
+    clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
+        // Get memory service and user info from invocation context.
+        memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+        appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+
+        if err := memSvc.ClearMemories(ctx, memory.UserKey{AppName: appName, UserID: userID}); err != nil {
+            return nil, fmt.Errorf("custom clear tool: failed to clear memories: %w", err)
+        }
+        return &toolmemory.ClearMemoryResponse{Message: "🎉 All memories cleared successfully!"}, nil
     }
 
     return function.NewFunctionTool(
         clearFunc,
         function.WithName(memory.ClearToolName),
-        function.WithDescription(
-            "🧹 Custom clear tool: clears all user memory with a playful note.",
-        ),
+        function.WithDescription("Clear all memories for the user."),
     )
 }
 
-// Use the custom tool.
+// Register the custom tool with an InMemory service.
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
@@ -342,12 +398,6 @@ func main() {
         }
     default: // inmemory.
         memoryService = memoryinmemory.NewMemoryService(
-            memoryinmemory.WithInstructionBuilder(
-                func(enabledTools []string, defaultPrompt string) string {
-                    return "[Memory Instructions] Follow these guidelines.\n\n" +
-                        defaultPrompt
-                },
-            ),
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
             memoryinmemory.WithCustomTool(
                 memory.ClearToolName, customClearMemoryTool,
@@ -358,7 +408,7 @@ func main() {
     // 2. Create the LLM model.
     modelInstance := openai.New(*modelName)
 
-    // 3. Create the Agent and integrate Memory.
+    // 3. Create the Agent and register memory tools.
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
@@ -373,15 +423,16 @@ func main() {
                 "and recall it when needed.",
         ),
         llmagent.WithGenerationConfig(genConfig),
-        llmagent.WithMemory(memoryService), // Adds memory tools and prompts.
+        llmagent.WithTools(memoryService.Tools()), // Register memory tools.
     )
 
-    // 4. Create the Runner.
+    // 4. Create the Runner with memory service.
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // Set memory service.
     )
 
     // 5. Run a dialog (the Agent uses memory tools automatically).
@@ -399,7 +450,7 @@ func main() {
 }
 
 // Custom clear tool.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     // ... implementation ...
     return nil
 }

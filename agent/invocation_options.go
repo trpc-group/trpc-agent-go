@@ -13,6 +13,7 @@ import (
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -117,6 +118,13 @@ func WithInvocationStructuredOutput(structuredOutput *model.StructuredOutput) In
 func WithInvocationStructuredOutputType(structuredOutputType reflect.Type) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.StructuredOutputType = structuredOutputType
+	}
+}
+
+// WithInvocationMemoryService set memoryService for the Invocation.
+func WithInvocationMemoryService(memoryService memory.Service) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.MemoryService = memoryService
 	}
 }
 

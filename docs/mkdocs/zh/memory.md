@@ -4,36 +4,82 @@
 
 Memory 是 tRPC-Agent-Go 框架中的记忆管理系统，为 Agent 提供持久化记忆和上下文管理能力。通过集成记忆服务、会话管理和记忆工具，Memory 系统能够帮助 Agent 记住用户信息、维护对话上下文，并在多轮对话中提供个性化的响应体验。
 
+## ⚠️ 不兼容更新通知
+
+**重要提示**：记忆集成方式已更新，以提供更好的关注点分离和显式控制。这是一个**不兼容更新**，会影响记忆服务与 Agent 的集成方式。
+
+### 变更内容
+
+- **移除**：`llmagent.WithMemory(memoryService)` - 自动记忆工具注册
+- **新增**：两步集成方式：
+  1. `llmagent.WithTools(memoryService.Tools())` - 手动工具注册
+  2. `runner.WithMemoryService(memoryService)` - 在 runner 中管理服务
+
+### 迁移指南
+
+**之前（旧方式）**：
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithMemory(memoryService), // ❌ 不再支持
+)
+```
+
+**现在（新方式）**：
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithTools(memoryService.Tools()), // ✅ 步骤1：注册工具
+)
+
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // ✅ 步骤2：设置服务
+)
+```
+
+### 新方式的优势
+
+- **显式控制**：应用程序完全控制注册哪些工具
+- **更好的分离**：框架与业务逻辑的清晰分离
+- **服务管理**：记忆服务在适当的层级（runner）进行管理
+- **无自动注入**：框架不会自动注入工具或提示，可以按需使用
+
 ### 使用模式
 
 Memory 系统的使用遵循以下模式：
 
 1. **创建 Memory Service**：配置记忆存储后端（内存或 Redis）
-2. **集成到 Agent**：使用 `WithMemory()` 将 Memory Service 集成到 LLM Agent 中
-3. **Agent 自动调用**：Agent 通过内置的记忆工具自动进行记忆管理
-4. **会话持久化**：记忆信息在会话间保持，支持多轮对话
+2. **注册记忆工具**：使用 `llmagent.WithTools(memoryService.Tools())` 手动注册记忆工具到 Agent
+3. **在 Runner 中设置记忆服务**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 中配置记忆服务
+4. **Agent 自动调用**：Agent 通过已注册的记忆工具自动进行记忆管理
+5. **会话持久化**：记忆信息在会话间保持，支持多轮对话
 
 这种模式提供了：
 
 - **智能记忆**：基于对话上下文的自动记忆存储和检索
 - **多轮对话**：维护对话状态和记忆连续性
 - **灵活存储**：支持内存和 Redis 等多种存储后端
-- **工具集成**：自动注册记忆管理工具，无需手动配置
+- **工具集成**：手动注册记忆管理工具，提供显式控制
 - **会话管理**：支持会话创建、切换和重置
 
 ### Agent 集成
 
 Memory 系统与 Agent 的集成方式：
 
-- **自动工具注册**：使用 `WithMemory()` 选项自动添加记忆管理工具
+- **手动工具注册**：使用 `llmagent.WithTools(memoryService.Tools())` 显式注册记忆工具
+- **服务管理**：使用 `runner.WithMemoryService(memoryService)` 在 Runner 层级管理记忆服务
 - **工具调用**：Agent 可以调用记忆工具进行信息的存储、检索和管理
-- **上下文增强**：记忆信息自动添加到 Agent 的上下文中
+- **显式控制**：应用程序完全控制注册哪些工具以及如何使用它们
 
 ## 快速开始
 
 ### 环境要求
 
-- Go 1.24.1 或更高版本
+- Go 1.21 或更高版本
 - 有效的 LLM API 密钥（OpenAI 兼容接口）
 - Redis 服务（可选，用于生产环境）
 
@@ -72,21 +118,22 @@ func main() {
     // 2. 创建 LLM 模型
     modelInstance := openai.New("deepseek-chat")
 
-    // 3. 创建 Agent 并集成 Memory
+    // 3. 创建 Agent 并注册记忆工具
     llmAgent := llmagent.New(
         "memory-assistant",
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手"),
         llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-        llmagent.WithMemory(memoryService), // 自动添加记忆工具
+        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
     )
 
-    // 4. 创建 Runner
+    // 4. 创建 Runner 并设置记忆服务
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // 设置记忆服务
     )
 
     // 5. 执行对话（Agent 会自动使用记忆工具）
@@ -119,25 +166,36 @@ memory/
 
 ### 与 Agent 集成
 
-使用 `llmagent.WithMemory(memoryService)` 将 Memory Service 集成到 Agent，框架会自动注册记忆管理工具，无需手动创建自定义工具。
+使用两步方法将 Memory Service 集成到 Agent：
+
+1. 使用 `llmagent.WithTools(memoryService.Tools())` 向 Agent 注册记忆工具
+2. 使用 `runner.WithMemoryService(memoryService)` 在 Runner 中设置记忆服务
 
 ```go
 import (
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/memory"
     memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // 创建记忆服务
 memoryService := memoryinmemory.NewMemoryService()
 
-// 创建 Agent 并集成 Memory
+// 创建 Agent 并注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
     llmagent.WithModel(modelInstance),
     llmagent.WithDescription("具有记忆能力的智能助手"),
     llmagent.WithInstruction("记住用户的重要信息，并在需要时回忆起来。"),
-    llmagent.WithMemory(memoryService), // 自动添加记忆工具
+    llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
+)
+
+// 创建 Runner 并设置记忆服务
+appRunner := runner.NewRunner(
+    "memory-chat",
+    llmAgent,
+    runner.WithMemoryService(memoryService), // 设置记忆服务
 )
 ```
 
@@ -165,10 +223,17 @@ if err != nil {
     // 处理错误
 }
 
-// 传递给 Agent
+// 向 Agent 注册记忆工具
 llmAgent := llmagent.New(
     "memory-assistant",
-    llmagent.WithMemory(memService), // 或 redisService
+    llmagent.WithTools(memService.Tools()), // 或 redisService.Tools()
+)
+
+// 在 Runner 中设置记忆服务
+runner := runner.NewRunner(
+    "app",
+    llmAgent,
+    runner.WithMemoryService(memService), // 或 redisService
 )
 ```
 
@@ -193,21 +258,10 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-### 自定义记忆指令提示
+### 覆盖语义（ID 与重复）
 
-你可以提供自定义的记忆指令提示构建器：
-
-```go
-memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-        header := "[记忆指令] 遵循以下指导原则管理用户记忆。\n\n"
-        // 示例 A：包装默认内容
-        return header + defaultPrompt
-        // 示例 B：替换为你自己的内容
-        // return fmt.Sprintf("[记忆指令] 可用工具: %s\n...", strings.Join(enabledTools, ", "))
-    }),
-)
-```
+- 记忆 ID 基于「内容 + 主题」生成。对同一用户重复添加相同内容与主题是幂等的：会覆盖原有记录（非追加），并刷新 UpdatedAt。
+- 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
 
 ### 自定义工具实现
 
@@ -219,30 +273,39 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/memory"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
     toolmemory "trpc.group/trpc-go/trpc-agent-go/memory/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// 自定义清空工具，带有诙谐的输出
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-    clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
-        fmt.Println("🧹 [自定义清空工具] 正在执行 sudo rm -rf /... 骗你的！😄")
-        // ... 你的实现逻辑 ...
-        return toolmemory.ClearMemoryResponse{
-            Success: true,
-            Message: "🎉 所有记忆已成功清空！不过别担心，我只是在开玩笑，你的记忆都还在～ 😉",
-        }, nil
+// 自定义清空工具，使用调用上下文中的 MemoryService 与会话信息。
+func customClearMemoryTool() tool.Tool {
+    clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
+        // 从调用上下文获取 MemoryService 与用户信息。
+        memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+        appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+
+        if err := memSvc.ClearMemories(ctx, memory.UserKey{AppName: appName, UserID: userID}); err != nil {
+            return nil, fmt.Errorf("custom clear tool: failed to clear memories: %w", err)
+        }
+        return &toolmemory.ClearMemoryResponse{Message: "🎉 所有记忆已成功清空！"}, nil
     }
 
     return function.NewFunctionTool(
         clearFunc,
         function.WithName(memory.ClearToolName),
-        function.WithDescription("🧹 自定义清空工具：清空用户的所有记忆，但会开个玩笑让你开心一下！😄"),
+        function.WithDescription("清空用户的所有记忆。"),
     )
 }
 
-// 使用自定义工具
+// 在内存实现上注册自定义工具。
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
@@ -299,9 +362,6 @@ func main() {
         }
     default: // inmemory
         memoryService = memoryinmemory.NewMemoryService(
-            memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-                return "[记忆指令] 遵循以下指导原则管理用户记忆。\n\n" + defaultPrompt
-            }),
             memoryinmemory.WithToolEnabled(memory.DeleteToolName, true),
             memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
         )
@@ -310,7 +370,7 @@ func main() {
     // 2. 创建 LLM 模型
     modelInstance := openai.New(*modelName)
 
-    // 3. 创建 Agent 并集成 Memory
+    // 3. 创建 Agent 并注册记忆工具
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
@@ -322,15 +382,16 @@ func main() {
         llmagent.WithModel(modelInstance),
         llmagent.WithDescription("具有记忆能力的智能助手。我可以记住关于你的重要信息，并在需要时回忆起来。"),
         llmagent.WithGenerationConfig(genConfig),
-        llmagent.WithMemory(memoryService), // 自动添加记忆工具和记忆指令
+        llmagent.WithTools(memoryService.Tools()), // 注册记忆工具
     )
 
-    // 4. 创建 Runner
+    // 4. 创建 Runner 并设置记忆服务
     sessionService := inmemory.NewSessionService()
     appRunner := runner.NewRunner(
         "memory-chat",
         llmAgent,
         runner.WithSessionService(sessionService),
+        runner.WithMemoryService(memoryService), // 设置记忆服务
     )
 
     // 5. 执行对话（Agent 会自动使用记忆工具）
@@ -345,7 +406,7 @@ func main() {
 }
 
 // 自定义清空工具
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
+func customClearMemoryTool() tool.Tool {
     // ... 实现逻辑 ...
 }
 

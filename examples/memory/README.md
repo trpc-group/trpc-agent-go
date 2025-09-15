@@ -2,6 +2,19 @@
 
 This example demonstrates intelligent memory management using the `Runner` orchestration component with streaming output, session management, and comprehensive memory tool calling functionality.
 
+## ⚠️ Breaking Changes Notice
+
+**Important**: This example has been updated to use the new two-step memory integration approach. The old `llmagent.WithMemory()` method is no longer supported.
+
+### What Changed
+
+- **Removed**: `llmagent.WithMemory(memoryService)` - automatic memory tool registration
+- **Updated**: Now uses explicit two-step integration:
+  1. `llmagent.WithTools(memoryService.Tools())` - manual tool registration
+  2. `runner.WithMemoryService(memoryService)` - service management in runner
+
+This change provides better separation of concerns and explicit control over memory tool registration.
+
 ## What is Memory Chat?
 
 This implementation showcases the essential features for building AI applications with persistent memory capabilities:
@@ -12,7 +25,7 @@ This implementation showcases the essential features for building AI application
 - **💾 Session Management**: Conversation state preservation and continuity
 - **🔧 Memory Tool Integration**: Working memory tools with proper execution
 - **🚀 Simple Interface**: Clean, focused chat experience with memory capabilities
-- **⚡ Automatic Integration**: Memory tools are automatically registered via `WithMemory()`
+- **⚡ Manual Integration**: Memory tools are manually registered for explicit control
 - **🎨 Custom Tool Support**: Ability to override default tool implementations with custom ones
 - **⚙️ Configurable Tools**: Enable or disable specific memory tools as needed
 - **🔴 Redis Support**: Support for Redis-based memory service (ready to use)
@@ -26,15 +39,25 @@ This implementation showcases the essential features for building AI application
 - **Memory Tool Execution**: Proper execution and display of memory tool calling procedures
 - **Memory Visualization**: Clear indication of memory operations, arguments, and responses
 - **Error Handling**: Graceful error recovery and reporting
-- **Automatic Tool Registration**: Memory tools are automatically added to the agent via `WithMemory()`
+- **Manual Tool Registration**: Memory tools are explicitly registered for better control
 - **Custom Tool Override**: Replace default tool implementations with custom ones
 - **Tool Enablement Control**: Enable or disable specific memory tools
 
 ## Architecture
 
+### Design
+
+This implementation follows principles for better separation of concerns and explicit control:
+
+- **Step 1 - Explicit Tool Registration**: Memory tools are manually registered via `llmagent.WithTools(memoryService.Tools())`
+- **Step 2 - Service Management**: Memory service is managed at the runner level via `runner.WithMemoryService(memoryService)`
+- **No Automatic Integration**: The framework doesn't automatically inject tools or prompts
+- **Business Logic Control**: Applications have full control over which tools to register and how to use them
+- **Clear Separation**: Framework provides building blocks, business logic decides how to use them
+
 ### Memory Integration
 
-The memory functionality is integrated using the `WithMemory()` option, which automatically registers all enabled memory tools:
+The memory functionality is integrated using a two-step approach:
 
 ```go
 // Create memory service with default tools enabled
@@ -45,18 +68,19 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
 
-// Create LLM agent with automatic memory tool registration
+// Create LLM agent with manual memory tool registration
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
-    llmagent.WithMemory(memoryService), // Automatic memory tool registration
+    llmagent.WithTools(memoryService.Tools()), // Step 1: Register memory tools
 )
 
-// Create runner (no memory service needed here)
+// Create runner with memory service
 runner := runner.NewRunner(
     appName,
     llmAgent,
     runner.WithSessionService(sessionService),
+    runner.WithMemoryService(memoryService), // Step 2: Set memory service in runner
 )
 ```
 
@@ -90,7 +114,7 @@ This design provides:
 
 ### Available Memory Tools
 
-The following memory tools are automatically registered when using `WithMemory()`:
+The following memory tools are manually registered via `memoryService.Tools()`:
 
 | Tool Name       | Description                   | Parameters                                                                                         |
 | --------------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -103,7 +127,7 @@ The following memory tools are automatically registered when using `WithMemory()
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
@@ -240,22 +264,6 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-### Custom Memory Instruction Prompt
-
-You can provide a custom memory instruction prompt builder at service creation. The framework generates a default English instruction based on enabled tools; your builder can wrap or replace that default:
-
-```go
-memoryService := memoryinmemory.NewMemoryService(
-    memoryinmemory.WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-        header := "[Memory Instruction] Follow these guidelines to manage user memories.\n\n"
-        // Example A: wrap the default content
-        return header + defaultPrompt
-        // Example B: replace with your own content
-        // return fmt.Sprintf("[Memory Instruction] Tools available: %s\n...", strings.Join(enabledTools, ", "))
-    }),
-)
-```
-
 Notes:
 
 - Enabled tools: the set of memory tools currently active for your service. By default, `memory_add`, `memory_update`, `memory_search`, and `memory_load` are enabled; `memory_delete` and `memory_clear` are disabled. Control them with `WithToolEnabled(...)`. The builder’s `enabledTools` argument reflects this list.
@@ -288,14 +296,22 @@ import (
 )
 
 // Custom clear tool with enhanced logging.
-func customClearMemoryTool(memoryService memory.Service) tool.Tool {
-    clearFunc := func(ctx context.Context, _ struct{}) (toolmemory.ClearMemoryResponse, error) {
-        fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
-        // ... implementation ...
-        return toolmemory.ClearMemoryResponse{
-            Success: true,
-            Message: "🎉 All memories cleared successfully with custom magic! ✨",
-        }, nil
+func customClearMemoryTool() tool.Tool {
+    clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
+        // Get memory service and user info from invocation context.
+        memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+        appName, userID, err := toolmemory.GetAppAndUserFromContext(ctx)
+        if err != nil {
+            return nil, fmt.Errorf("custom clear tool: %w", err)
+        }
+
+        if err := memSvc.ClearMemories(ctx, memory.UserKey{AppName: appName, UserID: userID}); err != nil {
+            return nil, fmt.Errorf("custom clear tool: failed to clear memories: %w", err)
+        }
+        return &toolmemory.ClearMemoryResponse{Message: "🎉 All memories cleared successfully with custom magic! ✨"}, nil
     }
 
     return function.NewFunctionTool(
@@ -304,6 +320,7 @@ func customClearMemoryTool(memoryService memory.Service) tool.Tool {
         function.WithDescription("🧹 Custom clear tool: Clear all memories for the user with extra sparkle! ✨"),
     )
 }
+
 
 // Use custom tool
 memoryService := memoryinmemory.NewMemoryService(
@@ -327,11 +344,11 @@ if err != nil {
 Custom tools use the `ToolCreator` pattern to avoid circular dependencies:
 
 ```go
-type ToolCreator func(memory.Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Example custom tool
-func myCustomAddTool(memoryService memory.Service) tool.Tool {
-    // Implementation that uses memoryService
+func myCustomAddTool() tool.Tool {
+    // Implementation that gets memory service from context
     return function.NewFunctionTool(/* ... */)
 }
 
@@ -483,12 +500,12 @@ Custom tools can provide enhanced functionality:
 
 - Uses `inmemory.NewMemoryService()` for in-memory storage
 - Memory tools directly access the memory service
-- No complex integration required - tools handle memory operations
-- Automatic tool registration via `WithMemory()`
+- Two-step integration: Step 1 (manual tool registration) + Step 2 (runner service setup)
+- Explicit control over tool registration and service management
 
 ### Memory Tools Registration
 
-The memory tools are automatically registered when using `WithMemory()`:
+The memory tools are manually registered for explicit control:
 
 ```go
 // Create memory service with custom configuration
@@ -497,11 +514,19 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool),
 )
 
-// Create LLM agent with automatic memory tool registration
+// Create LLM agent with manual memory tool registration
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
-    llmagent.WithMemory(memoryService), // Automatic registration
+    llmagent.WithTools(memoryService.Tools()), // Step 1: Register memory tools
+)
+
+// Create runner with memory service
+runner := runner.NewRunner(
+    appName,
+    llmAgent,
+    runner.WithSessionService(sessionService),
+    runner.WithMemoryService(memoryService), // Step 2: Set memory service
 )
 ```
 
@@ -520,12 +545,12 @@ Custom tools use a factory pattern to avoid circular dependencies:
 
 ```go
 // ToolCreator type for creating tools
-type ToolCreator func(memory.Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Default tool creators
 var defaultEnabledTools = map[string]ToolCreator{
-    memory.AddToolName:    toolmemory.NewAddMemoryTool,
-    memory.UpdateToolName: toolmemory.NewUpdateMemoryTool,
+    memory.AddToolName:    toolmemory.NewAddTool,
+    memory.UpdateToolName: toolmemory.NewUpdateTool,
     // ... other tools
 }
 
@@ -544,29 +569,7 @@ memoryinmemory.WithCustomTool(memory.ClearToolName, customClearMemoryTool)
 - **memory_search**: Allows LLM to search for relevant memories
 - **memory_load**: Allows LLM to load user memory overview
 
-**Custom Tools:**
-
-You can override any default tool with a custom implementation:
-
-```go
-// Custom add tool with enhanced logging
-func customAddMemoryTool(memoryService memory.Service) tool.Tool {
-    addFunc := func(ctx context.Context, req toolmemory.AddMemoryRequest) (toolmemory.AddMemoryResponse, error) {
-        fmt.Println("📝 [Custom Add Tool] Adding memory with special care... 💖")
-        // ... implementation ...
-        return toolmemory.AddMemoryResponse{
-            Success: true,
-            Message: "💖 Memory added with extra love! 💖",
-        }, nil
-    }
-
-    return function.NewFunctionTool(
-        addFunc,
-        function.WithName(memory.AddToolName),
-        function.WithDescription("📝 Custom add tool: Add memories with extra care and love! 💖"),
-    )
-}
-```
+**Custom Tools:** You can override default tools with custom implementations. Refer to the customClearMemoryTool example above, and follow the same pattern (imports + context helpers) for add/update/delete/search/load.
 
 ### Tool Calling Flow
 

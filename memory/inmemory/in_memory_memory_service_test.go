@@ -13,11 +13,9 @@ package inmemory
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -343,10 +341,10 @@ func TestMemoryService_Tools(t *testing.T) {
 
 	// Register some tools.
 	service = NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return &mockTool{name: memory.AddToolName}
 		}),
-		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.SearchToolName, func() tool.Tool {
 			return &mockTool{name: memory.SearchToolName}
 		}),
 	)
@@ -366,7 +364,7 @@ func TestMemoryService_Tools(t *testing.T) {
 	// Custom tool should be returned when provided.
 	custom := &mockTool{name: memory.AddToolName}
 	service = NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return custom
 		}),
 	)
@@ -385,10 +383,10 @@ func TestMemoryService_Tools(t *testing.T) {
 
 	// Test tool enable/disable functionality.
 	service = NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return &mockTool{name: memory.AddToolName}
 		}),
-		WithCustomTool(memory.SearchToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.SearchToolName, func() tool.Tool {
 			return &mockTool{name: memory.SearchToolName}
 		}),
 		WithToolEnabled(memory.AddToolName, false),
@@ -407,7 +405,7 @@ func TestMemoryService_Tools(t *testing.T) {
 
 	// Test tool builder functionality.
 	service = NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return &mockTool{name: memory.AddToolName + "_built"}
 		}),
 	)
@@ -436,53 +434,6 @@ func TestMemoryService_Tools(t *testing.T) {
 	}
 }
 
-func TestWithInstructionBuilder_AndGenerateInstruction(t *testing.T) {
-	// Create a service with a custom instruction builder.
-	svc := NewMemoryService(
-		WithInstructionBuilder(func(enabledTools []string, defaultPrompt string) string {
-			if len(enabledTools) == 0 {
-				t.Fatalf("expected enabled tools to be non-empty")
-			}
-			if !strings.Contains(defaultPrompt, "Available memory tools:") {
-				t.Fatalf("expected default prompt to contain tools list")
-			}
-			return "TEST_BUILDER_PROMPT"
-		}),
-	)
-
-	// Ensure default tools exist so enabledTools is non-empty.
-	tools := svc.Tools()
-	if len(tools) == 0 {
-		t.Fatalf("expected default tools to be enabled")
-	}
-
-	// Call the shared instruction generator.
-	got := imemory.GenerateInstruction(svc)
-	if got != "TEST_BUILDER_PROMPT" {
-		t.Fatalf("expected builder prompt to be used, got: %q", got)
-	}
-}
-
-func TestGenerateInstruction_DefaultWhenNoBuilder(t *testing.T) {
-	// Create a service WITHOUT a custom instruction builder.
-	svc := NewMemoryService()
-
-	// Ensure default tools exist so enabledTools is non-empty.
-	tools := svc.Tools()
-	if len(tools) == 0 {
-		t.Fatalf("expected default tools to be enabled")
-	}
-
-	// Call the shared instruction generator. Since builder is nil, it should use default.
-	got := imemory.GenerateInstruction(svc)
-	if !strings.Contains(got, "You have access to memory tools") {
-		t.Fatalf("expected default instruction content, got: %q", got)
-	}
-	if !strings.Contains(got, "Available memory tools:") {
-		t.Fatalf("expected tools list in default instruction, got: %q", got)
-	}
-}
-
 // mockTool implements tool.Tool for testing.
 type mockTool struct{ name string }
 
@@ -491,7 +442,7 @@ func (m *mockTool) Declaration() *tool.Declaration { return &tool.Declaration{Na
 func TestMemoryService_ToolNameValidation(t *testing.T) {
 	// Test that valid tool names work correctly.
 	service := NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return &mockTool{name: memory.AddToolName}
 		}),
 		WithToolEnabled(memory.SearchToolName, true),
@@ -507,7 +458,7 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 
 	// Test that invalid tool names are ignored.
 	service = NewMemoryService(
-		WithCustomTool("invalid_tool_name", func(s memory.Service) tool.Tool {
+		WithCustomTool("invalid_tool_name", func() tool.Tool {
 			return &mockTool{name: "invalid_tool_name"}
 		}),
 		WithToolEnabled("another_invalid_name", true),
@@ -523,10 +474,10 @@ func TestMemoryService_ToolNameValidation(t *testing.T) {
 
 	// Test that mixed valid and invalid tool names work correctly.
 	service = NewMemoryService(
-		WithCustomTool(memory.AddToolName, func(s memory.Service) tool.Tool {
+		WithCustomTool(memory.AddToolName, func() tool.Tool {
 			return &mockTool{name: memory.AddToolName}
 		}),
-		WithCustomTool("invalid_tool", func(s memory.Service) tool.Tool {
+		WithCustomTool("invalid_tool", func() tool.Tool {
 			return &mockTool{name: "invalid_tool"}
 		}),
 		WithToolEnabled(memory.SearchToolName, true),

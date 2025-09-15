@@ -1,0 +1,294 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package memory
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+)
+
+func TestDefaultEnabledTools(t *testing.T) {
+	// Verify that DefaultEnabledTools contains expected tools.
+	expectedTools := []string{
+		memory.AddToolName,
+		memory.UpdateToolName,
+		memory.SearchToolName,
+		memory.LoadToolName,
+	}
+
+	for _, toolName := range expectedTools {
+		creator, exists := DefaultEnabledTools[toolName]
+		assert.True(t, exists, "Tool %s should exist in DefaultEnabledTools", toolName)
+		assert.NotNil(t, creator, "Tool creator for %s should not be nil", toolName)
+	}
+
+	// Verify that delete and clear tools are not included.
+	assert.NotContains(t, DefaultEnabledTools, memory.DeleteToolName)
+	assert.NotContains(t, DefaultEnabledTools, memory.ClearToolName)
+}
+
+func TestIsValidToolName(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		expected bool
+	}{
+		{"valid add tool", memory.AddToolName, true},
+		{"valid update tool", memory.UpdateToolName, true},
+		{"valid delete tool", memory.DeleteToolName, true},
+		{"valid clear tool", memory.ClearToolName, true},
+		{"valid search tool", memory.SearchToolName, true},
+		{"valid load tool", memory.LoadToolName, true},
+		{"invalid tool", "invalid_tool", false},
+		{"empty tool name", "", false},
+		{"case sensitive", "ADD_MEMORY", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsValidToolName(tt.toolName)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestBuildSearchTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		expected []string
+	}{
+		{"empty query", "", nil},
+		{"whitespace only", "   ", nil},
+		{"single character", "a", []string{}},
+		{"short word", "hi", []string{"hi"}},
+		{"english words", "hello world", []string{"hello", "world"}},
+		{"english with stopwords", "the quick brown fox", []string{"quick", "brown", "fox"}},
+		{"english with punctuation", "hello, world!", []string{"hello", "world"}},
+		{"english with numbers", "test123 abc456", []string{"test123", "abc456"}},
+		{"mixed case", "Hello World", []string{"hello", "world"}},
+		{"chinese single character", "中", []string{"中"}},
+		{"chinese bigrams", "中文测试", []string{"中文", "文测", "测试"}},
+		{"chinese with punctuation", "中文，测试！", []string{"中文", "文测", "测试"}},
+		{"chinese with spaces", "中文 测试", []string{"中文", "文测", "测试"}},
+		{"mixed chinese and english", "hello中文world", []string{"he", "el", "ll", "lo", "o中", "中文", "文w", "wo", "or", "rl", "ld"}},
+		{"only punctuation", "!@#$%", []string{}},
+		{"only stopwords", "the and or", []string{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildSearchTokens(tt.query)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestBuildSearchTokens_EdgeCases(t *testing.T) {
+	t.Run("very long query", func(t *testing.T) {
+		longQuery := strings.Repeat("hello world ", 1000)
+		result := BuildSearchTokens(longQuery)
+		require.NotNil(t, result)
+		assert.Contains(t, result, "hello")
+		assert.Contains(t, result, "world")
+	})
+
+	t.Run("unicode edge cases", func(t *testing.T) {
+		// Test various Unicode characters.
+		result := BuildSearchTokens("🚀hello🌟world")
+		assert.Contains(t, result, "hello")
+		assert.Contains(t, result, "world")
+	})
+
+	t.Run("only CJK punctuation", func(t *testing.T) {
+		result := BuildSearchTokens("，。！？")
+		assert.Empty(t, result)
+	})
+
+	t.Run("mixed CJK and punctuation", func(t *testing.T) {
+		result := BuildSearchTokens("中文，测试！")
+		expected := []string{"中文", "文测", "测试"}
+		assert.Equal(t, expected, result)
+	})
+}
+
+func TestBuildSearchTokens_Performance(t *testing.T) {
+	// Test performance to ensure it's not too slow.
+	query := "hello world this is a test query with multiple words"
+
+	// Run multiple times to ensure performance stability.
+	for i := 0; i < 1000; i++ {
+		result := BuildSearchTokens(query)
+		require.NotNil(t, result)
+		assert.Contains(t, result, "hello")
+		assert.Contains(t, result, "world")
+	}
+}
+
+func TestMatchMemoryEntry(t *testing.T) {
+	now := time.Now()
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "Hello world, this is a test memory",
+			Topics: []string{"test", "example"},
+		},
+		CreatedAt: now,
+	}
+
+	tests := []struct {
+		name     string
+		entry    *memory.Entry
+		query    string
+		expected bool
+	}{
+		{
+			name:     "exact content match",
+			entry:    entry,
+			query:    "hello world",
+			expected: true,
+		},
+		{
+			name:     "partial content match",
+			entry:    entry,
+			query:    "test memory",
+			expected: true,
+		},
+		{
+			name:     "topic match",
+			entry:    entry,
+			query:    "example",
+			expected: true,
+		},
+		{
+			name:     "case insensitive match",
+			entry:    entry,
+			query:    "HELLO WORLD",
+			expected: true,
+		},
+		{
+			name:     "chinese content match",
+			entry:    &memory.Entry{Memory: &memory.Memory{Memory: "这是一个中文测试", Topics: []string{"测试"}}},
+			query:    "中文测试",
+			expected: true,
+		},
+		{
+			name:     "chinese topic match",
+			entry:    &memory.Entry{Memory: &memory.Memory{Memory: "test content", Topics: []string{"中文测试"}}},
+			query:    "中文",
+			expected: true,
+		},
+		{
+			name:     "no match",
+			entry:    entry,
+			query:    "nonexistent",
+			expected: false,
+		},
+		{
+			name:     "empty query",
+			entry:    entry,
+			query:    "",
+			expected: false,
+		},
+		{
+			name:     "whitespace query",
+			entry:    entry,
+			query:    "   ",
+			expected: false,
+		},
+		{
+			name:     "nil entry",
+			entry:    nil,
+			query:    "test",
+			expected: false,
+		},
+		{
+			name:     "nil memory",
+			entry:    &memory.Entry{Memory: nil},
+			query:    "test",
+			expected: false,
+		},
+		{
+			name:     "stopword only query",
+			entry:    entry,
+			query:    "the and or",
+			expected: false,
+		},
+		{
+			name:     "punctuation only query",
+			entry:    entry,
+			query:    "!@#$%",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MatchMemoryEntry(tt.entry, tt.query)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMatchMemoryEntry_EdgeCases(t *testing.T) {
+	t.Run("very long content", func(t *testing.T) {
+		longContent := strings.Repeat("hello world ", 1000)
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: longContent,
+				Topics: []string{"test"},
+			},
+		}
+		result := MatchMemoryEntry(entry, "hello")
+		assert.True(t, result)
+	})
+
+	t.Run("very long query", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "test content",
+				Topics: []string{"example"},
+			},
+		}
+		longQuery := strings.Repeat("hello world ", 1000)
+		result := MatchMemoryEntry(entry, longQuery)
+		assert.False(t, result)
+	})
+
+	t.Run("unicode characters", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "🚀hello🌟world",
+				Topics: []string{"emoji"},
+			},
+		}
+		result := MatchMemoryEntry(entry, "hello")
+		assert.True(t, result)
+	})
+
+	t.Run("mixed languages", func(t *testing.T) {
+		entry := &memory.Entry{
+			Memory: &memory.Memory{
+				Memory: "hello 世界 world",
+				Topics: []string{"多语言", "multilingual"},
+			},
+		}
+		assert.True(t, MatchMemoryEntry(entry, "hello"))
+		assert.True(t, MatchMemoryEntry(entry, "世界"))
+		assert.True(t, MatchMemoryEntry(entry, "world"))
+		assert.True(t, MatchMemoryEntry(entry, "多语言"))
+		assert.True(t, MatchMemoryEntry(entry, "multilingual"))
+	})
+}

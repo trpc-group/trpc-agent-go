@@ -12,6 +12,7 @@ package redis
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -19,21 +20,13 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var _ memory.Service = (*Service)(nil)
-
-// defaultEnabledTools are the creators of default memory tools to enable.
-var defaultEnabledTools = imemory.DefaultEnabledTools
-
-const (
-	// defaultMemoryLimit is the default limit of memories per user.
-	defaultMemoryLimit = imemory.DefaultMemoryLimit
-)
 
 // Service is the redis memory service.
 // Storage structure:
@@ -49,12 +42,12 @@ type Service struct {
 // NewService creates a new redis memory service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
-		memoryLimit:  defaultMemoryLimit,
+		memoryLimit:  imemory.DefaultMemoryLimit,
 		toolCreators: make(map[string]memory.ToolCreator),
 		enabledTools: make(map[string]bool),
 	}
 	// Enable default tools.
-	for name, creator := range defaultEnabledTools {
+	for name, creator := range imemory.DefaultEnabledTools {
 		opts.toolCreators[name] = creator
 		opts.enabledTools[name] = true
 	}
@@ -220,8 +213,12 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		}
 		entries = append(entries, e)
 	}
+	// Sort by updated time (newest first), tie-breaker by created time.
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
 	})
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
@@ -243,64 +240,63 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	q := strings.ToLower(query)
 	results := make([]*memory.Entry, 0)
 	for _, v := range all {
 		e := &memory.Entry{}
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
-		if strings.Contains(strings.ToLower(e.Memory.Memory), q) {
+		if imemory.MatchMemoryEntry(e, query) {
 			results = append(results, e)
-			continue
-		}
-		for _, t := range e.Memory.Topics {
-			if strings.Contains(strings.ToLower(t), q) {
-				results = append(results, e)
-				break
-			}
 		}
 	}
+	// Stable sort by updated time desc.
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
+			return results[i].CreatedAt.After(results[j].CreatedAt)
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
 	return results, nil
 }
 
 // Tools returns the list of available memory tools.
 func (s *Service) Tools() []tool.Tool {
-	var toolsList []tool.Tool
-	for toolName, creator := range s.opts.toolCreators {
-		if s.opts.enabledTools[toolName] {
-			if _, ok := s.cachedTools[toolName]; !ok {
-				s.cachedTools[toolName] = creator(s)
-			}
-			toolsList = append(toolsList, s.cachedTools[toolName])
+	// Concurrency-safe and stable order by name.
+	// Protect tool creators/enabled flags and cache with a single lock at call-site
+	// by converting to a local snapshot first (no struct-level mutex exists).
+	// We assume opts are immutable after construction.
+	names := make([]string, 0, len(s.opts.toolCreators))
+	for name := range s.opts.toolCreators {
+		if s.opts.enabledTools[name] {
+			names = append(names, name)
 		}
 	}
-	return toolsList
+	sort.Strings(names)
+
+	tools := make([]tool.Tool, 0, len(names))
+	for _, name := range names {
+		if _, ok := s.cachedTools[name]; !ok {
+			s.cachedTools[name] = s.opts.toolCreators[name]()
+		}
+		tools = append(tools, s.cachedTools[name])
+	}
+	return tools
 }
 
 // generateMemoryID generates a memory ID from memory content.
-// Follow the same scheme as the in-memory implementation for consistency.
+// Uses SHA256 to match the in-memory implementation for consistency.
 func generateMemoryID(mem *memory.Memory) string {
-	// Follow the same scheme as the in-memory implementation for consistency.
 	content := fmt.Sprintf("memory:%s", mem.Memory)
 	if len(mem.Topics) > 0 {
 		content += fmt.Sprintf("|topics:%s", strings.Join(mem.Topics, ","))
 	}
-	// Lightweight hex encoding of the content bytes to produce a deterministic ID.
-	return fmt.Sprintf("%x", []byte(content))
+	// Use SHA256 to match in-memory implementation for consistency.
+	hash := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", hash)
 }
 
 // getUserMemKey builds the Redis key for a user's memories.
 func getUserMemKey(userKey memory.UserKey) string {
 	return fmt.Sprintf("mem:{%s}:%s", userKey.AppName, userKey.UserID)
-}
-
-// BuildInstruction allows the internal memory package to obtain a customized instruction if provided.
-// Returns (prompt, true) when custom builder is configured; otherwise ("", false).
-func (s *Service) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
-	builder := s.opts.instructionBuilder
-	if builder == nil {
-		return "", false
-	}
-	return builder(enabledTools, defaultPrompt), true
 }

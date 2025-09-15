@@ -13,8 +13,9 @@ English | [中文](README.zh_CN.md)
 🚀 **A powerful Go framework for building intelligent agent systems** that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease.
 
 ✨ **Why tRPC-Agent-Go?**
+
 - 🧠 **Intelligent Reasoning**: Advanced hierarchical planners and multi-agent orchestration
-- 🧰 **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services  
+- 🧰 **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services
 - 💾 **Persistent Memory**: Long-term state management and contextual awareness
 - 🔗 **Multi-Agent Collaboration**: Chain, parallel, and graph-based agent workflows
 - 📊 **Production Ready**: Built-in telemetry, tracing, and enterprise-grade reliability
@@ -23,8 +24,9 @@ English | [中文](README.zh_CN.md)
 ## 🎯 Use Cases
 
 **Perfect for building:**
+
 - 🤖 **Customer Support Bots** - Intelligent agents that understand context and solve complex queries
-- 📊 **Data Analysis Assistants** - Agents that query databases, generate reports, and provide insights  
+- 📊 **Data Analysis Assistants** - Agents that query databases, generate reports, and provide insights
 - 🔧 **DevOps Automation** - Smart deployment, monitoring, and incident response systems
 - 💼 **Business Process Automation** - Multi-step workflows with human-in-the-loop capabilities
 - 🧠 **Research & Knowledge Management** - RAG-powered agents for document analysis and Q&A
@@ -36,6 +38,7 @@ English | [中文](README.zh_CN.md)
 <td width="50%">
 
 ### 🎪 **Multi-Agent Orchestration**
+
 ```go
 // Chain agents for complex workflows
 pipeline := chainagent.New("pipeline",
@@ -52,12 +55,17 @@ parallel := parallelagent.New("concurrent",
 <td width="50%">
 
 ### 🧠 **Advanced Memory System**
+
 ```go
 // Persistent memory with search
 memory := memorysvc.NewInMemoryService()
 agent := llmagent.New("assistant",
-    llmagent.WithMemory(memory),
+    llmagent.WithTools(memory.Tools()),
     llmagent.WithModel(model))
+
+// Memory service managed at runner level
+runner := runner.NewRunner("app", agent,
+    runner.WithMemoryService(memory))
 
 // Agents remember context across sessions
 ```
@@ -68,6 +76,7 @@ agent := llmagent.New("assistant",
 <td>
 
 ### 🛠️ **Rich Tool Integration**
+
 ```go
 // Any function becomes a tool
 calculator := function.NewFunctionTool(
@@ -83,6 +92,7 @@ mcpTool := mcptool.New(serverConn)
 <td>
 
 ### 📈 **Production Monitoring**
+
 ```go
 // OpenTelemetry integration
 runner := runner.NewRunner("app", agent,
@@ -124,7 +134,7 @@ Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.
 
 ## ⚡ Quick Start
 
-> 🎬 **See it in Action**: *[Demo GIF placeholder - showing agent reasoning and tool usage]*
+> 🎬 **See it in Action**: _[Demo GIF placeholder - showing agent reasoning and tool usage]_
 
 ### 📋 Prerequisites
 
@@ -151,12 +161,13 @@ go run . -model="gpt-4o-mini" -streaming=true
 ```
 
 **What you'll see:**
+
 - 💬 **Interactive chat** with your AI agent
-- ⚡ **Real-time streaming** responses  
+- ⚡ **Real-time streaming** responses
 - 🧮 **Tool usage** (calculator + time tools)
 - 🔄 **Multi-turn conversations** with memory
 
-Try asking: *"What's the current time? Then calculate 15 * 23 + 100"*
+Try asking: "What's the current time? Then calculate 15 \* 23 + 100"
 
 ### Basic Usage
 
@@ -322,7 +333,8 @@ Other notable examples:
 See individual `README.md` files in each example folder for usage details.
 
 ## 🏗️ Architecture Overview
-Architecture 
+
+Architecture
 
 ![architecture](docs/assets/img/component_architecture.png)
 
@@ -396,18 +408,19 @@ for ev := range events { /* ... */ }
 The composition API lets you nest chains, cycles, or parallels to build complex
 workflows without low-level plumbing.
 
-
 ## 🤝 Contributing
 
 We ❤️ contributions! Join our growing community of developers building the future of AI agents.
 
 ### 🌟 **Ways to Contribute**
+
 - 🐛 **Report bugs** or suggest features via [Issues](https://github.com/trpc-group/trpc-agent-go/issues)
 - 📖 **Improve documentation** - help others learn faster
 - 🔧 **Submit PRs** - bug fixes, new features, or examples
 - 💡 **Share your use cases** - inspire others with your agent applications
 
 ### 🚀 **Quick Contribution Setup**
+
 ```bash
 # Fork & clone the repo
 git clone https://github.com/YOUR_USERNAME/trpc-agent-go.git
@@ -425,9 +438,11 @@ go vet ./...
 ## 🏆 Acknowledgements
 
 ### 🏢 **Enterprise Validation**
+
 Special thanks to Tencent's business units including **Tencent Yuanbao**, **Tencent Video**, **Tencent News**, **IMA**, and **QQ Music** for their invaluable support and real-world validation. Production usage drives framework excellence! 🚀
 
-### 🌟 **Open Source Inspiration**  
+### 🌟 **Open Source Inspiration**
+
 Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, and many others. Standing on the shoulders of giants! 🙏
 
 ---
@@ -444,6 +459,6 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 
 **Built with ❤️ by the tRPC-Agent-Go team**
 
-*Empowering developers to build the next generation of intelligent applications*
+_Empowering developers to build the next generation of intelligent applications_
 
 </div>
