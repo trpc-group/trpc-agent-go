@@ -57,41 +57,47 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	ch <- event.New(invocation.InvocationID, invocation.AgentName,
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: truncatedContent},
 				},
 			},
-		}))
+		}),
+		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	)
 
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
 		CodeBlocks:  codeBlocks,
 		ExecutionID: invocation.Session.ID,
 	})
 	if err != nil {
-		ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		ch <- event.New(invocation.InvocationID, invocation.AgentName,
 			event.WithResponse(&model.Response{
 				Choices: []model.Choice{
 					{
 						Message: model.Message{Role: model.RoleAssistant, Content: "Code execution failed: " + err.Error()},
 					},
 				},
-			}))
+			}),
+			event.WithBranch(invocation.Branch),
+			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		)
 		return
 	}
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	ch <- event.New(invocation.InvocationID, invocation.AgentName,
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: codeExecutionResult.String()},
 				},
 			},
-		}))
+		}),
+		event.WithBranch(invocation.Branch),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	)
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
 }
