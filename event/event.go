@@ -32,6 +32,9 @@ const (
 const (
 	// EmitWithoutTimeout is the default timeout for emitting events.
 	EmitWithoutTimeout = 0 * time.Second
+
+	// FilterKeyDelimiter is the delimiter for hierarchical event filtering.
+	FilterKeyDelimiter = "/"
 )
 
 // Event represents an event in conversation between agents and users.
@@ -152,8 +155,8 @@ func (e *Event) Filter(filterKey string) bool {
 		return true
 	}
 
-	filterKey += "/"
-	eFilterKey = eFilterKey + "/"
+	filterKey += FilterKeyDelimiter
+	eFilterKey = eFilterKey + FilterKeyDelimiter
 	return strings.HasPrefix(filterKey, eFilterKey) || strings.HasPrefix(eFilterKey, filterKey)
 }
 
