@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -101,8 +102,6 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, "invocation")
-	defer span.End()
 
 	sessionKey := session.Key{
 		AppName:   r.appName,
@@ -168,6 +167,8 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
+	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -177,7 +178,6 @@ func (r *runner) Run(
 
 	// Create a new channel for processed events.
 	processedEventCh := make(chan *event.Event)
-
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {
@@ -235,6 +235,8 @@ func (r *runner) Run(
 		case <-ctx.Done():
 		}
 	}()
+
+	itelemetry.TraceRunner(span, r.appName, invocation, message)
 
 	return processedEventCh, nil
 }
