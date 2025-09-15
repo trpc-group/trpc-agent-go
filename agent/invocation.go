@@ -203,6 +203,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		Session:         inv.Session,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
+		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		noticeMu:        inv.noticeMu,
 		noticeChanMap:   inv.noticeChanMap,
