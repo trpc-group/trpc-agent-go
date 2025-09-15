@@ -1201,8 +1201,7 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	p := NewFunctionCallResponseProcessor(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res := p.collectParallelToolResults(ctx, make(chan toolResult),
-		make(chan struct{}), 2)
+	res := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
 }
 
