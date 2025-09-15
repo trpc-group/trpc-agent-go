@@ -65,6 +65,17 @@ func (a *SimpleIntentAgent) Run(ctx context.Context, invocation *agent.Invocatio
 	go func() {
 		defer close(out)
 
+		// Align invocation metadata for downstream consumers (consistency with LLMAgent behavior).
+		if invocation.AgentName == "" {
+			invocation.AgentName = a.name
+		}
+		if invocation.Agent == nil {
+			invocation.Agent = a
+		}
+		if invocation.Model == nil {
+			invocation.Model = a.model
+		}
+
 		// 1) Intent classification (not forwarded to user).
 		intent := a.classifyIntent(ctx, invocation)
 
@@ -118,11 +129,11 @@ func (a *SimpleIntentAgent) classifyIntent(ctx context.Context, inv *agent.Invoc
 		}
 	}
 
-	out := strings.TrimSpace(strings.ToLower(buf.String()))
+	out := sanitizeIntent(buf.String())
 	switch out {
-	case "chitchat", "chat", "闲聊":
+	case "chitchat", "chat", "casual", "闲聊", "聊天", "对话":
 		return "chitchat"
-	case "task", "任务":
+	case "task", "action", "todo", "job", "任务", "办理", "处理":
 		return "task"
 	default:
 		return "chitchat"
@@ -142,21 +153,19 @@ func (a *SimpleIntentAgent) replyChitChat(ctx context.Context, inv *agent.Invoca
 	rspCh, err := a.model.GenerateContent(ctx, req)
 	if err != nil {
 		inv.EmitEventWithInvocation(ctx, out, event.NewErrorEvent(
-			inv.InvocationID,
-			a.name,
-			model.ErrorTypeFlowError,
+      inv.InvocationID,
+      a.name,
+      model.ErrorTypeFlowError,
 			err.Error(),
 		))
 		return
 	}
 	for rsp := range rspCh {
-		if err := inv.EmitEventWithInvocation(ctx, out, event.NewResponseEvent(
+		inv.EmitEventWithInvocation(ctx, out, event.NewResponseEvent(
 			inv.InvocationID,
 			a.name,
 			rsp,
-		)); err != nil {
-			return
-		}
+		))
 	}
 }
 
@@ -183,12 +192,24 @@ func (a *SimpleIntentAgent) replyTaskPlan(ctx context.Context, inv *agent.Invoca
 		return
 	}
 	for rsp := range rspCh {
-		if err := inv.EmitEventWithInvocation(ctx, out, event.NewResponseEvent(
+		inv.EmitEventWithInvocation(ctx, out, event.NewResponseEvent(
 			inv.InvocationID,
 			a.name,
 			rsp,
-		)); err != nil {
-			return
-		}
+		))
 	}
+}
+
+// sanitizeIntent normalizes the LLM output for intent classification.
+func sanitizeIntent(s string) string {
+	t := strings.ToLower(strings.TrimSpace(s))
+	// Keep just the first line in case the model added explanations.
+	if idx := strings.IndexByte(t, '\n'); idx >= 0 {
+		t = t[:idx]
+	}
+	// Trim common punctuation / quotes around a single token.
+	t = strings.Trim(t, ".,!?;:。！？；：\"'`（）()[]{}<>")
+	// Collapse spaces.
+	t = strings.Join(strings.Fields(t), " ")
+	return t
 }

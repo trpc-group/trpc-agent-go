@@ -89,12 +89,17 @@ ch, err := r.Run(ctx, "user-001", "session-001", model.NewUserMessage("你好，
 // 处理事件流...
 ```
 
-## 运行示例
+## 运行示例（交互式）
 
 ```bash
 cd examples/customagent
 export OPENAI_API_KEY="your_api_key"
-go run . -model deepseek-chat -q "帮我规划一次上海周末亲子游"
+go run . -model deepseek-chat
+
+# 进入交互后可使用命令：
+# /history  显示对话历史（通过提示）
+# /new      开启新会话
+# /exit     退出
 ```
 
 ## 扩展建议
@@ -102,4 +107,3 @@ go run . -model deepseek-chat -q "帮我规划一次上海周末亲子游"
 - 引入工具：返回 `[]tool.Tool`，如 `function.NewFunctionTool(...)` 串接数据库/HTTP/内部服务
 - 增加校验：在分支前先做参数校验、风控、开关控制
 - 渐进演进：当 if-else 过多或需要协作时，平滑切换到 `ChainAgent`/`ParallelAgent` 或 `Graph`
-

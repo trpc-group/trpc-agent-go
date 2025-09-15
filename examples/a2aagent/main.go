@@ -18,15 +18,13 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-	"trpc.group/trpc-go/trpc-a2a-go/log"
-	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -46,10 +44,6 @@ const (
 
 func main() {
 	flag.Parse()
-	config := zap.NewProductionConfig()
-	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	logger, _ := config.Build()
-	a2alog.Default = logger.Sugar()
 
 	// runRemoteAgent will start a a2a server that build with the agent it returns
 	localAgent := runRemoteAgent("agent_joker", "i am a remote agent, i can tell a joke", *host)
@@ -179,6 +173,16 @@ func (h *hookProcessor) ProcessMessage(
 func runRemoteAgent(agentName, desc, host string) agent.Agent {
 	remoteAgent := buildRemoteAgent(agentName, desc)
 	server, err := a2a.New(
+		a2a.WithDebugLogging(false),
+		a2a.WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+			errMsg := protocol.NewMessage(
+				protocol.MessageRoleAgent,
+				[]protocol.Part{
+					protocol.NewTextPart("your own error msg"),
+				},
+			)
+			return &errMsg, nil
+		}),
 		a2a.WithHost(host),
 		a2a.WithAgent(remoteAgent, *streaming),
 		a2a.WithProcessMessageHook(

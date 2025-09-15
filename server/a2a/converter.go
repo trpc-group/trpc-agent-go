@@ -139,6 +139,10 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return nil, nil
 	}
 
+	if event.Response.Error != nil {
+		return nil, fmt.Errorf("A2A server received error event from agent, event: %v", event.ID)
+	}
+
 	// Filter out toolcall events for non-streaming responses
 	if isToolCallEvent(event) || len(event.Response.Choices) == 0 {
 		return nil, nil
@@ -164,6 +168,11 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	if event.Response == nil {
 		return nil, nil
 	}
+
+	if event.Response.Error != nil {
+		return nil, fmt.Errorf("A2A server received error event from agent, event: %v", event.ID)
+	}
+
 	// Filter out tool call events for streaming responses
 	if isToolCallEvent(event) || len(event.Response.Choices) == 0 {
 		return nil, nil
