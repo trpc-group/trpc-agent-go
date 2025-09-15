@@ -1911,3 +1911,31 @@ func TestDeepCopyAny_Branches(t *testing.T) {
 	gotSlice[0].A = 99
 	require.Equal(t, []pair{{1}, {2}}, s) // original unchanged
 }
+
+// TestExecuteNodeFunction_RecoversFromPanic ensures that panics in user node functions
+// are recovered and converted into errors, without crashing the executor.
+func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
+	// Build graph with a single node that panics
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("boom", func(ctx context.Context, state State) (any, error) {
+		panic("kaboom")
+	}).SetEntryPoint("boom").SetFinishPoint("boom")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        make(State),
+		InvocationID: "panic-test",
+	}
+	task := &Task{NodeID: "boom", TaskID: "boom-0"}
+
+	res, runErr := exec.executeNodeFunction(context.Background(), execCtx, task)
+	require.Error(t, runErr)
+	require.Nil(t, res)
+	require.Contains(t, runErr.Error(), "kaboom")
+	require.Contains(t, runErr.Error(), "node boom panic")
+}
