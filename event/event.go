@@ -159,14 +159,7 @@ func (e *Event) GetFilterKey() string {
 
 // Filter checks if the event matches the specified filter key.
 func (e *Event) Filter(filterKey string) bool {
-	if e == nil {
-		return true
-	}
-
-	eFilterKey := e.filterKey
-	if e.version != CurrentVersion {
-		eFilterKey = e.Branch
-	}
+	eFilterKey := e.GetFilterKey()
 
 	if filterKey == "" || eFilterKey == "" {
 		return true
