@@ -428,10 +428,9 @@ func (s *Saver) processSingleRow(ctx context.Context, rows *sql.Rows,
 }
 
 // matchesMetadataFilter checks if a tuple matches the metadata filter.
-func (s *Saver) matchesMetadataFilter(tuple *graph.CheckpointTuple,
-	filter *graph.CheckpointFilter) bool {
-
-	if filter == nil || filter.Metadata == nil {
+func (s *Saver) matchesMetadataFilter(tuple *graph.CheckpointTuple, filter *graph.CheckpointFilter) bool {
+	// Treat nil or empty metadata map as "no metadata filter".
+	if filter == nil || len(filter.Metadata) == 0 {
 		return true
 	}
 

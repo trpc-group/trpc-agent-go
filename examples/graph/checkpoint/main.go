@@ -486,7 +486,9 @@ func (w *checkpointWorkflow) startInteractiveMode(ctx context.Context) error {
 			}
 			if len(parts) > 3 {
 				// Support additional input when resuming (advanced feature)
-				additionalInput = parts[3]
+				// Join remaining parts to preserve spaces, trim simple quotes.
+				additionalInput = strings.Join(parts[3:], " ")
+				additionalInput = strings.Trim(additionalInput, "\"'")
 			}
 			if err := w.resumeWorkflow(ctx, lineageID, checkpointID, additionalInput); err != nil {
 				fmt.Printf("❌ Error: %v\n", err)
@@ -1235,47 +1237,28 @@ func (w *checkpointWorkflow) processStreamingResponse(eventChan <-chan *event.Ev
 			}
 		}
 
-		// Approach 2: Look for graph node events with metadata (fallback).
-		if event.Author == graph.AuthorGraphNode {
-			if event.StateDelta != nil {
-				// Extract node metadata.
-				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
-					var nodeMetadata graph.NodeExecutionMetadata
-					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
-						switch nodeMetadata.Phase {
-						case graph.ExecutionPhaseStart:
-							w.logger.Infof("Node execution started: %s (%s)", nodeMetadata.NodeID, nodeMetadata.NodeType)
-							if w.verbose {
-								fmt.Printf("⚡ Starting node: %s (type: %s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-							}
-						case graph.ExecutionPhaseComplete:
-							lastNodeExecuted = nodeMetadata.NodeID
-							nodeExecutionCount++
-							duration := nodeMetadata.EndTime.Sub(nodeMetadata.StartTime)
-							w.logger.Infof("Node execution completed: %s (%s) in %v, total nodes: %d",
-								nodeMetadata.NodeID, nodeMetadata.NodeType, duration, nodeExecutionCount)
-							if w.verbose {
-								fmt.Printf("✓ Completed node: %s (duration: %v)\n", nodeMetadata.NodeID, duration.Round(time.Microsecond))
-							}
+		// Approach 2: Parse node execution metadata regardless of author.
+		if event.StateDelta != nil {
+			if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+				var nodeMetadata graph.NodeExecutionMetadata
+				if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+					switch nodeMetadata.Phase {
+					case graph.ExecutionPhaseStart:
+						w.logger.Infof("Node execution started: %s (%s)", nodeMetadata.NodeID, nodeMetadata.NodeType)
+						if w.verbose {
+							fmt.Printf("⚡ Starting node: %s (type: %s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 						}
-					}
-				}
-			}
-		}
-
-		// Approach 3: Look for executor events that indicate node completion.
-		if event.Author == graph.AuthorGraphExecutor && event.StateDelta != nil {
-			// Check if this state update indicates a node has executed
-			// by looking for our node-specific state changes.
-			if currentNodeIDBytes, exists := event.StateDelta["current_node_id"]; exists {
-				var nodeID string
-				if err := json.Unmarshal(currentNodeIDBytes, &nodeID); err == nil && nodeID != "" {
-					// This indicates a node has executed
-					lastNodeExecuted = nodeID
-					nodeExecutionCount++
-					w.logger.Infof("Detected node execution from state: %s (count: %d)", nodeID, nodeExecutionCount)
-					if w.verbose {
-						fmt.Printf("✓ Node executed: %s\n", nodeID)
+					case graph.ExecutionPhaseComplete:
+						// Avoid double-counting; rely on explicit graph.node.complete events for counts.
+						if lastNodeExecuted == "" {
+							lastNodeExecuted = nodeMetadata.NodeID
+						}
+						duration := nodeMetadata.EndTime.Sub(nodeMetadata.StartTime)
+						w.logger.Infof("Node execution completed: %s (%s) in %v, total nodes: %d",
+							nodeMetadata.NodeID, nodeMetadata.NodeType, duration, nodeExecutionCount)
+						if w.verbose {
+							fmt.Printf("✓ Completed node: %s (duration: %v)\n", nodeMetadata.NodeID, duration.Round(time.Microsecond))
+						}
 					}
 				}
 			}
