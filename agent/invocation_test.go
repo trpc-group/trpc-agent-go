@@ -72,7 +72,7 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
 }
 
-func TestAddNoticeChannel(t *testing.T) {
+func TestInvocation_AddNoticeChannel(t *testing.T) {
 	inv := NewInvocation()
 	ctx := context.Background()
 	ch := inv.AddNoticeChannel(ctx, "test-channel")
@@ -89,7 +89,7 @@ func TestAddNoticeChannel(t *testing.T) {
 	require.Equal(t, 0, len(inv.noticeChanMap))
 }
 
-func TestAddNoticeChannelAndWait(t *testing.T) {
+func TestInvocation_AddNoticeChannelAndWait(t *testing.T) {
 	type execTime struct {
 		min time.Duration
 		max time.Duration
@@ -198,10 +198,21 @@ func TestAddNoticeChannelAndWait(t *testing.T) {
 	}
 }
 
-func TestNotifyCompletion(t *testing.T) {
+func TestInvocation_NotifyCompletion(t *testing.T) {
 	inv := NewInvocation()
 	noticeKey := "test-channel-1"
 	err := inv.NotifyCompletion(context.Background(), noticeKey)
 	require.Error(t, err)
+	require.Equal(t, 0, len(inv.noticeChanMap))
+}
+
+func TestInvocation_CleanupNotice(t *testing.T) {
+	inv := NewInvocation()
+	ch := inv.AddNoticeChannel(context.Background(), "test-channel-1")
+	require.Equal(t, 1, len(inv.noticeChanMap))
+
+	// Cleanup notice channel
+	inv.CleanupNotice(context.Background())
+	<-ch
 	require.Equal(t, 0, len(inv.noticeChanMap))
 }

@@ -171,6 +171,7 @@ func (r *runner) Run(
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
+		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
 
@@ -179,7 +180,10 @@ func (r *runner) Run(
 
 	// Start a goroutine to process and append events to session.
 	go func() {
-		defer close(processedEventCh)
+		defer func() {
+			close(processedEventCh)
+			invocation.CleanupNotice(ctx)
+		}()
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
