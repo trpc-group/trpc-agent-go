@@ -714,16 +714,16 @@ func processEventCmd(cmd *redis.StringSliceCmd) ([]event.Event, error) {
 	}
 	events := make([]event.Event, 0, len(eventsBytes))
 	for _, eventBytes := range eventsBytes {
-		e := &event.Event{}
-		if err := json.Unmarshal([]byte(eventBytes), e); err != nil {
+		event := &event.Event{}
+		if err := json.Unmarshal([]byte(eventBytes), event); err != nil {
 			return nil, fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		events = append(events, *e)
+		events = append(events, *event)
 	}
 	return events, nil
 }
 
-func (s *Service) addEvent(ctx context.Context, key session.Key, e *event.Event) error {
+func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
 	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
 		return fmt.Errorf("get session state failed: %w", err)
@@ -737,13 +737,13 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, e *event.Event)
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
 	}
-	isession.ApplyEventStateDeltaMap(sessState.State, e)
+	isession.ApplyEventStateDeltaMap(sessState.State, event)
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("marshal session state failed: %w", err)
 	}
 
-	eventBytes, err := json.Marshal(e)
+	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
@@ -751,7 +751,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, e *event.Event)
 	txPipe := s.redisClient.TxPipeline()
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
 	txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
-		Score:  float64(e.Timestamp.UnixNano()),
+		Score:  float64(event.Timestamp.UnixNano()),
 		Member: eventBytes,
 	})
 	if s.opts.sessionEventLimit > 0 {
