@@ -85,16 +85,27 @@ func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 
 // testAgent implements agent.Agent and agent.CodeExecutor
-type testAgent struct{ exec codeexecutor.CodeExecutor }
+type testAgent struct {
+	exec codeexecutor.CodeExecutor
+}
 
 // agent.Agent
 func (a *testAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	return nil, nil
 }
-func (a *testAgent) Tools() []tool.Tool                   { return nil }
-func (a *testAgent) Info() agent.Info                     { return agent.Info{Name: "test-agent"} }
-func (a *testAgent) SubAgents() []agent.Agent             { return nil }
-func (a *testAgent) FindSubAgent(name string) agent.Agent { return nil }
+func (a *testAgent) Tools() []tool.Tool {
+	return nil
+}
+func (a *testAgent) Info() agent.Info {
+	return agent.Info{Name: "test-agent"}
+}
+func (a *testAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (a *testAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
 
-// agent.CodeExecutor
-func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor { return a.exec }
+func (a *testAgent) CodeExecutor() codeexecutor.CodeExecutor {
+	return a.exec
+}
