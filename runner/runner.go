@@ -134,7 +134,7 @@ func (r *runner) Run(
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationArtifactService(r.artifactService),
-		agent.WithInvocationEventFilterKey("runner"),
+		agent.WithInvocationEventFilterKey(r.appName),
 	)
 
 	// Append the incoming user message to the session if it has content.
@@ -171,8 +171,8 @@ func (r *runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.StateDelta != nil ||
-				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
+			if agentEvent != nil && (len(agentEvent.StateDelta) > 0 ||
+				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
