@@ -413,3 +413,18 @@ model := openai.New("deepseek-chat",
     }),
 )
 ```
+
+### 2. Provider compatibility options
+
+Some OpenAI-compatible providers reject `max_tokens` and only accept
+`max_completion_tokens`.
+
+Use the following option to force the wire key:
+
+```go
+model := openai.New("deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithForceMaxCompletionTokens(), // Use max_completion_tokens
+)
+```

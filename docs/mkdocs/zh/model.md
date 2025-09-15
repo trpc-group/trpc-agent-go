@@ -413,3 +413,17 @@ model := openai.New("deepseek-chat",
     }),
 )
 ```
+
+### 2. 兼容性选项
+
+部分 OpenAI 兼容平台不接受 `max_tokens`，仅接受 `max_completion_tokens`。
+
+可通过以下选项强制发送对应字段：
+
+```go
+model := openai.New("deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithForceMaxCompletionTokens(), // 使用 max_completion_tokens
+)
+```
