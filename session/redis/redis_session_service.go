@@ -407,7 +407,7 @@ func (s *Service) AppendEvent(
 	if s.opts.enableAsyncPersist {
 		defer func() {
 			if r := recover(); r != nil {
-				if err, ok := r.(error); ok && err.Error() != "send on closed channel" {
+				if err, ok := r.(error); !ok || err.Error() != "send on closed channel" {
 					log.Errorf("redis session service append event failed: %v", r)
 					return
 				}
