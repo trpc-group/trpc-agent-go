@@ -77,7 +77,7 @@ func (p *PlanningRequestProcessor) ProcessRequest(
 
 	log.Debugf("Planning request processor: sent preprocessing event")
 
-	if err := invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingPlanning),
@@ -160,7 +160,7 @@ func (p *PlanningResponseProcessor) ProcessResponse(
 
 	log.Debugf("Planning response processor: sent postprocessing event")
 
-	if err := invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePostprocessingPlanning),

@@ -100,7 +100,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		// Send a preprocessing event and return early.
 		evt := event.New(invocation.InvocationID, invocation.AgentName, event.WithObject(model.ObjectTypePreprocessingContent))
 		log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
-		invocation.EmitEventWithInvocation(ctx, ch, evt)
+		agent.EmitEvent(ctx, invocation, ch, evt)
 		return
 	}
 
@@ -127,7 +127,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Send a preprocessing event.
-	invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingPlanning),

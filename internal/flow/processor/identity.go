@@ -108,7 +108,7 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 
 	log.Debugf("Identity request processor: sent preprocessing event")
 
-	if err := invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingIdentity),

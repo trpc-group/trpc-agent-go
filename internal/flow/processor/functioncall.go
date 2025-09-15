@@ -103,7 +103,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		invocation.EmitEventWithInvocation(ctx, ch, event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -129,7 +129,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		if emitErr := invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
+		if emitErr := agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -139,7 +139,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		}
 		return nil, err
 	}
-	err = invocation.EmitEventWithInvocation(ctx, eventChan, functionResponseEvent)
+	err = agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
 
@@ -756,7 +756,7 @@ func newToolCallResponseEvent(
 			Timestamp: time.Now(),
 		},
 	)
-	invocation.InjectInvocationIntoEvent(e)
+	agent.InjectInvocationIntoEvent(invocation, e)
 	return e
 }
 
@@ -896,7 +896,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
 		if f.shouldForwardInnerEvent(ev) {
-			if err := invocation.EmitEventWithInvocation(ctx, eventChan, ev); err != nil {
+			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
 				return err
 			}
 		}
@@ -912,7 +912,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	*contents = append(*contents, text)
 	if eventChan != nil {
 		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
-		if err := invocation.EmitEventWithInvocation(ctx, eventChan, partial); err != nil {
+		if err := agent.EmitEvent(ctx, invocation, eventChan, partial); err != nil {
 			return err
 		}
 	}

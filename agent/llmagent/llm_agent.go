@@ -568,7 +568,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			invocation.EmitEventWithInvocation(ctx, eventChan, customEvent)
+			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -644,7 +644,7 @@ func (a *LLMAgent) wrapEventChannel(
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
 
-			invocation.EmitEventWithInvocation(ctx, wrappedChan, evt)
+			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 	}()
 

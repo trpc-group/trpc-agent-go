@@ -60,7 +60,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
-	invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
@@ -78,7 +78,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		ExecutionID: invocation.Session.ID,
 	})
 	if err != nil {
-		invocation.EmitEventWithInvocation(ctx, ch, event.New(
+		agent.EmitEvent(ctx, invocation, ch, event.New(
 			invocation.InvocationID,
 			invocation.AgentName,
 			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
@@ -92,7 +92,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		)
 		return
 	}
-	invocation.EmitEventWithInvocation(ctx, ch, event.New(
+	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePostprocessingCodeExecution),

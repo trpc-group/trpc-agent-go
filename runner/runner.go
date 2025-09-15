@@ -155,7 +155,7 @@ func (r *runner) Run(
 			authorUser,
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 		)
-		invocation.InjectInvocationIntoEvent(evt)
+		agent.InjectInvocationIntoEvent(invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return nil, err
 		}
@@ -223,7 +223,7 @@ func (r *runner) Run(
 		}
 
 		// Send the runner completion event to output channel.
-		invocation.EmitEventWithInvocation(ctx, processedEventCh, runnerCompletionEvent)
+		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
 	}()
 
 	itelemetry.TraceRunner(span, r.appName, invocation, message)

@@ -173,7 +173,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
 			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			invocation.EmitEventWithInvocation(ctx, eventChan, customevent)
+			agent.EmitEvent(ctx, invocation, eventChan, customevent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -304,7 +304,7 @@ func (ga *GraphAgent) wrapEventChannel(
 			)
 		}
 
-		invocation.EmitEventWithInvocation(ctx, wrappedChan, evt)
+		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 	}()
 	return wrappedChan
 }

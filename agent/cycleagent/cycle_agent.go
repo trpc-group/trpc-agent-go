@@ -203,7 +203,7 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
@@ -213,7 +213,7 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewResponseEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
@@ -240,7 +240,7 @@ func (a *CycleAgent) runSubAgent(
 	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
-		invocation.EmitEventWithInvocation(ctx, eventChan, event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
@@ -318,7 +318,7 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 		)
 	}
 
-	invocation.EmitEventWithInvocation(ctx, eventChan, evt)
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.

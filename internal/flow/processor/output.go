@@ -112,7 +112,7 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 	typedEvt.RequiresCompletion = true
 
 	log.Debugf("Emitted typed structured output payload event.")
-	invocation.EmitEventWithInvocation(ctx, ch, typedEvt)
+	agent.EmitEvent(ctx, invocation, ch, typedEvt)
 }
 
 // handleOutputKey validates and emits state delta for output_key/output_schema cases.
@@ -148,7 +148,7 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	stateEvent.RequiresCompletion = true
 
 	log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
-	if err := invocation.EmitEventWithInvocation(ctx, ch, stateEvent); err != nil {
+	if err := agent.EmitEvent(ctx, invocation, ch, stateEvent); err != nil {
 		return
 	}
 
