@@ -214,6 +214,56 @@ func TestLocalCodeExecutor_ExecuteCode_WithWorkDir(t *testing.T) {
 	assert.NoError(t, err, "File should exist in work directory")
 }
 
+func TestLocalCodeExecutor_ExecuteCode_WithRelativeWorkDir(t *testing.T) {
+	// Create a temporary directory relative to current working directory.
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	relDirPath, err := os.MkdirTemp(".", "rel-workdir-")
+	require.NoError(t, err)
+	defer os.RemoveAll(relDirPath)
+
+	// Determine values to pass and to assert against.
+	// Pass a relative WorkDir argument.
+	workDirArg := relDirPath
+	if filepath.IsAbs(workDirArg) {
+		// Make it relative to cwd if MkdirTemp returned absolute.
+		if rel, err2 := filepath.Rel(cwd, workDirArg); err2 == nil {
+			workDirArg = rel
+		}
+	}
+	// Also compute absolute path for existence checks.
+	absDir, err := filepath.Abs(relDirPath)
+	require.NoError(t, err)
+
+	executor := local.New(
+		local.WithWorkDir(workDirArg),
+		local.WithCleanTempFiles(false), // keep artifacts to verify path correctness
+	)
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{
+				Code:     "echo 'Hello Rel' > rel_out.txt\ncat rel_out.txt",
+				Language: "bash",
+			},
+		},
+		ExecutionID: "test-rel-workdir-1",
+	}
+
+	ctx := context.Background()
+	result, err := executor.ExecuteCode(ctx, input)
+
+	assert.NoError(t, err)
+	assert.Contains(t, result.Output, "Hello Rel")
+	assert.Empty(t, result.OutputFiles)
+
+	// Verify the file was created under the (absolute-normalized) work directory
+	outFile := filepath.Join(absDir, "rel_out.txt")
+	_, err = os.Stat(outFile)
+	assert.NoError(t, err, "Expected output file inside normalized work dir")
+}
+
 func TestLocalCodeExecutor_ExecuteCode_WithoutWorkDir(t *testing.T) {
 	executor := local.New()
 
