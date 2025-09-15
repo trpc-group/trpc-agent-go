@@ -125,6 +125,17 @@ func WithKnowledgeFilter(filter map[string]any) RunOption {
 	}
 }
 
+// WithMessages sets the initial conversation history for this run.
+// When provided, the content processor will prefer these messages and
+// will not derive messages from session events or the single
+// `invocation.Message` to prevent duplication. The messages should be
+// in chronological order (system -> user/assistant alternating).
+func WithMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.Messages = messages
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -134,6 +145,13 @@ type RunOptions struct {
 
 	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
 	KnowledgeFilter map[string]any
+
+	// Messages allows callers to provide a full conversation history
+	// directly to the agent invocation without relying on the session
+	// service. When provided, the content processor will prefer these
+	// messages and skip deriving content from session events or the
+	// single `invocation.Message` to avoid duplication.
+	Messages []model.Message
 }
 
 // NewInvocation create a new invocation

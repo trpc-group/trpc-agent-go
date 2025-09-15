@@ -157,6 +157,34 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
 
+#### Pass Conversation History (no session dependency)
+
+If your upstream service maintains the conversation and you want to pass the full history (`[]model.Message`) directly to the Agent, use one of the following approaches:
+
+Option A: Use the convenience helper `runner.RunWithMessages`
+
+```go
+msgs := []model.Message{
+    model.NewSystemMessage("You are a helpful assistant."),
+    model.NewUserMessage("First user input"),
+    model.NewAssistantMessage("Previous assistant reply"),
+    model.NewUserMessage("What’s the next step?"),
+}
+
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+```
+
+Example: `examples/runwithmessages`
+
+Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
+
+```go
+msgs := []model.Message{ /* as above */ }
+ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msgs))
+```
+
+Note: When `[]model.Message` is provided, the content processor prioritizes this history and skips deriving messages from the Session or the single `message`, avoiding duplication. In `RunWithMessages`, Runner sets `invocation.Message` to the latest user message to preserve compatibility with graph-based agents that use initial user input.
+
 ## 💾 Session Management
 
 ### In-memory Session (Default)
