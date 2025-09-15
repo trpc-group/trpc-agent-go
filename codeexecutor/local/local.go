@@ -78,8 +78,14 @@ func (e *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 	var shouldCleanup bool
 
 	if e.WorkDir != "" {
-		// Use specified working directory
+		// Use specified working directory.
 		workDir = e.WorkDir
+		// Normalize relative paths to absolute.
+		if !filepath.IsAbs(workDir) {
+			if abs, err := filepath.Abs(workDir); err == nil {
+				workDir = abs
+			}
+		}
 		// Ensure the directory exists
 		if err := os.MkdirAll(workDir, 0755); err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create work directory: %w", err)
