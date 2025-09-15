@@ -264,7 +264,7 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			defer cleanup()
 
 			service, err := NewService(WithRedisClientURL(redisURL),
-				WithEnableAsyncPersistence(tt.enableAsyncPersistence))
+				WithEnableAsyncPersist(tt.enableAsyncPersistence))
 			require.NoError(t, err)
 			defer service.Close()
 
