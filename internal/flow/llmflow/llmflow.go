@@ -115,7 +115,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 
 			// Exit conditions.
-			if invocation.EndInvocation || lastEvent.IsFinalResponse() {
+			// Protect against nil lastEvent which can occur if a step produced no events.
+			if invocation.EndInvocation || (lastEvent != nil && lastEvent.IsFinalResponse()) {
 				break
 			}
 		}
