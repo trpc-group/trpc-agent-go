@@ -1,5 +1,7 @@
 // Copyright The OpenTelemetry Authors
+// Copyright (C) 2025 Tencent. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
 
 package tracetransform
 
