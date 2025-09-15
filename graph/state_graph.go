@@ -364,7 +364,7 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
@@ -669,7 +669,7 @@ func runModel(
 // This implements tools node functionality using the tools package interface.
 func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "tools_node_execution")
+		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
 		defer span.End()
 
 		// Extract and validate messages from state.
@@ -798,21 +798,10 @@ func runTool(
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
 ) (any, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
-	defer span.End()
-
-	// Set span attributes for tool execution.
-	span.SetAttributes(
-		attribute.String("trpc.go.agent.tool_name", toolCall.Function.Name),
-		attribute.String("trpc.go.agent.tool_id", toolCall.ID),
-		attribute.String("trpc.go.agent.tool_description", t.Declaration().Description),
-	)
-
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
 			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
@@ -822,14 +811,12 @@ func runTool(
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
 				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
 			if err != nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 				return nil, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
@@ -838,7 +825,6 @@ func runTool(
 		}
 		return result, nil
 	}
-	span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s is not callable", toolCall.Function.Name)))
 	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
@@ -1087,10 +1073,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	)
 
 	// Execute the tool.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
 	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
-
 	// Emit tool execution complete event.
-	emitToolCompleteEvent(toolCompleteEventConfig{
+	event := emitToolCompleteEvent(toolCompleteEventConfig{
 		EventChan:    config.EventChan,
 		InvocationID: config.InvocationID,
 		ToolName:     name,
@@ -1101,6 +1087,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Error:        err,
 		Arguments:    config.ToolCall.Function.Arguments,
 	})
+	itelemetry.TraceToolCall(span, t.Declaration(), config.ToolCall.Function.Arguments, event)
+	span.End()
 
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
@@ -1158,9 +1146,9 @@ type toolCompleteEventConfig struct {
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
-func emitToolCompleteEvent(config toolCompleteEventConfig) {
+func emitToolCompleteEvent(config toolCompleteEventConfig) *event.Event {
 	if config.EventChan == nil {
-		return
+		return nil
 	}
 
 	endTime := time.Now()
@@ -1188,6 +1176,7 @@ func emitToolCompleteEvent(config toolCompleteEventConfig) {
 	case config.EventChan <- toolCompleteEvent:
 	default:
 	}
+	return toolCompleteEvent
 }
 
 // extractToolCallbacks extracts tool callbacks from the state.

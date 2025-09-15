@@ -24,47 +24,31 @@ Refer to the Langfuse self-hosting guide for local or cloud deployment. For a qu
 
 #### 2. Go Code Integration Example
 
+```bash
+export LANGFUSE_PUBLIC_KEY="your-public-key"
+export LANGFUSE_SECRET_KEY="your-secret-key"
+export LANGFUSE_HOST="your-langfuse-host"
+```
+
 ```go
 import (
-    "context"
-    "encoding/base64"
-    "fmt"
-    "log"
+	"context"
+	"log"
 
-    atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
 func main() {
-    // https://langfuse.com/integrations/native/opentelemetry
-    langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "sk-*")
-    langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "pk-*")
-    langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
-    otelEndpointPath := "/api/public/otel/v1/traces"
-
-    // Start tracing
-    clean, err := atrace.Start(
-        context.Background(),
-        atrace.WithEndpointURL(langFuseHost+otelEndpointPath),
-        atrace.WithProtocol("http"),
-        atrace.WithHeaders(map[string]string{
-            "Authorization": fmt.Sprintf("Basic %s", encodeAuth(langFusePublicKey, langFuseSecretKey)),
-        }),
-    )
-    if err != nil {
-        log.Fatalf("Failed to start tracing: %v", err)
-    }
-    defer func() {
-        if err := clean(); err != nil {
-            log.Printf("Failed to cleanup tracing: %v", err)
-        }
-    }()
-    // ...your Agent application code...
-}
-
-func encodeAuth(pk, sk string) string {
-    auth := pk + ":" + sk
-    return base64.StdEncoding.EncodeToString([]byte(auth))
-}
+	// Start trace with Langfuse integration using environment variables
+	clean, err := langfuse.Start(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to start trace telemetry: %v", err)
+	}
+	defer func() {
+		if err := clean(context.Background()); err != nil {
+			log.Printf("Failed to clean up trace telemetry: %v", err)
+		}
+	}()
 ```
 
 See the complete example at [examples/telemetry/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse).

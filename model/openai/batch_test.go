@@ -48,7 +48,7 @@ func TestBatchRequestInput_JSON(t *testing.T) {
 					Model: "gpt-3.5-turbo",
 				},
 			},
-			expected: `{"custom_id":"test-1","method":"POST","url":"/v1/chat/completions","body":{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Hello"}],"model":"gpt-3.5-turbo","stream":false}}`,
+			expected: `{"custom_id":"test-1","method":"POST","url":"/v1/chat/completions","body":{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Hello"}],"generation_config":{"stream":false},"model":"gpt-3.5-turbo"}}`,
 		},
 		{
 			name: "minimal request",
@@ -62,7 +62,7 @@ func TestBatchRequestInput_JSON(t *testing.T) {
 					},
 				},
 			},
-			expected: `{"custom_id":"test-2","method":"","url":"","body":{"messages":[{"role":"user","content":"Hi"}],"model":"","stream":false}}`,
+			expected: `{"custom_id":"test-2","method":"","url":"","body":{"messages":[{"role":"user","content":"Hi"}],"generation_config":{"stream":false},"model":""}}`,
 		},
 	}
 
@@ -104,7 +104,7 @@ func TestBatchRequest_JSON(t *testing.T) {
 				},
 				Model: "gpt-4",
 			},
-			expected: `{"messages":[{"role":"user","content":"Hello"}],"temperature":0.7,"model":"gpt-4","stream":false}`,
+			expected: `{"messages":[{"role":"user","content":"Hello"}],"generation_config":{"temperature":0.7,"stream":false},"model":"gpt-4"}`,
 		},
 		{
 			name: "without model",
@@ -115,7 +115,7 @@ func TestBatchRequest_JSON(t *testing.T) {
 					},
 				},
 			},
-			expected: `{"messages":[{"role":"system","content":"You are helpful"}],"model":"","stream":false}`,
+			expected: `{"messages":[{"role":"system","content":"You are helpful"}],"generation_config":{"stream":false},"model":""}`,
 		},
 	}
 
