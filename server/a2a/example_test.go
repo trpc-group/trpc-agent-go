@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package a2a
 
 import (
@@ -19,13 +28,14 @@ import (
 )
 
 func TestA2AServerExample(t *testing.T) {
+	// Define test cases with consistent port allocation
 	tests := []struct {
 		name      string
 		agentName string
 		agentDesc string
 		userInput string
 		streaming bool
-		host      string
+		port      int
 		expectErr bool
 	}{
 		{
@@ -34,7 +44,7 @@ func TestA2AServerExample(t *testing.T) {
 			agentDesc: "i am a remote agent, i can tell a joke",
 			userInput: "tell me a joke",
 			streaming: false,
-			host:      "localhost:18881",
+			port:      18881,
 			expectErr: false,
 		},
 		{
@@ -43,19 +53,19 @@ func TestA2AServerExample(t *testing.T) {
 			agentDesc: "i am a helpful assistant",
 			userInput: "help me with something",
 			streaming: true,
-			host:      "localhost:18882",
+			port:      18882,
 			expectErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fmt.Printf("=== Testing %s ===\n", tt.name)
-			fmt.Printf("Agent: %s\n", tt.agentName)
-			fmt.Printf("Description: %s\n", tt.agentDesc)
-			fmt.Printf("User Input: %s\n", tt.userInput)
-			fmt.Printf("Streaming: %v\n", tt.streaming)
-			fmt.Printf("Host: %s\n", tt.host)
+			// Create context with timeout for the entire test case
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			host := fmt.Sprintf("localhost:%d", tt.port)
+			t.Logf("Testing %s (streaming=%v) on %s", tt.name, tt.streaming, host)
 
 			// Step 1: Create mock agent for the server
 			mockAgent := createExampleMockAgent(tt.agentName, tt.agentDesc, tt.streaming)
@@ -72,7 +82,7 @@ func TestA2AServerExample(t *testing.T) {
 					)
 					return &errMsg, nil
 				}),
-				WithHost(tt.host),
+				WithHost(host),
 				WithAgent(mockAgent, tt.streaming),
 				WithProcessMessageHook(
 					func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
@@ -85,20 +95,32 @@ func TestA2AServerExample(t *testing.T) {
 				t.Fatalf("Failed to create a2a server: %v", err)
 			}
 
-			defer server.Stop(context.Background())
-
-			// Start server in goroutine
-			serverDone := make(chan struct{})
-			go func() {
-				defer close(serverDone)
-				server.Start(tt.host)
+			defer func() {
+				if err := server.Stop(ctx); err != nil {
+					t.Logf("Warning: failed to stop server: %v", err)
+				}
 			}()
 
-			// Wait for server to start
-			time.Sleep(100 * time.Millisecond)
+			// Start server in goroutine with error handling
+			serverErr := make(chan error, 1)
+			go func() {
+				if err := server.Start(host); err != nil {
+					serverErr <- err
+				}
+			}()
+
+			// Wait for server to be ready with timeout
+			select {
+			case err := <-serverErr:
+				t.Fatalf("Server failed to start: %v", err)
+			case <-time.After(200 * time.Millisecond):
+				// Server started successfully
+			case <-ctx.Done():
+				t.Fatal("Timeout waiting for server to start")
+			}
 
 			// Step 3: Create a2a agent that connects to the server
-			httpURL := fmt.Sprintf("http://%s", tt.host)
+			httpURL := fmt.Sprintf("http://%s", host)
 			optionalStateKey := "meta"
 
 			a2aAgent, err := createTestA2AAgent(httpURL, optionalStateKey)
@@ -113,22 +135,19 @@ func TestA2AServerExample(t *testing.T) {
 				t.Fatalf("Failed to create a2a agent: %v", err)
 			}
 
-			// Verify agent card similar to the removed TestA2AServerExample
-			testAgentCard(t, mockAgent, tt.agentName, tt.agentDesc, tt.host, tt.streaming)
+			// Verify agent card
+			testAgentCard(t, mockAgent, tt.agentName, tt.agentDesc, host, tt.streaming)
 
 			// Step 4: Create runner with a2a agent
 			sessionService := inmemory.NewSessionService()
 			testRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(sessionService))
 
-			// Step 5: Execute runner similar to example's processMessage
+			// Step 5: Execute runner with timeout
 			userID := "user1"
 			sessionID := "session1"
 
-			fmt.Printf("🚀 Starting runner execution...\n")
-
-			// Execute runner similar to example
 			events, err := testRunner.Run(
-				context.Background(),
+				ctx,
 				userID,
 				sessionID,
 				model.NewUserMessage(tt.userInput),
@@ -139,12 +158,12 @@ func TestA2AServerExample(t *testing.T) {
 				t.Fatalf("Failed to run agent: %v", err)
 			}
 
-			// Step 6: Process response similar to example
+			// Step 6: Process response
 			if err := processTestResponse(t, events, tt.streaming); err != nil {
 				t.Fatalf("Failed to process response: %v", err)
 			}
 
-			fmt.Printf("=== Test %s completed successfully ===\n\n", tt.name)
+			t.Logf("Test completed successfully")
 		})
 	}
 }
@@ -256,9 +275,7 @@ func (h *exampleHookProcessor) ProcessMessage(
 	options taskmanager.ProcessOptions,
 	handler taskmanager.TaskHandler,
 ) (*taskmanager.MessageProcessingResult, error) {
-	// Log message similar to example (using fmt.Printf for testing)
-	fmt.Printf("A2A Server: received message: %+v\n", message.MessageID)
-	fmt.Printf("A2A Server: received state: %+v\n", message.Metadata)
+	// Use testing.T from context if available for proper test logging
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
@@ -400,14 +417,6 @@ func createTestA2AAgent(httpURL, optionalStateKey string) (agent.Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a2a agent: %w", err)
 	}
-
-	// Verify agent card similar to example
-	card := a2aAgent.GetAgentCard()
-	fmt.Printf("------- Agent Card -------\n")
-	fmt.Printf("Name: %s\n", card.Name)
-	fmt.Printf("Description: %s\n", card.Description)
-	fmt.Printf("URL: %s\n", httpURL)
-	fmt.Printf("------------------------\n")
 
 	return a2aAgent, nil
 }
