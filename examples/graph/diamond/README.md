@@ -1,6 +1,6 @@
 # Diamond Pattern Workflow Example
 
-This example demonstrates a diamond pattern workflow that exposes the need for per-node version tracking (`versions_seen`) in graph execution. Without proper `versions_seen` implementation, nodes that receive input from multiple sources (like the aggregator node in this example) will execute multiple times instead of once.
+This example demonstrates a diamond pattern workflow with correct fan-in behavior, per-node version tracking ("versions_seen") on resume, and a barrier at the aggregator so it emits to the final node only after both branches complete.
 
 ## Overview
 
@@ -22,16 +22,11 @@ The diamond pattern is a common workflow structure where:
          final
 ```
 
-## The Problem This Example Exposes
+## What This Example Demonstrates
 
-Without proper per-node version tracking:
-- The aggregator node executes **twice** (once after each analyzer completes)
-- This leads to redundant processing and potential state inconsistencies
-- The issue becomes more severe with more parallel branches
-
-With proper `versions_seen` implementation:
-- The aggregator node would execute **once** after all analyzers complete
-- This ensures correct fan-in behavior and optimal performance
+- Correct fan-in with a barrier: aggregator routes to `final` only when both analyzer results are present.
+- Proper result accumulation from parallel branches using a string-slice reducer.
+- Checkpointing + resume: when resuming, per-node `versions_seen` avoids redundant executions if nothing new has arrived.
 
 ## Features
 
@@ -53,42 +48,54 @@ go run .
 
 Once running, use these commands:
 
-- `run [input]` - Execute the workflow with optional input data
-- `reset` - Reset execution counters
-- `help` - Show available commands
-- `exit` or `quit` - Exit the program
+- `run <lineage> [input]` — Run with a fixed `lineage_id` and optional input
+- `resume <lineage> [ck]` — Resume latest or specific checkpoint for a lineage
+- `list <lineage> [n]`    — List latest n checkpoints (default 5)
+- `reset`                 — Reset execution counters
+- `help`                  — Show available commands
+- `exit|quit`             — Exit the program
 
 ### Example Session
 
 ```bash
-> run test-data
-🚀 Starting workflow with input: test-data
-🔄 [1] SPLITTER: Processing input: test-data
-🔬 [1] ANALYZER1: Processing: A1-test-data
-🔬 [1] ANALYZER2: Processing: A2-test-data
-⚠️  [1] AGGREGATOR: Processing 1 results
-   - Result 1: Result1[A1-test-data]
-⚠️  [2] AGGREGATOR: Processing 2 results
-❌ ISSUE DETECTED: Aggregator executed multiple times!
-   Without versions_seen, aggregator runs once per analyzer update.
-   With proper versions_seen, it would run only once after both complete.
-   - Result 1: Result1[A1-test-data]
-   - Result 2: Result2[A2-test-data]
+> run demo hello
+🚀 Starting workflow with input: hello
+🔄 [1] SPLITTER: Processing input: hello
+🔬 [1] ANALYZER2: Processing: A2-hello
+🔬 [1] ANALYZER1: Processing: A1-hello
+⚠️  [1] AGGREGATOR: Processing 2 results
+   - Result 1: Result1[A1-hello]
+   - Result 2: Result2[A2-hello]
 
 📊 [1] FINAL: Workflow Complete
-Results collected: [Result1[A1-test-data] Result2[A2-test-data]]
+Results collected: [Result1[A1-hello] Result2[A2-hello]]
 
 🔍 Execution Analysis:
 ✅ splitter: 1 execution(s)
 ✅ analyzer1: 1 execution(s)
 ✅ analyzer2: 1 execution(s)
-❌ aggregator: 2 executions (expected: 1) - REDUNDANT EXECUTION!
+✅ aggregator: 1 execution(s)
 ✅ final: 1 execution(s)
 
-💡 Solution: Implement versions_seen to track per-node channel versions.
-
-⏱️  Execution time: 250ms
+⏱️  Execution time: ~150ms
 ```
+
+### Checkpoint + Resume
+
+```bash
+> run demo hello
+> list demo 5
+ 1. id=... step=3 time=... next=[]
+ 2. id=... step=2 time=... next=[final]
+ 3. id=... step=1 time=... next=[aggregator]
+ 4. id=... step=0 time=... next=[analyzer1 analyzer2]
+ 5. id=... step=-1 time=... next=[splitter]
+> resume demo
+🔁 Resuming workflow (lineage=demo, checkpoint=latest)
+⏱️  Execution time: 1ms
+```
+
+On resume with no new updates, `versions_seen` prevents redundant executions.
 
 ## Implementation Details
 
@@ -137,18 +144,16 @@ The example includes built-in execution tracking to demonstrate the issue:
 
 2. **Version Tracking Importance**: Per-node version tracking (`versions_seen`) is crucial for correct graph execution in diamond and similar patterns.
 
-3. **State Reducers**: The example uses `AppendReducer` for the results field to accumulate outputs from parallel branches.
+3. **State Reducers**: The example uses `StringSliceReducer` for the `results` field to accumulate outputs from parallel branches.
 
 4. **Timing Independence**: The analyzers have different processing times, ensuring they complete at different moments and expose the aggregator execution issue.
 
-## Solution
+## Implementation Notes
 
-The proper solution involves implementing `versions_seen` tracking that:
-- Records which channel versions each node has processed
-- Ensures nodes with multiple inputs wait for all inputs before executing
-- Prevents redundant executions while maintaining correctness
+- The aggregator has a conditional edge that routes to `final` only when both results are present; otherwise it routes to the special `End` node (no-op). This acts as a barrier to avoid premature routing.
+- The executor persists checkpoints at each step and carries forward `versions_seen` so that, upon resume, nodes only re-execute if they have not seen the latest version(s) of their triggering channels.
 
-This example serves as a test case for validating proper fan-in behavior in graph execution engines.
+This example serves as a test case for validating correct fan-in behavior plus checkpoint/resume semantics with per-node version tracking.
 
 ## Related Examples
 
