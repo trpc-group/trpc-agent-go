@@ -310,7 +310,7 @@ import (
 
 // A custom clear tool with real logic using the invocation context.
 func customClearMemoryTool() tool.Tool {
-    clearFunc := func(ctx context.Context, _ *struct{}) (*toolmemory.ClearMemoryResponse, error) {
+    clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
         // Get memory service and user info from invocation context.
         memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
         if err != nil {

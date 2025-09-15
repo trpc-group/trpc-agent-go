@@ -281,7 +281,7 @@ import (
 
 // 自定义清空工具，使用调用上下文中的 MemoryService 与会话信息。
 func customClearMemoryTool() tool.Tool {
-    clearFunc := func(ctx context.Context, _ *struct{}) (*toolmemory.ClearMemoryResponse, error) {
+    clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
         // 从调用上下文获取 MemoryService 与用户信息。
         memSvc, err := toolmemory.GetMemoryServiceFromContext(ctx)
         if err != nil {
