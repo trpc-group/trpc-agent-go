@@ -37,7 +37,7 @@ export OPENAI_API_KEY="your-openai-api-key"
 # OPENAI_BASE_URL not needed for OpenAI
 ```
 
-## Build and Run
+## Build and Run (Interactive)
 
 ```bash
 cd examples/customagent
@@ -45,17 +45,18 @@ cd examples/customagent
 # Build
 go build -o customagent .
 
-# Run with default model (deepseek-chat)
-./customagent -q "帮我规划一次上海周末亲子游"
+# Start interactive chat (default model: deepseek-chat)
+./customagent
 
-# Run with specific model
-./customagent -model gpt-4o-mini -q "Plan a 2-day weekend in Shanghai for kids"
+# Use a specific model
+./customagent -model gpt-4o-mini
 ```
 
-Command line flags:
+Interactive commands:
 
-- `-model`: model name (default: `deepseek-chat`)
-- `-q`: user query text
+- `/history` — Ask the agent to show conversation history
+- `/new` — Start a new session
+- `/exit` — Quit
 
 ## How it works
 
