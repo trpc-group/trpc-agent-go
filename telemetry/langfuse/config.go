@@ -35,8 +35,9 @@ func WithPublicKey(publicKey string) Option {
 // For local development, use "localhost:3000".
 //
 // Example:
-//   WithHost("cloud.langfuse.com:443")      // Production
-//   WithHost("localhost:3000")              // Local development
+//
+//	WithHost("cloud.langfuse.com:443")      // Production
+//	WithHost("localhost:3000")              // Local development
 func WithHost(host string) Option {
 	return func(cfg *config) {
 		cfg.host = host
@@ -62,10 +63,11 @@ type config struct {
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
 // Supported environment variables:
-//   LANGFUSE_SECRET_KEY: Langfuse secret key
-//   LANGFUSE_PUBLIC_KEY: Langfuse public key
-//   LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
-//   LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
+//
+//	LANGFUSE_SECRET_KEY: Langfuse secret key
+//	LANGFUSE_PUBLIC_KEY: Langfuse public key
+//	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
+//	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
 func newConfigFromEnv() *config {
 	return &config{
 		secretKey: getEnv("LANGFUSE_SECRET_KEY", ""),
