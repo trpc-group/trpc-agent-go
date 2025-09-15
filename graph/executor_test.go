@@ -1798,3 +1798,144 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 	}
 	close(stopCh)
 }
+
+// minimalNoopNode returns a trivial node function for building test graphs.
+func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
+
+func TestNewExecutor_InvalidGraph_ReturnsError(t *testing.T) {
+	// Graph created without entry point should fail validation in NewExecutor
+	g := New(NewStateSchema())
+	exec, err := NewExecutor(g)
+	require.Nil(t, exec)
+	require.Error(t, err)
+}
+
+func TestNewExecutor_NodeTimeout_MinimumEnforced(t *testing.T) {
+	// Build a minimal valid graph
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", minimalNoopNode).SetEntryPoint("a").SetFinishPoint("a")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	// StepTimeout < 2s -> derived node timeout < 1s -> should clamp to 1s
+	exec, err := NewExecutor(g, WithStepTimeout(1500*time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+	require.Equal(t, time.Second, exec.nodeTimeout)
+
+	// StepTimeout large -> derived node timeout should be half of step timeout
+	exec2, err := NewExecutor(g, WithStepTimeout(5*time.Second))
+	require.NoError(t, err)
+	require.NotNil(t, exec2)
+	require.Equal(t, 2500*time.Millisecond, exec2.nodeTimeout)
+}
+
+func TestExecutor_Execute_NilInvocation_Error(t *testing.T) {
+	// Build a minimal valid graph
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", minimalNoopNode).SetEntryPoint("a").SetFinishPoint("a")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// invocation is nil -> should return error before starting execution
+	ch, err := exec.Execute(context.Background(), State{}, nil)
+	require.Error(t, err)
+	require.Nil(t, ch)
+}
+
+func TestDeepCopyAny_Branches(t *testing.T) {
+	// []int branch
+	ints := []int{1, 2, 3}
+	gotIntsAny := deepCopyAny(ints)
+	gotInts, ok := gotIntsAny.([]int)
+	require.True(t, ok)
+	require.Equal(t, ints, gotInts)
+	if len(gotInts) > 0 && len(ints) > 0 {
+		require.NotSame(t, &ints[0], &gotInts[0])
+	}
+	gotInts[0] = 99
+	require.Equal(t, []int{1, 2, 3}, ints) // original unchanged
+
+	// []float64 branch
+	floats := []float64{1.5, 2.5}
+	gotFloatsAny := deepCopyAny(floats)
+	gotFloats, ok := gotFloatsAny.([]float64)
+	require.True(t, ok)
+	require.Equal(t, floats, gotFloats)
+	if len(gotFloats) > 0 && len(floats) > 0 {
+		require.NotSame(t, &floats[0], &gotFloats[0])
+	}
+	gotFloats[0] = 7.7
+	require.Equal(t, []float64{1.5, 2.5}, floats) // original unchanged
+
+	// time.Time branch
+	now := time.Now()
+	gotTime := deepCopyAny(now)
+	// should return the same value
+	require.True(t, gotTime.(time.Time).Equal(now))
+
+	// reflect.Map: typed nil map should be returned as typed nil
+	var nilMap map[string]int
+	gotNilMap := deepCopyAny(nilMap)
+	require.Equal(t, reflect.TypeOf(nilMap), reflect.TypeOf(gotNilMap))
+	require.True(t, reflect.ValueOf(gotNilMap).IsNil())
+
+	// reflect.Map: non-nil map with non-any value type
+	m := map[string]int{"a": 1}
+	gotMapAny := deepCopyAny(m)
+	gotMap, ok := gotMapAny.(map[string]int)
+	require.True(t, ok)
+	require.Equal(t, m, gotMap)
+	gotMap["a"] = 42
+	require.Equal(t, 1, m["a"]) // original unchanged
+
+	// reflect.Slice: typed nil slice should be returned as typed nil
+	type pair struct{ A int }
+	var nilSlice []pair
+	gotNilSlice := deepCopyAny(nilSlice)
+	require.Equal(t, reflect.TypeOf(nilSlice), reflect.TypeOf(gotNilSlice))
+	require.True(t, reflect.ValueOf(gotNilSlice).IsNil())
+
+	// reflect.Slice: non-nil slice of custom type
+	s := []pair{{1}, {2}}
+	gotSliceAny := deepCopyAny(s)
+	gotSlice, ok := gotSliceAny.([]pair)
+	require.True(t, ok)
+	require.Equal(t, s, gotSlice)
+	if len(gotSlice) > 0 && len(s) > 0 {
+		require.NotSame(t, &s[0], &gotSlice[0])
+	}
+	gotSlice[0].A = 99
+	require.Equal(t, []pair{{1}, {2}}, s) // original unchanged
+}
+
+// TestExecuteNodeFunction_RecoversFromPanic ensures that panics in user node functions
+// are recovered and converted into errors, without crashing the executor.
+func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
+	// Build graph with a single node that panics
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("boom", func(ctx context.Context, state State) (any, error) {
+		panic("kaboom")
+	}).SetEntryPoint("boom").SetFinishPoint("boom")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        make(State),
+		InvocationID: "panic-test",
+	}
+	task := &Task{NodeID: "boom", TaskID: "boom-0"}
+
+	res, runErr := exec.executeNodeFunction(context.Background(), execCtx, task)
+	require.Error(t, runErr)
+	require.Nil(t, res)
+	require.Contains(t, runErr.Error(), "kaboom")
+	require.Contains(t, runErr.Error(), "node boom panic")
+}
