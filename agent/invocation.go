@@ -19,7 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
-
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -77,6 +77,8 @@ type Invocation struct {
 	// StructuredOutputType is the Go type to unmarshal the final JSON into.
 	StructuredOutputType reflect.Type
 
+	// MemoryService is the service for managing memory.
+	MemoryService memory.Service
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 

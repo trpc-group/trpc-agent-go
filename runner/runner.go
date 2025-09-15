@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -39,6 +40,13 @@ type Option func(*Options)
 func WithSessionService(service session.Service) Option {
 	return func(opts *Options) {
 		opts.sessionService = service
+	}
+}
+
+// WithMemoryService sets the memory service to use.
+func WithMemoryService(service memory.Service) Option {
+	return func(opts *Options) {
+		opts.memoryService = service
 	}
 }
 
@@ -65,12 +73,14 @@ type runner struct {
 	appName         string
 	agent           agent.Agent
 	sessionService  session.Service
+	memoryService   memory.Service
 	artifactService artifact.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
 	sessionService  session.Service
+	memoryService   memory.Service
 	artifactService artifact.Service
 }
 
@@ -90,6 +100,7 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		appName:         appName,
 		agent:           agent,
 		sessionService:  options.sessionService,
+		memoryService:   options.memoryService,
 		artifactService: options.artifactService,
 	}
 }
@@ -159,6 +170,7 @@ func (r *runner) Run(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
 	)
 
