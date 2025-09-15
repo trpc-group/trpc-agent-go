@@ -647,6 +647,229 @@ func findSubstring(s, substr string) bool {
 	return false
 }
 
+// Additional test cases for better coverage
+func TestMessageProcessor_HandleError(t *testing.T) {
+	tests := []struct {
+		name      string
+		streaming bool
+		error     error
+		msg       *protocol.Message
+	}{
+		{
+			name:      "non-streaming error",
+			streaming: false,
+			error:     errors.New("test error"),
+			msg: &protocol.Message{
+				MessageID: "test-msg",
+				Role:      protocol.MessageRoleUser,
+			},
+		},
+		{
+			name:      "streaming error",
+			streaming: true,
+			error:     errors.New("streaming test error"),
+			msg: &protocol.Message{
+				MessageID: "test-msg-stream",
+				Role:      protocol.MessageRoleUser,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := createTestMessageProcessor()
+			ctx := context.Background()
+
+			result, err := processor.handleError(ctx, tt.msg, tt.streaming, tt.error)
+
+			if err != nil {
+				t.Errorf("handleError() unexpected error: %v", err)
+				return
+			}
+
+			if result == nil {
+				t.Error("handleError() should return non-nil result")
+				return
+			}
+
+			if tt.streaming {
+				if result.StreamingEvents == nil {
+					t.Error("handleError() should return streaming events for streaming error")
+				}
+				if result.Result != nil {
+					t.Error("handleError() should not return result for streaming error")
+				}
+			} else {
+				if result.Result == nil {
+					t.Error("handleError() should return result for non-streaming error")
+				}
+				if result.StreamingEvents != nil {
+					t.Error("handleError() should not return streaming events for non-streaming error")
+				}
+			}
+		})
+	}
+}
+
+func TestMessageProcessor_ProcessMessage_EdgeCases(t *testing.T) {
+	ctxID := "edge-ctx"
+
+	tests := []struct {
+		name           string
+		message        protocol.Message
+		setupProcessor func() *messageProcessor
+		expectError    bool
+	}{
+		{
+			name: "conversion_error",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "conv-error",
+				ContextID: &ctxID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "test"},
+				},
+			},
+			setupProcessor: func() *messageProcessor {
+				return &messageProcessor{
+					runner:              &mockRunner{},
+					a2aToAgentConverter: &errorA2AMessageConverter{},
+					eventToA2AConverter: &defaultEventToA2AMessage{},
+					errorHandler:        defaultErrorHandler,
+					debugLogging:        false,
+				}
+			},
+			expectError: false, // Should handle conversion error gracefully
+		},
+		{
+			name: "runner_error",
+			message: protocol.Message{
+				Kind:      "message",
+				MessageID: "runner-error",
+				ContextID: &ctxID,
+				Role:      protocol.MessageRoleUser,
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "test"},
+				},
+			},
+			setupProcessor: func() *messageProcessor {
+				return &messageProcessor{
+					runner: &mockRunner{
+						runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+							return nil, errors.New("runner failed")
+						},
+					},
+					a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+					eventToA2AConverter: &defaultEventToA2AMessage{},
+					errorHandler:        defaultErrorHandler,
+					debugLogging:        false,
+				}
+			},
+			expectError: false, // Should handle runner error gracefully
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler := &mockTaskHandler{
+				buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+					return "test-task", nil
+				},
+			}
+			processor := tt.setupProcessor()
+			options := taskmanager.ProcessOptions{Streaming: false}
+
+			result, err := processor.ProcessMessage(ctx, tt.message, options, handler)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("ProcessMessage() expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("ProcessMessage() unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Error("ProcessMessage() should return non-nil result")
+				}
+			}
+		})
+	}
+}
+
+func TestBuildA2AServer_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     *options
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name: "task_manager_creation_error",
+			options: &options{
+				agent:           &mockAgent{name: "test", description: "test"},
+				sessionService:  &mockSessionService{},
+				host:            "localhost:8080",
+				errorHandler:    defaultErrorHandler,
+				enableStreaming: false,
+				// No custom task manager builder, will use default which might fail
+			},
+			expectError: false, // Default task manager should work
+		},
+		{
+			name: "custom_task_manager_builder_returns_nil",
+			options: &options{
+				agent:          &mockAgent{name: "test", description: "test"},
+				sessionService: &mockSessionService{},
+				host:           "localhost:8080",
+				errorHandler:   defaultErrorHandler,
+				taskManagerBuilder: func(processor taskmanager.MessageProcessor) taskmanager.TaskManager {
+					return nil // This should cause an error
+				},
+			},
+			expectError: true,
+			errorMsg:    "NewA2AServer requires a non-nil taskManager",
+		},
+		{
+			name: "custom_processor_builder",
+			options: &options{
+				agent:          &mockAgent{name: "test", description: "test"},
+				sessionService: &mockSessionService{},
+				host:           "localhost:8080",
+				errorHandler:   defaultErrorHandler,
+				processorBuilder: func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor {
+					return &mockTaskManager{}
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, err := buildA2AServer(tt.options)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("buildA2AServer() expected error but got none")
+				}
+				if tt.errorMsg != "" && !containsString(err.Error(), tt.errorMsg) {
+					t.Errorf("buildA2AServer() error = %v, should contain %v", err, tt.errorMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("buildA2AServer() unexpected error: %v", err)
+				}
+				if server == nil {
+					t.Error("buildA2AServer() should return non-nil server")
+				}
+			}
+		})
+	}
+}
+
 func TestNew(t *testing.T) {
 	tests := []struct {
 		name    string
