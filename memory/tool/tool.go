@@ -162,7 +162,7 @@ func NewDeleteTool() tool.CallableTool {
 
 // NewClearTool creates a function tool for clearing all memories.
 func NewClearTool() tool.CallableTool {
-	clearFunc := func(ctx context.Context, _ *struct{}) (*ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ *ClearMemoryRequest) (*ClearMemoryResponse, error) {
 		// Get MemoryService from context.
 		memoryService, err := GetMemoryServiceFromContext(ctx)
 		if err != nil {

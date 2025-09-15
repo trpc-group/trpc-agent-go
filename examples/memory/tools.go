@@ -21,7 +21,7 @@ import (
 
 // Custom clear tool with enhanced logging.
 func customClearMemoryTool() tool.Tool {
-	clearFunc := func(ctx context.Context, _ *struct{}) (*toolmemory.ClearMemoryResponse, error) {
+	clearFunc := func(ctx context.Context, _ *toolmemory.ClearMemoryRequest) (*toolmemory.ClearMemoryResponse, error) {
 		fmt.Println("🧹 [Custom Clear Tool] Clearing memories with extra sparkle... ✨")
 
 		// Get memory service from invocation context.
