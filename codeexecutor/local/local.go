@@ -211,9 +211,8 @@ func (e *CodeExecutor) executeCommand(ctx context.Context, workDir string, cmdAr
 	// Execute the command
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("command failed (cwd=%s, cmd=%s): %s: %w", workDir, strings.Join(cmdArgs, " "), string(output), err)
 	}
-
 	return string(output), nil
 }
 
