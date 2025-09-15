@@ -140,7 +140,7 @@ func TestMaxTokensParameterSelection(t *testing.T) {
 	}
 
 	// Forced completion option: expect only max_completion_tokens present.
-	body = run(WithMaxCompletionTokens())
+	body = run(WithForceMaxCompletionTokens())
 	if !strings.Contains(body, "max_completion_tokens") {
 		t.Fatalf("expected body to contain max_completion_tokens, got: %s", body)
 	}

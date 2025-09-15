@@ -191,11 +191,11 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
-	// forceCompletionTokens forces using max_completion_tokens instead of
+	// forceMaxCompletionTokens forces using max_completion_tokens instead of
 	// max_tokens for Chat Completions request when MaxTokens is provided.
 	// When true, the adapter will inject max_completion_tokens via JSON and
 	// skip setting chatRequest.MaxTokens.
-	forceCompletionTokens bool
+	forceMaxCompletionTokens bool
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -248,7 +248,7 @@ type options struct {
 	BatchBaseURL string
 	// Force using max_completion_tokens instead of max_tokens when MaxTokens
 	// is provided in GenerationConfig.
-	forceCompletionTokens bool
+	forceMaxCompletionTokens bool
 }
 
 // Option is a function that configures an OpenAI model.
@@ -379,12 +379,12 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithMaxCompletionTokens forces the adapter to send max_completion_tokens
+// WithForceMaxCompletionTokens forces the adapter to send max_completion_tokens
 // instead of max_tokens when MaxTokens is provided by GenerationConfig.
 // Useful for models that reject max_tokens.
-func WithMaxCompletionTokens() Option {
+func WithForceMaxCompletionTokens() Option {
 	return func(opts *options) {
-		opts.forceCompletionTokens = true
+		opts.forceMaxCompletionTokens = true
 	}
 }
 
@@ -424,21 +424,21 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	return &Model{
-		client:                client,
-		name:                  name,
-		baseURL:               o.BaseURL,
-		apiKey:                o.APIKey,
-		channelBufferSize:     channelBufferSize,
-		chatRequestCallback:   o.ChatRequestCallback,
-		chatResponseCallback:  o.ChatResponseCallback,
-		chatChunkCallback:     o.ChatChunkCallback,
-		extraFields:           o.ExtraFields,
-		variant:               o.Variant,
-		variantConfig:         variantConfigs[o.Variant],
-		batchCompletionWindow: batchCompletionWindow,
-		batchMetadata:         o.BatchMetadata,
-		batchBaseURL:          o.BatchBaseURL,
-		forceCompletionTokens: o.forceCompletionTokens,
+		client:                   client,
+		name:                     name,
+		baseURL:                  o.BaseURL,
+		apiKey:                   o.APIKey,
+		channelBufferSize:        channelBufferSize,
+		chatRequestCallback:      o.ChatRequestCallback,
+		chatResponseCallback:     o.ChatResponseCallback,
+		chatChunkCallback:        o.ChatChunkCallback,
+		extraFields:              o.ExtraFields,
+		variant:                  o.Variant,
+		variantConfig:            variantConfigs[o.Variant],
+		batchCompletionWindow:    batchCompletionWindow,
+		batchMetadata:            o.BatchMetadata,
+		batchBaseURL:             o.BatchBaseURL,
+		forceMaxCompletionTokens: o.forceMaxCompletionTokens,
 	}
 }
 
@@ -488,10 +488,10 @@ func (m *Model) GenerateContent(
 
 	// Set optional parameters if provided.
 	if request.MaxTokens != nil {
-		if m.forceCompletionTokens {
+		if m.forceMaxCompletionTokens {
 			// Inject max_completion_tokens via JSON to ensure correct wire key even
 			// if the SDK struct does not expose the field.
-			opts = append(opts, openaiopt.WithJSONSet("max_completion_tokens", *request.MaxTokens))
+			opts = append(opts, openaiopt.WithJSONSet(model.MaxCompletionTokensKey, *request.MaxTokens))
 		} else {
 			chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
 		}
