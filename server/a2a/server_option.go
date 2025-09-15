@@ -12,10 +12,12 @@ package a2a
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -49,6 +51,9 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 // ProcessorBuilder returns a message processor for the given agent.
 type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
 
+// ProcessMessageHook is a function that wraps the message processor with additional functionality.
+type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
+
 // TaskManagerBuilder returns a task manager for the given agent.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
@@ -60,7 +65,7 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	}
 	userID := r.Header.Get(userIDHeader)
 	if userID == "" {
-		log.Warnf("UserID not set, you will use anonymous user")
+		log.Warnf("UserID(Header X-User-ID) not set, you will use anonymous user")
 		userID = uuid.New().String()
 	}
 	return &auth.User{ID: userID}, nil
@@ -72,19 +77,18 @@ type options struct {
 	enableStreaming     bool
 	agentCard           *a2a.AgentCard
 	processorBuilder    ProcessorBuilder
+	processorHook       ProcessMessageHook
 	taskManagerBuilder  TaskManagerBuilder
 	a2aToAgentConverter A2AMessageToAgentMessage
 	eventToA2AConverter EventToA2AMessage
 	host                string
 	extraOptions        []a2a.Option
+	errorHandler        ErrorHandler
+	debugLogging        bool
 }
 
 // Option is a function that configures a Server.
 type Option func(*options)
-
-var defaultOptions = &options{
-	host: "localhost:8080",
-}
 
 // WithSessionService sets the session service to use.
 func WithSessionService(service session.Service) Option {
@@ -112,6 +116,14 @@ func WithAgentCard(agentCard a2a.AgentCard) Option {
 func WithProcessorBuilder(builder ProcessorBuilder) Option {
 	return func(opts *options) {
 		opts.processorBuilder = builder
+	}
+}
+
+// WithProcessMessageHook sets the process message hook to use.
+// The hook can be used to wrap the message processor with additional functionality.
+func WithProcessMessageHook(hook ProcessMessageHook) Option {
+	return func(opts *options) {
+		opts.processorHook = hook
 	}
 }
 
@@ -148,4 +160,65 @@ func WithEventToA2AConverter(converter EventToA2AMessage) Option {
 	return func(opts *options) {
 		opts.eventToA2AConverter = converter
 	}
+}
+
+// WithDebugLogging sets the debug logging to use.
+func WithDebugLogging(debug bool) Option {
+	return func(opts *options) {
+		opts.debugLogging = debug
+	}
+}
+
+// WithErrorHandler sets a custom error handler.
+func WithErrorHandler(handler ErrorHandler) Option {
+	return func(opts *options) {
+		opts.errorHandler = handler
+	}
+}
+
+// ErrorHandler converts errors to user-friendly messages
+type ErrorHandler func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error)
+
+// DefaultErrorHandler provides intelligent error handling based on error type
+func defaultErrorHandler(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+	outputMsg := protocol.NewMessage(
+		protocol.MessageRoleAgent,
+		[]protocol.Part{
+			protocol.NewTextPart("An error occurred while processing your request."),
+		},
+	)
+	return &outputMsg, nil
+}
+
+type singleMsgSubscriber struct {
+	ch chan protocol.StreamingMessageEvent
+}
+
+func newSingleMsgSubscriber(msg *protocol.Message) *singleMsgSubscriber {
+	ch := make(chan protocol.StreamingMessageEvent, 1)
+	ch <- protocol.StreamingMessageEvent{
+		Result: msg,
+	}
+	close(ch)
+	return &singleMsgSubscriber{
+		ch: ch,
+	}
+}
+
+func (e *singleMsgSubscriber) Send(event protocol.StreamingMessageEvent) error {
+	return fmt.Errorf("send msg is not allowed for singleMsgSubscriber")
+}
+
+// Channel returns the channel of the task subscriber
+func (e *singleMsgSubscriber) Channel() <-chan protocol.StreamingMessageEvent {
+	return e.ch
+}
+
+// Closed returns true if the task subscriber is closed
+func (e *singleMsgSubscriber) Closed() bool {
+	return true
+}
+
+// Close close the task subscriber
+func (e *singleMsgSubscriber) Close() {
 }

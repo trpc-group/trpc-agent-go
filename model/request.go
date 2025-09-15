@@ -341,7 +341,7 @@ type Request struct {
 	Messages []Message `json:"messages"`
 
 	// GenerationConfig contains the generation parameters.
-	GenerationConfig `json:",inline"`
+	GenerationConfig `json:"generation_config,omitempty"`
 
 	// StructuredOutput defines how the model should produce structured output.
 	// When set, the underlying model adapter may use native structured output

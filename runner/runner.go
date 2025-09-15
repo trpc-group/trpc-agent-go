@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -112,8 +113,6 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, "invocation")
-	defer span.End()
 
 	sessionKey := session.Key{
 		AppName:   r.appName,
@@ -161,40 +160,42 @@ func (r *runner) Run(
 	}
 
 	// Create invocation.
-	eventCompletionCh := make(chan string)
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
-	invocation := &agent.Invocation{
-		Agent:             r.agent,
-		Session:           sess,
-		InvocationID:      invocationID,
-		EndInvocation:     false,
-		Message:           message,
-		RunOptions:        ro,
-		EventCompletionCh: eventCompletionCh,
-		MemoryService:     r.memoryService,
-		ArtifactService:   r.artifactService,
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID(invocationID),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationAgent(r.agent),
+		agent.WithInvocationRunOptions(ro),
+		agent.WithMemoryService(r.memoryService),
+		agent.WithInvocationArtifactService(r.artifactService),
+	)
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
+	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
+		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
 
 	// Create a new channel for processed events.
 	processedEventCh := make(chan *event.Event)
-
 	// Start a goroutine to process and append events to session.
 	go func() {
-		defer close(processedEventCh)
+		defer func() {
+			close(processedEventCh)
+			invocation.CleanupNotice(ctx)
+		}()
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
@@ -206,7 +207,8 @@ func (r *runner) Run(
 			}
 
 			if agentEvent.RequiresCompletion {
-				eventCompletionCh <- agentEvent.CompletionID
+				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
+				invocation.NotifyCompletion(ctx, completionID)
 			}
 
 			// Forward the event to the output channel.
@@ -246,5 +248,33 @@ func (r *runner) Run(
 		}
 	}()
 
+	itelemetry.TraceRunner(span, r.appName, invocation, message)
+
 	return processedEventCh, nil
+}
+
+// RunWithMessages is a convenience helper that lets callers pass a full
+// conversation history ([]model.Message) directly, without relying on the
+// session service. It preserves backward compatibility by delegating to the
+// existing Runner.Run with an empty message and a RunOption that carries the
+// conversation history.
+func RunWithMessages(
+	ctx context.Context,
+	r Runner,
+	userID string,
+	sessionID string,
+	messages []model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	runOpts = append(runOpts, agent.WithMessages(messages))
+	// Derive the latest user message for invocation state compatibility
+	// (e.g., used by GraphAgent to set initial user_input).
+	var latestUser model.Message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+			latestUser = messages[i]
+			break
+		}
+	}
+	return r.Run(ctx, userID, sessionID, latestUser, runOpts...)
 }

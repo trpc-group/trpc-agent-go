@@ -150,13 +150,11 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	case <-ctx.Done():
 		return
 	}
-	select {
-	case completionID := <-invocation.EventCompletionCh:
-		if completionID == stateEvent.ID {
-			log.Debugf("State delta event %s completed, proceeding with next LLM call", completionID)
-		}
-	case <-ctx.Done():
-		return
+
+	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
+	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,
+		agent.WaitNoticeWithoutTimeout); err != nil {
+		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.ID, err)
 	}
 }
 

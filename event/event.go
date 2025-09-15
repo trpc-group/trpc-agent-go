@@ -40,9 +40,6 @@ type Event struct {
 	// RequiresCompletion indicates if this event needs completion signaling.
 	RequiresCompletion bool `json:"requiresCompletion,omitempty"`
 
-	// CompletionID is used for completion signaling of this event.
-	CompletionID string `json:"completionId,omitempty"`
-
 	// LongRunningToolIDs is the Set of ids of the long running function calls.
 	// Agent client will know from this field about which function call is long running.
 	// only valid for function call event

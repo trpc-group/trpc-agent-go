@@ -10,13 +10,27 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"reflect"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const (
+	// WaitNoticeWithoutTimeout is the timeout duration for waiting without timeout
+	WaitNoticeWithoutTimeout = 0 * time.Second
+
+	// AppendEventNoticeKeyPrefix is the prefix for append event notice keys
+	AppendEventNoticeKeyPrefix = "append_event:"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -47,8 +61,6 @@ type Invocation struct {
 	Model model.Model
 	// Message is the message that is being sent to the agent.
 	Message model.Message
-	// EventCompletionCh is used to signal when events are written to session.
-	EventCompletionCh <-chan string
 	// RunOptions is the options for the Run method.
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
@@ -69,6 +81,33 @@ type Invocation struct {
 	MemoryService memory.Service
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
+
+	// noticeChanMap is used to signal when events are written to the session.
+	noticeChanMap map[string]chan any
+	noticeMu      *sync.Mutex
+}
+
+// WaitNoticeTimeoutError represents an error that signals the wait notice timeout.
+type WaitNoticeTimeoutError struct {
+	// Message contains the stop reason
+	Message string
+}
+
+// Error implements the error interface.
+func (e *WaitNoticeTimeoutError) Error() string {
+	return e.Message
+}
+
+// AsWaitNoticeTimeoutError checks if an error is a AsWaitNoticeTimeoutError using errors.As.
+func AsWaitNoticeTimeoutError(err error) (*WaitNoticeTimeoutError, bool) {
+	var waitNoticeTimeoutErr *WaitNoticeTimeoutError
+	ok := errors.As(err, &waitNoticeTimeoutErr)
+	return waitNoticeTimeoutErr, ok
+}
+
+// NewWaitNoticeTimeoutError creates a new AsWaitNoticeTimeoutError with the given message.
+func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
+	return &WaitNoticeTimeoutError{Message: message}
 }
 
 // RunOption is a function that configures a RunOptions.
@@ -88,6 +127,17 @@ func WithKnowledgeFilter(filter map[string]any) RunOption {
 	}
 }
 
+// WithMessages sets the initial conversation history for this run.
+// When provided, the content processor will prefer these messages and
+// will not derive messages from session events or the single
+// `invocation.Message` to prevent duplication. The messages should be
+// in chronological order (system -> user/assistant alternating).
+func WithMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.Messages = messages
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -97,23 +147,115 @@ type RunOptions struct {
 
 	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
 	KnowledgeFilter map[string]any
+
+	// Messages allows callers to provide a full conversation history
+	// directly to the agent invocation without relying on the session
+	// service. When provided, the content processor will prefer these
+	// messages and skip deriving content from session events or the
+	// single `invocation.Message` to avoid duplication.
+	Messages []model.Message
 }
 
-// CreateBranchInvocation create a new invocation for branch agent
-func (baseInvocation *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	branchInvocation := Invocation{
-		Agent:             branchAgent,
-		AgentName:         branchAgent.Info().Name,
-		InvocationID:      baseInvocation.InvocationID,
-		Branch:            baseInvocation.Branch,
-		Session:           baseInvocation.Session,
-		Message:           baseInvocation.Message,
-		EventCompletionCh: baseInvocation.EventCompletionCh,
-		RunOptions:        baseInvocation.RunOptions,
-		MemoryService:     baseInvocation.MemoryService,
-		ArtifactService:   baseInvocation.ArtifactService,
+// NewInvocation create a new invocation
+func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
+	inv := &Invocation{
+		InvocationID:  uuid.NewString(),
+		noticeMu:      &sync.Mutex{},
+		noticeChanMap: make(map[string]chan any),
 	}
 
-	return &branchInvocation
+	for _, opt := range invocationOpts {
+		opt(inv)
+	}
+
+	return inv
+}
+
+// Clone clone a new invocation
+func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
+	newInv := &Invocation{
+		InvocationID:    inv.InvocationID,
+		Branch:          inv.Branch,
+		Session:         inv.Session,
+		Message:         inv.Message,
+		RunOptions:      inv.RunOptions,
+		ArtifactService: inv.ArtifactService,
+		noticeMu:        inv.noticeMu,
+		noticeChanMap:   inv.noticeChanMap,
+	}
+
+	for _, opt := range invocationOpts {
+		opt(newInv)
+	}
+
+	return newInv
+}
+
+// AddNoticeChannelAndWait add notice channel and wait it complete
+func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
+	if timeout == WaitNoticeWithoutTimeout {
+		// no timeout, maybe wait for ever
+		select {
+		case <-inv.AddNoticeChannel(ctx, key):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	select {
+	case <-inv.AddNoticeChannel(ctx, key):
+	case <-time.After(timeout):
+		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
+// AddNoticeChannel add a new notice channel
+func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	if ch, ok := inv.noticeChanMap[key]; ok {
+		return ch
+	}
+
+	ch := make(chan any)
+	if inv.noticeChanMap == nil {
+		inv.noticeChanMap = make(map[string]chan any)
+	}
+	inv.noticeChanMap[key] = ch
+
+	return ch
+}
+
+// NotifyCompletion notify completion signal to waiting task
+func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	ch, ok := inv.noticeChanMap[key]
+	if !ok {
+		return fmt.Errorf("notice channel not found for %s.", key)
+	}
+
+	close(ch)
+	delete(inv.noticeChanMap, key)
+
+	return nil
+}
+
+// CleanupNotice cleanup all notice channel
+// The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
+// upon completion to prevent resource leaks.
+func (inv *Invocation) CleanupNotice(ctx context.Context) {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	for _, ch := range inv.noticeChanMap {
+		close(ch)
+	}
+	inv.noticeChanMap = nil
 }
