@@ -16,7 +16,7 @@ import (
 	"strconv"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/examples/filetoolset/project/counter"
+	"trpc.group/trpc-go/trpc-agent-go/examples/debugagent/project/counter"
 )
 
 func main() {
