@@ -15,11 +15,11 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
+	"trpc.group/trpc-go/trpc-a2a-go/log"
 )
 
 func init() {
-	a2alog.Default = Default
+	log.Default = Default
 }
 
 // Log level constants
