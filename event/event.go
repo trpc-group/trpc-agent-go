@@ -87,18 +87,6 @@ type Event struct {
 	Version int `json:"version,omitempty"`
 }
 
-// eventJSON is a temporary struct to hold the JSON representation of an event.
-// Used only in Event serialization/deserialization scenarios.
-type eventJSON struct {
-	// Event
-	Event
-	// Version is used to handle version compatibility issues.
-	Version int `json:"version"`
-
-	// FilterKey is used to handle hierarchical event filtering.
-	FilterKey string `json:"filterKey"`
-}
-
 // EventActions represents optional actions/hints attached to an event.
 // These are used by the flow to adjust control behavior without
 // overloading Response fields.
