@@ -159,6 +159,7 @@ func (r *runner) Run(
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
+		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
 
@@ -167,7 +168,10 @@ func (r *runner) Run(
 
 	// Start a goroutine to process and append events to session.
 	go func() {
-		defer close(processedEventCh)
+		defer func() {
+			close(processedEventCh)
+			invocation.CleanupNotice(ctx)
+		}()
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
@@ -211,4 +215,30 @@ func (r *runner) Run(
 	}()
 
 	return processedEventCh, nil
+}
+
+// RunWithMessages is a convenience helper that lets callers pass a full
+// conversation history ([]model.Message) directly, without relying on the
+// session service. It preserves backward compatibility by delegating to the
+// existing Runner.Run with an empty message and a RunOption that carries the
+// conversation history.
+func RunWithMessages(
+	ctx context.Context,
+	r Runner,
+	userID string,
+	sessionID string,
+	messages []model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	runOpts = append(runOpts, agent.WithMessages(messages))
+	// Derive the latest user message for invocation state compatibility
+	// (e.g., used by GraphAgent to set initial user_input).
+	var latestUser model.Message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+			latestUser = messages[i]
+			break
+		}
+	}
+	return r.Run(ctx, userID, sessionID, latestUser, runOpts...)
 }

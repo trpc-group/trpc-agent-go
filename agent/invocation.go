@@ -139,6 +139,17 @@ func WithKnowledgeFilter(filter map[string]any) RunOption {
 	}
 }
 
+// WithMessages sets the initial conversation history for this run.
+// When provided, the content processor will prefer these messages and
+// will not derive messages from session events or the single
+// `invocation.Message` to prevent duplication. The messages should be
+// in chronological order (system -> user/assistant alternating).
+func WithMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.Messages = messages
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -148,6 +159,13 @@ type RunOptions struct {
 
 	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
 	KnowledgeFilter map[string]any
+
+	// Messages allows callers to provide a full conversation history
+	// directly to the agent invocation without relying on the session
+	// service. When provided, the content processor will prefer these
+	// messages and skip deriving content from session events or the
+	// single `invocation.Message` to avoid duplication.
+	Messages []model.Message
 }
 
 // NewInvocation create a new invocation
@@ -232,26 +250,6 @@ func (inv *Invocation) EmitEventWithInvocation(ctx context.Context, ch chan<- *e
 	return event.EmitEvent(ctx, ch, e)
 }
 
-// CreateBranchInvocation create a new invocation for branch agent
-// deprecated please use Clone method
-func (inv *Invocation) CreateBranchInvocation(branchAgent Agent) *Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	branchInvocation := Invocation{
-		Agent:           branchAgent,
-		AgentName:       branchAgent.Info().Name,
-		InvocationID:    inv.InvocationID,
-		Branch:          inv.Branch,
-		Session:         inv.Session,
-		Message:         inv.Message,
-		RunOptions:      inv.RunOptions,
-		ArtifactService: inv.ArtifactService,
-		noticeMu:        inv.noticeMu,
-		noticeChanMap:   inv.noticeChanMap,
-	}
-
-	return &branchInvocation
-}
-
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
 	if timeout == WaitNoticeWithoutTimeout {
@@ -306,4 +304,17 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	delete(inv.noticeChanMap, key)
 
 	return nil
+}
+
+// CleanupNotice cleanup all notice channel
+// The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
+// upon completion to prevent resource leaks.
+func (inv *Invocation) CleanupNotice(ctx context.Context) {
+	inv.noticeMu.Lock()
+	defer inv.noticeMu.Unlock()
+
+	for _, ch := range inv.noticeChanMap {
+		close(ch)
+	}
+	inv.noticeChanMap = nil
 }

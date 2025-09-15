@@ -157,6 +157,34 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
 
+#### 传入对话历史（无需使用 Session）
+
+如果上游服务已经维护了会话历史，并希望直接将整段对话（[]model.Message）传入 Agent，可使用以下两种方式：
+
+方式 A：使用便捷函数 `runner.RunWithMessages`
+
+```go
+msgs := []model.Message{
+    model.NewSystemMessage("你是一个有帮助的助手"),
+    model.NewUserMessage("第一条用户输入"),
+    model.NewAssistantMessage("上一轮助手回复"),
+    model.NewUserMessage("新的问题是什么？"),
+}
+
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+```
+
+示例：`examples/runwithmessages`
+
+方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）
+
+```go
+msgs := []model.Message{ /* 同上 */ }
+ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msgs))
+```
+
+注意：当显式传入 `[]model.Message` 时，Runner 会优先使用该历史并跳过从 Session 派生内容的逻辑，避免重复拼接；同时由于我们传入了空的 `message`，Runner 不会额外把这一步输入追加到 Session 中。
+
 ## 💾 会话管理
 
 ### 内存会话（默认）
