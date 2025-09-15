@@ -235,8 +235,8 @@ func (inv *Invocation) GetEventFilterKey() string {
 	return inv.eventFilterKey
 }
 
-// InjectInvocationIntoEvent inject invocation information into event.
-func InjectInvocationIntoEvent(inv *Invocation, e *event.Event) {
+// InjectIntoEvent inject invocation information into event.
+func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	if e == nil || inv == nil {
 		return
 	}
@@ -249,7 +249,7 @@ func InjectInvocationIntoEvent(inv *Invocation, e *event.Event) {
 // EmitEvent inject invocation information into event and emit it to channel.
 func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	e *event.Event) error {
-	InjectInvocationIntoEvent(inv, e)
+	InjectIntoEvent(inv, e)
 	return event.EmitEvent(ctx, ch, e)
 }
 

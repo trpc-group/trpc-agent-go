@@ -155,7 +155,7 @@ func (r *runner) Run(
 			authorUser,
 			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
 		)
-		agent.InjectInvocationIntoEvent(invocation, evt)
+		agent.InjectIntoEvent(invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
 			return nil, err
 		}

@@ -756,7 +756,7 @@ func newToolCallResponseEvent(
 			Timestamp: time.Now(),
 		},
 	)
-	agent.InjectInvocationIntoEvent(invocation, e)
+	agent.InjectIntoEvent(invocation, e)
 	return e
 }
 
