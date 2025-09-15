@@ -93,6 +93,62 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// TestMaxTokensParameterSelection verifies that the adapter sets the correct
+// parameter name based on WithMaxCompletionTokens option.
+func TestMaxTokensParameterSelection(t *testing.T) {
+	// Start a mock server that captures the request body.
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		capturedBody = body
+		// Return a minimal valid non-streaming response.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"id","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer server.Close()
+
+	// Helper to run one request and return captured body as string.
+	run := func(opts ...Option) string {
+		capturedBody = nil
+		m := New("test-model", append([]Option{WithBaseURL(server.URL), WithAPIKey("k")}, opts...)...)
+		req := &model.Request{
+			Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+			GenerationConfig: model.GenerationConfig{MaxTokens: func() *int { v := 123; return &v }()},
+		}
+		ctx := context.Background()
+		ch, err := m.GenerateContent(ctx, req)
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+		for range ch { // drain
+		}
+		return string(capturedBody)
+	}
+
+	// Default path: expect max_tokens present, max_completion_tokens absent.
+	body := run()
+	if !strings.Contains(body, "\"max_tokens\":123") {
+		t.Fatalf("expected body to contain max_tokens=123, got: %s", body)
+	}
+	if strings.Contains(body, "max_completion_tokens") {
+		t.Fatalf("did not expect max_completion_tokens in body, got: %s", body)
+	}
+
+	// Forced completion option: expect only max_completion_tokens present.
+	body = run(WithMaxCompletionTokens())
+	if !strings.Contains(body, "max_completion_tokens") {
+		t.Fatalf("expected body to contain max_completion_tokens, got: %s", body)
+	}
+	if strings.Contains(body, "\"max_tokens\":123") {
+		t.Fatalf("did not expect max_tokens in body when forced completion tokens, got: %s", body)
+	}
+}
+
 func TestModel_GenContent_NilReq(t *testing.T) {
 	m := New("test-model", WithAPIKey("test-key"))
 

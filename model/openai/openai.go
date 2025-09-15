@@ -191,6 +191,11 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
+	// forceCompletionTokens forces using max_completion_tokens instead of
+	// max_tokens for Chat Completions request when MaxTokens is provided.
+	// When true, the adapter will inject max_completion_tokens via JSON and
+	// skip setting chatRequest.MaxTokens.
+	forceCompletionTokens bool
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -241,6 +246,9 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// Force using max_completion_tokens instead of max_tokens when MaxTokens
+	// is provided in GenerationConfig.
+	forceCompletionTokens bool
 }
 
 // Option is a function that configures an OpenAI model.
@@ -371,6 +379,15 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
+// WithMaxCompletionTokens forces the adapter to send max_completion_tokens
+// instead of max_tokens when MaxTokens is provided by GenerationConfig.
+// Useful for models that reject max_tokens.
+func WithMaxCompletionTokens() Option {
+	return func(opts *options) {
+		opts.forceCompletionTokens = true
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -421,6 +438,7 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
 		batchBaseURL:          o.BatchBaseURL,
+		forceCompletionTokens: o.forceCompletionTokens,
 	}
 }
 
@@ -466,9 +484,17 @@ func (m *Model) GenerateContent(
 		}
 	}
 
+	var opts []openaiopt.RequestOption
+
 	// Set optional parameters if provided.
 	if request.MaxTokens != nil {
-		chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
+		if m.forceCompletionTokens {
+			// Inject max_completion_tokens via JSON to ensure correct wire key even
+			// if the SDK struct does not expose the field.
+			opts = append(opts, openaiopt.WithJSONSet("max_completion_tokens", *request.MaxTokens))
+		} else {
+			chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
@@ -491,7 +517,6 @@ func (m *Model) GenerateContent(
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
-	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
 	}
