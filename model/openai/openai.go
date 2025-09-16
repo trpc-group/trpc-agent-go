@@ -466,9 +466,10 @@ func (m *Model) GenerateContent(
 		}
 	}
 
-	// Set optional parameters if provided.
+	// MaxTokens is deprecated and not compatible with o-series models.
+	// Use MaxCompletionTokens instead.
 	if request.MaxTokens != nil {
-		chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)

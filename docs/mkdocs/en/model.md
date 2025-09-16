@@ -27,19 +27,19 @@ import (
 
 func main() {
     // 1. Create model instance.
-    modelInstance := openai.New("deepseek-chat", 
+    modelInstance := openai.New("deepseek-chat",
         openai.WithExtraFields(map[string]interface{}{
             "tool_choice": "auto", // Automatically select tools.
         }),
     )
-    
+
     // 2. Configure generation parameters.
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
         Stream:      true, // Enable streaming output.
     }
-    
+
     // 3. Create Agent and integrate model.
     agent := llmagent.New(
         "chat-assistant",
@@ -49,14 +49,14 @@ func main() {
         llmagent.WithGenerationConfig(genConfig),
         llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
     )
-    
+
     // 4. Create Runner and run.
     r := runner.NewRunner("app-name", agent)
     eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // 5. Handle response events.
     for event := range eventChan {
         // Handle streaming responses, tool calls, etc.
@@ -85,12 +85,14 @@ go run main.go -model deepseek-chat
 All platform integration methods follow the same pattern, only requiring configuration of different environment variables or direct setting in code:
 
 **Environment Variable Method** (Recommended):
+
 ```bash
 export OPENAI_BASE_URL="Platform API address"
 export OPENAI_API_KEY="API key"
 ```
 
 **Code Method**:
+
 ```go
 model := openai.New("Model name",
     openai.WithBaseURL("Platform API address"),
@@ -141,7 +143,7 @@ model := openai.New("deepseek-chat",
 type Model interface {
     // Generate content, supports streaming response.
     GenerateContent(ctx context.Context, request *Request) (<-chan *Response, error)
-    
+
     // Return basic model information.
     Info() Info
 }
@@ -159,10 +161,10 @@ type Info struct {
 type Request struct {
     // Message list, containing system instructions, user input and assistant replies.
     Messages []Message `json:"messages"`
-    
+
     // Generation configuration (inlined into request).
     GenerationConfig `json:",inline"`
-    
+
     // Tool list.
     Tools map[string]tool.Tool `json:"-"`
 }
@@ -171,31 +173,31 @@ type Request struct {
 type GenerationConfig struct {
     // Whether to use streaming response.
     Stream bool `json:"stream"`
-    
+
     // Temperature parameter (0.0-2.0).
     Temperature *float64 `json:"temperature,omitempty"`
-    
+
     // Maximum generation token count.
     MaxTokens *int `json:"max_tokens,omitempty"`
-    
+
     // Top-P sampling parameter.
     TopP *float64 `json:"top_p,omitempty"`
-    
+
     // Stop generation markers.
     Stop []string `json:"stop,omitempty"`
-    
+
     // Frequency penalty.
     FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-    
+
     // Presence penalty.
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
-    
+
     // Reasoning effort level ("low", "medium", "high").
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-    
+
     // Whether to enable thinking mode.
     ThinkingEnabled *bool `json:"-"`
-    
+
     // Maximum token count for thinking mode.
     ThinkingTokens *int `json:"-"`
 }
@@ -214,10 +216,10 @@ type Response struct {
     SystemFingerprint *string  `json:"system_fingerprint,omitempty"`
     Choices           []Choice `json:"choices,omitempty"`
     Usage             *Usage   `json:"usage,omitempty"`
-    
+
     // Error information.
     Error *ResponseError `json:"error,omitempty"`
-    
+
     // Internal fields.
     Timestamp time.Time `json:"-"`
     Done      bool      `json:"-"`
@@ -239,7 +241,7 @@ type ResponseError struct {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -247,11 +249,11 @@ import (
 func main() {
     // Create model instance.
     llm := openai.New("deepseek-chat")
-    
+
     // Build request.
     temperature := 0.7
     maxTokens := 1000
-    
+
     request := &model.Request{
         Messages: []model.Message{
             model.NewSystemMessage("You are a professional AI assistant."),
@@ -263,7 +265,7 @@ func main() {
             Stream:      false,
         },
     }
-    
+
     // Call model.
     ctx := context.Background()
     responseChan, err := llm.GenerateContent(ctx, request)
@@ -271,18 +273,18 @@ func main() {
         fmt.Printf("System error: %v\n", err)
         return
     }
-    
+
     // Handle response.
     for response := range responseChan {
         if response.Error != nil {
             fmt.Printf("API error: %s\n", response.Error.Message)
             return
         }
-        
+
         if len(response.Choices) > 0 {
             fmt.Printf("Reply: %s\n", response.Choices[0].Message.Content)
         }
-        
+
         if response.Done {
             break
         }
@@ -315,11 +317,11 @@ for response := range responseChan {
         fmt.Printf("Error: %s", response.Error.Message)
         return
     }
-    
+
     if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
         fmt.Print(response.Choices[0].Delta.Content)
     }
-    
+
     if response.Done {
         break
     }
@@ -385,6 +387,7 @@ request := &model.Request{
 ```
 
 ## Advanced Features
+
 ### 1. Callback Functions
 
 ```go
@@ -394,16 +397,16 @@ model := openai.New("deepseek-chat",
         // Called before request is sent.
         log.Printf("Sending request: model=%s, message count=%d", req.Model, len(req.Messages))
     }),
-    
+
     // Set response callback function (non-streaming).
-    openai.WithChatResponseCallback(func(ctx context.Context, 
-        req *openai.ChatCompletionNewParams, 
+    openai.WithChatResponseCallback(func(ctx context.Context,
+        req *openai.ChatCompletionNewParams,
         resp *openai.ChatCompletion) {
         // Called when complete response is received.
-        log.Printf("Received response: ID=%s, tokens used=%d", 
+        log.Printf("Received response: ID=%s, tokens used=%d",
             resp.ID, resp.Usage.TotalTokens)
     }),
-    
+
     // Set streaming response callback function.
     openai.WithChatChunkCallback(func(ctx context.Context,
         req *openai.ChatCompletionNewParams,
