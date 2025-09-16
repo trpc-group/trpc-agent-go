@@ -22,14 +22,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// readManyFilesRequest represents the input for the read many files operation.
-type readManyFilesRequest struct {
+// readMultipleFilesRequest represents the input for the read multiple files operation.
+type readMultipleFilesRequest struct {
 	Patterns      []string `json:"patterns" jsonschema:"description=glob patterns of relative file path"`
 	CaseSensitive bool     `json:"case_sensitive" jsonschema:"description=Whether pattern matching is case sensitive"`
 }
 
-// readManyFilesResponse represents the output from the read many files operation.
-type readManyFilesResponse struct {
+// readMultipleFilesResponse represents the output from the read multiple files operation.
+type readMultipleFilesResponse struct {
 	BaseDirectory string            `json:"base_directory"`
 	Files         []*fileReadResult `json:"files"`
 	Message       string            `json:"message"`
@@ -42,9 +42,10 @@ type fileReadResult struct {
 	Message  string `json:"message"`
 }
 
-// readManyFiles performs the read many files operation with support for glob patterns.
-func (f *fileToolSet) readManyFiles(_ context.Context, req *readManyFilesRequest) (*readManyFilesResponse, error) {
-	rsp := &readManyFilesResponse{BaseDirectory: f.baseDir}
+// readMultipleFiles performs the read multiple files operation with support for glob patterns.
+func (f *fileToolSet) readMultipleFiles(_ context.Context,
+	req *readMultipleFilesRequest) (*readMultipleFilesResponse, error) {
+	rsp := &readMultipleFilesResponse{BaseDirectory: f.baseDir}
 	if len(req.Patterns) == 0 {
 		rsp.Message = "Error: patterns cannot be empty"
 		return rsp, fmt.Errorf("patterns cannot be empty")
@@ -122,11 +123,11 @@ func (f *fileToolSet) readFiles(files []string) []*fileReadResult {
 	return results
 }
 
-// readManyFilesTool returns a callable tool for reading many files with glob support.
-func (f *fileToolSet) readManyFilesTool() tool.CallableTool {
+// readMultipleFilesTool returns a callable tool for reading multiple files with glob support.
+func (f *fileToolSet) readMultipleFilesTool() tool.CallableTool {
 	return function.NewFunctionTool(
-		f.readManyFiles,
-		function.WithName("read_many_files"),
+		f.readMultipleFiles,
+		function.WithName("read_multiple_files"),
 		function.WithDescription(
 			"Reads multiple files matched by 'patterns' (glob, relative to base directory). "+
 				"The 'patterns' parameter is a list of glob patterns, like ['*.go', 'src/**/*.go', '**/*.md', "+

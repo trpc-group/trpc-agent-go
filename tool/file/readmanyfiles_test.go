@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestReadManyFiles(t *testing.T) {
+func TestReadMultipleFiles(t *testing.T) {
 	// Build the test directory and files once, similar to TestSearchContent.
 	base := t.TempDir()
 	// Prepare files and directories.
@@ -47,19 +47,19 @@ func TestReadManyFiles(t *testing.T) {
 	tests := []struct {
 		name             string
 		opts             []Option
-		req              readManyFilesRequest
+		req              readMultipleFilesRequest
 		expectedContents map[string]string // file_name -> contents
 		wantErr          bool
 	}{
 		{
 			name:    "empty patterns",
-			req:     readManyFilesRequest{Patterns: nil},
+			req:     readMultipleFilesRequest{Patterns: nil},
 			wantErr: true,
 		},
 		{
 			name: "invalid pattern aggregated with valid",
 			// Use exact filenames to avoid unintended matches; plus an invalid pattern.
-			req: readManyFilesRequest{Patterns: []string{"[", "a.txt", "foo.txt", "Foo.txt"}},
+			req: readMultipleFilesRequest{Patterns: []string{"[", "a.txt", "foo.txt", "Foo.txt"}},
 			expectedContents: map[string]string{
 				"a.txt":   "hello",
 				"foo.txt": "x",
@@ -68,7 +68,7 @@ func TestReadManyFiles(t *testing.T) {
 		},
 		{
 			name: "case insensitive",
-			req:  readManyFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: false},
+			req:  readMultipleFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: false},
 			expectedContents: map[string]string{
 				"foo.txt": "x",
 				"Foo.txt": "y",
@@ -76,14 +76,14 @@ func TestReadManyFiles(t *testing.T) {
 		},
 		{
 			name: "case sensitive",
-			req:  readManyFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: true},
+			req:  readMultipleFilesRequest{Patterns: []string{"foo*.txt"}, CaseSensitive: true},
 			expectedContents: map[string]string{
 				"foo.txt": "x",
 			},
 		},
 		{
 			name: "deduplicate across patterns",
-			req:  readManyFilesRequest{Patterns: []string{"*.go", "f1.go"}},
+			req:  readMultipleFilesRequest{Patterns: []string{"*.go", "f1.go"}},
 			expectedContents: map[string]string{
 				"f1.go": "a",
 				"f2.go": "b",
@@ -92,14 +92,14 @@ func TestReadManyFiles(t *testing.T) {
 		{
 			name: "exceed max file size",
 			opts: []Option{WithMaxFileSize(5)},
-			req:  readManyFilesRequest{Patterns: []string{"big.txt"}},
+			req:  readMultipleFilesRequest{Patterns: []string{"big.txt"}},
 			expectedContents: map[string]string{
 				"big.txt": "",
 			},
 		},
 		{
 			name: "directory recursion",
-			req:  readManyFilesRequest{Patterns: []string{"**/*.go"}},
+			req:  readMultipleFilesRequest{Patterns: []string{"**/*.go"}},
 			expectedContents: map[string]string{
 				"f1.go":       "a",
 				"f2.go":       "b",
@@ -108,14 +108,14 @@ func TestReadManyFiles(t *testing.T) {
 		},
 		{
 			name: "empty file",
-			req:  readManyFilesRequest{Patterns: []string{"empty.txt"}},
+			req:  readMultipleFilesRequest{Patterns: []string{"empty.txt"}},
 			expectedContents: map[string]string{
 				"empty.txt": "",
 			},
 		},
 		{
 			name: "read permission denied",
-			req:  readManyFilesRequest{Patterns: []string{"noaccess.txt"}},
+			req:  readMultipleFilesRequest{Patterns: []string{"noaccess.txt"}},
 			expectedContents: map[string]string{
 				"noaccess.txt": "",
 			},
@@ -130,7 +130,7 @@ func TestReadManyFiles(t *testing.T) {
 			toolSet, err := NewToolSet(opts...)
 			assert.NoError(t, err)
 			fts := toolSet.(*fileToolSet)
-			rsp, err := fts.readManyFiles(context.Background(), &tc.req)
+			rsp, err := fts.readMultipleFiles(context.Background(), &tc.req)
 			if tc.wantErr {
 				assert.Error(t, err)
 				return

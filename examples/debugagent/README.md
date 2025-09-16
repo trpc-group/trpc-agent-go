@@ -81,7 +81,7 @@ go run main.go -base-dir ./project
 Model: deepseek-chat
 Base Directory: ./project
 Type 'exit' to end the conversation
-Available tools: save_file, read_file, read_many_files, list_file, search_file, search_content, replace_content
+Available tools: save_file, read_file, read_multiple_files, list_file, search_file, search_content, replace_content
 ==================================================
 ✅ Debug agent ready! Session: debug-session-1758004914
 
@@ -106,7 +106,7 @@ Available tools: save_file, read_file, read_many_files, list_file, search_file, 
 This appears to be a Go project. Let me examine the main files to understand the structure and identify the bug:
 
 🔧 Tool call initiated:
-   • read_many_files (ID: call_00_IPpAT8AFnUG3ZmzcKstPJoZ5)
+   • read_multiple_files (ID: call_00_IPpAT8AFnUG3ZmzcKstPJoZ5)
      Arguments: {"patterns": ["README.md", "go.mod", "main.go"]}
 🔄 Executing tools...
 ✅ Tool result (ID: call_00_IPpAT8AFnUG3ZmzcKstPJoZ5): {"base_directory":"project","files":[{"file_name":"README.md","contents":"input.txt: Program input\noutput.txt: Program output\nexpect.txt: Program expected output\n\nWe've discovered that the program's actual output doesn't match our expectations. Could you help us debug this?\n","message":"Successfully read README.md, total lines: 6"},{"file_name":"go.mod","contents":"module trpc.group/trpc-go/trpc-agent-go/examples/debugagent/project\n\ngo 1.24.1\n","message":"Successfully read go.mod, total lines: 4"},{"file_name":"main.go","contents":"//\n// Tencent is pleased to support the open source community by making trpc-agent-go available.\n//\n// Copyright (C) 2025 Tencent.  All rights reserved.\n//\n// trpc-agent-go is licensed under the Apache License Version 2.0.\n//\n//\n\n// package main is a example project with bug.\npackage main\n\nimport (\n\t\"log\"\n\t\"os\"\n\t\"strconv\"\n\t\"strings\"\n\n\t\"trpc.group/trpc-go/trpc-agent-go/examples/debugagent/project/counter\"\n)\n\nfunc main() {\n\tcontent, err := os.ReadFile(\"input.txt\")\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tn, err := strconv.Atoi(strings.TrimSpace(string(content)))\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\tcounter := counter.GetCounter(n)\n\tos.WriteFile(\"output.txt\", []byte(strconv.Itoa(counter)), 0644)\n}\n","message":"Successfully read main.go, total lines: 34"}],"message":"Read 3 file(s)"}
@@ -114,7 +114,7 @@ This appears to be a Go project. Let me examine the main files to understand the
 Now let me check the counter package and the input/output files to understand the issue:
 
 🔧 Tool call initiated:
-   • read_many_files (ID: call_00_07r9jkkklLsKwFQNFF7rc9Yw)
+   • read_multiple_files (ID: call_00_07r9jkkklLsKwFQNFF7rc9Yw)
      Arguments: {"patterns": ["counter/*.go", "input.txt", "output.txt", "expect.txt"]}
 🔄 Executing tools...
 ✅ Tool result (ID: call_00_07r9jkkklLsKwFQNFF7rc9Yw): {"base_directory":"project","files":[{"file_name":"counter/counter.go","contents":"//\n// Tencent is pleased to support the open source community by making trpc-agent-go available.\n//\n// Copyright (C) 2025 Tencent.  All rights reserved.\n//\n// trpc-agent-go is licensed under the Apache License Version 2.0.\n//\n//\n\n// package counter implements a counter.\npackage counter\n\nimport \"sync/atomic\"\n\nfunc GetCounter(n int) int {\n\tvar counter int64\n\tfor i := 0; i \u003c n; i++ {\n\t\tgo func() {\n\t\t\tatomic.AddInt64(\u0026counter, 1)\n\t\t}()\n\t}\n\treturn int(counter)\n}\n","message":"Successfully read counter/counter.go, total lines: 24"},{"file_name":"expect.txt","contents":"100000","message":"Successfully read expect.txt, total lines: 1"},{"file_name":"input.txt","contents":"100000","message":"Successfully read input.txt, total lines: 1"},{"file_name":"output.txt","contents":"97876","message":"Successfully read output.txt, total lines: 1"}],"message":"Read 4 file(s)"}
@@ -160,7 +160,7 @@ Actual: 100000
 1. **Setup**: Creates an LLM agent with file tools and a local CodeExecutor.
 2. **User Input**: You ask for debugging help or file tasks under `-base-dir`.
 3. **Tool/Execution Decision**: The agent decides to use file tools or execute code:
-   - File tools: `read_file`, `list_file`, `search_file`, `search_content`, `replace_content`, `save_file`, `read_many_files`.
+   - File tools: `read_file`, `list_file`, `search_file`, `search_content`, `replace_content`, `save_file`, `read_multiple_files`.
    - Code execution: emit a single fenced `bash` block, or write a script then immediately run it.
 4. **File Operation Execution** (when applicable): File tools run and return structured results.
 5. **Code Execution** (when applicable): The CodeExecution processor extracts the fenced block and runs it in the working dir, then emits two post‑processing events — one with the code, one with the result. The UI prints the result cleanly without duplicating the code block.
