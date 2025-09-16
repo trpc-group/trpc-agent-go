@@ -11,6 +11,7 @@ package tcvector
 
 import (
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // options contains the options for tcvectordb.
@@ -46,8 +47,24 @@ var defaultOptions = options{
 	vectorWeight:   0.7,
 	textWeight:     0.3,
 	language:       "en",
-	filterFields:   []string{},
-	filterIndexes:  []tcvectordb.FilterIndex{},
+	filterFields:   []string{source.MetaURI, source.MetaSourceName, fieldCreatedAt},
+	filterIndexes: []tcvectordb.FilterIndex{
+		{
+			FieldName: source.MetaURI,
+			IndexType: tcvectordb.FILTER,
+			FieldType: tcvectordb.String,
+		},
+		{
+			FieldName: source.MetaSourceName,
+			IndexType: tcvectordb.FILTER,
+			FieldType: tcvectordb.String,
+		},
+		{
+			FieldName: fieldCreatedAt,
+			IndexType: tcvectordb.FILTER,
+			FieldType: tcvectordb.Uint64,
+		},
+	},
 }
 
 // Option is the option for tcvectordb.

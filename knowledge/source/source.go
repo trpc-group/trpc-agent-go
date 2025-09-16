@@ -25,7 +25,7 @@ const (
 	TypeURL  = "url"
 )
 
-const metaPrefix = "trpc_agent_go"
+const metaPrefix = "trpc_agent_go_"
 
 // Metadata keys
 const (
@@ -45,6 +45,14 @@ const (
 	MetaURLScheme     = metaPrefix + "url_scheme"
 	MetaInputCount    = metaPrefix + "input_count"
 	MetaInputs        = metaPrefix + "inputs"
+
+	MetaChunkType = metaPrefix + "chunk_type"
+	MetaChunkSize = metaPrefix + "chunk_size"
+
+	// necessary metadata
+	MetaURI        = metaPrefix + "uri"         // URI (absolute path / URL / md5 for pure text)
+	MetaSourceName = metaPrefix + "source_name" // source name
+	MetaChunkIndex = metaPrefix + "chunk_index" // chunk index
 )
 
 // Source represents a knowledge source that can provide documents.
@@ -59,7 +67,7 @@ type Source interface {
 	// Type returns the type of this source (e.g., "file", "url", "dir").
 	Type() string
 
-	// GetMetadata returns the metadata associated with this source.
+	// GetMetadata returns the metadata that user set
 	GetMetadata() map[string]interface{}
 }
 
