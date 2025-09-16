@@ -484,14 +484,9 @@ func (m *Model) GenerateContent(
 		}
 	}
 
-	var opts []openaiopt.RequestOption
-
-	// Set optional parameters if provided.
 	if request.MaxTokens != nil {
 		if m.forceMaxCompletionTokens {
-			// Inject max_completion_tokens via JSON to ensure correct wire key even
-			// if the SDK struct does not expose the field.
-			opts = append(opts, openaiopt.WithJSONSet(model.MaxCompletionTokensKey, *request.MaxTokens))
+			chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
 		} else {
 			chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
 		}
@@ -517,6 +512,7 @@ func (m *Model) GenerateContent(
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
+	var opts []openaiopt.RequestOption
 	if request.ThinkingEnabled != nil {
 		opts = append(opts, openaiopt.WithJSONSet(model.ThinkingEnabledKey, *request.ThinkingEnabled))
 	}
