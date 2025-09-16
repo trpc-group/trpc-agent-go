@@ -58,6 +58,13 @@ func WithReadFileEnabled(e bool) Option {
 	}
 }
 
+// WithReadManyFilesEnabled enables or disables the read many files functionality, default is true.
+func WithReadManyFilesEnabled(e bool) Option {
+	return func(f *fileToolSet) {
+		f.readManyFilesEnabled = e
+	}
+}
+
 // WithListFileEnabled enables or disables the list file functionality, default is true.
 func WithListFileEnabled(e bool) Option {
 	return func(f *fileToolSet) {
@@ -112,6 +119,7 @@ type fileToolSet struct {
 	baseDir               string
 	saveFileEnabled       bool
 	readFileEnabled       bool
+	readManyFilesEnabled  bool
 	listFileEnabled       bool
 	searchFileEnabled     bool
 	searchContentEnabled  bool
@@ -140,6 +148,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		baseDir:               defaultBaseDir,
 		saveFileEnabled:       true,
 		readFileEnabled:       true,
+		readManyFilesEnabled:  true,
 		listFileEnabled:       true,
 		searchFileEnabled:     true,
 		searchContentEnabled:  true,
@@ -170,6 +179,9 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	if fileToolSet.readFileEnabled {
 		tools = append(tools, fileToolSet.readFileTool())
 	}
+	if fileToolSet.readManyFilesEnabled {
+		tools = append(tools, fileToolSet.readManyFilesTool())
+	}
 	if fileToolSet.listFileEnabled {
 		tools = append(tools, fileToolSet.listFileTool())
 	}
@@ -195,80 +207,26 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 	return filepath.Join(f.baseDir, relativePath), nil
 }
 
+// matchFiles matches files with the given pattern in the target path.
+// It returns a list of relative paths, filtered out the "", "." and ".." paths.
 func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitive bool) ([]string, error) {
-	// First validate the pattern by trying to match it (this will catch invalid patterns).
-	_, err := doublestar.Match(pattern, "test")
+	if pattern == "" {
+		return nil, fmt.Errorf("pattern cannot be empty")
+	}
+	opts := []doublestar.GlobOption{}
+	if !caseSensitive {
+		opts = append(opts, doublestar.WithCaseInsensitive())
+	}
+	mathches, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("invalid pattern '%s': %w", pattern, err)
+		return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
 	}
-
-	// For case-sensitive matching, use doublestar directly.
-	if caseSensitive {
-		files, err := doublestar.Glob(os.DirFS(targetPath), pattern)
-		if err != nil {
-			return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
+	files := mathches[:0]
+	for _, match := range mathches {
+		if match == "" || match == "." || match == ".." {
+			continue
 		}
-		return files, nil
+		files = append(files, match)
 	}
-
-	// For case-insensitive matching, we need to implement it manually
-	// since doublestar v4.6.1 doesn't support case-insensitive matching.
-
-	// Get all possible files using a broad pattern, then filter manually.
-	allFiles, err := doublestar.Glob(os.DirFS(targetPath), "**")
-	if err != nil {
-		return nil, fmt.Errorf("searching files: %w", err)
-	}
-
-	// Also get directories if the pattern might match them.
-	allDirs, err := doublestar.Glob(os.DirFS(targetPath), "**/")
-	if err != nil {
-		return nil, fmt.Errorf("searching directories: %w", err)
-	}
-
-	// Combine files and directories.
-	allPaths := append(allFiles, allDirs...)
-
-	var matches []string
-	lowerPattern := strings.ToLower(pattern)
-
-	for _, path := range allPaths {
-		lowerPath := strings.ToLower(path)
-		// For directory patterns, we need to add the trailing slash for matching.
-		testPath := lowerPath
-		if strings.HasSuffix(lowerPattern, "/") && !strings.HasSuffix(testPath, "/") {
-			// Check if this path is a directory by looking in the original allDirs slice.
-			isDir := false
-			for _, dir := range allDirs {
-				if strings.ToLower(dir) == lowerPath {
-					isDir = true
-					break
-				}
-			}
-			if isDir {
-				testPath += "/"
-			}
-		}
-
-		// Use doublestar.Match for case-insensitive pattern matching.
-		matched, err := doublestar.Match(lowerPattern, testPath)
-		if err != nil {
-			continue // Skip paths with match errors.
-		}
-		if matched {
-			matches = append(matches, path)
-		}
-	}
-
-	// Remove duplicates.
-	seen := make(map[string]bool)
-	var uniqueMatches []string
-	for _, match := range matches {
-		if !seen[match] {
-			seen[match] = true
-			uniqueMatches = append(uniqueMatches, match)
-		}
-	}
-
-	return uniqueMatches, nil
+	return files, nil
 }
