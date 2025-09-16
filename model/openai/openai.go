@@ -246,9 +246,6 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
-	// Force using max_completion_tokens instead of max_tokens when MaxTokens
-	// is provided in GenerationConfig.
-	forceMaxCompletionTokens bool
 }
 
 // Option is a function that configures an OpenAI model.
@@ -379,15 +376,6 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithForceMaxCompletionTokens forces the adapter to send max_completion_tokens
-// instead of max_tokens when MaxTokens is provided by GenerationConfig.
-// Useful for models that reject max_tokens.
-func WithForceMaxCompletionTokens() Option {
-	return func(opts *options) {
-		opts.forceMaxCompletionTokens = true
-	}
-}
-
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -424,21 +412,20 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	return &Model{
-		client:                   client,
-		name:                     name,
-		baseURL:                  o.BaseURL,
-		apiKey:                   o.APIKey,
-		channelBufferSize:        channelBufferSize,
-		chatRequestCallback:      o.ChatRequestCallback,
-		chatResponseCallback:     o.ChatResponseCallback,
-		chatChunkCallback:        o.ChatChunkCallback,
-		extraFields:              o.ExtraFields,
-		variant:                  o.Variant,
-		variantConfig:            variantConfigs[o.Variant],
-		batchCompletionWindow:    batchCompletionWindow,
-		batchMetadata:            o.BatchMetadata,
-		batchBaseURL:             o.BatchBaseURL,
-		forceMaxCompletionTokens: o.forceMaxCompletionTokens,
+		client:                client,
+		name:                  name,
+		baseURL:               o.BaseURL,
+		apiKey:                o.APIKey,
+		channelBufferSize:     channelBufferSize,
+		chatRequestCallback:   o.ChatRequestCallback,
+		chatResponseCallback:  o.ChatResponseCallback,
+		chatChunkCallback:     o.ChatChunkCallback,
+		extraFields:           o.ExtraFields,
+		variant:               o.Variant,
+		variantConfig:         variantConfigs[o.Variant],
+		batchCompletionWindow: batchCompletionWindow,
+		batchMetadata:         o.BatchMetadata,
+		batchBaseURL:          o.BatchBaseURL,
 	}
 }
 
@@ -484,12 +471,10 @@ func (m *Model) GenerateContent(
 		}
 	}
 
+	// MaxTokens is deprecated and not compatible with o-series models.
+	// Use MaxCompletionTokens instead.
 	if request.MaxTokens != nil {
-		if m.forceMaxCompletionTokens {
-			chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
-		} else {
-			chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
-		}
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
