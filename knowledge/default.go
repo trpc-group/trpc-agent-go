@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,7 +91,11 @@ func convertMetaToDocumentInfo(docID string, meta *vectorstore.DocumentMetadata)
 		log.Debugf("chunk index not found in metadata, setting to 0")
 		chunkIndex = 0
 	}
-	chunkIndexInt := convertToInt(chunkIndex)
+	chunkIndexInt, ok := convertToInt(chunkIndex)
+	if !ok {
+		log.Debugf("chunk index is not an integer, setting to 0")
+		chunkIndexInt = 0
+	}
 	docInfo := BuiltinDocumentInfo{
 		DocumentID: docID,
 		SourceName: sourceName,
@@ -751,7 +756,7 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 		return fmt.Errorf("document missing chunk index metadata")
 	}
 
-	chunkIndexInt, ok := chunkIndex.(int)
+	chunkIndexInt, ok := convertToInt(chunkIndex)
 	if !ok {
 		return fmt.Errorf("chunk index is not an integer")
 	}
@@ -1108,37 +1113,37 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 }
 
 // convertToInt converts interface{} to int, handling JSON unmarshaling type conversion
-func convertToInt(value interface{}) int {
+func convertToInt(value interface{}) (int, bool) {
 	log.Infof("convertToInt value: %v, type: %T", value, value)
 	switch v := value.(type) {
 	case int:
-		return v
+		return v, true
 	case float64:
-		return int(v)
+		return int(v), true
 	case float32:
-		return int(v)
+		return int(v), true
 	case string:
 		s, err := strconv.Atoi(v)
 		if err != nil {
 			log.Infof("convertToInt string to int error: %v", err)
-			return 0
+			return 0, false
 		}
-		return s
+		return s, true
 	case json.Number:
 		s, err := v.Int64()
 		if err != nil {
 			log.Infof("convertToInt json.Number to int error: %v", err)
-			return 0
+			return 0, false
 		}
-		return int(s)
+		return int(s), true
 	default:
 		str := fmt.Sprintf("%v", v)
 		s, err := strconv.Atoi(str)
 		if err != nil {
 			log.Infof("convertToInt default to int error: %v", err)
-			return 0
+			return 0, false
 		}
-		return s
+		return s, true
 	}
 }
 
@@ -1159,18 +1164,68 @@ func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceM
 	hasher.Write([]byte(fmt.Sprintf("%d", chunkIndex)))
 	hasher.Write([]byte(":"))
 
-	// Write source metadata (sorted by keys for consistency)
+	// Write source metadata (use deterministic serialization)
 	if sourceMetadata != nil {
-		keys := make([]string, 0, len(sourceMetadata))
-		for k := range sourceMetadata {
+		serializedMetadata := serializeMetadata(sourceMetadata)
+		hasher.Write([]byte(serializedMetadata))
+		hasher.Write([]byte(":"))
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil))
+}
+
+// serializeMetadata recursively serializes a value in a deterministic way
+func serializeMetadata(value interface{}) string {
+	var builder strings.Builder
+	serializeMetadataToBuilder(value, &builder)
+	return builder.String()
+}
+
+// serializeMetadataToBuilder recursively serializes a value to a strings.Builder
+func serializeMetadataToBuilder(value interface{}, builder *strings.Builder) {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		// Handle nested map - sort keys and recursively serialize
+		keys := make([]string, 0, len(v))
+		for k := range v {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 
-		for _, k := range keys {
-			hasher.Write([]byte(fmt.Sprintf("%s:%v:", k, sourceMetadata[k])))
+		builder.WriteByte('{')
+		for i, k := range keys {
+			if i > 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString(k)
+			builder.WriteByte(':')
+			serializeMetadataToBuilder(v[k], builder)
+		}
+		builder.WriteByte('}')
+	case []interface{}:
+		// Handle slice - serialize each element in order
+		builder.WriteByte('[')
+		for i, item := range v {
+			if i > 0 {
+				builder.WriteByte(',')
+			}
+			serializeMetadataToBuilder(item, builder)
+		}
+		builder.WriteByte(']')
+	case map[interface{}]interface{}:
+		// Handle map with interface{} keys - convert to string keys first
+		stringMap := make(map[string]interface{}, len(v))
+		for k, val := range v {
+			stringMap[fmt.Sprintf("%v", k)] = val
+		}
+		serializeMetadataToBuilder(stringMap, builder)
+	default:
+		// Handle primitive types - use json.Marshal to avoid pointer issues
+		if data, err := json.Marshal(v); err == nil {
+			builder.Write(data)
+		} else {
+			// Fallback to fmt.Sprintf if json.Marshal fails
+			builder.WriteString(fmt.Sprintf("%v", v))
 		}
 	}
-
-	return fmt.Sprintf("%x", hasher.Sum(nil))
 }
