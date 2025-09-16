@@ -32,19 +32,29 @@ var (
 
 // Session is the interface that all sessions must implement.
 type Session struct {
-	ID        string        `json:"id"`        // session id
-	AppName   string        `json:"appName"`   // app name
-	UserID    string        `json:"userID"`    // user id
-	State     StateMap      `json:"state"`     // session state with delta support
-	Events    []event.Event `json:"events"`    // session events
-	UpdatedAt time.Time     `json:"updatedAt"` // last update time
-	CreatedAt time.Time     `json:"createdAt"` // creation time
+	ID      string        `json:"id"`      // ID is the session id.
+	AppName string        `json:"appName"` // AppName is the app name.
+	UserID  string        `json:"userID"`  // UserID is the user id.
+	State   StateMap      `json:"state"`   // State is the session state with delta support.
+	Events  []event.Event `json:"events"`  // Events is the session events.
+	// Summaries holds branch-aware summaries. The key is the normalized branch identifier.
+	Summaries map[string]*Summary `json:"summaries,omitempty"` // Summaries is the branch-aware summaries.
+	UpdatedAt time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
+	CreatedAt time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
+}
+
+// Summary represents a concise, structured summary of a conversation branch.
+// It is stored on the session object rather than in the StateMap.
+type Summary struct {
+	Summary   string    `json:"summary"`          // Summary is the concise conversation summary.
+	Topics    []string  `json:"topics,omitempty"` // Topics is the optional topics list.
+	UpdatedAt time.Time `json:"updated_at"`       // UpdatedAt is the update timestamp in UTC.
 }
 
 // Options is the options for getting a session.
 type Options struct {
-	EventNum  int       // number of recent events
-	EventTime time.Time // after time
+	EventNum  int       // EventNum is the number of recent events.
+	EventTime time.Time // EventTime is the after time.
 }
 
 // Option is the option for a session.
@@ -100,8 +110,9 @@ type Service interface {
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
 
 	// CreateSessionSummary triggers summarization for the session.
-	// Implementations should preserve original events and store summary separately.
-	// The operation should be non-blocking for the main flow where possible.
+	// Implementations should preserve original events and store summaries on
+	// the session object. The operation should be non-blocking for the main
+	// flow where possible. Implementations may group deltas by branch internally.
 	CreateSessionSummary(ctx context.Context, sess *Session, force bool) error
 
 	// GetSessionSummaryText returns the latest summary text for the session if any.

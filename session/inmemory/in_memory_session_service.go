@@ -654,8 +654,8 @@ func (s *SessionService) Close() error {
 	return nil
 }
 
-// CreateSessionSummary generates a simple in-memory summary and stores it in session state.
-// This implementation preserves original events and writes summary metadata to state only.
+// CreateSessionSummary generates a summary for the session and stores it on the session object.
+// This implementation preserves original events and updates session.Summaries only.
 func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
 	if sess == nil {
 		return fmt.Errorf("nil session")
@@ -664,14 +664,11 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-
-	// If no summarizer manager configured, warn and no-op.
 	if s.opts.summarizerManager == nil {
 		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
 		return nil
 	}
 
-	// Resolve stored session pointer once (under lock) to validate existence, then release lock.
 	app := s.getOrCreateAppSessions(key.AppName)
 	app.mu.Lock()
 	userSessions, ok := app.sessions[key.UserID]
@@ -691,63 +688,120 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	// Always run summarization synchronously to populate manager cache.
-	if err := s.opts.summarizerManager.Summarize(ctx, storedSession, force); err != nil {
-		return fmt.Errorf("failed to create summary: %w", err)
-	}
-	// Persist synchronously when force=true, async otherwise.
-	if force {
-		if err := s.persistSummaryFromCacheByKey(ctx, key); err != nil {
-			return err
-		}
+	branches := s.groupEventsByBranch(storedSession.Events)
+	if len(branches) == 0 {
 		return nil
 	}
 
-	// Async persist in order not to block caller.
-	go func(k session.Key) {
-		if err := s.persistSummaryFromCacheByKey(context.Background(), k); err != nil {
-			log.Errorf("failed to persist summary from cache: %v", err)
+	// Ensure summaries map exists.
+	app.mu.Lock()
+	swt, ok = app.sessions[key.UserID][key.SessionID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession = getValidSession(swt)
+	if storedSession == nil {
+		app.mu.Unlock()
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	if storedSession.Summaries == nil {
+		storedSession.Summaries = make(map[string]*session.Summary)
+	}
+	app.mu.Unlock()
+
+	for b, evs := range branches {
+		prev := storedSession.Summaries[b]
+		var since time.Time
+		if prev != nil {
+			since = prev.UpdatedAt
 		}
-	}(key)
+		delta := s.computeDeltaSince(evs, since)
+		if !force && len(delta) == 0 {
+			continue
+		}
+
+		tmp := s.buildBranchSession(storedSession, b, evs)
+		if err := s.opts.summarizerManager.Summarize(ctx, tmp, true); err != nil {
+			log.Warnf("summarize branch %s failed: %v", b, err)
+			continue
+		}
+		sum, err := s.opts.summarizerManager.GetSummary(tmp)
+		if err != nil || sum == nil || sum.Summary == "" {
+			continue
+		}
+
+		if err := s.writeSummaryUnderLock(app, key, b, sum.Summary); err != nil {
+			log.Warnf("write summary for branch %s failed: %v", b, err)
+		}
+	}
 	return nil
 }
 
-// persistSummaryFromCacheByKey persists the latest cached summary into session state when present.
-// It acquires the internal lock, updates the session's state, UpdatedAt, and TTL.
-func (s *SessionService) persistSummaryFromCacheByKey(_ context.Context, key session.Key) error {
-	app := s.getOrCreateAppSessions(key.AppName)
+// normalizeBranch maps empty branch to a canonical value.
+func (s *SessionService) normalizeBranch(b string) string {
+	if b == "" {
+		return "root"
+	}
+	return b
+}
+
+// groupEventsByBranch groups events by normalized branch identifier.
+func (s *SessionService) groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+	m := make(map[string][]event.Event)
+	for _, e := range evs {
+		b := s.normalizeBranch(e.Branch)
+		m[b] = append(m[b], e)
+	}
+	return m
+}
+
+// computeDeltaSince returns events that occurred strictly after the given time.
+func (s *SessionService) computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
+	if since.IsZero() {
+		return evs
+	}
+	out := make([]event.Event, 0, len(evs))
+	for _, e := range evs {
+		if e.Timestamp.After(since) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// buildBranchSession builds a temporary session containing branch events.
+func (s *SessionService) buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+	return &session.Session{
+		ID:        base.ID + ":" + branch,
+		AppName:   base.AppName,
+		UserID:    base.UserID,
+		State:     nil,
+		Events:    evs,
+		UpdatedAt: time.Now(),
+		CreatedAt: base.CreatedAt,
+	}
+}
+
+// writeSummaryUnderLock writes a summary for a branch under app lock and refreshes TTL.
+func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, branch string, text string) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
-
-	userSessions, ok := app.sessions[key.UserID]
-	if !ok {
-		return fmt.Errorf("user not found: %s", key.UserID)
-	}
-	swt, ok := userSessions[key.SessionID]
+	swt, ok := app.sessions[key.UserID][key.SessionID]
 	if !ok {
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
-	storedSession := getValidSession(swt)
-	if storedSession == nil {
+	cur := getValidSession(swt)
+	if cur == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
-
-	sum, err := s.opts.summarizerManager.GetSummary(storedSession)
-	if err != nil {
-		return fmt.Errorf("get summary failed: %w", err)
+	b := s.normalizeBranch(branch)
+	if cur.Summaries == nil {
+		cur.Summaries = make(map[string]*session.Summary)
 	}
-	if sum == nil || sum.Summary == "" {
-		log.Warnf("no summary text found for session %s", key.SessionID)
-		return nil
-	}
-	if storedSession.State == nil {
-		storedSession.State = make(session.StateMap)
-	}
-	now := time.Now().UTC()
-	storedSession.State[summaryTextKey] = []byte(sum.Summary)
-	storedSession.State[summaryUpdatedAtKey] = []byte(now.Format(time.RFC3339Nano))
-	storedSession.UpdatedAt = time.Now()
-	swt.session = storedSession
+	cur.Summaries[b] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	cur.UpdatedAt = time.Now()
+	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
 }
@@ -810,13 +864,13 @@ func copySession(sess *session.Session) *session.Session {
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     make(session.StateMap), // Create new state to avoid reference sharing
+		State:     make(session.StateMap), // Create new state to avoid reference sharing.
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
-		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
+		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
 	}
 
-	// copy state
+	// Copy state.
 	if sess.State != nil {
 		for k, v := range sess.State {
 			copiedValue := make([]byte, len(v))
@@ -824,7 +878,20 @@ func copySession(sess *session.Session) *session.Session {
 			copiedSess.State[k] = copiedValue
 		}
 	}
+	// Copy events.
 	copy(copiedSess.Events, sess.Events)
+	// Copy summaries.
+	if sess.Summaries != nil {
+		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
+		for b, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			// Shallow copy is fine since Summary is immutable after write.
+			copied := *sum
+			copiedSess.Summaries[b] = &copied
+		}
+	}
 	return copiedSess
 }
 

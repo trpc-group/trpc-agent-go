@@ -75,14 +75,13 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer and manager.
-	checks := []summary.Checker{
-		summary.CheckEventThreshold(*flagEvents),
-		summary.CheckTokenThreshold(*flagTokens),
-		summary.CheckTimeThreshold(time.Duration(*flagTimeSec) * time.Second),
-	}
 	sumOpts := []summary.Option{summary.WithWindowSize(*flagWindow)}
 	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
-	sumOpts = append(sumOpts, summary.WithChecksAny(checks))
+	sumOpts = append(sumOpts, summary.WithChecksAny(
+		summary.CheckEventThreshold(*flagEvents),
+		summary.CheckTokenThreshold(*flagTokens),
+		summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second)),
+	)
 	sum := summary.NewSummarizer(llm, sumOpts...)
 	mgr := summary.NewManager(sum)
 
@@ -165,6 +164,13 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 			fmt.Printf("⚠️ force summarize failed: %v\n", err)
 			return nil
 		}
+		// Re-fetch session to ensure we read the latest summaries.
+		sess, _ = c.sessionService.GetSession(ctx, session.Key{AppName: c.app, UserID: c.userID, SessionID: c.sessionID})
+		if text, ok := getSummaryFromSession(sess); ok {
+			fmt.Printf("📝 Summary (forced):\n%s\n\n", text)
+			return nil
+		}
+		// Fallback to service helper if no structured summary was found.
 		if text, ok := c.sessionService.GetSessionSummaryText(ctx, sess); ok && text != "" {
 			fmt.Printf("📝 Summary (forced):\n%s\n\n", text)
 		} else {
@@ -176,6 +182,10 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 		sess, err := c.sessionService.GetSession(ctx, session.Key{AppName: c.app, UserID: c.userID, SessionID: c.sessionID})
 		if err != nil || sess == nil {
 			fmt.Printf("⚠️ load session failed: %v\n", err)
+			return nil
+		}
+		if text, ok := getSummaryFromSession(sess); ok {
+			fmt.Printf("📝 Summary:\n%s\n\n", text)
 			return nil
 		}
 		if text, ok := c.sessionService.GetSessionSummaryText(ctx, sess); ok && text != "" {
@@ -245,3 +255,21 @@ func (c *summaryChat) extractContent(event *event.Event) string {
 
 // Helper.
 func intPtr(i int) *int { return &i }
+
+// getSummaryFromSession returns a structured summary from the session if present.
+// It prefers the "root" branch and falls back to any available summary.
+func getSummaryFromSession(sess *session.Session) (string, bool) {
+	if sess == nil || sess.Summaries == nil || len(sess.Summaries) == 0 {
+		return "", false
+	}
+	if sum, ok := sess.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
+		return sum.Summary, true
+	}
+	// Fallback to any branch if root is not present.
+	for _, s := range sess.Summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
+	return "", false
+}

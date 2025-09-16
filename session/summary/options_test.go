@@ -66,7 +66,7 @@ func TestOptions(t *testing.T) {
 
 	t.Run("WithChecksAll", func(t *testing.T) {
 		checks := []Checker{CheckEventThreshold(1), CheckTokenThreshold(4)}
-		s := NewSummarizer(&testModel{}, WithChecksAll(checks))
+		s := NewSummarizer(&testModel{}, WithChecksAll(checks...))
 		sess := &session.Session{Events: []event.Event{
 			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
 			{Response: &model.Response{Usage: &model.Usage{TotalTokens: 5}}, Timestamp: time.Now()},
@@ -76,7 +76,7 @@ func TestOptions(t *testing.T) {
 
 	t.Run("WithChecksAny", func(t *testing.T) {
 		checks := []Checker{CheckTokenThreshold(10000), CheckEventThreshold(3)}
-		s := NewSummarizer(&testModel{}, WithChecksAny(checks))
+		s := NewSummarizer(&testModel{}, WithChecksAny(checks...))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
 			sess.Events[i] = event.Event{Timestamp: time.Now()}

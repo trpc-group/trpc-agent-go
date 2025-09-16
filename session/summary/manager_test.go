@@ -178,7 +178,7 @@ func (f *fakeService) AppendEvent(ctx context.Context, s *session.Session, e *ev
 	f.appendCalled = true
 	return nil
 }
-func (f *fakeService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+func (f *fakeService) CreateSessionSummary(ctx context.Context, sess *session.Session, branch string, force bool) error {
 	return nil
 }
 func (f *fakeService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {

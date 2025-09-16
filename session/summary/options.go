@@ -74,20 +74,22 @@ func WithTimeThreshold(interval time.Duration) Option {
 	}
 }
 
-// WithChecksAll sets all provided checks to be required (AND logic).
-func WithChecksAll(checks []Checker) Option {
+// WithChecksAll appends a single composite check that requires all provided checks (AND logic).
+func WithChecksAll(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
-		if len(checks) > 0 {
-			s.checks = []Checker{ChecksAll(checks)}
+		if len(checks) == 0 {
+			return
 		}
+		s.checks = append(s.checks, ChecksAll(checks))
 	}
 }
 
-// WithChecksAny sets any of the provided checks to be sufficient (OR logic).
-func WithChecksAny(checks []Checker) Option {
+// WithChecksAny appends a single composite check that passes if any provided check passes (OR logic).
+func WithChecksAny(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
-		if len(checks) > 0 {
-			s.checks = []Checker{ChecksAny(checks)}
+		if len(checks) == 0 {
+			return
 		}
+		s.checks = append(s.checks, ChecksAny(checks))
 	}
 }

@@ -14,8 +14,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -187,51 +185,32 @@ func (r *runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent != nil && (len(agentEvent.StateDelta) > 0 ||
-				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())) {
+			if agentEvent.StateDelta != nil ||
+				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
+				} else {
+					// If this is a final assistant message, trigger branch-aware summary asynchronously.
+					if agentEvent.Response != nil && agentEvent.Response.Done && !agentEvent.Response.IsPartial {
+						branch := agentEvent.Branch
+						go func(b string) {
+							// Use a short timeout to avoid blocking the main loop.
+							tctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+							defer cancel()
+							if r.sessionService != nil {
+								_ = r.sessionService.CreateSessionSummary(tctx, sess, false)
+							}
+						}(branch)
+					}
 				}
 			}
 
-			if agentEvent.RequiresCompletion {
-				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
-				invocation.NotifyCompletion(ctx, completionID)
-			}
-
-			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
+			// Forward the event to the output channel.
+			select {
+			case processedEventCh <- agentEvent:
+			case <-ctx.Done():
 				return
 			}
-		}
-
-		// Emit final runner completion event after all agent events are processed.
-		runnerCompletionEvent := event.NewResponseEvent(
-			invocation.InvocationID,
-			r.appName,
-			&model.Response{
-				ID:        "runner-completion-" + uuid.New().String(),
-				Object:    model.ObjectTypeRunnerCompletion,
-				Created:   time.Now().Unix(),
-				Done:      true,
-				IsPartial: false,
-			},
-		)
-
-		// Append runner completion event to session.
-		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
-			log.Errorf("Failed to append runner completion event to session: %v", err)
-		}
-
-		// Send the runner completion event to output channel.
-		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
-
-		// Trigger non-forced summarization in background if supported.
-		if r.sessionService != nil && sess != nil {
-			go func() {
-				if err := r.sessionService.CreateSessionSummary(ctx, sess, false); err != nil {
-					log.Warnf("Runner: CreateSessionSummary failed: %v", err)
-				}
-			}()
 		}
 	}()
 
