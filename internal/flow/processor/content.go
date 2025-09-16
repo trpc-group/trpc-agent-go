@@ -61,7 +61,7 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		IncludeContents:  IncludeContentsFiltered, // Default to only include filtered contents.
+		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
 		AddContextPrefix: true,                    // Default to add context prefix.
 	}
 
