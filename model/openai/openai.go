@@ -191,11 +191,6 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
-	// forceMaxCompletionTokens forces using max_completion_tokens instead of
-	// max_tokens for Chat Completions request when MaxTokens is provided.
-	// When true, the adapter will inject max_completion_tokens via JSON and
-	// skip setting chatRequest.MaxTokens.
-	forceMaxCompletionTokens bool
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
