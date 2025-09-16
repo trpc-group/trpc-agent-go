@@ -30,6 +30,7 @@ Langfuse 是专为 LLM 应用设计的可观测平台，支持通过 OpenTelemet
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
 export LANGFUSE_HOST="your-langfuse-host"
+export LANGFUSE_INSECURE="true" # 用于不安全连接（仅限开发环境）
 ```
 
 ```go

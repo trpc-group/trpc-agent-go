@@ -15,6 +15,7 @@ For this example, you can quickly get started by [deploying Langfuse locally or 
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
 export LANGFUSE_HOST="your-langfuse-host"
+export LANGFUSE_INSECURE="true" # for insecure connections (development only)
 ```
 
 ```go

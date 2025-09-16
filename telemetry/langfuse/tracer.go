@@ -18,9 +18,11 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"go.opentelemetry.io/otel/trace/noop"
+
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -35,16 +37,20 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 	}
 
 	if config.secretKey == "" || config.publicKey == "" || config.host == "" {
-		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided")
+		return nil, fmt.Errorf("langfuse: secret key, public key and host must be provided. Host should be in 'hostname:port' format (e.g., 'cloud.langfuse.com:443')")
 	}
 
 	otelOpts := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(config.host),
-		otlptracehttp.WithInsecure(),
 		otlptracehttp.WithHeaders(map[string]string{
 			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(config.publicKey, config.secretKey)),
 		}),
 		otlptracehttp.WithURLPath("/api/public/otel/v1/traces"),
+	}
+
+	// Add insecure option only when explicitly configured
+	if config.insecure {
+		otelOpts = append(otelOpts, otlptracehttp.WithInsecure())
 	}
 
 	return start(ctx, otelOpts...)

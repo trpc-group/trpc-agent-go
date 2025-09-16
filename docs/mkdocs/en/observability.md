@@ -28,6 +28,7 @@ Refer to the Langfuse self-hosting guide for local or cloud deployment. For a qu
 export LANGFUSE_PUBLIC_KEY="your-public-key"
 export LANGFUSE_SECRET_KEY="your-secret-key"
 export LANGFUSE_HOST="your-langfuse-host"
+export LANGFUSE_INSECURE="true" # for insecure connections (development only)
 ```
 
 ```go
