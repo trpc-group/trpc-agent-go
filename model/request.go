@@ -37,8 +37,6 @@ const (
 	ThinkingTokensKey = "thinking_tokens"
 	// ReasoningContentKey is the key used for reasoning content in API responses.
 	ReasoningContentKey = "reasoning_content"
-	// MaxCompletionTokensKey is the wire key for max completion tokens.
-	MaxCompletionTokensKey = "max_completion_tokens"
 )
 
 // String returns the string representation of the role.
