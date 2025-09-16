@@ -8,9 +8,10 @@ The parallel fan-out workflow demonstrates dynamic task distribution:
 
 1. **Fan-out Node** - Returns `[]*graph.Command` to create multiple parallel tasks
 2. **Parallel Execution** - Multiple tasks execute the same worker node simultaneously
-3. **Parameter Isolation** - Each task has isolated `Overlay` state parameters
+3. **Task-specific State** - Each task runs with its own state snapshot (global + command update)
 4. **Result Merging** - Results from parallel tasks are merged using `StateSchema` reducers
 5. **Dynamic Scaling** - Number of parallel tasks can be determined at runtime
+6. **Readable Output** - Only the planner streams; after completion, results are replayed sequentially for clarity
 
 ## Key Features
 
@@ -40,15 +41,15 @@ return cmds, nil
 ### 📊 Parallel Task Execution
 
 - **Same Target Node**: Multiple tasks execute the same worker node
-- **Parameter Isolation**: Each task has independent `Overlay` state
+- **Task-specific State**: Each task has an independent state snapshot (global + command update)
 - **Concurrent Processing**: Tasks run in parallel for better performance
 - **Result Aggregation**: Results are merged using custom reducers
 
-### 🔍 State Management with Overlays
+### 🔍 State Management
 
-- **Global State**: Shared state across all tasks
-- **Overlay State**: Task-specific parameters that don't affect global state
-- **Reducer Functions**: Custom logic for merging parallel results
+- **Global State**: Shared baseline state across tasks
+- **Per-task Snapshot**: Task-specific parameters from `Command.Update` are merged into a per-task snapshot (isolated from other tasks)
+- **Reducer Functions**: Custom logic for merging parallel results back into the global state
 - **Type Safety**: Strong typing with `StateSchema` definitions
 
 ## Graph Structure
@@ -75,13 +76,13 @@ execution.
 
 Each `Command` contains:
 
-- **`Update`**: `Overlay` state with task-specific parameters (includes `priority` in this example)
+- **`Update`**: Task-specific parameters merged into a per-task state snapshot (includes `priority` in this example)
 - **`GoTo`**: Target node identifier
 
 ### **Execution Flow**
 
 1. **Fan-out Node** returns `[]*graph.Command`
-2. **Executor** creates multiple `Task` objects with `Overlay` states
+2. **Executor** creates multiple `Task` objects with per-task merged state snapshots
 3. **Parallel Execution** of tasks targeting the same worker node
 4. **State Merging** using `StateSchema.ApplyUpdate` and reducers
 5. **Result Aggregation** from all parallel tasks
@@ -94,6 +95,16 @@ schema := graph.MessagesStateSchema().
         Type:    reflect.TypeOf([]string{}),
         Reducer: graph.StringSliceReducer,  // Merges string slices
         Default: func() any { return []string{} },
+    }).
+    AddField("node_execution_history", graph.StateField{
+        Type:    reflect.TypeOf([]map[string]any{}),
+        Reducer: appendMapSliceReducer,   // Appends []map[string]any across branches
+        Default: func() any { return []map[string]any{} },
+    }).
+    AddField("error_count", graph.StateField{
+        Type:    reflect.TypeOf(0),
+        Reducer: intSumReducer,           // Sums errors across branches
+        Default: func() any { return 0 },
     })
 ```
 
@@ -154,22 +165,21 @@ The example demonstrates:
 ```
 🚀 Parallel Fan-out Execution Example
 
-📋 Creating parallel tasks...
-✅ Task A (priority: high) created
-✅ Task B (priority: medium) created
-✅ Task C (priority: low) created
+🤖 LLM Streaming: 2
+🧭 Planner decided to run 2 tasks
+📋 Creating 2 parallel tasks...
+✅ task-A (priority: high) created
+✅ task-B (priority: medium) created
 
-🔄 Executing parallel tasks...
-⏱️  Task A completed in 45ms
-⏱️  Task B completed in 52ms
-⏱️  Task C completed in 48ms
+🔄 Executing 2 parallel tasks...
 
-📊 Aggregated Results:
-   - task-A (priority: high)
-   - task-B (priority: medium)
-   - task-C (priority: low)
+🧵 Replaying results sequentially:
 
-🎯 Total execution time: 52ms (parallel vs 145ms sequential)
+[1/2] task-A (priority: high)
+... worker A content ...
+
+[2/2] task-B (priority: medium)
+... worker B content ...
 ```
 
 ## Benefits
@@ -224,7 +234,8 @@ The example demonstrates:
 
 - **Task Queue**: `pendingTasks` queue manages parallel task execution
 - **Mutex Protection**: Separate mutexes for global state and task queue
-- **State Isolation**: `Overlay` state prevents parameter conflicts
+- **State Isolation**: Per-task state snapshots prevent parameter conflicts
+- **Streaming UX**: Only the planner streams; worker results are replayed sequentially after completion to avoid interleaved logs
 
 ### **Error Handling**
 
@@ -239,3 +250,10 @@ The example demonstrates:
 - **Cleanup**: Proper resource cleanup after task completion
 
 This example provides a foundation for building scalable, parallel workflows that can dynamically distribute work across multiple execution paths while maintaining clean state management and result aggregation.
+
+## Notes on Routing and Events
+
+- **Routing via `GoTo`**: When commands specify `GoTo`, you don’t need a static `AddEdge` from the fan-out node to the worker — routing is explicit in the command.
+- **Channel correctness**: Fan-out task writers/triggers are derived from the target node, ensuring correct downstream triggering without duplicates.
+- **Execution stats and errors**: The example’s callbacks persist `node_execution_history` and `error_count` in state on successful nodes, enabling the aggregator to display execution flow and error counts in the final output.
+- **Planner tool usage & parsing**: The planning node must call `analyze_task_complexity` first, then output a single integer (1–5). The example includes a robust parser that extracts a valid number even if minor formatting (e.g., `**2**`) appears.

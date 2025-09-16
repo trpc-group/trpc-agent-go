@@ -53,13 +53,49 @@ func (w *fanoutWorkflow) onAfterNode(
 	w.updateLastHistory(state, executionTime, nodeErr)
 	w.maybeWarnSlow(callbackCtx.NodeName, executionTime)
 
-	// Append result for process_task when success and expected fields exist.
+	// Append result for process_task when success: include actual model output
 	if nodeErr == nil && callbackCtx.NodeID == "process_task" {
-		if _, taskOK := state["task_id"].(string); taskOK {
-			if _, priorityOK := state["priority"].(string); priorityOK {
-				msg := w.buildTaskResultString(state)
-				return graph.State{"results": []string{msg}}, nil
+		var taskID, priority string
+		if v, ok := state["task_id"].(string); ok {
+			taskID = v
+		}
+		if v, ok := state["priority"].(string); ok {
+			priority = v
+		}
+		// Prefer node-specific response content from the node's result first
+		var content string
+		if rstate, ok := result.(graph.State); ok {
+			if nr, ok2 := rstate[graph.StateKeyNodeResponses].(map[string]any); ok2 {
+				if v, ok3 := nr[callbackCtx.NodeID].(string); ok3 {
+					content = v
+				}
 			}
+			if content == "" {
+				if v, ok3 := rstate[graph.StateKeyLastResponse].(string); ok3 {
+					content = v
+				}
+			}
+		}
+		// Fallback to previous state when result doesn't contain it (should be rare)
+		if content == "" {
+			if nr, ok := state[graph.StateKeyNodeResponses].(map[string]any); ok {
+				if v, ok := nr[callbackCtx.NodeID].(string); ok {
+					content = v
+				}
+			}
+		}
+		if content == "" {
+			if v, ok := state[graph.StateKeyLastResponse].(string); ok {
+				content = v
+			}
+		}
+		if content != "" || taskID != "" || priority != "" {
+			header := w.buildTaskResultString(state)
+			full := header
+			if content != "" {
+				full = fmt.Sprintf("%s\n%s", header, content)
+			}
+			return graph.State{"results": []string{full}}, nil
 		}
 	}
 
@@ -70,6 +106,11 @@ func (w *fanoutWorkflow) onAfterNode(
 			sr["last_execution_time"] = executionTime
 			if hist, ok := state["node_execution_history"].([]map[string]any); ok {
 				sr["total_nodes_executed"] = len(hist)
+				// Persist execution history so downstream nodes (like aggregator) can read it.
+				sr["node_execution_history"] = hist
+			}
+			if ec, ok := state["error_count"].(int); ok {
+				sr["error_count"] = ec
 			}
 			return sr, nil
 		}
