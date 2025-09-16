@@ -139,6 +139,7 @@ func (r *runner) Run(
 		opt(&ro)
 	}
 	invocation := agent.NewInvocation(
+		agent.WithInvocationRunID(uuid.NewString()),
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),

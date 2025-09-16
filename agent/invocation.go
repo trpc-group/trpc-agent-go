@@ -56,6 +56,9 @@ type Invocation struct {
 	Agent Agent
 	// AgentName is the name of the agent that is being invoked.
 	AgentName string
+	// RunID is the ID of the run.
+	// Similar to the user's request ID, it is used to trace the entire execution chain.
+	RunID string
 	// InvocationID is the ID of the invocation.
 	InvocationID string
 	// Branch records agent execution chain information.
@@ -96,6 +99,9 @@ type Invocation struct {
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
+
+	// parent is the parent invocation, if any
+	parent *Invocation
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -208,6 +214,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:        inv.noticeMu,
 		noticeChanMap:   inv.noticeChanMap,
 		eventFilterKey:  inv.eventFilterKey,
+		parent:          inv,
 	}
 
 	for _, opt := range invocationOpts {
@@ -241,6 +248,10 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 		return
 	}
 
+	e.RunID = inv.RunID
+	if inv.parent != nil {
+		e.ParentInvocationID = inv.parent.InvocationID
+	}
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
 	e.FilterKey = inv.GetEventFilterKey()

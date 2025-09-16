@@ -29,6 +29,13 @@ func WithInvocationID(id string) InvocationOptions {
 	}
 }
 
+// WithInvocationRunID set run id for the Invocation.
+func WithInvocationRunID(id string) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.RunID = id
+	}
+}
+
 // WithInvocationAgent set agent for the Invocation.
 func WithInvocationAgent(agent Agent) InvocationOptions {
 	return func(inv *Invocation) {
