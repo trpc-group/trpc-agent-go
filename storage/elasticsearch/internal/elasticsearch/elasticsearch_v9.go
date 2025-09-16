@@ -12,6 +12,7 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -183,4 +184,71 @@ func (c *clientV9) Search(ctx context.Context, indexName string, body []byte) ([
 		return nil, fmt.Errorf("elasticsearch search failed: %s: %s", res.Status(), string(bodyBytes))
 	}
 	return bodyBytes, nil
+}
+
+// Count executes a count query.
+func (c *clientV9) Count(ctx context.Context, indexName string, body []byte) (int, error) {
+	res, err := c.esClient.Count(
+		c.esClient.Count.WithContext(ctx),
+		c.esClient.Count.WithIndex(indexName),
+		c.esClient.Count.WithBody(bytes.NewReader(body)),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Body.Close()
+	responseBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, err
+	}
+	if res.IsError() {
+		return 0, fmt.Errorf("elasticsearch count failed: %s: %s", res.Status(), string(responseBody))
+	}
+
+	// Parse count response
+	var countResponse struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(responseBody, &countResponse); err != nil {
+		return 0, fmt.Errorf("elasticsearch parse count response: %w", err)
+	}
+	return countResponse.Count, nil
+}
+
+// DeleteByQuery deletes documents matching the query.
+func (c *clientV9) DeleteByQuery(ctx context.Context, indexName string, body []byte) error {
+	res, err := c.esClient.DeleteByQuery(
+		[]string{indexName},
+		bytes.NewReader(body),
+		c.esClient.DeleteByQuery.WithContext(ctx),
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.IsError() {
+		responseBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("elasticsearch delete by query failed: %s: %s", res.Status(), string(responseBody))
+	}
+	return nil
+}
+
+// Refresh refreshes an index.
+func (c *clientV9) Refresh(ctx context.Context, indexName string) error {
+	res, err := c.esClient.Indices.Refresh(
+		c.esClient.Indices.Refresh.WithContext(ctx),
+		c.esClient.Indices.Refresh.WithIndex(indexName),
+	)
+	if err != nil {
+		return fmt.Errorf("elasticsearch refresh index: %w", err)
+	}
+	defer res.Body.Close()
+
+	// Check response status
+	if res.IsError() {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("elasticsearch refresh index failed: %s: %s", res.Status(), string(body))
+	}
+
+	return nil
 }

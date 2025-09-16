@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // TestReadDocuments verifies Auto Source handles plain text input with and
@@ -55,7 +56,7 @@ func TestReadDocuments(t *testing.T) {
 			t.Fatalf("expected multiple chunks, got %d", len(docs))
 		}
 		for _, d := range docs {
-			if sz, ok := d.Metadata["chunk_size"].(int); ok && sz > chunkSize {
+			if sz, ok := d.Metadata[source.MetaChunkSize].(int); ok && sz > chunkSize {
 				t.Fatalf("chunk size %d exceeds expected max %d", sz, chunkSize)
 			}
 		}

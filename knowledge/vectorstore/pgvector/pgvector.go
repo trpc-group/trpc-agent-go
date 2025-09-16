@@ -7,7 +7,7 @@
 //
 //
 
-// Package pgvector provides a vector store for pgvector.
+// Package pgvector provides a PostgreSQL pgvector-based implementation of the VectorStore interface.
 package pgvector
 
 import (
@@ -47,6 +47,11 @@ var (
 	defaultLimit   = 10
 )
 
+const (
+	// Batch processing constants
+	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
+)
+
 // SQL templates for better maintainability and safety.
 const (
 	sqlCreateTable = `
@@ -80,7 +85,12 @@ const (
 
 	sqlDeleteDocument = `DELETE FROM %s WHERE id = $1`
 
+	sqlTruncateTable = `TRUNCATE TABLE %s`
+
 	sqlDocumentExists = `SELECT 1 FROM %s WHERE id = $1`
+
+	// Metadata query templates
+	sqlGetAllMetadata = `SELECT id, metadata FROM %s ORDER BY created_at LIMIT $1 OFFSET $2`
 )
 
 // VectorStore is the vector store for pgvector.
@@ -505,6 +515,185 @@ func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []any
 
 	if err = rows.Err(); err != nil {
 		return nil, fmt.Errorf("pgvector iterate rows: %w", err)
+	}
+
+	return result, nil
+}
+
+// DeleteByFilter deletes documents from the vector store based on filter conditions.
+// It supports deletion by document IDs, metadata filters, or all documents.
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
+	config := vectorstore.ApplyDeleteOptions(opts...)
+
+	if err := vs.validateDeleteConfig(config); err != nil {
+		return err
+	}
+
+	if config.DeleteAll {
+		return vs.deleteAll(ctx)
+	}
+
+	return vs.deleteByFilter(ctx, config)
+}
+
+func (vs *VectorStore) validateDeleteConfig(config *vectorstore.DeleteConfig) error {
+	if config.DeleteAll && (len(config.DocumentIDs) > 0 || len(config.Filter) > 0) {
+		return fmt.Errorf("pgvector delete all documents, but document ids or filter are provided")
+	}
+	if !config.DeleteAll && len(config.DocumentIDs) == 0 && len(config.Filter) == 0 {
+		return fmt.Errorf("pgvector delete by filter: no filter conditions specified")
+	}
+	return nil
+}
+
+func (vs *VectorStore) deleteAll(ctx context.Context) error {
+	truncateSQL := fmt.Sprintf(sqlTruncateTable, vs.option.table)
+	if _, err := vs.pool.Exec(ctx, truncateSQL); err != nil {
+		return fmt.Errorf("pgvector delete all documents: %w", err)
+	}
+	log.Infof("pgvector truncated all documents from table %s", vs.option.table)
+	return nil
+}
+
+func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
+	dsb := newDeleteSQLBuilder(vs.option.table)
+
+	if len(config.DocumentIDs) > 0 {
+		dsb.addIDFilter(config.DocumentIDs)
+	}
+	if len(config.Filter) > 0 {
+		dsb.addMetadataFilter(config.Filter)
+	}
+
+	deleteSQL, args := dsb.build()
+	if deleteSQL == "" {
+		return fmt.Errorf("pgvector delete by filter: failed to build delete query")
+	}
+
+	result, err := vs.pool.Exec(ctx, deleteSQL, args...)
+	if err != nil {
+		return fmt.Errorf("pgvector delete by filter: %w", err)
+	}
+
+	log.Infof("pgvector deleted %d documents by filter", result.RowsAffected())
+	return nil
+}
+
+// Count counts the number of documents in the vector store.
+func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	config := vectorstore.ApplyCountOptions(opts...)
+
+	// Create a count query builder
+	cqb := newCountQueryBuilder(vs.option.table)
+
+	// Add metadata filter if provided
+	if len(config.Filter) > 0 {
+		cqb.addMetadataFilter(config.Filter)
+	}
+
+	// Build and execute the count query
+	query, args := cqb.build()
+
+	var count int
+	err := vs.pool.QueryRow(ctx, query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("pgvector count documents: %w", err)
+	}
+
+	return count, nil
+}
+
+// GetMetadata retrieves metadata from the vector store with pagination support.
+// If limit < 0, retrieves all metadata in batches of 5000 records ordered by created_at.
+func (vs *VectorStore) GetMetadata(
+	ctx context.Context,
+	opts ...vectorstore.GetMetadataOption,
+) (map[string]vectorstore.DocumentMetadata, error) {
+	config, err := vectorstore.ApplyGetMetadataOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if config.Limit < 0 && config.Offset < 0 {
+		return vs.getAllMetadata(ctx, config)
+	}
+
+	return vs.queryMetadataBatch(ctx, config.Limit, config.Offset, config.IDs, config.Filter)
+}
+
+func (vs *VectorStore) getAllMetadata(ctx context.Context, config *vectorstore.GetMetadataConfig) (map[string]vectorstore.DocumentMetadata, error) {
+	result := make(map[string]vectorstore.DocumentMetadata)
+
+	for offset := 0; ; offset += metadataBatchSize {
+		batch, err := vs.queryMetadataBatch(ctx, metadataBatchSize, offset, config.IDs, config.Filter)
+		if err != nil {
+			return nil, err
+		}
+
+		for docID, metadata := range batch {
+			result[docID] = metadata
+		}
+
+		if len(batch) < metadataBatchSize {
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// queryMetadataBatch executes a single metadata query with the given limit and offset
+func (vs *VectorStore) queryMetadataBatch(
+	ctx context.Context,
+	limit,
+	offset int,
+	docIDs []string,
+	filters map[string]interface{},
+) (map[string]vectorstore.DocumentMetadata, error) {
+	// Create a metadata query builder
+	qb := newMetadataQueryBuilder(vs.option.table)
+
+	// Add ID filter if provided
+	if len(docIDs) > 0 {
+		qb.addIDFilter(docIDs)
+	}
+
+	// Add metadata filter if provided
+	if len(filters) > 0 {
+		qb.addMetadataFilter(filters)
+	}
+
+	// Build the query with pagination
+	query, args := qb.buildWithPagination(limit, offset)
+
+	rows, err := vs.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pgvector get metadata batch: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for rows.Next() {
+		var docID string
+		var metadataJSON string
+
+		err := rows.Scan(&docID, &metadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("pgvector scan metadata: %w", err)
+		}
+
+		metadata, err := jsonToMap(metadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
+		}
+
+		result[docID] = vectorstore.DocumentMetadata{
+			Metadata: metadata,
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgvector iterate metadata rows: %w", err)
 	}
 
 	return result, nil
