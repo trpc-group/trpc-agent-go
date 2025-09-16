@@ -1631,15 +1631,23 @@ func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []*C
 			maps.Copy(mergedState, c.Update)
 		}
 
-		// Create task with merged state instead of just overlay
+		// Resolve writers/triggers from the target node rather than the source task.
+		var targetWriters []channelWriteEntry
+		var targetTriggers []string
+		if node, exists := e.graph.Node(target); exists && node != nil {
+			targetWriters = node.writers
+			targetTriggers = node.triggers
+		}
+
+		// Create task with merged state and target node channel config.
 		newTask := &Task{
 			NodeID:   target,
-			Input:    mergedState, // Use merged state instead of nil.
-			Writes:   t.Writes,    // Copy writes from source task.
-			Triggers: t.Triggers,  // Copy triggers from source task.
+			Input:    mergedState,
+			Writes:   targetWriters,
+			Triggers: targetTriggers,
 			TaskID:   fmt.Sprintf("%s-%d", target, nextStep),
 			TaskPath: append([]string{}, t.TaskPath...),
-			Overlay:  nil, // No overlay needed since we have merged state.
+			Overlay:  nil,
 		}
 
 		newTasks = append(newTasks, newTask)
