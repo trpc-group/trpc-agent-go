@@ -1,8 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector
 
-go 1.24.1
-
-toolchain go1.24.4
+go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
@@ -38,4 +36,5 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )
