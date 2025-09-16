@@ -63,15 +63,15 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: truncatedContent},
 				},
 			},
-		})),
-	)
+		}),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	))
 
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
 		CodeBlocks:  codeBlocks,
@@ -81,29 +81,29 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		agent.EmitEvent(ctx, invocation, ch, event.New(
 			invocation.InvocationID,
 			invocation.AgentName,
-			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 			event.WithResponse(&model.Response{
 				Choices: []model.Choice{
 					{
 						Message: model.Message{Role: model.RoleAssistant, Content: "Code execution failed: " + err.Error()},
 					},
 				},
-			})),
-		)
+			}),
+			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		))
 		return
 	}
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
 		invocation.AgentName,
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: codeExecutionResult.String()},
 				},
 			},
-		})),
-	)
+		}),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
 }
