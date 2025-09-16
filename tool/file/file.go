@@ -217,12 +217,12 @@ func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitiv
 	if !caseSensitive {
 		opts = append(opts, doublestar.WithCaseInsensitive())
 	}
-	mathches, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
+	matches, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
 	}
-	files := mathches[:0]
-	for _, match := range mathches {
+	files := matches[:0]
+	for _, match := range matches {
 		if match == "" || match == "." || match == ".." {
 			continue
 		}
