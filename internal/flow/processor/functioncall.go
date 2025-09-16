@@ -106,6 +106,13 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
+	// If the tool indicates skipping outer summarization, mark the invocation to end
+	// after this tool response so the flow does not perform an extra LLM call.
+	if functioncallResponseEvent.Actions != nil && functioncallResponseEvent.Actions.SkipSummarization {
+		invocation.EndInvocation = true
+		return
+	}
+
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
 		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
@@ -142,8 +149,8 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 		))
 		return nil, err
 	}
-	err = agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
-	return functionResponseEvent, err
+	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+	return functionResponseEvent, nil
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
@@ -242,11 +249,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
 
-	// If the tool indicates skipping outer summarization, mark the invocation to end
-	// after this tool response so the flow does not perform an extra LLM call.
-	if mergedEvent.Actions != nil && mergedEvent.Actions.SkipSummarization {
-		invocation.EndInvocation = true
-	}
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
