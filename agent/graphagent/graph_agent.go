@@ -172,8 +172,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 			// Create a channel that returns the custom response and then closes.
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			eventChan <- customEvent
+			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			agent.EmitEvent(ctx, invocation, eventChan, customevent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -280,42 +280,31 @@ func (ga *GraphAgent) wrapEventChannel(
 		defer close(wrappedChan)
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			select {
-			case wrappedChan <- evt:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
 		// After all events are processed, run after agent callbacks
 		customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		var evt *event.Event
 		if err != nil {
 			// Send error event.
-			errorEvent := event.NewErrorEvent(
+			evt = event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				agent.ErrorTypeAgentCallbackError,
 				err.Error(),
 			)
-			select {
-			case wrappedChan <- errorEvent:
-			case <-ctx.Done():
-				return
-			}
-			return
-		}
-		if customResponse != nil {
+		} else if customResponse != nil {
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(
+			evt = event.NewResponseEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				customResponse,
 			)
-			select {
-			case wrappedChan <- customEvent:
-			case <-ctx.Done():
-				return
-			}
 		}
+
+		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 	}()
 	return wrappedChan
 }

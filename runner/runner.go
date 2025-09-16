@@ -133,46 +133,34 @@ func (r *runner) Run(
 		}
 	}
 
-	// Generate invocation ID.
-	invocationID := "invocation-" + uuid.New().String()
-
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" {
-		userEvent := &event.Event{
-			Response:     &model.Response{Done: false},
-			InvocationID: invocationID,
-			Author:       authorUser,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-			Branch:       "", // User events typically don't have branch constraints
-		}
-		// Set the user message content in the response.
-		userEvent.Response.Choices = []model.Choice{
-			{
-				Index:   0,
-				Message: message,
-			},
-		}
-
-		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
-			return nil, err
-		}
-	}
-
 	// Create invocation.
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
 	invocation := agent.NewInvocation(
-		agent.WithInvocationID(invocationID),
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(r.agent),
 		agent.WithInvocationRunOptions(ro),
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey(r.appName),
 	)
+
+	// Append the incoming user message to the session if it has content.
+	if message.Content != "" {
+		evt := event.NewResponseEvent(
+			invocation.InvocationID,
+			authorUser,
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+		)
+		agent.InjectIntoEvent(invocation, evt)
+		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
+			return nil, err
+		}
+
+	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -199,8 +187,8 @@ func (r *runner) Run(
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.StateDelta != nil ||
-				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
+			if agentEvent != nil && (len(agentEvent.StateDelta) > 0 ||
+				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
@@ -211,41 +199,31 @@ func (r *runner) Run(
 				invocation.NotifyCompletion(ctx, completionID)
 			}
 
-			// Forward the event to the output channel.
-			select {
-			case processedEventCh <- agentEvent:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
 		}
 
 		// Emit final runner completion event after all agent events are processed.
-		runnerCompletionEvent := &event.Event{
-			Response: &model.Response{
+		runnerCompletionEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			r.appName,
+			&model.Response{
 				ID:        "runner-completion-" + uuid.New().String(),
 				Object:    model.ObjectTypeRunnerCompletion,
 				Created:   time.Now().Unix(),
 				Done:      true,
 				IsPartial: false,
 			},
-			InvocationID: invocationID,
-			Author:       r.appName,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-		}
+		)
 
 		// Append runner completion event to session.
-		if err := r.sessionService.AppendEvent(
-			ctx, sess, runnerCompletionEvent,
-		); err != nil {
+		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
 
 		// Send the runner completion event to output channel.
-		select {
-		case processedEventCh <- runnerCompletionEvent:
-		case <-ctx.Done():
-		}
+		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
 	}()
 
 	itelemetry.TraceRunner(span, r.appName, invocation, message)

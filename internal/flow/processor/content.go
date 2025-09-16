@@ -86,32 +86,28 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
+	if invocation == nil {
+		return
+	}
+
 	// 0. If caller supplied explicit messages via RunOptions, prefer them
 	// and skip deriving from session or the single invocation message to
 	// avoid duplication. This supports use cases where the upstream
 	// system maintains the conversation history and passes it in each run.
-	if invocation != nil && len(invocation.RunOptions.Messages) > 0 {
+	if len(invocation.RunOptions.Messages) > 0 {
 		req.Messages = append(req.Messages, invocation.RunOptions.Messages...)
 
 		// Send a preprocessing event and return early.
-		if invocation != nil {
-			evt := event.New(invocation.InvocationID, invocation.AgentName)
-			evt.Object = model.ObjectTypePreprocessingContent
-			evt.Branch = invocation.Branch
-			select {
-			case ch <- evt:
-				log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
-			case <-ctx.Done():
-				log.Debugf("Content request processor: context cancelled")
-			}
-		}
+		evt := event.New(invocation.InvocationID, invocation.AgentName, event.WithObject(model.ObjectTypePreprocessingContent))
+		log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
+		agent.EmitEvent(ctx, invocation, ch, evt)
 		return
 	}
 
 	// Process session events if available and includeContents is not "none".
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		sessionMessages := p.getContents(
-			invocation.Branch, // Current branch for filtering
+			invocation.GetEventFilterKey(), // Current branch for filtering
 			invocation.Session.Events,
 			invocation.AgentName, // Current agent name for filtering
 		)
@@ -131,23 +127,16 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Send a preprocessing event.
-	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePreprocessingContent
-		evt.Branch = invocation.Branch // Set branch for hierarchical event filtering
-
-		select {
-		case ch <- evt:
-			log.Debugf("Content request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Content request processor: context cancelled")
-		}
-	}
+	agent.EmitEvent(ctx, invocation, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypePreprocessingPlanning),
+	))
 }
 
 // getContents gets the contents for the LLM request from session events.
 func (p *ContentRequestProcessor) getContents(
-	currentBranch string,
+	filterKey string,
 	events []event.Event,
 	agentName string,
 ) []model.Message {
@@ -163,12 +152,12 @@ func (p *ContentRequestProcessor) getContents(
 
 		// Skip events without content, or generated neither by user nor by model
 		// or has empty text. E.g. events purely for mutating session states.
-		if !p.hasValidContent(&evt) {
+		if !evt.IsValidContent() {
 			continue
 		}
 
 		// Skip events not belong to current branch.
-		if !p.isEventBelongsToBranch(currentBranch, &evt) {
+		if !evt.Filter(filterKey) {
 			continue
 		}
 
@@ -198,40 +187,6 @@ func (p *ContentRequestProcessor) getContents(
 	}
 
 	return messages
-}
-
-// hasValidContent checks if an event has valid content for message generation.
-func (p *ContentRequestProcessor) hasValidContent(evt *event.Event) bool {
-	// Check if event has choices with content.
-	if len(evt.Choices) > 0 {
-		for _, choice := range evt.Choices {
-			if choice.Message.Content != "" {
-				return true
-			}
-			if choice.Delta.Content != "" {
-				return true
-			}
-		}
-	}
-	if len(evt.Choices) > 0 && evt.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	if len(evt.Choices) > 0 && len(evt.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	return false
-}
-
-// isEventBelongsToBranch checks if an event belongs to a specific branch.
-// Event belongs to a branch when event.branch is prefix of the invocation branch.
-func (p *ContentRequestProcessor) isEventBelongsToBranch(
-	invocationBranch string,
-	evt *event.Event,
-) bool {
-	if invocationBranch == "" || evt.Branch == "" {
-		return true
-	}
-	return strings.HasPrefix(invocationBranch, evt.Branch)
 }
 
 // isOtherAgentReply checks whether the event is a reply from another agent.
@@ -319,11 +274,11 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 
 	// Check if latest event is a function response.
 	lastEvent := events[len(events)-1]
-	if !p.isFunctionResponseEvent(&lastEvent) {
+	if !lastEvent.IsToolResultResponse() {
 		return events
 	}
 
-	functionResponseIDs := p.getFunctionResponseIDs(&lastEvent)
+	functionResponseIDs := lastEvent.GetToolResultIDs()
 	if len(functionResponseIDs) == 0 {
 		return events
 	}
@@ -332,9 +287,9 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	functionCallEventIdx := -1
 	for i := len(events) - 2; i >= 0; i-- {
 		evt := &events[i]
-		if p.isFunctionCallEvent(evt) {
-			functionCallIDs := p.getFunctionCallIDs(evt)
-			for responseID := range functionResponseIDs {
+		if evt.IsToolCallResponse() {
+			functionCallIDs := toMap(evt.GetToolCallIDs())
+			for _, responseID := range functionResponseIDs {
 				if functionCallIDs[responseID] {
 					functionCallEventIdx = i
 					break
@@ -354,9 +309,9 @@ func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	var functionResponseEvents []event.Event
 	for i := functionCallEventIdx + 1; i < len(events); i++ {
 		evt := &events[i]
-		if p.isFunctionResponseEvent(evt) {
-			responseIDs := p.getFunctionResponseIDs(evt)
-			for responseID := range functionResponseIDs {
+		if evt.IsToolResultResponse() {
+			responseIDs := toMap(evt.GetToolResultIDs())
+			for _, responseID := range functionResponseIDs {
 				if responseIDs[responseID] {
 					functionResponseEvents = append(functionResponseEvents, *evt)
 					break
@@ -388,9 +343,9 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		// Create a local copy to avoid implicit memory aliasing.
 		evt := evt
 
-		if p.isFunctionResponseEvent(&evt) {
-			responseIDs := p.getFunctionResponseIDs(&evt)
-			for responseID := range responseIDs {
+		if evt.IsToolResultResponse() {
+			responseIDs := evt.GetToolResultIDs()
+			for _, responseID := range responseIDs {
 				functionCallIDToResponseEventIndex[responseID] = i
 			}
 		}
@@ -401,13 +356,13 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 		// Create a local copy to avoid implicit memory aliasing.
 		evt := evt
 
-		if p.isFunctionResponseEvent(&evt) {
+		if evt.IsToolResultResponse() {
 			// Function response should be handled with function call below.
 			continue
-		} else if p.isFunctionCallEvent(&evt) {
-			functionCallIDs := p.getFunctionCallIDs(&evt)
+		} else if evt.IsToolCallResponse() {
+			functionCallIDs := evt.GetToolCallIDs()
 			var responseEventIndices []int
-			for callID := range functionCallIDs {
+			for _, callID := range functionCallIDs {
 				if idx, exists := functionCallIDToResponseEventIndex[callID]; exists {
 					responseEventIndices = append(responseEventIndices, idx)
 				}
@@ -436,40 +391,6 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	return resultEvents
 }
 
-// Helper functions for function call/response detection and processing.
-
-func (p *ContentRequestProcessor) isFunctionCallEvent(evt *event.Event) bool {
-	if len(evt.Choices) == 0 {
-		return false
-	}
-	return len(evt.Choices[0].Message.ToolCalls) > 0
-}
-
-func (p *ContentRequestProcessor) isFunctionResponseEvent(evt *event.Event) bool {
-	if len(evt.Choices) == 0 {
-		return false
-	}
-	return evt.Choices[0].Message.ToolID != ""
-}
-
-func (p *ContentRequestProcessor) getFunctionCallIDs(evt *event.Event) map[string]bool {
-	ids := make(map[string]bool)
-	if len(evt.Choices) > 0 {
-		for _, toolCall := range evt.Choices[0].Message.ToolCalls {
-			ids[toolCall.ID] = true
-		}
-	}
-	return ids
-}
-
-func (p *ContentRequestProcessor) getFunctionResponseIDs(evt *event.Event) map[string]bool {
-	ids := make(map[string]bool)
-	if len(evt.Choices) > 0 && evt.Choices[0].Message.ToolID != "" {
-		ids[evt.Choices[0].Message.ToolID] = true
-	}
-	return ids
-}
-
 // mergeFunctionResponseEvents merges a list of function_response events into one event.
 func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	functionResponseEvents []event.Event,
@@ -496,4 +417,12 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	}
 
 	return mergedEvent
+}
+
+func toMap(ids []string) map[string]bool {
+	m := make(map[string]bool)
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }
