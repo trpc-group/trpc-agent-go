@@ -136,40 +136,94 @@ type Response struct {
 }
 
 // Clone creates a deep copy of the response.
-func (r *Response) Clone() *Response {
-	if r == nil {
+func (rsp *Response) Clone() *Response {
+	if rsp == nil {
 		return nil
 	}
-	clone := *r
-	clone.Choices = make([]Choice, len(r.Choices))
-	copy(clone.Choices, r.Choices)
-	if r.Usage != nil {
+	clone := *rsp
+	clone.Choices = make([]Choice, len(rsp.Choices))
+	copy(clone.Choices, rsp.Choices)
+	if rsp.Usage != nil {
 		clone.Usage = &Usage{
-			PromptTokens:     r.Usage.PromptTokens,
-			CompletionTokens: r.Usage.CompletionTokens,
-			TotalTokens:      r.Usage.TotalTokens,
+			PromptTokens:     rsp.Usage.PromptTokens,
+			CompletionTokens: rsp.Usage.CompletionTokens,
+			TotalTokens:      rsp.Usage.TotalTokens,
 		}
 	}
 	// Deep copy Error if present.
-	if r.Error != nil {
+	if rsp.Error != nil {
 		clone.Error = &ResponseError{
-			Message: r.Error.Message,
-			Type:    r.Error.Type,
-			Param:   r.Error.Param,
-			Code:    r.Error.Code,
+			Message: rsp.Error.Message,
+			Type:    rsp.Error.Type,
+			Param:   rsp.Error.Param,
+			Code:    rsp.Error.Code,
 		}
 	}
 	// Deep copy SystemFingerprint if present.
-	if r.SystemFingerprint != nil {
-		fp := *r.SystemFingerprint
+	if rsp.SystemFingerprint != nil {
+		fp := *rsp.SystemFingerprint
 		clone.SystemFingerprint = &fp
 	}
 	return &clone
 }
 
-// HasToolCalls checks if the response contains tool calls.
-func (rsp *Response) HasToolCalls() bool {
-	return len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+// IsValidContent checks if the response has valid content for message generation.
+func (rsp *Response) IsValidContent() bool {
+	if rsp == nil {
+		return false
+	}
+
+	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
+		return true
+	}
+	// Check if event has choices with content.
+	for _, choice := range rsp.Choices {
+		if choice.Message.Content != "" {
+			return true
+		}
+		if choice.Delta.Content != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsToolResultResponse  checks if the response is a tool call result response.
+func (rsp *Response) IsToolResultResponse() bool {
+	return rsp != nil && len(rsp.Choices) > 0 && rsp.Choices[0].Message.ToolID != ""
+}
+
+// IsToolCallResponse checks if the response is related to tool calls.
+func (rsp *Response) IsToolCallResponse() bool {
+	return rsp != nil && len(rsp.Choices) > 0 && len(rsp.Choices[0].Message.ToolCalls) > 0
+}
+
+// GetToolCallIDs gets the IDs of tool calls from the response.
+func (rsp *Response) GetToolCallIDs() []string {
+	ids := make([]string, 0)
+	if rsp == nil || len(rsp.Choices) <= 0 {
+		return ids
+	}
+	for _, choice := range rsp.Choices {
+		for _, toolCall := range choice.Message.ToolCalls {
+			ids = append(ids, toolCall.ID)
+		}
+	}
+	return ids
+}
+
+// GetToolResultIDs gets the IDs of tool results from the response.
+func (rsp *Response) GetToolResultIDs() []string {
+	ids := make([]string, 0)
+	if rsp == nil || len(rsp.Choices) <= 0 {
+		return ids
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ToolID != "" {
+			ids = append(ids, choice.Message.ToolID)
+		}
+	}
+	return ids
 }
 
 // IsFinalResponse checks if the Response is a final response.
@@ -178,7 +232,7 @@ func (rsp *Response) IsFinalResponse() bool {
 		return true
 	}
 
-	if rsp.HasToolCalls() {
+	if rsp.IsToolCallResponse() {
 		return false
 	}
 

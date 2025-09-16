@@ -72,10 +72,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 		for {
 			// Check if context is cancelled.
-			select {
-			case <-ctx.Done():
+			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
-			default:
 			}
 
 			// Run one step (one LLM call cycle).
@@ -107,15 +105,14 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 					log.Errorf("Flow step failed for agent %s: %v", invocation.AgentName, err)
 				}
 
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
+				agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
 				return
 			}
 
 			// Exit conditions.
-			if invocation.EndInvocation || lastEvent.IsFinalResponse() {
+			// If no events were produced in this step, treat as terminal to avoid busy loop.
+			// Also break when EndInvocation is set or a final response is observed.
+			if lastEvent == nil || invocation.EndInvocation || lastEvent.IsFinalResponse() {
 				break
 			}
 		}
@@ -181,7 +178,7 @@ func (f *Flow) processStreamingResponses(
 
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
-		eventChan <- llmResponseEvent
+		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
 
 		// 5. Check context cancellation.
@@ -216,13 +213,12 @@ func (f *Flow) handleAfterModelCallbacks(
 		}
 
 		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
-		lastEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		eventChan <- lastEvent
+		))
 		return nil, err
 	}
 	return customResp, nil
@@ -230,7 +226,7 @@ func (f *Flow) handleAfterModelCallbacks(
 
 // createLLMResponseEvent creates a new LLM response event.
 func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *model.Response, llmRequest *model.Request) *event.Event {
-	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response), event.WithBranch(invocation.Branch))
+	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response))
 	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}
