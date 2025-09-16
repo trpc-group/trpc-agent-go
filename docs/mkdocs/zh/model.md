@@ -27,19 +27,19 @@ import (
 
 func main() {
     // 1. 创建模型实例
-    modelInstance := openai.New("deepseek-chat", 
+    modelInstance := openai.New("deepseek-chat",
         openai.WithExtraFields(map[string]interface{}{
             "tool_choice": "auto", // 自动选择工具
         }),
     )
-    
+
     // 2. 配置生成参数
     genConfig := model.GenerationConfig{
         MaxTokens:   intPtr(2000),
         Temperature: floatPtr(0.7),
         Stream:      true, // 启用流式输出
     }
-    
+
     // 3. 创建 Agent 并集成模型
     agent := llmagent.New(
         "chat-assistant",
@@ -49,14 +49,14 @@ func main() {
         llmagent.WithGenerationConfig(genConfig),
         llmagent.WithTools([]tool.Tool{calculatorTool, timeTool}),
     )
-    
+
     // 4. 创建 Runner 并运行
     r := runner.NewRunner("app-name", agent)
     eventChan, err := r.Run(ctx, userID, sessionID, model.NewUserMessage("Hello"))
     if err != nil {
         log.Fatal(err)
     }
-    
+
     // 5. 处理响应事件
     for event := range eventChan {
         // 处理流式响应、工具调用等
@@ -85,12 +85,14 @@ go run main.go -model deepseek-chat
 所有平台的接入方式都遵循相同模式，只需配置不同的环境变量或直接在代码中设置：
 
 **环境变量方式**（推荐）：
+
 ```bash
 export OPENAI_BASE_URL="平台API地址"
 export OPENAI_API_KEY="API密钥"
 ```
 
 **代码方式**：
+
 ```go
 model := openai.New("模型名称",
     openai.WithBaseURL("平台API地址"),
@@ -141,7 +143,7 @@ model := openai.New("deepseek-chat",
 type Model interface {
     // 生成内容，支持流式响应
     GenerateContent(ctx context.Context, request *Request) (<-chan *Response, error)
-    
+
     // 返回模型基本信息
     Info() Info
 }
@@ -159,10 +161,10 @@ type Info struct {
 type Request struct {
     // 消息列表，包含系统指令、用户输入和助手回复
     Messages []Message `json:"messages"`
-    
+
     // 生成配置（内联到请求中）
     GenerationConfig `json:",inline"`
-    
+
     // 工具列表
     Tools map[string]tool.Tool `json:"-"`
 }
@@ -171,31 +173,31 @@ type Request struct {
 type GenerationConfig struct {
     // 是否使用流式响应
     Stream bool `json:"stream"`
-    
+
     // 温度参数 (0.0-2.0)
     Temperature *float64 `json:"temperature,omitempty"`
-    
+
     // 最大生成令牌数
     MaxTokens *int `json:"max_tokens,omitempty"`
-    
+
     // Top-P 采样参数
     TopP *float64 `json:"top_p,omitempty"`
-    
+
     // 停止生成的标记
     Stop []string `json:"stop,omitempty"`
-    
+
     // 频率惩罚
     FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
-    
+
     // 存在惩罚
     PresencePenalty *float64 `json:"presence_penalty,omitempty"`
-    
+
     // 推理努力程度 ("low", "medium", "high")
     ReasoningEffort *string `json:"reasoning_effort,omitempty"`
-    
+
     // 是否启用思考模式
     ThinkingEnabled *bool `json:"-"`
-    
+
     // 思考模式的最大令牌数
     ThinkingTokens *int `json:"-"`
 }
@@ -214,10 +216,10 @@ type Response struct {
     SystemFingerprint *string  `json:"system_fingerprint,omitempty"`
     Choices           []Choice `json:"choices,omitempty"`
     Usage             *Usage   `json:"usage,omitempty"`
-    
+
     // 错误信息
     Error *ResponseError `json:"error,omitempty"`
-    
+
     // 内部字段
     Timestamp time.Time `json:"-"`
     Done      bool      `json:"-"`
@@ -239,7 +241,7 @@ type ResponseError struct {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -247,11 +249,11 @@ import (
 func main() {
     // 创建模型实例
     llm := openai.New("deepseek-chat")
-    
+
     // 构建请求
     temperature := 0.7
     maxTokens := 1000
-    
+
     request := &model.Request{
         Messages: []model.Message{
             model.NewSystemMessage("你是一个专业的AI助手。"),
@@ -263,7 +265,7 @@ func main() {
             Stream:      false,
         },
     }
-    
+
     // 调用模型
     ctx := context.Background()
     responseChan, err := llm.GenerateContent(ctx, request)
@@ -271,18 +273,18 @@ func main() {
         fmt.Printf("系统错误: %v\n", err)
         return
     }
-    
+
     // 处理响应
     for response := range responseChan {
         if response.Error != nil {
             fmt.Printf("API错误: %s\n", response.Error.Message)
             return
         }
-        
+
         if len(response.Choices) > 0 {
             fmt.Printf("回复: %s\n", response.Choices[0].Message.Content)
         }
-        
+
         if response.Done {
             break
         }
@@ -315,11 +317,11 @@ for response := range responseChan {
         fmt.Printf("错误: %s", response.Error.Message)
         return
     }
-    
+
     if len(response.Choices) > 0 && response.Choices[0].Delta.Content != "" {
         fmt.Print(response.Choices[0].Delta.Content)
     }
-    
+
     if response.Done {
         break
     }
@@ -385,6 +387,7 @@ request := &model.Request{
 ```
 
 ## 高级功能
+
 ### 1. 回调函数
 
 ```go
@@ -394,16 +397,16 @@ model := openai.New("deepseek-chat",
         // 请求发送前被调用
         log.Printf("发送请求: 模型=%s, 消息数=%d", req.Model, len(req.Messages))
     }),
-    
+
     // 设置响应回调函数（非流式）
-    openai.WithChatResponseCallback(func(ctx context.Context, 
-        req *openai.ChatCompletionNewParams, 
+    openai.WithChatResponseCallback(func(ctx context.Context,
+        req *openai.ChatCompletionNewParams,
         resp *openai.ChatCompletion) {
         // 收到完整响应时调用
-        log.Printf("收到响应: ID=%s, 使用Token=%d", 
+        log.Printf("收到响应: ID=%s, 使用Token=%d",
             resp.ID, resp.Usage.TotalTokens)
     }),
-    
+
     // 设置流式响应回调函数
     openai.WithChatChunkCallback(func(ctx context.Context,
         req *openai.ChatCompletionNewParams,
