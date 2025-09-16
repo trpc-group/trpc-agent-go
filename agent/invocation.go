@@ -56,9 +56,6 @@ type Invocation struct {
 	Agent Agent
 	// AgentName is the name of the agent that is being invoked.
 	AgentName string
-	// RunID is the ID of the run.
-	// Similar to the user's request ID, it is used to trace the entire execution chain.
-	RunID string
 	// InvocationID is the ID of the invocation.
 	InvocationID string
 	// Branch records agent execution chain information.
@@ -174,6 +171,9 @@ type RunOptions struct {
 	// messages and skip deriving content from session events or the
 	// single `invocation.Message` to avoid duplication.
 	Messages []model.Message
+
+	// RequestID is the request id of the request.
+	RequestID string
 }
 
 // NewInvocation create a new invocation
@@ -248,7 +248,7 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 		return
 	}
 
-	e.RunID = inv.RunID
+	e.RequestID = inv.RunOptions.RequestID
 	if inv.parent != nil {
 		e.ParentInvocationID = inv.parent.InvocationID
 	}

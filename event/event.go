@@ -42,8 +42,8 @@ type Event struct {
 	// Response is the base struct for all LLM response functionality.
 	*model.Response
 
-	// RunID is the run ID of the event.
-	RunID string `json:"runId,omitempty"`
+	// RequestID is the request ID of the event.
+	RequestID string `json:"runId,omitempty"`
 
 	// InvocationID is the invocation ID of the event.
 	InvocationID string `json:"invocationId"`
