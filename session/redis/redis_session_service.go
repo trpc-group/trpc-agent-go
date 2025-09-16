@@ -967,5 +967,10 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	if sum, ok := sessState.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
 		return sum.Summary, true
 	}
+	for _, s := range sessState.Summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
 	return "", false
 }
