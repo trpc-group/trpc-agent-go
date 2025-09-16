@@ -141,7 +141,6 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
-		doc.Metadata[source.MetaChunkIndex] = chunkIndex
 		chunkIndex++
 	}
 	return documents, nil

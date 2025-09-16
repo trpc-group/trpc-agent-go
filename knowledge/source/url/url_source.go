@@ -156,7 +156,6 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.
-	chunkIndex := 0
 	for _, doc := range documents {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]interface{})
@@ -164,8 +163,6 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
-		doc.Metadata[source.MetaChunkIndex] = chunkIndex
-		chunkIndex++
 	}
 
 	return documents, nil

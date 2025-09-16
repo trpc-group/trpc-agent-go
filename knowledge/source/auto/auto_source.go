@@ -13,6 +13,7 @@ package auto
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -204,11 +205,10 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	}
 	metadata[source.MetaSource] = source.TypeAuto
 
-	metadata[source.MetaURI] = fmt.Sprintf("text://%s", string(sha256Hash[:]))
+	metadata[source.MetaURI] = fmt.Sprintf("text://%s", hex.EncodeToString(sha256Hash[:]))
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata for each document
-	chunkIndex := 0
 	for _, doc := range docs {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]interface{})
@@ -216,8 +216,6 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
-		doc.Metadata[source.MetaChunkIndex] = chunkIndex
-		chunkIndex++
 	}
 
 	return docs, nil

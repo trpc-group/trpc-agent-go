@@ -13,9 +13,11 @@ package knowledge
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -57,6 +59,7 @@ type BuiltinKnowledge struct {
 	cacheMetaInfo    map[string]BuiltinDocumentInfo   // cached vectorstore metadata
 	processedDocIDs  sync.Map                         // processed doc IDs, used to avoid duplicate processing and cleanup orphan documents
 	enableSourceSync bool                             // enable source sync, if true, will keep document in vectorstore be synced with source
+	mu               sync.RWMutex                     // mutex for protecting concurrent access to shared data structures
 }
 
 // BuiltinDocumentInfo stores the basic information of a document for incremental sync
@@ -74,15 +77,15 @@ func convertMetaToDocumentInfo(docID string, meta *vectorstore.DocumentMetadata)
 	sourceName, hasSource := meta.Metadata[source.MetaSourceName].(string)
 	chunkIndex, hasChunkIndex := meta.Metadata[source.MetaChunkIndex]
 	if !hasURI {
-		log.Debugf("uri not found in metadata, set to empty string")
+		log.Debugf("URI not found in metadata, setting to empty string")
 		uri = ""
 	}
 	if !hasSource {
-		log.Debugf("sourceName not found in metadata, set to empty string")
+		log.Debugf("source name not found in metadata, setting to empty string")
 		sourceName = ""
 	}
 	if !hasChunkIndex {
-		log.Debugf("chunkIndex not found in metadata, set to 0")
+		log.Debugf("chunk index not found in metadata, setting to 0")
 		chunkIndex = 0
 	}
 	chunkIndexInt := convertToInt(chunkIndex)
@@ -130,6 +133,9 @@ func (dk *BuiltinKnowledge) ShowDocumentInfo(
 	ctx context.Context,
 	opts ...ShowDocumentInfoOption,
 ) ([]BuiltinDocumentInfo, error) {
+	dk.mu.RLock()
+	defer dk.mu.RUnlock()
+
 	if dk.vectorStore == nil {
 		return nil, fmt.Errorf("vector store not configured")
 	}
@@ -165,6 +171,13 @@ func (dk *BuiltinKnowledge) ShowDocumentInfo(
 
 // AddSource adds a source to the knowledge base.
 func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, opts ...LoadOption) error {
+	dk.mu.Lock()
+	defer dk.mu.Unlock()
+
+	if src == nil {
+		return fmt.Errorf("source cannot be nil")
+	}
+
 	// check if source already exists
 	for _, dkSrc := range dk.sources {
 		if src.Name() == dkSrc.Name() {
@@ -191,14 +204,21 @@ func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, op
 
 // ReloadSource reloads the source to the knowledge base.
 func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source, opts ...LoadOption) error {
+	dk.mu.Lock()
+	defer dk.mu.Unlock()
+
+	if src == nil {
+		return fmt.Errorf("source cannot be nil")
+	}
+
 	// Find the source by name
 	sourceName := src.Name()
 	var oldSource source.Source
 
 	// find and remove old source from sources list
-	for i, src := range dk.sources {
-		if src.Name() == sourceName {
-			oldSource = src
+	for i, existingSource := range dk.sources {
+		if existingSource.Name() == sourceName {
+			oldSource = existingSource
 			dk.sources = append(dk.sources[:i], dk.sources[i+1:]...)
 			break
 		}
@@ -298,6 +318,9 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 
 // RemoveSource removes a source from the knowledge base by name.
 func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string) error {
+	dk.mu.Lock()
+	defer dk.mu.Unlock()
+
 	// Find and remove source from sources list
 	var targetSource source.Source
 	var sourceIndex int = -1
@@ -334,6 +357,9 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 
 // Load loads one or more source
 func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error {
+	dk.mu.Lock()
+	defer dk.mu.Unlock()
+
 	if dk.vectorStore == nil {
 		return fmt.Errorf("vector store not configured")
 	}
@@ -343,12 +369,12 @@ func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error 
 		if err := dk.loadWithRecreate(ctx, config); err != nil {
 			return fmt.Errorf("failed to load with recreate: %w", err)
 		}
+		return nil
 	}
 
 	if err := dk.load(ctx, config); err != nil {
 		return fmt.Errorf("failed to load with sync: %w", err)
 	}
-
 	return nil
 }
 
@@ -555,8 +581,11 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 	wg.Wait()
 	close(errCh)
 
-	if err := <-errCh; err != nil {
-		return nil, err
+	// Check for any errors
+	for err := range errCh {
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return allAddedIDs, nil
@@ -610,8 +639,11 @@ func (dk *BuiltinKnowledge) processDocuments(
 	wgDoc.Wait()
 	close(errCh)
 
-	if err := <-errCh; err != nil {
-		return err
+	// Check for any errors
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -693,7 +725,6 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 		return fmt.Errorf("document metadata is nil")
 	}
 
-	// set source name
 	doc.Metadata[source.MetaSourceName] = src.Name()
 
 	_, ok := doc.Metadata[source.MetaURI]
@@ -701,13 +732,11 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 		return fmt.Errorf("document missing URI metadata")
 	}
 
-	// set chunk index (if not exists, set to 0)
 	chunkIndex, ok := doc.Metadata[source.MetaChunkIndex]
 	if !ok {
 		return fmt.Errorf("document missing chunk index metadata")
 	}
 
-	// generate and set document ID
 	chunkIndexInt, ok := chunkIndex.(int)
 	if !ok {
 		return fmt.Errorf("chunk index is not an integer")
@@ -718,7 +747,7 @@ func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.S
 		return fmt.Errorf("document missing URI metadata")
 	}
 
-	// generate document ID by source name, content, chunk index and source metadata
+	// generate document ID by source name, uri, content, chunk index and source metadata
 	// we cal hash with metadata that user set
 	doc.ID = generateDocumentID(src.Name(), uri, doc.Content, chunkIndexInt, src.GetMetadata())
 	return nil
@@ -888,6 +917,10 @@ func (dk *BuiltinKnowledge) clearVectorStoreMetadata() {
 // Search implements the Knowledge interface.
 // It uses the built-in retriever for the complete RAG pipeline with context awareness.
 func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*SearchResult, error) {
+	// search don't need to lock, it will not modify or read incremental sync cache
+	if req == nil {
+		return nil, fmt.Errorf("search request cannot be nil")
+	}
 	if dk.retriever == nil {
 		return nil, fmt.Errorf("retriever not configured")
 	}
@@ -937,6 +970,9 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 
 // Close closes the knowledge base and releases resources.
 func (dk *BuiltinKnowledge) Close() error {
+	dk.mu.Lock()
+	defer dk.mu.Unlock()
+
 	// Close components if they support closing.
 	if dk.retriever != nil {
 		if err := dk.retriever.Close(); err != nil {
@@ -1053,6 +1089,7 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 
 // convertToInt converts interface{} to int, handling JSON unmarshaling type conversion
 func convertToInt(value interface{}) int {
+	log.Infof("convertToInt value: %v, type: %T", value, value)
 	switch v := value.(type) {
 	case int:
 		return v
@@ -1060,8 +1097,28 @@ func convertToInt(value interface{}) int {
 		return int(v)
 	case float32:
 		return int(v)
+	case string:
+		s, err := strconv.Atoi(v)
+		if err != nil {
+			log.Infof("convertToInt string to int error: %v", err)
+			return 0
+		}
+		return s
+	case json.Number:
+		s, err := v.Int64()
+		if err != nil {
+			log.Infof("convertToInt json.Number to int error: %v", err)
+			return 0
+		}
+		return int(s)
 	default:
-		return 0
+		str := fmt.Sprintf("%v", v)
+		s, err := strconv.Atoi(str)
+		if err != nil {
+			log.Infof("convertToInt default to int error: %v", err)
+			return 0
+		}
+		return s
 	}
 }
 

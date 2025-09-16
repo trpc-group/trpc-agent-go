@@ -13,6 +13,7 @@ package dir
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,11 +223,11 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
 	}
-	metadata[source.MetaURI] = fmt.Sprintf("file://%s", absPath)
+	fileURL := (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaURI] = fileURL
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.
-	chunkIndex := 0
 	for _, doc := range documents {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]interface{})
@@ -234,8 +235,6 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
-		doc.Metadata[source.MetaChunkIndex] = chunkIndex
-		chunkIndex++
 	}
 
 	return documents, nil
