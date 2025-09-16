@@ -110,17 +110,17 @@ func (a *ParallelAgent) createBranchInvocation(
 
 	// Set branch identifier for hierarchical event filtering.
 	// Use parent branch if available, otherwise fallback to InvocationID.
-	var branchID string
+	var finalBranchName string
 	if baseInvocation.Branch != "" {
-		branchID = baseInvocation.Branch + "." + branchSuffix
+		finalBranchName = baseInvocation.Branch + "." + branchSuffix
 	} else {
-		branchID = branchInvocationID
+		finalBranchName = branchInvocationID
 	}
 
 	branchInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
 		agent.WithInvocationID(branchInvocationID),
-		agent.WithInvocationBranch(branchID),
+		agent.WithInvocationBranch(finalBranchName),
 	)
 
 	return branchInvocation
