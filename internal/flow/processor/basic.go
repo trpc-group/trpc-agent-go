@@ -64,6 +64,10 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		return
 	}
 
+	if invocation == nil {
+		return
+	}
+
 	log.Debugf("Basic request processor: processing request for agent %s", invocation.AgentName)
 
 	// Set generation configuration.
@@ -74,16 +78,14 @@ func (p *BasicRequestProcessor) ProcessRequest(
 		req.StructuredOutput = invocation.StructuredOutput
 	}
 
+	log.Debugf("Basic request processor: sent preprocessing event")
 	// Send a preprocessing event.
-	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePreprocessingBasic
-
-		select {
-		case ch <- evt:
-			log.Debugf("Basic request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Basic request processor: context cancelled")
-		}
+	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypePreprocessingBasic),
+	)); err != nil {
+		log.Debugf("Basic request processor: context cancelled")
 	}
+
 }

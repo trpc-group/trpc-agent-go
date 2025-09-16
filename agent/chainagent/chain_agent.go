@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -106,14 +107,9 @@ func (a *ChainAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.Clone(agent.WithInvocationAgent(subAgent))
-
-	// Set branch info to track sequence in multi-agent scenarios.
-	// Do not include sub-agent name in branch, so that the chain sub-agents can
-	// observe each other's events.
-	if subInvocation.Branch == "" {
-		subInvocation.Branch = a.name
-	}
+	subInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+	)
 
 	return subInvocation
 }
@@ -175,29 +171,21 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	return false // Continue execution
@@ -218,35 +206,27 @@ func (a *ChainAgent) executeSubAgents(
 
 		// Run the sub-agent.
 		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
+		log.Warnf("subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
 		if err != nil {
-			// Send error event.
-			errorEvent := event.NewErrorEvent(
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				model.ErrorTypeFlowError,
 				err.Error(),
-			)
-			select {
-			case eventChan <- errorEvent:
-			case <-ctx.Done():
-			}
+			))
 			return
 		}
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
-			select {
-			case eventChan <- subEvent:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return
 			}
 		}
 
-		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			log.Warnf("Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
 			return
-		default:
 		}
 	}
 }
@@ -262,32 +242,24 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
 	}
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Tools implements the agent.Agent interface.

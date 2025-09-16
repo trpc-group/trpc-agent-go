@@ -105,13 +105,16 @@ func (a *ParallelAgent) createBranchInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create unique invocation ID for this branch.
-	branchSuffix := a.name + "." + subAgent.Info().Name
-	branchInvocationID := baseInvocation.InvocationID + "." + branchSuffix
+	eventFilterKey := baseInvocation.GetEventFilterKey()
+	if eventFilterKey == "" {
+		eventFilterKey = a.name + agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	} else {
+		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	}
 
 	branchInvocation := baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
-		agent.WithInvocationID(branchInvocationID),
-		agent.WithInvocationBranch(branchInvocationID),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
 	)
 
 	return branchInvocation
@@ -138,34 +141,27 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	var evt *event.Event
+
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
-	return false // Continue execution
+
+	if evt == nil {
+		return false // Continue execution
+	}
+
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
+	return true
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -193,16 +189,12 @@ func (a *ParallelAgent) startSubAgents(
 			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				errorEvent := event.NewErrorEvent(
+				agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
 					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
+				))
 				return
 			}
 
@@ -226,32 +218,21 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	}
 
 	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
+
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
@@ -312,18 +293,8 @@ func (a *ParallelAgent) mergeEventStreams(
 		wg.Add(1)
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
-			for {
-				select {
-				case evt, ok := <-inputChan:
-					if !ok {
-						return // Channel closed.
-					}
-					select {
-					case outputChan <- evt:
-					case <-ctx.Done():
-						return
-					}
-				case <-ctx.Done():
+			for evt := range inputChan {
+				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
 				}
 			}

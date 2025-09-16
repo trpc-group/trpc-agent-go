@@ -12,7 +12,6 @@ package parallelagent
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -199,23 +198,22 @@ func TestParallelAgent_WithError(t *testing.T) {
 }
 
 func TestParallelAgent_BranchInvoke(t *testing.T) {
-	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
 	parallelAgent := newFromLegacy(legacyOptions{Name: "test-parallel"})
 
-	baseInvocation := &agent.Invocation{
-		AgentName:    "test-parallel",
-		InvocationID: "base-001",
-	}
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationAgent(parallelAgent),
+	)
 
+	subAgent := &mockAgent{name: "agent-1", eventCount: 1}
 	branchInvocation := parallelAgent.createBranchInvocation(subAgent, baseInvocation)
 
+	require.Equal(t, "test-parallel", baseInvocation.GetEventFilterKey())
 	// Verify branch has different ID.
 	require.NotEqual(t, branchInvocation.InvocationID, baseInvocation.InvocationID)
-	// Verify branch contains base ID.
-	require.True(t, strings.Contains(branchInvocation.InvocationID, baseInvocation.InvocationID))
 	// Verify agent is set.
 	require.NotNil(t, branchInvocation.Agent)
 	require.Equal(t, subAgent.Info().Name, branchInvocation.Agent.Info().Name)
+	require.Equal(t, "test-parallel/agent-1", branchInvocation.GetEventFilterKey())
 }
 
 func TestParallelAgent_ChannelBufferSize(t *testing.T) {

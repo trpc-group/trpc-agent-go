@@ -47,6 +47,9 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
 	// Only process complete (non-partial) responses.
 	// Extract text content from the response.
 	content, ok := p.extractFinalContent(rsp)
@@ -100,17 +103,16 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		log.Errorf("Structured output unmarshal failed: %v", err)
 		return
 	}
-	typedEvt := event.New(invocation.InvocationID, invocation.AgentName,
+	typedEvt := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStructuredOutputPayload(instance),
 	)
 	typedEvt.RequiresCompletion = true
-	select {
-	case ch <- typedEvt:
-		log.Debugf("Emitted typed structured output payload event.")
-	case <-ctx.Done():
-		return
-	}
+
+	log.Debugf("Emitted typed structured output payload event.")
+	agent.EmitEvent(ctx, invocation, ch, typedEvt)
 }
 
 // handleOutputKey validates and emits state delta for output_key/output_schema cases.
@@ -144,10 +146,9 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		event.WithStateDelta(stateDelta),
 	)
 	stateEvent.RequiresCompletion = true
-	select {
-	case ch <- stateEvent:
-		log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
-	case <-ctx.Done():
+
+	log.Debugf("Emitted state delta event with key '%s'.", p.outputKey)
+	if err := agent.EmitEvent(ctx, invocation, ch, stateEvent); err != nil {
 		return
 	}
 

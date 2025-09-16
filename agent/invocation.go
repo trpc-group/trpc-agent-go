@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -31,6 +32,12 @@ const (
 
 	// AppendEventNoticeKeyPrefix is the prefix for append event notice keys
 	AppendEventNoticeKeyPrefix = "append_event:"
+
+	// BranchDelimiter is the delimiter for branch
+	BranchDelimiter = "/"
+
+	// EventFilterKeyDelimiter is the delimiter for event filter key
+	EventFilterKeyDelimiter = "/"
 )
 
 // TransferInfo contains information about a pending agent transfer.
@@ -51,7 +58,8 @@ type Invocation struct {
 	AgentName string
 	// InvocationID is the ID of the invocation.
 	InvocationID string
-	// Branch is the branch identifier for hierarchical event filtering.
+	// Branch records agent execution chain information.
+	// In multi-agent mode, this is useful for tracing agent execution trajectories.
 	Branch string
 	// EndInvocation is a flag that indicates if the invocation is complete.
 	EndInvocation bool
@@ -85,7 +93,13 @@ type Invocation struct {
 	// noticeChanMap is used to signal when events are written to the session.
 	noticeChanMap map[string]chan any
 	noticeMu      *sync.Mutex
+
+	// eventFilterKey is used to filter events for flow or agent
+	eventFilterKey string
 }
+
+// DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
+var DefaultWaitNoticeTimeoutErr = NewWaitNoticeTimeoutError("wait notice timeout.")
 
 // WaitNoticeTimeoutError represents an error that signals the wait notice timeout.
 type WaitNoticeTimeoutError struct {
@@ -168,27 +182,75 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 		opt(inv)
 	}
 
+	if inv.Branch == "" {
+		inv.Branch = inv.AgentName
+	}
+
+	if inv.eventFilterKey == "" && inv.AgentName != "" {
+		inv.eventFilterKey = inv.AgentName
+	}
+
 	return inv
 }
 
 // Clone clone a new invocation
 func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
+	if inv == nil {
+		return nil
+	}
 	newInv := &Invocation{
-		InvocationID:    inv.InvocationID,
-		Branch:          inv.Branch,
+		InvocationID:    uuid.NewString(),
 		Session:         inv.Session,
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
+		MemoryService:   inv.MemoryService,
 		ArtifactService: inv.ArtifactService,
 		noticeMu:        inv.noticeMu,
 		noticeChanMap:   inv.noticeChanMap,
+		eventFilterKey:  inv.eventFilterKey,
 	}
 
 	for _, opt := range invocationOpts {
 		opt(newInv)
 	}
 
+	if inv.Branch != "" && newInv.AgentName != "" {
+		newInv.Branch = inv.Branch + BranchDelimiter + newInv.AgentName
+	} else if newInv.AgentName != "" {
+		newInv.Branch = newInv.AgentName
+	}
+
+	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
+		newInv.eventFilterKey = newInv.AgentName
+	}
+
 	return newInv
+}
+
+// GetEventFilterKey get event filter key.
+func (inv *Invocation) GetEventFilterKey() string {
+	if inv == nil {
+		return ""
+	}
+	return inv.eventFilterKey
+}
+
+// InjectIntoEvent inject invocation information into event.
+func InjectIntoEvent(inv *Invocation, e *event.Event) {
+	if e == nil || inv == nil {
+		return
+	}
+
+	e.InvocationID = inv.InvocationID
+	e.Branch = inv.Branch
+	e.FilterKey = inv.GetEventFilterKey()
+}
+
+// EmitEvent inject invocation information into event and emit it to channel.
+func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
+	e *event.Event) error {
+	InjectIntoEvent(inv, e)
+	return event.EmitEvent(ctx, ch, e)
 }
 
 // AddNoticeChannelAndWait add notice channel and wait it complete

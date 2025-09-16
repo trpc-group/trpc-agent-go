@@ -568,7 +568,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			eventChan <- customEvent
+			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -622,9 +622,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			select {
-			case wrappedChan <- evt:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
@@ -632,30 +630,21 @@ func (a *LLMAgent) wrapEventChannel(
 		// After all events are processed, run after agent callbacks
 		if invocation.AgentCallbacks != nil {
 			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			var evt *event.Event
 			if err != nil {
 				// Send error event.
-				errorEvent := event.NewErrorEvent(
+				evt = event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
-				select {
-				case wrappedChan <- errorEvent:
-				case <-ctx.Done():
-					return
-				}
-				return
-			}
-			if customResponse != nil {
+			} else if customResponse != nil {
 				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case wrappedChan <- customEvent:
-				case <-ctx.Done():
-					return
-				}
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
+
+			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 	}()
 

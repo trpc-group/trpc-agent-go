@@ -59,6 +59,10 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 	req *model.Request,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
+
 	if req == nil {
 		log.Errorf("Identity request processor: request is nil")
 		return
@@ -102,17 +106,14 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// Send a preprocessing event.
-	if invocation != nil {
-		evt := event.New(invocation.InvocationID, invocation.AgentName)
-		evt.Object = model.ObjectTypePreprocessingIdentity
+	log.Debugf("Identity request processor: sent preprocessing event")
 
-		select {
-		case ch <- evt:
-			log.Debugf("Identity request processor: sent preprocessing event")
-		case <-ctx.Done():
-			log.Debugf("Identity request processor: context cancelled")
-		}
+	if err := agent.EmitEvent(ctx, invocation, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypePreprocessingIdentity),
+	)); err != nil {
+		log.Debugf("Identity request processor: context cancelled")
 	}
 }
 

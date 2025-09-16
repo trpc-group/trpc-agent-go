@@ -10,6 +10,7 @@
 package model
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -266,5 +267,312 @@ func TestResponse_MultipleChoices(t *testing.T) {
 	}
 	if response.Choices[1].Message.Content != "Second choice" {
 		t.Errorf("Second choice content = %v, want %v", response.Choices[1].Message.Content, "Second choice")
+	}
+}
+
+func TestResponse_IsValidContent(t *testing.T) {
+	tests := []struct {
+		name string
+		rsp  *Response
+		want bool
+	}{
+		{
+			name: "nil response",
+			rsp:  nil,
+			want: false,
+		},
+		{
+			name: "tool call response",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						ToolCalls: []ToolCall{{ID: "tool1"}},
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "tool result response",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						ToolID: "tool1",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "valid content in message",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{
+						Content: "Hello, world!",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "valid content in delta",
+			rsp: &Response{
+				Choices: []Choice{{
+					Delta: Message{
+						Content: "Hello, world!",
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "no valid content",
+			rsp: &Response{
+				Choices: []Choice{{
+					Message: Message{},
+				}},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.rsp.IsValidContent(); got != tt.want {
+				t.Errorf("IsValidContent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsToolResultResponse tests the IsToolResultResponse function with table-driven tests.
+func TestResponse_IsToolResultResponse(t *testing.T) {
+	type testCase struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}
+
+	tests := []testCase{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: false,
+		},
+		{
+			name:     "empty choices",
+			rsp:      &Response{Choices: []Choice{}},
+			expected: false,
+		},
+		{
+			name: "choices with empty ToolID",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{ToolID: ""},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "choices with non-empty ToolID",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{ToolID: "tool123"},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.IsToolResultResponse()
+			if got != tt.expected {
+				t.Errorf("IsToolResultResponse() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResponse_GetToolCallIDs(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected []string
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: []string{},
+		},
+		{
+			name: "no choices",
+			rsp: &Response{
+				Choices: []Choice{},
+			},
+			expected: []string{},
+		},
+		{
+			name: "with tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							ToolCalls: []ToolCall{
+								{ID: "tool1"},
+								{ID: "tool2"},
+							},
+						},
+					},
+				},
+			},
+			expected: []string{"tool1", "tool2"},
+		},
+		{
+			name: "no tool calls",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{},
+					},
+				},
+			},
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.GetToolCallIDs()
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("GetToolCallIDs() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResponse_GetToolResultIDs(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected []string
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: []string{},
+		},
+		{
+			name: "no choices",
+			rsp: &Response{
+				Choices: []Choice{},
+			},
+			expected: []string{},
+		},
+		{
+			name: "with tool IDs",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							ToolID: "tool1",
+						},
+					},
+					{
+						Message: Message{
+							ToolID: "tool2",
+						},
+					},
+				},
+			},
+			expected: []string{"tool1", "tool2"},
+		},
+		{
+			name: "no tool IDs",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{},
+					},
+				},
+			},
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.GetToolResultIDs()
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("GetToolResultIDs() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResponse_IsFinalResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		rsp      *Response
+		expected bool
+	}{
+		{
+			name:     "nil response",
+			rsp:      nil,
+			expected: true,
+		},
+		{
+			name: "tool call response",
+			rsp: &Response{
+				Choices: []Choice{
+					{
+						Message: Message{
+							ToolCalls: []ToolCall{{ID: "tool1"}},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "done with content",
+			rsp: &Response{
+				Done: true,
+				Choices: []Choice{
+					{
+						Message: Message{Content: "content"},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "done with error",
+			rsp: &Response{
+				Done:  true,
+				Error: &ResponseError{Message: "error"},
+			},
+			expected: true,
+		},
+		{
+			name: "not done",
+			rsp: &Response{
+				Done: false,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rsp.IsFinalResponse()
+			if got != tt.expected {
+				t.Errorf("IsFinalResponse() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }

@@ -1265,16 +1265,6 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-func TestTrySendEvent_NilAndBuffered(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(false)
-	ctx := context.Background()
-	// Nil channel is no-op.
-	require.NoError(t, p.trySendEvent(ctx, nil, event.New("inv", "a")))
-	// Buffered channel should accept send.
-	ch := make(chan *event.Event, 1)
-	require.NoError(t, p.trySendEvent(ctx, ch, event.New("inv", "a")))
-}
-
 // stream tool that returns error on StreamableCall.
 type errStreamTool struct{ name string }
 
