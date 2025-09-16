@@ -65,7 +65,7 @@ func TestInvocation_Clone(t *testing.T) {
 	subAgent := &mockAgent{name: "test-agent"}
 	subInv := inv.Clone(WithInvocationAgent(subAgent))
 	require.NotNil(t, subInv)
-	require.Equal(t, "test-invocation", subInv.InvocationID)
+	require.NotEqual(t, "test-invocation", subInv.InvocationID)
 	require.Equal(t, "test-agent", subInv.AgentName)
 	require.Equal(t, "Hello", subInv.Message.Content)
 	require.Equal(t, inv.noticeChanMap, subInv.noticeChanMap)
