@@ -23,10 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
-	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -142,23 +141,6 @@ func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 func WithKnowledge(kb knowledge.Knowledge) Option {
 	return func(opts *Options) {
 		opts.Knowledge = kb
-	}
-}
-
-// WithMemory sets the memory service for the agent.
-// If provided, the memory tools will be automatically added to the agent's tools.
-// The memory tools will get appName and userID from the agent invocation context at runtime.
-// Memory instruction will be automatically appended to the existing instruction.
-// Note: Please make sure this option is passed AFTER `WithInstruction`.
-func WithMemory(memoryService memory.Service) Option {
-	return func(opts *Options) {
-		opts.Memory = memoryService
-		// Generate memory instruction based on the memory service.
-		if opts.Instruction == "" {
-			opts.Instruction = imemory.GenerateInstruction(memoryService)
-		} else {
-			opts.Instruction = opts.Instruction + "\n\n" + imemory.GenerateInstruction(memoryService)
-		}
 	}
 }
 
@@ -329,9 +311,6 @@ type Options struct {
 	EnableKnowledgeAgenticFilter bool
 	// KnowledgeAgenticFilter is the knowledge agentic filter for the knowledge search tool.
 	AgenticFilterInfo map[string][]interface{}
-	// Memory is the memory service for the agent.
-	// If provided, the memory tools will be automatically added.
-	Memory memory.Service
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
 	// EnableParallelTools enables parallel tool execution if true.
@@ -415,6 +394,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, orp)
 	}
 
+	responseProcessors = append(responseProcessors, processor.NewFunctionCallResponseProcessor(options.EnableParallelTools))
+
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
 		transferResponseProcessor := processor.NewTransferResponseProcessor()
@@ -423,8 +404,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize:   options.ChannelBufferSize,
-		EnableParallelTools: options.EnableParallelTools,
+		ChannelBufferSize: options.ChannelBufferSize,
 	}
 
 	llmFlow := llmflow.New(
@@ -437,8 +417,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
 		}
-		if options.Knowledge != nil || options.Memory != nil {
-			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge and memory must be empty")
+		if options.Knowledge != nil {
+			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
@@ -565,18 +545,13 @@ func registerTools(options *Options) []tool.Tool {
 		}
 	}
 
-	// Add memory tool if memory service is provided.
-	if options.Memory != nil {
-		allTools = append(allTools, options.Memory.Tools()...)
-	}
-
 	return allTools
 }
 
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("agent_run [%s]", a.name))
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s [%s]", itelemetry.SpanNamePrefixAgentRun, a.name))
 	defer span.End()
 
 	// Setup invocation
@@ -593,7 +568,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 			eventChan := make(chan *event.Event, 1)
 			// Create an event from the custom response.
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			eventChan <- customEvent
+			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
 			return eventChan, nil
 		}
@@ -647,9 +622,7 @@ func (a *LLMAgent) wrapEventChannel(
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			select {
-			case wrappedChan <- evt:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
@@ -657,30 +630,21 @@ func (a *LLMAgent) wrapEventChannel(
 		// After all events are processed, run after agent callbacks
 		if invocation.AgentCallbacks != nil {
 			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+			var evt *event.Event
 			if err != nil {
 				// Send error event.
-				errorEvent := event.NewErrorEvent(
+				evt = event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
-				select {
-				case wrappedChan <- errorEvent:
-				case <-ctx.Done():
-					return
-				}
-				return
-			}
-			if customResponse != nil {
+			} else if customResponse != nil {
 				// Create an event from the custom response.
-				customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-				select {
-				case wrappedChan <- customEvent:
-				case <-ctx.Done():
-					return
-				}
+				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
+
+			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 	}()
 

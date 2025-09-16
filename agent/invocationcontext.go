@@ -22,3 +22,13 @@ func InvocationFromContext(ctx context.Context) (*Invocation, bool) {
 	invocation, ok := ctx.Value(invocationKey{}).(*Invocation)
 	return invocation, ok
 }
+
+// CheckContextCancelled check context cancelled
+func CheckContextCancelled(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}

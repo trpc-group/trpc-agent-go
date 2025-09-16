@@ -59,15 +59,11 @@ type Service interface {
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool
-
-	// BuildInstruction allows the service to customize the memory instruction prompt.
-	// If ok is false, callers should use the provided defaultPrompt.
-	BuildInstruction(enabledTools []string, defaultPrompt string) (prompt string, ok bool)
 }
 
-// ToolCreator creates a tool with a given memory service.
+// ToolCreator creates a tool.
 // This type can be shared by different implementations.
-type ToolCreator func(Service) tool.Tool
+type ToolCreator func() tool.Tool
 
 // Memory represents a memory entry with content and metadata.
 type Memory struct {

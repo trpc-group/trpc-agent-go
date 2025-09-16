@@ -260,3 +260,66 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	require.Equal(t, 10, cm.TotalSteps)
 	require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
 }
+
+func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializable(t *testing.T) {
+	final := State{
+		StateKeyLastResponse: "ok",
+		"keep1":              1,
+		"keep2":              map[string]any{"a": 1},
+		// internal keys that must be skipped.
+		MetadataKeyNode:        []byte("x"),
+		MetadataKeyPregel:      []byte("y"),
+		MetadataKeyChannel:     []byte("z"),
+		MetadataKeyState:       []byte("w"),
+		MetadataKeyCompletion:  []byte("v"),
+		StateKeyExecContext:    "ctx",
+		StateKeyParentAgent:    "agent",
+		StateKeyToolCallbacks:  "tc",
+		StateKeyModelCallbacks: "mc",
+		StateKeyAgentCallbacks: "ac",
+		StateKeyCurrentNodeID:  "nid",
+		StateKeySession:        "sid",
+		// Unserializable value; json.Marshal should fail and be ignored.
+		"bad": func() {},
+	}
+	e := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv"),
+		WithCompletionEventFinalState(final),
+		WithCompletionEventTotalSteps(2),
+		WithCompletionEventTotalDuration(1*time.Millisecond),
+	)
+	// Should include keep1 and keep2, exclude internal keys and unserializable key.
+	require.Contains(t, e.StateDelta, "keep1")
+	require.Contains(t, e.StateDelta, "keep2")
+	require.NotContains(t, e.StateDelta, MetadataKeyNode)
+	require.NotContains(t, e.StateDelta, MetadataKeyPregel)
+	require.NotContains(t, e.StateDelta, MetadataKeyChannel)
+	require.NotContains(t, e.StateDelta, MetadataKeyState)
+	require.NotContains(t, e.StateDelta, StateKeyExecContext)
+	require.NotContains(t, e.StateDelta, StateKeyParentAgent)
+	require.NotContains(t, e.StateDelta, StateKeyToolCallbacks)
+	require.NotContains(t, e.StateDelta, StateKeyModelCallbacks)
+	require.NotContains(t, e.StateDelta, StateKeyAgentCallbacks)
+	require.NotContains(t, e.StateDelta, StateKeyCurrentNodeID)
+	require.NotContains(t, e.StateDelta, StateKeySession)
+	require.NotContains(t, e.StateDelta, "bad")
+}
+
+func TestNewGraphCompletionEvent_NilFinalState(t *testing.T) {
+	e := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv"),
+		WithCompletionEventFinalState(nil),
+		WithCompletionEventTotalSteps(0),
+		WithCompletionEventTotalDuration(0),
+	)
+	// StateDelta should be initialized.
+	require.NotNil(t, e.StateDelta)
+	// No assistant choice expected when there is no StateKeyLastResponse.
+	if len(e.Response.Choices) > 0 {
+		t.Fatalf("expected no choices when final state is nil")
+	}
+	// Completion metadata should exist and FinalStateKeys should be 0.
+	var cm CompletionMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
+	require.Equal(t, 0, cm.FinalStateKeys)
+}
