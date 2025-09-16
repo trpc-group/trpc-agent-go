@@ -901,6 +901,165 @@ func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
 	}
 }
 
+// Tool that requests skipping summarization.
+type skipSummCallableTool struct {
+	declaration *tool.Declaration
+	result      any
+	skip        bool
+	longRun     bool
+}
+
+func (m *skipSummCallableTool) Declaration() *tool.Declaration { return m.declaration }
+func (m *skipSummCallableTool) Call(ctx context.Context, args []byte) (any, error) {
+	return m.result, nil
+}
+
+// Mark that outer summarization should be skipped.
+func (m *skipSummCallableTool) SkipSummarization() bool { return m.skip }
+
+// Implement LongRunner to allow returning nil and skipping child event creation when longRun is true.
+func (m *skipSummCallableTool) LongRunning() bool { return m.longRun }
+
+// Verify SkipSummarization propagation and EndInvocation flag in the sequential path.
+func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false)
+
+	t1 := &skipSummCallableTool{
+		declaration: &tool.Declaration{Name: "t1"},
+		result:      map[string]any{"ok": true},
+		skip:        true,
+	}
+	tools := map[string]tool.Tool{"t1": t1}
+	inv := &agent.Invocation{InvocationID: "inv-s", AgentName: "agent"}
+
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1", Function: model.FunctionDefinitionParam{Name: "t1", Arguments: []byte(`{}`)},
+		}}},
+	}}}
+
+	evt, err := p.handleFunctionCalls(ctx, inv, rsp, tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Actions)
+	require.True(t, evt.Actions.SkipSummarization)
+	require.True(t, inv.EndInvocation, "invocation should be marked to end when skipping summarization")
+	require.True(t, evt.RequiresCompletion)
+}
+
+// Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
+func TestHandleFunctionCalls_SkipSummarization_NoChildEvents_SetsEndInvocation(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false)
+
+	t1 := &skipSummCallableTool{
+		declaration: &tool.Declaration{Name: "t1"},
+		// Return nil and mark as LongRunning so executeToolCall yields no choice.
+		result:  nil,
+		longRun: true,
+		skip:    true,
+	}
+	tools := map[string]tool.Tool{"t1": t1}
+	inv := &agent.Invocation{InvocationID: "inv-nc", AgentName: "agent"}
+
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1", Function: model.FunctionDefinitionParam{Name: "t1", Arguments: []byte(`{}`)},
+		}}},
+	}}}
+
+	evt, err := p.handleFunctionCalls(ctx, inv, rsp, tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Actions)
+	require.True(t, evt.Actions.SkipSummarization, "merged event should propagate SkipSummarization when no child events")
+	require.True(t, inv.EndInvocation, "invocation should end when skipping summarization")
+}
+
+// Verify SkipSummarization propagation and EndInvocation in parallel execution.
+func TestHandleFunctionCalls_SkipSummarization_Parallel_PropagatesFlag(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(true)
+
+	tSkip := &skipSummCallableTool{
+		declaration: &tool.Declaration{Name: "ts"},
+		result:      map[string]any{"v": 1},
+		skip:        true,
+	}
+	tOther := &mockCallableTool{declaration: &tool.Declaration{Name: "to"}, callFn: func(_ context.Context, _ []byte) (any, error) { return "ok", nil }}
+	tools := map[string]tool.Tool{"ts": tSkip, "to": tOther}
+	inv := &agent.Invocation{InvocationID: "inv-p", AgentName: "agent"}
+
+	toolCalls := []model.ToolCall{
+		{ID: "c1", Function: model.FunctionDefinitionParam{Name: "ts", Arguments: []byte(`{}`)}},
+		{ID: "c2", Function: model.FunctionDefinitionParam{Name: "to", Arguments: []byte(`{}`)}},
+	}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{Message: model.Message{ToolCalls: toolCalls}}}}
+
+	evt, err := p.handleFunctionCalls(ctx, inv, rsp, tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Actions)
+	require.True(t, evt.Actions.SkipSummarization)
+	// Parallel path returns early from handleFunctionCalls (via executeToolCallsInParallel),
+	// so EndInvocation is not toggled here. We only verify flag propagation.
+}
+
+// stream tool forwarding a single final assistant message (no deltas).
+type finalOnlyInnerEventStreamTool struct{ name string }
+
+func (s *finalOnlyInnerEventStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+func (s *finalOnlyInnerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
+	st := tool.NewStream(1)
+	go func() {
+		defer st.Writer.Close()
+		// Final full assistant message only, no deltas prior.
+		inner := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "final"},
+		}}}))
+		st.Writer.Send(tool.StreamChunk{Content: inner}, nil)
+	}()
+	return st.Reader, nil
+}
+
+// Ensure the final full inner assistant message is forwarded when there were no prior deltas.
+func TestExecuteStreamableTool_ForwardsFinalOnlyInnerMessage(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false)
+	ctx := context.Background()
+	inv := &agent.Invocation{InvocationID: "inv-final", AgentName: "parent", Branch: "br", Model: &mockModel{}}
+	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "inner-final"}}
+	st := &finalOnlyInnerEventStreamTool{name: "inner-final"}
+	ch := make(chan *event.Event, 2)
+
+	res, err := f.executeStreamableTool(ctx, inv, tc, st, ch)
+	require.NoError(t, err)
+	require.Equal(t, "final", res.(string))
+
+	// Exactly one forwarded event (the final full assistant message)
+	select {
+	case e := <-ch:
+		require.NotNil(t, e)
+		require.Equal(t, inv.InvocationID, e.InvocationID)
+		require.Equal(t, inv.Branch, e.Branch)
+		require.NotNil(t, e.Response)
+		require.False(t, e.Response.IsPartial)
+		require.Equal(t, model.RoleAssistant, e.Choices[0].Message.Role)
+		require.Equal(t, "final", e.Choices[0].Message.Content)
+	default:
+		t.Fatalf("expected the final inner assistant message to be forwarded")
+	}
+
+	// And no more events
+	select {
+	case <-ch:
+		t.Fatalf("did not expect more than one forwarded event")
+	default:
+	}
+}
+
 // Minimal callable tool used by tests above
 type mockTransferCallableTool struct {
 	declaration *tool.Declaration

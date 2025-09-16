@@ -223,12 +223,31 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 			})
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
+		// If any tool prefers skipping summarization, propagate this hint even
+		// when we only forwarded inner events and didn't construct child events.
+		for _, tc := range toolCalls {
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if mergedEvent.Actions == nil {
+						mergedEvent.Actions = &event.EventActions{}
+					}
+					mergedEvent.Actions.SkipSummarization = true
+					break
+				}
+			}
+		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
+
+	// If the tool indicates skipping outer summarization, mark the invocation to end
+	// after this tool response so the flow does not perform an extra LLM call.
+	if mergedEvent.Actions != nil && mergedEvent.Actions.SkipSummarization {
+		invocation.EndInvocation = true
+	}
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -305,6 +324,17 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			toolCallResponseEvent := newToolCallResponseEvent(invocation, llmResponse,
 				[]model.Choice{*choice})
 
+			// If the tool indicates we should skip outer summarization, mark it on the event
+			// so the flow/runner can respect it. This mirrors the sequential path handling.
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if toolCallResponseEvent.Actions == nil {
+						toolCallResponseEvent.Actions = &event.EventActions{}
+					}
+					toolCallResponseEvent.Actions.SkipSummarization = true
+				}
+			}
+
 			tl, ok := tools[tc.Function.Name]
 			var declaration *tool.Declaration
 			if !ok {
@@ -356,6 +386,19 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			})
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
+		// If any tool prefers skipping summarization, propagate this hint even
+		// when we only forwarded inner events and didn't construct child events.
+		for _, tc := range toolCalls {
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if mergedEvent.Actions == nil {
+						mergedEvent.Actions = &event.EventActions{}
+					}
+					mergedEvent.Actions.SkipSummarization = true
+					break
+				}
+			}
+		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
@@ -895,7 +938,14 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		f.normalizeInnerEvent(ev, invocation)
-		if f.shouldForwardInnerEvent(ev) {
+		// Default forwarding rule suppresses the final full assistant message to avoid
+		// duplication, but if we have not emitted any prior deltas/content from the
+		// inner stream, forward this final message so callers still see the sub-agent output.
+		shouldForward := f.shouldForwardInnerEvent(ev)
+		if !shouldForward && contents != nil && len(*contents) == 0 {
+			shouldForward = true
+		}
+		if shouldForward {
 			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
 				return err
 			}
