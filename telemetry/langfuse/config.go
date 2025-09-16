@@ -29,10 +29,27 @@ func WithPublicKey(publicKey string) Option {
 	}
 }
 
-// WithHost sets the Langfuse host URL.
+// WithHost sets the Langfuse host endpoint.
+// The provided host should be in "hostname:port" format (no scheme or path).
+// For cloud.langfuse.com, use "cloud.langfuse.com:443".
+// For local development, use "localhost:3000".
+//
+// Example:
+//
+//	WithHost("cloud.langfuse.com:443")      // Production
+//	WithHost("localhost:3000")              // Local development
 func WithHost(host string) Option {
 	return func(cfg *config) {
 		cfg.host = host
+	}
+}
+
+// WithInsecure configures the exporter to use insecure connections.
+// This should only be used for development/testing environments.
+// By default, secure connections are used.
+func WithInsecure() Option {
+	return func(cfg *config) {
+		cfg.insecure = true
 	}
 }
 
@@ -41,14 +58,22 @@ type config struct {
 	secretKey string
 	publicKey string
 	host      string
+	insecure  bool
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
+// Supported environment variables:
+//
+//	LANGFUSE_SECRET_KEY: Langfuse secret key
+//	LANGFUSE_PUBLIC_KEY: Langfuse public key
+//	LANGFUSE_HOST: Langfuse host in "hostname:port" format (e.g., "cloud.langfuse.com:443")
+//	LANGFUSE_INSECURE: Set to "true" for insecure connections (development only)
 func newConfigFromEnv() *config {
 	return &config{
 		secretKey: getEnv("LANGFUSE_SECRET_KEY", ""),
 		publicKey: getEnv("LANGFUSE_PUBLIC_KEY", ""),
 		host:      getEnv("LANGFUSE_HOST", ""),
+		insecure:  getEnv("LANGFUSE_INSECURE", "") == "true",
 	}
 }
 
