@@ -1740,7 +1740,7 @@ func TestEmitStateUpdateEventConcurrency(t *testing.T) {
 
 	// Rapidly emit state update events; should not panic.
 	for i := 0; i < 200; i++ {
-		exec.emitStateUpdateEvent(execCtx)
+		exec.emitStateUpdateEvent(context.Background(), nil, execCtx)
 	}
 	close(stopCh)
 }
@@ -1794,7 +1794,7 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 
 	// Repeatedly process conditional edges; should not panic.
 	for i := 0; i < 200; i++ {
-		require.NoError(t, exec.processConditionalEdges(context.Background(), execCtx, "start", i), "conditional processing failed.")
+		require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", i), "conditional processing failed.")
 	}
 	close(stopCh)
 }
