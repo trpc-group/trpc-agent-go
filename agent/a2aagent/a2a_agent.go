@@ -139,16 +139,17 @@ func (r *A2AAgent) resolveAgentCardFromURL() (*server.AgentCard, error) {
 }
 
 // sendErrorEvent sends an error event to the event channel
-func (r *A2AAgent) sendErrorEvent(eventChan chan<- *event.Event, invocation *agent.Invocation, errorMessage string) {
-	eventChan <- &event.Event{
-		Author:       r.name,
-		InvocationID: invocation.InvocationID,
-		Response: &model.Response{
+func (r *A2AAgent) sendErrorEvent(ctx context.Context, eventChan chan<- *event.Event,
+	invocation *agent.Invocation, errorMessage string) {
+	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+		invocation.InvocationID,
+		r.name,
+		event.WithResponse(&model.Response{
 			Error: &model.ResponseError{
 				Message: errorMessage,
 			},
-		},
-	}
+		}),
+	))
 }
 
 // Run implements the Agent interface
@@ -208,7 +209,7 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 
 		a2aMessage, err := r.buildA2AMessage(invocation, true)
 		if err != nil {
-			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
 			return
 		}
 		params := protocol.SendMessageParams{
@@ -216,53 +217,45 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 		}
 		streamChan, err := r.a2aClient.StreamMessage(ctx, params)
 		if err != nil {
-			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("A2A streaming request failed to %s: %v", r.agentCard.URL, err))
 			return
 		}
 
 		var aggregatedContentBuilder strings.Builder
 		for streamEvent := range streamChan {
-			select {
-			case <-ctx.Done():
-				// For streaming requests, treat caller cancellation as normal shutdown
-				// and stop without emitting an extra error event.
+			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
-			default:
 			}
 
-			event, err := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
+			evt, err := r.eventConverter.ConvertStreamingToEvent(streamEvent, r.name, invocation)
 			if err != nil {
-				r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
+				r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
 				return
 			}
 
 			// Aggregate content from delta
-			if event.Response != nil && len(event.Response.Choices) > 0 {
+			if evt.Response != nil && len(evt.Response.Choices) > 0 {
 				if r.streamingRespHandler != nil {
-					content, err := r.streamingRespHandler(event.Response)
+					content, err := r.streamingRespHandler(evt.Response)
 					if err != nil {
-						r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
+						r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("streaming resp handler failed: %v", err))
 						return
 					}
 					if content != "" {
 						aggregatedContentBuilder.WriteString(content)
 					}
-				} else if event.Response.Choices[0].Delta.Content != "" {
-					aggregatedContentBuilder.WriteString(event.Response.Choices[0].Delta.Content)
+				} else if evt.Response.Choices[0].Delta.Content != "" {
+					aggregatedContentBuilder.WriteString(evt.Response.Choices[0].Delta.Content)
 				}
 			}
 
-			if event != nil {
-				eventChan <- event
-			}
+			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
 
-		// Send final event with aggregated content
-		finalEvent := &event.Event{
-			Author:       r.name,
-			InvocationID: invocation.InvocationID,
-			Timestamp:    time.Now(),
-			Response: &model.Response{
+		agent.EmitEvent(ctx, invocation, eventChan, event.New(
+			invocation.InvocationID,
+			r.name,
+			event.WithResponse(&model.Response{
 				Done:      true,
 				IsPartial: false,
 				Timestamp: time.Now(),
@@ -273,9 +266,8 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 						Content: aggregatedContentBuilder.String(),
 					},
 				}},
-			},
-		}
-		eventChan <- finalEvent
+			}),
+		))
 	}()
 	return eventChan, nil
 }
@@ -289,7 +281,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		// Construct A2A message from session
 		a2aMessage, err := r.buildA2AMessage(invocation, false)
 		if err != nil {
-			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("failed to construct A2A message: %v", err))
 			return
 		}
 
@@ -298,21 +290,19 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 		}
 		result, err := r.a2aClient.SendMessage(ctx, params)
 		if err != nil {
-			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("A2A request failed to %s: %v", r.agentCard.URL, err))
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("A2A request failed to %s: %v", r.agentCard.URL, err))
 			return
 		}
 
 		// Try custom event converters first
 		msgResult := protocol.MessageResult{Result: result.Result}
-		event, err := r.eventConverter.ConvertToEvent(msgResult, r.name, invocation)
+		evt, err := r.eventConverter.ConvertToEvent(msgResult, r.name, invocation)
 		if err != nil {
-			r.sendErrorEvent(eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
+			r.sendErrorEvent(ctx, eventChan, invocation, fmt.Sprintf("custom event converter failed: %v", err))
 			return
 		}
 
-		if event != nil {
-			eventChan <- event
-		}
+		agent.EmitEvent(ctx, invocation, eventChan, evt)
 	}()
 	return eventChan, nil
 }

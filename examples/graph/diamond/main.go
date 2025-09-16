@@ -67,8 +67,8 @@ type diamondWorkflow struct {
 
 func main() {
 	fmt.Println("🔷 Diamond Pattern Workflow Example")
-	fmt.Println("This example demonstrates the need for per-node version tracking.")
-	fmt.Println("Without proper versions_seen, the aggregator node will execute multiple times.")
+	fmt.Println("Demonstrates per-node version tracking and correct result aggregation.")
+	fmt.Println("On resume, versions_seen prevents redundant node executions.")
 
 	// Create and initialize workflow.
 	workflow := &diamondWorkflow{
@@ -147,7 +147,7 @@ func (w *diamondWorkflow) createGraph() (*graph.Graph, error) {
 
 	schema.AddField(stateKeyResults, graph.StateField{
 		Type:    reflect.TypeOf([]string{}),
-		Reducer: graph.AppendReducer, // Append results from both analyzers.
+		Reducer: graph.StringSliceReducer, // Append results from both analyzers.
 		Default: func() any { return []string{} },
 	})
 
@@ -179,8 +179,20 @@ func (w *diamondWorkflow) createGraph() (*graph.Graph, error) {
 	stateGraph.AddEdge(nodeAnalyzer1, nodeAggregator)
 	stateGraph.AddEdge(nodeAnalyzer2, nodeAggregator)
 
-	// Aggregator goes to final.
-	stateGraph.AddEdge(nodeAggregator, nodeFinal)
+	// Aggregator routes to final only when both results are ready (barrier).
+	// Otherwise it does not route further (to End), and will be triggered
+	// again when the second analyzer completes.
+	condition := func(ctx context.Context, state graph.State) (string, error) {
+		results, _ := state[stateKeyResults].([]string)
+		if len(results) >= 2 {
+			return nodeFinal, nil
+		}
+		return graph.End, nil
+	}
+	stateGraph.AddConditionalEdges(nodeAggregator, condition, map[string]string{
+		nodeFinal: nodeFinal,
+		graph.End: graph.End,
+	})
 
 	fmt.Println("📊 Graph structure:")
 	fmt.Println("        splitter")
@@ -255,9 +267,8 @@ func (w *diamondWorkflow) aggregatorNode(ctx context.Context, state graph.State)
 	fmt.Printf("⚠️  [%d] AGGREGATOR: Processing %d results\n", execCount, len(results))
 
 	if execCount > 1 {
-		fmt.Println("❌ ISSUE DETECTED: Aggregator executed multiple times!")
-		fmt.Println("   Without versions_seen, aggregator runs once per analyzer update.")
-		fmt.Println("   With proper versions_seen, it would run only once after both complete.")
+		fmt.Println("❌ Aggregator executed multiple times (likely after resume).")
+		fmt.Println("   Per-node versions_seen prevents redundant executions on resume.")
 	}
 
 	// Log what we're aggregating.
@@ -274,7 +285,8 @@ func (w *diamondWorkflow) finalNode(ctx context.Context, state graph.State) (any
 	execCount := w.recordExecution(nodeFinal)
 
 	results, _ := state[stateKeyResults].([]string)
-	execCounts, _ := state[stateKeyExecCounts].(map[string]int)
+	// Read live execution counts to reflect final node's own execution.
+	execCounts := w.getExecutionCounts()
 
 	fmt.Printf("\n📊 [%d] FINAL: Workflow Complete\n", execCount)
 	fmt.Printf("Results collected: %v\n", results)
@@ -338,10 +350,12 @@ func (w *diamondWorkflow) runInteractive() error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("\n📝 Commands:")
-	fmt.Println("  run [input]  - Run the workflow with optional input")
-	fmt.Println("  reset        - Reset execution counters")
-	fmt.Println("  help         - Show this help")
-	fmt.Println("  exit/quit    - Exit the program")
+	fmt.Println("  run <lid> [input]  - Run with lineage_id and optional input")
+	fmt.Println("  resume <lid> [ck]  - Resume latest or specific checkpoint for lineage")
+	fmt.Println("  list <lid> [n]     - List latest n checkpoints (default 5)")
+	fmt.Println("  reset              - Reset execution counters")
+	fmt.Println("  help               - Show this help")
+	fmt.Println("  exit/quit          - Exit the program")
 	fmt.Println()
 
 	for {
@@ -360,12 +374,49 @@ func (w *diamondWorkflow) runInteractive() error {
 
 		switch command {
 		case "run":
+			if len(parts) < 2 {
+				fmt.Println("Usage: run <lineage_id> [input]")
+				break
+			}
+			lineage := parts[1]
 			inputData := "test-data"
-			if len(parts) > 1 {
-				inputData = strings.Join(parts[1:], " ")
+			if len(parts) > 2 {
+				inputData = strings.Join(parts[2:], " ")
 			}
 			w.resetExecutionCounts()
-			if err := w.runWorkflow(context.Background(), inputData); err != nil {
+			if err := w.runWorkflowWithLineage(context.Background(), inputData, lineage); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			}
+
+		case "resume":
+			if len(parts) < 2 {
+				fmt.Println("Usage: resume <lineage_id> [checkpoint_id]")
+				break
+			}
+			lineage := parts[1]
+			ckID := ""
+			if len(parts) >= 3 {
+				ckID = parts[2]
+			}
+			w.resetExecutionCounts()
+			if err := w.resumeWorkflow(context.Background(), lineage, ckID); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			}
+
+		case "list":
+			if len(parts) < 2 {
+				fmt.Println("Usage: list <lineage_id> [n]")
+				break
+			}
+			lineage := parts[1]
+			limit := 5
+			if len(parts) >= 3 {
+				// best-effort parse
+				if n, err := fmt.Sscanf(parts[2], "%d", &limit); n == 0 || err != nil {
+					limit = 5
+				}
+			}
+			if err := w.listCheckpoints(context.Background(), lineage, limit); err != nil {
 				fmt.Printf("❌ Error: %v\n", err)
 			}
 
@@ -375,10 +426,12 @@ func (w *diamondWorkflow) runInteractive() error {
 
 		case "help":
 			fmt.Println("\n📝 Commands:")
-			fmt.Println("  run [input]  - Run the workflow with optional input")
-			fmt.Println("  reset        - Reset execution counters")
-			fmt.Println("  help         - Show this help")
-			fmt.Println("  exit/quit    - Exit the program")
+			fmt.Println("  run <lid> [input]  - Run with lineage_id and optional input")
+			fmt.Println("  resume <lid> [ck]  - Resume latest or specific checkpoint for lineage")
+			fmt.Println("  list <lid> [n]     - List latest n checkpoints (default 5)")
+			fmt.Println("  reset              - Reset execution counters")
+			fmt.Println("  help               - Show this help")
+			fmt.Println("  exit/quit          - Exit the program")
 
 		case "exit", "quit":
 			fmt.Println("👋 Goodbye!")
@@ -429,5 +482,107 @@ func (w *diamondWorkflow) runWorkflow(ctx context.Context, inputData string) err
 	duration := time.Since(startTime)
 	fmt.Printf("\n⏱️  Execution time: %v\n", duration.Round(time.Millisecond))
 
+	return nil
+}
+
+// runWorkflowWithLineage executes the workflow with a fixed lineage_id.
+func (w *diamondWorkflow) runWorkflowWithLineage(ctx context.Context, inputData, lineageID string) error {
+	fmt.Printf("\n🚀 Starting workflow with input: %s (lineage=%s)\n", inputData, lineageID)
+	startTime := time.Now()
+
+	message := model.NewUserMessage(inputData)
+	runtimeState := map[string]any{
+		stateKeyInput:            inputData,
+		graph.CfgKeyLineageID:    lineageID,
+		graph.CfgKeyCheckpointNS: "",
+	}
+
+	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+	eventChan, err := w.runner.Run(
+		ctx,
+		defaultUserID,
+		sessionID,
+		message,
+		agent.WithRuntimeState(runtimeState),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to run workflow: %w", err)
+	}
+
+	for event := range eventChan {
+		if event.Error != nil {
+			return fmt.Errorf("workflow error: %w", event.Error)
+		}
+	}
+
+	duration := time.Since(startTime)
+	fmt.Printf("\n⏱️  Execution time: %v\n", duration.Round(time.Millisecond))
+	return nil
+}
+
+// resumeWorkflow resumes from latest or specific checkpoint of a lineage.
+func (w *diamondWorkflow) resumeWorkflow(ctx context.Context, lineageID, checkpointID string) error {
+	label := checkpointID
+	if label == "" {
+		label = "latest"
+	}
+	fmt.Printf("\n🔁 Resuming workflow (lineage=%s, checkpoint=%s)\n", lineageID, label)
+	startTime := time.Now()
+
+	// For resume, the input message content is not used to reconstruct state;
+	// state is restored from checkpoint by the executor.
+	message := model.NewUserMessage("resume")
+
+	runtimeState := map[string]any{
+		graph.CfgKeyLineageID:    lineageID,
+		graph.CfgKeyCheckpointNS: "",
+	}
+	if checkpointID != "" {
+		runtimeState[graph.CfgKeyCheckpointID] = checkpointID
+	}
+
+	sessionID := fmt.Sprintf("session-%d", time.Now().Unix())
+	eventChan, err := w.runner.Run(
+		ctx,
+		defaultUserID,
+		sessionID,
+		message,
+		agent.WithRuntimeState(runtimeState),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to resume workflow: %w", err)
+	}
+
+	for event := range eventChan {
+		if event.Error != nil {
+			return fmt.Errorf("workflow error: %w", event.Error)
+		}
+	}
+
+	duration := time.Since(startTime)
+	fmt.Printf("\n⏱️  Execution time: %v\n", duration.Round(time.Millisecond))
+	return nil
+}
+
+// listCheckpoints lists recent checkpoints for a lineage.
+func (w *diamondWorkflow) listCheckpoints(ctx context.Context, lineageID string, limit int) error {
+	fmt.Printf("\n🗂️  Checkpoints for lineage %s (latest %d):\n", lineageID, limit)
+	cfg := graph.CreateCheckpointConfig(lineageID, "", "")
+	tuples, err := w.saver.List(ctx, cfg, &graph.CheckpointFilter{Limit: limit})
+	if err != nil {
+		return fmt.Errorf("failed to list checkpoints: %w", err)
+	}
+	if len(tuples) == 0 {
+		fmt.Println("(none)")
+		return nil
+	}
+	for i, t := range tuples {
+		step := -1
+		if t.Metadata != nil {
+			step = t.Metadata.Step
+		}
+		ts := t.Checkpoint.Timestamp.Local().Format(time.RFC3339)
+		fmt.Printf("%2d. %s step=%d time=%s next=%v\n", i+1, t.Checkpoint.ID, step, ts, t.Checkpoint.NextNodes)
+	}
 	return nil
 }

@@ -19,7 +19,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -38,6 +40,13 @@ type Option func(*Options)
 func WithSessionService(service session.Service) Option {
 	return func(opts *Options) {
 		opts.sessionService = service
+	}
+}
+
+// WithMemoryService sets the memory service to use.
+func WithMemoryService(service memory.Service) Option {
+	return func(opts *Options) {
+		opts.memoryService = service
 	}
 }
 
@@ -64,12 +73,14 @@ type runner struct {
 	appName         string
 	agent           agent.Agent
 	sessionService  session.Service
+	memoryService   memory.Service
 	artifactService artifact.Service
 }
 
 // Options is the options for the Runner.
 type Options struct {
 	sessionService  session.Service
+	memoryService   memory.Service
 	artifactService artifact.Service
 }
 
@@ -89,6 +100,7 @@ func NewRunner(appName string, agent agent.Agent, opts ...Option) Runner {
 		appName:         appName,
 		agent:           agent,
 		sessionService:  options.sessionService,
+		memoryService:   options.memoryService,
 		artifactService: options.artifactService,
 	}
 }
@@ -101,8 +113,6 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, "invocation")
-	defer span.End()
 
 	sessionKey := session.Key{
 		AppName:   r.appName,
@@ -123,47 +133,33 @@ func (r *runner) Run(
 		}
 	}
 
-	// Generate invocation ID.
-	invocationID := "invocation-" + uuid.New().String()
-
-	// Append the incoming user message to the session if it has content.
-	if message.Content != "" {
-		userEvent := &event.Event{
-			Response:     &model.Response{Done: false},
-			InvocationID: invocationID,
-			Author:       authorUser,
-			ID:           uuid.New().String(),
-			Timestamp:    time.Now(),
-			Branch:       "", // User events typically don't have branch constraints
-		}
-		// Set the user message content in the response.
-		userEvent.Response.Choices = []model.Choice{
-			{
-				Index:   0,
-				Message: message,
-			},
-		}
-
-		if err := r.sessionService.AppendEvent(ctx, sess, userEvent); err != nil {
-			return nil, err
-		}
-	}
-
 	// Create invocation.
-	eventCompletionCh := make(chan string)
 	var ro agent.RunOptions
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
-	invocation := &agent.Invocation{
-		Agent:             r.agent,
-		Session:           sess,
-		InvocationID:      invocationID,
-		EndInvocation:     false,
-		Message:           message,
-		RunOptions:        ro,
-		EventCompletionCh: eventCompletionCh,
-		ArtifactService:   r.artifactService,
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationAgent(r.agent),
+		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationMemoryService(r.memoryService),
+		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey(r.appName),
+	)
+
+	// Append the incoming user message to the session if it has content.
+	if message.Content != "" {
+		evt := event.NewResponseEvent(
+			invocation.InvocationID,
+			authorUser,
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+		)
+		agent.InjectIntoEvent(invocation, evt)
+		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
+			return nil, err
+		}
+
 	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
@@ -171,90 +167,101 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
+	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
+		invocation.CleanupNotice(ctx)
 		return nil, err
 	}
 
 	// Create a new channel for processed events.
 	processedEventCh := make(chan *event.Event)
-
 	// Start a goroutine to process and append events to session.
 	go func() {
-		defer close(processedEventCh)
+		defer func() {
+			close(processedEventCh)
+			invocation.CleanupNotice(ctx)
+		}()
 
 		for agentEvent := range agentEventCh {
 			// Append event to session if it's complete (not partial).
-			if agentEvent.StateDelta != nil ||
-				(agentEvent.Response != nil && !agentEvent.Response.IsPartial && agentEvent.Response.Choices != nil) {
+			if agentEvent != nil && (len(agentEvent.StateDelta) > 0 ||
+				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
 			}
 
 			if agentEvent.RequiresCompletion {
-				eventCompletionCh <- agentEvent.CompletionID
+				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
+				invocation.NotifyCompletion(ctx, completionID)
 			}
 
-			// Forward the event to the output channel.
-			select {
-			case processedEventCh <- agentEvent:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, processedEventCh, agentEvent); err != nil {
 				return
 			}
 		}
 
-		// Finalize the run: emit completion event and trigger summarization.
-		r.finalizeRun(ctx, sess, invocationID, processedEventCh)
+		// Emit final runner completion event after all agent events are processed.
+		runnerCompletionEvent := event.NewResponseEvent(
+			invocation.InvocationID,
+			r.appName,
+			&model.Response{
+				ID:        "runner-completion-" + uuid.New().String(),
+				Object:    model.ObjectTypeRunnerCompletion,
+				Created:   time.Now().Unix(),
+				Done:      true,
+				IsPartial: false,
+			},
+		)
+
+		// Append runner completion event to session.
+		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+
+		// Send the runner completion event to output channel.
+		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
+
+		// Trigger non-forced summarization in background if supported.
+		if r.sessionService != nil && sess != nil {
+			go func() {
+				if err := r.sessionService.CreateSessionSummary(ctx, sess, false); err != nil {
+					log.Warnf("Runner: CreateSessionSummary failed: %v", err)
+				}
+			}()
+		}
 	}()
+
+	itelemetry.TraceRunner(span, r.appName, invocation, message)
 
 	return processedEventCh, nil
 }
 
-// finalizeRun emits a runner completion event, appends it to the session,
-// forwards it to the output channel, and then triggers summarization.
-func (r *runner) finalizeRun(
+// RunWithMessages is a convenience helper that lets callers pass a full
+// conversation history ([]model.Message) directly, without relying on the
+// session service. It preserves backward compatibility by delegating to the
+// existing Runner.Run with an empty message and a RunOption that carries the
+// conversation history.
+func RunWithMessages(
 	ctx context.Context,
-	sess *session.Session,
-	invocationID string,
-	out chan<- *event.Event,
-) {
-	// Emit final runner completion event after all agent events are processed.
-	completion := &event.Event{
-		Response: &model.Response{
-			ID:        "runner-completion-" + uuid.New().String(),
-			Object:    model.ObjectTypeRunnerCompletion,
-			Created:   time.Now().Unix(),
-			Done:      true,
-			IsPartial: false,
-		},
-		InvocationID: invocationID,
-		Author:       r.appName,
-		ID:           uuid.New().String(),
-		Timestamp:    time.Now(),
-	}
-
-	// Append completion event to session.
-	if r.sessionService != nil && sess != nil {
-		if err := r.sessionService.AppendEvent(ctx, sess, completion); err != nil {
-			log.Errorf("Failed to append runner completion event to session: %v", err)
+	r Runner,
+	userID string,
+	sessionID string,
+	messages []model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	runOpts = append(runOpts, agent.WithMessages(messages))
+	// Derive the latest user message for invocation state compatibility
+	// (e.g., used by GraphAgent to set initial user_input).
+	var latestUser model.Message
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleUser && (messages[i].Content != "" || len(messages[i].ContentParts) > 0) {
+			latestUser = messages[i]
+			break
 		}
 	}
-
-	// Forward completion event to output channel.
-	select {
-	case out <- completion:
-	case <-ctx.Done():
-		return
-	}
-
-	// Trigger non-forced summarization if possible.
-	if r.sessionService != nil && sess != nil {
-		go func() {
-			if err := r.sessionService.CreateSessionSummary(ctx, sess, false); err != nil {
-				log.Warnf("Runner: CreateSessionSummary failed: %v", err)
-			}
-		}()
-	}
+	return r.Run(ctx, userID, sessionID, latestUser, runOpts...)
 }

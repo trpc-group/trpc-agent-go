@@ -22,6 +22,8 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,6 +126,16 @@ func (w *fanoutWorkflow) createFanoutGraph() (*graph.Graph, error) {
 			Type:    reflect.TypeOf([]string{}),
 			Reducer: graph.StringSliceReducer,
 			Default: func() any { return []string{} },
+		}).
+		AddField("node_execution_history", graph.StateField{
+			Type:    reflect.TypeOf([]map[string]any{}),
+			Reducer: appendMapSliceReducer,
+			Default: func() any { return []map[string]any{} },
+		}).
+		AddField("error_count", graph.StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: intSumReducer,
+			Default: func() any { return 0 },
 		})
 
 	// Create model instance.
@@ -192,7 +204,6 @@ Remember: only output the final processed result itself, no other text.`,
 	stateGraph.AddEdge("analyze_input", "plan_tasks")
 	stateGraph.AddToolsConditionalEdges("plan_tasks", "tools", "create_fanout")
 	stateGraph.AddEdge("tools", "plan_tasks") // This edge allows the LLM to continue after tool execution
-	stateGraph.AddEdge("create_fanout", "process_task")
 	stateGraph.AddEdge("process_task", "aggregate_results")
 
 	// Build and return the graph.
@@ -230,12 +241,21 @@ func (w *fanoutWorkflow) createFanoutTasks(ctx context.Context, state graph.Stat
 	// Get the number of tasks from the LLM's response.
 	var numTasks int
 	if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
-		// Parse the response to get the number of tasks.
-		if _, err := fmt.Sscanf(lastResponse, "%d", &numTasks); err != nil {
-			numTasks = 3 // Default fallback.
+		last := strings.TrimSpace(lastResponse)
+		// Robustly extract the first integer anywhere in the output (handles **2**, etc.)
+		re := regexp.MustCompile(`\d+`)
+		matches := re.FindAllString(last, -1)
+		for i := len(matches) - 1; i >= 0; i-- {
+			if n, err := strconv.Atoi(matches[i]); err == nil {
+				if n >= 1 && n <= 5 {
+					numTasks = n
+					break
+				}
+			}
 		}
-	} else {
-		numTasks = 3 // Default fallback.
+	}
+	if numTasks == 0 {
+		numTasks = 3 // sensible default
 	}
 
 	// Ensure reasonable bounds.
@@ -246,6 +266,7 @@ func (w *fanoutWorkflow) createFanoutTasks(ctx context.Context, state graph.Stat
 		numTasks = 5
 	}
 
+	fmt.Printf("🧭 Planner decided to run %d tasks\n", numTasks)
 	fmt.Printf("📋 Creating %d parallel tasks...\n", numTasks)
 
 	// Generate commands for parallel execution.
@@ -254,13 +275,21 @@ func (w *fanoutWorkflow) createFanoutTasks(ctx context.Context, state graph.Stat
 		taskID := fmt.Sprintf("task-%c", 'A'+i)
 		priority := []string{"high", "medium", "low"}[i%3]
 
+		// Build a dedicated user input for the worker stage so the LLM
+		// incorporates task parameters instead of continuing prior context only.
+		baseInput, _ := state[graph.StateKeyUserInput].(string)
+		workerPrompt := fmt.Sprintf(
+			"Task %s (priority: %s)\nPlease process the following content with the specified parameters.\n\nContent:\n%s",
+			taskID, priority, baseInput,
+		)
+
 		cmds[i] = &graph.Command{
 			Update: graph.State{
-				"task_id":    taskID,
-				"priority":   priority,
-				"worker_id":  i + 1,
-				"created_at": time.Now().Format("15:04:05"),
-				"input_text": state[graph.StateKeyUserInput],
+				"task_id":               taskID,
+				"priority":              priority,
+				"worker_id":             i + 1,
+				"created_at":            time.Now().Format("15:04:05"),
+				graph.StateKeyUserInput: workerPrompt,
 			},
 			GoTo: "process_task",
 		}
@@ -416,6 +445,8 @@ func (w *fanoutWorkflow) analyzeTaskComplexity(ctx context.Context, args taskAna
 // startInteractiveMode starts the interactive parallel fan-out mode.
 func (w *fanoutWorkflow) startInteractiveMode(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
+	// Allow larger inputs than the default ~64KB token limit
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 	fmt.Println("💡 Interactive Parallel Fan-out Mode")
 	fmt.Println("   Enter your content to process with parallel fan-out (or 'exit' to quit)")
@@ -483,6 +514,7 @@ func (w *fanoutWorkflow) processStreamingResponse(eventChan <-chan *event.Event)
 	var (
 		workflowStarted bool
 		stageCount      int
+		completionEvent *event.Event
 	)
 	for event := range eventChan {
 		if w.handleErrorEvent(event) {
@@ -494,10 +526,60 @@ func (w *fanoutWorkflow) processStreamingResponse(eventChan <-chan *event.Event)
 		w.handleStreamingChoices(event, &workflowStarted)
 		w.trackStageProgress(event, &stageCount)
 		if event.Done {
+			completionEvent = event
 			break
 		}
 	}
+	// After completion, replay final results sequentially to improve readability.
+	if completionEvent != nil {
+		w.fakeStreamFinalResults(completionEvent, 35*time.Millisecond)
+	}
 	return nil
+}
+
+// fakeStreamFinalResults replays final results sequentially with small delays
+// to mimic streaming, improving readability after parallel fan-out completes.
+func (w *fanoutWorkflow) fakeStreamFinalResults(e *event.Event, delay time.Duration) {
+	if e == nil || e.StateDelta == nil {
+		return
+	}
+	// Prefer "final_results", fallback to "results"
+	var results []string
+	if b, ok := e.StateDelta["final_results"]; ok && len(b) > 0 {
+		_ = json.Unmarshal(b, &results)
+	}
+	if len(results) == 0 {
+		if b, ok := e.StateDelta["results"]; ok && len(b) > 0 {
+			_ = json.Unmarshal(b, &results)
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+
+	fmt.Println("\n🧵 Replaying results sequentially:")
+	total := len(results)
+	for i, r := range results {
+		// Split header (first line) and body (rest)
+		parts := strings.SplitN(r, "\n", 2)
+		header := parts[0]
+		body := ""
+		if len(parts) > 1 {
+			body = parts[1]
+		}
+		fmt.Printf("\n[%d/%d] %s\n", i+1, total, header)
+		if body != "" {
+			lines := strings.Split(body, "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					fmt.Println(line)
+				} else {
+					fmt.Println()
+				}
+				time.Sleep(delay)
+			}
+		}
+	}
 }
 
 func (w *fanoutWorkflow) handleErrorEvent(e *event.Event) bool {
@@ -611,6 +693,10 @@ func (w *fanoutWorkflow) handleStreamingChoices(e *event.Event, started *bool) {
 	if len(e.Choices) == 0 {
 		return
 	}
+	// Only stream planning node output to avoid interleaved parallel outputs.
+	if e.Author != "plan_tasks" {
+		return
+	}
 	choice := e.Choices[0]
 	if choice.Delta.Content != "" {
 		if !*started {
@@ -626,18 +712,37 @@ func (w *fanoutWorkflow) handleStreamingChoices(e *event.Event, started *bool) {
 }
 
 func (w *fanoutWorkflow) trackStageProgress(e *event.Event, stageCount *int) {
-	if e.Author != graph.AuthorGraphExecutor {
-		return
+	// Keep stage tracking silent to avoid noisy logs in this example.
+}
+
+// Reducers for schema-managed aggregation
+func appendMapSliceReducer(existing, update any) any {
+	if existing == nil {
+		existing = []map[string]any{}
 	}
-	*stageCount++
-	if *stageCount >= 1 && len(e.Response.Choices) > 0 {
-		content := e.Response.Choices[0].Message.Content
-		if content != "" {
-			fmt.Printf("\n🔄 Stage %d completed, %s\n", *stageCount, content)
-			return
+	ex, ok1 := existing.([]map[string]any)
+	up, ok2 := update.([]map[string]any)
+	if !ok1 || !ok2 {
+		return update
+	}
+	return append(ex, up...)
+}
+
+func intSumReducer(existing, update any) any {
+	var a, b int
+	if existing != nil {
+		if v, ok := existing.(int); ok {
+			a = v
 		}
-		fmt.Printf("\n🔄 Stage %d completed\n", *stageCount)
 	}
+	if update != nil {
+		if v, ok := update.(int); ok {
+			b = v
+		} else if v2, ok := update.(int64); ok {
+			b = int(v2)
+		}
+	}
+	return a + b
 }
 
 // showHelp displays available commands.

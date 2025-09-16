@@ -307,7 +307,7 @@ func TestToolCreator(t *testing.T) {
 	assert.Nil(t, creator, "Zero value for ToolCreator should be nil.")
 
 	// Test that we can assign a function to ToolCreator.
-	creator = func(service Service) tool.Tool {
+	creator = func() tool.Tool {
 		return nil
 	}
 	assert.NotNil(t, creator, "ToolCreator should accept function assignment.")

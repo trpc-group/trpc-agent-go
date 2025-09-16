@@ -17,13 +17,15 @@ import (
 
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
-	sessionEventLimit int
-	url               string
-	instanceName      string
-	extraOptions      []interface{}
-	sessionTTL        time.Duration // TTL for session state and event list
-	appStateTTL       time.Duration // TTL for app state
-	userStateTTL      time.Duration // TTL for user state
+	sessionEventLimit  int
+	url                string
+	instanceName       string
+	extraOptions       []interface{}
+	sessionTTL         time.Duration // TTL for session state and event list
+	appStateTTL        time.Duration // TTL for app state
+	userStateTTL       time.Duration // TTL for user state
+	enableAsyncPersist bool
+	asyncPersisterNum  int // number of worker goroutines for async persistence
 	// summarizerManager integrates LLM summarization.
 	summarizerManager summary.SummarizerManager
 }
@@ -83,6 +85,24 @@ func WithAppStateTTL(ttl time.Duration) ServiceOpt {
 func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.userStateTTL = ttl
+	}
+}
+
+// WithEnableAsyncPersist enables async persistence for session state and event list.
+// if not set, default is false.
+func WithEnableAsyncPersist(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableAsyncPersist = enable
+	}
+}
+
+// WithAsyncPersisterNum sets the number of workers for async persistence.
+func WithAsyncPersisterNum(num int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if num < 1 {
+			num = defaultAsyncPersisterNum
+		}
+		opts.asyncPersisterNum = num
 	}
 }
 

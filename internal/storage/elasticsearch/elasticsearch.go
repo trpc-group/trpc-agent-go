@@ -35,4 +35,10 @@ type Client interface {
 	DeleteDoc(ctx context.Context, indexName, id string) error
 	// Search executes a query and returns the raw response body.
 	Search(ctx context.Context, indexName string, body []byte) ([]byte, error)
+	// Count executes a count query and returns the document count.
+	Count(ctx context.Context, indexName string, body []byte) (int, error)
+	// DeleteByQuery deletes documents matching the query.
+	DeleteByQuery(ctx context.Context, indexName string, body []byte) error
+	// Refresh refreshes an index.
+	Refresh(ctx context.Context, indexName string) error
 }

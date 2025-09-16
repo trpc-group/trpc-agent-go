@@ -92,7 +92,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
-	if !rsp.HasToolCalls() {
+	if invocation == nil || !rsp.IsToolCallResponse() {
 		return
 	}
 
@@ -101,22 +101,14 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if err := p.checkContextCancelled(ctx); err != nil {
-		return
-	}
-
 	// Wait for completion if required.
 	if err := p.waitForCompletion(ctx, invocation, functioncallResponseEvent); err != nil {
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return
 	}
 }
@@ -137,25 +129,17 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		errorEvent := event.NewErrorEvent(
+		if emitErr := agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		)); emitErr != nil {
+			err = emitErr
 		}
 		return nil, err
-	} else if functionResponseEvent != nil {
-		select {
-		case eventChan <- functionResponseEvent:
-		case <-ctx.Done():
-			return functionResponseEvent, ctx.Err()
-		}
 	}
+	err = agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
 
@@ -239,13 +223,31 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 			})
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
+		// If any tool prefers skipping summarization, propagate this hint even
+		// when we only forwarded inner events and didn't construct child events.
+		for _, tc := range toolCalls {
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if mergedEvent.Actions == nil {
+						mergedEvent.Actions = &event.EventActions{}
+					}
+					mergedEvent.Actions.SkipSummarization = true
+					break
+				}
+			}
+		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
+
+	// If the tool indicates skipping outer summarization, mark the invocation to end
+	// after this tool response so the flow does not perform an extra LLM call.
+	if mergedEvent.Actions != nil && mergedEvent.Actions.SkipSummarization {
+		invocation.EndInvocation = true
+	}
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -322,6 +324,17 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			toolCallResponseEvent := newToolCallResponseEvent(invocation, llmResponse,
 				[]model.Choice{*choice})
 
+			// If the tool indicates we should skip outer summarization, mark it on the event
+			// so the flow/runner can respect it. This mirrors the sequential path handling.
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if toolCallResponseEvent.Actions == nil {
+						toolCallResponseEvent.Actions = &event.EventActions{}
+					}
+					toolCallResponseEvent.Actions.SkipSummarization = true
+				}
+			}
+
 			tl, ok := tools[tc.Function.Name]
 			var declaration *tool.Declaration
 			if !ok {
@@ -355,7 +368,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	}()
 
 	// Collect results and maintain original order.
-	toolCallResponsesEvents := p.collectParallelToolResults(ctx, resultChan, done, len(toolCalls))
+	toolCallResponsesEvents := p.collectParallelToolResults(ctx, resultChan, len(toolCalls))
 
 	var mergedEvent *event.Event
 	if len(toolCallResponsesEvents) == 0 {
@@ -373,13 +386,25 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			})
 		}
 		mergedEvent = newToolCallResponseEvent(invocation, llmResponse, minimalChoices)
+		// If any tool prefers skipping summarization, propagate this hint even
+		// when we only forwarded inner events and didn't construct child events.
+		for _, tc := range toolCalls {
+			if tl, ok := tools[tc.Function.Name]; ok {
+				if skipper, ok2 := tl.(summarizationSkipper); ok2 && skipper.SkipSummarization() {
+					if mergedEvent.Actions == nil {
+						mergedEvent.Actions = &event.EventActions{}
+					}
+					mergedEvent.Actions.SkipSummarization = true
+					break
+				}
+			}
+		}
 	} else {
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallResponsesEvents)
 	}
 
 	// Signal that this event needs to be completed before proceeding.
 	mergedEvent.RequiresCompletion = true
-	mergedEvent.CompletionID = uuid.New().String()
 	if len(toolCallResponsesEvents) > 1 {
 		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
@@ -460,13 +485,11 @@ func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, i
 		return nil
 	}
 
+	completionID := agent.AppendEventNoticeKeyPrefix + lastEvent.ID
 	select {
-	case completedID := <-invocation.EventCompletionCh:
-		if completedID == lastEvent.CompletionID {
-			log.Debugf("Tool response event %s completed, proceeding with next LLM call", completedID)
-		}
+	case <-invocation.AddNoticeChannel(ctx, completionID):
 	case <-time.After(eventCompletionTimeout):
-		log.Warnf("Timeout waiting for completion of event %s", lastEvent.CompletionID)
+		log.Warnf("Timeout waiting for completion of event %s", lastEvent.ID)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -486,15 +509,14 @@ func (p *FunctionCallResponseProcessor) createErrorChoice(index int, toolID stri
 	}
 }
 
-// collectParallelToolResults collects results from the result channel and filters out nil events.
+// collectParallelToolResults drains resultChan and preserves order by index.
+// It returns only non-nil events.
 func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
-	done <-chan struct{},
 	toolCallsCount int,
 ) []*event.Event {
 	results := make([]*event.Event, toolCallsCount)
-
 	for {
 		select {
 		case result, ok := <-resultChan:
@@ -502,18 +524,14 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				// Channel closed, all results received.
 				return p.filterNilEvents(results)
 			}
-			// Add bounds checking to prevent index out of range
 			if result.index >= 0 && result.index < len(results) {
 				results[result.index] = result.event
 			} else {
 				log.Errorf("Tool result index %d out of range [0, %d)", result.index, len(results))
 			}
 		case <-ctx.Done():
-			// Context cancelled, stop waiting for more results.
+			// Context cancelled, return what we have.
 			log.Warnf("Context cancelled while waiting for tool results")
-			return p.filterNilEvents(results)
-		case <-done:
-			// All goroutines completed.
 			return p.filterNilEvents(results)
 		}
 	}
@@ -635,6 +653,29 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	}
 	defer reader.Close()
 
+	// Process stream chunks, handling:
+	// Case 1: Raw sub-agent event passthrough.
+	// Case 2: Plain text-like chunk. Emit partial tool.response event.
+	contents, err := f.consumeStream(ctx, invocation, toolCall, reader, eventChan)
+	if err != nil {
+		return nil, err
+	}
+	// If we forwarded inner events, still return the merged content as the tool
+	// result so it can be recorded in the tool response message for the next LLM
+	// turn (to satisfy providers that require tool messages). The UI example
+	// suppresses printing these aggregated strings to avoid duplication; they are
+	// primarily for model consumption.
+	return tool.Merge(contents), nil
+}
+
+// consumeStream reads all chunks from the reader and processes them.
+func (f *FunctionCallResponseProcessor) consumeStream(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	reader *tool.StreamReader,
+	eventChan chan<- *event.Event,
+) ([]any, error) {
 	var contents []any
 	for {
 		chunk, err := reader.Recv()
@@ -647,93 +688,86 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 			break
 		}
 
-		// Case 1: Raw sub-agent event passthrough
-		if ev, ok := chunk.Content.(*event.Event); ok {
-			if ev.InvocationID == "" {
-				ev.InvocationID = invocation.InvocationID
-			}
-			if ev.Branch == "" {
-				ev.Branch = invocation.Branch
-			}
-			// Suppress forwarding of the inner agent's final full content to avoid
-			// duplicate large blocks in the parent transcript. We still aggregate
-			// its text from deltas for the final tool.response content.
-			forward := true
-			if ev.Response != nil && len(ev.Response.Choices) > 0 {
-				ch := ev.Response.Choices[0]
-				if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
-					forward = false
-				}
-			}
-			if forward && eventChan != nil {
-				select {
-				case eventChan <- ev:
-				case <-ctx.Done():
-					return tool.Merge(contents), ctx.Err()
-				default:
-				}
-			}
-			if ev.Response != nil && len(ev.Response.Choices) > 0 {
-				ch := ev.Response.Choices[0]
-				if ch.Delta.Content != "" {
-					contents = append(contents, ch.Delta.Content)
-				} else if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
-					contents = append(contents, ch.Message.Content)
-				}
-			}
-			continue
-		}
-
-		// Case 2: Plain text-like chunk. Emit partial tool.response event.
-		var text string
-		switch v := chunk.Content.(type) {
-		case string:
-			text = v
-		default:
-			if bts, e := json.Marshal(v); e == nil {
-				text = string(bts)
-			} else {
-				text = fmt.Sprintf("%v", v)
-			}
-		}
-		if text != "" {
-			contents = append(contents, text)
-			if eventChan != nil {
-				resp := &model.Response{
-					ID:      uuid.New().String(),
-					Object:  model.ObjectTypeToolResponse,
-					Created: time.Now().Unix(),
-					Model:   invocation.Model.Info().Name,
-					Choices: []model.Choice{{
-						Index:   0,
-						Message: model.Message{Role: model.RoleTool, ToolID: toolCall.ID},
-						Delta:   model.Message{Content: text},
-					}},
-					Timestamp: time.Now(),
-					Done:      false,
-					IsPartial: true,
-				}
-				partial := event.New(
-					invocation.InvocationID,
-					invocation.AgentName,
-					event.WithResponse(resp),
-					event.WithBranch(invocation.Branch),
-				)
-				select {
-				case eventChan <- partial:
-				case <-ctx.Done():
-					return tool.Merge(contents), ctx.Err()
-				default:
-				}
-			}
+		if err := f.processStreamChunk(ctx, invocation, toolCall, chunk, eventChan, &contents); err != nil {
+			return contents, err
 		}
 	}
-	// If we forwarded inner events, still return the merged content as the
-	// tool result so it can be recorded in the tool response message for the
-	// next LLM turn (to satisfy providers that require tool messages). The
-	// UI example suppresses printing these aggregated strings to avoid
-	// duplication; they are primarily for model consumption.
-	return tool.Merge(contents), nil
+	return contents, nil
+}
+
+// normalizeInnerEvent ensures invocation ID and branch are set for inner events.
+func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv *agent.Invocation) {
+	if ev.InvocationID == "" {
+		ev.InvocationID = inv.InvocationID
+	}
+	if ev.Branch == "" {
+		ev.Branch = inv.Branch
+	}
+}
+
+// shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
+// content to avoid duplicate large blocks in the parent transcript. We still
+// aggregate its text from deltas for the final tool.response content.
+func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event) bool {
+	if ev.Response != nil && len(ev.Response.Choices) > 0 {
+		ch := ev.Response.Choices[0]
+		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
+			return false
+		}
+	}
+	return true
+}
+
+// appendInnerEventContent extracts textual content from an inner event and appends it.
+func (f *FunctionCallResponseProcessor) appendInnerEventContent(ev *event.Event, contents *[]any) {
+	if ev.Response != nil && len(ev.Response.Choices) > 0 {
+		ch := ev.Response.Choices[0]
+		if ch.Delta.Content != "" {
+			*contents = append(*contents, ch.Delta.Content)
+		} else if ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" {
+			*contents = append(*contents, ch.Message.Content)
+		}
+	}
+}
+
+// buildPartialToolResponseEvent constructs a partial tool.response event.
+func (f *FunctionCallResponseProcessor) buildPartialToolResponseEvent(
+	inv *agent.Invocation,
+	toolCall model.ToolCall,
+	text string,
+) *event.Event {
+	resp := &model.Response{
+		ID:      uuid.New().String(),
+		Object:  model.ObjectTypeToolResponse,
+		Created: time.Now().Unix(),
+		Model:   inv.Model.Info().Name,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.Message{Role: model.RoleTool, ToolID: toolCall.ID},
+			Delta:   model.Message{Content: text},
+		}},
+		Timestamp: time.Now(),
+		Done:      false,
+		IsPartial: true,
+	}
+	return event.New(
+		inv.InvocationID,
+		inv.AgentName,
+		event.WithResponse(resp),
+	)
+}
+
+// marshalChunkToText converts a chunk content into a string representation.
+func marshalChunkToText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	default:
+		if bts, e := json.Marshal(v); e == nil {
+			return string(bts)
+		}
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 // filterNilEvents filters out nil events from a slice of events while preserving order.
@@ -749,38 +783,24 @@ func (p *FunctionCallResponseProcessor) filterNilEvents(results []*event.Event) 
 	return filtered
 }
 
-// checkContextCancelled checks if the context is cancelled and returns error if so.
-func (p *FunctionCallResponseProcessor) checkContextCancelled(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		return nil
-	}
-}
-
 func newToolCallResponseEvent(
 	invocation *agent.Invocation,
 	functionCallResponse *model.Response,
 	functionResponses []model.Choice) *event.Event {
-	// Generate a proper unique ID.
-	eventID := uuid.New().String()
 	// Create function response event.
-	return &event.Event{
-		Response: &model.Response{
-			ID:        eventID,
+	e := event.NewResponseEvent(
+		invocation.InvocationID,
+		invocation.AgentName,
+		&model.Response{
 			Object:    model.ObjectTypeToolResponse,
 			Created:   time.Now().Unix(),
 			Model:     functionCallResponse.Model,
 			Choices:   functionResponses,
 			Timestamp: time.Now(),
 		},
-		InvocationID: invocation.InvocationID,
-		Author:       invocation.AgentName,
-		ID:           eventID,
-		Timestamp:    time.Now(),
-		Branch:       invocation.Branch, // Set branch for hierarchical event filtering.
-	}
+	)
+	agent.InjectIntoEvent(invocation, e)
+	return e
 }
 
 func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
@@ -839,7 +859,6 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			baseEvent.InvocationID,
 			baseEvent.Author,
 			event.WithResponse(resp),
-			event.WithBranch(baseEvent.Branch),
 		)
 	} else {
 		// Fallback: construct without base metadata.
@@ -905,4 +924,47 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 		return nil
 	}
 	return b
+}
+
+// processStreamChunk handles a single streamed chunk and updates contents and events.
+func (f *FunctionCallResponseProcessor) processStreamChunk(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	chunk tool.StreamChunk,
+	eventChan chan<- *event.Event,
+	contents *[]any,
+) error {
+	// Case 1: Raw sub-agent event passthrough.
+	if ev, ok := chunk.Content.(*event.Event); ok {
+		f.normalizeInnerEvent(ev, invocation)
+		// Default forwarding rule suppresses the final full assistant message to avoid
+		// duplication, but if we have not emitted any prior deltas/content from the
+		// inner stream, forward this final message so callers still see the sub-agent output.
+		shouldForward := f.shouldForwardInnerEvent(ev)
+		if !shouldForward && contents != nil && len(*contents) == 0 {
+			shouldForward = true
+		}
+		if shouldForward {
+			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
+				return err
+			}
+		}
+		f.appendInnerEventContent(ev, contents)
+		return nil
+	}
+
+	// Case 2: Plain text-like chunk. Emit partial tool.response event.
+	text := marshalChunkToText(chunk.Content)
+	if text == "" {
+		return nil
+	}
+	*contents = append(*contents, text)
+	if eventChan != nil {
+		partial := f.buildPartialToolResponseEvent(invocation, toolCall, text)
+		if err := agent.EmitEvent(ctx, invocation, eventChan, partial); err != nil {
+			return err
+		}
+	}
+	return nil
 }

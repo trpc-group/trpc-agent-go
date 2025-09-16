@@ -61,6 +61,13 @@ type DeleteMemoryResponse struct {
 	MemoryID string `json:"memory_id"` // MemoryID is the ID of the deleted memory.
 }
 
+// ClearMemoryRequest represents the input for the clear memory tool.
+// Having at least one optional field ensures the generated JSON Schema includes
+// a non-empty properties object for compatibility with strict validators.
+type ClearMemoryRequest struct {
+	Reason string `json:"reason,omitempty" jsonschema:"description=Optional reason for clearing all memories"`
+}
+
 // ClearMemoryResponse represents the response from memory_clear tool.
 type ClearMemoryResponse struct {
 	Message string `json:"message"` // Message is the success message.

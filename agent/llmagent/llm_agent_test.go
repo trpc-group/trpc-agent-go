@@ -344,7 +344,7 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 	t.Run("with knowledge", func(t *testing.T) {
 		kb := &mockKnowledgeBase{documents: map[string]*document.Document{}}
 		require.PanicsWithValue(t,
-			"Invalid LLMAgent configuration: if output_schema is set, knowledge and memory must be empty",
+			"Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty",
 			func() {
 				_ = New("test",
 					WithOutputSchema(schema),

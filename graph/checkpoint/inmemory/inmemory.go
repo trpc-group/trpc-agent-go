@@ -489,7 +489,8 @@ func (s *Saver) passesBeforeFilter(tuple *graph.CheckpointTuple, checkpoints map
 
 // passesMetadataFilter checks if checkpoint passes the metadata filter.
 func (s *Saver) passesMetadataFilter(tuple *graph.CheckpointTuple, metadata map[string]any) bool {
-	if metadata == nil {
+	// Treat nil or empty metadata map as "no metadata filter".
+	if len(metadata) == 0 {
 		return true
 	}
 

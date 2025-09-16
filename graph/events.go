@@ -1167,30 +1167,52 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	}
 
 	// Extract final response from state if available
-	var finalResponse string
-	if v, ok := options.FinalState[StateKeyLastResponse].(string); ok {
-		finalResponse = v
-	}
+	finalResponse := extractFinalResponse(options.FinalState)
 
 	e := NewGraphEvent(options.InvocationID, AuthorGraphExecutor, ObjectTypeGraphExecution)
 	e.Response.Done = true
 	// Always initialize StateDelta to a non-nil map to ensure consumers can rely on it.
-	if e.StateDelta == nil {
-		e.StateDelta = make(map[string][]byte)
-	}
+	ensureStateDelta(e)
 	if finalResponse != "" {
-		e.Response.Choices = []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: finalResponse,
-				},
-			},
-		}
+		e.Response.Choices = buildFinalChoices(finalResponse)
 	}
 
 	// Add completion metadata to StateDelta
+	addCompletionMetadata(e, options)
+	// Also include a serialized snapshot of the final state itself so downstream
+	// consumers (including tests) can reconstruct state without additional logic.
+	serializeFinalState(e, options.FinalState)
+	return e
+}
+
+// ensureStateDelta initializes StateDelta if nil.
+func ensureStateDelta(e *event.Event) {
+	if e.StateDelta == nil {
+		e.StateDelta = make(map[string][]byte)
+	}
+}
+
+// extractFinalResponse fetches the last response text from state.
+func extractFinalResponse(state State) string {
+	if v, ok := state[StateKeyLastResponse].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// buildFinalChoices constructs the terminal assistant message choice.
+func buildFinalChoices(text string) []model.Choice {
+	return []model.Choice{{
+		Index: 0,
+		Message: model.Message{
+			Role:    model.RoleAssistant,
+			Content: text,
+		},
+	}}
+}
+
+// addCompletionMetadata attaches completion metadata to StateDelta.
+func addCompletionMetadata(e *event.Event, options *CompletionEventOptions) {
 	completionMetadata := CompletionMetadata{
 		TotalSteps:     options.TotalSteps,
 		TotalDuration:  options.TotalDuration,
@@ -1199,26 +1221,28 @@ func NewGraphCompletionEvent(opts ...CompletionEventOption) *event.Event {
 	if jsonData, err := json.Marshal(completionMetadata); err == nil {
 		e.StateDelta[MetadataKeyCompletion] = jsonData
 	}
-	// Also include a serialized snapshot of the final state itself so downstream
-	// consumers (including tests) can reconstruct state without additional logic.
-	if options.FinalState != nil {
-		for key, value := range options.FinalState {
-			// Skip internal/ephemeral keys that are not JSON-serializable or can race
-			// due to concurrent updates (e.g., execution context and callbacks).
-			if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
-				key == MetadataKeyState || key == MetadataKeyCompletion ||
-				key == StateKeyExecContext || key == StateKeyParentAgent ||
-				key == StateKeyToolCallbacks || key == StateKeyModelCallbacks ||
-				key == StateKeyAgentCallbacks || key == StateKeyCurrentNodeID ||
-				key == StateKeySession {
-				continue
-			}
-			if jsonData, err := json.Marshal(value); err == nil {
-				e.StateDelta[key] = jsonData
-			}
+}
+
+// serializeFinalState writes serializable final state keys into StateDelta.
+func serializeFinalState(e *event.Event, state State) {
+	if state == nil {
+		return
+	}
+	for key, value := range state {
+		// Skip internal/ephemeral keys that are not JSON-serializable or can race
+		// due to concurrent updates (e.g., execution context and callbacks).
+		if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
+			key == MetadataKeyState || key == MetadataKeyCompletion ||
+			key == StateKeyExecContext || key == StateKeyParentAgent ||
+			key == StateKeyToolCallbacks || key == StateKeyModelCallbacks ||
+			key == StateKeyAgentCallbacks || key == StateKeyCurrentNodeID ||
+			key == StateKeySession {
+			continue
+		}
+		if jsonData, err := json.Marshal(value); err == nil {
+			e.StateDelta[key] = jsonData
 		}
 	}
-	return e
 }
 
 // extractStateKeys extracts all keys from a state map.

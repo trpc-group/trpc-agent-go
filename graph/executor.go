@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1484,7 +1485,18 @@ func (e *Executor) emitNodeStartEvent(
 // executeNodeFunction executes the actual node function.
 func (e *Executor) executeNodeFunction(
 	ctx context.Context, execCtx *ExecutionContext, t *Task,
-) (any, error) {
+) (res any, err error) {
+	// Recover from panics in user-provided node functions to prevent
+	// the whole service from crashing. Convert to error so the normal
+	// error handling path (callbacks, events, checkpointing) can run.
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.Errorf("panic in node %s: %v\n%s", t.NodeID, r, string(stack))
+			err = fmt.Errorf("node %s panic: %v", t.NodeID, r)
+			res = nil
+		}
+	}()
 	nodeID := t.NodeID
 	node, exists := e.graph.Node(nodeID)
 	if !exists {
@@ -1619,15 +1631,23 @@ func (e *Executor) enqueueCommands(execCtx *ExecutionContext, t *Task, cmds []*C
 			maps.Copy(mergedState, c.Update)
 		}
 
-		// Create task with merged state instead of just overlay
+		// Resolve writers/triggers from the target node rather than the source task.
+		var targetWriters []channelWriteEntry
+		var targetTriggers []string
+		if node, exists := e.graph.Node(target); exists && node != nil {
+			targetWriters = node.writers
+			targetTriggers = node.triggers
+		}
+
+		// Create task with merged state and target node channel config.
 		newTask := &Task{
 			NodeID:   target,
-			Input:    mergedState, // Use merged state instead of nil.
-			Writes:   t.Writes,    // Copy writes from source task.
-			Triggers: t.Triggers,  // Copy triggers from source task.
+			Input:    mergedState,
+			Writes:   targetWriters,
+			Triggers: targetTriggers,
 			TaskID:   fmt.Sprintf("%s-%d", target, nextStep),
 			TaskPath: append([]string{}, t.TaskPath...),
-			Overlay:  nil, // No overlay needed since we have merged state.
+			Overlay:  nil,
 		}
 
 		newTasks = append(newTasks, newTask)
