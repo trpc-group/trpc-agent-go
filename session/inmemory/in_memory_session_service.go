@@ -1,9 +1,12 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
+
 // Package inmemory provides in-memory session service implementation.
 package inmemory
 
@@ -48,7 +51,7 @@ func isExpired(expiredAt time.Time) bool {
 // calculateExpiredAt calculates expiration time based on TTL.
 func calculateExpiredAt(ttl time.Duration) time.Time {
 	if ttl <= 0 {
-		return time.Time{} // Zero time means no expiration.
+		return time.Time{} // Zero time means no expiration
 	}
 	return time.Now().Add(ttl)
 }
@@ -106,7 +109,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		option(&opts)
 	}
 
-	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled.
+	// Set default cleanup interval if any TTL is configured and auto cleanup is not disabled
 	if opts.cleanupInterval <= 0 {
 		if opts.sessionTTL > 0 || opts.appStateTTL > 0 || opts.userStateTTL > 0 {
 			opts.cleanupInterval = defaultCleanupIntervalSecond * time.Second
@@ -119,7 +122,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		cleanupDone: make(chan struct{}),
 	}
 
-	// Start automatic cleanup if cleanup interval is configured and auto cleanup is not disabled.
+	// Start automatic cleanup if cleanup interval is configured and auto cleanup is not disabled
 	if opts.cleanupInterval > 0 {
 		s.startCleanupRoutine()
 	}
@@ -167,23 +170,23 @@ func (s *SessionService) CreateSession(
 
 	app := s.getOrCreateAppSessions(key.AppName)
 
-	// Generate session ID if not provided.
+	// Generate session ID if not provided
 	if key.SessionID == "" {
 		key.SessionID = uuid.New().String()
 	}
 
-	// Create the session with new State.
+	// Create the session with new State
 	sess := &session.Session{
 		ID:        key.SessionID,
 		AppName:   key.AppName,
 		UserID:    key.UserID,
-		State:     make(session.StateMap), // Initialize with provided state.
+		State:     make(session.StateMap), // Initialize with provided state
 		Events:    []event.Event{},
 		UpdatedAt: time.Now(),
 		CreatedAt: time.Now(),
 	}
 
-	// Set initial state if provided.
+	// Set initial state if provided
 	for k, v := range state {
 		sess.State[k] = v
 	}
@@ -202,13 +205,13 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// Store the session with TTL.
+	// Store the session with TTL
 	app.sessions[key.UserID][key.SessionID] = &sessionWithTTL{
 		session:   sess,
 		expiredAt: calculateExpiredAt(s.opts.sessionTTL),
 	}
 
-	// Create a copy and merge state for return.
+	// Create a copy and merge state for return
 	copiedSess := copySession(sess)
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[key.UserID])
@@ -245,20 +248,20 @@ func (s *SessionService) GetSession(
 		return nil, nil
 	}
 
-	// Check if session is expired.
+	// Check if session is expired
 	sess := getValidSession(sessWithTTL)
 	if sess == nil {
 		return nil, nil
 	}
 
-	// Refresh TTL on access.
+	// Refresh TTL on access
 	sessWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 
 	copiedSess := copySession(sess)
 
-	// Apply filtering options if provided.
+	// apply filtering options if provided
 	isession.ApplyEventFiltering(copiedSess, opts...)
-	// Filter events to ensure they start with RoleUser.
+	// filter events to ensure they start with RoleUser
 	isession.EnsureEventStartWithUser(copiedSess)
 
 	appState := getValidState(app.appState)
@@ -295,14 +298,14 @@ func (s *SessionService) ListSessions(
 
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
-		// Check if session is expired.
+		// Check if session is expired
 		s := getValidSession(sWithTTL)
 		if s == nil {
-			continue // Skip expired sessions.
+			continue // Skip expired sessions
 		}
 		copiedSess := copySession(s)
 		isession.ApplyEventFiltering(copiedSess, opts...)
-		// Filter events to ensure they start with RoleUser.
+		// filter events to ensure they start with RoleUser
 		isession.EnsureEventStartWithUser(copiedSess)
 
 		appState := getValidState(app.appState)
@@ -343,10 +346,10 @@ func (s *SessionService) DeleteSession(
 		return nil
 	}
 
-	// Delete the session.
+	// Delete the session
 	delete(app.sessions[key.UserID], key.SessionID)
 
-	// Clean up empty user sessions map.
+	// Clean up empty user sessions map
 	if len(app.sessions[key.UserID]) == 0 {
 		delete(app.sessions, key.UserID)
 	}
@@ -360,7 +363,7 @@ func (s *SessionService) UpdateAppState(ctx context.Context, appName string, sta
 		return session.ErrAppNameRequired
 	}
 
-	// if app not found, create a new one.
+	// if app not found, create a new one
 	app := s.getOrCreateAppSessions(appName)
 
 	app.mu.Lock()
@@ -372,7 +375,7 @@ func (s *SessionService) UpdateAppState(ctx context.Context, appName string, sta
 		k = strings.TrimPrefix(k, session.StateAppPrefix)
 		app.appState.data[k] = copiedValue
 	}
-	// Update expiration time.
+	// Update expiration time
 	app.appState.expiredAt = calculateExpiredAt(s.opts.appStateTTL)
 	return nil
 }
@@ -383,7 +386,7 @@ func (s *SessionService) DeleteAppState(ctx context.Context, appName string, key
 		return session.ErrAppNameRequired
 	}
 
-	// if app not found, return nil.
+	// if app not found, return nil
 	app, ok := s.getAppSessions(appName)
 	if !ok {
 		return nil
@@ -403,7 +406,7 @@ func (s *SessionService) ListAppStates(ctx context.Context, appName string) (ses
 		return nil, session.ErrAppNameRequired
 	}
 
-	// if app not found, return empty state map.
+	// if app not found, return empty state map
 	app, ok := s.getAppSessions(appName)
 	if !ok {
 		return make(session.StateMap), nil
@@ -412,7 +415,7 @@ func (s *SessionService) ListAppStates(ctx context.Context, appName string) (ses
 	app.mu.RLock()
 	defer app.mu.RUnlock()
 
-	// Get valid app state (check expiration).
+	// Get valid app state (check expiration)
 	appState := getValidState(app.appState)
 	if appState == nil {
 		return make(session.StateMap), nil
@@ -433,7 +436,7 @@ func (s *SessionService) UpdateUserState(ctx context.Context, userKey session.Us
 		return err
 	}
 
-	// if app not found, create a new one.
+	// if app not found, create a new one
 	app := s.getOrCreateAppSessions(userKey.AppName)
 
 	app.mu.Lock()
@@ -461,7 +464,7 @@ func (s *SessionService) UpdateUserState(ctx context.Context, userKey session.Us
 		k = strings.TrimPrefix(k, session.StateUserPrefix)
 		app.userState[userKey.UserID].data[k] = copiedValue
 	}
-	// Update expiration time.
+	// Update expiration time
 	app.userState[userKey.UserID].expiredAt = calculateExpiredAt(s.opts.userStateTTL)
 	return nil
 }
@@ -472,7 +475,7 @@ func (s *SessionService) DeleteUserState(ctx context.Context, userKey session.Us
 		return err
 	}
 
-	// if app not found, return nil.
+	// if app not found, return nil
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return nil
@@ -512,7 +515,7 @@ func (s *SessionService) ListUserStates(ctx context.Context, userKey session.Use
 		return make(session.StateMap), nil
 	}
 
-	// Get valid user state (check expiration).
+	// Get valid user state (check expiration)
 	userState := getValidState(userStateWithTTL)
 	if userState == nil {
 		return make(session.StateMap), nil
@@ -552,7 +555,7 @@ func (s *SessionService) AppendEvent(
 	app.mu.Lock()
 	defer app.mu.Unlock()
 
-	// Check if user exists first to prevent panic.
+	// Check if user exists first to prevent panic
 	userSessions, ok := app.sessions[key.UserID]
 	if !ok {
 		return fmt.Errorf("user not found: %s", key.UserID)
@@ -563,16 +566,16 @@ func (s *SessionService) AppendEvent(
 		return fmt.Errorf("session not found: %s", key.SessionID)
 	}
 
-	// Check if session is expired.
+	// Check if session is expired
 	storedSession := getValidSession(storedSessionWithTTL)
 	if storedSession == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
 
-	// Update stored session with the given event.
+	// update stored session with the given event
 	s.updateStoredSession(storedSession, event)
 
-	// Update the session in the wrapper and refresh TTL.
+	// Update the session in the wrapper and refresh TTL
 	storedSessionWithTTL.session = storedSession
 	storedSessionWithTTL.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
 	return nil
@@ -585,27 +588,27 @@ func (s *SessionService) cleanupExpired() {
 
 	for _, app := range s.apps {
 		app.mu.Lock()
-		// Clean expired sessions.
+		// Clean expired sessions
 		for userID, userSessions := range app.sessions {
 			for sessionID, sessionWithTTL := range userSessions {
 				if isExpired(sessionWithTTL.expiredAt) {
 					delete(userSessions, sessionID)
 				}
 			}
-			// Remove empty user session maps.
+			// Remove empty user session maps
 			if len(userSessions) == 0 {
 				delete(app.sessions, userID)
 			}
 		}
 
-		// Clean expired user states.
+		// Clean expired user states
 		for userID, userState := range app.userState {
 			if isExpired(userState.expiredAt) {
 				delete(app.userState, userID)
 			}
 		}
 
-		// Clean expired app state.
+		// Clean expired app state
 		if isExpired(app.appState.expiredAt) {
 			app.appState.data = make(session.StateMap)
 			app.appState.expiredAt = time.Time{}
@@ -617,7 +620,7 @@ func (s *SessionService) cleanupExpired() {
 // startCleanupRoutine starts the background cleanup routine.
 func (s *SessionService) startCleanupRoutine() {
 	s.cleanupTicker = time.NewTicker(s.opts.cleanupInterval)
-	ticker := s.cleanupTicker // Capture ticker to avoid race condition.
+	ticker := s.cleanupTicker // Capture ticker to avoid race condition
 	go func() {
 		defer ticker.Stop()
 		for {
