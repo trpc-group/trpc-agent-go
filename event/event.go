@@ -43,7 +43,7 @@ type Event struct {
 	*model.Response
 
 	// RequestID is the request ID of the event.
-	RequestID string `json:"runId,omitempty"`
+	RequestID string `json:"requestID,omitempty"`
 
 	// InvocationID is the invocation ID of the event.
 	InvocationID string `json:"invocationId"`
