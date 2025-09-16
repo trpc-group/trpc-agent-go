@@ -1,8 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector
 
-go 1.24.1
-
-toolchain go1.24.4
+go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
@@ -25,4 +23,5 @@ require (
 	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )

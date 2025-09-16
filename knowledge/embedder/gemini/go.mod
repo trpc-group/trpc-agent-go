@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini
 
-go 1.23.0
+go 1.21
 
 require (
 	google.golang.org/genai v1.0.0
@@ -26,6 +26,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../..
