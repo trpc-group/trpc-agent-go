@@ -876,30 +876,31 @@ func (dk *BuiltinKnowledge) shouldProcessDocument(doc *document.Document) (bool,
 	}
 	// check if document has been processing in current sync
 	if _, exists := dk.processingDocIDs.Load(docID); exists {
-		return false, nil // already processing, skip
+		return false, nil // processing, skip
 	}
-	// Mark as processing regardless of the decision to avoid duplicate processing
-	dk.processingDocIDs.Store(docID, struct{}{})
 
 	// get existing documents by URI
 	existingDocs, exists := dk.cacheURIInfo[uri]
 	if !exists {
-		// new file, process it
+		// new file, process it, mark as processing
 		log.Debugf("New file detected: %s:%s", sourceName, uri)
+		dk.processingDocIDs.Store(docID, struct{}{})
 		return true, nil
 	}
 
 	// check if document ID exists in existing documents
 	for _, existingDoc := range existingDocs {
 		if existingDoc.DocumentID == docID {
-			// document ID exists and unchanged, skip processing
+			// document ID exists and unchanged, skip processing, mark as processed
 			log.Debugf("Document unchanged: %s", docID)
+			dk.processedDocIDs.Store(docID, struct{}{})
 			return false, nil
 		}
 	}
 
-	// document ID does not exist in existing documents, file has changed
+	// document ID does not exist in existing documents, file has changed, mark as processing
 	log.Debugf("File changed detected: %s, will update documents", uri)
+	dk.processingDocIDs.Store(docID, struct{}{})
 	return true, nil
 }
 
@@ -1114,7 +1115,6 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 
 // convertToInt converts interface{} to int, handling JSON unmarshaling type conversion
 func convertToInt(value interface{}) (int, bool) {
-	log.Infof("convertToInt value: %v, type: %T", value, value)
 	switch v := value.(type) {
 	case int:
 		return v, true
