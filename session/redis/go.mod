@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/session/redis
 
-go 1.24.1
+go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
@@ -25,4 +25,5 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )

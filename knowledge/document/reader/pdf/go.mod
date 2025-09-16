@@ -1,8 +1,7 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf
 
-go 1.24.1
+go 1.21
 
-toolchain go1.24.7
 
 require (
 	github.com/go-pdf/fpdf v0.9.0
@@ -15,6 +14,7 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../..
