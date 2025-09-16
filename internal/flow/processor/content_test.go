@@ -10,15 +10,12 @@
 package processor
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
@@ -321,63 +318,4 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 	msgs := p.getContents("main/feature", events, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, "kept", msgs[0].Content)
-}
-
-func TestContentRequestProcessor_BuildWithOptionalSummary(t *testing.T) {
-	p := NewContentRequestProcessor()
-
-	// Prepare session messages (3 items).
-	msgs := []model.Message{
-		{Role: model.RoleUser, Content: "m1"},
-		{Role: model.RoleAssistant, Content: "m2"},
-		{Role: model.RoleUser, Content: "m3"},
-	}
-
-	// With empty summary, messages should pass through unchanged.
-	outNoSummary := p.buildWithOptionalSummary("", msgs)
-	assert.Equal(t, msgs, outNoSummary)
-
-	// With summary, a system message is prepended and all messages are kept.
-	outWithSummary := p.buildWithOptionalSummary("hello-summary", msgs)
-	if assert.GreaterOrEqual(t, len(outWithSummary), 1) {
-		assert.Equal(t, model.RoleSystem, outWithSummary[0].Role)
-		assert.Contains(t, outWithSummary[0].Content, "Previous conversation summary:")
-		assert.Contains(t, outWithSummary[0].Content, "hello-summary")
-	}
-	// Expect 1 summary + 3 messages.
-	assert.Equal(t, 4, len(outWithSummary))
-	assert.Equal(t, "m1", outWithSummary[1].Content)
-	assert.Equal(t, "m2", outWithSummary[2].Content)
-	assert.Equal(t, "m3", outWithSummary[3].Content)
-}
-
-func TestContentRequestProcessor_ProcessRequest_WithSummaryInjection(t *testing.T) {
-	p := NewContentRequestProcessor(
-		WithAddContextPrefix(false),
-	)
-
-	// Build a session with summary in state and two events.
-	sess := &session.Session{
-		State: session.StateMap{
-			"summary_text": []byte("short summary"),
-		},
-		Events: []event.Event{
-			{Author: "user", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "u1"}}}}},
-			{Author: "assistant", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "a1"}}}}},
-		},
-	}
-
-	inv := &agent.Invocation{Session: sess, AgentName: "agent-a"}
-	req := &model.Request{}
-	ch := make(chan *event.Event, 1)
-
-	p.ProcessRequest(context.Background(), inv, req, ch)
-
-	// Expect first message is system summary, followed by all session messages in order (no prefix).
-	if assert.GreaterOrEqual(t, len(req.Messages), 3) {
-		assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-		assert.Contains(t, req.Messages[0].Content, "Previous conversation summary:")
-		assert.Equal(t, "u1", req.Messages[1].Content)
-		assert.Equal(t, "a1", req.Messages[2].Content)
-	}
 }
