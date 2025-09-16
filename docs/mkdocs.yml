@@ -2,7 +2,7 @@ site_name: tRPC-Agent-Go
 site_url: https://trpc-group.github.io/trpc-agent-go/
 repo_url: https://github.com/trpc-group/trpc-agent-go
 repo_name: trpc-group/trpc-agent-go
-edit_uri: edit/main/docs/
+edit_uri: edit/main/docs/mkdocs/
 docs_dir: mkdocs/
 
 nav:
@@ -95,6 +95,7 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - mdx_truly_sane_lists
 
 extra_css:
   - assets/stylesheets/extra.css
