@@ -99,9 +99,10 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
 
 	// Option one: set invocation.EndInvocation is true, and stop next step.
-	// Option two: emit error event, maybe the LLM can select other tool to correction and also need to wait for notice compoletion.
+	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice compoletion.
 	// maybe the Option two is better.
 	if err != nil || functioncallResponseEvent == nil {
+		invocation.EndInvocation = true
 		return
 	}
 
@@ -133,16 +134,16 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		functionResponseEvent = event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		functionResponseEvent.RequiresCompletion = true
+		))
+		return nil, err
 	}
 	err = agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
-	return functionResponseEvent, nil
+	return functionResponseEvent, err
 }
 
 // handleFunctionCalls executes function calls and creates function response events.
