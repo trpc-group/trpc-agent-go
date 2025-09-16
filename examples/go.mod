@@ -21,8 +21,8 @@ require (
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
 	trpc.group/trpc-go/trpc-agent-go v0.1.2
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0-00010101000000-000000000000
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
