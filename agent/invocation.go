@@ -155,6 +155,13 @@ func WithMessages(messages []model.Message) RunOption {
 	}
 }
 
+// WithRequestID sets the request id for the RunOptions.
+func WithRequestID(requestID string) RunOption {
+	return func(opts *RunOptions) {
+		opts.RequestID = requestID
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
