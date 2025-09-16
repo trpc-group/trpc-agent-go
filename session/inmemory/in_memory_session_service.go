@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -660,7 +661,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-	if s.opts.summarizerManager == nil {
+	if s.opts.summarizer == nil {
 		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
 		return nil
 	}
@@ -717,17 +718,25 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 			continue
 		}
 
-		tmp := s.buildBranchSession(storedSession, b, evs)
-		if err := s.opts.summarizerManager.Summarize(ctx, tmp, true); err != nil {
-			log.Warnf("summarize branch %s failed: %v", b, err)
-			continue
+		// Prepend previous summary as a synthetic system event to provide context.
+		input := delta
+		if prev != nil && prev.Summary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prev.Summary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
 		}
-		sum, err := s.opts.summarizerManager.GetSummary(tmp)
-		if err != nil || sum == nil || sum.Summary == "" {
+
+		tmp := s.buildBranchSession(storedSession, b, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp, 0)
+		if err != nil || text == "" {
 			continue
 		}
 
-		if err := s.writeSummaryUnderLock(app, key, b, sum.Summary); err != nil {
+		if err := s.writeSummaryUnderLock(app, key, b, text); err != nil {
 			log.Warnf("write summary for branch %s failed: %v", b, err)
 		}
 	}
@@ -816,12 +825,6 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 			if s != nil && s.Summary != "" {
 				return s.Summary, true
 			}
-		}
-	}
-	// Fallback to manager cache if available.
-	if s.opts.summarizerManager != nil {
-		if summary, err := s.opts.summarizerManager.GetSummary(sess); err == nil && summary != nil && summary.Summary != "" {
-			return summary.Summary, true
 		}
 	}
 	return "", false

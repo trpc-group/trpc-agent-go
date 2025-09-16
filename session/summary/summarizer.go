@@ -31,10 +31,6 @@ const (
 	metadataKeyModelAvailable = "model_available"
 	// metadataKeyCheckFunctions is the key for check functions count in metadata.
 	metadataKeyCheckFunctions = "check_functions"
-	// metadataKeyCachedSummaries is the key for cached summaries count in metadata.
-	metadataKeyCachedSummaries = "cached_summaries"
-	// metadataKeySummarizerConfigured is the key for summarizer configuration in metadata.
-	metadataKeySummarizerConfigured = "summarizer_configured"
 )
 
 const (
@@ -134,8 +130,6 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if s.maxSummaryLength > 0 && len(summaryText) > s.maxSummaryLength {
 		summaryText = summaryText[:s.maxSummaryLength] + "..."
 	}
-
-	// Note: We do NOT modify sess.Events here - the summary is returned for external use.
 	return summaryText, nil
 }
 
@@ -161,17 +155,19 @@ func (s *sessionSummarizer) extractConversationText(events []event.Event) string
 	var parts []string
 
 	for _, e := range events {
-		if e.Response != nil && len(e.Response.Choices) > 0 {
-			content := e.Response.Choices[0].Message.Content
-			if content != "" {
-				// Format as "Author: content".
-				author := e.Author
-				if author == "" {
-					author = authorUnknown
-				}
-				parts = append(parts, fmt.Sprintf("%s: %s", author, strings.TrimSpace(content)))
-			}
+		if e.Response == nil || len(e.Response.Choices) == 0 {
+			continue
 		}
+		content := e.Response.Choices[0].Message.Content
+		if content == "" {
+			continue
+		}
+		// Format as "Author: content".
+		author := e.Author
+		if author == "" {
+			author = authorUnknown
+		}
+		parts = append(parts, fmt.Sprintf("%s: %s", author, strings.TrimSpace(content)))
 	}
 
 	return strings.Join(parts, "\n")

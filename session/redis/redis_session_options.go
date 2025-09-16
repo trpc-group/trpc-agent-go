@@ -26,8 +26,8 @@ type ServiceOpts struct {
 	userStateTTL       time.Duration // TTL for user state
 	enableAsyncPersist bool
 	asyncPersisterNum  int // number of worker goroutines for async persistence
-	// summarizerManager integrates LLM summarization.
-	summarizerManager summary.SummarizerManager
+	// summarizer integrates LLM summarization.
+	summarizer summary.SessionSummarizer
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -106,9 +106,9 @@ func WithAsyncPersisterNum(num int) ServiceOpt {
 	}
 }
 
-// WithSummarizerManager injects a summarizer manager for LLM-based summaries.
-func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+// WithSummarizer injects a summarizer for LLM-based summaries.
+func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		opts.summarizerManager = m
+		opts.summarizer = s
 	}
 }

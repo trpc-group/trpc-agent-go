@@ -222,6 +222,16 @@ func (r *runner) Run(
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
 
+		// Final attempt to summarize after completion.
+		// Run asynchronously with a short timeout to avoid blocking the main
+		// response flow. The service will perform per-branch delta summarization
+		// using the previous summary (if any) plus the new delta events.
+		go func(sessCopy *session.Session) {
+			if err := r.sessionService.CreateSessionSummary(context.Background(), sessCopy, true); err != nil {
+				log.Debugf("Auto summarize on completion skipped or failed: %v.", err)
+			}
+		}(sess)
+
 		// Send the runner completion event to output channel.
 		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
 	}()

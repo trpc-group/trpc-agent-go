@@ -31,24 +31,6 @@ type SessionSummarizer interface {
 	Metadata() map[string]any
 }
 
-// SummarizerManager manages session summarization with caching.
-type SummarizerManager interface {
-	// SetSummarizer sets the summarizer to use.
-	SetSummarizer(summarizer SessionSummarizer, force bool)
-
-	// ShouldSummarize checks if a session should be summarized.
-	ShouldSummarize(sess *session.Session) bool
-
-	// Summarize creates a session summary and compresses if needed.
-	Summarize(ctx context.Context, sess *session.Session, force bool) error
-
-	// GetSummary retrieves a summary for a session.
-	GetSummary(sess *session.Session) (*SessionSummary, error)
-
-	// Metadata returns metadata about the summarizer configuration.
-	Metadata() map[string]any
-}
-
 // SessionSummary represents a summary of a session's conversation history.
 type SessionSummary struct {
 	// ID is the ID of the session.

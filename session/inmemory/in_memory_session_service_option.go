@@ -28,8 +28,8 @@ type serviceOpts struct {
 	// cleanupInterval is the interval for automatic cleanup of expired data.
 	// If set to 0, automatic cleanup is disabled.
 	cleanupInterval time.Duration
-	// summarizerManager integrates LLM summarization.
-	summarizerManager summary.SummarizerManager
+	// summarizer integrates LLM summarization.
+	summarizer summary.SessionSummarizer
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -75,9 +75,9 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	}
 }
 
-// WithSummarizerManager injects a summarizer manager for LLM-based summaries.
-func WithSummarizerManager(m summary.SummarizerManager) ServiceOpt {
+// WithSummarizer injects a summarizer for LLM-based summaries.
+func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *serviceOpts) {
-		opts.summarizerManager = m
+		opts.summarizer = s
 	}
 }

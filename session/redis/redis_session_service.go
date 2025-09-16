@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -890,7 +891,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-	if s.opts.summarizerManager == nil {
+	if s.opts.summarizer == nil {
 		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
 		return nil
 	}
@@ -917,24 +918,34 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	updatedAny := false
 	for b, evs := range branches {
 		var since time.Time
+		var prevSummary string
 		if prev := sessState.Summaries[b]; prev != nil {
 			since = prev.UpdatedAt
+			prevSummary = prev.Summary
 		}
 		delta := s.computeDeltaSince(evs, since)
 		if !force && len(delta) == 0 {
 			continue
 		}
 
-		tmp := s.buildBranchSession(sess, b, evs)
-		if err := s.opts.summarizerManager.Summarize(ctx, tmp, true); err != nil {
-			log.Warnf("summarize branch %s failed: %v", b, err)
+		// Prepend previous summary as a synthetic system event to provide context.
+		input := delta
+		if prevSummary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
+		}
+
+		tmp := s.buildBranchSession(sess, b, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp, 0)
+		if err != nil || text == "" {
 			continue
 		}
-		out, err := s.opts.summarizerManager.GetSummary(tmp)
-		if err != nil || out == nil || out.Summary == "" {
-			continue
-		}
-		sessState.Summaries[b] = &session.Summary{Summary: out.Summary, UpdatedAt: time.Now().UTC()}
+		sessState.Summaries[b] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
 		updatedAny = true
 	}
 

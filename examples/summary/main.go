@@ -7,7 +7,7 @@
 //
 //
 
-// Package main demonstrates session summarization with LLM using SummarizerManager.
+// Package main demonstrates session summarization with LLM.
 package main
 
 import (
@@ -74,7 +74,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	// Model used for both chat and summarization.
 	llm := openai.New(c.modelName)
 
-	// Summarizer and manager.
+	// Summarizer.
 	sumOpts := []summary.Option{summary.WithWindowSize(*flagWindow)}
 	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
 	sumOpts = append(sumOpts, summary.WithChecksAny(
@@ -83,11 +83,9 @@ func (c *summaryChat) setup(_ context.Context) error {
 		summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second)),
 	)
 	sum := summary.NewSummarizer(llm, sumOpts...)
-	mgr := summary.NewManager(sum)
-
-	// In-memory session service with summarizer manager.
+	// In-memory session service with summarizer.
 	sessService := inmemory.NewSessionService(
-		inmemory.WithSummarizerManager(mgr),
+		inmemory.WithSummarizer(sum),
 	)
 	c.sessionService = sessService
 
