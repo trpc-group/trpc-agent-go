@@ -16,7 +16,7 @@ This example demonstrates a comprehensive knowledge base management system that 
 ## Data Directory Structure
 
 ```
-examples/knowledgemanage/
+examples/knowledge/management/
 ├── data/
 │   ├── golang.md      # Default Golang documentation
 │   ├── llm.md         # Default LLM documentation  
@@ -161,14 +161,14 @@ Total documents in vector store: 30
 Source Name: GolangDocSource
   Total Documents: 5
   URIs: 1 unique URI(s)
-    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledgemanage/data/golang.md (5 documents)
+    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledge/management/data/golang.md (5 documents)
   Source Metadata:
     tag: golang
 
 Source Name: LLMDocSource
   Total Documents: 25
   URIs: 1 unique URI(s)
-    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledgemanage/data/llm.md (25 documents)
+    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledge/management/data/llm.md (25 documents)
   Source Metadata:
     tag: llm
 
@@ -228,21 +228,21 @@ Total documents in vector store: 52
 Source Name: GolangDocSource
   Total Documents: 5
   URIs: 1 unique URI(s)
-    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledgemanage/data/golang.md (5 documents)
+    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledge/management/data/golang.md (5 documents)
   Source Metadata:
     tag: golang
 
 Source Name: other
   Total Documents: 22
   URIs: 1 unique URI(s)
-    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledgemanage/data/other.md (22 documents)
+    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledge/management/data/other.md (22 documents)
   Source Metadata:
     tag: cpp
 
 Source Name: LLMDocSource
   Total Documents: 25
   URIs: 1 unique URI(s)
-    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledgemanage/data/llm.md (25 documents)
+    URI: file:///data/home/xxx/workspace/trpc-agent-go/examples/knowledge/management/data/llm.md (25 documents)
   Source Metadata:
     tag: llm
 ──────────────────────────────────────────────────

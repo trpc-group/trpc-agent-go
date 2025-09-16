@@ -58,8 +58,10 @@ type BuiltinKnowledge struct {
 	cacheSourceInfo  map[string][]BuiltinDocumentInfo // cached document info grouped by source name, generated from vectorMetadata
 	cacheMetaInfo    map[string]BuiltinDocumentInfo   // cached vectorstore metadata
 	processedDocIDs  sync.Map                         // processed doc IDs, used to avoid duplicate processing and cleanup orphan documents
+	processingDocIDs sync.Map                         // processing doc IDs, used to avoid duplicate processing
+	processingIDMu   sync.Mutex                       // mutex for make consistent of read and write processingDocIDs
 	enableSourceSync bool                             // enable source sync, if true, will keep document in vectorstore be synced with source
-	mu               sync.RWMutex                     // mutex for protecting concurrent access to shared data structures
+	dataOperationMu  sync.RWMutex                     // mutex for make sequence of data operations
 }
 
 // BuiltinDocumentInfo stores the basic information of a document for incremental sync
@@ -133,8 +135,8 @@ func (dk *BuiltinKnowledge) ShowDocumentInfo(
 	ctx context.Context,
 	opts ...ShowDocumentInfoOption,
 ) ([]BuiltinDocumentInfo, error) {
-	dk.mu.RLock()
-	defer dk.mu.RUnlock()
+	dk.dataOperationMu.RLock()
+	defer dk.dataOperationMu.RUnlock()
 
 	if dk.vectorStore == nil {
 		return nil, fmt.Errorf("vector store not configured")
@@ -171,8 +173,8 @@ func (dk *BuiltinKnowledge) ShowDocumentInfo(
 
 // AddSource adds a source to the knowledge base.
 func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, opts ...LoadOption) error {
-	dk.mu.Lock()
-	defer dk.mu.Unlock()
+	dk.dataOperationMu.Lock()
+	defer dk.dataOperationMu.Unlock()
 
 	if src == nil {
 		return fmt.Errorf("source cannot be nil")
@@ -204,8 +206,8 @@ func (dk *BuiltinKnowledge) AddSource(ctx context.Context, src source.Source, op
 
 // ReloadSource reloads the source to the knowledge base.
 func (dk *BuiltinKnowledge) ReloadSource(ctx context.Context, src source.Source, opts ...LoadOption) error {
-	dk.mu.Lock()
-	defer dk.mu.Unlock()
+	dk.dataOperationMu.Lock()
+	defer dk.dataOperationMu.Unlock()
 
 	if src == nil {
 		return fmt.Errorf("source cannot be nil")
@@ -308,6 +310,12 @@ func (dk *BuiltinKnowledge) reloadSource(
 
 // loadSourceInternal loads sources with proper concurrency handling
 func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []source.Source, config *loadConfig) error {
+	dk.processingDocIDs = sync.Map{}
+	defer func() {
+		// reset processingDocIDs after loading sources
+		dk.processingDocIDs = sync.Map{}
+	}()
+
 	if config.srcParallelism > 1 || config.docParallelism > 1 {
 		_, err := dk.loadConcurrent(ctx, config, sources)
 		return err
@@ -318,8 +326,8 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 
 // RemoveSource removes a source from the knowledge base by name.
 func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string) error {
-	dk.mu.Lock()
-	defer dk.mu.Unlock()
+	dk.dataOperationMu.Lock()
+	defer dk.dataOperationMu.Unlock()
 
 	// Find and remove source from sources list
 	var targetSource source.Source
@@ -357,8 +365,8 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 
 // Load loads one or more source
 func (dk *BuiltinKnowledge) Load(ctx context.Context, opts ...LoadOption) error {
-	dk.mu.Lock()
-	defer dk.mu.Unlock()
+	dk.dataOperationMu.Lock()
+	defer dk.dataOperationMu.Unlock()
 
 	if dk.vectorStore == nil {
 		return fmt.Errorf("vector store not configured")
@@ -682,6 +690,9 @@ func (dk *BuiltinKnowledge) addDocumentWithSync(
 		return dk.addDocument(ctx, doc)
 	}
 	// check document metadata
+	defer func() {
+		dk.processingDocIDs.Delete(doc.ID)
+	}()
 	if err := dk.resetDocumentID(doc, src); err != nil {
 		return fmt.Errorf("failed to check document metadata: %w", err)
 	}
@@ -697,7 +708,11 @@ func (dk *BuiltinKnowledge) addDocumentWithSync(
 	}
 
 	// add document
-	return dk.addDocument(ctx, doc)
+	if err := dk.addDocument(ctx, doc); err != nil {
+		return fmt.Errorf("failed to add document: %w", err)
+	}
+	dk.processedDocIDs.Store(doc.ID, struct{}{})
+	return nil
 }
 
 // addDocument adds a document to the knowledge base (internal method).
@@ -719,7 +734,6 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 	return nil
 }
 
-// enrichDocumentMetadata adds incremental sync required metadata to the document
 func (dk *BuiltinKnowledge) resetDocumentID(doc *document.Document, src source.Source) error {
 	if doc.Metadata == nil {
 		return fmt.Errorf("document metadata is nil")
@@ -837,6 +851,9 @@ func (dk *BuiltinKnowledge) markSourceUnprocessed(sourceName string) {
 
 // shouldProcessDocument checks if the document should be processed (incremental sync logic)
 func (dk *BuiltinKnowledge) shouldProcessDocument(doc *document.Document) (bool, error) {
+	dk.processingIDMu.Lock()
+	defer dk.processingIDMu.Unlock()
+
 	docID := doc.ID
 
 	uri, ok := doc.Metadata[source.MetaURI].(string)
@@ -848,14 +865,16 @@ func (dk *BuiltinKnowledge) shouldProcessDocument(doc *document.Document) (bool,
 	if !ok {
 		return false, fmt.Errorf("document missing or invalid source name metadata")
 	}
-
 	// check if document has been processed in current sync
 	if _, exists := dk.processedDocIDs.Load(docID); exists {
 		return false, nil // already processed, skip
 	}
-
-	// Mark as processed regardless of the decision to avoid duplicate processing
-	dk.processedDocIDs.Store(docID, struct{}{})
+	// check if document has been processing in current sync
+	if _, exists := dk.processingDocIDs.Load(docID); exists {
+		return false, nil // already processing, skip
+	}
+	// Mark as processing regardless of the decision to avoid duplicate processing
+	dk.processingDocIDs.Store(docID, struct{}{})
 
 	// get existing documents by URI
 	existingDocs, exists := dk.cacheURIInfo[uri]
@@ -911,6 +930,7 @@ func (dk *BuiltinKnowledge) clearVectorStoreMetadata() {
 	dk.cacheSourceInfo = make(map[string][]BuiltinDocumentInfo)
 	dk.cacheMetaInfo = make(map[string]BuiltinDocumentInfo)
 	dk.processedDocIDs = sync.Map{}
+	dk.processingDocIDs = sync.Map{}
 	log.Infof("Cleared all incremental sync cache")
 }
 
@@ -970,8 +990,8 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 
 // Close closes the knowledge base and releases resources.
 func (dk *BuiltinKnowledge) Close() error {
-	dk.mu.Lock()
-	defer dk.mu.Unlock()
+	dk.dataOperationMu.Lock()
+	defer dk.dataOperationMu.Unlock()
 
 	// Close components if they support closing.
 	if dk.retriever != nil {

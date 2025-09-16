@@ -141,8 +141,8 @@ type showDocumentInfoConfig struct {
 // ShowDocumentInfoOption represents a functional option for configuring show document info behavior.
 type ShowDocumentInfoOption func(*showDocumentInfoConfig)
 
-// WithShowDocumentInfoIds sets the document ids to show.
-func WithShowDocumentInfoIds(ids []string) ShowDocumentInfoOption {
+// WithShowDocumentInfoIDs sets the document ids to show.
+func WithShowDocumentInfoIDs(ids []string) ShowDocumentInfoOption {
 	return func(s *showDocumentInfoConfig) {
 		s.ids = ids
 	}

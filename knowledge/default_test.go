@@ -1409,7 +1409,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				return kb
 			},
 			options: []ShowDocumentInfoOption{
-				WithShowDocumentInfoIds([]string{"doc-1"}),
+				WithShowDocumentInfoIDs([]string{"doc-1"}),
 			},
 			expectError: false,
 			validateResult: func(docs []BuiltinDocumentInfo) bool {

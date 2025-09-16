@@ -546,9 +546,6 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 // DeleteByFilter deletes documents by filter.
 func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
 	config := vectorstore.ApplyDeleteOptions(opts...)
-
-	fmt.Printf("elasticsearch delete by filter: %+v\n", config)
-
 	if err := vs.validateDeleteConfig(config); err != nil {
 		return err
 	}
