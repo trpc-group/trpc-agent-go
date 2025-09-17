@@ -39,7 +39,7 @@ How the Knowledge system integrates with Agents:
 
 ### Environment Requirements
 
-- Go 1.24.1 or higher
+- Go 1.24.1 or laster
 - Valid LLM API key (OpenAI compatible interface)
 - Vector database (optional, for production environment)
 
@@ -566,7 +566,7 @@ sources := []source.Source{
         filesource.WithMetadataValue("protocol", "trpc-go"),
         filesource.WithMetadataValue("version", "v1.0"),
     ),
-    
+
     // Directory source metadata configuration
     dirsource.New(
         []string{"./tutorials"},
@@ -575,7 +575,7 @@ sources := []source.Source{
         dirsource.WithMetadataValue("difficulty", "beginner"),
         dirsource.WithMetadataValue("topic", "programming"),
     ),
-    
+
     // URL source metadata configuration
     urlsource.New(
         []string{"https://example.com/wiki/rpc"},
@@ -593,6 +593,7 @@ sources := []source.Source{
 Different vector databases have varying levels of filter support:
 
 #### PostgreSQL + pgvector
+
 - ✅ Supports all metadata field filtering
 - ✅ Supports complex query conditions
 - ✅ Supports JSONB field indexing
@@ -606,6 +607,7 @@ vectorStore, err := vectorpgvector.New(
 ```
 
 #### TcVector
+
 - ✅ Supports predefined field filtering
 - ⚠️ Requires pre-establishing filter field indexes
 
@@ -621,6 +623,7 @@ vectorStore, err := vectortcvector.New(
 ```
 
 #### In-memory Storage
+
 - ✅ Supports all filter functionality
 - ⚠️ Only suitable for development and testing
 
@@ -710,6 +713,7 @@ for _, docInfo := range docInfos {
 ```
 
 **Status monitoring output example**:
+
 ```
 Document ID: a1b2c3d4e5f6...
 Source: Technical Documentation
@@ -717,7 +721,7 @@ URI: /docs/api/authentication.md
 Chunk Index: 0
 
 Document ID: f6e5d4c3b2a1...
-Source: Technical Documentation  
+Source: Technical Documentation
 URI: /docs/api/authentication.md
 Chunk Index: 1
 ```
@@ -926,7 +930,7 @@ func main() {
 
     // Get metadata information from all sources (for intelligent filters).
     sourcesMetadata := source.GetAllMetadata(sources)
-    
+
     // 7. Create Agent and integrate Knowledge.
     llmAgent := llmagent.New(
         "knowledge-assistant",
@@ -958,7 +962,7 @@ func main() {
 
     // 11. Demonstrate knowledge base management functionality - view document metadata
     log.Println("📊 Displaying current knowledge base status...")
-    
+
     // Query metadata information for all documents, also supports querying specific source or metadata data
     docInfos, err := kb.ShowDocumentInfo(ctx)
     if err != nil {
@@ -967,7 +971,7 @@ func main() {
         log.Printf("Knowledge base contains a total of %d document chunks", len(docInfos))
     }
 
-    
+
     // 12. Demonstrate dynamic source addition - new data will automatically stay consistent with configuration
     log.Println("Demonstrating dynamic source addition...")
     newSource := filesource.New(
@@ -976,11 +980,11 @@ func main() {
         filesource.WithMetadataValue("category", "changelog"),
         filesource.WithMetadataValue("type", "updates"),
     )
-    
+
     if err := kb.AddSource(ctx, newSource); err != nil {
         log.Printf("Failed to add new source: %v", err)
-    } 
-    
+    }
+
     // 13. Demonstrate source removal (optional, uncomment to test)
     // if err := kb.RemoveSource(ctx, "Changelog"); err != nil {
     //     log.Printf("Failed to remove source: %v", err)
