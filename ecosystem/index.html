@@ -1317,7 +1317,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/en/ecosystem.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/ecosystem.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1326,7 +1326,7 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/en/ecosystem.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/ecosystem.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
@@ -2788,9 +2788,11 @@
 <li>Package: <code>telemetry/metric</code>.</li>
 <li>Global Object: <code>metric.Meter</code>, default <code>noop</code>, points to OTel Meter after calling <code>metric.Start</code>.</li>
 <li>Initialization: <code>metric.Start(ctx, metric.WithEndpoint("host:4317"))</code>.</li>
-<li>OTLP Export: uses <code>otlpmetricgrpc</code>, supports environment variable override:</li>
+<li>OTLP Export: uses <code>otlpmetricgrpc</code>, supports environment variable override:<ul>
 <li><code>OTEL_EXPORTER_OTLP_METRICS_ENDPOINT</code>.</li>
 <li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code> (fallback).</li>
+</ul>
+</li>
 <li>Resource Identification: automatically fills <code>service.namespace/name/version</code>.</li>
 </ul>
 <p>Example (start metrics and report Counter):</p>
@@ -2850,9 +2852,11 @@
 <li>Package: <code>telemetry/trace</code>.</li>
 <li>Global Object: <code>trace.Tracer</code>, default <code>noop</code>, points to OTel Tracer after calling <code>trace.Start</code>.</li>
 <li>Initialization: <code>trace.Start(ctx, trace.WithEndpoint("host:4317"))</code>.</li>
-<li>OTLP Export: uses <code>otlptracegrpc</code>, supports environment variable override:</li>
+<li>OTLP Export: uses <code>otlptracegrpc</code>, supports environment variable override:<ul>
 <li><code>OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</code>.</li>
 <li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code> (fallback).</li>
+</ul>
+</li>
 <li>Propagator: enables <code>TraceContext</code> by default.</li>
 </ul>
 <p>Example (start tracing and create Span):</p>
@@ -2907,7 +2911,7 @@
 <p><strong>Goal:</strong> Provide unified, extensible API service encapsulation for frontend Chat interfaces (such as ADK Web, AG-UI, Agent UI), covering session management, conversation sending, streaming transmission, tool calls, observability and authentication capabilities, and align with various UI protocols for plug-and-play.</p>
 <p><strong>Existing Implementation Reference:</strong></p>
 <ul>
-<li><strong>ADK Web Compatible HTTP Service</strong>: <code>server/debug</code>.</li>
+<li><strong>ADK Web Compatible HTTP Service</strong>: <code>server/debug</code>.<ul>
 <li>Endpoints (implemented):<ul>
 <li><code>GET /list-apps</code>: List available <code>Agent</code> applications.</li>
 <li><code>GET /apps/{appName}/users/{userId}/sessions</code>: List user sessions.</li>
@@ -2920,13 +2924,17 @@
 </ul>
 </li>
 <li>Features: Built-in CORS, pluggable session storage (default In-Memory), integrated with <code>runner.Runner</code>, observability instrumentation (exports key Spans).</li>
-<li><strong>A2A Server</strong>: <code>server/a2a</code>.</li>
+</ul>
+</li>
+<li><strong>A2A Server</strong>: <code>server/a2a</code>.<ul>
 <li>Service encapsulation for A2A protocol, built-in <code>AuthProvider</code> and task orchestration, suitable for platform-to-Agent integration scenarios.</li>
+</ul>
+</li>
 </ul>
 <p><strong>Alignment with Frontend Protocols:</strong></p>
 <ul>
 <li><strong>ADK Web</strong>: Already aligned with request/response and event Schema, see <code>server/debug/internal/schema</code>.</li>
-<li><strong>AG-UI</strong>: Reference <code>https://github.com/ag-ui-protocol/ag-ui</code>.</li>
+<li><strong>AG-UI</strong>: Reference <code>https://github.com/ag-ui-protocol/ag-ui</code>.<ul>
 <li>Required capabilities:<ul>
 <li>Session list/create/query.</li>
 <li>Text conversation and SSE streaming increment; support tool calls and function response fragment display.</li>
@@ -2936,25 +2944,41 @@
 </ul>
 </li>
 <li>Recommend providing implementation in <code>server/agui/</code>, reuse common model and event mapping tools, complete protocol layer adaptation in Handler.</li>
-<li><strong>Agent UI (agno)</strong>: Reference <code>https://docs.agno.com/agent-ui/introduction</code>.</li>
+</ul>
+</li>
+<li><strong>Agent UI (agno)</strong>: Reference <code>https://docs.agno.com/agent-ui/introduction</code>.<ul>
 <li>Focus: SSE/WebSocket streaming, Tool call streaming UI feedback, session/artifact persistence.</li>
+</ul>
+</li>
 </ul>
 <p><strong>Key Design Points:</strong></p>
 <ul>
-<li><strong>Schema Mapping</strong>:</li>
+<li><strong>Schema Mapping</strong>:<ul>
 <li>Input: Map UI's <code>Content</code>/<code>Part</code> to internal <code>model.Message</code>.</li>
 <li>Output events: Map internal <code>event.Event</code> to UI-expected envelope/parts, structure tool calls and tool responses to avoid duplicate text display.</li>
-<li><strong>Streaming Transmission</strong>:</li>
+</ul>
+</li>
+<li><strong>Streaming Transmission</strong>:<ul>
 <li>SSE already implemented in <code>server/debug</code>, prioritize reuse; WebSocket can be ecosystem extension.</li>
 <li>Non-streaming endpoints need to aggregate final messages and tool responses according to UI expectations.</li>
-<li><strong>Session Storage</strong>:</li>
+</ul>
+</li>
+<li><strong>Session Storage</strong>:<ul>
 <li>Inject specific implementation through <code>runner.WithSessionService</code>, reuse <code>session</code> module.</li>
-<li><strong>Observability</strong>:</li>
+</ul>
+</li>
+<li><strong>Observability</strong>:<ul>
 <li>Reuse <code>telemetry/trace</code> and <code>telemetry/metric</code>. <code>server/debug</code> already demonstrates how to export key Spans and event attributes for UI-side debugging and positioning.</li>
-<li><strong>Authentication and Security</strong>:</li>
+</ul>
+</li>
+<li><strong>Authentication and Security</strong>:<ul>
 <li>Support API Key/JWT/custom Header; add rate limiting and cross-domain control for sensitive endpoints.</li>
-<li><strong>Open Specifications</strong>:</li>
+</ul>
+</li>
+<li><strong>Open Specifications</strong>:<ul>
 <li>Recommend attaching <code>openapi.json</code>/<code>README.md</code> to each <code>server/*</code> submodule for frontend/integration party integration.</li>
+</ul>
+</li>
 </ul>
 <p><strong>Minimal Example (reuse ADK Web compatible service):</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
@@ -3054,16 +3078,22 @@
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Ecosystem Directions and Contribution Standards:</strong></p>
 <ul>
-<li><strong>Target UI/Protocols</strong>:</li>
+<li><strong>Target UI/Protocols</strong>:<ul>
 <li><strong>AG-UI</strong>: Provide HTTP + SSE adaptation in <code>server/agui/</code>, with examples and <code>openapi.json</code>.</li>
-<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/agentui/</code>.</li>
+</ul>
+</li>
+<li><strong>Agent UI (agno)</strong>: Provide HTTP + SSE / WebSocket adaptation in <code>server/agentui/</code>.<ul>
 <li><strong>WebSocket/Bidi Streaming</strong>: Align with ADK <code>run_live</code>, provide real-time audio/video channels (depends on model-side support).</li>
-<li><strong>Implementation Requirements</strong>:</li>
+</ul>
+</li>
+<li><strong>Implementation Requirements</strong>:<ul>
 <li>Clear event Schema, complete mapping, ensure tool calls/responses have good experience in UI.</li>
 <li>Support pluggable session storage, default In-Memory, recommend supporting Redis/MySQL etc.</li>
 <li>Built-in CORS, authentication middleware (API Key/JWT), expose health check endpoints.</li>
 <li>Observability: integrate <code>telemetry</code>, provide minimal Trace and Metric examples.</li>
 <li>Documentation: README, OpenAPI, end-to-end examples (include simple frontend or curl scripts).</li>
+</ul>
+</li>
 </ul>
 <p>Link references:</p>
 <ul>

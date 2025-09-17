@@ -1858,7 +1858,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/en/knowledge.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1867,7 +1867,7 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/en/knowledge.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
@@ -3542,10 +3542,8 @@
 <ol>
 <li>
 <p><strong>Create embedding failed/HTTP 4xx/5xx</strong></p>
-</li>
-<li>
-<p>Possible causes: Invalid or missing API Key; Incorrect BaseURL configuration; Network access restrictions; Text too long; The configured BaseURL doesn't provide Embeddings interface or doesn't support the selected embedding model (e.g., returns 404 Not Found).</p>
-</li>
+<ul>
+<li>Possible causes: Invalid or missing API Key; Incorrect BaseURL configuration; Network access restrictions; Text too long; The configured BaseURL doesn't provide Embeddings interface or doesn't support the selected embedding model (e.g., returns 404 Not Found).</li>
 <li>Troubleshooting steps:<ul>
 <li>Confirm <code>OPENAI_API_KEY</code> is set and available;</li>
 <li>If using compatible gateway, explicitly set <code>WithBaseURL(os.Getenv("OPENAI_BASE_URL"))</code>;</li>
@@ -3564,9 +3562,8 @@
 <li>Gradually shorten text to confirm it's not caused by overly long input.</li>
 </ul>
 </li>
-<li>
-<p>Reference code:
-     <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1">1</a></span>
+<li>Reference code:
+   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-28-1">1</a></span>
 <span class="normal"><a href="#__codelineno-28-2">2</a></span>
 <span class="normal"><a href="#__codelineno-28-3">3</a></span>
 <span class="normal"><a href="#__codelineno-28-4">4</a></span>
@@ -3581,23 +3578,21 @@
 </span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6"></a><span class="k">if</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">embedder</span><span class="p">.</span><span class="nx">GetEmbedding</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;ping&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;embed check failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 </span><span id="__span-28-8"><a id="__codelineno-28-8" name="__codelineno-28-8"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div></p>
+</span></code></pre></div></td></tr></table></div></li>
+</ul>
 </li>
 <li>
 <p><strong>Slow loading speed or high CPU usage</strong></p>
-</li>
-<li>
-<p>Possible causes: Single-core sequential loading; Inappropriate concurrency settings; Unreasonable large file chunking strategy.</p>
-</li>
+<ul>
+<li>Possible causes: Single-core sequential loading; Inappropriate concurrency settings; Unreasonable large file chunking strategy.</li>
 <li>Troubleshooting steps:<ul>
 <li>Set source-level/document-level concurrency: <code>WithSourceConcurrency(N)</code>, <code>WithDocConcurrency(M)</code>;</li>
 <li>Adjust chunk size to avoid too many small chunks;</li>
 <li>Temporarily disable statistics output to reduce log overhead: <code>WithShowStats(false)</code>.</li>
 </ul>
 </li>
-<li>
-<p>Reference code:
-     <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">1</a></span>
+<li>Reference code:
+   <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-29-1">1</a></span>
 <span class="normal"><a href="#__codelineno-29-2">2</a></span>
 <span class="normal"><a href="#__codelineno-29-3">3</a></span>
 <span class="normal"><a href="#__codelineno-29-4">4</a></span>
@@ -3606,58 +3601,53 @@
 </span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithDocConcurrency</span><span class="p">(</span><span class="nx">runtime</span><span class="p">.</span><span class="nx">NumCPU</span><span class="p">()</span><span class="o">*</span><span class="mi">2</span><span class="p">),</span>
 </span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowStats</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div></p>
+</span></code></pre></div></td></tr></table></div></li>
+</ul>
 </li>
 <li>
 <p><strong>Storage connection failure (pgvector/TcVector)</strong></p>
-</li>
-<li>
-<p>Possible causes: Incorrect connection parameters; Network/authentication failure; Service not started or port not accessible.</p>
-</li>
-<li>
-<p>Troubleshooting steps:</p>
 <ul>
+<li>Possible causes: Incorrect connection parameters; Network/authentication failure; Service not started or port not accessible.</li>
+<li>Troubleshooting steps:<ul>
 <li>Use native client to connect once first (psql/curl);</li>
 <li>Explicitly print current configuration (host/port/user/db/url);</li>
 <li>For minimal example, only insert/query one record to verify.</li>
 </ul>
 </li>
+</ul>
+</li>
 <li>
 <p><strong>High memory usage</strong></p>
-</li>
-<li>
-<p>Possible causes: Loading too many documents at once; Chunk size/overlap too large; Similarity filtering too wide.</p>
-</li>
-<li>
-<p>Troubleshooting steps:</p>
 <ul>
+<li>Possible causes: Loading too many documents at once; Chunk size/overlap too large; Similarity filtering too wide.</li>
+<li>Troubleshooting steps:<ul>
 <li>Reduce concurrency and chunk overlap;</li>
 <li>Load directories in batches.</li>
 </ul>
 </li>
+</ul>
+</li>
 <li>
 <p><strong>Dimension/vector mismatch</strong></p>
-</li>
-<li>
-<p>Symptoms: Search phase errors or abnormal scores of 0.</p>
-</li>
-<li>
-<p>Troubleshooting:</p>
 <ul>
+<li>Symptoms: Search phase errors or abnormal scores of 0.</li>
+<li>Troubleshooting:<ul>
 <li>Confirm embedding model dimension matches existing vectors (<code>text-embedding-3-small</code> is 1536);</li>
 <li>After replacing embedding model, need to rebuild (clear and reload) vector database.</li>
 </ul>
 </li>
+</ul>
+</li>
 <li>
 <p><strong>Path/format reading failure</strong></p>
-</li>
-<li>
-<p>Symptoms: Loading logs show 0 documents or specific source errors.</p>
-</li>
+<ul>
+<li>Symptoms: Loading logs show 0 documents or specific source errors.</li>
 <li>Troubleshooting:<ul>
 <li>Confirm files exist and extensions are supported (.md/.txt/.pdf/.csv/.json/.docx, etc.);</li>
 <li>Whether directory source needs <code>WithRecursive(true)</code>;</li>
 <li>Use <code>WithFileExtensions</code> for whitelist filtering.</li>
+</ul>
+</li>
 </ul>
 </li>
 </ol>

@@ -2332,7 +2332,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/zh/graph.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/graph.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2341,7 +2341,7 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/zh/graph.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/graph.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
@@ -2802,32 +2802,32 @@
 <ul>
 <li>
 <p>OneShot（<code>StateKeyOneShotMessages</code>）：</p>
+<ul>
+<li>当该键存在时，本轮仅使用这里提供的 <code>[]model.Message</code> 调用模型，
+  通常包含完整的 system prompt 与 user prompt。调用后自动清空。</li>
+<li>适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。</li>
+</ul>
 </li>
-<li>
-<p>当该键存在时，本轮仅使用这里提供的 <code>[]model.Message</code> 调用模型，
-    通常包含完整的 system prompt 与 user prompt。调用后自动清空。</p>
-</li>
-<li>
-<p>适用场景：前置节点专门构造 prompt 的工作流，需完全覆盖本轮输入。</p>
-</li>
+</ul>
+<ul>
 <li>
 <p>UserInput（<code>StateKeyUserInput</code>）：</p>
+<ul>
+<li>当 <code>user_input</code> 非空时，LLM 节点会取持久化历史 <code>messages</code>，并将
+  本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
+  <code>MessageOp</code>（例如 <code>AppendMessages</code>、<code>ReplaceLastUser</code>）原子性写入
+  到 <code>messages</code>，并自动清空 <code>user_input</code> 以避免重复追加。</li>
+<li>适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。</li>
+</ul>
 </li>
-<li>
-<p>当 <code>user_input</code> 非空时，LLM 节点会取持久化历史 <code>messages</code>，并将
-    本轮的用户输入合并后发起调用。结束后会把用户输入与助手回复通过
-    <code>MessageOp</code>（例如 <code>AppendMessages</code>、<code>ReplaceLastUser</code>）原子性写入
-    到 <code>messages</code>，并自动清空 <code>user_input</code> 以避免重复追加。</p>
-</li>
-<li>
-<p>适用场景：普通对话式工作流，允许在前置节点动态调整用户输入。</p>
-</li>
-<li>
-<p>Messages only（仅 <code>StateKeyMessages</code>）：</p>
-</li>
+</ul>
+<ul>
+<li>Messages only（仅 <code>StateKeyMessages</code>）：<ul>
 <li>多用于工具调用回路。当第一轮经由 <code>user_input</code> 发起后，路由到工具
-    节点执行，再回到 LLM 节点时，因为 <code>user_input</code> 已被清空，LLM 将走
-    “Messages only” 分支，以历史中的 tool 响应继续推理。</li>
+  节点执行，再回到 LLM 节点时，因为 <code>user_input</code> 已被清空，LLM 将走
+  “Messages only” 分支，以历史中的 tool 响应继续推理。</li>
+</ul>
+</li>
 </ul>
 <h4 id="reducer-messageop">通过 Reducer 与 MessageOp 实现的原子更新</h4>
 <p>Graph 包的消息状态支持 <code>MessageOp</code> 补丁操作（如 <code>ReplaceLastUser</code>、
@@ -5002,9 +5002,11 @@
 <p>在恢复机制上，本框架采用节点级恢复（node-level resume）。这意味着：</p>
 <ul>
 <li>仅恢复到被中断的节点或其后继节点的执行边界，不会整步回滚整个图。</li>
-<li>在任意节点内产生的外部副作用（例如：数据库写入、HTTP 调用、消息发送）必须具备一次语义保障：</li>
+<li>在任意节点内产生的外部副作用（例如：数据库写入、HTTP 调用、消息发送）必须具备一次语义保障：<ul>
 <li>建议封装为幂等操作（例如基于业务幂等键、去重表、Upsert）。</li>
 <li>或使用事务性边界（例如本地事务/分布式事务/Outbox + Relay）。</li>
+</ul>
+</li>
 <li>恢复后会重放 PendingWrites 构建执行前沿；写入顺序使用单调自增序列号保证跨后端一致性。</li>
 </ul>
 <p>生产建议：

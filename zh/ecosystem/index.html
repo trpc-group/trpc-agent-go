@@ -1317,7 +1317,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/zh/ecosystem.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/ecosystem.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1326,7 +1326,7 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/zh/ecosystem.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/ecosystem.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
@@ -2785,9 +2785,11 @@
 <li>全局对象：<code>metric.Meter</code>，默认 <code>noop</code>，调用 <code>metric.Start</code> 后指向
   OTel Meter。</li>
 <li>初始化：<code>metric.Start(ctx, metric.WithEndpoint("host:4317"))</code>。</li>
-<li>OTLP 导出：使用 <code>otlpmetricgrpc</code>，支持环境变量覆盖：</li>
+<li>OTLP 导出：使用 <code>otlpmetricgrpc</code>，支持环境变量覆盖：<ul>
 <li><code>OTEL_EXPORTER_OTLP_METRICS_ENDPOINT</code>。</li>
 <li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code>（兜底）。</li>
+</ul>
+</li>
 <li>资源标识：自动填充 <code>service.namespace/name/version</code>。</li>
 </ul>
 <p>示例（启动指标与上报 Counter）：</p>
@@ -2848,9 +2850,11 @@
 <li>全局对象：<code>trace.Tracer</code>，默认 <code>noop</code>，调用 <code>trace.Start</code> 后指向
   OTel Tracer。</li>
 <li>初始化：<code>trace.Start(ctx, trace.WithEndpoint("host:4317"))</code>。</li>
-<li>OTLP 导出：使用 <code>otlptracegrpc</code>，支持环境变量覆盖：</li>
+<li>OTLP 导出：使用 <code>otlptracegrpc</code>，支持环境变量覆盖：<ul>
 <li><code>OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</code>。</li>
 <li><code>OTEL_EXPORTER_OTLP_ENDPOINT</code>（兜底）。</li>
+</ul>
+</li>
 <li>Propagator：默认启用 <code>TraceContext</code>。</li>
 </ul>
 <p>示例（启动追踪与创建 Span）：</p>
@@ -2908,7 +2912,7 @@
 可观测与鉴权等能力，并对齐各 UI 协议以便即插即用。</p>
 <p><strong>现有实现参考：</strong></p>
 <ul>
-<li><strong>ADK Web 兼容 HTTP 服务</strong>：<code>server/debug</code>。</li>
+<li><strong>ADK Web 兼容 HTTP 服务</strong>：<code>server/debug</code>。<ul>
 <li>端点（已实现）：<ul>
 <li><code>GET /list-apps</code>：列出可用 <code>Agent</code> 应用。</li>
 <li><code>GET /apps/{appName}/users/{userId}/sessions</code>：列出用户会话。</li>
@@ -2921,15 +2925,19 @@
 </ul>
 </li>
 <li>特性：内置 CORS、会话存储可插拔（默认 In-Memory）、与
-    <code>runner.Runner</code> 打通、可观测埋点（导出关键 Span）。</li>
-<li><strong>A2A Server</strong>：<code>server/a2a</code>。</li>
+  <code>runner.Runner</code> 打通、可观测埋点（导出关键 Span）。</li>
+</ul>
+</li>
+<li><strong>A2A Server</strong>：<code>server/a2a</code>。<ul>
 <li>面向 A2A 协议的服务封装，内建 <code>AuthProvider</code> 与任务编排，适合
-    平台到 Agent 的集成场景。</li>
+  平台到 Agent 的集成场景。</li>
+</ul>
+</li>
 </ul>
 <p><strong>与前端协议对齐：</strong></p>
 <ul>
 <li><strong>ADK Web</strong>：已对齐请求/响应与事件 Schema，见 <code>server/debug/internal/schema</code>。</li>
-<li><strong>AG-UI</strong>：参考 <code>https://github.com/ag-ui-protocol/ag-ui</code>。</li>
+<li><strong>AG-UI</strong>：参考 <code>https://github.com/ag-ui-protocol/ag-ui</code>。<ul>
 <li>需要的能力：<ul>
 <li>会话列表/创建/查询。</li>
 <li>文本对话与 SSE 流式增量；支持工具调用与函数响应片段化展示。</li>
@@ -2939,29 +2947,45 @@
 </ul>
 </li>
 <li>建议在 <code>server/agui/</code> 提供实现，复用通用的模型与事件
-    映射工具，在 Handler 中完成协议层适配。</li>
-<li><strong>Agent UI（agno）</strong>：参考 <code>https://docs.agno.com/agent-ui/introduction</code>。</li>
+  映射工具，在 Handler 中完成协议层适配。</li>
+</ul>
+</li>
+<li><strong>Agent UI（agno）</strong>：参考 <code>https://docs.agno.com/agent-ui/introduction</code>。<ul>
 <li>重点：SSE/WebSocket 流、Tool 调用流式 UI 反馈、会话/工件持久化。</li>
+</ul>
+</li>
 </ul>
 <p><strong>关键设计要点：</strong></p>
 <ul>
-<li><strong>Schema 映射</strong>：</li>
+<li><strong>Schema 映射</strong>：<ul>
 <li>输入：将 UI 的 <code>Content</code>/<code>Part</code> 映射为内部 <code>model.Message</code>。</li>
 <li>输出事件：将内部 <code>event.Event</code> 映射为 UI 期望的 envelope/parts，
-    对工具调用与工具响应进行结构化，避免重复文本展示。</li>
-<li><strong>流式传输</strong>：</li>
+  对工具调用与工具响应进行结构化，避免重复文本展示。</li>
+</ul>
+</li>
+<li><strong>流式传输</strong>：<ul>
 <li>SSE 已在 <code>server/debug</code> 实现，优先复用；WebSocket 可作为生态扩展。</li>
 <li>非流式端点需按 UI 期望聚合最终消息与工具响应。</li>
-<li><strong>会话存储</strong>：</li>
+</ul>
+</li>
+<li><strong>会话存储</strong>：<ul>
 <li>通过 <code>runner.WithSessionService</code> 注入具体实现，复用 <code>session</code> 模块。</li>
-<li><strong>可观测</strong>：</li>
+</ul>
+</li>
+<li><strong>可观测</strong>：<ul>
 <li>复用 <code>telemetry/trace</code> 与 <code>telemetry/metric</code>。<code>server/debug</code> 已演示
-    如何导出关键 Span 与事件属性，便于 UI 侧调试与定位。</li>
-<li><strong>鉴权与安全</strong>：</li>
+  如何导出关键 Span 与事件属性，便于 UI 侧调试与定位。</li>
+</ul>
+</li>
+<li><strong>鉴权与安全</strong>：<ul>
 <li>支持 API Key/JWT/自定义 Header；对敏感端点加速率限制与跨域控制。</li>
-<li><strong>开放规范</strong>：</li>
+</ul>
+</li>
+<li><strong>开放规范</strong>：<ul>
 <li>建议在各 <code>server/*</code> 子模块附带 <code>openapi.json</code>/<code>README.md</code>，
-    便于前端/集成方对接。</li>
+  便于前端/集成方对接。</li>
+</ul>
+</li>
 </ul>
 <p><strong>最小示例（复用 ADK Web 兼容服务）：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
@@ -3061,19 +3085,25 @@
 </span></code></pre></div></td></tr></table></div>
 <p><strong>生态化方向与贡献规范：</strong></p>
 <ul>
-<li><strong>目标 UI/协议</strong>：</li>
+<li><strong>目标 UI/协议</strong>：<ul>
 <li><strong>AG-UI</strong>：在 <code>server/agui/</code> 提供 HTTP + SSE 适配，附带示例
 与 <code>openapi.json</code>。</li>
+</ul>
+</li>
 <li><strong>Agent UI（agno）</strong>：在 <code>server/agentui/</code> 提供 HTTP + SSE /
-WebSocket 适配。</li>
+WebSocket 适配。<ul>
 <li><strong>WebSocket/Bidi Streaming</strong>：对标 ADK <code>run_live</code>，提供实时音视频
-    通道（依赖模型侧支持）。</li>
-<li><strong>落地要求：</strong></li>
+  通道（依赖模型侧支持）。</li>
+</ul>
+</li>
+<li><strong>落地要求：</strong><ul>
 <li>事件 Schema 明确、映射完备，确保工具调用/响应在 UI 端有良好体验。</li>
 <li>支持会话存储可插拔，默认 In-Memory，推荐支持 Redis/MySQL 等。</li>
 <li>内置 CORS、鉴权中间件（API Key/JWT），暴露健康检查端点。</li>
 <li>可观测：打通 <code>telemetry</code>，提供最小 Trace 与 Metric 样例。</li>
 <li>文档：README、OpenAPI、端到端示例（包含简单前端或 curl 脚本）。</li>
+</ul>
+</li>
 </ul>
 <p>链接参考：</p>
 <ul>

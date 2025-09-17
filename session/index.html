@@ -1426,7 +1426,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/en/session.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/session.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1435,7 +1435,7 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/en/session.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/session.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
@@ -1640,12 +1640,16 @@
 </span></code></pre></div></td></tr></table></div>
 <ul>
 <li><strong>Function</strong>: Retrieve an existing session based on AppName, UserID, and SessionID.</li>
-<li><strong>Params</strong>:</li>
+<li><strong>Params</strong>:<ul>
 <li><code>key</code>: Session key, must include complete AppName, UserID, and SessionID.</li>
 <li><code>options</code>: Optional parameters, such as <code>session.WithEventNum(10)</code> to limit the number of returned events.</li>
-<li><strong>Returns</strong>:</li>
+</ul>
+</li>
+<li><strong>Returns</strong>:<ul>
 <li>If the session does not exist, returns <code>nil, nil</code>.</li>
 <li>If the session exists, returns the complete session object (including merged app, user, and session state).</li>
+</ul>
+</li>
 </ul>
 <p>Usage:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
@@ -1691,10 +1695,12 @@
 </span></code></pre></div></td></tr></table></div>
 <ul>
 <li><strong>Function</strong>: Remove the specified session from storage. If the user has no other sessions, the user record is automatically cleaned up.</li>
-<li><strong>Characteristics</strong>:</li>
+<li><strong>Characteristics</strong>:<ul>
 <li>Deleting a non-existent session does not produce an error.</li>
 <li>Automatically cleans up empty user-session mappings.</li>
 <li>Thread-safe operations.</li>
+</ul>
+</li>
 </ul>
 <p>Usage:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
