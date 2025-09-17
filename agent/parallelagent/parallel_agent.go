@@ -31,7 +31,6 @@ const defaultChannelBufferSize = 256
 type ParallelAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -44,7 +43,6 @@ type Option func(*Options)
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -54,12 +52,6 @@ type Options struct {
 // into a single output stream.
 func WithSubAgents(sub []agent.Agent) Option {
 	return func(o *Options) { o.subAgents = sub }
-}
-
-// WithTools registers tools available to the parallel agent.
-// These tools can be used by any sub-agent during parallel execution.
-func WithTools(tools []tool.Tool) Option {
-	return func(o *Options) { o.tools = tools }
 }
 
 // WithChannelBufferSize sets the buffer size for the event channel.
@@ -92,7 +84,6 @@ func New(name string, opts ...Option) *ParallelAgent {
 	return &ParallelAgent{
 		name:              name,
 		subAgents:         cfg.subAgents,
-		tools:             cfg.tools,
 		channelBufferSize: cfg.channelBufferSize,
 		agentCallbacks:    cfg.agentCallbacks,
 	}
@@ -308,7 +299,7 @@ func (a *ParallelAgent) mergeEventStreams(
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
 func (a *ParallelAgent) Tools() []tool.Tool {
-	return a.tools
+	return []tool.Tool{}
 }
 
 // Info implements the agent.Agent interface.
