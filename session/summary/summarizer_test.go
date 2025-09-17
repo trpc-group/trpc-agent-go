@@ -44,7 +44,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	t.Run("errors when no events", func(t *testing.T) {
 		s := NewSummarizer(&fakeModel{})
 		sess := &session.Session{ID: "empty", Events: []event.Event{}}
-		_, err := s.Summarize(context.Background(), sess, 0)
+		_, err := s.Summarize(context.Background(), sess)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no events to summarize")
 	})
@@ -55,7 +55,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 		for i := range sess.Events {
 			sess.Events[i] = event.Event{Timestamp: time.Now()}
 		}
-		_, err := s.Summarize(context.Background(), sess, 5)
+		_, err := s.Summarize(context.Background(), sess)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no conversation text extracted")
 	})
@@ -68,7 +68,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
-		text, err := s.Summarize(context.Background(), sess, 0)
+		text, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		assert.Contains(t, text, "hello")
 		assert.Contains(t, text, "world")
@@ -87,7 +87,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
-		text, err := s.Summarize(context.Background(), sess, 0)
+		text, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, len(text), 13) // 10 + "..."
 		// Events should remain unchanged.
@@ -102,7 +102,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
-		text, err := s.Summarize(context.Background(), sess, 0)
+		text, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		assert.Contains(t, text, long)
 		// Events should remain unchanged.
@@ -117,7 +117,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
-		text, err := s.Summarize(context.Background(), sess, 0)
+		text, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		assert.Contains(t, text, "unknown: content")
 		// Events should remain unchanged.
@@ -133,7 +133,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent2"}}}}, Timestamp: time.Now().Add(-1 * time.Second)},
 		}}
 		originalEventCount := len(sess.Events)
-		_, err := s.Summarize(context.Background(), sess, 0)
+		_, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		// Events should remain unchanged.
 		assert.Equal(t, originalEventCount, len(sess.Events), "events should remain unchanged.")
@@ -153,7 +153,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "r3"}}}}, Timestamp: time.Now().Add(-1 * time.Second)},
 		}}
 		originalEventCount := len(sess.Events)
-		_, err := s.Summarize(context.Background(), sess, 2) // override to use only last 2
+		_, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
 		// Events should remain unchanged.
 		assert.Equal(t, originalEventCount, len(sess.Events), "events should remain unchanged.")
@@ -166,7 +166,7 @@ func TestSessionSummarizer_Metadata(t *testing.T) {
 	assert.Equal(t, "fake", md[metadataKeyModelName])
 	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
 	assert.Equal(t, 2, md[metadataKeyWindowSize])
-	assert.GreaterOrEqual(t, md[metadataKeyCheckFunctions].(int), 1)
+	assert.Equal(t, 0, md[metadataKeyCheckFunctions])
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.

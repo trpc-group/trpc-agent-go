@@ -67,9 +67,9 @@ type sessionSummarizer struct {
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
 		prompt:           defaultSummarizerPrompt,
-		checks:           []Checker{CheckEventThreshold(25)}, // Summarize after 25 events.
-		maxSummaryLength: 0,                                  // The max summary length is 0 by default, which means no truncation.
-		windowSize:       10,                                 // The window size is 10 by default.
+		checks:           []Checker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryLength: 0,           // The max summary length is 0 by default, which means no truncation.
+		windowSize:       10,          // The window size is 10 by default.
 	}
 	s.model = m
 
@@ -95,7 +95,7 @@ func (s *sessionSummarizer) ShouldSummarize(sess *session.Session) bool {
 }
 
 // Summarize generates a summary without modifying the session events.
-func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session, windowSize int) (string, error) {
+func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	if s.model == nil {
 		return "", fmt.Errorf("no model configured for summarization for session %s", sess.ID)
 	}
@@ -103,14 +103,10 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 
-	if windowSize <= 0 {
-		windowSize = s.windowSize
-	}
-
 	// Extract conversation text from events within the window.
 	eventsToSummarize := sess.Events
-	if windowSize > 0 && len(sess.Events) > windowSize {
-		eventsToSummarize = sess.Events[len(sess.Events)-windowSize:]
+	if s.windowSize > 0 && len(sess.Events) > s.windowSize {
+		eventsToSummarize = sess.Events[len(sess.Events)-s.windowSize:]
 	}
 
 	conversationText := s.extractConversationText(eventsToSummarize)

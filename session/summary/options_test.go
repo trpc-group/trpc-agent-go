@@ -31,7 +31,7 @@ func TestOptions(t *testing.T) {
 		// Verify metadata increments and logic via isolated checks.
 		s := NewSummarizer(&testModel{}, WithTokenThreshold(2))
 		md := s.Metadata()
-		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 1, md[metadataKeyCheckFunctions])
 
 		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{CheckTokenThreshold(2)}))
 		sess := &session.Session{Events: []event.Event{
@@ -44,7 +44,7 @@ func TestOptions(t *testing.T) {
 	t.Run("WithEventThreshold", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithEventThreshold(2))
 		md := s.Metadata()
-		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 1, md[metadataKeyCheckFunctions])
 
 		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{CheckEventThreshold(2)}))
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}, {Timestamp: time.Now()}, {Timestamp: time.Now()}}}
@@ -54,15 +54,13 @@ func TestOptions(t *testing.T) {
 	t.Run("WithTimeThreshold", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithTimeThreshold(10*time.Millisecond))
 		md := s.Metadata()
-		assert.Equal(t, 2, md[metadataKeyCheckFunctions])
+		assert.Equal(t, 1, md[metadataKeyCheckFunctions])
 
 		sIso := NewSummarizer(&testModel{}, WithChecks([]Checker{CheckTimeThreshold(10 * time.Millisecond)}))
 		older := time.Now().Add(-20 * time.Millisecond)
 		sess := &session.Session{Events: []event.Event{{Timestamp: older}}}
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
-
-	// Removed: important threshold checker is no longer supported.
 
 	t.Run("WithChecksAll", func(t *testing.T) {
 		checks := []Checker{CheckEventThreshold(1), CheckTokenThreshold(4)}
@@ -95,7 +93,7 @@ func TestOptions(t *testing.T) {
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
-		text, err := s.Summarize(context.Background(), sess, 0)
+		text, err := s.Summarize(context.Background(), sess)
 		assert.NoError(t, err)
 		assert.LessOrEqual(t, len(text), 50)
 		// Events should remain unchanged.

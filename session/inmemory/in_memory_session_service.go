@@ -731,7 +731,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		}
 
 		tmp := s.buildBranchSession(storedSession, b, input)
-		text, err := s.opts.summarizer.Summarize(ctx, tmp, 0)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp)
 		if err != nil || text == "" {
 			continue
 		}

@@ -24,8 +24,7 @@ type SessionSummarizer interface {
 	ShouldSummarize(sess *session.Session) bool
 
 	// Summarize generates a summary without modifying the session events.
-	// windowSize controls how many recent events to include in the summary input.
-	Summarize(ctx context.Context, sess *session.Session, windowSize int) (string, error)
+	Summarize(ctx context.Context, sess *session.Session) (string, error)
 
 	// Metadata returns metadata about the summarizer configuration.
 	Metadata() map[string]any
