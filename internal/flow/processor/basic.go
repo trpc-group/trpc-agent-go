@@ -74,7 +74,7 @@ func (p *BasicRequestProcessor) ProcessRequest(
 	req.GenerationConfig = p.GenerationConfig
 
 	// Propagate structured output from invocation to request if present.
-	if invocation != nil && invocation.StructuredOutput != nil {
+	if invocation.StructuredOutput != nil {
 		req.StructuredOutput = invocation.StructuredOutput
 	}
 

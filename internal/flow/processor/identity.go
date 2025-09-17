@@ -68,10 +68,8 @@ func (p *IdentityRequestProcessor) ProcessRequest(
 		return
 	}
 
-	agentName := ""
-	if invocation != nil {
-		agentName = invocation.AgentName
-	}
+	// Get agent name.
+	agentName := invocation.AgentName
 	log.Debugf("Identity request processor: processing request for agent %s", agentName)
 
 	// Initialize messages slice if nil.
