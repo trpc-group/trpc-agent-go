@@ -218,14 +218,14 @@ go run main.go -agentic_filter=false
 
 ```bash
 export OPENAI_API_KEY="your-openai-api-key"           # Required for OpenAI model and embedder
-export OPENAI_BASE_URL="your-openai-base-url"    # Required for OpenAI model and embedder
+export OPENAI_BASE_URL="your-openai-base-url"         # Required for OpenAI model and embedder
 export OPENAI_EMBEDDING_MODEL="text-embedding-3-small" # Required for OpenAI embedder only
 ```
 
 #### For Gemini Embedder
 
 ```bash
-export GOOGLE_API_KEY="your-google-api-key"  # Only this is needed for Gemini embedder
+export GOOGLE_API_KEY="your-google-api-key"           # Only this is needed for Gemini embedder
 ```
 
 ### Optional Configuration
@@ -281,6 +281,7 @@ if err := kb.Load(
     knowledge.WithShowStats(false),     // Disable statistics display (default: true)
     knowledge.WithSourceConcurrency(4), // Process 4 sources concurrently
     knowledge.WithDocConcurrency(64),   // Process 64 documents concurrently
+    knowledge.WithRecreate(true),       // **Only works with Load()** - Forces complete rebuild
 ); err != nil {
     return fmt.Errorf("failed to load knowledge base: %w", err)
 }
@@ -426,6 +427,8 @@ if err := c.kb.Load(
 - **Update Frequency**: `WithProgressStepSize()` - Control progress update intervals
 - **Statistics Display**: `WithShowStats()` - Show/hide loading statistics
 - **Concurrency Tuning**: `WithSourceConcurrency()` and `WithDocConcurrency()` - Performance optimization
+- **Complete Rebuild**: `WithRecreate()` - **Only works with Load() function** - Forces complete knowledge base rebuild by clearing vector store and re-importing all documents
+- **Incremental Sync**: `WithEnableSourceSync()` - Enables smart change detection and incremental updates (enabled by default)
 
 ### Components Used
 

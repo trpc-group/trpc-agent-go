@@ -8,6 +8,7 @@ with user input, implementing a real-world two-stage approval workflow pattern.
 ## Overview
 
 The example implements an interactive command-line application that:
+
 - Uses **Runner** for orchestration and session management
 - Uses **GraphAgent** for graph-based execution with checkpoint support
 - Provides an **interactive CLI** with comprehensive commands
@@ -25,6 +26,7 @@ The example implements an interactive command-line application that:
 ## Features
 
 ### Core Capabilities
+
 - **Interactive Command-Line Interface** - Rich CLI with help and command history
 - **Multi-Stage Interrupts** - Sequential interrupt points with independent handling
 - **Dynamic Resume Logic** - Uses TaskID from checkpoint for automatic key mapping
@@ -32,6 +34,7 @@ The example implements an interactive command-line application that:
 - **Session Persistence** - Maintains state across interrupts and resumes
 
 ### Advanced Features
+
 - **Checkpoint Tree Visualization** - Visual parent-child checkpoint relationships
 - **Interrupt Status Tracking** - Detailed interrupt context and available actions
 - **Execution History** - Timeline view with interrupt markers
@@ -40,7 +43,7 @@ The example implements an interactive command-line application that:
 
 ## Prerequisites
 
-- Go 1.21+
+- Go 1.21 or later
 - tRPC-Agent-Go framework
 
 ## Usage
@@ -48,6 +51,7 @@ The example implements an interactive command-line application that:
 ### Quick Start
 
 Run the interactive mode (default):
+
 ```bash
 go run .
 ```
@@ -65,33 +69,38 @@ go run .
 Once in interactive mode, the following commands are available:
 
 #### Workflow Execution
-| Command | Description | Example |
-|---------|-------------|---------|
-| `run [lineage-id]` | Execute workflow normally (skips interrupts) | `run my-workflow` |
-| `interrupt [lineage-id]` | Run until interrupt point | `interrupt test-flow` |
-| `resume <lineage-id> <input>` | Resume from interrupt | `resume test-flow yes` |
+
+| Command                       | Description                                  | Example                |
+| ----------------------------- | -------------------------------------------- | ---------------------- |
+| `run [lineage-id]`            | Execute workflow normally (skips interrupts) | `run my-workflow`      |
+| `interrupt [lineage-id]`      | Run until interrupt point                    | `interrupt test-flow`  |
+| `resume <lineage-id> <input>` | Resume from interrupt                        | `resume test-flow yes` |
 
 #### Checkpoint Management
-| Command | Description | Example |
-|---------|-------------|---------|
-| `list [lineage-id]` | List all checkpoints | `list test-flow` |
-| `tree [lineage-id]` | Display checkpoint tree | `tree test-flow` |
-| `history [lineage-id]` | Show execution history | `history test-flow` |
-| `latest [lineage-id]` | Show latest checkpoint details | `latest test-flow` |
-| `status [lineage-id]` | Show interrupt status | `status test-flow` |
-| `delete <lineage-id>` | Delete lineage checkpoints | `delete test-flow` |
+
+| Command                | Description                    | Example             |
+| ---------------------- | ------------------------------ | ------------------- |
+| `list [lineage-id]`    | List all checkpoints           | `list test-flow`    |
+| `tree [lineage-id]`    | Display checkpoint tree        | `tree test-flow`    |
+| `history [lineage-id]` | Show execution history         | `history test-flow` |
+| `latest [lineage-id]`  | Show latest checkpoint details | `latest test-flow`  |
+| `status [lineage-id]`  | Show interrupt status          | `status test-flow`  |
+| `delete <lineage-id>`  | Delete lineage checkpoints     | `delete test-flow`  |
 
 #### Other Commands
-| Command | Description |
-|---------|-------------|
-| `demo` | Run comprehensive demonstration |
-| `help` | Show all available commands |
-| `exit` or `quit` | Exit the application |
+
+| Command          | Description                     |
+| ---------------- | ------------------------------- |
+| `demo`           | Run comprehensive demonstration |
+| `help`           | Show all available commands     |
+| `exit` or `quit` | Exit the application            |
 
 ## Execution Modes
 
 ### 1. Normal Execution (`run`)
+
 Executes the complete workflow without interruptions:
+
 ```
 🔐 interrupt> run xx
 
@@ -106,6 +115,7 @@ Executes the complete workflow without interruptions:
 ### 2. Interrupt Mode with Two-Stage Approval
 
 #### First Interrupt
+
 ```
 🔐 interrupt> interrupt yy
 
@@ -118,6 +128,7 @@ Executes the complete workflow without interruptions:
 ```
 
 #### Resume to Second Interrupt
+
 ```
 🔐 interrupt> resume yy yes
 
@@ -128,6 +139,7 @@ Executes the complete workflow without interruptions:
 ```
 
 #### Final Resume to Completion
+
 ```
 🔐 interrupt> resume yy yes
 
@@ -138,20 +150,21 @@ Executes the complete workflow without interruptions:
 ```
 
 ### 3. Checkpoint Listing
+
 ```
 🔐 interrupt> list yy
 
 📋 Checkpoints for lineage: yy
 --------------------------------------------------------------------------------
  1. ID: 7e8ef18f-dea8-4ecd-974e-4fc64d5f7ff4
-    Namespace: 
+    Namespace:
     Created: 12:05:37 | Source: interrupt | Step: 3
     State: counter=10, steps=2, last_node=request_approval
     🔴 INTERRUPTED at node: second_approval
     💬 Message: This requires a second approval (yes/no):
     🔗 Node ID: second_approval
  2. ID: 7c97c495-55e1-4f94-bd20-6ce4cf894973
-    Namespace: 
+    Namespace:
     Created: 12:05:37 | Source: loop | Step: 2
     State: counter=10, steps=2, last_node=request_approval
     ✅ Completed checkpoint
@@ -159,6 +172,7 @@ Executes the complete workflow without interruptions:
 ```
 
 ### 4. Tree Visualization
+
 ```
 🔐 interrupt> tree yy
 
@@ -205,18 +219,19 @@ Branch points: 7
 
 The workflow maintains the following state fields:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `counter` | int | Value incremented by increment node (0→10) |
-| `messages` | []string | Operation log and execution history |
-| `user_input` | string | User's approval input |
-| `approved` | bool | Approval status for decisions |
-| `step_count` | int | Total execution steps counter |
-| `last_node` | string | Last executed node ID |
+| Field        | Type     | Description                                |
+| ------------ | -------- | ------------------------------------------ |
+| `counter`    | int      | Value incremented by increment node (0→10) |
+| `messages`   | []string | Operation log and execution history        |
+| `user_input` | string   | User's approval input                      |
+| `approved`   | bool     | Approval status for decisions              |
+| `step_count` | int      | Total execution steps counter              |
+| `last_node`  | string   | Last executed node ID                      |
 
 ### Interrupt Flow
 
 #### 1. First Interrupt (Request Approval)
+
 ```go
 // In request_approval node
 interruptValue := map[string]any{
@@ -231,6 +246,7 @@ resumeValue, err := graph.Interrupt(ctx, s, nodeRequestApproval, interruptValue)
 ```
 
 #### 2. Second Interrupt (Second Approval)
+
 ```go
 // In second_approval node (only if first was approved)
 interruptValue := map[string]any{
@@ -244,6 +260,7 @@ resumeValue, err := graph.Interrupt(ctx, s, nodeSecondApproval, interruptValue)
 ```
 
 #### 3. Dynamic Resume Handling
+
 ```go
 // Extract TaskID from checkpoint for automatic key mapping
 latest, err := w.manager.Latest(ctx, lineageID, namespace)
@@ -257,6 +274,7 @@ if err == nil && latest != nil && latest.Checkpoint.IsInterrupted() {
 ### Real-World Use Cases
 
 This pattern is ideal for:
+
 - **Multi-Stage Approvals** - Financial transactions, deployment pipelines
 - **Quality Gates** - Code review → security review → deployment
 - **Human-in-the-Loop AI** - Initial AI decision → human verification → final check
@@ -267,12 +285,14 @@ This pattern is ideal for:
 ## Advanced Features
 
 ### Checkpoint Tree Structure
+
 - Visual parent-child relationships
 - Interrupt markers (🔴) vs normal checkpoints (📍)
 - State tracking at each checkpoint
 - Branch point counting
 
 ### Interrupt Status Monitoring
+
 ```
 🔍 Interrupt Status for lineage: test-flow
 ------------------------------------------------------------
@@ -312,19 +332,23 @@ This pattern is ideal for:
 ## Troubleshooting
 
 ### Resume fails with "no active interrupt found"
+
 - Ensure the workflow was interrupted first
 - Check that the lineage ID matches exactly
 - Verify the checkpoint is in interrupted state using `status`
 
 ### Second interrupt not triggering
+
 - Confirm first approval was "yes" (rejection skips second approval)
 - Check logs with `-verbose` flag for detailed execution flow
 
 ### Tree visualization issues
+
 - Ensure terminal supports UTF-8 for emoji display
 - Use `list` command as alternative for checkpoint information
 
 ### Checkpoint not found
+
 - Verify lineage ID spelling
 - Check storage backend is accessible
 - Ensure workflow has been run at least once

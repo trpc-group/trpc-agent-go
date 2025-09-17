@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -67,8 +68,8 @@ func createChunk(originalDoc *document.Document, content string, chunkNumber int
 	}
 
 	// Add chunk-specific metadata.
-	metadata["chunk"] = chunkNumber
-	metadata["chunk_size"] = encoding.RuneCount(content)
+	metadata[source.MetaChunkIndex] = chunkNumber
+	metadata[source.MetaChunkSize] = encoding.RuneCount(content)
 
 	// Generate chunk ID.
 	var chunkID string

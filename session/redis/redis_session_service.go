@@ -417,7 +417,8 @@ func (s *Service) AppendEvent(
 
 		// TODO: Init hash index at session creation to prevent duplicate computation.
 		hKey := getEventKey(key)
-		index := murmur3.Sum32([]byte(hKey)) % uint32(len(s.eventPairChans))
+		n := len(s.eventPairChans)
+		index := int(murmur3.Sum32([]byte(hKey))) % n
 		select {
 		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
 		case <-ctx.Done():
@@ -789,10 +790,11 @@ func (s *Service) startAsyncPersistWorker() {
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			for eventPair := range eventPairChan {
-				ctx, _ := context.WithTimeout(context.Background(), defaultTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.Errorf("redis session service persistence event failed: %w", err)
 				}
+				cancel()
 			}
 		}(eventPairChan)
 	}
