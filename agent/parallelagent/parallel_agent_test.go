@@ -444,7 +444,6 @@ func TestParallelAgent_PanicRecovery(t *testing.T) {
 	for _, evt := range errorEvents {
 		if evt.Error != nil && strings.Contains(evt.Error.Message, "panic") {
 			foundPanicError = true
-			t.Logf("✅ Found panic error event: %s", evt.Error.Message)
 			break
 		}
 	}
@@ -452,8 +451,6 @@ func TestParallelAgent_PanicRecovery(t *testing.T) {
 
 	// Verify that the normal agent still ran successfully
 	require.Greater(t, len(normalEvents), 0, "Normal agent should have produced events despite panic in other agent")
-
-	t.Log("✅ Bug fixed: ParallelAgent properly recovers from sub-agent panics")
 }
 
 // TestParallelAgent_MultiplePanics tests recovery from multiple simultaneous panics.
@@ -493,6 +490,4 @@ func TestParallelAgent_MultiplePanics(t *testing.T) {
 
 	// Should have received error events for both panics
 	require.GreaterOrEqual(t, len(errorEvents), 2, "Should have error events for multiple panics")
-
-	t.Log("✅ ParallelAgent handles multiple simultaneous panics correctly")
 }
