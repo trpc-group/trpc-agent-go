@@ -12,6 +12,8 @@ require (
 	github.com/stretchr/testify v1.10.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0
 )
 
 require (
