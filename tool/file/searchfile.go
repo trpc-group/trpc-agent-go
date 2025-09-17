@@ -73,9 +73,6 @@ func (f *fileToolSet) searchFile(_ context.Context, req *searchFileRequest) (*se
 	}
 	// Separate files and folders.
 	for _, match := range matches {
-		if match == "." || match == ".." {
-			continue
-		}
 		fullPath := filepath.Join(targetPath, match)
 		stat, err := os.Stat(fullPath)
 		if err != nil {

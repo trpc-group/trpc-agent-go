@@ -3,12 +3,13 @@ module trpc.group/trpc-go/trpc-agent-go
 go 1.21
 
 require (
-	github.com/bmatcuk/doublestar/v4 v4.6.1
+	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/gomutex/godocx v0.1.5
 	github.com/gonfva/docxlib v0.0.0-20210517191039-d8f39cecf1ad
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/openai/openai-go v1.12.0
 	github.com/panjf2000/ants/v2 v2.9.0
@@ -50,6 +51,7 @@ require (
 	github.com/golang/glog v1.2.1 // indirect
 	github.com/google/go-querystring v1.0.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/invopop/yaml v0.2.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.2 // indirect

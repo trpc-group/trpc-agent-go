@@ -127,6 +127,7 @@ func TestNewToolSet_FeatureSwitch(t *testing.T) {
 		WithSearchFileEnabled(false),
 		WithSearchContentEnabled(false),
 		WithReplaceContentEnabled(false),
+		WithReadMultipleFilesEnabled(false),
 	)
 	assert.NoError(t, err)
 	fts := set.(*fileToolSet)

@@ -40,7 +40,7 @@ func main() {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Base Directory: %s\n", *baseDir)
 	fmt.Printf("Type 'exit' to end the conversation\n")
-	fmt.Printf("Available tools: save_file, read_file, list_file, search_file, search_content, replace_content\n")
+	fmt.Printf("Available tools: save_file, read_file, read_multiple_files, list_file, search_file, search_content, replace_content\n")
 	fmt.Println(strings.Repeat("=", 50))
 	// Create and run the chat.
 	chat := &debugChat{
@@ -116,7 +116,8 @@ func (c *debugChat) setup(ctx context.Context) error {
 		"",
 		"File Operation Rules:",
 		"- read_file, list_files, search_files, search_content: can run without confirmation.",
-		"- read_many_files: Prefer this to read multiple files in a single call to reduce round-trips.",
+		"- read_multiple_files: Prefer this when you need multiple files in one call to reduce round-trips.",
+		"  Use read_file when you need partial ranges of a single file (start_line/num_lines).",
 		"- save_file, replace_content: MUST ask for user confirmation before overwriting/creating files.",
 		"- Prefer replace_content over save_file for small edits; be precise and explain planned changes.",
 		"",
@@ -124,6 +125,7 @@ func (c *debugChat) setup(ctx context.Context) error {
 		"- save_file: Save content to files (confirmation required).",
 		"- replace_content: Replace specific strings (confirmation required). Prefer this for small edits.",
 		"- read_file: Read file contents.",
+		"- read_multiple_files: Read multiple files in a single call.",
 		"- list_files: List files and directories.",
 		"- search_files: Search for files by pattern.",
 		"- search_content: Search for content by pattern.",
