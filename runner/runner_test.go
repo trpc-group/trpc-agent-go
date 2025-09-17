@@ -247,8 +247,9 @@ func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
 	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	// Expect: seed (3) + agent response (1) + runner completion (1) = 5
-	require.Len(t, sess.Events, 5)
+    // Expect: due to EnsureEventStartWithUser filtering, only the first user
+    // event from seed is kept, plus agent response and runner completion = 3
+    require.Len(t, sess.Events, 3)
 	// Ensure we did not append a duplicate user message beyond the seed.
 	userCount := 0
 	for _, e := range sess.Events {
