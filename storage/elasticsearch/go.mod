@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch
 
-go 1.24.1
+go 1.23.0
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 
@@ -9,7 +9,7 @@ require (
 	github.com/elastic/go-elasticsearch/v8 v8.19.0
 	github.com/elastic/go-elasticsearch/v9 v9.1.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
 )
 
 require (
