@@ -20,7 +20,7 @@ Knowledge 系统的使用遵循以下模式：
 - **多源支持**：支持文件、目录、URL 等多种知识来源
 - **灵活存储**：支持内存、PostgreSQL、TcVector 等多种存储后端
 - **高性能处理**：并发处理和批量文档加载
-- **知识过滤**：通过元数据，支持知识的静态过滤和Agent智能过滤
+- **知识过滤**：通过元数据，支持知识的静态过滤和 Agent 智能过滤
 - **可扩展架构**：支持自定义 Embedder、Retriever 和 Reranker
 - **动态管理**：支持运行时添加、移除和更新知识源
 - **数据一致性保证**：通过 `enableSourceSync` 开启智能同步机制，确保向量存储数据始终与用户配置的 source 保持一致，支持增量处理、变更检测和孤儿文档自动清理
@@ -546,7 +546,7 @@ sources := []source.Source{
         filesource.WithMetadataValue("protocol", "trpc-go"),
         filesource.WithMetadataValue("version", "v1.0"),
     ),
-    
+
     // 目录源配置元数据
     dirsource.New(
         []string{"./tutorials"},
@@ -555,7 +555,7 @@ sources := []source.Source{
         dirsource.WithMetadataValue("difficulty", "beginner"),
         dirsource.WithMetadataValue("topic", "programming"),
     ),
-    
+
     // URL 源配置元数据
     urlsource.New(
         []string{"https://example.com/wiki/rpc"},
@@ -573,6 +573,7 @@ sources := []source.Source{
 不同的向量数据库对过滤器的支持程度不同：
 
 #### PostgreSQL + pgvector
+
 - ✅ 支持所有元数据字段过滤
 - ✅ 支持复杂查询条件
 - ✅ 支持 JSONB 字段索引
@@ -586,6 +587,7 @@ vectorStore, err := vectorpgvector.New(
 ```
 
 #### TcVector
+
 - ✅ 支持预定义字段过滤
 - ⚠️ 需要预先建立过滤字段索引
 
@@ -601,9 +603,9 @@ vectorStore, err := vectortcvector.New(
 ```
 
 #### 内存存储
+
 - ✅ 支持所有过滤器功能
 - ⚠️ 仅适用于开发和测试
-
 
 ### 知识库管理功能
 
@@ -678,7 +680,7 @@ if err != nil {
 }
 
 // 按源名称过滤显示
-docInfos, err = kb.ShowDocumentInfo(ctx, 
+docInfos, err = kb.ShowDocumentInfo(ctx,
     knowledge.WithShowDocumentInfoSourceName("APIDocumentation"))
 if err != nil {
     log.Printf("Failed to show source documents: %v", err)
@@ -703,6 +705,7 @@ for _, docInfo := range docInfos {
 ```
 
 **状态监控输出示例**：
+
 ```
 Document ID: a1b2c3d4e5f6...
 Source: Technical Documentation
@@ -710,7 +713,7 @@ URI: /docs/api/authentication.md
 Chunk Index: 0
 
 Document ID: f6e5d4c3b2a1...
-Source: Technical Documentation  
+Source: Technical Documentation
 URI: /docs/api/authentication.md
 Chunk Index: 1
 ```
@@ -917,7 +920,7 @@ func main() {
 
     // 获取所有源的元数据信息（用于智能过滤器）
     sourcesMetadata := source.GetAllMetadata(sources)
-    
+
     // 7. 创建 Agent 并集成 Knowledge
     llmAgent := llmagent.New(
         "knowledge-assistant",
@@ -949,7 +952,7 @@ func main() {
 
     // 11. 演示知识库管理功能 - 查看文档元数据
     log.Println("📊 显示当前知识库状态...")
-    
+
     // 查询所有文档的元数据信息，也支持查询指定 source 或者 metadata 的数据信息
     docInfos, err := kb.ShowDocumentInfo(ctx)
     if err != nil {
@@ -958,7 +961,7 @@ func main() {
         log.Printf("知识库中总共有 %d 个文档块", len(docInfos))
     }
 
-    
+
     // 12. 演示动态添加源 - 新数据将自动与配置保持同步
     log.Println("演示动态添加 source ...")
     newSource := filesource.New(
@@ -967,11 +970,11 @@ func main() {
         filesource.WithMetadataValue("category", "changelog"),
         filesource.WithMetadataValue("type", "updates"),
     )
-    
+
     if err := kb.AddSource(ctx, newSource); err != nil {
         log.Printf("Failed to add new source: %v", err)
-    } 
-    
+    }
+
     // 13. 演示移除source（可选，取消注释以测试）
     // if err := kb.RemoveSource(ctx, "Changelog"); err != nil {
     //     log.Printf("Failed to remove source: %v", err)

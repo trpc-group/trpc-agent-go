@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector
 
-go 1.21
+go 1.23.0
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 

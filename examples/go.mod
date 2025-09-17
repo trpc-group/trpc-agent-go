@@ -20,7 +20,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.29.0
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
-	trpc.group/trpc-go/trpc-agent-go v0.1.2
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
@@ -83,5 +83,5 @@ require (
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )

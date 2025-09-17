@@ -18,7 +18,7 @@ Runner provides the interface to run Agents, responsible for session management 
 ┌─────────────────────┐
 │       Runner        │  - Session management.
 └─────────┬───────────┘  - Event stream processing.
-          │ 
+          │
           │ r.agent.Run(ctx, invocation)
           │
 ┌─────────▼───────────┐
@@ -26,7 +26,7 @@ Runner provides the interface to run Agents, responsible for session management 
 └─────────┬───────────┘  - Returns <-chan *event.Event.
           │
           │ Implementation is determined by the Agent.
-          │ 
+          │
 ┌─────────▼───────────┐
 │    Agent Impl       │  e.g., LLMAgent, ChainAgent.
 └─────────────────────┘
@@ -36,7 +36,7 @@ Runner provides the interface to run Agents, responsible for session management 
 
 ### 📋 Requirements
 
-- Go 1.23 or higher.
+- Go 1.21 or later.
 - Valid LLM API key (OpenAI-compatible interface).
 - Redis (optional, for distributed session management).
 
@@ -48,7 +48,7 @@ package main
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -58,33 +58,33 @@ import (
 func main() {
     // 1. Create model.
     llmModel := openai.New("DeepSeek-V3-Online-64K")
-    
+
     // 2. Create Agent.
-    agent := llmagent.New("assistant", 
+    agent := llmagent.New("assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("You are a helpful AI assistant."),
         llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
     )
-    
+
     // 3. Create Runner.
     r := runner.NewRunner("my-app", agent)
-    
+
     // 4. Run conversation.
     ctx := context.Background()
     userMessage := model.NewUserMessage("Hello!")
-    
+
     eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
     if err != nil {
         panic(err)
     }
-    
+
     // 5. Handle responses.
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             fmt.Print(event.Choices[0].Delta.Content)
         }
@@ -205,7 +205,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 // Create Redis session service.
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"))
-    
+
 r := runner.NewRunner("app", agent,
     runner.WithSessionService(sessionService))
 ```
@@ -312,20 +312,20 @@ for event := range eventChan {
         fmt.Printf("Error: %s\n", event.Error.Message)
         continue
     }
-    
+
     // Streaming content.
     if len(event.Choices) > 0 {
         choice := event.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
-    
+
     // Tool invocation.
     if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
         for _, toolCall := range event.Choices[0].Message.ToolCalls {
             fmt.Printf("Call tool: %s\n", toolCall.Function.Name)
         }
     }
-    
+
     // Completion event.
     if event.Done {
         break
@@ -343,24 +343,24 @@ import (
 
 func processEvents(eventChan <-chan *event.Event) error {
     var fullResponse strings.Builder
-    
+
     for event := range eventChan {
         // Handle errors.
         if event.Error != nil {
             return fmt.Errorf("Event error: %w", event.Error)
         }
-        
+
         // Handle tool calls.
         if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 Tool Call:")
             for _, toolCall := range event.Choices[0].Message.ToolCalls {
-                fmt.Printf("  • %s (ID: %s)\n", 
+                fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
-                fmt.Printf("    Params: %s\n", 
+                fmt.Printf("    Params: %s\n",
                     string(toolCall.Function.Arguments))
             }
         }
-        
+
         // Handle tool responses.
         if event.Response != nil {
             for _, choice := range event.Response.Choices {
@@ -370,7 +370,7 @@ func processEvents(eventChan <-chan *event.Event) error {
                 }
             }
         }
-        
+
         // Handle streaming content.
         if len(event.Choices) > 0 {
             content := event.Choices[0].Delta.Content
@@ -379,13 +379,13 @@ func processEvents(eventChan <-chan *event.Event) error {
                 fullResponse.WriteString(content)
             }
         }
-        
+
         if event.Done {
             fmt.Println() // New line.
             break
         }
     }
-    
+
     return nil
 }
 ```
@@ -458,7 +458,7 @@ for event := range eventChan {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -470,7 +470,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
     if err != nil {
         return fmt.Errorf("Runner.Run failed: %v", err)
     }
-    
+
     // Check the event stream.
     for event := range eventChan {
         if event.Error != nil {
@@ -480,7 +480,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
             break
         }
     }
-    
+
     return nil
 }
 ```
