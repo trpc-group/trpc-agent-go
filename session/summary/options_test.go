@@ -84,7 +84,7 @@ func TestOptions(t *testing.T) {
 
 	t.Run("WithMaxLength_MetadataAndTruncation", func(t *testing.T) {
 		// Set a small max length and ensure metadata reflects it and output is truncated.
-		s := NewSummarizer(&testModel{}, WithMaxSummaryLength(50), WithWindowSize(1))
+		s := NewSummarizer(&testModel{}, WithMaxSummaryLength(50), WithKeepRecentCount(1))
 		md := s.Metadata()
 		assert.Equal(t, 50, md[metadataKeyMaxSummaryLength])
 

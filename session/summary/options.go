@@ -44,11 +44,11 @@ func WithMaxSummaryLength(maxSummaryLength int) Option {
 	}
 }
 
-// WithWindowSize sets the window size for summarization input.
-func WithWindowSize(windowSize int) Option {
+// WithKeepRecentCount sets how many recent events to feed into summarizer input.
+func WithKeepRecentCount(count int) Option {
 	return func(s *sessionSummarizer) {
-		if windowSize > 0 {
-			s.windowSize = windowSize
+		if count > 0 {
+			s.keepRecentCount = count
 		}
 	}
 }

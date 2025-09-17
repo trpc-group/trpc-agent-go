@@ -75,7 +75,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer.
-	sumOpts := []summary.Option{summary.WithWindowSize(*flagWindow)}
+	sumOpts := []summary.Option{summary.WithKeepRecentCount(*flagWindow)}
 	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
 	sumOpts = append(sumOpts, summary.WithChecksAny(
 		summary.CheckEventThreshold(*flagEvents),

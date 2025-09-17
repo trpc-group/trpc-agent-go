@@ -60,7 +60,7 @@ type sessionSummarizer struct {
 	prompt           string
 	checks           []Checker
 	maxSummaryLength int
-	windowSize       int
+	keepRecentCount  int
 }
 
 // NewSummarizer creates a new session summarizer.
@@ -69,7 +69,7 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 		prompt:           defaultSummarizerPrompt,
 		checks:           []Checker{}, // No default checks - summarization only when explicitly configured.
 		maxSummaryLength: 0,           // The max summary length is 0 by default, which means no truncation.
-		windowSize:       10,          // The window size is 10 by default.
+		keepRecentCount:  10,          // Keep recent 10 events by default.
 	}
 	s.model = m
 
@@ -105,8 +105,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 
 	// Extract conversation text from events within the window.
 	eventsToSummarize := sess.Events
-	if s.windowSize > 0 && len(sess.Events) > s.windowSize {
-		eventsToSummarize = sess.Events[len(sess.Events)-s.windowSize:]
+	if s.keepRecentCount > 0 && len(sess.Events) > s.keepRecentCount {
+		eventsToSummarize = sess.Events[len(sess.Events)-s.keepRecentCount:]
 	}
 
 	conversationText := s.extractConversationText(eventsToSummarize)
@@ -140,7 +140,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	return map[string]any{
 		metadataKeyModelName:        modelName,
 		metadataKeyMaxSummaryLength: s.maxSummaryLength,
-		metadataKeyWindowSize:       s.windowSize,
+		metadataKeyWindowSize:       s.keepRecentCount,
 		metadataKeyModelAvailable:   modelAvailable,
 		metadataKeyCheckFunctions:   len(s.checks),
 	}

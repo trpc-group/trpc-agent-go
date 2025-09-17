@@ -50,7 +50,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("errors when no conversation text", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(10))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(10))
 		sess := &session.Session{ID: "no-text", Events: make([]event.Event, 5)}
 		for i := range sess.Events {
 			sess.Events[i] = event.Event{Timestamp: time.Now()}
@@ -61,7 +61,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("simple concat summary without event modification", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(3)) // Use all events
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(3)) // Use all events
 		sess := &session.Session{ID: "concat", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "hello"}}}}, Timestamp: time.Now()},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "world"}}}}, Timestamp: time.Now()},
@@ -81,7 +81,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("truncation when max length set", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(1), WithMaxSummaryLength(10))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(1), WithMaxSummaryLength(10))
 		sess := &session.Session{ID: "truncate", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "abcdefghijklmno"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
@@ -95,7 +95,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("no truncation when max length is zero", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(2), WithMaxSummaryLength(0))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(2), WithMaxSummaryLength(0))
 		long := strings.Repeat("abc", 200)
 		sess := &session.Session{ID: "no-trunc", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: long}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
@@ -110,7 +110,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("author fallback to unknown", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(3))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(3))
 		sess := &session.Session{ID: "author-fallback", Events: []event.Event{
 			{Timestamp: time.Now().Add(-3 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "content"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
@@ -125,7 +125,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("windowSize default applied when param <= 0", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(2))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(2))
 		sess := &session.Session{ID: "window-size", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "old1"}}}}, Timestamp: time.Now().Add(-4 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "old2"}}}}, Timestamp: time.Now().Add(-3 * time.Second)},
@@ -144,7 +144,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("explicit windowSize argument overrides default", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithWindowSize(5))
+		s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(5))
 		sess := &session.Session{ID: "override-window", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "old1"}}}}, Timestamp: time.Now().Add(-5 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "old2"}}}}, Timestamp: time.Now().Add(-4 * time.Second)},
@@ -161,7 +161,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 }
 
 func TestSessionSummarizer_Metadata(t *testing.T) {
-	s := NewSummarizer(&fakeModel{}, WithWindowSize(2), WithMaxSummaryLength(0))
+	s := NewSummarizer(&fakeModel{}, WithKeepRecentCount(2), WithMaxSummaryLength(0))
 	md := s.Metadata()
 	assert.Equal(t, "fake", md[metadataKeyModelName])
 	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
