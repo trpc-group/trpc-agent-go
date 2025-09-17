@@ -221,6 +221,44 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	assert.Len(t, sess.Events, 0)
 }
 
+func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user"
+	sessionID := "seed-session"
+	seedHistory := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewAssistantMessage("prev reply"),
+		model.NewUserMessage("hello"),
+	}
+
+	message := model.NewUserMessage("hello")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.WithMessages(seedHistory))
+	require.NoError(t, err)
+
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Expect: seed (3) + agent response (1) + runner completion (1) = 5
+	require.Len(t, sess.Events, 5)
+	// Ensure we did not append a duplicate user message beyond the seed.
+	userCount := 0
+	for _, e := range sess.Events {
+		if e.Author == authorUser {
+			userCount++
+		}
+	}
+	require.Equal(t, 1, userCount)
+}
+
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
 func TestRunner_InvocationInjection(t *testing.T) {
 	// Create an in-memory session service.

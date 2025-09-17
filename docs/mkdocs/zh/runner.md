@@ -157,9 +157,11 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
 
-#### 传入对话历史（无需使用 Session）
+#### 传入对话历史（auto-seed + 复用 Session）
 
-如果上游服务已经维护了会话历史，并希望直接将整段对话（[]model.Message）传入 Agent，可使用以下两种方式：
+如果上游服务已经维护了会话历史，并希望让 Agent 看见这些上下文，可以直接传入整段
+`[]model.Message`。Runner 会在 Session 为空时自动将其写入 Session，并在随后的轮次将
+新事件（工具调用、后续回复等）继续写入。
 
 方式 A：使用便捷函数 `runner.RunWithMessages`
 
@@ -174,7 +176,7 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
 ```
 
-示例：`examples/runwithmessages`
+示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）
 
 方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）
 
@@ -183,7 +185,10 @@ msgs := []model.Message{ /* 同上 */ }
 ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msgs))
 ```
 
-注意：当显式传入 `[]model.Message` 时，Runner 会优先使用该历史并跳过从 Session 派生内容的逻辑，避免重复拼接；同时由于我们传入了空的 `message`，Runner 不会额外把这一步输入追加到 Session 中。
+注意：当显式传入 `[]model.Message` 时，Runner 会在 Session 为空时自动把这段历史写入
+Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
+没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
+`invocation.Message`。
 
 ## 💾 会话管理
 
