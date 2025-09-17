@@ -42,8 +42,14 @@ type Event struct {
 	// Response is the base struct for all LLM response functionality.
 	*model.Response
 
+	// RequestID is the request ID of the event.
+	RequestID string `json:"requestID,omitempty"`
+
 	// InvocationID is the invocation ID of the event.
 	InvocationID string `json:"invocationId"`
+
+	// ParentInvocationID is the parent invocation ID of the event.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
 
 	// Author is the author of the event.
 	Author string `json:"author"`

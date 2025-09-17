@@ -134,7 +134,7 @@ func (r *runner) Run(
 	}
 
 	// Create invocation.
-	var ro agent.RunOptions
+	ro := agent.RunOptions{RequestID: uuid.NewString()}
 	for _, opt := range runOpts {
 		opt(&ro)
 	}
