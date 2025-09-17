@@ -1814,7 +1814,7 @@
 <li><strong>多源支持</strong>：支持文件、目录、URL 等多种知识来源</li>
 <li><strong>灵活存储</strong>：支持内存、PostgreSQL、TcVector 等多种存储后端</li>
 <li><strong>高性能处理</strong>：并发处理和批量文档加载</li>
-<li><strong>知识过滤</strong>：通过元数据，支持知识的静态过滤和Agent智能过滤</li>
+<li><strong>知识过滤</strong>：通过元数据，支持知识的静态过滤和 Agent 智能过滤</li>
 <li><strong>可扩展架构</strong>：支持自定义 Embedder、Retriever 和 Reranker</li>
 <li><strong>动态管理</strong>：支持运行时添加、移除和更新知识源</li>
 <li><strong>数据一致性保证</strong>：通过 <code>enableSourceSync</code> 开启智能同步机制，确保向量存储数据始终与用户配置的 source 保持一致，支持增量处理、变更检测和孤儿文档自动清理</li>
@@ -2832,7 +2832,7 @@
 </span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a><span class="p">}</span>
 </span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a>
 </span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8"></a><span class="c1">// 按源名称过滤显示</span>
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span>
+</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
 </span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowDocumentInfoSourceName</span><span class="p">(</span><span class="s">&quot;APIDocumentation&quot;</span><span class="p">))</span>
 </span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show source documents: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
@@ -2855,7 +2855,7 @@
 </span><span id="__span-19-29"><a id="__codelineno-19-29" name="__codelineno-19-29"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Chunk Index: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">ChunkIndex</span><span class="p">)</span>
 </span><span id="__span-19-30"><a id="__codelineno-19-30" name="__codelineno-19-30"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>状态监控输出示例</strong>：
+<p><strong>状态监控输出示例</strong>：</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
 <span class="normal"><a href="#__codelineno-20-2">2</a></span>
 <span class="normal"><a href="#__codelineno-20-3">3</a></span>
@@ -2870,10 +2870,10 @@
 </span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a>Chunk Index: 0
 </span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a>
 </span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>Document ID: f6e5d4c3b2a1...
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>Source: Technical Documentation  
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>Source: Technical Documentation
 </span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a>URI: /docs/api/authentication.md
 </span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a>Chunk Index: 1
-</span></code></pre></div></td></tr></table></div></p>
+</span></code></pre></div></td></tr></table></div>
 <h3 id="queryenhancer">QueryEnhancer</h3>
 <p>QueryEnhancer 用于在搜索前对用户查询进行预处理和优化。目前框架只提供了一个默认实现：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
@@ -3365,7 +3365,7 @@
 </span><span id="__span-23-218"><a id="__codelineno-23-218" name="__codelineno-23-218"></a>
 </span><span id="__span-23-219"><a id="__codelineno-23-219" name="__codelineno-23-219"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">AddSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-23-220"><a id="__codelineno-23-220" name="__codelineno-23-220"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to add new source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-23-221"><a id="__codelineno-23-221" name="__codelineno-23-221"></a><span class="w">    </span><span class="p">}</span><span class="w"> </span>
+</span><span id="__span-23-221"><a id="__codelineno-23-221" name="__codelineno-23-221"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-23-222"><a id="__codelineno-23-222" name="__codelineno-23-222"></a>
 </span><span id="__span-23-223"><a id="__codelineno-23-223" name="__codelineno-23-223"></a><span class="w">    </span><span class="c1">// 13. 演示移除source（可选，取消注释以测试）</span>
 </span><span id="__span-23-224"><a id="__codelineno-23-224" name="__codelineno-23-224"></a><span class="w">    </span><span class="c1">// if err := kb.RemoveSource(ctx, &quot;Changelog&quot;); err != nil {</span>
@@ -3603,7 +3603,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年9月16日 06:13:45 UTC">2025-09-16 06:13:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年9月17日 06:14:11 UTC">2025-09-17 06:14:11</span>
   </span>
 
     

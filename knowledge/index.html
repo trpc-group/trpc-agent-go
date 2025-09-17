@@ -1909,7 +1909,7 @@
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="environment-requirements">Environment Requirements</h3>
 <ul>
-<li>Go 1.24.1 or higher</li>
+<li>Go 1.24.1 or laster</li>
 <li>Valid LLM API key (OpenAI compatible interface)</li>
 <li>Vector database (optional, for production environment)</li>
 </ul>
@@ -2934,7 +2934,7 @@
 </span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Chunk Index: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">ChunkIndex</span><span class="p">)</span>
 </span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Status monitoring output example</strong>:
+<p><strong>Status monitoring output example</strong>:</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1">1</a></span>
 <span class="normal"><a href="#__codelineno-21-2">2</a></span>
 <span class="normal"><a href="#__codelineno-21-3">3</a></span>
@@ -2949,10 +2949,10 @@
 </span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a>Chunk Index: 0
 </span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a>
 </span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a>Document ID: f6e5d4c3b2a1...
-</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a>Source: Technical Documentation  
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a>Source: Technical Documentation
 </span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8"></a>URI: /docs/api/authentication.md
 </span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9"></a>Chunk Index: 1
-</span></code></pre></div></td></tr></table></div></p>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="advanced-features">Advanced Features</h2>
 <h3 id="queryenhancer">QueryEnhancer</h3>
 <p>QueryEnhancer is used to preprocess and optimize user queries before searching. Currently, the framework only provides a default implementation:</p>
@@ -3445,7 +3445,7 @@
 </span><span id="__span-24-218"><a id="__codelineno-24-218" name="__codelineno-24-218"></a>
 </span><span id="__span-24-219"><a id="__codelineno-24-219" name="__codelineno-24-219"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">AddSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-24-220"><a id="__codelineno-24-220" name="__codelineno-24-220"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to add new source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-24-221"><a id="__codelineno-24-221" name="__codelineno-24-221"></a><span class="w">    </span><span class="p">}</span><span class="w"> </span>
+</span><span id="__span-24-221"><a id="__codelineno-24-221" name="__codelineno-24-221"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-24-222"><a id="__codelineno-24-222" name="__codelineno-24-222"></a>
 </span><span id="__span-24-223"><a id="__codelineno-24-223" name="__codelineno-24-223"></a><span class="w">    </span><span class="c1">// 13. Demonstrate source removal (optional, uncomment to test)</span>
 </span><span id="__span-24-224"><a id="__codelineno-24-224" name="__codelineno-24-224"></a><span class="w">    </span><span class="c1">// if err := kb.RemoveSource(ctx, &quot;Changelog&quot;); err != nil {</span>
@@ -3683,7 +3683,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 16, 2025 06:13:45 UTC">2025-09-16 06:13:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 17, 2025 06:14:11 UTC">2025-09-17 06:14:11</span>
   </span>
 
     
