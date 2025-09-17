@@ -48,16 +48,19 @@ The workflow uses a Graph + GraphAgent + Runner architecture:
 ## Usage
 
 ### Run with default examples:
+
 ```bash
-go run . 
+go run .
 ```
 
 ### Run in interactive mode:
+
 ```bash
 go run . -interactive
 ```
 
 ### Use a different model:
+
 ```bash
 go run . -model "gpt-4"
 ```
@@ -118,7 +121,7 @@ To customize the workflow:
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.21 or later
 - Valid API key and base URL for your model provider (OpenAI-compatible)
 - Network connectivity for LLM calls
 
