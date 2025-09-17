@@ -12,6 +12,7 @@ The usage of the Knowledge system follows this pattern:
 2. **Load Documents**: Load and index documents from various sources
 3. **Integrate with Agent**: Use `WithKnowledge()` to integrate Knowledge into LLM Agent
 4. **Agent Auto Retrieval**: Agent automatically performs knowledge retrieval through built-in `knowledge_search` tool
+5. **Knowledge Base Management**: Enable intelligent synchronization mechanism through `enableSourceSync` to ensure data in vector storage always stays consistent with user-configured sources
 
 This pattern provides:
 
@@ -19,7 +20,10 @@ This pattern provides:
 - **Multi-source Support**: Support for files, directories, URLs, and other knowledge sources
 - **Flexible Storage**: Support for memory, PostgreSQL, TcVector, and other storage backends
 - **High Performance Processing**: Concurrent processing and batch document loading
+- **Knowledge Filtering**: Support static filtering and Agent intelligent filtering through metadata
 - **Extensible Architecture**: Support for custom Embedders, Retrievers, and Rerankers
+- **Dynamic Management**: Support runtime addition, removal, and updating of knowledge sources
+- **Data Consistency Guarantee**: Enable intelligent synchronization mechanism through `enableSourceSync` to ensure vector storage data always stays consistent with user-configured sources, supporting incremental processing, change detection, and automatic orphan document cleanup
 
 ### Agent Integration
 
@@ -35,7 +39,7 @@ How the Knowledge system integrates with Agents:
 
 ### Environment Requirements
 
-- Go 1.24.1 or higher
+- Go 1.24.1 or laster
 - Valid LLM API key (OpenAI compatible interface)
 - Vector database (optional, for production environment)
 
@@ -97,6 +101,7 @@ func main() {
         knowledge.WithEmbedder(embedder),
         knowledge.WithVectorStore(vectorStore),
         knowledge.WithSources(sources),
+        knowledge.WithEnableSourceSync(true), // Enable incremental sync to keep vector storage consistent with sources.
     )
 
     // 5. Load documents.
@@ -561,7 +566,7 @@ sources := []source.Source{
         filesource.WithMetadataValue("protocol", "trpc-go"),
         filesource.WithMetadataValue("version", "v1.0"),
     ),
-    
+
     // Directory source metadata configuration
     dirsource.New(
         []string{"./tutorials"},
@@ -570,7 +575,7 @@ sources := []source.Source{
         dirsource.WithMetadataValue("difficulty", "beginner"),
         dirsource.WithMetadataValue("topic", "programming"),
     ),
-    
+
     // URL source metadata configuration
     urlsource.New(
         []string{"https://example.com/wiki/rpc"},
@@ -588,6 +593,7 @@ sources := []source.Source{
 Different vector databases have varying levels of filter support:
 
 #### PostgreSQL + pgvector
+
 - ✅ Supports all metadata field filtering
 - ✅ Supports complex query conditions
 - ✅ Supports JSONB field indexing
@@ -601,6 +607,7 @@ vectorStore, err := vectorpgvector.New(
 ```
 
 #### TcVector
+
 - ✅ Supports predefined field filtering
 - ⚠️ Requires pre-establishing filter field indexes
 
@@ -616,8 +623,108 @@ vectorStore, err := vectortcvector.New(
 ```
 
 #### In-memory Storage
+
 - ✅ Supports all filter functionality
 - ⚠️ Only suitable for development and testing
+
+### Knowledge Base Management Functionality
+
+The Knowledge system provides powerful knowledge base management functionality, supporting dynamic source management and intelligent synchronization mechanisms.
+
+#### Enable Source Sync (enableSourceSync)
+
+By enabling `enableSourceSync`, the knowledge base will always keep vector storage data consistent with configured sources. If you're not using custom methods to manage the knowledge base, it's recommended to enable this option:
+
+```go
+kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),
+    knowledge.WithVectorStore(vectorStore),
+    knowledge.WithSources(sources),
+    knowledge.WithEnableSourceSync(true), // Enable incremental sync
+)
+```
+
+**How the synchronization mechanism works**:
+
+1. **Pre-loading preparation**: Refresh document information cache, establish synchronization state tracking
+2. **Process tracking**: Record processed documents to avoid duplicate processing
+3. **Post-loading cleanup**: Automatically clean up orphaned documents that no longer exist
+
+**Advantages of enabling synchronization**:
+
+- **Data consistency**: Ensure vector storage is completely synchronized with source configuration
+- **Incremental updates**: Only process changed documents, improving performance
+- **Orphan cleanup**: Automatically delete documents from removed sources
+- **State tracking**: Real-time monitoring of synchronization status and processing progress
+
+#### Dynamic Source Management
+
+Knowledge supports runtime dynamic management of knowledge sources, ensuring data in vector storage always stays consistent with user-configured sources:
+
+```go
+// Add new knowledge source - data will stay consistent with configured sources
+newSource := filesource.New([]string{"./new-docs/api.md"})
+if err := kb.AddSource(ctx, newSource); err != nil {
+    log.Printf("Failed to add source: %v", err)
+}
+
+// Reload specified knowledge source - automatically detect changes and sync
+if err := kb.ReloadSource(ctx, newSource); err != nil {
+    log.Printf("Failed to reload source: %v", err)
+}
+
+// Remove specified knowledge source - precisely delete related documents
+if err := kb.RemoveSource(ctx, "API Documentation"); err != nil {
+    log.Printf("Failed to remove source: %v", err)
+}
+```
+
+**Core features of dynamic management**:
+
+- **Data consistency guarantee**: Vector storage data always stays consistent with user-configured sources
+- **Intelligent incremental sync**: Only process changed documents, avoiding duplicate processing
+- **Precise source control**: Support precise addition/removal/reload by source name
+- **Orphan document cleanup**: Automatically clean up documents that no longer belong to any configured source
+- **Hot update support**: Update knowledge base without restarting the application
+
+#### Knowledge Base Status Monitoring
+
+Knowledge provides rich status monitoring functionality to help users understand the synchronization status of currently configured sources:
+
+```go
+// Show all document information
+docInfos, err := kb.ShowDocumentInfo(ctx)
+if err != nil {
+    log.Printf("Failed to show document info: %v", err)
+    return
+}
+
+// Also supports querying specific sources or metadata
+// docInfos, err := kb.ShowDocumentInfo(ctx, "source_name_1", "source_name_2")
+// This will only return document metadata for the specified source names
+
+// Iterate through document information
+for _, docInfo := range docInfos {
+    fmt.Printf("Document ID: %s\n", docInfo.DocumentID)
+    fmt.Printf("Source: %s\n", docInfo.SourceName)
+    fmt.Printf("URI: %s\n", docInfo.URI)
+    fmt.Printf("Chunk Index: %d\n", docInfo.ChunkIndex)
+}
+```
+
+**Status monitoring output example**:
+
+```
+Document ID: a1b2c3d4e5f6...
+Source: Technical Documentation
+URI: /docs/api/authentication.md
+Chunk Index: 0
+
+Document ID: f6e5d4c3b2a1...
+Source: Technical Documentation
+URI: /docs/api/authentication.md
+Chunk Index: 1
+```
 
 ## Advanced Features
 
@@ -823,7 +930,7 @@ func main() {
 
     // Get metadata information from all sources (for intelligent filters).
     sourcesMetadata := source.GetAllMetadata(sources)
-    
+
     // 7. Create Agent and integrate Knowledge.
     llmAgent := llmagent.New(
         "knowledge-assistant",
@@ -852,6 +959,36 @@ func main() {
     }
 
     // 10. Handle response ...
+
+    // 11. Demonstrate knowledge base management functionality - view document metadata
+    log.Println("📊 Displaying current knowledge base status...")
+
+    // Query metadata information for all documents, also supports querying specific source or metadata data
+    docInfos, err := kb.ShowDocumentInfo(ctx)
+    if err != nil {
+        log.Printf("Failed to show document info: %v", err)
+    } else {
+        log.Printf("Knowledge base contains a total of %d document chunks", len(docInfos))
+    }
+
+
+    // 12. Demonstrate dynamic source addition - new data will automatically stay consistent with configuration
+    log.Println("Demonstrating dynamic source addition...")
+    newSource := filesource.New(
+        []string{"./new-docs/changelog.md"},
+        filesource.WithName("Changelog"),
+        filesource.WithMetadataValue("category", "changelog"),
+        filesource.WithMetadataValue("type", "updates"),
+    )
+
+    if err := kb.AddSource(ctx, newSource); err != nil {
+        log.Printf("Failed to add new source: %v", err)
+    }
+
+    // 13. Demonstrate source removal (optional, uncomment to test)
+    // if err := kb.RemoveSource(ctx, "Changelog"); err != nil {
+    //     log.Printf("Failed to remove source: %v", err)
+    // }
 }
 
 // getEnvOrDefault returns the environment variable value or a default value if not set.

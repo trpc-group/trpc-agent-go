@@ -19,6 +19,7 @@ import (
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
+	tcdocument "github.com/tencent/vectordatabase-sdk-go/tcvectordb/api/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -46,6 +47,11 @@ var (
 	fieldSparseVector = "sparse_vector"
 	fieldMetadata     = "metadata"
 	defaultLimit      = 10
+)
+
+const (
+	// Batch processing constants
+	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
 )
 
 // VectorStore is the vector store for tcvectordb.
@@ -427,7 +433,7 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	}
 }
 
-// vectorSearch performs pure vector similarity search using dense embeddings.
+// vectorSearch performs pure vector similarity search using dense embeddings
 func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if len(query.Vector) == 0 {
 		return nil, errors.New("tcvectordb: searching with a nil or empty vector is not supported")
@@ -610,6 +616,154 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("tcvectordb filter search: %w", err)
 	}
 	return vs.convertQueryResult(result)
+}
+
+// DeleteByFilter deletes documents from the vector store based on filter conditions.
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
+	options := vectorstore.ApplyDeleteOptions(opts...)
+
+	if err := vs.validateDeleteOptions(options); err != nil {
+		return err
+	}
+
+	if options.DeleteAll {
+		return vs.deleteAll(ctx)
+	}
+
+	return vs.deleteByFilter(ctx, options)
+}
+
+func (vs *VectorStore) validateDeleteOptions(options *vectorstore.DeleteConfig) error {
+	if options.DeleteAll && (len(options.DocumentIDs) > 0 || len(options.Filter) > 0) {
+		return fmt.Errorf("tcvectordb delete all documents, but document ids or filter are provided")
+	}
+	if !options.DeleteAll && len(options.DocumentIDs) == 0 && len(options.Filter) == 0 {
+		return fmt.Errorf("tcvectordb delete by filter: no filter conditions specified")
+	}
+	return nil
+}
+
+func (vs *VectorStore) deleteAll(ctx context.Context) error {
+	db := vs.client.Database(vs.option.database)
+	if _, err := db.TruncateCollection(ctx, vs.option.collection); err != nil {
+		return fmt.Errorf("tcvectordb truncate collection: %w", err)
+	}
+	return nil
+}
+
+func (vs *VectorStore) deleteByFilter(ctx context.Context, options *vectorstore.DeleteConfig) error {
+	deleteParams := tcvectordb.DeleteDocumentParams{
+		DocumentIds: options.DocumentIDs,
+	}
+
+	if len(options.Filter) > 0 {
+		deleteParams.Filter = getCondFromQuery([]string{}, options.Filter)
+	}
+
+	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, deleteParams); err != nil {
+		return fmt.Errorf("tcvectordb delete documents by filter: %w", err)
+	}
+	return nil
+}
+
+// Count counts the number of documents in the vector store.
+func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	options := vectorstore.ApplyCountOptions(opts...)
+	filter := options.Filter
+
+	countParams := tcvectordb.CountDocumentParams{}
+	if filter != nil {
+		tcFilter := getCondFromQuery([]string{}, filter)
+		countParams.CountFilter = tcFilter
+	}
+
+	countResult, err := vs.client.Count(ctx, vs.option.database, vs.option.collection, countParams)
+	if err != nil {
+		return 0, fmt.Errorf("tcvectordb count documents: %w", err)
+	}
+	result := int(countResult.Count)
+	return result, nil
+}
+
+// GetMetadata retrieves metadata from the vector store with pagination support.
+// If limit < 0, retrieves all metadata in batches ordered by created_at.
+func (vs *VectorStore) GetMetadata(
+	ctx context.Context,
+	opts ...vectorstore.GetMetadataOption,
+) (map[string]vectorstore.DocumentMetadata, error) {
+	options, err := vectorstore.ApplyGetMetadataOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	if options.Limit < 0 && options.Offset < 0 {
+		return vs.getAllMetadata(ctx, options)
+	}
+
+	return vs.queryMetadataBatch(ctx, options.Limit, options.Offset, options.IDs, options.Filter)
+}
+
+func (vs *VectorStore) getAllMetadata(ctx context.Context, options *vectorstore.GetMetadataConfig) (map[string]vectorstore.DocumentMetadata, error) {
+	result := make(map[string]vectorstore.DocumentMetadata)
+
+	for offset := 0; ; offset += metadataBatchSize {
+		batch, err := vs.queryMetadataBatch(ctx, metadataBatchSize, offset, options.IDs, options.Filter)
+		if err != nil {
+			return nil, err
+		}
+
+		for docID, metadata := range batch {
+			result[docID] = metadata
+		}
+
+		if len(batch) < metadataBatchSize {
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// queryMetadataBatch executes a single metadata query with the given limit and offset
+func (vs *VectorStore) queryMetadataBatch(
+	ctx context.Context,
+	limit,
+	offset int,
+	ids []string,
+	filter map[string]interface{},
+) (map[string]vectorstore.DocumentMetadata, error) {
+	QueryDocumentParams := tcvectordb.QueryDocumentParams{
+		Offset:       int64(offset),
+		Limit:        int64(limit),
+		Filter:       getCondFromQuery(ids, filter),
+		OutputFields: []string{fieldMetadata, fieldID},
+		Sort: []tcdocument.SortRule{
+			{
+				FieldName: fieldCreatedAt,
+				Direction: "asc",
+			},
+		},
+	}
+
+	queryResult, err := vs.client.Query(ctx, vs.option.database, vs.option.collection, nil, &QueryDocumentParams)
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb get metadata batch: %w", err)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for _, tcDoc := range queryResult.Documents {
+		metadata := make(map[string]interface{})
+		if field, ok := tcDoc.Fields[fieldMetadata]; ok {
+			if metaField, ok := field.Val.(map[string]interface{}); ok {
+				metadata = metaField
+			}
+		}
+		result[tcDoc.Id] = vectorstore.DocumentMetadata{
+			Metadata: metadata,
+		}
+	}
+
+	return result, nil
 }
 
 // Close closes the vector store connection.

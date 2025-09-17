@@ -12,6 +12,7 @@ Knowledge 系统的使用遵循以下模式：
 2. **加载文档**：从各种来源加载和索引文档
 3. **集成到 Agent**：使用 `WithKnowledge()` 将 Knowledge 集成到 LLM Agent 中
 4. **Agent 自动检索**：Agent 通过内置的 `knowledge_search` 工具自动进行知识检索
+5. **知识库管理**：通过 `enableSourceSync` 启用智能同步机制，确保向量存储中的数据始终与用户配置的 source 保持一致
 
 这种模式提供了：
 
@@ -19,7 +20,10 @@ Knowledge 系统的使用遵循以下模式：
 - **多源支持**：支持文件、目录、URL 等多种知识来源
 - **灵活存储**：支持内存、PostgreSQL、TcVector 等多种存储后端
 - **高性能处理**：并发处理和批量文档加载
+- **知识过滤**：通过元数据，支持知识的静态过滤和 Agent 智能过滤
 - **可扩展架构**：支持自定义 Embedder、Retriever 和 Reranker
+- **动态管理**：支持运行时添加、移除和更新知识源
+- **数据一致性保证**：通过 `enableSourceSync` 开启智能同步机制，确保向量存储数据始终与用户配置的 source 保持一致，支持增量处理、变更检测和孤儿文档自动清理
 
 ### Agent 集成
 
@@ -97,6 +101,7 @@ func main() {
         knowledge.WithEmbedder(embedder),
         knowledge.WithVectorStore(vectorStore),
         knowledge.WithSources(sources),
+        knowledge.WithEnableSourceSync(true), // 启用增量同步，保持向量存储与源一致
     )
 
     // 5. 加载文档
@@ -133,8 +138,6 @@ func main() {
     if err != nil {
         log.Fatalf("Failed to run agent: %v", err)
     }
-
-    // 10. 处理响应 ...
 }
 ```
 
@@ -543,7 +546,7 @@ sources := []source.Source{
         filesource.WithMetadataValue("protocol", "trpc-go"),
         filesource.WithMetadataValue("version", "v1.0"),
     ),
-    
+
     // 目录源配置元数据
     dirsource.New(
         []string{"./tutorials"},
@@ -552,7 +555,7 @@ sources := []source.Source{
         dirsource.WithMetadataValue("difficulty", "beginner"),
         dirsource.WithMetadataValue("topic", "programming"),
     ),
-    
+
     // URL 源配置元数据
     urlsource.New(
         []string{"https://example.com/wiki/rpc"},
@@ -570,6 +573,7 @@ sources := []source.Source{
 不同的向量数据库对过滤器的支持程度不同：
 
 #### PostgreSQL + pgvector
+
 - ✅ 支持所有元数据字段过滤
 - ✅ 支持复杂查询条件
 - ✅ 支持 JSONB 字段索引
@@ -583,6 +587,7 @@ vectorStore, err := vectorpgvector.New(
 ```
 
 #### TcVector
+
 - ✅ 支持预定义字段过滤
 - ⚠️ 需要预先建立过滤字段索引
 
@@ -598,10 +603,120 @@ vectorStore, err := vectortcvector.New(
 ```
 
 #### 内存存储
+
 - ✅ 支持所有过滤器功能
 - ⚠️ 仅适用于开发和测试
 
-## 高级功能
+### 知识库管理功能
+
+Knowledge 系统提供了强大的知识库管理功能，支持动态源管理和智能同步机制。
+
+#### 启用源同步 (enableSourceSync)
+
+通过启用 `enableSourceSync`，知识库会始终保持向量存储数据和配置的数据源一致，这里如果没有使用自定义的办法来管理知识库，建议开启此选项：
+
+```go
+kb := knowledge.New(
+    knowledge.WithEmbedder(embedder),
+    knowledge.WithVectorStore(vectorStore),
+    knowledge.WithSources(sources),
+    knowledge.WithEnableSourceSync(true), // 启用增量同步
+)
+```
+
+**同步机制的工作原理**：
+
+1. **加载前准备**：刷新文档信息缓存，建立同步状态跟踪
+2. **处理过程跟踪**：记录已处理的文档，避免重复处理
+3. **加载后清理**：自动清理不再存在的孤儿文档
+
+**启用同步的优势**：
+
+- **数据一致性**：确保向量存储与源配置完全同步
+- **增量更新**：只处理变更的文档，提升性能
+- **孤儿清理**：自动删除已移除源的相关文档
+- **状态跟踪**：实时监控同步状态和处理进度
+
+#### 动态源管理
+
+Knowledge 支持运行时动态管理知识源，确保向量存储中的数据始终与用户配置的 source 保持一致：
+
+```go
+// 添加新的知识源 - 数据将与配置的源保持同步
+newSource := filesource.New([]string{"./new-docs/api.md"})
+if err := kb.AddSource(ctx, newSource); err != nil {
+    log.Printf("Failed to add source: %v", err)
+}
+
+// 重新加载指定的知识源 - 自动检测变更并同步
+if err := kb.ReloadSource(ctx, newSource); err != nil {
+    log.Printf("Failed to reload source: %v", err)
+}
+
+// 移除指定的知识源 - 精确删除相关文档
+if err := kb.RemoveSource(ctx, "API Documentation"); err != nil {
+    log.Printf("Failed to remove source: %v", err)
+}
+```
+
+**动态管理的核心特点**：
+
+- **数据一致性保证**：向量存储数据始终与用户配置的 source 保持一致
+- **智能增量同步**：只处理变更的文档，避免重复处理
+- **精确源控制**：支持按源名称精确添加/移除/重载
+- **孤儿文档清理**：自动清理不再属于任何配置源的文档
+- **热更新支持**：无需重启应用即可更新知识库
+
+#### 知识库状态监控
+
+Knowledge 提供了丰富的状态监控功能，帮助用户了解当前配置源的同步状态：
+
+```go
+// 显示所有文档信息
+docInfos, err := kb.ShowDocumentInfo(ctx)
+if err != nil {
+    log.Printf("Failed to show document info: %v", err)
+    return
+}
+
+// 按源名称过滤显示
+docInfos, err = kb.ShowDocumentInfo(ctx,
+    knowledge.WithShowDocumentInfoSourceName("APIDocumentation"))
+if err != nil {
+    log.Printf("Failed to show source documents: %v", err)
+    return
+}
+
+// 按文档ID过滤显示
+docInfos, err = kb.ShowDocumentInfo(ctx,
+    knowledge.WithShowDocumentInfoIDs([]string{"doc1", "doc2"}))
+if err != nil {
+    log.Printf("Failed to show specific documents: %v", err)
+    return
+}
+
+// 遍历显示文档信息
+for _, docInfo := range docInfos {
+    fmt.Printf("Document ID: %s\n", docInfo.DocumentID)
+    fmt.Printf("Source: %s\n", docInfo.SourceName)
+    fmt.Printf("URI: %s\n", docInfo.URI)
+    fmt.Printf("Chunk Index: %d\n", docInfo.ChunkIndex)
+}
+```
+
+**状态监控输出示例**：
+
+```
+Document ID: a1b2c3d4e5f6...
+Source: Technical Documentation
+URI: /docs/api/authentication.md
+Chunk Index: 0
+
+Document ID: f6e5d4c3b2a1...
+Source: Technical Documentation
+URI: /docs/api/authentication.md
+Chunk Index: 1
+```
 
 ### QueryEnhancer
 
@@ -805,7 +920,7 @@ func main() {
 
     // 获取所有源的元数据信息（用于智能过滤器）
     sourcesMetadata := source.GetAllMetadata(sources)
-    
+
     // 7. 创建 Agent 并集成 Knowledge
     llmAgent := llmagent.New(
         "knowledge-assistant",
@@ -834,6 +949,36 @@ func main() {
     }
 
     // 10. 处理响应 ...
+
+    // 11. 演示知识库管理功能 - 查看文档元数据
+    log.Println("📊 显示当前知识库状态...")
+
+    // 查询所有文档的元数据信息，也支持查询指定 source 或者 metadata 的数据信息
+    docInfos, err := kb.ShowDocumentInfo(ctx)
+    if err != nil {
+        log.Printf("Failed to show document info: %v", err)
+    } else {
+        log.Printf("知识库中总共有 %d 个文档块", len(docInfos))
+    }
+
+
+    // 12. 演示动态添加源 - 新数据将自动与配置保持同步
+    log.Println("演示动态添加 source ...")
+    newSource := filesource.New(
+        []string{"./new-docs/changelog.md"},
+        filesource.WithName("Changelog"),
+        filesource.WithMetadataValue("category", "changelog"),
+        filesource.WithMetadataValue("type", "updates"),
+    )
+
+    if err := kb.AddSource(ctx, newSource); err != nil {
+        log.Printf("Failed to add new source: %v", err)
+    }
+
+    // 13. 演示移除source（可选，取消注释以测试）
+    // if err := kb.RemoveSource(ctx, "Changelog"); err != nil {
+    //     log.Printf("Failed to remove source: %v", err)
+    // }
 }
 
 // getEnvOrDefault returns the environment variable value or a default value if not set.

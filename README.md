@@ -138,7 +138,7 @@ Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.
 
 ### 📋 Prerequisites
 
-- ✅ Go 1.24.1 or later
+- ✅ Go 1.21 or later
 - 🔑 LLM provider API key (OpenAI, DeepSeek, etc.)
 - 💡 5 minutes to build your first intelligent agent
 

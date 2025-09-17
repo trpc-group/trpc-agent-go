@@ -23,24 +23,24 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
+| Variable          | Description                              | Default Value               |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
-| `-model` | Name of the model to use | `deepseek-chat` |
-| `-show-inner` | Show inner agent deltas streamed by AgentTool | `false` |
-| `-show-tool` | Show tool.response deltas/finals in transcript | `false` |
-| `-debug` | Prefix streamed lines with author for debugging | `false` |
+| Argument      | Description                                     | Default Value   |
+| ------------- | ----------------------------------------------- | --------------- |
+| `-model`      | Name of the model to use                        | `deepseek-chat` |
+| `-show-inner` | Show inner agent deltas streamed by AgentTool   | `false`         |
+| `-show-tool`  | Show tool.response deltas/finals in transcript  | `false`         |
+| `-debug`      | Prefix streamed lines with author for debugging | `false`         |
 
 ## Usage
 
@@ -63,16 +63,18 @@ go run main.go -model gpt-4o
 
 The example includes two types of tools:
 
-### 🕐 Time Tool  
+### 🕐 Time Tool
+
 - **Function**: `current_time`
 - **Timezones**: UTC, EST, PST, CST, or local time
 - **Usage**: "What time is it in EST?" or "Current time please"
 - **Arguments**: timezone (optional string)
 
 ### 🤖 Math Specialist Agent Tool
+
 - **Function**: `math-specialist`
 - **Purpose**: Handles complex mathematical operations and reasoning with its own calculator tool
-- **Usage**: "Calculate 923476 * 273472354" or "Solve this equation: 2x + 5 = 13"
+- **Usage**: "Calculate 923476 \* 273472354" or "Solve this equation: 2x + 5 = 13"
 - **Arguments**: request (string) - the mathematical problem or question
 - **Internal Tools**: The math specialist agent has access to a calculator tool for basic operations
 
@@ -216,7 +218,8 @@ llmAgent := llmagent.New(
 - **Multi-Step Workflows**: Chain multiple agents for complex processes
 - **Quality Assurance**: Use specialized agents for validation and review
 - **Content Generation**: Delegate different types of content to specialized agents
-- **Problem Solving**: Break complex problems into specialized sub-tasks 
+- **Problem Solving**: Break complex problems into specialized sub-tasks
+
 ### Streaming Tool Responses in the App
 
 When the main agent invokes the agent tool, the framework emits `tool.response` events for the tool output. In streaming mode, each chunk appears in `choice.Delta.Content` with `Object: tool.response`.

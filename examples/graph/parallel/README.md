@@ -239,7 +239,14 @@ This example is designed to test:
 
 ```bash
 # Run with verbose logging
-go run main.go -model deepseek-chat
+go run main.go -model deepseek-chat -verbose
+
+# Fake streaming is enabled by default.
+# Disable fake streaming
+go run main.go -model deepseek-chat -stream=false
+
+# Customize streaming feel (chunk size and delay)
+go run main.go -model deepseek-chat -stream -stream-chunk 12 -stream-delay 40ms
 
 # Check for compilation errors
 go build main.go
@@ -266,4 +273,3 @@ When modifying this example:
 ## License
 
 This example is part of the `trpc-agent-go` project and is licensed under the Apache License Version 2.0.
-
