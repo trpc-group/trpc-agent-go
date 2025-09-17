@@ -39,7 +39,7 @@ How the Knowledge system integrates with Agents:
 
 ### Environment Requirements
 
-- Go 1.21 or laster
+- Go 1.24.1 or laster
 - Valid LLM API key (OpenAI compatible interface)
 - Vector database (optional, for production environment)
 

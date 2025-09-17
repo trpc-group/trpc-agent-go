@@ -16,7 +16,7 @@ The code execution system allows you to execute code snippets in various program
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.23.0 or later
 - Valid OpenAI API key (or compatible API endpoint) for LLM functionality
 - Docker installed and running (for ContainerCodeExecutor)
 - Python 3.x, Go, and Bash interpreters (for LocalCodeExecutor)
