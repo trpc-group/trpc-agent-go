@@ -112,7 +112,7 @@ schema := graph.MessagesStateSchema().
 
 ### Prerequisites
 
-- Go 1.24 or later
+- Go 1.21 or later
 - Access to an LLM model (optional, for enhanced examples)
 - Valid API key configured for the selected model
 

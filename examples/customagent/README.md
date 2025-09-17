@@ -22,7 +22,7 @@ It’s a good starting point when you want to “embed” LLM into existing code
 
 ## Prerequisites
 
-- Go 1.23+
+- GGo 1.21 or later
 - Valid API key for an OpenAI-compatible model provider
 
 ### Environment setup

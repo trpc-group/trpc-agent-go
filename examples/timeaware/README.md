@@ -11,7 +11,7 @@ This example demonstrates a multi-turn chat application using the tRPC Agent Go 
 
 ## Prerequisites
 
-- Go 1.19 or later
+- Go 1.21 or later
 - tRPC Agent Go framework dependencies
 - OpenAI-compatible model access (or other supported models)
 
@@ -91,6 +91,7 @@ The application automatically includes current time information in system prompt
 - Adapt responses based on timezone settings
 
 Example time-aware interactions:
+
 ```
 User: What time is it?
 Assistant: Based on the current time information available to me, it's currently [current time] in [timezone].

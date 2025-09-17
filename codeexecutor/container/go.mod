@@ -2,12 +2,14 @@ module trpc.group/trpc-go/trpc-agent-go/codeexecutor/container
 
 go 1.23.0
 
+replace trpc.group/trpc-go/trpc-agent-go => ../..
+
 require (
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/moby/go-archive v0.1.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
 )
 
 require (
@@ -46,6 +48,5 @@ require (
 	golang.org/x/sys v0.35.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go => ../..

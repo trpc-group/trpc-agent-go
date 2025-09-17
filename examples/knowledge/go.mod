@@ -2,11 +2,20 @@ module github.com/trpc-agent-go/examples/knowledge
 
 go 1.24.1
 
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../../knowledge/document/reader/pdf
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+)
+
 require (
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20250916142551-e09bc82faeaa
-	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250916142551-e09bc82faeaa
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20250917031858-f0ddbd5b2cb4
+	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 )
@@ -77,10 +86,6 @@ require (
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.0.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.2-0.20250807061029-66942a6b44d9 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch

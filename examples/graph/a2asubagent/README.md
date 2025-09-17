@@ -35,6 +35,7 @@ The example demonstrates a complete A2A integration:
 ### **Key Components**
 
 #### **A2A Server (Remote Agent)**
+
 ```go
 // Specialized technical support agent with tools
 remoteAgent := llmagent.New(
@@ -51,6 +52,7 @@ server, err := a2a.New(
 ```
 
 #### **A2A Client (Sub-Agent)**
+
 ```go
 // Create A2A client agent
 a2aAgent, err := a2aagent.New(a2aagent.WithAgentCardURL("http://0.0.0.0:8888"))
@@ -62,6 +64,7 @@ graphAgent, err := graphagent.New("coordinator", workflowGraph,
 ```
 
 #### **Graph Node Integration**
+
 ```go
 // Graph node references sub-agent by name
 AddAgentNode(nodeTechnicalSupport, agentTechnicalSupport,
@@ -77,6 +80,7 @@ AddAgentNode(nodeTechnicalSupport, agentTechnicalSupport,
 This example demonstrates improved state management with constants:
 
 #### **State Constants**
+
 ```go
 const (
     stateKeyCustomerQuery    = "customer_query"
@@ -94,6 +98,7 @@ const (
 ```
 
 #### **StateBuilder Pattern**
+
 ```go
 // ✅ Type-safe state construction
 return NewStateBuilder().
@@ -126,21 +131,25 @@ The workflow uses a **GraphAgent and Runner architecture with A2A sub-agents**:
 ## Usage
 
 ### Run with default examples:
+
 ```bash
 go run .
 ```
 
 ### Run in interactive mode:
+
 ```bash
 go run . -interactive
 ```
 
 ### Use a different model:
+
 ```bash
 go run . -model "gpt-4"
 ```
 
 ### Use a different A2A host:
+
 ```bash
 go run . -a2a-host "localhost:9999"
 ```
@@ -209,16 +218,19 @@ Response: I understand you have a billing inquiry...
 This example demonstrates practical applications:
 
 ### **1. Customer Support Automation**
+
 - **Query Classification**: Automatically categorize customer issues
 - **Specialized Routing**: Route technical issues to specialized agents
 - **Scalable Architecture**: Add more specialized A2A agents as needed
 
 ### **2. Microservices Integration**
+
 - **Service Discovery**: A2A protocol enables dynamic agent discovery
 - **Load Distribution**: Distribute workload across multiple specialized agents
 - **Fault Tolerance**: Isolate failures to specific agent types
 
 ### **3. Multi-Domain Expertise**
+
 - **Domain Specialization**: Each A2A agent can specialize in different domains
 - **Tool Integration**: Remote agents can have access to domain-specific tools
 - **Knowledge Isolation**: Sensitive tools/data isolated to specific agents
@@ -235,7 +247,7 @@ To customize the workflow:
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.21 or later
 - Valid OpenAI API key (set via environment or configuration)
 - Network connectivity for LLM calls and A2A communication
 - A2A server running on the specified host (automatically started by the example)

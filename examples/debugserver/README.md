@@ -5,7 +5,7 @@ connect it to [ADK Web](https://github.com/google/adk-web).
 
 ## Prerequisites
 
-- Go 1.21+
+- Go 1.21 or later
 - NodeJS & npm (for running ADK Web UI)
 
 ## Running the Server

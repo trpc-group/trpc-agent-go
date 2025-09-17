@@ -11,7 +11,7 @@ This example demonstrates how to drive an Agent with a full `[]model.Message` co
 
 ## Prerequisites
 
-- Go 1.23+ (examples/go.mod uses 1.24 toolchain)
+- Go 1.21 or later
 - Valid API key (OpenAI-compatible)
 
 Environment variables:
@@ -79,4 +79,3 @@ For more details, see docs:
 
 - English: `docs/mkdocs/en/runner.md` → “Pass Conversation History (no session dependency)”
 - 中文: `docs/mkdocs/zh/runner.md` → “传入对话历史（无需使用 Session）”
-

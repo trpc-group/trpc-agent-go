@@ -18,7 +18,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 ┌─────────────────────┐
 │       Runner        │  - 会话管理
 └─────────┬───────────┘  - 事件流处理
-          │ 
+          │
           │ r.agent.Run(ctx, invocation)
           │
 ┌─────────▼───────────┐
@@ -26,7 +26,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 └─────────┬───────────┘  - 返回 <-chan *event.Event
           │
           │ 具体实现由 Agent 决定
-          │ 
+          │
 ┌─────────▼───────────┐
 │     Agent 实现      │  如 LLMAgent, ChainAgent 等
 └─────────────────────┘
@@ -36,7 +36,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 
 ### 📋 环境要求
 
-- Go 1.23 或更高版本
+- Go 1.21 或更高版本
 - 有效的 LLM API 密钥（OpenAI 兼容接口）
 - Redis（可选，用于分布式会话管理）
 
@@ -48,7 +48,7 @@ package main
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -58,33 +58,33 @@ import (
 func main() {
     // 1. 创建模型
     llmModel := openai.New("DeepSeek-V3-Online-64K")
-    
+
     // 2. 创建 Agent
-    agent := llmagent.New("assistant", 
+    agent := llmagent.New("assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("你是一个有帮助的AI助手"),
         llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // 启用流式输出
     )
-    
+
     // 3. 创建 Runner
     r := runner.NewRunner("my-app", agent)
-    
+
     // 4. 运行对话
     ctx := context.Background()
     userMessage := model.NewUserMessage("你好！")
-    
+
     eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
     if err != nil {
         panic(err)
     }
-    
+
     // 5. 处理响应
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("错误: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             fmt.Print(event.Choices[0].Delta.Content)
         }
@@ -117,7 +117,7 @@ go run main.go -model "gpt-4o-mini"
 运行示例后，支持以下特殊命令：
 
 - `/history` - 请求 AI 显示对话历史
-- `/new` - 开始新的会话（重置对话上下文）  
+- `/new` - 开始新的会话（重置对话上下文）
 - `/exit` - 结束对话
 
 当 AI 使用工具时，会显示详细的调用过程：
@@ -205,7 +205,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 // 创建 Redis 会话服务
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"))
-    
+
 r := runner.NewRunner("app", agent,
     runner.WithSessionService(sessionService))
 ```
@@ -312,20 +312,20 @@ for event := range eventChan {
         fmt.Printf("错误: %s\n", event.Error.Message)
         continue
     }
-    
+
     // 流式内容
     if len(event.Choices) > 0 {
         choice := event.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
-    
+
     // 工具调用
     if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
         for _, toolCall := range event.Choices[0].Message.ToolCalls {
             fmt.Printf("调用工具: %s\n", toolCall.Function.Name)
         }
     }
-    
+
     // 完成事件
     if event.Done {
         break
@@ -343,24 +343,24 @@ import (
 
 func processEvents(eventChan <-chan *event.Event) error {
     var fullResponse strings.Builder
-    
+
     for event := range eventChan {
         // 处理错误
         if event.Error != nil {
             return fmt.Errorf("事件错误: %w", event.Error)
         }
-        
+
         // 处理工具调用
         if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 工具调用:")
             for _, toolCall := range event.Choices[0].Message.ToolCalls {
-                fmt.Printf("  • %s (ID: %s)\n", 
+                fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
-                fmt.Printf("    参数: %s\n", 
+                fmt.Printf("    参数: %s\n",
                     string(toolCall.Function.Arguments))
             }
         }
-        
+
         // 处理工具响应
         if event.Response != nil {
             for _, choice := range event.Response.Choices {
@@ -370,7 +370,7 @@ func processEvents(eventChan <-chan *event.Event) error {
                 }
             }
         }
-        
+
         // 处理流式内容
         if len(event.Choices) > 0 {
             content := event.Choices[0].Delta.Content
@@ -379,13 +379,13 @@ func processEvents(eventChan <-chan *event.Event) error {
                 fullResponse.WriteString(content)
             }
         }
-        
+
         if event.Done {
             fmt.Println() // 换行
             break
         }
     }
-    
+
     return nil
 }
 ```
@@ -457,7 +457,7 @@ for event := range eventChan {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -469,7 +469,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
     if err != nil {
         return fmt.Errorf("Runner.Run 失败: %v", err)
     }
-    
+
     // 检查事件流
     for event := range eventChan {
         if event.Error != nil {
@@ -479,7 +479,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
             break
         }
     }
-    
+
     return nil
 }
 ```

@@ -24,20 +24,20 @@ The trpc-agent-go framework provides built-in support for MCP tools with these k
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint | `https://api.openai.com/v1` |
+| Variable          | Description                              | Default Value               |
+| ----------------- | ---------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint      | `https://api.openai.com/v1` |
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
+| Argument | Description              | Default Value   |
+| -------- | ------------------------ | --------------- |
 | `-model` | Name of the model to use | `deepseek-chat` |
 
 ## Usage
@@ -80,14 +80,17 @@ mcptool/
 This example demonstrates four types of tools:
 
 1. **Function Tools**: Direct Go function implementations
+
    - `calculator`: Perform basic math operations
    - `current_time`: Get current time in different formats
 
 2. **STDIO MCP Tools**: Tools provided via standard I/O
+
    - `echo`: Echo back a message with optional prefix
    - `add`: Add two numbers together
 
 3. **SSE MCP Tools**: Tools provided via Server-Sent Events
+
    - `sse_recipe`: Get recipe information for a dish
    - `sse_health_tip`: Get health tips by category
 
@@ -180,11 +183,11 @@ streamableToolSet := mcp.NewMCPToolSet(
 
 ```go
 // Create function tools
-calculatorTool := function.NewFunctionTool(calculate, 
-    function.WithName("calculator"), 
+calculatorTool := function.NewFunctionTool(calculate,
+    function.WithName("calculator"),
     function.WithDescription("Perform basic mathematical calculations"))
-timeTool := function.NewFunctionTool(getCurrentTime, 
-    function.WithName("current_time"), 
+timeTool := function.NewFunctionTool(getCurrentTime,
+    function.WithName("current_time"),
     function.WithDescription("Get the current time and date"))
 
 // Create LLM agent with both function tools and toolsets
@@ -238,6 +241,7 @@ mcp.WithMCPOptions(
 ### What Errors Are Retried?
 
 Automatic retry handles temporary failures:
+
 - **Network issues**: Connection refused/reset/timeout, I/O timeout, EOF, broken pipe
 - **HTTP server errors**: 408, 409, 429, and all 5xx status codes
 
@@ -267,12 +271,14 @@ Ensure you have Go installed and set up properly.
 ### Starting the Servers
 
 1. **Start the Streamable HTTP Server**:
+
    ```bash
    cd streamalbeserver
    go run main.go
    ```
 
 2. **Start the SSE Server**:
+
    ```bash
    cd sseserver
    go run main.go -port 8080  # Default port is 8080
@@ -306,7 +312,7 @@ Here's an example of interacting with the assistant:
 
 Let me know what you'd like to use, and I'll assist! 😊
 
-👤 You: I want to know the weather of Shenzhen.        
+👤 You: I want to know the weather of Shenzhen.
 🤖 Assistant: 🔧 CallableTool calls initiated:
    • get_weather (ID: call_0_d2b56dbb-ba74-47f8-9e2a-e868db0952ac)
      Args: {"location":"Shenzhen"}
@@ -314,9 +320,9 @@ Let me know what you'd like to use, and I'll assist! 😊
 🔄 Executing tools...
 ✅ CallableTool response (ID: call_0_d2b56dbb-ba74-47f8-9e2a-e868db0952ac): {"text":"Weather for Shenzhen: 22°C, Sunny, Humidity: 45%, Wind: 10 km/h","type":"text"}
 
-🤖 Assistant: The current weather in Shenzhen is **22°C** and **Sunny**. Here are the details:  
-- **Humidity**: 45%  
-- **Wind Speed**: 10 km/h  
+🤖 Assistant: The current weather in Shenzhen is **22°C** and **Sunny**. Here are the details:
+- **Humidity**: 45%
+- **Wind Speed**: 10 km/h
 
 Enjoy the pleasant weather! 😊
 ```
@@ -326,6 +332,7 @@ Enjoy the pleasant weather! 😊
 ### Function Tools
 
 1. **calculator**
+
    - **Description**: Perform basic mathematical calculations
    - **Parameters**:
      - `operation`: The operation to perform (add, subtract, multiply, divide)
@@ -340,6 +347,7 @@ Enjoy the pleasant weather! 😊
 ### STDIO MCP Tools
 
 1. **echo**
+
    - **Description**: Simple echo tool that returns the input message with an optional prefix
    - **Parameters**:
      - `message`: The message to echo
@@ -354,6 +362,7 @@ Enjoy the pleasant weather! 😊
 ### SSE MCP Tools
 
 1. **sse_recipe**
+
    - **Description**: Chinese recipe query tool
    - **Parameters**:
      - `dish`: Dish name
@@ -366,6 +375,7 @@ Enjoy the pleasant weather! 😊
 ### Streamable HTTP MCP Tools
 
 1. **get_weather**
+
    - **Description**: Get current weather for a location
    - **Parameters**:
      - `location`: City name or location
@@ -383,4 +393,4 @@ The example demonstrates:
 2. **Direct Testing**: How to test tools directly without going through an LLM
 3. **Interactive Chat**: How to use tools in an interactive chat session with an LLM
 
-This serves as a practical reference for building your own tool-enabled AI assistants. 
+This serves as a practical reference for building your own tool-enabled AI assistants.
