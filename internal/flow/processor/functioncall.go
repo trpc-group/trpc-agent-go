@@ -184,12 +184,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
-
-	if len(toolCallResponsesEvents) > 1 {
-		_, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool))
-		itelemetry.TraceMergedToolCalls(span, mergedEvent)
-		span.End()
-	}
 	return mergedEvent, nil
 }
 
