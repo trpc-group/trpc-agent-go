@@ -96,6 +96,9 @@ type Invocation struct {
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
+
+	// parent is the parent invocation, if any
+	parent *Invocation
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -153,6 +156,13 @@ func WithMessages(messages []model.Message) RunOption {
 	}
 }
 
+// WithRequestID sets the request id for the RunOptions.
+func WithRequestID(requestID string) RunOption {
+	return func(opts *RunOptions) {
+		opts.RequestID = requestID
+	}
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -169,6 +179,9 @@ type RunOptions struct {
 	// ignores this field and reads only from Session events (or falls back to
 	// `invocation.Message` when no events exist).
 	Messages []model.Message
+
+	// RequestID is the request id of the request.
+	RequestID string
 }
 
 // NewInvocation create a new invocation
@@ -209,6 +222,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:        inv.noticeMu,
 		noticeChanMap:   inv.noticeChanMap,
 		eventFilterKey:  inv.eventFilterKey,
+		parent:          inv,
 	}
 
 	for _, opt := range invocationOpts {
@@ -242,6 +256,10 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 		return
 	}
 
+	e.RequestID = inv.RunOptions.RequestID
+	if inv.parent != nil {
+		e.ParentInvocationID = inv.parent.InvocationID
+	}
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
 	e.FilterKey = inv.GetEventFilterKey()

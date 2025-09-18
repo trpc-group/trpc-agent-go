@@ -11,6 +11,7 @@ User Input → Generate Agent → Critic Agent → Repeat Until Quality Met
 ```
 
 **Cycle Flow:**
+
 1. **🤖 Generate Agent** - Creates content based on user prompts and improvement feedback
 2. **👀 Critic Agent** - Evaluates generated content and provides quality assessment
 
@@ -25,7 +26,7 @@ User Input → Generate Agent → Critic Agent → Repeat Until Quality Met
 
 ## Prerequisites
 
-- Go 1.23+
+- Go 1.21 or later
 - OpenAI API key
 
 ## Usage
@@ -55,11 +56,11 @@ Cycle: Generate → Critique → Improve → Repeat
 
 🤖 Cycle Response:
 
-🤖 Generate Agent: Why don't skeletons fight each other?  
+🤖 Generate Agent: Why don't skeletons fight each other?
 Because they don't have the guts!
 
 👀 Critic Agent: Here's a short joke for you:
-**Why don't skeletons fight each other?**  
+**Why don't skeletons fight each other?**
 Because they don't have the guts!
 
 Now, let me evaluate this joke.
@@ -72,12 +73,12 @@ Now, let me evaluate this joke.
 🔄 **Iteration 2**
 
 🤖 Generate Agent: Here's a refined version with a fresh twist:
-**Why don't skeletons ever win arguments?**  
+**Why don't skeletons ever win arguments?**
 Because they always lose their backbone halfway through!
 
-👀 Critic Agent: 
+👀 Critic Agent:
 🔧 Using tools:
-   • record_score (ID: call_456)  
+   • record_score (ID: call_456)
 🔄 Executing...
 ✅ Quality Score: 85/100
 🎉 Quality threshold met - cycle complete
@@ -101,6 +102,7 @@ The cycle agent continues iterating until one of these conditions is met:
 ## Quality-Driven Iteration
 
 The critic agent uses the `record_score` tool to:
+
 - Score solution quality (0-100)
 - Determine if additional iteration is needed (scores below 82 need improvement)
 - Provide specific recommendations for improvement
@@ -109,16 +111,17 @@ When quality score ≥ 82, the cycle completes early. Otherwise, it continues re
 
 ## Environment Variables
 
-| Variable | Required | Default |
-|----------|----------|---------|
-| `OPENAI_API_KEY` | Yes | - |
-| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` |
+| Variable          | Required | Default                     |
+| ----------------- | -------- | --------------------------- |
+| `OPENAI_API_KEY`  | Yes      | -                           |
+| `OPENAI_BASE_URL` | No       | `https://api.openai.com/v1` |
 
 ## Customization
 
 Modify the cycle by:
+
 - Adjusting quality thresholds in the `qualityEscalationFunc` function
-- Adding/removing agents in the cycle sequence  
+- Adding/removing agents in the cycle sequence
 - Changing max iterations via command line
 - Adding new tools for enhanced validation
 - Modifying agent instructions for different domains
@@ -126,7 +129,8 @@ Modify the cycle by:
 ## Use Cases
 
 Perfect for scenarios requiring iterative refinement:
-- **Content creation**: Generate → critique → refine → repeat  
+
+- **Content creation**: Generate → critique → refine → repeat
 - **Solution optimization**: Create → assess → improve → repeat
 - **Problem-solving**: Propose → evaluate → enhance → repeat
-- **Quality assurance**: Draft → review → revise → repeat 
+- **Quality assurance**: Draft → review → revise → repeat

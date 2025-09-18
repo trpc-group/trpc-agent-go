@@ -16,7 +16,7 @@ and the agent reads full context from session events.
 
 ## Prerequisites
 
-- Go 1.23+ (examples/go.mod targets 1.24 toolchain)
+- Go 1.21 or later
 - Valid API key (OpenAI-compatible)
 
 Environment variables:
@@ -60,8 +60,26 @@ Try asking things like:
   read this option; it only converts session events (and falls back to a single
   `invocation.Message` when the session has no events).
 
-## Next Steps
+Notes:
 
-- Inspect `examples/runwithmessages/main.go` to see the “seed once, then latest” flow.
-- Compare with `examples/runner`, which builds conversation state solely via the runner.
-- Read more in `docs/mkdocs/en/runner.md` (English) or `docs/mkdocs/zh/runner.md`.
+- When `[]model.Message` is provided, the content processor prioritizes these messages and skips deriving content from session events or the single `message` to avoid duplication.
+- `RunWithMessages` sets `invocation.Message` to the latest user message for compatibility with graph/flow agents that use initial user input.
+- Runner still persists events to its session service by default, but this session is not used to build the LLM request when messages are explicitly supplied.
+
+## Compare with examples/runner
+
+- `examples/runner` demonstrates multi-turn chat using Runner with server-side session state.
+- `examples/runwithmessages` shows a stateless approach where you control the full prompt per run — a good fit for building middleware services where the upstream system already maintains the session.
+
+## Customize
+
+- Change the initial system message to guide behavior.
+- Toggle `-streaming=false` to get full responses in one piece.
+- Replace the model via `-model` (e.g., `gpt-4o-mini`, `deepseek-chat`).
+
+---
+
+For more details, see docs:
+
+- English: `docs/mkdocs/en/runner.md` → “Pass Conversation History (no session dependency)”
+- 中文: `docs/mkdocs/zh/runner.md` → “传入对话历史（无需使用 Session）”
