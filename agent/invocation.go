@@ -144,11 +144,12 @@ func WithKnowledgeFilter(filter map[string]any) RunOption {
 	}
 }
 
-// WithMessages sets the initial conversation history for this run.
-// When provided, the content processor will prefer these messages and
-// will not derive messages from session events or the single
-// `invocation.Message` to prevent duplication. The messages should be
-// in chronological order (system -> user/assistant alternating).
+// WithMessages sets the caller-supplied conversation history for this run.
+// Runner uses this history to auto-seed an empty Session (once) and to
+// populate `invocation.Message` via RunWithMessages for compatibility. The
+// content processor itself does not read this field; it derives messages from
+// Session events (and may fall back to a single `invocation.Message` when the
+// Session is empty).
 func WithMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.Messages = messages
@@ -172,11 +173,11 @@ type RunOptions struct {
 	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
 	KnowledgeFilter map[string]any
 
-	// Messages allows callers to provide a full conversation history
-	// directly to the agent invocation without relying on the session
-	// service. When provided, the content processor will prefer these
-	// messages and skip deriving content from session events or the
-	// single `invocation.Message` to avoid duplication.
+	// Messages allows callers to provide a full conversation history to Runner.
+	// Runner will seed an empty Session with this history automatically and
+	// then rely on Session events for subsequent turns. The content processor
+	// ignores this field and reads only from Session events (or falls back to
+	// `invocation.Message` when no events exist).
 	Messages []model.Message
 
 	// RequestID is the request id of the request.

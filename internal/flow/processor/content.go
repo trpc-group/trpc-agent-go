@@ -90,20 +90,6 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 0. If caller supplied explicit messages via RunOptions, prefer them
-	// and skip deriving from session or the single invocation message to
-	// avoid duplication. This supports use cases where the upstream
-	// system maintains the conversation history and passes it in each run.
-	if len(invocation.RunOptions.Messages) > 0 {
-		req.Messages = append(req.Messages, invocation.RunOptions.Messages...)
-
-		// Send a preprocessing event and return early.
-		evt := event.New(invocation.InvocationID, invocation.AgentName, event.WithObject(model.ObjectTypePreprocessingContent))
-		log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
-		agent.EmitEvent(ctx, invocation, ch, evt)
-		return
-	}
-
 	// Process session events if available and includeContents is not "none".
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		sessionMessages := p.getContents(

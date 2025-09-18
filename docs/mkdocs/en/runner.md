@@ -157,9 +157,12 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
 
-#### Pass Conversation History (no session dependency)
+#### Provide Conversation History (auto-seed + session reuse)
 
-If your upstream service maintains the conversation and you want to pass the full history (`[]model.Message`) directly to the Agent, use one of the following approaches:
+If your upstream service maintains the conversation and you want the agent to
+see that context, you can pass a full history (`[]model.Message`) directly. The
+runner will seed an empty session with that history automatically and then
+merge in new session events.
 
 Option A: Use the convenience helper `runner.RunWithMessages`
 
@@ -174,7 +177,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
 ```
 
-Example: `examples/runwithmessages`
+Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
+continues reusing the session)
 
 Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
 
@@ -183,7 +187,12 @@ msgs := []model.Message{ /* as above */ }
 ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msgs))
 ```
 
-Note: When `[]model.Message` is provided, the content processor prioritizes this history and skips deriving messages from the Session or the single `message`, avoiding duplication. In `RunWithMessages`, Runner sets `invocation.Message` to the latest user message to preserve compatibility with graph-based agents that use initial user input.
+When `[]model.Message` is provided, the runner persists that history into the
+session on first use (if empty). The content processor does not read this
+option; it only derives messages from session events (or falls back to the
+single `invocation.Message` if the session has no events). `RunWithMessages`
+still sets `invocation.Message` to the latest user turn so graph/flow agents
+that inspect it continue to work.
 
 ## 💾 Session Management
 

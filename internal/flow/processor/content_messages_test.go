@@ -11,30 +11,49 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// Test that when RunOptions.Messages is provided, the content processor
-// uses them directly and does not mix in session-derived messages or
-// invocation.Message, and still emits the preprocessing event.
-func TestProcessRequest_UsesExplicitMessages(t *testing.T) {
-	// Prepare explicit history and a session with events that would otherwise be included.
-	explicit := []model.Message{
-		model.NewSystemMessage("You are helpful"),
+func TestProcessRequest_IgnoresRunOptionsMessages_UsesSessionOnly(t *testing.T) {
+	// Even if RunOptions carries messages, content processor should only read from session.
+	seed := []model.Message{
+		model.NewSystemMessage("system guidance"),
 		model.NewUserMessage("hello"),
-		model.NewAssistantMessage("hi!"),
-		model.NewUserMessage("what can you do?"),
+		model.NewAssistantMessage("hi"),
 	}
 
 	sess := &session.Session{}
-	// Add a dummy event that would be included if not bypassed.
-	sess.Events = append(sess.Events, *event.New("inv-1", "other-agent", event.WithResponse(&model.Response{
-		Choices: []model.Choice{{Message: model.NewAssistantMessage("from session")}},
-	})))
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("hi")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("latest from session")),
+	)
 
 	inv := &agent.Invocation{
-		InvocationID: "inv-1",
+		InvocationID: "inv-seed",
 		AgentName:    "test-agent",
 		Session:      sess,
-		Message:      model.NewUserMessage("should be ignored when explicit provided"),
-		RunOptions:   agent.RunOptions{Messages: explicit},
+		Message:      model.NewUserMessage("hello"),
+		RunOptions:   agent.RunOptions{Messages: seed},
+	}
+
+	req := &model.Request{}
+	ch := make(chan *event.Event, 2)
+	p := NewContentRequestProcessor()
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	// Expect only session-derived messages (3 entries), not the seed.
+	require.Equal(t, 3, len(req.Messages))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("latest from session"), req.Messages[2]))
+}
+
+func TestProcessRequest_IncludeInvocationMessage_WhenNoSession(t *testing.T) {
+	// When no session or empty, include invocation.Message as the only message.
+	inv := &agent.Invocation{
+		InvocationID: "inv-empty",
+		AgentName:    "test-agent",
+		Session:      &session.Session{},
+		Message:      model.NewUserMessage("hi there"),
 	}
 
 	req := &model.Request{}
@@ -42,19 +61,18 @@ func TestProcessRequest_UsesExplicitMessages(t *testing.T) {
 	p := NewContentRequestProcessor()
 
 	p.ProcessRequest(context.Background(), inv, req, ch)
+	require.Equal(t, 1, len(req.Messages))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hi there"), req.Messages[0]))
+}
 
-	// Ensure only explicit messages are used.
-	require.Equal(t, len(explicit), len(req.Messages))
-	for i := range explicit {
-		require.Equal(t, explicit[i].Role, req.Messages[i].Role)
-		require.Equal(t, explicit[i].Content, req.Messages[i].Content)
-	}
-
-	// Ensure a preprocessing event was emitted.
-	select {
-	case evt := <-ch:
-		require.Equal(t, model.ObjectTypePreprocessingContent, evt.Object)
-	default:
-		t.Fatal("expected preprocessing event to be emitted")
+func newSessionEvent(author string, msg model.Message) event.Event {
+	return event.Event{
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Index: 0, Message: msg},
+			},
+		},
+		Author: author,
 	}
 }
