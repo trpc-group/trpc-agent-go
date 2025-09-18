@@ -206,8 +206,9 @@ func (w *perNodeCallbacksWorkflow) createWorkflowGraph() (*graph.Graph, error) {
 					if inputStr, ok := input.(string); ok {
 						if len(inputStr) > 50 {
 							fmt.Printf("🎯 [STEP3] Input too long, skipping processing\n")
-							// Return a custom result to skip node execution.
-							return "skipped_due_to_length", nil
+							// Return a custom state update to skip node execution
+							// and mark a final result directly.
+							return graph.State{"final_result": "skipped_due_to_length"}, nil
 						}
 					}
 				}
@@ -217,8 +218,12 @@ func (w *perNodeCallbacksWorkflow) createWorkflowGraph() (*graph.Graph, error) {
 				fmt.Printf("🎯 [STEP3] Post-callback: Finalizing result\n")
 				// Add a timestamp to the result.
 				if result != nil {
-					timestampedResult := fmt.Sprintf("%s [processed at %s]", result, time.Now().Format("15:04:05"))
-					return timestampedResult, nil
+					if resState, ok := result.(graph.State); ok {
+						if final, ok2 := resState["final_result"].(string); ok2 && final != "" {
+							resState["final_result"] = fmt.Sprintf("%s [processed at %s]", final, time.Now().Format("15:04:05"))
+							return resState, nil
+						}
+					}
 				}
 				return nil, nil
 			}),
@@ -383,21 +388,18 @@ func (w *perNodeCallbacksWorkflow) processStreamingResponse(eventChan <-chan *ev
 			continue
 		}
 
-		// Track node execution events.
-		if event.Author == graph.AuthorGraphNode {
-			// Try to extract node metadata from StateDelta.
-			if event.StateDelta != nil {
-				if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
-					var nodeMetadata graph.NodeExecutionMetadata
-					if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
-						switch nodeMetadata.Phase {
-						case graph.ExecutionPhaseStart:
-							fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						case graph.ExecutionPhaseComplete:
-							fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						case graph.ExecutionPhaseError:
-							fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
-						}
+		// Track node execution events via metadata regardless of author.
+		if event.StateDelta != nil {
+			if nodeData, exists := event.StateDelta[graph.MetadataKeyNode]; exists {
+				var nodeMetadata graph.NodeExecutionMetadata
+				if err := json.Unmarshal(nodeData, &nodeMetadata); err == nil {
+					switch nodeMetadata.Phase {
+					case graph.ExecutionPhaseStart:
+						fmt.Printf("\n🚀 Entering node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+					case graph.ExecutionPhaseComplete:
+						fmt.Printf("✅ Completed node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
+					case graph.ExecutionPhaseError:
+						fmt.Printf("❌ Error in node: %s (%s)\n", nodeMetadata.NodeID, nodeMetadata.NodeType)
 					}
 				}
 			}

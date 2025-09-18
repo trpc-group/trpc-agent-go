@@ -32,8 +32,8 @@ Global BeforeNode Callbacks → Per-Node BeforeNode Callbacks → Node Execution
    - Can add metadata
 
 3. **OnNodeError Callbacks**: Execute when node fails
-   - Cannot change the error
-   - Useful for logging, monitoring, cleanup
+   - Cannot change the error nor continue execution
+   - Useful for logging/metrics; changes to state here are not persisted
 
 ## 🚀 Usage
 
@@ -74,8 +74,7 @@ graph.NewStateGraph(schema).
     AddNode("risky_node", riskyFunction,
         graph.WithNodeErrorCallback(func(ctx context.Context, callbackCtx *graph.NodeCallbackContext, state graph.State, err error) {
             fmt.Printf("Node %s failed: %v\n", callbackCtx.NodeID, err)
-            // Set fallback state
-            state["fallback_result"] = "default_value"
+            // Note: This callback is observational. Use for logging/metrics only.
         }),
     )
 ```
@@ -148,9 +147,9 @@ Input: Hello World
 - Pre-callbacks can return custom results to skip node execution
 - Useful for implementing conditional logic
 
-### 3. **Error Recovery**
-- Error callbacks can set fallback values
-- Graceful handling of node failures
+### 3. **Error Observability**
+- Error callbacks provide hooks for logging/metrics
+- Execution stops on error; use conditional logic or Commands for recovery paths
 
 ### 4. **Monitoring and Logging**
 - Global callbacks for application-wide monitoring
@@ -198,15 +197,12 @@ graph.WithPostNodeCallback(func(ctx context.Context, callbackCtx *graph.NodeCall
 })
 ```
 
-### 4. **Error Recovery**
+### 4. **Error Hooks**
 ```go
 graph.WithNodeErrorCallback(func(ctx context.Context, callbackCtx *graph.NodeCallbackContext, state graph.State, err error) {
-    // Log error for debugging
+    // Observe failures (non-recoverable at this point)
     fmt.Printf("Node %s failed: %v\n", callbackCtx.NodeID, err)
-    
-    // Set fallback state
-    state["error_recovery"] = true
-    state["fallback_result"] = "default_value"
+    // emit metrics, traces, etc.
 })
 ```
 
