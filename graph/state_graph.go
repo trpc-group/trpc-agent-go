@@ -1240,8 +1240,8 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 		}
 	}
 
-	parentInvocation, ok := agent.InvocationFromContext(ctx)
-	if ok {
+	// clone a new Invocation from parent.
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok {
 		invocation := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
