@@ -416,7 +416,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 
 		// Convert event to A2A message for streaming
 		convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
-			ctx, taskID, *a2aMsg.ContextID, agentEvent,
+			ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
 		)
 		if err != nil {
 			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
@@ -491,7 +491,9 @@ func (m *messageProcessor) processMessage(
 			continue
 		}
 
-		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(ctx, *a2aMsg.ContextID, agentEvent)
+		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(
+			ctx, agentEvent, EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
+		)
 		if err != nil {
 			log.Errorf("failed to convert event %d to A2A message: %v", eventCount, err)
 			return m.handleError(ctx, a2aMsg, false, err)

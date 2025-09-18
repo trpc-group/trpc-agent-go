@@ -25,21 +25,31 @@ type A2AMessageToAgentMessage interface {
 	ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error)
 }
 
+// EventToA2AUnaryOptions is the options for the EventToA2AMessage.
+type EventToA2AUnaryOptions struct {
+	CtxID string
+}
+
+// EventToA2AStreamingOptions is the options for the EventToA2AMessage.
+type EventToA2AStreamingOptions struct {
+	CtxID  string
+	TaskID string
+}
+
 // EventToA2AMessage defines an interface for converting Agent events to A2A protocol messages.
 type EventToA2AMessage interface {
 	// ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 	ConvertToA2AMessage(
 		ctx context.Context,
-		ctxID string,
 		event *event.Event,
+		options EventToA2AUnaryOptions,
 	) (protocol.UnaryMessageResult, error)
 
 	// ConvertStreaming converts an Agent event to an A2A protocol message for streaming.
 	ConvertStreamingToA2AMessage(
 		ctx context.Context,
-		taskID string,
-		ctxID string,
 		event *event.Event,
+		options EventToA2AStreamingOptions,
 	) (protocol.StreamingMessageResult, error)
 }
 
@@ -142,8 +152,8 @@ type defaultEventToA2AMessage struct{}
 // For non-streaming responses, it returns the full content and filters out toolcall events.
 func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	ctx context.Context,
-	ctxID string,
 	event *event.Event,
+	options EventToA2AUnaryOptions,
 ) (protocol.UnaryMessageResult, error) {
 	if event.Response == nil {
 		return nil, nil
@@ -181,9 +191,8 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 // For streaming responses, it returns delta content and filters out tool call events.
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
-	taskID string,
-	ctxID string,
 	event *event.Event,
+	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
 	if event.Response == nil {
 		return nil, nil
@@ -210,7 +219,12 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	// Use delta choice.Message.Content for non-streaming events mixed in streaming
 	if choice.Delta.Content != "" {
 		parts = append(parts, protocol.NewTextPart(choice.Delta.Content))
-		taskStatus := protocol.NewTaskArtifactUpdateEvent(taskID, ctxID, protocol.Artifact{Parts: parts}, false)
+		taskStatus := protocol.NewTaskArtifactUpdateEvent(
+			options.TaskID,
+			options.CtxID,
+			protocol.Artifact{Parts: parts},
+			false,
+		)
 		return &taskStatus, nil
 	}
 

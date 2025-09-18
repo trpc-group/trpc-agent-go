@@ -341,7 +341,7 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := converter.ConvertToA2AMessage(ctx, "test-ctx-id", tt.event)
+			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx-id"})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ConvertToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -457,7 +457,9 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := converter.ConvertStreamingToA2AMessage(ctx, "test-task-id", "test-ctx-id", tt.event)
+			result, err := converter.ConvertStreamingToA2AMessage(
+				ctx, tt.event, EventToA2AStreamingOptions{CtxID: "test-ctx-id", TaskID: "test-task-id"},
+			)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ConvertStreamingToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
 				return
