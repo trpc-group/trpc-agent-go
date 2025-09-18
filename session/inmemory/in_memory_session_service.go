@@ -685,7 +685,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	branches := s.groupEventsByBranch(storedSession.Events)
+	branches := groupEventsByBranch(storedSession.Events)
 	if len(branches) == 0 {
 		return nil
 	}
@@ -713,7 +713,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		if prev != nil {
 			since = prev.UpdatedAt
 		}
-		delta := s.computeDeltaSince(evs, since)
+		delta := computeDeltaSince(evs, since)
 		if !force && len(delta) == 0 {
 			continue
 		}
@@ -730,7 +730,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 			input = append(input, delta...)
 		}
 
-		tmp := s.buildBranchSession(storedSession, b, input)
+		tmp := buildBranchSession(storedSession, b, input)
 		text, err := s.opts.summarizer.Summarize(ctx, tmp)
 		if err != nil || text == "" {
 			continue
@@ -743,26 +743,17 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	return nil
 }
 
-// normalizeBranch maps empty branch to a canonical value.
-func (s *SessionService) normalizeBranch(b string) string {
-	if b == "" {
-		return "root"
-	}
-	return b
-}
-
-// groupEventsByBranch groups events by normalized branch identifier.
-func (s *SessionService) groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+// groupEventsByBranch groups events by branch identifier.
+func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
 	m := make(map[string][]event.Event)
 	for _, e := range evs {
-		b := s.normalizeBranch(e.Branch)
-		m[b] = append(m[b], e)
+		m[e.Branch] = append(m[e.Branch], e)
 	}
 	return m
 }
 
 // computeDeltaSince returns events that occurred strictly after the given time.
-func (s *SessionService) computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
+func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
 	if since.IsZero() {
 		return evs
 	}
@@ -776,7 +767,7 @@ func (s *SessionService) computeDeltaSince(evs []event.Event, since time.Time) [
 }
 
 // buildBranchSession builds a temporary session containing branch events.
-func (s *SessionService) buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
 	return &session.Session{
 		ID:        base.ID + ":" + branch,
 		AppName:   base.AppName,
@@ -800,11 +791,10 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	if cur == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
-	b := s.normalizeBranch(branch)
 	if cur.Summaries == nil {
 		cur.Summaries = make(map[string]*session.Summary)
 	}
-	cur.Summaries[b] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	cur.Summaries[branch] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
 	cur.UpdatedAt = time.Now()
 	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)

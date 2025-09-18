@@ -255,15 +255,12 @@ func (c *summaryChat) extractContent(event *event.Event) string {
 func intPtr(i int) *int { return &i }
 
 // getSummaryFromSession returns a structured summary from the session if present.
-// It prefers the "root" branch and falls back to any available summary.
+// It returns the first available summary from any branch.
 func getSummaryFromSession(sess *session.Session) (string, bool) {
 	if sess == nil || sess.Summaries == nil || len(sess.Summaries) == 0 {
 		return "", false
 	}
-	if sum, ok := sess.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
-		return sum.Summary, true
-	}
-	// Fallback to any branch if root is not present.
+	// Return the first available summary from any branch.
 	for _, s := range sess.Summaries {
 		if s != nil && s.Summary != "" {
 			return s.Summary, true

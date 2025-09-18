@@ -820,26 +820,17 @@ func applyOptions(opts ...session.Option) *session.Options {
 	return opt
 }
 
-// normalizeBranch maps empty branch to a canonical value.
-func (s *Service) normalizeBranch(b string) string {
-	if b == "" {
-		return "root"
-	}
-	return b
-}
-
-// groupEventsByBranch groups events by normalized branch identifier.
-func (s *Service) groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+// groupEventsByBranch groups events by branch identifier.
+func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
 	m := make(map[string][]event.Event)
 	for _, e := range evs {
-		b := s.normalizeBranch(e.Branch)
-		m[b] = append(m[b], e)
+		m[e.Branch] = append(m[e.Branch], e)
 	}
 	return m
 }
 
 // computeDeltaSince returns events that occurred strictly after the given time.
-func (s *Service) computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
+func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
 	if since.IsZero() {
 		return evs
 	}
@@ -853,7 +844,7 @@ func (s *Service) computeDeltaSince(evs []event.Event, since time.Time) []event.
 }
 
 // buildBranchSession builds a temporary session containing branch events.
-func (s *Service) buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
 	return &session.Session{
 		ID:        base.ID + ":" + branch,
 		AppName:   base.AppName,
@@ -912,7 +903,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		sessState.Summaries = make(map[string]*session.Summary)
 	}
 
-	branches := s.groupEventsByBranch(sess.Events)
+	branches := groupEventsByBranch(sess.Events)
 	if len(branches) == 0 {
 		return nil
 	}
@@ -925,7 +916,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 			since = prev.UpdatedAt
 			prevSummary = prev.Summary
 		}
-		delta := s.computeDeltaSince(evs, since)
+		delta := computeDeltaSince(evs, since)
 		if !force && len(delta) == 0 {
 			continue
 		}
@@ -942,7 +933,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 			input = append(input, delta...)
 		}
 
-		tmp := s.buildBranchSession(sess, b, input)
+		tmp := buildBranchSession(sess, b, input)
 		text, err := s.opts.summarizer.Summarize(ctx, tmp)
 		if err != nil || text == "" {
 			continue

@@ -5,7 +5,7 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - Preserves original `events`.
 - Stores summary separately from events (not inserted as system events).
 - Feeds LLM with "latest summary + incremental event window" to control context size.
-- Uses `SummarizerManager` as an optional in-process cache for fast reads.
+- Uses `SessionSummarizer` directly with session service for summarization.
 
 ## What it shows
 
@@ -44,7 +44,7 @@ Command-line flags:
 
 - `-model`: Model name to use for both chat and summarization. Default: `deepseek-chat`.
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
-- `-window`: Event window size for summarization input. Default: `50`.
+- `-window`: Number of recent events to keep for summarization input. Default: `50`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
 - `-timeSec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
@@ -56,7 +56,7 @@ Command-line flags:
 - Type `/exit` to quit the demo.
 - Type `/summary` to force-generate a session summary.
 - Type `/show` to display the current session summary.
-- After each assistant reply, the framework automatically triggers summarization in the background.
+- After the conversation completes, the framework automatically triggers summarization asynchronously in the background.
 
 Example output:
 
@@ -104,7 +104,7 @@ The user requested an article introducing LLMs. The assistant provided a compreh
 ## Architecture
 
 ```
-User → Runner → Agent(Model) → Session Service → (SummarizerManager + Summarizer)
+User → Runner → Agent(Model) → Session Service → SessionSummarizer
                                     ↑
                             Auto-trigger summary
                                     ↓
@@ -112,16 +112,16 @@ User → Runner → Agent(Model) → Session Service → (SummarizerManager + Su
 ```
 
 - The `Runner` orchestrates the conversation and writes events.
-- The `Runner` automatically triggers summarization after each turn via `CreateSessionSummary`.
-- The `SummarizerManager` optionally caches the latest summary in memory.
-- The `session.Service` mirrors summary text to its backend storage (in-memory or Redis).
+- The `Runner` automatically triggers summarization asynchronously after completion via `CreateSessionSummary`.
+- The `SessionSummarizer` generates summaries using the configured LLM model.
+- The `session.Service` stores summary text in its backend storage (in-memory or Redis).
 - Summary injection happens automatically in the `ContentRequestProcessor` for subsequent turns.
 
 ## Key design choices
 
 - Do not modify or truncate original `events`.
 - Do not insert summary as an event. Summary is stored separately.
-- `window` controls the LLM input size only.
+- `window` (keepRecentCount) controls the number of recent events used for summarization input.
 - Default trigger uses an event-count threshold aligned with Python (`>` semantics).
 - Summary generation is asynchronous by default (non-blocking).
 - Summary injection into LLM prompts is automatic and implicit.
@@ -132,5 +132,5 @@ User → Runner → Agent(Model) → Session Service → (SummarizerManager + Su
 
 ## Notes
 
-- If the summarizer or manager is not configured, the service logs a warning and skips summarization.
+- If the summarizer is not configured, the service logs a warning and skips summarization.
 - No fallback summaries by string concatenation are provided. The system relies on the configured LLM.
