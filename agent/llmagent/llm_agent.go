@@ -352,8 +352,12 @@ type Options struct {
 	AddContextPrefix bool
 
 	// Content context controls
+	// AddSessionSummary controls whether to prepend the current branch summary
+	// as a system message when available (default: false).
 	AddSessionSummary bool
-	MaxHistoryRuns    int
+	// MaxHistoryRuns limits the number of recent messages appended after
+	// branch-incremental selection (0 means unlimited; default: 0).
+	MaxHistoryRuns int
 
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
