@@ -1201,6 +1201,13 @@ func (e *Executor) executeSingleTask(
 		return err
 	}
 
+	// Ensure pre-callback state mutations are visible to the node function.
+	// We pass the callback-mutated state copy as the task input so that
+	// executeNodeFunction uses it (instead of rebuilding from the global state).
+	// This preserves overlay application done in buildTaskStateCopy and respects
+	// any in-place state changes made by before-node callbacks.
+	t.Input = stateCopy
+
 	// Execute the node function.
 	result, err := e.executeNodeFunction(nodeCtx, execCtx, t)
 	if err != nil {
@@ -1422,15 +1429,18 @@ func (e *Executor) mergeNodeCallbacks(global, perNode *NodeCallbacks) *NodeCallb
 	// Create a new merged callbacks instance.
 	merged := NewNodeCallbacks()
 
-	// Add global callbacks first (they execute first).
+	// Add global callbacks first for Before and OnNodeError.
 	merged.BeforeNode = append(merged.BeforeNode, global.BeforeNode...)
-	merged.AfterNode = append(merged.AfterNode, global.AfterNode...)
 	merged.OnNodeError = append(merged.OnNodeError, global.OnNodeError...)
 
-	// Add per-node callbacks (they execute after global callbacks).
+	// For per-node callbacks, Before callbacks execute after global.
 	merged.BeforeNode = append(merged.BeforeNode, perNode.BeforeNode...)
-	merged.AfterNode = append(merged.AfterNode, perNode.AfterNode...)
 	merged.OnNodeError = append(merged.OnNodeError, perNode.OnNodeError...)
+
+	// For After callbacks, execute per-node first, then global, so per-node can
+	// shape/override the result before global observers run.
+	merged.AfterNode = append(merged.AfterNode, perNode.AfterNode...)
+	merged.AfterNode = append(merged.AfterNode, global.AfterNode...)
 
 	return merged
 }
