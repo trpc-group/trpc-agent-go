@@ -135,33 +135,78 @@ evaluation/
 
 注：为使用 ADK Web 可视化编辑测试集的能力，gotag 需要与 ADK 字段对齐。
 
-**核心类型:**
+**核心类型（与 ADK Pydantic 定义对齐）:**
 
 ```go
 // EvalCase 表示单个评估用例
 type EvalCase struct {
-    EvalID            string        `json:"eval_id"`
+    EvalID            string        `json:"evalId"`
     Conversation      []Invocation  `json:"conversation"`
-    SessionInput      *SessionInput `json:"session_input,omitempty"`
-    CreationTimestamp time.Time     `json:"creation_timestamp"`
+    SessionInput      *SessionInput `json:"sessionInput,omitempty"`
+    CreationTimestamp EpochTime     `json:"creationTimestamp"`
 }
 
-// Invocation 表示对话中的单次交互
+// Invocation 表示对话中的单次交互，存储多模态内容。
 type Invocation struct {
-    InvocationID      string            `json:"invocation_id"`
-    UserContent       string            `json:"user_content"`
-    FinalResponse     string            `json:"final_response,omitempty"`
-    IntermediateData  *IntermediateData `json:"intermediate_data,omitempty"`
-    CreationTimestamp time.Time         `json:"creation_timestamp"`
+    InvocationID      string            `json:"invocationId,omitempty"`
+    UserContent       *Content          `json:"userContent"`
+    FinalResponse     *Content          `json:"finalResponse,omitempty"`
+    IntermediateData  *IntermediateData `json:"intermediateData,omitempty"`
+    CreationTimestamp EpochTime         `json:"creationTimestamp"`
 }
+
+type Content struct {
+    Role  string `json:"role"`
+    Parts []Part `json:"parts,omitempty"`
+}
+
+type Part struct {
+    Text string `json:"text,omitempty"`
+    // 后续可扩展 image/audio/file 等多模态字段。
+}
+
+// IntermediateData 捕获推理轨迹，便于工具调用评估。
+type IntermediateData struct {
+    ToolUses              []FunctionCall        `json:"toolUses,omitempty"`
+    ToolResponses         []ToolResponse        `json:"toolResponses,omitempty"`
+    IntermediateResponses []IntermediateMessage `json:"intermediateResponses,omitempty"`
+}
+
+type FunctionCall struct {
+    ID   string                 `json:"id,omitempty"`
+    Name string                 `json:"name"`
+    Args map[string]interface{} `json:"args,omitempty"`
+}
+
+type ToolResponse struct {
+    Name         string                 `json:"name"`
+    Response     map[string]interface{} `json:"response"`
+    ID           string                 `json:"id,omitempty"`
+    WillContinue *bool                  `json:"willContinue,omitempty"`
+    Scheduling   *string                `json:"scheduling,omitempty"`
+}
+
+type IntermediateMessage struct {
+    Author string `json:"author"`
+    Parts  []Part `json:"parts,omitempty"`
+}
+
+// SessionInput 表示 Session 初始化信息，兼容 ADK SessionInput。
+type SessionInput struct {
+    UserID string                 `json:"userId"`
+    State  map[string]interface{} `json:"state,omitempty"`
+}
+
+// EpochTime 以 ADK 相同的秒级浮点序列化，便于互导。
+type EpochTime struct{ time.Time }
 
 // EvalSet 表示评估集
 type EvalSet struct {
-    EvalSetID         string      `json:"eval_set_id"`
-    Name              string      `json:"name"`
-    Description       string      `json:"description,omitempty"`
-    EvalCases         []EvalCase  `json:"eval_cases"`
-    CreationTimestamp time.Time   `json:"creation_timestamp"`
+    EvalSetID         string     `json:"eval_set_id"`
+    Name              string     `json:"name,omitempty"`
+    Description       string     `json:"description,omitempty"`
+    EvalCases         []EvalCase `json:"eval_cases"`
+    CreationTimestamp time.Time  `json:"creation_timestamp"`
 }
 ```
 
@@ -187,16 +232,32 @@ type Manager interface {
 
 **核心类型:**
 
+// EvalStatus 定义在 evalresult 包中，状态含 Passed/Failed/NotEvaluated。
 ```go
 // EvalCaseResult 表示单个评估用例的结果
 type EvalCaseResult struct {
-    EvalSetID                     string                              `json:"eval_set_id"`
-    EvalCaseID                    string                              `json:"eval_id"`
-    FinalEvalStatus               evaluation.EvalStatus               `json:"final_eval_status"`
-    OverallEvalMetricResults      []metric.EvalMetricResult           `json:"overall_eval_metric_results"`
-    EvalMetricResultPerInvocation []metric.EvalMetricResultPerInvocation `json:"eval_metric_result_per_invocation"`
-    SessionID                     string                              `json:"session_id"`
-    UserID                        string                              `json:"user_id,omitempty"`
+    EvalSetID                     string                                `json:"eval_set_id"`
+    EvalCaseID                    string                                `json:"eval_id"`
+    FinalEvalStatus               EvalStatus                            `json:"final_eval_status"`
+    OverallEvalMetricResults      []EvalMetricResult                    `json:"overall_eval_metric_results"`
+    EvalMetricResultPerInvocation []EvalMetricResultPerInvocation       `json:"eval_metric_result_per_invocation"`
+    SessionID                     string                                `json:"session_id"`
+    UserID                        string                                `json:"user_id,omitempty"`
+}
+
+// EvalMetricResult 表示单个指标的结果
+type EvalMetricResult struct {
+    MetricName string                 `json:"metric_name"`
+    Score      *float64               `json:"score,omitempty"`
+    Status     EvalStatus             `json:"status"`
+    Threshold  float64                `json:"threshold"`
+    Details    map[string]interface{} `json:"details,omitempty"`
+}
+
+// EvalMetricResultPerInvocation 表示每轮对话的指标结果
+type EvalMetricResultPerInvocation struct {
+    InvocationIndex int               `json:"invocation_index"`
+    MetricResults   []EvalMetricResult `json:"metric_results"`
 }
 
 // EvalSetResult 表示整个评估集的结果
@@ -233,19 +294,28 @@ type Manager interface {
 **评估器接口:**
 
 ```go
+// Go 侧接口直接复用 evaluator 包：
 type Evaluator interface {
     Evaluate(ctx context.Context, actual, expected []evalset.Invocation) (*EvaluationResult, error)
     Name() string
     Description() string
 }
 
-// EvaluationResult 评估器返回的结果
 type EvaluationResult struct {
-    OverallScore         float64                 `json:"overall_score"`
-    OverallStatus        evaluation.EvalStatus   `json:"overall_status"`
-    PerInvocationResults []PerInvocationResult   `json:"per_invocation_results"`
+    OverallScore         *float64               `json:"overall_score,omitempty"`
+    OverallStatus        evalresult.EvalStatus  `json:"overall_status"`
+    PerInvocationResults []PerInvocationResult  `json:"per_invocation_results"`
+}
+
+type PerInvocationResult struct {
+    ActualInvocation   evalset.Invocation `json:"actual_invocation"`
+    ExpectedInvocation evalset.Invocation `json:"expected_invocation"`
+    Score              *float64           `json:"score,omitempty"`
+    Status             evalresult.EvalStatus `json:"status"`
 }
 ```
+
+`InferenceResult` 持有 `EvalSetID/EvalCaseID`，评估器通过 `EvalSet.Manager.GetCase` 拉取期望值，保证 actual 与 expected 对齐；该流程与 ADK `LocalEvalService._evaluate_single_inference_result` 一致。
 
 **常用的评估器实现:**
 
@@ -272,19 +342,22 @@ func (r *Registry) List() []string
 **指标配置:**
 ```go
 type EvalMetric struct {
-    MetricName        string             `json:"metric_name"`
-    Threshold         float64            `json:"threshold"`
-    JudgeModelOptions *JudgeModelOptions `json:"judge_model_options,omitempty"`
+    MetricName        string                 `json:"metric_name"`
+    Threshold         float64                `json:"threshold"`
+    JudgeModelOptions *JudgeModelOptions     `json:"judge_model_options,omitempty"`
+    Config            map[string]interface{} `json:"config,omitempty"`
 }
 
-// 指标结果
-type EvalMetricResult struct {
-    MetricName string                 `json:"metric_name"`
-    Threshold  float64                `json:"threshold"`
-    Score      *float64               `json:"score,omitempty"`
-    Status     evaluation.EvalStatus  `json:"status"`
+type JudgeModelOptions struct {
+    JudgeModel   string   `json:"judge_model"`
+    Temperature  *float64 `json:"temperature,omitempty"`
+    MaxTokens    *int     `json:"max_tokens,omitempty"`
+    NumSamples   *int     `json:"num_samples,omitempty"`
+    CustomPrompt string   `json:"custom_prompt,omitempty"`
 }
 ```
+
+指标计算产物复用前文 `evalresult.EvalMetricResult`/`EvalMetricResultPerInvocation`，输出结构与 ADK 一致。
 
 ### service - 评估服务
 
@@ -294,17 +367,23 @@ type EvalMetricResult struct {
 
 ```go
 type EvaluationService interface {
-    // 执行推理，返回流式结果
+    // 推理阶段：从 EvalSet 拿到 expected，对 Runner 触发调用，返回有序 channel。
     PerformInference(ctx context.Context, request *InferenceRequest) (<-chan *InferenceResult, error)
-    
-    // 执行评估，返回流式结果
+
+    // 评估阶段：结合推理结果与期望值，返回 EvalCaseResult 流。
     Evaluate(ctx context.Context, request *EvaluateRequest) (<-chan *evalresult.EvalCaseResult, error)
 }
 ```
 
-**请求类型:**
+**请求与结果类型（与 ADK BaseEvalService 对齐）:**
 
 ```go
+type InferenceConfig struct {
+    AgentConfig map[string]interface{} `json:"agent_config"`
+    MaxTokens   int                    `json:"max_tokens"`
+    Temperature float64                `json:"temperature"`
+}
+
 type InferenceRequest struct {
     AppName         string          `json:"app_name"`
     EvalSetID       string          `json:"eval_set_id"`
@@ -312,11 +391,42 @@ type InferenceRequest struct {
     InferenceConfig InferenceConfig `json:"inference_config"`
 }
 
+type InferenceResult struct {
+    AppName    string               `json:"app_name"`
+    EvalSetID  string               `json:"eval_set_id"`
+    EvalCaseID string               `json:"eval_case_id"`
+    Inferences []evalset.Invocation `json:"inferences,omitempty"`
+    SessionID  string               `json:"session_id,omitempty"`
+    Status     InferenceStatus      `json:"status"`
+    ErrorMessage string             `json:"error_message,omitempty"`
+}
+
+type InferenceStatus int
+
+const (
+    InferenceStatusUnknown InferenceStatus = iota
+    InferenceStatusSuccess
+    InferenceStatusFailure
+)
+
+type EvaluateConfig struct {
+    Metrics            []metric.EvalMetric `json:"metrics"`
+    InferenceConfig    InferenceConfig     `json:"inference_config"`
+    ConcurrencyConfig  ConcurrencyConfig   `json:"concurrency_config"`
+}
+
+type ConcurrencyConfig struct {
+    MaxInferenceConcurrency int `json:"max_inference_concurrency"`
+    MaxEvalConcurrency      int `json:"max_eval_concurrency"`
+}
+
 type EvaluateRequest struct {
     InferenceResults []InferenceResult `json:"inference_results"`
     EvaluateConfig   EvaluateConfig    `json:"evaluate_config"`
 }
 ```
+
+`InferenceResult` 中的标识确保 Local/远端 Service 可以回查 EvalSet，复用期望答案、会话元信息等，消除此前文档里“expected 来源不明”的问题。
 
 #### AgentEvaluator - 用户入口
 
@@ -326,19 +436,34 @@ type EvaluateRequest struct {
 
 ```go
 type AgentEvaluator struct {
+    service  service.EvaluationService
+    registry *evaluator.Registry
+    cfg      AgentEvaluatorConfig
 }
+
+func NewAgentEvaluator(opts ...Option) *AgentEvaluator
 
 func (a *AgentEvaluator) Evaluate(ctx context.Context, runner runner.Runner) (*EvaluationResult, error)
 ```
+
+通过 Option 模式注入 `EvaluationService`、`Evaluator.Registry`、默认指标阈值等依赖；若未显式提供，默认使用 `service/local.New()` 与内置注册表，保持与 ADK `AgentEvaluator` 类似的开箱体验。
 
 **评估结果:**
 
 ```go
 type EvaluationResult struct {
-    OverallStatus EvalStatus                `json:"overall_status"`
+    OverallStatus evalresult.EvalStatus      `json:"overall_status"`
     MetricResults map[string]MetricSummary  `json:"metric_results"`
     TotalCases    int                       `json:"total_cases"`
     ExecutionTime time.Duration             `json:"execution_time"`
+}
+
+type MetricSummary struct {
+    MetricName   string                `json:"metric_name"`
+    OverallScore *float64              `json:"overall_score,omitempty"`
+    Threshold    float64               `json:"threshold"`
+    Status       evalresult.EvalStatus `json:"status"`
+    NumSamples   int                   `json:"num_samples"`
 }
 ```
 

@@ -16,6 +16,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
     "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
     "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // EvaluationService defines the main interface for evaluation operations
@@ -54,7 +55,10 @@ type InferenceRequest struct {
 	EvalCaseIDs []string `json:"eval_case_ids,omitempty"`
 
 	// InferenceConfig is the configuration for inference
-	InferenceConfig InferenceConfig `json:"inference_config"`
+    InferenceConfig InferenceConfig `json:"inference_config"`
+
+    // Runner 用于执行实际推理流程，不参与序列化。
+    Runner runner.Runner `json:"-" yaml:"-"`
 }
 
 // InferenceResult represents the result of agent inference
@@ -84,11 +88,11 @@ type InferenceResult struct {
 
 // EvaluateRequest represents a request for evaluation
 type EvaluateRequest struct {
-	// InferenceResults are the results to be evaluated
-	InferenceResults []InferenceResult `json:"inference_results"`
+    // InferenceResults are the results to be evaluated
+    InferenceResults []InferenceResult `json:"inference_results"`
 
-	// EvaluateConfig is the configuration for evaluation
-	EvaluateConfig EvaluateConfig `json:"evaluate_config"`
+    // EvaluateConfig is the configuration for evaluation
+    EvaluateConfig EvaluateConfig `json:"evaluate_config"`
 }
 
 // InferenceStatus represents the status of inference

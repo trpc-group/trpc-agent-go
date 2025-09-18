@@ -1,15 +1,15 @@
 package evaluation
 
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/response"
+    "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+)
 
-// DefaultRegistry 创建一个默认的评估器注册表。
-// 初期可以不注册任何评估器，后续在这里注册：
-//  - 工具轨迹评估器（tool_trajectory_avg_score）
-//  - 最终响应 ROUGE 匹配（response_match_score）
-//  - 响应质量 LLM Judge（response_evaluation_score）
-//  - 安全性 LLM Judge（safety_v1）
+// DefaultRegistry 创建一个默认的评估器注册表，对常用指标进行注册。
 func DefaultRegistry() *evaluator.Registry {
     r := evaluator.NewRegistry()
-    // 示例：r.Register(metric.MetricToolTrajectoryAvgScore, NewTrajectoryEvaluator(...))
+    // 文本响应匹配（等价于 ADK response_match_score）。
+    _ = r.Register(metric.MetricResponseMatchScore, response.New())
     return r
 }

@@ -42,12 +42,12 @@ type Invocation struct {
 }
 
 type Content struct {
-	Role  string
-	Parts []Part
+	Role  string `json:"role"`
+	Parts []Part `json:"parts,omitempty"`
 }
 
 type Part struct {
-	Text string
+	Text string `json:"text,omitempty"`
 }
 
 // IntermediateData contains intermediate execution data.
