@@ -169,14 +169,22 @@ func (m *mockA2AToAgentConverter) ConvertToAgentMessage(ctx context.Context, mes
 
 type mockEventToA2AConverter struct{}
 
-func (m *mockEventToA2AConverter) ConvertToA2AMessage(ctx context.Context, event *event.Event) (*protocol.Message, error) {
+func (m *mockEventToA2AConverter) ConvertToA2AMessage(
+	ctx context.Context,
+	event *event.Event,
+	options EventToA2AUnaryOptions,
+) (protocol.UnaryMessageResult, error) {
 	return &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{&protocol.TextPart{Text: "converted event"}},
 	}, nil
 }
 
-func (m *mockEventToA2AConverter) ConvertStreamingToA2AMessage(ctx context.Context, event *event.Event) (*protocol.Message, error) {
+func (m *mockEventToA2AConverter) ConvertStreamingToA2AMessage(
+	ctx context.Context,
+	event *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, error) {
 	return &protocol.Message{
 		Role:  protocol.MessageRoleAgent,
 		Parts: []protocol.Part{&protocol.TextPart{Text: "streaming event"}},
