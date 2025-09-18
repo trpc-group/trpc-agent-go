@@ -99,7 +99,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
 
 	// Option one: set invocation.EndInvocation is true, and stop next step.
-	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice compoletion.
+	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
 	// maybe the Option two is better.
 	if err != nil || functioncallResponseEvent == nil {
 		invocation.EndInvocation = true
