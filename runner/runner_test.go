@@ -128,7 +128,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 	// Verify session contains both user message and agent response.
 	// Should have: user message + agent response + runner done = 3 events.
-	assert.Len(t, sess.Events, 3)
+	assert.Len(t, sess.Events, 2)
 
 	// Verify user event.
 	userEvent := sess.Events[0]

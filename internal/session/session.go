@@ -56,11 +56,15 @@ func UpdateUserSession(sess *session.Session, event *event.Event, opts ...sessio
 		log.Info("session or event is nil")
 		return
 	}
-	sess.Events = append(sess.Events, *event)
-	// Apply filtering options
-	ApplyEventFiltering(sess, opts...)
-	// Ensure events start with RoleUser after filtering
-	EnsureEventStartWithUser(sess)
+	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		sess.Events = append(sess.Events, *event)
+
+		// Apply filtering options
+		ApplyEventFiltering(sess, opts...)
+		// Ensure events start with RoleUser after filtering
+		EnsureEventStartWithUser(sess)
+	}
+
 	sess.UpdatedAt = time.Now()
 	if sess.State == nil {
 		sess.State = make(session.StateMap)

@@ -497,6 +497,67 @@ func TestUpdateUserSession(t *testing.T) {
 			expectTimestamp: true,
 			description:     "Should keep events when they already start with user",
 		},
+		{
+			name:         "response is nil",
+			inputSession: createTestSession([]event.Event{}, nil),
+			inputEvent: &event.Event{
+				Timestamp:  now,
+				StateDelta: nil,
+			},
+			options:         []session.Option{},
+			expectedEvents:  []event.Event{},
+			expectedState:   session.StateMap{},
+			expectTimestamp: true,
+			description:     "should not append to events when response is nil",
+		},
+		{
+			name:         "response is partial",
+			inputSession: createTestSession([]event.Event{}, nil),
+			inputEvent: &event.Event{
+				Response: &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{
+						{
+							Delta: model.Message{
+								Role:    "user",
+								Content: "hello word",
+							},
+						},
+					},
+				},
+				Timestamp:  now,
+				StateDelta: nil,
+			},
+			options:         []session.Option{},
+			expectedEvents:  []event.Event{},
+			expectedState:   session.StateMap{},
+			expectTimestamp: true,
+			description:     "should not append to events when response is partial",
+		},
+		{
+			name:         "response is invalid",
+			inputSession: createTestSession([]event.Event{}, nil),
+			inputEvent: &event.Event{
+				Response: &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    "assistant",
+								Content: "",
+							},
+						},
+					},
+				},
+				Timestamp:  now,
+				StateDelta: nil,
+			},
+			options:         []session.Option{},
+			expectedEvents:  []event.Event{},
+			expectedState:   session.StateMap{},
+			expectTimestamp: true,
+			description:     "should not append to events when response is invalid",
+		},
 	}
 
 	for _, tt := range tests {
