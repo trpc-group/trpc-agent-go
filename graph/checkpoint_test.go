@@ -545,7 +545,7 @@ func TestBuildAgentInvocation(t *testing.T) {
 	s := &session.Session{ID: "s1"}
 	exec := &ExecutionContext{InvocationID: "inv-x"}
 	st := State{StateKeyUserInput: "hello", StateKeySession: s, StateKeyExecContext: exec}
-	inv := buildAgentInvocation(st, d, nil)
+	inv := buildAgentInvocation(context.Background(), st, d, nil)
 	require.NotNil(t, inv)
 	require.Equal(t, "ag", inv.AgentName)
 	require.Equal(t, "hello", inv.Message.Content)
