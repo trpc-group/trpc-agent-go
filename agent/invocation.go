@@ -302,7 +302,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 func panic_recover() {
 	if r := recover(); r != nil {
 		if err, ok := r.(error); ok && err.Error() == "runtime error: invalid memory address or nil pointer dereference" {
-			log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method.")
+			log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
 			return
 		}
 		panic(r)
