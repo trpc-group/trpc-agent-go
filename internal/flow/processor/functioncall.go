@@ -102,7 +102,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
 	// maybe the Option two is better.
 	if err != nil || functioncallResponseEvent == nil {
-		invocation.EndInvocation = true
 		return
 	}
 
