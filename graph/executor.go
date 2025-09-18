@@ -273,15 +273,11 @@ func (e *Executor) Execute(
 				return
 			}
 			// Emit error event for other errors.
-			errorEvent := NewPregelErrorEvent(
+			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
 				WithPregelEventInvocationID(invocation.InvocationID),
 				WithPregelEventStepNumber(-1),
 				WithPregelEventError(err.Error()),
-			)
-			select {
-			case eventChan <- errorEvent:
-			default:
-			}
+			))
 		}
 	}()
 	return eventChan, nil
@@ -306,7 +302,7 @@ func (e *Executor) executeGraph(
 
 	if resumed && e.pendingWrites != nil {
 		log.Debugf("🔧 Executor: applying %d pending writes", len(e.pendingWrites))
-		e.applyPendingWrites(execCtx, e.pendingWrites)
+		e.applyPendingWrites(ctx, invocation, execCtx, e.pendingWrites)
 	}
 
 	if e.checkpointSaver != nil && !resumed {
@@ -322,16 +318,12 @@ func (e *Executor) executeGraph(
 		startStep = resumedStep + 1
 	}
 
-	stepsExecuted, err := e.runBspLoop(ctx, execCtx, &checkpointConfig, startStep)
+	stepsExecuted, err := e.runBspLoop(ctx, invocation, execCtx, &checkpointConfig, startStep)
 	if err != nil {
 		return err
 	}
 
-	completionEvent := e.buildCompletionEvent(execCtx, startTime, stepsExecuted)
-	select {
-	case eventChan <- completionEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, eventChan, e.buildCompletionEvent(execCtx, startTime, stepsExecuted))
 	return nil
 }
 
@@ -517,6 +509,7 @@ func (e *Executor) buildExecutionContext(
 // runBspLoop runs the BSP execution loop from the given start step.
 func (e *Executor) runBspLoop(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	checkpointConfig *map[string]any,
 	startStep int,
@@ -535,7 +528,7 @@ func (e *Executor) runBspLoop(
 		if step == 0 && execCtx.resumed && startStep > 0 {
 			tasks = e.planBasedOnChannelTriggers(execCtx, step)
 		} else {
-			tasks, err = e.planStep(execCtx, step)
+			tasks, err = e.planStep(ctx, invocation, execCtx, step)
 		}
 		if err != nil {
 			stepCancel()
@@ -545,15 +538,15 @@ func (e *Executor) runBspLoop(
 			stepCancel()
 			break
 		}
-		if err := e.executeStep(stepCtx, execCtx, tasks, step); err != nil {
+		if err := e.executeStep(stepCtx, invocation, execCtx, tasks, step); err != nil {
 			if interrupt, ok := GetInterruptError(err); ok {
 				stepCancel()
-				return stepsExecuted, e.handleInterrupt(stepCtx, execCtx, interrupt, step, *checkpointConfig)
+				return stepsExecuted, e.handleInterrupt(stepCtx, invocation, execCtx, interrupt, step, *checkpointConfig)
 			}
 			stepCancel()
 			return stepsExecuted, fmt.Errorf("execution failed at step %d: %w", step, err)
 		}
-		if err := e.updateChannels(stepCtx, execCtx, step); err != nil {
+		if err := e.updateChannels(stepCtx, invocation, execCtx, step); err != nil {
 			stepCancel()
 			return stepsExecuted, fmt.Errorf("update failed at step %d: %w", step, err)
 		}
@@ -752,7 +745,8 @@ func (e *Executor) createCheckpointAndSave(
 }
 
 // applyPendingWrites replays pending writes into channels to rebuild frontier.
-func (e *Executor) applyPendingWrites(execCtx *ExecutionContext, writes []PendingWrite) {
+func (e *Executor) applyPendingWrites(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, writes []PendingWrite) {
 	if len(writes) == 0 {
 		return
 	}
@@ -767,7 +761,7 @@ func (e *Executor) applyPendingWrites(execCtx *ExecutionContext, writes []Pendin
 		if ch != nil {
 			ch.Update([]any{w.Value}, -1)
 			// Emit channel update event to mirror live execution behavior.
-			e.emitChannelUpdateEvent(execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
+			e.emitChannelUpdateEvent(ctx, invocation, execCtx, w.Channel, ch.Behavior, e.getTriggeredNodes(w.Channel))
 		}
 	}
 }
@@ -782,7 +776,8 @@ func getConfigKeys(config map[string]any) []string {
 }
 
 // resumeFromCheckpoint resumes execution from a specific checkpoint.
-func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]any) (State, error) {
+func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.Invocation,
+	config map[string]any) (State, error) {
 	log.Debugf("resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
 
 	if e.checkpointSaver == nil {
@@ -822,7 +817,7 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, config map[string]a
 			EventChan:    make(chan *event.Event, 100),
 			InvocationID: "resume-replay",
 		}
-		e.applyPendingWrites(tempExecCtx, tuple.PendingWrites)
+		e.applyPendingWrites(ctx, invocation, tempExecCtx, tuple.PendingWrites)
 		log.Debugf("Applied %d pending writes", len(tuple.PendingWrites))
 	} else if len(tuple.Checkpoint.NextNodes) > 0 {
 		// Fallback: use NextNodes to trigger execution when no pending writes or channels
@@ -884,7 +879,8 @@ func (e *Executor) initializeChannels(state State, updateChannels bool) {
 }
 
 // planStep determines which nodes to execute in the current step.
-func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error) {
+func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, step int) ([]*Task, error) {
 	var tasks []*Task
 
 	// Emit planning step event.
@@ -894,10 +890,7 @@ func (e *Executor) planStep(execCtx *ExecutionContext, step int) ([]*Task, error
 		WithPregelEventPhase(PregelPhasePlanning),
 		WithPregelEventTaskCount(0),
 	)
-	select {
-	case execCtx.EventChan <- planEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, planEvent)
 
 	// Check if we have nodes to execute from a resumed checkpoint stored in state
 	// This needs to be checked regardless of step number when resuming
@@ -1125,12 +1118,13 @@ func (e *Executor) createTask(nodeID string, state State, step int) *Task {
 // executeStep executes all tasks concurrently.
 func (e *Executor) executeStep(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	tasks []*Task,
 	step int,
 ) error {
 	// Emit execution step event.
-	e.emitExecutionStepEvent(execCtx, tasks, step)
+	e.emitExecutionStepEvent(ctx, invocation, execCtx, tasks, step)
 	// Execute tasks concurrently.
 	var wg sync.WaitGroup
 	results := make(chan error, len(tasks))
@@ -1139,7 +1133,7 @@ func (e *Executor) executeStep(
 		wg.Add(1)
 		go func(t *Task) {
 			defer wg.Done()
-			results <- e.executeSingleTask(ctx, execCtx, t, step)
+			results <- e.executeSingleTask(ctx, invocation, execCtx, t, step)
 		}(t)
 	}
 
@@ -1158,7 +1152,8 @@ func (e *Executor) executeStep(
 }
 
 // emitExecutionStepEvent emits the execution step event.
-func (e *Executor) emitExecutionStepEvent(execCtx *ExecutionContext, tasks []*Task, step int) {
+func (e *Executor) emitExecutionStepEvent(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, tasks []*Task, step int) {
 	activeNodes := make([]string, len(tasks))
 	for i, task := range tasks {
 		activeNodes[i] = task.NodeID
@@ -1171,15 +1166,13 @@ func (e *Executor) emitExecutionStepEvent(execCtx *ExecutionContext, tasks []*Ta
 		WithPregelEventTaskCount(len(tasks)),
 		WithPregelEventActiveNodes(activeNodes),
 	)
-	select {
-	case execCtx.EventChan <- execEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, execEvent)
 }
 
 // executeSingleTask executes a single task and handles all its events.
 func (e *Executor) executeSingleTask(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	t *Task,
 	step int,
@@ -1189,7 +1182,7 @@ func (e *Executor) executeSingleTask(
 	// Get node type and emit start event.
 	nodeType := e.getNodeType(t.NodeID)
 	nodeStart := time.Now()
-	e.emitNodeStartEvent(execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 
 	// Create callback context.
 	callbackCtx := e.newNodeCallbackContext(execCtx, t.NodeID, nodeType, step, nodeStart)
@@ -1202,7 +1195,7 @@ func (e *Executor) executeSingleTask(
 
 	// Run before node callbacks.
 	if handled, err := e.runBeforeCallbacks(
-		ctx, mergedCallbacks, callbackCtx, stateCopy, execCtx, t,
+		ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, execCtx, t,
 		nodeType, nodeStart, step,
 	); handled || err != nil {
 		return err
@@ -1226,13 +1219,13 @@ func (e *Executor) executeSingleTask(
 		if mergedCallbacks != nil {
 			mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
 		}
-		e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
 		return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
 	}
 
 	// Run after node callbacks.
 	if res, err := e.runAfterCallbacks(
-		ctx, mergedCallbacks, callbackCtx, stateCopy, result,
+		ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
 		execCtx, t.NodeID, nodeType, step,
 	); err != nil {
 		return err
@@ -1241,7 +1234,7 @@ func (e *Executor) executeSingleTask(
 	}
 
 	// Handle result and process channel writes.
-	if err := e.handleNodeResult(ctx, execCtx, t, result); err != nil {
+	if err := e.handleNodeResult(ctx, invocation, execCtx, t, result); err != nil {
 		return err
 	}
 
@@ -1249,12 +1242,12 @@ func (e *Executor) executeSingleTask(
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
-	if err := e.processConditionalEdges(ctx, execCtx, t.NodeID, step); err != nil {
+	if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 		return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 	}
 
 	// Emit node completion event.
-	e.emitNodeCompleteEvent(execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 
 	return nil
 }
@@ -1357,6 +1350,7 @@ func (e *Executor) getMergedCallbacks(stateCopy State, nodeID string) *NodeCallb
 // runBeforeCallbacks executes before-node callbacks and handles early result.
 func (e *Executor) runBeforeCallbacks(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	callbacks *NodeCallbacks,
 	cbCtx *NodeCallbackContext,
 	stateCopy State,
@@ -1371,25 +1365,26 @@ func (e *Executor) runBeforeCallbacks(
 	}
 	customResult, err := callbacks.RunBeforeNode(ctx, cbCtx, stateCopy)
 	if err != nil {
-		e.emitNodeErrorEvent(execCtx, t.NodeID, nodeType, step, err)
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
 		return true, fmt.Errorf("before node callback failed for node %s: %w", t.NodeID, err)
 	}
 	if customResult == nil {
 		return false, nil
 	}
-	if err := e.handleNodeResult(ctx, execCtx, t, customResult); err != nil {
+	if err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult); err != nil {
 		return true, err
 	}
-	if err := e.processConditionalEdges(ctx, execCtx, t.NodeID, step); err != nil {
+	if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 		return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 	}
-	e.emitNodeCompleteEvent(execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 	return true, nil
 }
 
 // runAfterCallbacks executes after-node callbacks and returns an override.
 func (e *Executor) runAfterCallbacks(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	callbacks *NodeCallbacks,
 	cbCtx *NodeCallbackContext,
 	stateCopy State,
@@ -1404,7 +1399,7 @@ func (e *Executor) runAfterCallbacks(
 	}
 	customResult, err := callbacks.RunAfterNode(ctx, cbCtx, stateCopy, result, nil)
 	if err != nil {
-		e.emitNodeErrorEvent(execCtx, nodeID, nodeType, step, err)
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeType, step, err)
 		return nil, fmt.Errorf("after node callback failed for node %s: %w", nodeID, err)
 	}
 	return customResult, nil
@@ -1442,6 +1437,8 @@ func (e *Executor) mergeNodeCallbacks(global, perNode *NodeCallbacks) *NodeCallb
 
 // emitNodeStartEvent emits the node start event.
 func (e *Executor) emitNodeStartEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	nodeID string,
 	nodeType NodeType,
@@ -1476,10 +1473,7 @@ func (e *Executor) emitNodeStartEvent(
 		WithNodeEventInputKeys(inputKeys),
 		WithNodeEventModelInput(modelInput),
 	)
-	select {
-	case execCtx.EventChan <- startEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, startEvent)
 }
 
 // executeNodeFunction executes the actual node function.
@@ -1539,6 +1533,8 @@ func (e *Executor) executeNodeFunction(
 
 // emitNodeErrorEvent emits the node error event.
 func (e *Executor) emitNodeErrorEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	nodeID string,
 	nodeType NodeType,
@@ -1556,16 +1552,12 @@ func (e *Executor) emitNodeErrorEvent(
 		WithNodeEventStepNumber(step),
 		WithNodeEventError(err.Error()),
 	)
-	select {
-	case execCtx.EventChan <- errorEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, errorEvent)
 }
 
 // handleNodeResult handles the result from node execution.
-func (e *Executor) handleNodeResult(
-	ctx context.Context, execCtx *ExecutionContext, t *Task, result any,
-) error {
+func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, t *Task, result any) error {
 	if result == nil {
 		return nil
 	}
@@ -1576,7 +1568,7 @@ func (e *Executor) handleNodeResult(
 		e.updateStateFromResult(execCtx, v)
 	case *Command: // Single command.
 		if v != nil {
-			if err := e.handleCommandResult(ctx, execCtx, v); err != nil {
+			if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
 				return err
 			}
 			// If the command explicitly routes via GoTo, avoid also writing to
@@ -1595,7 +1587,7 @@ func (e *Executor) handleNodeResult(
 
 	// Process channel writes, unless this is a fan-out case to avoid double trigger.
 	if !fanOut && len(t.Writes) > 0 {
-		e.processChannelWrites(execCtx, t.TaskID, t.Writes)
+		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
 	}
 
 	return nil
@@ -1673,9 +1665,8 @@ func (e *Executor) updateStateFromResult(execCtx *ExecutionContext, stateResult 
 }
 
 // handleCommandResult handles a Command result from node execution.
-func (e *Executor) handleCommandResult(
-	ctx context.Context, execCtx *ExecutionContext, cmdResult *Command,
-) error {
+func (e *Executor) handleCommandResult(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, cmdResult *Command) error {
 	// Update state with command updates.
 	if cmdResult.Update != nil {
 		e.updateStateFromResult(execCtx, cmdResult.Update)
@@ -1683,16 +1674,15 @@ func (e *Executor) handleCommandResult(
 
 	// Handle GoTo routing.
 	if cmdResult.GoTo != "" {
-		e.handleCommandRouting(ctx, execCtx, cmdResult.GoTo)
+		e.handleCommandRouting(ctx, invocation, execCtx, cmdResult.GoTo)
 	}
 
 	return nil
 }
 
 // handleCommandRouting handles the routing specified by a Command.
-func (e *Executor) handleCommandRouting(
-	ctx context.Context, execCtx *ExecutionContext, targetNode string,
-) {
+func (e *Executor) handleCommandRouting(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, targetNode string) {
 	// Create trigger channel for the target node (including self).
 	triggerChannel := fmt.Sprintf("%s%s", ChannelTriggerPrefix, targetNode)
 	e.graph.addNodeTrigger(triggerChannel, targetNode)
@@ -1704,18 +1694,19 @@ func (e *Executor) handleCommandRouting(
 	}
 
 	// Emit channel update event.
-	e.emitChannelUpdateEvent(execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
+	e.emitChannelUpdateEvent(ctx, invocation, execCtx, triggerChannel, channel.BehaviorLastValue, []string{targetNode})
 }
 
 // processChannelWrites processes the channel writes for a task.
-func (e *Executor) processChannelWrites(execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
+func (e *Executor) processChannelWrites(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, taskID string, writes []channelWriteEntry) {
 	for _, write := range writes {
 		ch, _ := e.graph.getChannel(write.Channel)
 		if ch != nil {
 			ch.Update([]any{write.Value}, -1)
 
 			// Emit channel update event.
-			e.emitChannelUpdateEvent(execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
+			e.emitChannelUpdateEvent(ctx, invocation, execCtx, write.Channel, ch.Behavior, e.getTriggeredNodes(write.Channel))
 			// Accumulate into pendingWrites to be saved with the next checkpoint.
 			execCtx.pendingMu.Lock()
 			execCtx.pendingWrites = append(execCtx.pendingWrites, PendingWrite{
@@ -1763,6 +1754,8 @@ func (e *Executor) restoreCheckpointValueWithSchema(value any, field StateField)
 
 // emitChannelUpdateEvent emits a channel update event.
 func (e *Executor) emitChannelUpdateEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	channelName string,
 	channelType channel.Behavior,
@@ -1779,14 +1772,13 @@ func (e *Executor) emitChannelUpdateEvent(
 		WithChannelEventAvailable(true),
 		WithChannelEventTriggeredNodes(triggeredNodes),
 	)
-	select {
-	case execCtx.EventChan <- channelEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, channelEvent)
 }
 
 // emitNodeCompleteEvent emits the node completion event.
 func (e *Executor) emitNodeCompleteEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	nodeID string,
 	nodeType NodeType,
@@ -1811,21 +1803,19 @@ func (e *Executor) emitNodeCompleteEvent(
 		WithNodeEventEndTime(execEndTime),
 		WithNodeEventOutputKeys(outputKeys),
 	)
-	select {
-	case execCtx.EventChan <- completeEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, completeEvent)
 }
 
 // updateChannels processes channel updates and emits events.
-func (e *Executor) updateChannels(ctx context.Context, execCtx *ExecutionContext, step int) error {
-	e.emitUpdateStepEvent(execCtx, step)
-	e.emitStateUpdateEvent(execCtx)
+func (e *Executor) updateChannels(ctx context.Context, invocation *agent.Invocation,
+	execCtx *ExecutionContext, step int) error {
+	e.emitUpdateStepEvent(ctx, invocation, execCtx, step)
+	e.emitStateUpdateEvent(ctx, invocation, execCtx)
 	return nil
 }
 
 // emitUpdateStepEvent emits the update step event.
-func (e *Executor) emitUpdateStepEvent(execCtx *ExecutionContext, step int) {
+func (e *Executor) emitUpdateStepEvent(ctx context.Context, invocation *agent.Invocation, execCtx *ExecutionContext, step int) {
 	updatedChannels := e.getUpdatedChannels()
 	updateEvent := NewPregelStepEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
@@ -1834,14 +1824,11 @@ func (e *Executor) emitUpdateStepEvent(execCtx *ExecutionContext, step int) {
 		WithPregelEventTaskCount(len(updatedChannels)),
 		WithPregelEventUpdatedChannels(updatedChannels),
 	)
-	select {
-	case execCtx.EventChan <- updateEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, updateEvent)
 }
 
 // emitStateUpdateEvent emits the state update event.
-func (e *Executor) emitStateUpdateEvent(execCtx *ExecutionContext) {
+func (e *Executor) emitStateUpdateEvent(ctx context.Context, invocation *agent.Invocation, execCtx *ExecutionContext) {
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -1856,10 +1843,7 @@ func (e *Executor) emitStateUpdateEvent(execCtx *ExecutionContext) {
 		WithStateEventUpdatedKeys(stateKeys),
 		WithStateEventStateSize(stateLen),
 	)
-	select {
-	case execCtx.EventChan <- stateEvent:
-	default:
-	}
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, stateEvent)
 }
 
 // getUpdatedChannels returns a list of updated channel names.
@@ -1896,6 +1880,7 @@ func (e *Executor) getTriggeredNodes(channelName string) []string {
 // processConditionalEdges evaluates conditional edges for a node and creates dynamic channels.
 func (e *Executor) processConditionalEdges(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	nodeID string,
 	step int,
@@ -1916,11 +1901,13 @@ func (e *Executor) processConditionalEdges(
 	}
 
 	// Process the conditional result.
-	return e.processConditionalResult(execCtx, condEdge, result, step)
+	return e.processConditionalResult(ctx, invocation, execCtx, condEdge, result, step)
 }
 
 // processConditionalResult processes the result of a conditional edge evaluation.
 func (e *Executor) processConditionalResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	condEdge *ConditionalEdge,
 	result string,
@@ -1941,7 +1928,8 @@ func (e *Executor) processConditionalResult(
 	ch, ok := e.graph.getChannel(channelName)
 	if ok && ch != nil {
 		ch.Update([]any{channelUpdateMarker}, -1)
-		e.emitChannelUpdateEvent(execCtx, channelName, channel.BehaviorLastValue, []string{target})
+		e.emitChannelUpdateEvent(ctx, invocation, execCtx, channelName,
+			channel.BehaviorLastValue, []string{target})
 	} else {
 		log.Warnf("❌ Step %d: Failed to get channel %s", step, channelName)
 	}
@@ -1951,6 +1939,7 @@ func (e *Executor) processConditionalResult(
 // handleInterrupt handles an interrupt during graph execution.
 func (e *Executor) handleInterrupt(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	execCtx *ExecutionContext,
 	interrupt *InterruptError,
 	step int,
@@ -2047,10 +2036,8 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventNodeID(interrupt.NodeID),
 		WithPregelEventInterruptValue(interrupt.Value),
 	)
-	select {
-	case execCtx.EventChan <- interruptEvent:
-	default:
-	}
+
+	agent.EmitEvent(ctx, invocation, execCtx.EventChan, interruptEvent)
 
 	// Return the interrupt error to propagate it to the caller.
 	return interrupt

@@ -241,13 +241,13 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	g := New(NewStateSchema())
 	exec := &Executor{graph: g}
 	// nil saver
-	st, err := exec.resumeFromCheckpoint(context.Background(), CreateCheckpointConfig("ln", "id", "ns"))
+	st, err := exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.Nil(t, st)
 
 	// saver error
 	exec.checkpointSaver = &resumeMockSaver{err: fmt.Errorf("err")}
-	_, err = exec.resumeFromCheckpoint(context.Background(), CreateCheckpointConfig("ln", "id", "ns"))
+	_, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.Error(t, err)
 
 	// tuple with pending writes
@@ -255,14 +255,14 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	ck := &Checkpoint{ID: "c1", ChannelValues: map[string]any{"x": 1}}
 	tuple := &CheckpointTuple{Checkpoint: ck, PendingWrites: []PendingWrite{{Channel: "branch:to:N1", Value: 2, Sequence: 1}}}
 	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
-	st, err = exec.resumeFromCheckpoint(context.Background(), CreateCheckpointConfig("ln", "id", "ns"))
+	st, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.Equal(t, 1, st["x"])
 
 	// tuple with NextNodes fallback
 	tuple2 := &CheckpointTuple{Checkpoint: &Checkpoint{ID: "c2", ChannelValues: map[string]any{"y": 3}, NextNodes: []string{"A"}}}
 	exec.checkpointSaver = &resumeMockSaver{tuple: tuple2}
-	st, err = exec.resumeFromCheckpoint(context.Background(), CreateCheckpointConfig("ln", "id", "ns"))
+	st, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.NotNil(t, st[StateKeyNextNodes])
 }
