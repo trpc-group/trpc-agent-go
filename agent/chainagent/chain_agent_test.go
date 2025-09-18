@@ -263,7 +263,6 @@ func TestChainAgent_Tools(t *testing.T) {
 
 	chainAgent := New(
 		"test-chain",
-		WithTools(tools),
 	)
 
 	require.Equal(t, len(tools), len(chainAgent.Tools()))
@@ -513,28 +512,4 @@ func TestChainAgent_BeforeCallbackError(t *testing.T) {
 		require.Equal(t, agent.ErrorTypeAgentCallbackError, e.Error.Type)
 	}
 	require.Equal(t, 1, cnt)
-}
-
-// legacyOptions mirrors the old Options struct used before refactor.
-type legacyOptions struct {
-	Name              string
-	SubAgents         []agent.Agent
-	Tools             []tool.Tool
-	ChannelBufferSize int
-	AgentCallbacks    *agent.Callbacks
-}
-
-// newFromLegacy adapts legacyOptions to the new functional-option constructor.
-func newFromLegacy(o legacyOptions) *ChainAgent {
-	opts := []Option{WithSubAgents(o.SubAgents)}
-	if len(o.Tools) > 0 {
-		opts = append(opts, WithTools(o.Tools))
-	}
-	if o.ChannelBufferSize > 0 {
-		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
-	}
-	if o.AgentCallbacks != nil {
-		opts = append(opts, WithAgentCallbacks(o.AgentCallbacks))
-	}
-	return New(o.Name, opts...)
 }

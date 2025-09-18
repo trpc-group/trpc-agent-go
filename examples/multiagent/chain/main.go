@@ -195,7 +195,6 @@ func (c *chainChat) setup(_ context.Context) error {
 	chainAgent := chainagent.New(
 		"multi-agent-chain",
 		chainagent.WithSubAgents([]agent.Agent{planningAgent, researchAgent, writingAgent}),
-		chainagent.WithTools([]tool.Tool{webSearchTool, knowledgeTool}),
 		chainagent.WithAgentCallbacks(agent.NewCallbacks().RegisterBeforeAgent(
 			func(ctx context.Context, invocation *agent.Invocation) (*model.Response, error) {
 				fmt.Printf("\n--- The %s is Runing\n", invocation.AgentName)
