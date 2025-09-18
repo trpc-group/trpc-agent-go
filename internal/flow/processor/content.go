@@ -61,8 +61,8 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		IncludeContents:  IncludeContentsAll, // Default to include all contents.
-		AddContextPrefix: true,               // Default to add context prefix.
+		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
+		AddContextPrefix: true,                    // Default to add context prefix.
 	}
 
 	// Apply options.
@@ -138,12 +138,12 @@ func (p *ContentRequestProcessor) getContents(
 
 		// Skip events without content, or generated neither by user nor by model
 		// or has empty text. E.g. events purely for mutating session states.
-		if !evt.IsValidContent() {
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 			continue
 		}
 
 		// Skip events not belong to current branch.
-		if !evt.Filter(filterKey) {
+		if p.IncludeContents == IncludeContentsFiltered && !evt.Filter(filterKey) {
 			continue
 		}
 

@@ -750,19 +750,29 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	}
 
 	txPipe := s.redisClient.TxPipeline()
+
+	// update session state
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
-	txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
-		Score:  float64(event.Timestamp.UnixNano()),
-		Member: eventBytes,
-	})
-	if s.opts.sessionEventLimit > 0 {
-		txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
-	}
 	// Set TTL for session state and event list if configured
 	if s.sessionTTL > 0 {
 		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
-		txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
 	}
+
+	// update event list if the event has response and is not partial
+	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
+			Score:  float64(event.Timestamp.UnixNano()),
+			Member: eventBytes,
+		})
+		if s.opts.sessionEventLimit > 0 {
+			txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
+		}
+		// Set TTL for session state and event list if configured
+		if s.sessionTTL > 0 {
+			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		}
+	}
+
 	if _, err := txPipe.Exec(ctx); err != nil {
 		return fmt.Errorf("store event failed: %w", err)
 	}
