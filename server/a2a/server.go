@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -182,7 +183,7 @@ func (m *messageProcessor) handleStreamingProcessingError(
 	msg *protocol.Message,
 	subscriber taskmanager.TaskSubscriber,
 	err error,
-) (*taskmanager.MessageProcessingResult, error) {
+) error {
 	if m.debugLogging {
 		msgJson, _ := json.Marshal(msg)
 		log.Debugf("handling error: req msg id: %s, error: %v, msg: %s", msg.MessageID, err, string(msgJson))
@@ -191,14 +192,14 @@ func (m *messageProcessor) handleStreamingProcessingError(
 	errMsg, err := m.errorHandler(ctx, msg, err)
 	if err != nil {
 		log.Warnf("handle streaming processing error: %v", err)
-		return nil, err
+		return err
 	}
 
 	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: errMsg}); err != nil {
-		return nil, fmt.Errorf("failed to send error message: %w", err)
+		log.Errorf("failed to send error message: %v", err)
+		return fmt.Errorf("failed to send error message: %w", err)
 	}
-
-	return &taskmanager.MessageProcessingResult{StreamingEvents: subscriber}, nil
+	return nil
 }
 
 // ProcessMessage is the main entry point for processing messages.
@@ -285,7 +286,17 @@ func (m *messageProcessor) processStreamingMessage(
 
 	// Start processing in a goroutine with error recovery
 	go func() {
-		m.processAgentStreamingEvents(ctx, a2aMsg, agentMsgChan, subscriber)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("panic in streaming processing for task %s: %v", taskID, r)
+				// Send error to subscriber before closing
+				if err := m.handleStreamingProcessingError(ctx, a2aMsg, subscriber,
+					fmt.Errorf("streaming processing panic: %v", r)); err != nil {
+					log.Errorf("failed to handle panic error: %v", err)
+				}
+			}
+		}()
+		m.processAgentStreamingEvents(ctx, taskID, a2aMsg, agentMsgChan, subscriber, handler)
 	}()
 
 	return &taskmanager.MessageProcessingResult{
@@ -296,11 +307,18 @@ func (m *messageProcessor) processStreamingMessage(
 // processAgentStreamingEvents handles streaming events from the agent runner using tunnel for batch processing.
 func (m *messageProcessor) processAgentStreamingEvents(
 	ctx context.Context,
+	taskID string,
 	a2aMsg *protocol.Message,
 	agentMsgChan <-chan *event.Event,
 	subscriber taskmanager.TaskSubscriber,
+	handler taskmanager.TaskHandler,
 ) {
-	defer subscriber.Close()
+	defer func() {
+		subscriber.Close()
+		if err := handler.CleanTask(&taskID); err != nil {
+			log.Warnf("failed to clean task %s: %v", taskID, err)
+		}
+	}()
 	produce := func() (*event.Event, bool) {
 		select {
 		case <-ctx.Done():
@@ -315,7 +333,20 @@ func (m *messageProcessor) processAgentStreamingEvents(
 
 	// define consume function
 	consume := func(batch []*event.Event) (bool, error) {
-		return m.processBatchStreamingEvents(ctx, a2aMsg, batch, subscriber)
+		return m.processBatchStreamingEvents(ctx, taskID, a2aMsg, batch, subscriber)
+	}
+
+	taskSubmitted := protocol.NewTaskStatusUpdateEvent(
+		taskID, *a2aMsg.ContextID,
+		protocol.TaskStatus{
+			State:     protocol.TaskStateSubmitted,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		false,
+	)
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskSubmitted}); err != nil {
+		log.Errorf("failed to send task submitted message: %v", err)
+		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
 
 	// run event tunnel
@@ -324,12 +355,32 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		log.Warnf("Event transfer error: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
 	}
+
+	finalArtifact := protocol.NewTaskArtifactUpdateEvent(taskID, *a2aMsg.ContextID, protocol.Artifact{}, true)
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &finalArtifact}); err != nil {
+		log.Errorf("failed to send final artifact message: %v", err)
+		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+	}
+
+	taskCompleted := protocol.NewTaskStatusUpdateEvent(
+		taskID, *a2aMsg.ContextID,
+		protocol.TaskStatus{
+			State:     protocol.TaskStateCompleted,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		true,
+	)
+	if err := subscriber.Send(protocol.StreamingMessageEvent{Result: &taskCompleted}); err != nil {
+		log.Errorf("failed to send task completed message: %v", err)
+		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+	}
 }
 
 // processBatchStreamingEvents processes a batch of streaming events and sends them through msgChan.
 func (m *messageProcessor) processBatchStreamingEvents(
 	ctx context.Context,
-	msg *protocol.Message,
+	taskID string,
+	a2aMsg *protocol.Message,
 	batch []*event.Event,
 	subscriber taskmanager.TaskSubscriber,
 ) (bool, error) {
@@ -350,7 +401,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 
 		if m.debugLogging {
 			agentEventJson, _ := json.Marshal(agentEvent)
-			log.Debugf("get agent event: req msg id: %s, event: %s", msg.MessageID, string(agentEventJson))
+			log.Debugf("get agent event: req msg id: %s, event: %s", a2aMsg.MessageID, string(agentEventJson))
 		}
 
 		if agentEvent == nil {
@@ -364,19 +415,21 @@ func (m *messageProcessor) processBatchStreamingEvents(
 		}
 
 		// Convert event to A2A message for streaming
-		a2aMsg, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(ctx, agentEvent)
+		convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
+			ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
+		)
 		if err != nil {
 			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
 		}
 
 		if m.debugLogging {
-			a2aMsgJson, _ := json.Marshal(a2aMsg)
-			log.Debugf("converted agent event to A2A message: req msg id: %s, event: %s", msg.MessageID, string(a2aMsgJson))
+			a2aMsgJson, _ := json.Marshal(convertedResult)
+			log.Debugf("converted agent event to A2A message: req msg id: %s, event: %s", a2aMsg.MessageID, string(a2aMsgJson))
 		}
 
 		// Send message if conversion successful
-		if a2aMsg != nil {
-			if err := subscriber.Send(protocol.StreamingMessageEvent{Result: a2aMsg}); err != nil {
+		if convertedResult != nil {
+			if err := subscriber.Send(protocol.StreamingMessageEvent{Result: convertedResult}); err != nil {
 				log.Errorf("failed to send streaming message event: %v", err)
 				return false, fmt.Errorf("failed to send streaming message event: %w", err)
 			}
@@ -384,7 +437,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 
 		// Check if this is the final event - stop processing if done
 		if agentEvent.Response.Done {
-			log.Debug("received final event, stopping batch processing")
+			log.Debug("received agent final event, stopping batch processing")
 			return false, nil
 		}
 	}
@@ -424,7 +477,7 @@ func (m *messageProcessor) processMessage(
 		select {
 		case <-ctx.Done():
 			log.Warnf("context cancelled after processing %d events", eventCount)
-			return nil, ctx.Err()
+			return m.handleError(ctx, a2aMsg, false, ctx.Err())
 		default:
 		}
 
@@ -438,19 +491,28 @@ func (m *messageProcessor) processMessage(
 			continue
 		}
 
-		convertedMsg, err := m.eventToA2AConverter.ConvertToA2AMessage(ctx, agentEvent)
+		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(
+			ctx, agentEvent, EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
+		)
 		if err != nil {
 			log.Errorf("failed to convert event %d to A2A message: %v", eventCount, err)
 			return m.handleError(ctx, a2aMsg, false, err)
 		}
 
 		if m.debugLogging {
-			convertedMsgJson, _ := json.Marshal(convertedMsg)
+			convertedMsgJson, _ := json.Marshal(convertedResult)
 			log.Debugf("converted agent event to A2A message: req msg id: %s, event: %s", a2aMsg.MessageID, string(convertedMsgJson))
 		}
 
-		if convertedMsg != nil {
-			allParts = append(allParts, convertedMsg.Parts...)
+		if convertedResult != nil {
+			if msg, ok := convertedResult.(*protocol.Message); ok {
+				allParts = append(allParts, msg.Parts...)
+			}
+			if task, ok := convertedResult.(*protocol.Task); ok {
+				for _, artifact := range task.Artifacts {
+					allParts = append(allParts, artifact.Parts...)
+				}
+			}
 		}
 	}
 
@@ -458,9 +520,11 @@ func (m *messageProcessor) processMessage(
 
 	var responseMsg *protocol.Message
 	if len(allParts) == 0 {
+		log.Warnf("no response parts from agent after processing %d events for message %s", eventCount, a2aMsg.MessageID)
 		return m.handleError(ctx, a2aMsg, false, errors.New("no response parts from agent after processing events"))
 	}
 
+	// only support message return in non-streaming processing
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, allParts)
 	responseMsg = &msg
 	return &taskmanager.MessageProcessingResult{
