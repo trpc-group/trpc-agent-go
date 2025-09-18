@@ -662,7 +662,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return err
 	}
 	if s.opts.summarizer == nil {
-		log.Warnf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
 		return nil
 	}
 
