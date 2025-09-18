@@ -556,6 +556,12 @@ func TestBuildAgentInvocation(t *testing.T) {
 	require.NotNil(t, newInv)
 	require.Equal(t, "ag", newInv.AgentName)
 	require.Equal(t, "hello", newInv.Message.Content)
+
+	newInv = buildAgentInvocation(context.Background(), st, d, nil)
+	require.NotNil(t, newInv)
+	require.Equal(t, "ag", newInv.AgentName)
+	require.Equal(t, "hello", newInv.Message.Content)
+
 }
 
 func TestExtractToolCallsFromState_SuccessAndErrors(t *testing.T) {
