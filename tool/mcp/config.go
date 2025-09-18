@@ -64,11 +64,19 @@ type ConnectionConfig struct {
 	ClientInfo mcp.Implementation `json:"client_info,omitempty"`
 }
 
+// SessionReconnectConfig defines configuration for automatic session reconnection.
+type SessionReconnectConfig struct {
+	// EnableAutoReconnect enables automatic session reconnection when session expires.
+	// Default: false
+	EnableAutoReconnect bool `json:"enable_auto_reconnect"`
+}
+
 // toolSetConfig holds internal configuration for ToolSet.
 type toolSetConfig struct {
-	connectionConfig ConnectionConfig
-	toolFilter       ToolFilter
-	mcpOptions       []mcp.ClientOption // MCP client options.
+	connectionConfig       ConnectionConfig
+	toolFilter             ToolFilter
+	mcpOptions             []mcp.ClientOption      // MCP client options.
+	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
 }
 
 // ToolSetOption is a function type for configuring ToolSet.
@@ -86,6 +94,17 @@ func WithToolFilter(filter ToolFilter) ToolSetOption {
 func WithMCPOptions(options ...mcp.ClientOption) ToolSetOption {
 	return func(c *toolSetConfig) {
 		c.mcpOptions = append(c.mcpOptions, options...)
+	}
+}
+
+// WithSessionReconnect enables automatic session reconnection.
+// When enabled, the session manager will automatically attempt to recreate
+// the MCP session when it receives session-expired errors from the transport layer.
+func WithSessionReconnect() ToolSetOption {
+	return func(c *toolSetConfig) {
+		c.sessionReconnectConfig = &SessionReconnectConfig{
+			EnableAutoReconnect: true,
+		}
 	}
 }
 
