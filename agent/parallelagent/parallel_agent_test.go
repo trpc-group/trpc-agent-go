@@ -94,7 +94,6 @@ func (m *mockAgent) Tools() []tool.Tool {
 type legacyOptions struct {
 	Name              string
 	SubAgents         []agent.Agent
-	Tools             []tool.Tool
 	ChannelBufferSize int
 	AgentCallbacks    *agent.Callbacks
 }
@@ -103,9 +102,6 @@ func newFromLegacy(o legacyOptions) *ParallelAgent {
 	opts := []Option{}
 	if len(o.SubAgents) > 0 {
 		opts = append(opts, WithSubAgents(o.SubAgents))
-	}
-	if len(o.Tools) > 0 {
-		opts = append(opts, WithTools(o.Tools))
 	}
 	if o.ChannelBufferSize > 0 {
 		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
