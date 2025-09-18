@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -846,6 +847,8 @@ type syncMockVectorStore struct {
 	deleteCalls  int
 	addCalls     int
 	getMetaCalls int
+	// protect concurrent access to documents and counters
+	mu sync.RWMutex
 }
 
 func newSyncMockVectorStore() *syncMockVectorStore {
@@ -855,6 +858,8 @@ func newSyncMockVectorStore() *syncMockVectorStore {
 }
 
 func (s *syncMockVectorStore) Add(ctx context.Context, doc *document.Document, emb []float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.addCalls++
 	meta := vectorstore.DocumentMetadata{
 		Metadata: doc.Metadata,
@@ -864,7 +869,9 @@ func (s *syncMockVectorStore) Add(ctx context.Context, doc *document.Document, e
 }
 
 func (s *syncMockVectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
+	s.mu.RLock()
 	meta, exists := s.documents[id]
+	s.mu.RUnlock()
 	if !exists {
 		return nil, nil, nil
 	}
@@ -880,14 +887,17 @@ func (s *syncMockVectorStore) Update(ctx context.Context, doc *document.Document
 }
 
 func (s *syncMockVectorStore) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
 	delete(s.documents, id)
 	s.deleteCalls++
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *syncMockVectorStore) DeleteByFilter(
 	ctx context.Context,
 	opts ...vectorstore.DeleteOption) error {
+	s.mu.Lock()
 	s.deleteCalls++
 	config := &vectorstore.DeleteConfig{}
 	for _, opt := range opts {
@@ -896,6 +906,7 @@ func (s *syncMockVectorStore) DeleteByFilter(
 
 	if config.DeleteAll {
 		s.documents = make(map[string]vectorstore.DocumentMetadata)
+		s.mu.Unlock()
 		return nil
 	}
 
@@ -912,10 +923,12 @@ func (s *syncMockVectorStore) DeleteByFilter(
 			}
 		}
 	}
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *syncMockVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	s.mu.RLock()
 	s.getMetaCalls++
 	config := &vectorstore.GetMetadataConfig{}
 	for _, opt := range opts {
@@ -934,11 +947,15 @@ func (s *syncMockVectorStore) GetMetadata(ctx context.Context, opts ...vectorsto
 			result[id] = meta
 		}
 	}
+	s.mu.RUnlock()
 	return result, nil
 }
 
 func (s *syncMockVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
-	return len(s.documents), nil
+	s.mu.RLock()
+	n := len(s.documents)
+	s.mu.RUnlock()
+	return n, nil
 }
 
 func (s *syncMockVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
