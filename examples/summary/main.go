@@ -30,13 +30,15 @@ import (
 )
 
 var (
-	modelName   = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
-	streaming   = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	flagWindow  = flag.Int("window", 50, "Event window size for summarization input")
-	flagEvents  = flag.Int("events", 1, "Event count threshold to trigger summarization")
-	flagTokens  = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
-	flagTimeSec = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
-	flagMaxLen  = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
+	modelName      = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
+	streaming      = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	flagKeepRecent = flag.Int("keepRecentCount", 50, "Number of recent events to keep for summarization input")
+	flagEvents     = flag.Int("events", 1, "Event count threshold to trigger summarization")
+	flagTokens     = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
+	flagTimeSec    = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
+	flagMaxLen     = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
+	flagAddSum     = flag.Bool("addSummary", true, "Prepend latest branch summary as system message for LLM input")
+	flagMaxHist    = flag.Int("maxHistoryRuns", 0, "Max number of recent messages kept after incremental selection (0=unlimited)")
 )
 
 func main() {
@@ -75,7 +77,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer.
-	sumOpts := []summary.Option{summary.WithKeepRecentCount(*flagWindow)}
+	sumOpts := []summary.Option{summary.WithKeepRecentCount(*flagKeepRecent)}
 	sumOpts = append(sumOpts, summary.WithMaxSummaryLength(*flagMaxLen))
 	sumOpts = append(sumOpts, summary.WithChecksAny(
 		summary.CheckEventThreshold(*flagEvents),
@@ -94,6 +96,8 @@ func (c *summaryChat) setup(_ context.Context) error {
 		"summary-demo-agent",
 		llmagent.WithModel(llm),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming, MaxTokens: intPtr(4000)}),
+		llmagent.WithAddSessionSummary(*flagAddSum),
+		llmagent.WithMaxHistoryRuns(*flagMaxHist),
 	)
 	c.app = "summary-demo-app"
 	c.runner = runner.NewRunner(c.app, ag, runner.WithSessionService(sessService))
@@ -105,12 +109,14 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("📝 Session Summarization Chat\n")
 	fmt.Printf("Model: %s\n", c.modelName)
 	fmt.Printf("Service: inmemory\n")
-	fmt.Printf("Window: %d\n", *flagWindow)
+	fmt.Printf("KeepRecentCount: %d\n", *flagKeepRecent)
 	fmt.Printf("EventThreshold: %d\n", *flagEvents)
 	fmt.Printf("TokenThreshold: %d\n", *flagTokens)
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
 	fmt.Printf("MaxLen: %d\n", *flagMaxLen)
 	fmt.Printf("Streaming: %v\n", *streaming)
+	fmt.Printf("AddSummary: %v\n", *flagAddSum)
+	fmt.Printf("MaxHistoryRuns: %d\n", *flagMaxHist)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("✅ Summary chat ready! Session: %s\n\n", c.sessionID)
 

@@ -222,7 +222,7 @@ func TestContentRequestProcessor_getContents_Basic(t *testing.T) {
 		},
 	}
 
-	msgs := p.getContents("main", events, "agent-a")
+	msgs := p.convertEventsToMessages(events, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleUser, msgs[0].Role)
 	assert.Equal(t, "hello world", msgs[0].Content)
@@ -270,7 +270,7 @@ func TestContentRequestProcessor_getContents_ForeignAgentConvert(t *testing.T) {
 				},
 			}
 
-			msgs := p.getContents("main", events, "agent-a")
+			msgs := p.convertEventsToMessages(events, "agent-a")
 			assert.Len(t, msgs, 1)
 			assert.Equal(t, model.RoleUser, msgs[0].Role)
 			assert.NotEmpty(t, msgs[0].Content)
@@ -315,7 +315,8 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 
 	// Current branch main/feature should include events whose branch is
 	// prefix of the current, i.e. "main" only.
-	msgs := p.getContents("main/feature", events, "agent-a")
+	filtered := p.eventsInBranch(events, "main/feature")
+	msgs := p.convertEventsToMessages(filtered, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, "kept", msgs[0].Content)
 }
