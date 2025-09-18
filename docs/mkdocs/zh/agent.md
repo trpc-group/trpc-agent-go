@@ -177,7 +177,6 @@ invocation := agent.NewInvocation(
     agent.WithInvocationSession(&session.Session{ID: "session-001"}), // Session
     agent.WithInvocationEndInvocation(false),                         // 是否结束调用
     agent.WithInvocationMessage(model.NewUserMessage("User input")),  // 用户消息
-    agent.WithInvocationRunOptions(ro),                               // 运行时候Options参数
     agent.WithInvocationModel(modelInstance),                         // 使用的模型
 )
 
