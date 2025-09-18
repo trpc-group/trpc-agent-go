@@ -725,9 +725,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#session" class="md-nav__link">
+  <a href="#auto-seed-session" class="md-nav__link">
     <span class="md-ellipsis">
-      传入对话历史（无需使用 Session）
+      传入对话历史（auto-seed + 复用 Session）
     </span>
   </a>
   
@@ -1380,9 +1380,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#session" class="md-nav__link">
+  <a href="#auto-seed-session" class="md-nav__link">
     <span class="md-ellipsis">
-      传入对话历史（无需使用 Session）
+      传入对话历史（auto-seed + 复用 Session）
     </span>
   </a>
   
@@ -1842,8 +1842,10 @@
 </span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="c1">// 带运行选项（当前 RunOptions 为空结构体，留作未来扩展）</span>
 </span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h4 id="session">传入对话历史（无需使用 Session）</h4>
-<p>如果上游服务已经维护了会话历史，并希望直接将整段对话（[]model.Message）传入 Agent，可使用以下两种方式：</p>
+<h4 id="auto-seed-session">传入对话历史（auto-seed + 复用 Session）</h4>
+<p>如果上游服务已经维护了会话历史，并希望让 Agent 看见这些上下文，可以直接传入整段
+<code>[]model.Message</code>。Runner 会在 Session 为空时自动将其写入 Session，并在随后的轮次将
+新事件（工具调用、后续回复等）继续写入。</p>
 <p>方式 A：使用便捷函数 <code>runner.RunWithMessages</code></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
 <span class="normal"><a href="#__codelineno-6-2">2</a></span>
@@ -1861,13 +1863,16 @@
 </span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a>
 </span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">RunWithMessages</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">msgs</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>示例：<code>examples/runwithmessages</code></p>
+<p>示例：<code>examples/runwithmessages</code>（使用 <code>RunWithMessages</code>；Runner 会 auto-seed 并复用 Session）</p>
 <p>方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span>
 <span class="normal"><a href="#__codelineno-7-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">msgs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span><span class="w"> </span><span class="cm">/* 同上 */</span><span class="w"> </span><span class="p">}</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{},</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithMessages</span><span class="p">(</span><span class="nx">msgs</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
-<p>注意：当显式传入 <code>[]model.Message</code> 时，Runner 会优先使用该历史并跳过从 Session 派生内容的逻辑，避免重复拼接；同时由于我们传入了空的 <code>message</code>，Runner 不会额外把这一步输入追加到 Session 中。</p>
+<p>注意：当显式传入 <code>[]model.Message</code> 时，Runner 会在 Session 为空时自动把这段历史写入
+Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
+没有事件时回退到单条 <code>invocation.Message</code>）。<code>RunWithMessages</code> 仍会把最新的用户消息写入
+<code>invocation.Message</code>。</p>
 <h2 id="_10">💾 会话管理</h2>
 <h3 id="_11">内存会话（默认）</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
@@ -2339,7 +2344,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年9月17日 06:14:11 UTC">2025-09-17 06:14:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年9月18日 11:19:28 UTC">2025-09-18 11:19:28</span>
   </span>
 
     
