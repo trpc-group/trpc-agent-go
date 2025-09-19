@@ -98,7 +98,18 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEvent(ctx, invocation, rsp, req.Tools, ch)
+
+	// Option one: set invocation.EndInvocation is true, and stop next step.
+	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
+	// maybe the Option two is better.
 	if err != nil || functioncallResponseEvent == nil {
+		return
+	}
+
+	// If the tool indicates skipping outer summarization, mark the invocation to end
+	// after this tool response so the flow does not perform an extra LLM call.
+	if functioncallResponseEvent.Actions != nil && functioncallResponseEvent.Actions.SkipSummarization {
+		invocation.EndInvocation = true
 		return
 	}
 
@@ -130,17 +141,15 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEvent(
 	)
 	if err != nil {
 		log.Errorf("Function call handling failed for agent %s: %v", invocation.AgentName, err)
-		if emitErr := agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)); emitErr != nil {
-			err = emitErr
-		}
+		))
 		return nil, err
 	}
-	err = agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
 	return functionResponseEvent, nil
 }
 
@@ -152,10 +161,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
-	if llmResponse == nil || len(llmResponse.Choices) == 0 {
-		return nil, nil
-	}
-
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
@@ -179,10 +184,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
-
-	if mergedEvent.Actions != nil && mergedEvent.Actions.SkipSummarization {
-		invocation.EndInvocation = true
-	}
 	return mergedEvent, nil
 }
 

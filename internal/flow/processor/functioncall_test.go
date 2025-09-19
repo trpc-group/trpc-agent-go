@@ -933,14 +933,20 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 	tools := map[string]tool.Tool{"t1": t1}
 	inv := &agent.Invocation{InvocationID: "inv-s", AgentName: "agent"}
 
+	req := &model.Request{Tools: tools}
 	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
 		Message: model.Message{ToolCalls: []model.ToolCall{{
 			ID: "c1", Function: model.FunctionDefinitionParam{Name: "t1", Arguments: []byte(`{}`)},
 		}}},
 	}}}
-
-	evt, err := p.handleFunctionCalls(ctx, inv, rsp, tools, nil)
-	require.NoError(t, err)
+	evenChan := make(chan *event.Event, 10)
+	defer close(evenChan)
+	p.ProcessResponse(ctx, inv, req, rsp, evenChan)
+	var evt *event.Event
+	for e := range evenChan {
+		evt = e
+		break
+	}
 	require.NotNil(t, evt)
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization)
@@ -963,15 +969,21 @@ func TestHandleFunctionCalls_SkipSummarization_NoChildEvents_SetsEndInvocation(t
 	tools := map[string]tool.Tool{"t1": t1}
 	inv := &agent.Invocation{InvocationID: "inv-nc", AgentName: "agent"}
 
+	req := &model.Request{Tools: tools}
 	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
 		Message: model.Message{ToolCalls: []model.ToolCall{{
 			ID: "c1", Function: model.FunctionDefinitionParam{Name: "t1", Arguments: []byte(`{}`)},
 		}}},
 	}}}
 
-	evt, err := p.handleFunctionCalls(ctx, inv, rsp, tools, nil)
-	require.NoError(t, err)
-	require.NotNil(t, evt)
+	evenChan := make(chan *event.Event, 10)
+	defer close(evenChan)
+	p.ProcessResponse(ctx, inv, req, rsp, evenChan)
+	var evt *event.Event
+	for e := range evenChan {
+		evt = e
+		break
+	}
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization, "merged event should propagate SkipSummarization when no child events")
 	require.True(t, inv.EndInvocation, "invocation should end when skipping summarization")
