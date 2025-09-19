@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -14,12 +15,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+var (
+	modelName = flag.String("model", "deepseek-chat", "Model to use")
+	isStream  = flag.Bool("stream", true, "Whether to stream the response")
+)
+
 func main() {
-	modelInstance := openai.New("deepseek-chat")
+	flag.Parse()
+	modelInstance := openai.New(*modelName)
 	generationConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(512),
 		Temperature: floatPtr(0.7),
-		Stream:      false,
+		Stream:      *isStream,
 	}
 	calculatorTool := function.NewFunctionTool(
 		calculator,
