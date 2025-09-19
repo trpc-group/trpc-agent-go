@@ -109,16 +109,25 @@ func (s *StateSchema) ApplyUpdate(currentState State, update State) State {
 	for key, updateValue := range update {
 		field, exists := s.Fields[key]
 		if !exists {
-			// If no field definition, use default behavior (override).
-			result[key] = updateValue
+			// If no field definition, use default behavior (override) with deep copy
+			// to avoid sharing mutable references (maps/slices) across goroutines.
+			result[key] = deepCopyAny(updateValue)
 			continue
 		}
 		currentValue, hasCurrentValue := result[key]
 		if !hasCurrentValue && field.Default != nil {
 			currentValue = field.Default()
 		}
-		// Apply reducer.
-		result[key] = field.Reducer(currentValue, updateValue)
+		// Apply reducer with deep-copied update to prevent reference sharing.
+		safeUpdate := deepCopyAny(updateValue)
+		merged := field.Reducer(currentValue, safeUpdate)
+		// Ensure merged complex values are not shared by taking a deep copy.
+		switch merged.(type) {
+		case map[string]any, []any, []string, []int, []float64:
+			result[key] = deepCopyAny(merged)
+		default:
+			result[key] = merged
+		}
 	}
 	return result
 }
@@ -150,6 +159,11 @@ func (s *StateSchema) Validate(state State) error {
 
 // DefaultReducer overwrites the existing value with the update.
 func DefaultReducer(existing, update any) any {
+	// For composite types, return a deep copy to avoid shared references.
+	switch update.(type) {
+	case map[string]any, []any, []string, []int, []float64:
+		return deepCopyAny(update)
+	}
 	return update
 }
 
@@ -195,16 +209,16 @@ func MergeReducer(existing, update any) any {
 	updateMap, ok2 := update.(map[string]any)
 
 	if !ok1 || !ok2 {
-		// Fallback to default behavior if not maps
-		return update
+		// Fallback to default behavior; deep copy if composite
+		return deepCopyAny(update)
 	}
 
-	result := make(map[string]any)
+	result := make(map[string]any, len(existingMap)+len(updateMap))
 	for k, v := range existingMap {
-		result[k] = v
+		result[k] = deepCopyAny(v)
 	}
 	for k, v := range updateMap {
-		result[k] = v
+		result[k] = deepCopyAny(v)
 	}
 	return result
 }

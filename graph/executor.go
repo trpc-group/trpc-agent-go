@@ -362,7 +362,18 @@ func (e *Executor) Execute(
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	// Start execution in a goroutine.
 	go func() {
-		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				log.Errorf("panic in executor goroutine: %v\n%s", r, string(stack))
+				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
+					WithPregelEventInvocationID(invocation.InvocationID),
+					WithPregelEventStepNumber(-1),
+					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+				))
+			}
+			close(eventChan)
+		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
 			if IsInterruptError(err) {
@@ -673,10 +684,17 @@ func (e *Executor) buildCompletionEvent(
 	startTime time.Time,
 	stepsExecuted int,
 ) *event.Event {
-	// Take a deep snapshot of the final state under read lock to avoid
-	// concurrent map iteration/write during later JSON marshaling.
+	// Take a deep snapshot of the final state under read lock.
+	// IMPORTANT: Skip volatile/non-serializable keys (e.g., Session, callbacks, exec context)
+	// to avoid racing on their internal maps/slices managed by other goroutines.
 	execCtx.stateMutex.RLock()
-	finalStateCopy := deepCopyState(execCtx.State)
+	finalStateCopy := make(State, len(execCtx.State))
+	for k, v := range execCtx.State {
+		if isUnsafeStateKey(k) {
+			continue
+		}
+		finalStateCopy[k] = deepCopyAny(v)
+	}
 	execCtx.stateMutex.RUnlock()
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
@@ -697,6 +715,24 @@ func (e *Executor) buildCompletionEvent(
 	return completionEvent
 }
 
+// isUnsafeStateKey reports whether the key points to values that are
+// non-serializable or potentially mutated concurrently by other subsystems
+// (e.g., session service), which should be excluded from final snapshots.
+func isUnsafeStateKey(key string) bool {
+	switch key {
+	case StateKeyExecContext,
+		StateKeyParentAgent,
+		StateKeyToolCallbacks,
+		StateKeyModelCallbacks,
+		StateKeyAgentCallbacks,
+		StateKeyCurrentNodeID,
+		StateKeySession:
+		return true
+	default:
+		return false
+	}
+}
+
 // createCheckpoint creates a checkpoint for the current state.
 func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, state State, source string, step int) error {
 	if e.checkpointSaver == nil {
@@ -707,6 +743,9 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 	// mutations of nested maps/slices during checkpoint serialization.
 	channelValues := make(map[string]any)
 	for k, v := range state {
+		if isUnsafeStateKey(k) {
+			continue
+		}
 		channelValues[k] = deepCopyAny(v)
 	}
 
@@ -1244,7 +1283,15 @@ func (e *Executor) executeStep(
 		wg.Add(1)
 		go func(t *Task) {
 			defer wg.Done()
-			results <- e.executeSingleTask(ctx, invocation, execCtx, t, step)
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("panic executing task %s: %v\n%s", t.NodeID, r, string(debug.Stack()))
+					results <- fmt.Errorf("task panic: %v", r)
+				}
+			}()
+			if err := e.executeSingleTask(ctx, invocation, execCtx, t, step); err != nil {
+				results <- err
+			}
 		}(t)
 	}
 
@@ -1432,8 +1479,9 @@ func (e *Executor) newNodeCallbackContext(
 
 // buildTaskStateCopy returns the per-task input state, including overlay.
 func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State {
-	// Always construct an isolated deep copy so node code can freely mutate
-	// maps/slices without racing with other goroutines or the global state.
+	// Always construct an isolated state copy so node code can freely mutate
+	// without racing with other goroutines. Skip or shallow-copy unsafe keys
+	// whose internals may be mutated concurrently by other subsystems.
 	execCtx.stateMutex.RLock()
 	defer execCtx.stateMutex.RUnlock()
 
@@ -1447,8 +1495,16 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 		base = execCtx.State
 	}
 
-	// Deep copy the base state to avoid sharing nested references.
-	stateCopy := deepCopyState(base)
+	stateCopy := make(State, len(base))
+	for k, v := range base {
+		if isUnsafeStateKey(k) {
+			// Preserve pointer/reference without deep copying to avoid racing
+			// on nested structures (e.g., session internals) during reflection.
+			stateCopy[k] = v
+			continue
+		}
+		stateCopy[k] = deepCopyAny(v)
+	}
 
 	// Preserve callback pointers that contain function values which cannot be
 	// deep-copied safely via reflection (functions would become nil and cause
@@ -1653,15 +1709,23 @@ func (e *Executor) executeNodeFunction(
 
 	if input == nil {
 		execCtx.stateMutex.RLock()
-		input = deepCopyState(execCtx.State)
+		tmp := make(State, len(execCtx.State))
+		for k, v := range execCtx.State {
+			if isUnsafeStateKey(k) {
+				tmp[k] = v
+				continue
+			}
+			tmp[k] = deepCopyAny(v)
+		}
 		// Apply overlay if present to form the isolated input view.
 		if t.Overlay != nil && e.graph.Schema() != nil {
-			input = e.graph.Schema().ApplyUpdate(input, t.Overlay)
+			tmp = e.graph.Schema().ApplyUpdate(tmp, t.Overlay)
 		}
 		execCtx.stateMutex.RUnlock()
 		// Inject execution context helpers used by nodes.
-		input[StateKeyExecContext] = execCtx
-		input[StateKeyCurrentNodeID] = nodeID
+		tmp[StateKeyExecContext] = execCtx
+		tmp[StateKeyCurrentNodeID] = nodeID
+		input = tmp
 	}
 
 	return node.Function(ctx, input)
@@ -2185,6 +2249,9 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// including any updates from nodes that haven't been written to channels yet.
 	channelValues := make(map[string]any)
 	for k, v := range state {
+		if isUnsafeStateKey(k) {
+			continue
+		}
 		channelValues[k] = deepCopyAny(v)
 	}
 

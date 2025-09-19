@@ -12,6 +12,7 @@ package runner
 
 import (
 	"context"
+	"runtime/debug"
 	"time"
 
 	"github.com/google/uuid"
@@ -203,6 +204,9 @@ func (r *runner) Run(
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				log.Errorf("panic in runner event loop: %v\n%s", r, string(debug.Stack()))
+			}
 			close(processedEventCh)
 			invocation.CleanupNotice(ctx)
 		}()
