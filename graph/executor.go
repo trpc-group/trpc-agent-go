@@ -209,9 +209,29 @@ func deepCopyAny(value any) any {
 	case time.Time:
 		return v
 	default:
-		// Fallback: handle generic maps/slices via reflection to avoid sharing.
+		// Fallback: handle generic pointers, interfaces, maps, slices, arrays and structs.
 		rv := reflect.ValueOf(value)
+		if !rv.IsValid() {
+			return nil
+		}
+
 		switch rv.Kind() {
+		case reflect.Interface:
+			if rv.IsNil() {
+				return nil
+			}
+			return deepCopyAny(rv.Elem().Interface())
+
+		case reflect.Ptr:
+			if rv.IsNil() {
+				return value
+			}
+			// Allocate a new value of the same type and deep copy the element.
+			elem := rv.Elem()
+			newElem := reflect.New(elem.Type())
+			newElem.Elem().Set(reflect.ValueOf(deepCopyAny(elem.Interface())))
+			return newElem.Interface()
+
 		case reflect.Map:
 			if rv.IsNil() {
 				return value
@@ -219,9 +239,11 @@ func deepCopyAny(value any) any {
 			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
 			for _, mk := range rv.MapKeys() {
 				mv := rv.MapIndex(mk)
+				// Keys must remain the same comparable values; do not deep copy keys.
 				newMap.SetMapIndex(mk, reflect.ValueOf(deepCopyAny(mv.Interface())))
 			}
 			return newMap.Interface()
+
 		case reflect.Slice:
 			if rv.IsNil() {
 				return value
@@ -232,8 +254,34 @@ func deepCopyAny(value any) any {
 				newSlice.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
 			}
 			return newSlice.Interface()
+
+		case reflect.Array:
+			l := rv.Len()
+			newArr := reflect.New(rv.Type()).Elem()
+			for i := 0; i < l; i++ {
+				newArr.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
+			}
+			return newArr.Interface()
+
+		case reflect.Struct:
+			// Create a new struct and copy exported fields deeply.
+			newStruct := reflect.New(rv.Type()).Elem()
+			for i := 0; i < rv.NumField(); i++ {
+				f := rv.Field(i)
+				ft := rv.Type().Field(i)
+				// Only copy exported fields (PkgPath == "" means exported).
+				if ft.PkgPath != "" { // unexported; leave zero value – JSON won't marshal it.
+					continue
+				}
+				// Set deep-copied field value; guard against non-settable just in case.
+				if newStruct.Field(i).CanSet() {
+					newStruct.Field(i).Set(reflect.ValueOf(deepCopyAny(f.Interface())))
+				}
+			}
+			return newStruct.Interface()
+
 		default:
-			// For other scalar or struct types, rely on value semantics.
+			// Scalars and other immutable kinds – rely on value semantics.
 			return v
 		}
 	}
