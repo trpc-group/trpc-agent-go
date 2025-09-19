@@ -44,17 +44,16 @@ var (
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
 type Executor struct {
-	graph                 *Graph
-	channelBufferSize     int
-	maxSteps              int
-	stepTimeout           time.Duration
-	nodeTimeout           time.Duration
-	checkpointSaveTimeout time.Duration
-	checkpointSaver       CheckpointSaver
-	checkpointManager     *CheckpointManager
-	lastCheckpoint        *Checkpoint
-	pendingWrites         []PendingWrite
-	nextNodesToExecute    []string // Nodes to execute when resuming from checkpoint.
+    graph                 *Graph
+    channelBufferSize     int
+    maxSteps              int
+    stepTimeout           time.Duration
+    nodeTimeout           time.Duration
+    checkpointSaveTimeout time.Duration
+    checkpointSaver       CheckpointSaver
+    checkpointManager     *CheckpointManager
+    lastCheckpoint        *Checkpoint
+    pendingWrites         []PendingWrite
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -359,25 +358,32 @@ func (e *Executor) Execute(
 
 // executeGraph executes the graph using Pregel-style BSP execution.
 func (e *Executor) executeGraph(
-	ctx context.Context,
-	initialState State,
-	invocation *agent.Invocation,
-	eventChan chan<- *event.Event,
-	startTime time.Time,
+    ctx context.Context,
+    initialState State,
+    invocation *agent.Invocation,
+    eventChan chan<- *event.Event,
+    startTime time.Time,
 ) error {
-	execState, checkpointConfig, resumed, resumedStep :=
-		e.prepareCheckpointAndState(ctx, initialState, invocation)
+    execState, checkpointConfig, resumed, resumedStep :=
+        e.prepareCheckpointAndState(ctx, initialState, invocation)
 
-	execState = e.processResumeCommand(execState, initialState)
+    execState = e.processResumeCommand(execState, initialState)
 
-	execCtx := e.buildExecutionContext(
-		eventChan, invocation.InvocationID, execState, resumed,
-	)
+    execCtx := e.buildExecutionContext(
+        eventChan, invocation.InvocationID, execState, resumed, e.lastCheckpoint,
+    )
 
-	if resumed && e.pendingWrites != nil {
-		log.Debugf("🔧 Executor: applying %d pending writes", len(e.pendingWrites))
-		e.applyPendingWrites(ctx, invocation, execCtx, e.pendingWrites)
-	}
+    // Move restored pending writes into the execution context to avoid
+    // cross-run sharing when Executor is reused concurrently.
+    if len(e.pendingWrites) > 0 {
+        execCtx.pendingWrites = append(execCtx.pendingWrites[:0], e.pendingWrites...)
+        e.pendingWrites = nil
+    }
+
+    if resumed && len(execCtx.pendingWrites) > 0 {
+        log.Debugf("🔧 Executor: applying %d pending writes", len(execCtx.pendingWrites))
+        e.applyPendingWrites(ctx, invocation, execCtx, execCtx.pendingWrites)
+    }
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
@@ -403,9 +409,9 @@ func (e *Executor) executeGraph(
 
 // prepareCheckpointAndState initializes or restores state and checkpointing.
 func (e *Executor) prepareCheckpointAndState(
-	ctx context.Context,
-	initialState State,
-	invocation *agent.Invocation,
+    ctx context.Context,
+    initialState State,
+    invocation *agent.Invocation,
 ) (State, map[string]any, bool, int) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
@@ -444,13 +450,13 @@ func (e *Executor) resumeOrInitWithSaver(
 		lineageID, checkpointID, namespace,
 	)
 
-	tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
+    tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
 	if err != nil || tuple == nil || tuple.Checkpoint == nil {
 		log.Debug("No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
-		return execState, checkpointConfig, false, 0
-	}
+        return execState, checkpointConfig, false, 0
+    }
 
 	log.Debugf("Resuming from checkpoint ID=%s", tuple.Checkpoint.ID)
 	restored := e.restoreStateFromCheckpoint(tuple)
@@ -461,18 +467,18 @@ func (e *Executor) resumeOrInitWithSaver(
 		resumedStep = tuple.Metadata.Step
 		log.Debugf("Resuming from step %d", resumedStep)
 	}
-	e.lastCheckpoint = tuple.Checkpoint
+    e.lastCheckpoint = tuple.Checkpoint
 	e.initializeChannels(restored, true)
 	if tuple.Config != nil {
 		checkpointConfig = tuple.Config
 	}
-	e.pendingWrites = tuple.PendingWrites
+    e.pendingWrites = tuple.PendingWrites
 	log.Debugf(
 		"Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
 		len(e.pendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
 	)
-	e.applyExecutableNextNodes(restored, tuple)
-	return restored, checkpointConfig, true, resumedStep
+    e.applyExecutableNextNodes(restored, tuple)
+    return restored, checkpointConfig, true, resumedStep
 }
 
 // restoreStateFromCheckpoint converts checkpoint channel values back into state.
@@ -524,9 +530,9 @@ func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
 // This is important for initial checkpoints (step -1) that have the entry
 // point set, so a forked resume can continue from the beginning.
 func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTuple) {
-	if len(e.pendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
-		return
-	}
+    if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
+        return
+    }
 	for _, nodeID := range tuple.Checkpoint.NextNodes {
 		if nodeID != End && nodeID != "" {
 			restored[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
@@ -552,32 +558,34 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 
 // buildExecutionContext constructs the execution context including versionsSeen.
 func (e *Executor) buildExecutionContext(
-	eventChan chan<- *event.Event,
-	invocationID string,
-	state State,
-	resumed bool,
+    eventChan chan<- *event.Event,
+    invocationID string,
+    state State,
+    resumed bool,
+    lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
-	versionsSeen := make(map[string]map[string]int64)
-	if resumed && e.lastCheckpoint != nil && e.lastCheckpoint.VersionsSeen != nil {
-		for nodeID, nodeVersions := range e.lastCheckpoint.VersionsSeen {
-			versionsSeen[nodeID] = make(map[string]int64)
-			for ch, version := range nodeVersions {
-				versionsSeen[nodeID][ch] = version
-			}
-		}
+    versionsSeen := make(map[string]map[string]int64)
+    if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
+        for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
+            versionsSeen[nodeID] = make(map[string]int64)
+            for ch, version := range nodeVersions {
+                versionsSeen[nodeID][ch] = version
+            }
+        }
 		log.Debugf(
 			"Restored versionsSeen for %d nodes from checkpoint",
 			len(versionsSeen),
 		)
 	}
-	return &ExecutionContext{
-		Graph:        e.graph,
-		State:        state,
-		EventChan:    eventChan,
-		InvocationID: invocationID,
-		resumed:      resumed,
-		versionsSeen: versionsSeen,
-	}
+    return &ExecutionContext{
+        Graph:        e.graph,
+        State:        state,
+        EventChan:    eventChan,
+        InvocationID: invocationID,
+        resumed:      resumed,
+        versionsSeen: versionsSeen,
+        lastCheckpoint: lastCheckpoint,
+    }
 }
 
 // runBspLoop runs the BSP execution loop from the given start step.
@@ -655,17 +663,16 @@ func (e *Executor) buildCompletionEvent(
 		WithCompletionEventTotalSteps(stepsExecuted),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
-	if completionEvent.StateDelta == nil {
-		completionEvent.StateDelta = make(map[string][]byte)
-	}
-	execCtx.stateMutex.RLock()
-	stateSnapshot := deepCopyState(execCtx.State)
-	execCtx.stateMutex.RUnlock()
-	for key, value := range stateSnapshot {
-		if jsonData, err := json.Marshal(value); err == nil {
-			completionEvent.StateDelta[key] = jsonData
-		}
-	}
+    if completionEvent.StateDelta == nil {
+        completionEvent.StateDelta = make(map[string][]byte)
+    }
+    // Reuse the deep-copied snapshot to populate StateDelta to avoid an
+    // additional full deep copy.
+    for key, value := range finalStateCopy {
+        if jsonData, err := json.Marshal(value); err == nil {
+            completionEvent.StateDelta[key] = jsonData
+        }
+    }
 	return completionEvent
 }
 
@@ -1059,11 +1066,11 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 
 // planBasedOnVersionTriggers creates tasks based on per-node version tracking.
 func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step int) []*Task {
-	var tasks []*Task
+    var tasks []*Task
 
-	if e.lastCheckpoint == nil {
-		return tasks
-	}
+    if execCtx.lastCheckpoint == nil {
+        return tasks
+    }
 
 	channels := e.graph.getAllChannels()
 	triggerToNodes := e.graph.getTriggerToNodes()
@@ -1093,16 +1100,16 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 			}
 
 			// Check if this node should be triggered based on version tracking.
-			if e.shouldTriggerNode(nodeID, channelName, currentVersion, e.lastCheckpoint) {
-				task := e.createTask(nodeID, execCtx.State, step)
-				if task != nil {
-					tasks = append(tasks, task)
-					scheduledNodes[nodeID] = true
-					log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
-				}
-			}
-		}
-	}
+            if e.shouldTriggerNode(nodeID, channelName, currentVersion, execCtx.lastCheckpoint) {
+                task := e.createTask(nodeID, execCtx.State, step)
+                if task != nil {
+                    tasks = append(tasks, task)
+                    scheduledNodes[nodeID] = true
+                    log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
+                }
+            }
+        }
+    }
 
 	// Acknowledge all available channels after planning.
 	for _, channel := range channels {
