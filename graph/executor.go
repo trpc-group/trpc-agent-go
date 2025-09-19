@@ -868,22 +868,22 @@ func getConfigKeys(config map[string]any) []string {
 // The caller is responsible for threading any returned checkpoint metadata
 // into the per-execution context (ExecutionContext) as needed.
 func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.Invocation,
-	config map[string]any) (State, error) {
+    config map[string]any) (State, *Checkpoint, []PendingWrite, error) {
 	log.Debugf("resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
 
-	if e.checkpointSaver == nil {
-		// No checkpoint saver, returning nil
-		return nil, nil
-	}
+    if e.checkpointSaver == nil {
+        // No checkpoint saver
+        return nil, nil, nil, nil
+    }
 
-	tuple, err := e.checkpointSaver.GetTuple(ctx, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
-	}
+    tuple, err := e.checkpointSaver.GetTuple(ctx, config)
+    if err != nil {
+        return nil, nil, nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
+    }
 
-	if tuple == nil {
-		return nil, nil
-	}
+    if tuple == nil {
+        return nil, nil, nil, nil
+    }
 
 	// Note: lastCheckpoint is now carried per-execution in ExecutionContext.
 
@@ -926,7 +926,7 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.I
 		}
 	}
 
-	return state, nil
+    return state, tuple.Checkpoint, tuple.PendingWrites, nil
 }
 
 // initializeState initializes the execution state with schema defaults.
