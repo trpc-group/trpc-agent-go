@@ -114,21 +114,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 0) If caller supplied explicit messages via RunOptions, prefer them
-	// and skip deriving from session or the single invocation message to
-	// avoid duplication. This supports use cases where the upstream
-	// system maintains the conversation history and passes it in each run.
-	if len(invocation.RunOptions.Messages) > 0 {
-		req.Messages = append(req.Messages, invocation.RunOptions.Messages...)
-
-		// Send a preprocessing event and return early.
-		evt := event.New(invocation.InvocationID, invocation.AgentName, event.WithObject(model.ObjectTypePreprocessingContent))
-		log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
-		agent.EmitEvent(ctx, invocation, ch, evt)
-		return
-	}
-
-	// 1) Prepend session summary as a system message if enabled and available.
+	// Prepend session summary as a system message if enabled and available.
 	if p.AddSessionSummary && invocation.Session != nil {
 		if msg := p.getSessionSummaryMessage(invocation); msg != nil {
 			// Prepend to the front of messages.
@@ -136,17 +122,17 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// 2) Append branch-incremental messages from session events when allowed.
+	// Append branch-incremental messages from session events when allowed.
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		messages := p.getBranchIncrementalMessages(invocation)
 		req.Messages = append(req.Messages, messages...)
 	}
 
-	// 3) Include the current invocation message if:
+	// Include the current invocation message if:
 	// 1. It has content, AND
 	// 2. There's no session OR the session has no events
 	// This prevents duplication when using Runner (which adds user message to session)
-	// while ensuring standalone usage works (where invocation.Message is the source)
+	// while ensuring standalone usage works (where invocation.Message is the source).
 	if invocation.Message.Content != "" &&
 		(invocation.Session == nil || len(invocation.Session.Events) == 0) {
 		req.Messages = append(req.Messages, invocation.Message)
@@ -154,7 +140,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.Message.Role)
 	}
 
-	// 4) Safety fallback: if messages are still empty, include the current
+	// Safety fallback: if messages are still empty, include the current.
 	// invocation message when non-empty to avoid empty model input.
 	if len(req.Messages) == 0 && invocation.Message.Content != "" {
 		req.Messages = append(req.Messages, invocation.Message)
@@ -172,7 +158,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 // getSessionSummaryMessage returns the current-branch session summary as a
 // system message if available and non-empty.
 func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) *model.Message {
-	if inv == nil || inv.Session == nil || inv.Session.Summaries == nil {
+	if inv.Session == nil || inv.Session.Summaries == nil {
 		return nil
 	}
 	branch := inv.GetEventFilterKey()
@@ -194,9 +180,13 @@ func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invoca
 		branch = inv.AgentName
 	}
 	var evs []event.Event
-	if inv.Session != nil && inv.Session.Summaries != nil {
-		if sum := inv.Session.Summaries[branch]; sum != nil {
-			evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, branch)
+	if inv.Session != nil {
+		if inv.Session.Summaries != nil {
+			if sum := inv.Session.Summaries[branch]; sum != nil {
+				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, branch)
+			} else {
+				evs = p.eventsInBranch(inv.Session.Events, branch)
+			}
 		} else {
 			evs = p.eventsInBranch(inv.Session.Events, branch)
 		}
