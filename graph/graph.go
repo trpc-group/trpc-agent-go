@@ -224,6 +224,11 @@ type ExecutionContext struct {
 	// Map from nodeID -> channelName -> version number.
 	versionsSeen   map[string]map[string]int64
 	versionsSeenMu sync.RWMutex
+
+	// lastCheckpoint holds the most recent checkpoint used for planning
+	// when resuming. Keeping this per-execution avoids cross-run sharing
+	// when a single Executor is reused concurrently.
+	lastCheckpoint *Checkpoint
 }
 
 // Command represents a command that combines state updates with routing.
