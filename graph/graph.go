@@ -202,9 +202,9 @@ func (g *Graph) validate() error {
 
 // ExecutionContext contains context for graph execution.
 type ExecutionContext struct {
-    Graph        *Graph
-    EventChan    chan<- *event.Event
-    InvocationID string
+	Graph        *Graph
+	EventChan    chan<- *event.Event
+	InvocationID string
 
 	// stateMutex protects State reads/writes.
 	stateMutex sync.RWMutex
@@ -222,13 +222,13 @@ type ExecutionContext struct {
 
 	// versionsSeen tracks which channel versions each node has seen.
 	// Map from nodeID -> channelName -> version number.
-    versionsSeen   map[string]map[string]int64
-    versionsSeenMu sync.RWMutex
+	versionsSeen   map[string]map[string]int64
+	versionsSeenMu sync.RWMutex
 
-    // lastCheckpoint holds the most recent checkpoint used for planning
-    // when resuming. Keeping this per-execution avoids cross-run sharing
-    // when a single Executor is reused concurrently.
-    lastCheckpoint *Checkpoint
+	// lastCheckpoint holds the most recent checkpoint used for planning
+	// when resuming. Keeping this per-execution avoids cross-run sharing
+	// when a single Executor is reused concurrently.
+	lastCheckpoint *Checkpoint
 }
 
 // Command represents a command that combines state updates with routing.
