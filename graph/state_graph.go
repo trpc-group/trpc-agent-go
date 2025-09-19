@@ -1244,6 +1244,7 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
 		invocation := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
+			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
 			agent.WithInvocationAgentCallbacks(agentCallbacks),
 		)
