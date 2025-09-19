@@ -247,7 +247,7 @@ func TestTimeoutContextCreation(t *testing.T) {
 		Timeout:   2 * time.Second,
 	}
 
-	manager := newMCPSessionManager(config, nil)
+	manager := newMCPSessionManager(config, nil, nil)
 
 	t.Run("adds timeout when context has no deadline", func(t *testing.T) {
 		ctx := context.Background() // No deadline
@@ -292,7 +292,7 @@ func TestTimeoutContextCreation(t *testing.T) {
 			Args:      []string{"hello"},
 			// No Timeout specified
 		}
-		managerNoTimeout := newMCPSessionManager(configNoTimeout, nil)
+		managerNoTimeout := newMCPSessionManager(configNoTimeout, nil, nil)
 
 		ctx := context.Background()
 		timeoutCtx, cancel := managerNoTimeout.createTimeoutContext(ctx, "test")
