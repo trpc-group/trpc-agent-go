@@ -118,6 +118,56 @@ User → Runner → Agent(Model) → Session Service → SessionSummarizer
 - Summary injection happens automatically in the `ContentRequestProcessor` for subsequent turns.
 - You can control summary injection and history truncation with `-addSummary` and `-maxHistoryRuns`.
 
+## Summary Options
+
+The `SessionSummarizer` supports various configuration options to customize summarization behavior:
+
+### Basic Options
+
+- **`WithMaxSummaryLength(maxLength int)`**: Sets the maximum length for generated summaries. When set to 0 (default), no truncation is applied.
+
+- **`WithPrompt(prompt string)`**: Sets a custom prompt for summarization. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the extracted conversation when generating the summary.
+
+### Trigger Options
+
+- **`WithEventThreshold(eventCount int)`**: Triggers summarization when the number of events exceeds the threshold.
+
+- **`WithTokenThreshold(tokenCount int)`**: Triggers summarization when the estimated token count exceeds the threshold (0=disabled).
+
+- **`WithTimeThreshold(interval time.Duration)`**: Triggers summarization when the time elapsed since the last event exceeds the interval (useful for periodic summarization in long-running sessions).
+
+### Composite Trigger Options
+
+- **`WithChecksAny(checks ...Checker)`**: Triggers summarization when ANY of the provided checks pass (OR logic).
+
+- **`WithChecksAll(checks ...Checker)`**: Triggers summarization when ALL of the provided checks pass (AND logic).
+
+### Example Usage
+
+```go
+// Basic configuration
+sum := summary.NewSummarizer(model,
+    summary.WithMaxSummaryLength(500),
+    summary.WithEventThreshold(10),
+)
+
+// Complex trigger configuration
+sum := summary.NewSummarizer(model,
+    summary.WithMaxSummaryLength(1000),
+    summary.WithChecksAny(
+        summary.CheckEventThreshold(5),
+        summary.CheckTokenThreshold(1000),
+        summary.CheckTimeThreshold(5*time.Minute),
+    ),
+)
+
+// Custom prompt
+sum := summary.NewSummarizer(model,
+    summary.WithPrompt("Summarize this conversation focusing on key decisions: {conversation_text}"),
+    summary.WithEventThreshold(3),
+)
+```
+
 ## Key design choices
 
 - Do not modify or truncate original `events`.

@@ -26,15 +26,6 @@ func WithPrompt(prompt string) Option {
 	}
 }
 
-// WithChecks sets the check functions for determining when to summarize.
-func WithChecks(checks []Checker) Option {
-	return func(s *sessionSummarizer) {
-		if checks != nil {
-			s.checks = checks
-		}
-	}
-}
-
 // WithMaxSummaryLength sets the maximum length for generated summaries.
 func WithMaxSummaryLength(maxSummaryLength int) Option {
 	return func(s *sessionSummarizer) {
@@ -68,19 +59,17 @@ func WithTimeThreshold(interval time.Duration) Option {
 // WithChecksAll appends a single composite check that requires all provided checks (AND logic).
 func WithChecksAll(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
-		if len(checks) == 0 {
-			return
+		if len(checks) > 0 {
+			s.checks = append(s.checks, ChecksAll(checks))
 		}
-		s.checks = append(s.checks, ChecksAll(checks))
 	}
 }
 
 // WithChecksAny appends a single composite check that passes if any provided check passes (OR logic).
 func WithChecksAny(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
-		if len(checks) == 0 {
-			return
+		if len(checks) > 0 {
+			s.checks = append(s.checks, ChecksAny(checks))
 		}
-		s.checks = append(s.checks, ChecksAny(checks))
 	}
 }

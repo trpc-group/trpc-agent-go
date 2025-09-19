@@ -76,13 +76,13 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer.
-	sumOpts := []summary.Option{summary.WithMaxSummaryLength(*flagMaxLen)}
-	sumOpts = append(sumOpts, summary.WithChecksAny(
-		summary.CheckEventThreshold(*flagEvents),
-		summary.CheckTokenThreshold(*flagTokens),
-		summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second)),
+	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryLength(*flagMaxLen),
+		summary.WithChecksAny(
+			summary.CheckEventThreshold(*flagEvents),
+			summary.CheckTokenThreshold(*flagTokens),
+			summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second),
+		),
 	)
-	sum := summary.NewSummarizer(llm, sumOpts...)
 	// In-memory session service with summarizer.
 	sessService := inmemory.NewSessionService(
 		inmemory.WithSummarizer(sum),
