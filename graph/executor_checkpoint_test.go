@@ -107,15 +107,15 @@ func TestExecutor_VersionBasedPlanning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Build execution context as resumed with a last checkpoint
-	ec := exec.buildExecutionContext(make(chan *event.Event, 1), "inv-pln", State{}, true)
-	exec.lastCheckpoint = &Checkpoint{VersionsSeen: map[string]map[string]int64{"b": {}}}
+	last := &Checkpoint{VersionsSeen: map[string]map[string]int64{"b": {}}}
+	ec := exec.buildExecutionContext(make(chan *event.Event, 1), "inv-pln", State{}, true, last)
 
 	// Make trigger channel available and version > seen
 	channels := exec.graph.getAllChannels()
 	for name, ch := range channels {
 		if strings.HasPrefix(name, "branch:to:b") {
 			ch.Update([]any{"x"}, 1) // Version becomes 1
-			exec.lastCheckpoint.VersionsSeen["b"][name] = 0
+			ec.lastCheckpoint.VersionsSeen["b"][name] = 0
 		}
 	}
 
@@ -159,7 +159,7 @@ func TestExecutor_GetNextChannelsInStep_And_ClearMarks_And_UpdateVersionsSeen(t 
 	require.False(t, c.IsUpdatedInStep(5))
 
 	// updateVersionsSeen should record current version for triggers
-	ec := exec.buildExecutionContext(nil, "inv", State{}, false)
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
 	exec.updateVersionsSeen(ec, "nodeA", []string{"branch:to:x"})
 	require.Equal(t, c.Version, ec.versionsSeen["nodeA"]["branch:to:x"])
 }
@@ -241,13 +241,15 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	g := New(NewStateSchema())
 	exec := &Executor{graph: g}
 	// nil saver
-	st, err := exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
+	st, ckpt, writes, err := exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.Nil(t, st)
+	require.Nil(t, ckpt)
+	require.Nil(t, writes)
 
 	// saver error
 	exec.checkpointSaver = &resumeMockSaver{err: fmt.Errorf("err")}
-	_, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
+	_, _, _, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.Error(t, err)
 
 	// tuple with pending writes
@@ -255,16 +257,20 @@ func TestExecutor_ResumeFromCheckpoint_Paths(t *testing.T) {
 	ck := &Checkpoint{ID: "c1", ChannelValues: map[string]any{"x": 1}}
 	tuple := &CheckpointTuple{Checkpoint: ck, PendingWrites: []PendingWrite{{Channel: "branch:to:N1", Value: 2, Sequence: 1}}}
 	exec.checkpointSaver = &resumeMockSaver{tuple: tuple}
-	st, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
+	st, ckpt, writes, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.Equal(t, 1, st["x"])
+	require.NotNil(t, ckpt)
+	require.Len(t, writes, 1)
 
 	// tuple with NextNodes fallback
 	tuple2 := &CheckpointTuple{Checkpoint: &Checkpoint{ID: "c2", ChannelValues: map[string]any{"y": 3}, NextNodes: []string{"A"}}}
 	exec.checkpointSaver = &resumeMockSaver{tuple: tuple2}
-	st, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
+	st, ckpt, writes, err = exec.resumeFromCheckpoint(context.Background(), nil, CreateCheckpointConfig("ln", "id", "ns"))
 	require.NoError(t, err)
 	require.NotNil(t, st[StateKeyNextNodes])
+	require.NotNil(t, ckpt)
+	require.Len(t, writes, 0)
 }
 
 func TestExecutor_HelperMethods(t *testing.T) {
@@ -303,8 +309,8 @@ func TestExecutor_ProcessResumeCommand_And_ApplyExecutableNextNodes(t *testing.T
 
 func TestExecutor_BuildExecutionContext_ResumedVersionsSeen(t *testing.T) {
 	exec := &Executor{graph: New(NewStateSchema())}
-	exec.lastCheckpoint = &Checkpoint{VersionsSeen: map[string]map[string]int64{"n": {"ch": 2}}}
-	ec := exec.buildExecutionContext(nil, "inv", State{}, true)
+	last := &Checkpoint{VersionsSeen: map[string]map[string]int64{"n": {"ch": 2}}}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, true, last)
 	require.Equal(t, int64(2), ec.versionsSeen["n"]["ch"])
 }
 
@@ -385,7 +391,7 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	require.Contains(t, n, "nodeX")
 
 	// buildTaskStateCopy with overlay
-	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false)
+	ec := exec.buildExecutionContext(nil, "inv", State{"a": 1}, false, nil)
 	tsk := &Task{NodeID: "nodeX", Overlay: State{"b": 2}}
 	st := exec.buildTaskStateCopy(ec, tsk)
 	require.Equal(t, 1, st["a"])

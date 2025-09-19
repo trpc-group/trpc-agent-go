@@ -1645,3 +1645,9 @@ eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
 ```
 
 This pattern makes the Graph package particularly suitable for building enterprise-level AI workflow applications, providing good scalability, maintainability, and user experience.
+### Runtime Isolation (Executor vs ExecutionContext)
+
+- Executor is reusable and safe for concurrent runs. It intentionally does not store per-run mutable state.
+- All per-run artifacts (e.g., restored checkpoint metadata, versions seen, pending writes) are carried inside an ExecutionContext instance created for that run.
+- Functions like resumeFromCheckpoint only read from the checkpoint store and reconstruct state; they do not mutate the Executor. Callers pass any needed checkpoint-derived data into the ExecutionContext used for that run.
+- Completion event serialization operates on a deep-copied snapshot and skips non-serializable/internal keys to avoid data races and reduce payload size.
