@@ -162,6 +162,10 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),
 				agent.WithInvocationMessage(message),
+				// Reset event filter key to the sub-agent name so that content
+				// processors fetch session messages belonging to the sub-agent,
+				// not the parent agent.
+				agent.WithInvocationEventFilterKey(at.agent.Info().Name),
 			)
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)

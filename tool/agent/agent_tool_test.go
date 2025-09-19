@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -169,9 +170,13 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 // streamingMockAgent streams a few delta events then a final full message.
 type streamingMockAgent struct {
 	name string
+	// capture the event filter key seen by Run for assertion.
+	seenFilterKey string
 }
 
-func (m *streamingMockAgent) Run(ctx context.Context, _ *agent.Invocation) (<-chan *event.Event, error) {
+func (m *streamingMockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+	// record the filter key used so tests can assert it equals agent name.
+	m.seenFilterKey = inv.GetEventFilterKey()
 	ch := make(chan *event.Event, 3)
 	go func() {
 		defer close(ch)
@@ -200,8 +205,17 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 		t.Fatalf("expected StreamInner to be true")
 	}
 
+	// Prepare a parent invocation context with a session and a different
+	// filter key, to ensure sub agent overrides it.
+	sess := &session.Session{}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
 	// Invoke stream
-	reader, err := at.StreamableCall(context.Background(), []byte(`{"request":"hi"}`))
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
 	if err != nil {
 		t.Fatalf("StreamableCall error: %v", err)
 	}
@@ -229,6 +243,11 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	// We pushed 3 events; delta1, delta2, final full
 	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
+	}
+
+	// Assert the sub agent saw its own name as filter key.
+	if sa.seenFilterKey != sa.name {
+		t.Fatalf("expected sub agent filter key %q, got %q", sa.name, sa.seenFilterKey)
 	}
 }
 
