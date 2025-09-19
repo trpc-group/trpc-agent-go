@@ -43,15 +43,24 @@ var (
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
+//
+// Runtime isolation principle:
+//   - Executor is designed to be reusable across concurrent runs.
+//   - It must not hold per-run mutable state; such data lives in ExecutionContext.
+//   - Checkpoint-derived artifacts (e.g., lastCheckpoint, pendingWrites) are
+//     carried inside ExecutionContext and never stored on the Executor.
+//
+// This makes it safe to share a single Executor instance between many
+// concurrent invocations without cross-run interference.
 type Executor struct {
-    graph                 *Graph
-    channelBufferSize     int
-    maxSteps              int
-    stepTimeout           time.Duration
-    nodeTimeout           time.Duration
-    checkpointSaveTimeout time.Duration
-    checkpointSaver       CheckpointSaver
-    checkpointManager     *CheckpointManager
+	graph                 *Graph
+	channelBufferSize     int
+	maxSteps              int
+	stepTimeout           time.Duration
+	nodeTimeout           time.Duration
+	checkpointSaveTimeout time.Duration
+	checkpointSaver       CheckpointSaver
+	checkpointManager     *CheckpointManager
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -356,28 +365,28 @@ func (e *Executor) Execute(
 
 // executeGraph executes the graph using Pregel-style BSP execution.
 func (e *Executor) executeGraph(
-    ctx context.Context,
-    initialState State,
-    invocation *agent.Invocation,
-    eventChan chan<- *event.Event,
-    startTime time.Time,
+	ctx context.Context,
+	initialState State,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	startTime time.Time,
 ) error {
-    execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
-        e.prepareCheckpointAndState(ctx, initialState, invocation)
+	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
+		e.prepareCheckpointAndState(ctx, initialState, invocation)
 
-    execState = e.processResumeCommand(execState, initialState)
+	execState = e.processResumeCommand(execState, initialState)
 
-    execCtx := e.buildExecutionContext(
-        eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
-    )
-    if len(restoredPending) > 0 {
-        execCtx.pendingWrites = append(execCtx.pendingWrites[:0], restoredPending...)
-    }
+	execCtx := e.buildExecutionContext(
+		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
+	)
+	if len(restoredPending) > 0 {
+		execCtx.pendingWrites = append(execCtx.pendingWrites[:0], restoredPending...)
+	}
 
-    if resumed && len(execCtx.pendingWrites) > 0 {
-        log.Debugf("🔧 Executor: applying %d pending writes", len(execCtx.pendingWrites))
-        e.applyPendingWrites(ctx, invocation, execCtx, execCtx.pendingWrites)
-    }
+	if resumed && len(execCtx.pendingWrites) > 0 {
+		log.Debugf("🔧 Executor: applying %d pending writes", len(execCtx.pendingWrites))
+		e.applyPendingWrites(ctx, invocation, execCtx, execCtx.pendingWrites)
+	}
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
@@ -403,23 +412,23 @@ func (e *Executor) executeGraph(
 
 // prepareCheckpointAndState initializes or restores state and checkpointing.
 func (e *Executor) prepareCheckpointAndState(
-    ctx context.Context,
-    initialState State,
-    invocation *agent.Invocation,
+	ctx context.Context,
+	initialState State,
+	invocation *agent.Invocation,
 ) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
-        return execState, nil, false, 0, nil, nil
-    }
-    return e.resumeOrInitWithSaver(ctx, initialState, invocation)
+		return execState, nil, false, 0, nil, nil
+	}
+	return e.resumeOrInitWithSaver(ctx, initialState, invocation)
 }
 
 // resumeOrInitWithSaver handles state preparation when checkpoint saver is set.
 func (e *Executor) resumeOrInitWithSaver(
-    ctx context.Context,
-    initialState State,
-    invocation *agent.Invocation,
+	ctx context.Context,
+	initialState State,
+	invocation *agent.Invocation,
 ) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
 	var lineageID string
 	if id, ok := initialState[CfgKeyLineageID].(string); ok && id != "" {
@@ -444,13 +453,13 @@ func (e *Executor) resumeOrInitWithSaver(
 		lineageID, checkpointID, namespace,
 	)
 
-    tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
+	tuple, err := e.checkpointSaver.GetTuple(ctx, checkpointConfig)
 	if err != nil || tuple == nil || tuple.Checkpoint == nil {
 		log.Debug("No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
-        return execState, checkpointConfig, false, 0, nil, nil
-    }
+		return execState, checkpointConfig, false, 0, nil, nil
+	}
 
 	log.Debugf("Resuming from checkpoint ID=%s", tuple.Checkpoint.ID)
 	restored := e.restoreStateFromCheckpoint(tuple)
@@ -461,18 +470,18 @@ func (e *Executor) resumeOrInitWithSaver(
 		resumedStep = tuple.Metadata.Step
 		log.Debugf("Resuming from step %d", resumedStep)
 	}
-    lastCheckpoint := tuple.Checkpoint
+	lastCheckpoint := tuple.Checkpoint
 	e.initializeChannels(restored, true)
-    if tuple.Config != nil {
-        checkpointConfig = tuple.Config
-    }
-    pending := tuple.PendingWrites
-    log.Debugf(
-        "Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
-        len(pending), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
-    )
-    e.applyExecutableNextNodes(restored, tuple)
-    return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
+	if tuple.Config != nil {
+		checkpointConfig = tuple.Config
+	}
+	pending := tuple.PendingWrites
+	log.Debugf(
+		"Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
+		len(pending), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
+	)
+	e.applyExecutableNextNodes(restored, tuple)
+	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
 }
 
 // restoreStateFromCheckpoint converts checkpoint channel values back into state.
@@ -524,9 +533,9 @@ func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
 // This is important for initial checkpoints (step -1) that have the entry
 // point set, so a forked resume can continue from the beginning.
 func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTuple) {
-    if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
-        return
-    }
+	if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
+		return
+	}
 	for _, nodeID := range tuple.Checkpoint.NextNodes {
 		if nodeID != End && nodeID != "" {
 			restored[StateKeyNextNodes] = tuple.Checkpoint.NextNodes
@@ -552,34 +561,34 @@ func (e *Executor) processResumeCommand(execState, initialState State) State {
 
 // buildExecutionContext constructs the execution context including versionsSeen.
 func (e *Executor) buildExecutionContext(
-    eventChan chan<- *event.Event,
-    invocationID string,
-    state State,
-    resumed bool,
-    lastCheckpoint *Checkpoint,
+	eventChan chan<- *event.Event,
+	invocationID string,
+	state State,
+	resumed bool,
+	lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
-    versionsSeen := make(map[string]map[string]int64)
-    if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
-        for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
-            versionsSeen[nodeID] = make(map[string]int64)
-            for ch, version := range nodeVersions {
-                versionsSeen[nodeID][ch] = version
-            }
-        }
-        log.Debugf(
-            "Restored versionsSeen for %d nodes from checkpoint",
-            len(versionsSeen),
-        )
-    }
-    return &ExecutionContext{
-        Graph:        e.graph,
-        State:        state,
-        EventChan:    eventChan,
-        InvocationID: invocationID,
-        resumed:      resumed,
-        versionsSeen: versionsSeen,
-        lastCheckpoint: lastCheckpoint,
-    }
+	versionsSeen := make(map[string]map[string]int64)
+	if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
+		for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
+			versionsSeen[nodeID] = make(map[string]int64)
+			for ch, version := range nodeVersions {
+				versionsSeen[nodeID][ch] = version
+			}
+		}
+		log.Debugf(
+			"Restored versionsSeen for %d nodes from checkpoint",
+			len(versionsSeen),
+		)
+	}
+	return &ExecutionContext{
+		Graph:          e.graph,
+		State:          state,
+		EventChan:      eventChan,
+		InvocationID:   invocationID,
+		resumed:        resumed,
+		versionsSeen:   versionsSeen,
+		lastCheckpoint: lastCheckpoint,
+	}
 }
 
 // runBspLoop runs the BSP execution loop from the given start step.
@@ -657,16 +666,16 @@ func (e *Executor) buildCompletionEvent(
 		WithCompletionEventTotalSteps(stepsExecuted),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
-    if completionEvent.StateDelta == nil {
-        completionEvent.StateDelta = make(map[string][]byte)
-    }
-    // Reuse the deep-copied snapshot to populate StateDelta to avoid an
-    // additional full deep copy.
-    for key, value := range finalStateCopy {
-        if jsonData, err := json.Marshal(value); err == nil {
-            completionEvent.StateDelta[key] = jsonData
-        }
-    }
+	if completionEvent.StateDelta == nil {
+		completionEvent.StateDelta = make(map[string][]byte)
+	}
+	// Reuse the deep-copied snapshot to populate StateDelta to avoid an
+	// additional full deep copy.
+	for key, value := range finalStateCopy {
+		if jsonData, err := json.Marshal(value); err == nil {
+			completionEvent.StateDelta[key] = jsonData
+		}
+	}
 	return completionEvent
 }
 
@@ -852,8 +861,14 @@ func getConfigKeys(config map[string]any) []string {
 }
 
 // resumeFromCheckpoint resumes execution from a specific checkpoint.
+//
+// This helper does not mutate Executor's fields. It only reads from the
+// checkpoint store, reconstructs a state memory image, and primes channels
+// by replaying pending writes (if any) using a temporary ExecutionContext.
+// The caller is responsible for threading any returned checkpoint metadata
+// into the per-execution context (ExecutionContext) as needed.
 func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.Invocation,
-    config map[string]any) (State, error) {
+	config map[string]any) (State, error) {
 	log.Debugf("resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
 
 	if e.checkpointSaver == nil {
@@ -870,7 +885,7 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.I
 		return nil, nil
 	}
 
-    // Note: lastCheckpoint is now carried per-execution in ExecutionContext.
+	// Note: lastCheckpoint is now carried per-execution in ExecutionContext.
 
 	// Convert channel values back to state.
 	state := make(State)
@@ -1046,10 +1061,10 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 	var tasks []*Task
 	triggerToNodes := e.graph.getTriggerToNodes()
 
-    // If this is a resumed execution, use version-based triggering
-    if execCtx.resumed && execCtx.lastCheckpoint != nil {
-        tasks = e.planBasedOnVersionTriggers(execCtx, step)
-    } else {
+	// If this is a resumed execution, use version-based triggering
+	if execCtx.resumed && execCtx.lastCheckpoint != nil {
+		tasks = e.planBasedOnVersionTriggers(execCtx, step)
+	} else {
 		// Use traditional availability-based triggering
 		tasks = e.planBasedOnAvailabilityTriggers(execCtx, step, triggerToNodes)
 	}
@@ -1059,11 +1074,11 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 
 // planBasedOnVersionTriggers creates tasks based on per-node version tracking.
 func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step int) []*Task {
-    var tasks []*Task
+	var tasks []*Task
 
-    if execCtx.lastCheckpoint == nil {
-        return tasks
-    }
+	if execCtx.lastCheckpoint == nil {
+		return tasks
+	}
 
 	channels := e.graph.getAllChannels()
 	triggerToNodes := e.graph.getTriggerToNodes()
@@ -1093,16 +1108,16 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 			}
 
 			// Check if this node should be triggered based on version tracking.
-            if e.shouldTriggerNode(nodeID, channelName, currentVersion, execCtx.lastCheckpoint) {
-                task := e.createTask(nodeID, execCtx.State, step)
-                if task != nil {
-                    tasks = append(tasks, task)
-                    scheduledNodes[nodeID] = true
-                    log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
-                }
-            }
-        }
-    }
+			if e.shouldTriggerNode(nodeID, channelName, currentVersion, execCtx.lastCheckpoint) {
+				task := e.createTask(nodeID, execCtx.State, step)
+				if task != nil {
+					tasks = append(tasks, task)
+					scheduledNodes[nodeID] = true
+					log.Debugf("Scheduled node %s for execution (triggered by channel %s)", nodeID, channelName)
+				}
+			}
+		}
+	}
 
 	// Acknowledge all available channels after planning.
 	for _, channel := range channels {

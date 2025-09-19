@@ -69,6 +69,13 @@ graph := graph.New(schema)
 - `End`：虚拟结束节点，通过 `SetFinishPoint()` 自动连接
 - 这些节点不需要显式创建，系统会自动处理连接
 
+### 运行态隔离（Executor 与 ExecutionContext）
+
+- Executor 设计为可复用，且在并发场景下是安全的：它不持有单次运行的可变状态。
+- 单次运行相关的数据（例如从检查点恢复得到的 lastCheckpoint、versionsSeen、pendingWrites）均存放在本次运行创建的 ExecutionContext 中。
+- 像 resumeFromCheckpoint 这样的辅助函数只从检查点存储读取并重建状态，不会改写 Executor；调用方应将需要的检查点信息传入本次运行的 ExecutionContext。
+- 完成事件的序列化基于深拷贝快照，并跳过不可序列化/内部键，避免数据竞争并缩减负载。
+
 ### 2. 节点 (Node)
 
 节点代表工作流中的一个处理步骤：
