@@ -181,110 +181,136 @@ type Step struct {
 // deepCopyAny performs a deep copy of common JSON-serializable Go types to
 // avoid sharing mutable references (maps/slices) across goroutines.
 func deepCopyAny(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		copied := make(map[string]any, len(v))
-		for k, vv := range v {
-			copied[k] = deepCopyAny(vv)
-		}
-		return copied
-	case []any:
-		copied := make([]any, len(v))
-		for i := range v {
-			copied[i] = deepCopyAny(v[i])
-		}
-		return copied
-	case []string:
-		copied := make([]string, len(v))
-		copy(copied, v)
-		return copied
-	case []int:
-		copied := make([]int, len(v))
-		copy(copied, v)
-		return copied
-	case []float64:
-		copied := make([]float64, len(v))
-		copy(copied, v)
-		return copied
-	case time.Time:
-		return v
-	default:
-		// Fallback: handle generic pointers, interfaces, maps, slices, arrays and structs.
-		rv := reflect.ValueOf(value)
-		if !rv.IsValid() {
-			return nil
-		}
+    // Use a visited set keyed by underlying pointer to break reference cycles
+    // across pointers, maps, and slices. The values are the already-created
+    // copies to return when revisiting the same reference.
+    visited := make(map[uintptr]any)
 
-		switch rv.Kind() {
-		case reflect.Interface:
-			if rv.IsNil() {
-				return nil
-			}
-			return deepCopyAny(rv.Elem().Interface())
+    var copyRecursive func(reflect.Value) any
+    copyRecursive = func(rv reflect.Value) any {
+        if !rv.IsValid() {
+            return nil
+        }
 
-		case reflect.Ptr:
-			if rv.IsNil() {
-				return value
-			}
-			// Allocate a new value of the same type and deep copy the element.
-			elem := rv.Elem()
-			newElem := reflect.New(elem.Type())
-			newElem.Elem().Set(reflect.ValueOf(deepCopyAny(elem.Interface())))
-			return newElem.Interface()
+        switch rv.Kind() {
+        case reflect.Interface:
+            if rv.IsNil() {
+                return nil
+            }
+            return copyRecursive(rv.Elem())
 
-		case reflect.Map:
-			if rv.IsNil() {
-				return value
-			}
-			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
-			for _, mk := range rv.MapKeys() {
-				mv := rv.MapIndex(mk)
-				// Keys must remain the same comparable values; do not deep copy keys.
-				newMap.SetMapIndex(mk, reflect.ValueOf(deepCopyAny(mv.Interface())))
-			}
-			return newMap.Interface()
+        case reflect.Ptr:
+            if rv.IsNil() {
+                return nil
+            }
+            ptr := rv.Pointer()
+            if cached, ok := visited[ptr]; ok {
+                return cached
+            }
+            elem := rv.Elem()
+            newPtr := reflect.New(elem.Type())
+            // Cache before descending to handle self-referential structures.
+            visited[ptr] = newPtr.Interface()
+            newPtr.Elem().Set(reflect.ValueOf(copyRecursive(elem)))
+            return newPtr.Interface()
 
-		case reflect.Slice:
-			if rv.IsNil() {
-				return value
-			}
-			l := rv.Len()
-			newSlice := reflect.MakeSlice(rv.Type(), l, l)
-			for i := 0; i < l; i++ {
-				newSlice.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
-			}
-			return newSlice.Interface()
+        case reflect.Map:
+            if rv.IsNil() {
+                return reflect.Zero(rv.Type()).Interface()
+            }
+            ptr := rv.Pointer()
+            if cached, ok := visited[ptr]; ok {
+                return cached
+            }
+            newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+            visited[ptr] = newMap.Interface()
+            for _, mk := range rv.MapKeys() {
+                mv := rv.MapIndex(mk)
+                newMap.SetMapIndex(mk, reflect.ValueOf(copyRecursive(mv)))
+            }
+            return newMap.Interface()
 
-		case reflect.Array:
-			l := rv.Len()
-			newArr := reflect.New(rv.Type()).Elem()
-			for i := 0; i < l; i++ {
-				newArr.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
-			}
-			return newArr.Interface()
+        case reflect.Slice:
+            if rv.IsNil() {
+                return reflect.Zero(rv.Type()).Interface()
+            }
+            ptr := rv.Pointer()
+            if cached, ok := visited[ptr]; ok {
+                return cached
+            }
+            l := rv.Len()
+            newSlice := reflect.MakeSlice(rv.Type(), l, l)
+            visited[ptr] = newSlice.Interface()
+            for i := 0; i < l; i++ {
+                newSlice.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
+            }
+            return newSlice.Interface()
 
-		case reflect.Struct:
-			// Create a new struct and copy exported fields deeply.
-			newStruct := reflect.New(rv.Type()).Elem()
-			for i := 0; i < rv.NumField(); i++ {
-				f := rv.Field(i)
-				ft := rv.Type().Field(i)
-				// Only copy exported fields (PkgPath == "" means exported).
-				if ft.PkgPath != "" { // unexported; leave zero value – JSON won't marshal it.
-					continue
-				}
-				// Set deep-copied field value; guard against non-settable just in case.
-				if newStruct.Field(i).CanSet() {
-					newStruct.Field(i).Set(reflect.ValueOf(deepCopyAny(f.Interface())))
-				}
-			}
-			return newStruct.Interface()
+        case reflect.Array:
+            l := rv.Len()
+            newArr := reflect.New(rv.Type()).Elem()
+            for i := 0; i < l; i++ {
+                newArr.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
+            }
+            return newArr.Interface()
 
-		default:
-			// Scalars and other immutable kinds – rely on value semantics.
-			return v
-		}
-	}
+        case reflect.Struct:
+            // Create a new struct and copy only exported fields to avoid
+            // touching unexported sync primitives, etc.
+            newStruct := reflect.New(rv.Type()).Elem()
+            for i := 0; i < rv.NumField(); i++ {
+                ft := rv.Type().Field(i)
+                if ft.PkgPath != "" { // unexported
+                    continue
+                }
+                f := rv.Field(i)
+                if newStruct.Field(i).CanSet() {
+                    newStruct.Field(i).Set(reflect.ValueOf(copyRecursive(f)))
+                }
+            }
+            return newStruct.Interface()
+
+        case reflect.Func, reflect.Chan, reflect.UnsafePointer:
+            // Not safely copyable/serializable; return zero value.
+            return reflect.Zero(rv.Type()).Interface()
+
+        default:
+            // Scalars and other immutable kinds – return as-is.
+            return rv.Interface()
+        }
+    }
+
+    // Fast-path for common JSON-compatible types without reflection.
+    switch v := value.(type) {
+    case map[string]any:
+        copied := make(map[string]any, len(v))
+        for k, vv := range v {
+            copied[k] = deepCopyAny(vv)
+        }
+        return copied
+    case []any:
+        copied := make([]any, len(v))
+        for i := range v {
+            copied[i] = deepCopyAny(v[i])
+        }
+        return copied
+    case []string:
+        copied := make([]string, len(v))
+        copy(copied, v)
+        return copied
+    case []int:
+        copied := make([]int, len(v))
+        copy(copied, v)
+        return copied
+    case []float64:
+        copied := make([]float64, len(v))
+        copy(copied, v)
+        return copied
+    case time.Time:
+        return v
+    }
+
+    return copyRecursive(reflect.ValueOf(value))
 }
 
 // deepCopyState clones the State, recursively copying nested maps/slices.
