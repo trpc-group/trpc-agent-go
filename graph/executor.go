@@ -269,9 +269,27 @@ func deepCopyAny(value any) any {
 				if ft.PkgPath != "" { // unexported
 					continue
 				}
-				f := rv.Field(i)
-				if newStruct.Field(i).CanSet() {
-					newStruct.Field(i).Set(reflect.ValueOf(copyRecursive(f)))
+				dstField := newStruct.Field(i)
+				if !dstField.CanSet() {
+					continue
+				}
+				srcField := rv.Field(i)
+				copied := copyRecursive(srcField)
+				// If copied is nil, Set with a typed zero value to avoid
+				// "reflect: call of reflect.Value.Set on zero Value".
+				if copied == nil {
+					dstField.Set(reflect.Zero(dstField.Type()))
+					continue
+				}
+				srcVal := reflect.ValueOf(copied)
+				// Align types as needed.
+				if srcVal.Type().AssignableTo(dstField.Type()) {
+					dstField.Set(srcVal)
+				} else if srcVal.Type().ConvertibleTo(dstField.Type()) {
+					dstField.Set(srcVal.Convert(dstField.Type()))
+				} else {
+					// Fallback: set zero value if types are incompatible.
+					dstField.Set(reflect.Zero(dstField.Type()))
 				}
 			}
 			return newStruct.Interface()
@@ -1436,7 +1454,12 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 	// deep-copied safely via reflection (functions would become nil and cause
 	// panics when invoked). For these keys, reuse the original pointer from the
 	// base state.
-	for _, cbKey := range []string{StateKeyNodeCallbacks, StateKeyToolCallbacks, StateKeyModelCallbacks, StateKeyAgentCallbacks} {
+	for _, cbKey := range []string{
+		StateKeyNodeCallbacks,
+		StateKeyToolCallbacks,
+		StateKeyModelCallbacks,
+		StateKeyAgentCallbacks,
+	} {
 		if v, ok := base[cbKey]; ok && v != nil {
 			stateCopy[cbKey] = v
 		}
