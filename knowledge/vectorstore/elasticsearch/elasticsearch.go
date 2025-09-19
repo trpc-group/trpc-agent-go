@@ -111,6 +111,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		storage.WithEnableDebugLogger(option.enableDebugLogger),
 		storage.WithRetryOnStatus(option.retryOnStatus),
 		storage.WithMaxRetries(option.maxRetries),
+		storage.WithExtraOptions(option.extraOptions...),
 		storage.WithVersion(option.version),
 	)
 	if err != nil {
