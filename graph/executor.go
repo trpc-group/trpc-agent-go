@@ -1432,6 +1432,16 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 	// Deep copy the base state to avoid sharing nested references.
 	stateCopy := deepCopyState(base)
 
+	// Preserve callback pointers that contain function values which cannot be
+	// deep-copied safely via reflection (functions would become nil and cause
+	// panics when invoked). For these keys, reuse the original pointer from the
+	// base state.
+	for _, cbKey := range []string{StateKeyNodeCallbacks, StateKeyToolCallbacks, StateKeyModelCallbacks, StateKeyAgentCallbacks} {
+		if v, ok := base[cbKey]; ok && v != nil {
+			stateCopy[cbKey] = v
+		}
+	}
+
 	// Apply overlay if present to form the isolated input view.
 	if t.Overlay != nil && e.graph.Schema() != nil {
 		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
