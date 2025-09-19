@@ -1,0 +1,93 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package runner wraps a trpc-agent-go runner and translates it to AG-UI events.
+package runner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/sdk"
+)
+
+// Runner executes AG-UI runs and emits AG-UI events.
+type Runner interface {
+	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
+	Run(ctx context.Context, runAgentInput *sdk.RunAgentInput) (<-chan events.Event, error)
+}
+
+// New wraps a trpc-agent-go runner with AG-UI specific translation logic.
+func New(r trunner.Runner, opt ...Option) Runner {
+	opts := newOptions(opt...)
+	run := &runner{
+		runner:         r,
+		userIDResolver: opts.userIDResolver,
+	}
+	return run
+}
+
+// runner is the default implementation of the Runner.
+type runner struct {
+	runner         trunner.Runner
+	userIDResolver UserIDResolver
+}
+
+// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
+func (r *runner) Run(ctx context.Context, runAgentInput *sdk.RunAgentInput) (<-chan events.Event, error) {
+	if r.runner == nil {
+		return nil, errors.New("agui: runner is nil")
+	}
+	if runAgentInput == nil {
+		return nil, errors.New("agui: run input cannot be nil")
+	}
+	events := make(chan events.Event)
+	go r.run(ctx, runAgentInput, events)
+	return events, nil
+}
+
+func (r *runner) run(ctx context.Context, runAgentInput *sdk.RunAgentInput, events chan<- events.Event) {
+	defer close(events)
+	bridge := event.NewBridge(runAgentInput.ThreadID, runAgentInput.RunID)
+	events <- bridge.NewRunStartedEvent()
+	if len(runAgentInput.Messages) == 0 {
+		events <- bridge.NewRunErrorEvent("no messages provided")
+		return
+	}
+	userID, err := r.userIDResolver(ctx, runAgentInput)
+	if err != nil {
+		events <- bridge.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err))
+		return
+	}
+	userMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
+	if userMessage.Role != model.RoleUser {
+		events <- bridge.NewRunErrorEvent("last message is not a user message")
+		return
+	}
+	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
+	if err != nil {
+		events <- bridge.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err))
+		return
+	}
+	for event := range ch {
+		aguiEvents, err := bridge.Translate(event)
+		if err != nil {
+			events <- bridge.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err))
+			return
+		}
+		for _, aguiEvent := range aguiEvents {
+			events <- aguiEvent
+		}
+	}
+}
