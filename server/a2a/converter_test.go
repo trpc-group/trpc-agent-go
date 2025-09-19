@@ -207,7 +207,7 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 	tests := []struct {
 		name     string
 		event    *event.Event
-		expected *protocol.Message
+		expected protocol.UnaryMessageResult
 		wantErr  bool
 	}{
 		{
@@ -223,14 +223,26 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 					},
 				},
 			},
-			expected: &protocol.Message{
-				Role: protocol.MessageRoleAgent,
-				Kind: protocol.KindMessage,
-				Parts: []protocol.Part{
+			expected: func() protocol.UnaryMessageResult {
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{
 					protocol.NewTextPart("Hello from agent"),
+				})
+				return &msg
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "event with error response",
+			event: &event.Event{
+				ID: "error-event-123",
+				Response: &model.Response{
+					Error: &model.ResponseError{
+						Message: "Something went wrong",
+					},
 				},
 			},
-			wantErr: false,
+			expected: nil,
+			wantErr:  true,
 		},
 		{
 			name: "event with empty content",
@@ -329,12 +341,12 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := converter.ConvertToA2AMessage(ctx, tt.event)
+			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx-id"})
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ConvertToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !compareProtocolMessages(result, tt.expected) {
+			if !compareUnaryMessageResults(result, tt.expected) {
 				t.Errorf("ConvertToA2AMessage() = %+v, want %+v", result, tt.expected)
 			}
 		})
@@ -345,7 +357,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 	tests := []struct {
 		name     string
 		event    *event.Event
-		expected *protocol.Message
+		expected protocol.StreamingMessageResult
 		wantErr  bool
 	}{
 		{
@@ -361,14 +373,25 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					},
 				},
 			},
-			expected: &protocol.Message{
-				Role: protocol.MessageRoleAgent,
-				Kind: protocol.KindMessage,
-				Parts: []protocol.Part{
-					protocol.NewTextPart("Hello"),
+			expected: func() protocol.StreamingMessageResult {
+				parts := []protocol.Part{protocol.NewTextPart("Hello")}
+				taskEvent := protocol.NewTaskArtifactUpdateEvent("test-task-id", "test-ctx-id", protocol.Artifact{Parts: parts}, false)
+				return &taskEvent
+			}(),
+			wantErr: false,
+		},
+		{
+			name: "streaming event with error response",
+			event: &event.Event{
+				ID: "error-event-456",
+				Response: &model.Response{
+					Error: &model.ResponseError{
+						Message: "Streaming error",
+					},
 				},
 			},
-			wantErr: false,
+			expected: nil,
+			wantErr:  true,
 		},
 		{
 			name: "streaming event with empty delta",
@@ -409,6 +432,24 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			expected: nil,
 			wantErr:  false,
 		},
+		{
+			name: "streaming event with no choices",
+			event: &event.Event{
+				Response: &model.Response{
+					Choices: []model.Choice{},
+				},
+			},
+			expected: nil,
+			wantErr:  false,
+		},
+		{
+			name: "streaming event with nil response",
+			event: &event.Event{
+				Response: nil,
+			},
+			expected: nil,
+			wantErr:  false,
+		},
 	}
 
 	converter := &defaultEventToA2AMessage{}
@@ -416,12 +457,14 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := converter.ConvertStreamingToA2AMessage(ctx, tt.event)
+			result, err := converter.ConvertStreamingToA2AMessage(
+				ctx, tt.event, EventToA2AStreamingOptions{CtxID: "test-ctx-id", TaskID: "test-task-id"},
+			)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ConvertStreamingToA2AMessage() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if !compareProtocolMessages(result, tt.expected) {
+			if !compareStreamingMessageResults(result, tt.expected) {
 				t.Errorf("ConvertStreamingToA2AMessage() = %+v, want %+v", result, tt.expected)
 			}
 		})
@@ -575,6 +618,25 @@ func compareMessages(a, b *model.Message) bool {
 	return true
 }
 
+func compareUnaryMessageResults(a, b protocol.UnaryMessageResult) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Handle protocol.Message comparison
+	msgA, okA := a.(*protocol.Message)
+	msgB, okB := b.(*protocol.Message)
+	if okA && okB {
+		return compareProtocolMessages(msgA, msgB)
+	}
+
+	// For other types, use deep equal
+	return reflect.DeepEqual(a, b)
+}
+
 func compareProtocolMessages(a, b *protocol.Message) bool {
 	if a == nil && b == nil {
 		return true
@@ -582,14 +644,68 @@ func compareProtocolMessages(a, b *protocol.Message) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	// Only compare essential fields: Role, Kind, and Parts
-	if a.Role != b.Role {
+
+	// Compare fields except MessageID which is dynamically generated
+	if a.Role != b.Role || a.Kind != b.Kind {
 		return false
 	}
-	// Compare Kind if both are set
-	if b.Kind != "" && a.Kind != b.Kind {
+
+	// Compare parts
+	if len(a.Parts) != len(b.Parts) {
 		return false
 	}
-	// Compare Parts using deep equal
-	return reflect.DeepEqual(a.Parts, b.Parts)
+
+	for i, partA := range a.Parts {
+		partB := b.Parts[i]
+		if !reflect.DeepEqual(partA, partB) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func compareStreamingMessageResults(a, b protocol.StreamingMessageResult) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Handle TaskArtifactUpdateEvent comparison
+	eventA, okA := a.(*protocol.TaskArtifactUpdateEvent)
+	eventB, okB := b.(*protocol.TaskArtifactUpdateEvent)
+	if okA && okB {
+		return compareTaskArtifactUpdateEvents(eventA, eventB)
+	}
+
+	// For other types, use deep equal
+	return reflect.DeepEqual(a, b)
+}
+
+func compareTaskArtifactUpdateEvents(a, b *protocol.TaskArtifactUpdateEvent) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+
+	// Compare main fields
+	if a.TaskID != b.TaskID || a.ContextID != b.ContextID {
+		return false
+	}
+
+	// Compare LastChunk if both are set
+	if a.LastChunk != nil && b.LastChunk != nil {
+		if *a.LastChunk != *b.LastChunk {
+			return false
+		}
+	} else if a.LastChunk != b.LastChunk {
+		return false
+	}
+
+	// Compare artifacts
+	return reflect.DeepEqual(a.Artifact, b.Artifact)
 }

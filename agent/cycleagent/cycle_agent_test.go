@@ -97,7 +97,6 @@ func (m *mockAgent) Tools() []tool.Tool {
 type legacyOptions struct {
 	Name              string
 	SubAgents         []agent.Agent
-	Tools             []tool.Tool
 	MaxIterations     *int
 	ChannelBufferSize int
 	AgentCallbacks    *agent.Callbacks
@@ -107,9 +106,6 @@ type legacyOptions struct {
 // newFromLegacy converts legacyOptions to functional options constructor.
 func newFromLegacy(o legacyOptions) *CycleAgent {
 	opts := []Option{WithSubAgents(o.SubAgents)}
-	if len(o.Tools) > 0 {
-		opts = append(opts, WithTools(o.Tools))
-	}
 	if o.MaxIterations != nil {
 		opts = append(opts, WithMaxIterations(*o.MaxIterations))
 	}

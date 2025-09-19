@@ -25,13 +25,32 @@ type A2AMessageToAgentMessage interface {
 	ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error)
 }
 
+// EventToA2AUnaryOptions is the options for the EventToA2AMessage.
+type EventToA2AUnaryOptions struct {
+	CtxID string
+}
+
+// EventToA2AStreamingOptions is the options for the EventToA2AMessage.
+type EventToA2AStreamingOptions struct {
+	CtxID  string
+	TaskID string
+}
+
 // EventToA2AMessage defines an interface for converting Agent events to A2A protocol messages.
 type EventToA2AMessage interface {
 	// ConvertToA2AMessage converts an Agent event to an A2A protocol message.
-	ConvertToA2AMessage(ctx context.Context, event *event.Event) (*protocol.Message, error)
+	ConvertToA2AMessage(
+		ctx context.Context,
+		event *event.Event,
+		options EventToA2AUnaryOptions,
+	) (protocol.UnaryMessageResult, error)
 
 	// ConvertStreaming converts an Agent event to an A2A protocol message for streaming.
-	ConvertStreamingToA2AMessage(ctx context.Context, event *event.Event) (*protocol.Message, error)
+	ConvertStreamingToA2AMessage(
+		ctx context.Context,
+		event *event.Event,
+		options EventToA2AStreamingOptions,
+	) (protocol.StreamingMessageResult, error)
 }
 
 // defaultA2AMessageToAgentMessage is the default implementation of A2AMessageToAgentMessageConverter.
@@ -134,13 +153,15 @@ type defaultEventToA2AMessage struct{}
 func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	ctx context.Context,
 	event *event.Event,
-) (*protocol.Message, error) {
+	options EventToA2AUnaryOptions,
+) (protocol.UnaryMessageResult, error) {
 	if event.Response == nil {
 		return nil, nil
 	}
 
 	if event.Response.Error != nil {
-		return nil, fmt.Errorf("A2A server received error event from agent, event: %v", event.ID)
+		return nil, fmt.Errorf("A2A server received error event from agent, event ID: %s, error: %v",
+			event.ID, event.Response.Error)
 	}
 
 	// Filter out toolcall events for non-streaming responses
@@ -148,9 +169,16 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return nil, nil
 	}
 
-	if event.Response.Choices[0].Message.Content != "" {
+	// Additional safety check for choices array bounds
+	if len(event.Response.Choices) == 0 {
+		log.Debugf("no choices in response, event: %v", event.ID)
+		return nil, nil
+	}
+
+	choice := event.Response.Choices[0]
+	if choice.Message.Content != "" {
 		var parts []protocol.Part
-		parts = append(parts, protocol.NewTextPart(event.Response.Choices[0].Message.Content))
+		parts = append(parts, protocol.NewTextPart(choice.Message.Content))
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 		return &msg, nil
 	}
@@ -164,13 +192,15 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
 	event *event.Event,
-) (*protocol.Message, error) {
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, error) {
 	if event.Response == nil {
 		return nil, nil
 	}
 
 	if event.Response.Error != nil {
-		return nil, fmt.Errorf("A2A server received error event from agent, event: %v", event.ID)
+		return nil, fmt.Errorf("A2A server received error event from agent, event ID: %s, error: %v",
+			event.ID, event.Response.Error)
 	}
 
 	// Filter out tool call events for streaming responses
@@ -178,12 +208,24 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return nil, nil
 	}
 
+	// Additional safety check for choices array bounds
+	if len(event.Response.Choices) == 0 {
+		log.Debugf("no choices in response, event: %v", event.ID)
+		return nil, nil
+	}
+
 	var parts []protocol.Part
+	choice := event.Response.Choices[0]
 	// Use delta choice.Message.Content for non-streaming events mixed in streaming
-	if event.Response.Choices[0].Delta.Content != "" {
-		parts = append(parts, protocol.NewTextPart(event.Response.Choices[0].Delta.Content))
-		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
-		return &msg, nil
+	if choice.Delta.Content != "" {
+		parts = append(parts, protocol.NewTextPart(choice.Delta.Content))
+		taskStatus := protocol.NewTaskArtifactUpdateEvent(
+			options.TaskID,
+			options.CtxID,
+			protocol.Artifact{Parts: parts},
+			false,
+		)
+		return &taskStatus, nil
 	}
 
 	log.Debugf("delta content is empty, event: %v", event)

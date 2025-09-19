@@ -35,7 +35,7 @@ const (
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// IncludeContents determines how to include content from session events.
-	// Options: "none", "all", "filtered" (default: "all").
+	// Options: "none", "all", "filtered" (default: "filtered").
 	IncludeContents string
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
@@ -85,10 +85,8 @@ func WithMaxHistoryRuns(n int) ContentOption {
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		IncludeContents:  IncludeContentsAll, // Default to include all contents.
-		AddContextPrefix: true,               // Default to add context prefix.
-		// AddSessionSummary defaults to false.
-		// MaxHistoryRuns defaults to 0 (unlimited).
+		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
+		AddContextPrefix: true,                    // Default to add context prefix.
 	}
 
 	// Apply options.
@@ -421,6 +419,8 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	// Map function response IDs to event indices.
 	for i, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
+		// This bug is fixed in go 1.22.
+		// See: https://tip.golang.org/doc/go1.22#language
 		evt := evt
 
 		if evt.IsToolResultResponse() {
@@ -434,6 +434,8 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	var resultEvents []event.Event
 	for _, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
+		// This bug is fixed in go 1.22.
+		// See: https://tip.golang.org/doc/go1.22#language
 		evt := evt
 
 		if evt.IsToolResultResponse() {
