@@ -25,8 +25,6 @@ const (
 	metadataKeyModelName = "model_name"
 	// metadataKeyMaxSummaryLength is the key for max summary length in metadata.
 	metadataKeyMaxSummaryLength = "max_summary_length"
-	// metadataKeyWindowSize is the key for keep recent count in metadata.
-	metadataKeyWindowSize = "window_size"
 	// metadataKeyModelAvailable is the key for model availability in metadata.
 	metadataKeyModelAvailable = "model_available"
 	// metadataKeyCheckFunctions is the key for check functions count in metadata.
@@ -60,7 +58,6 @@ type sessionSummarizer struct {
 	prompt           string
 	checks           []Checker
 	maxSummaryLength int
-	keepRecentCount  int
 }
 
 // NewSummarizer creates a new session summarizer.
@@ -69,7 +66,6 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 		prompt:           defaultSummarizerPrompt,
 		checks:           []Checker{}, // No default checks - summarization only when explicitly configured.
 		maxSummaryLength: 0,           // The max summary length is 0 by default, which means no truncation.
-		keepRecentCount:  10,          // Keep recent 10 events by default.
 	}
 	s.model = m
 
@@ -103,11 +99,9 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 
-	// Extract conversation text from events within the window.
+	// Extract conversation text from events. Use all events for summarization
+	// as the session service already handles incremental processing.
 	eventsToSummarize := sess.Events
-	if s.keepRecentCount > 0 && len(sess.Events) > s.keepRecentCount {
-		eventsToSummarize = sess.Events[len(sess.Events)-s.keepRecentCount:]
-	}
 
 	conversationText := s.extractConversationText(eventsToSummarize)
 	if conversationText == "" {
@@ -140,7 +134,6 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	return map[string]any{
 		metadataKeyModelName:        modelName,
 		metadataKeyMaxSummaryLength: s.maxSummaryLength,
-		metadataKeyWindowSize:       s.keepRecentCount,
 		metadataKeyModelAvailable:   modelAvailable,
 		metadataKeyCheckFunctions:   len(s.checks),
 	}

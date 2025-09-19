@@ -44,15 +44,6 @@ func WithMaxSummaryLength(maxSummaryLength int) Option {
 	}
 }
 
-// WithKeepRecentCount sets how many recent events to feed into summarizer input.
-func WithKeepRecentCount(count int) Option {
-	return func(s *sessionSummarizer) {
-		if count > 0 {
-			s.keepRecentCount = count
-		}
-	}
-}
-
 // WithTokenThreshold creates a token-based check function.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {

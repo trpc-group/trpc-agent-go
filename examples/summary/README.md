@@ -31,7 +31,7 @@ Environment variables:
 ```bash
 cd examples/summary
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model gpt-4o-mini -keepRecentCount 25
+go run main.go -model gpt-4o-mini
 ```
 
 Quick start with immediate summarization:
@@ -44,7 +44,6 @@ Command-line flags:
 
 - `-model`: Model name to use for both chat and summarization. Default: `deepseek-chat`.
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
-- `-keepRecentCount`: Number of recent events to keep for summarization input. Default: `50`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
 - `-timeSec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
@@ -66,7 +65,6 @@ Example output:
 📝 Session Summarization Chat
 Model: deepseek-chat
 Service: inmemory
-KeepRecentCount: 50
 EventThreshold: 1
 TokenThreshold: 0
 TimeThreshold: 0s
@@ -124,7 +122,7 @@ User → Runner → Agent(Model) → Session Service → SessionSummarizer
 
 - Do not modify or truncate original `events`.
 - Do not insert summary as an event. Summary is stored separately.
-- `keepRecentCount` controls the number of recent events used for summarization input.
+- Session service handles incremental processing for summarization automatically.
 - Default trigger uses an event-count threshold aligned with Python (`>` semantics).
 - Summary generation is asynchronous by default (non-blocking).
 - Summary injection into LLM prompts is automatic and implicit.
