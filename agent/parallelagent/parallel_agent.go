@@ -13,10 +13,12 @@ package parallelagent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -31,7 +33,6 @@ const defaultChannelBufferSize = 256
 type ParallelAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -44,7 +45,6 @@ type Option func(*Options)
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -54,12 +54,6 @@ type Options struct {
 // into a single output stream.
 func WithSubAgents(sub []agent.Agent) Option {
 	return func(o *Options) { o.subAgents = sub }
-}
-
-// WithTools registers tools available to the parallel agent.
-// These tools can be used by any sub-agent during parallel execution.
-func WithTools(tools []tool.Tool) Option {
-	return func(o *Options) { o.tools = tools }
 }
 
 // WithChannelBufferSize sets the buffer size for the event channel.
@@ -92,7 +86,6 @@ func New(name string, opts ...Option) *ParallelAgent {
 	return &ParallelAgent{
 		name:              name,
 		subAgents:         cfg.subAgents,
-		tools:             cfg.tools,
 		channelBufferSize: cfg.channelBufferSize,
 		agentCallbacks:    cfg.agentCallbacks,
 	}
@@ -178,6 +171,23 @@ func (a *ParallelAgent) startSubAgents(
 		wg.Add(1)
 		go func(idx int, sa agent.Agent) {
 			defer wg.Done()
+			// Recover from panics in sub-agent execution to prevent
+			// the whole service from crashing.
+			defer func() {
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					log.Errorf("Sub-agent execution panic for %s (index: %d, parent: %s): %v\n%s",
+						sa.Info().Name, idx, invocation.AgentName, r, string(stack))
+					// Send error event for the panic.
+					errorEvent := event.NewErrorEvent(
+						invocation.InvocationID,
+						invocation.AgentName,
+						model.ErrorTypeFlowError,
+						fmt.Sprintf("sub-agent %s panic: %v", sa.Info().Name, r),
+					)
+					agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+				}
+			}()
 
 			// Create branch invocation for this sub-agent.
 			branchInvocation := a.createBranchInvocation(sa, invocation)
@@ -293,6 +303,14 @@ func (a *ParallelAgent) mergeEventStreams(
 		wg.Add(1)
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
+			// Recover from potential panics during event merging.
+			defer func() {
+				if r := recover(); r != nil {
+					// Log the panic but don't propagate error events here since
+					// we're already in the event merging phase.
+					log.Errorf("Event merging panic in parallel agent %s: %v", a.name, r)
+				}
+			}()
 			for evt := range inputChan {
 				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
@@ -308,7 +326,7 @@ func (a *ParallelAgent) mergeEventStreams(
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
 func (a *ParallelAgent) Tools() []tool.Tool {
-	return a.tools
+	return []tool.Tool{}
 }
 
 // Info implements the agent.Agent interface.

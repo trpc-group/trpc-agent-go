@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,9 +47,11 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 			Name:    fmt.Sprintf("Document %d", i),
 			Content: fmt.Sprintf("Content for document %d", i),
 			Metadata: map[string]interface{}{
-				"category": fmt.Sprintf("cat-%d", i%3), // Categories: cat-0, cat-1, cat-2
-				"level":    i%2 + 1,                    // Levels: 1, 2
-				"source":   "test",
+				"category":            fmt.Sprintf("cat-%d", i%3), // Categories: cat-0, cat-1, cat-2
+				"level":               i%2 + 1,                    // Levels: 1, 2
+				source.MetaSourceName: "test",
+				source.MetaURI:        "test-uri",
+				source.MetaChunkIndex: i,
 			},
 		}
 	}
@@ -203,10 +206,17 @@ func (*stubVectorStore) Update(ctx context.Context, doc *document.Document, emb 
 	return nil
 }
 func (*stubVectorStore) Delete(ctx context.Context, id string) error { return nil }
-func (*stubVectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
+func (*stubVectorStore) DeleteByFilter(
+	ctx context.Context,
+	opts ...vectorstore.DeleteOption) error {
+	return nil
+}
+func (*stubVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	return nil, nil
+}
+func (*stubVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	return 0, nil
 }
-func (*stubVectorStore) FlushAll(ctx context.Context) error { return nil }
 func (*stubVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	return nil, nil
 }
@@ -809,11 +819,9 @@ func (e *errorVectorStore) Delete(ctx context.Context, id string) error {
 	return fmt.Errorf("vector store error")
 }
 
-func (e *errorVectorStore) DeleteByFilter(ctx context.Context, filter map[string]interface{}) (int, error) {
-	return 0, fmt.Errorf("vector store error")
-}
-
-func (e *errorVectorStore) FlushAll(ctx context.Context) error {
+func (e *errorVectorStore) DeleteByFilter(
+	ctx context.Context,
+	opts ...vectorstore.DeleteOption) error {
 	return fmt.Errorf("vector store error")
 }
 
@@ -821,6 +829,739 @@ func (e *errorVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuer
 	return nil, fmt.Errorf("vector store error")
 }
 
+func (e *errorVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	return nil, fmt.Errorf("vector store error")
+}
+
+func (e *errorVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	return 0, fmt.Errorf("vector store error")
+}
+
 func (e *errorVectorStore) Close() error {
 	return fmt.Errorf("vector store close error")
+}
+
+// syncMockVectorStore is a mock vector store with support for incremental sync testing
+type syncMockVectorStore struct {
+	documents    map[string]vectorstore.DocumentMetadata
+	deleteCalls  int
+	addCalls     int
+	getMetaCalls int
+	// protect concurrent access to documents and counters
+	mu sync.RWMutex
+}
+
+func newSyncMockVectorStore() *syncMockVectorStore {
+	return &syncMockVectorStore{
+		documents: make(map[string]vectorstore.DocumentMetadata),
+	}
+}
+
+func (s *syncMockVectorStore) Add(ctx context.Context, doc *document.Document, emb []float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addCalls++
+	meta := vectorstore.DocumentMetadata{
+		Metadata: doc.Metadata,
+	}
+	s.documents[doc.ID] = meta
+	return nil
+}
+
+func (s *syncMockVectorStore) Get(ctx context.Context, id string) (*document.Document, []float64, error) {
+	s.mu.RLock()
+	meta, exists := s.documents[id]
+	s.mu.RUnlock()
+	if !exists {
+		return nil, nil, nil
+	}
+	doc := &document.Document{
+		ID:       id,
+		Metadata: meta.Metadata,
+	}
+	return doc, []float64{1, 2, 3}, nil
+}
+
+func (s *syncMockVectorStore) Update(ctx context.Context, doc *document.Document, emb []float64) error {
+	return nil
+}
+
+func (s *syncMockVectorStore) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
+	delete(s.documents, id)
+	s.deleteCalls++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *syncMockVectorStore) DeleteByFilter(
+	ctx context.Context,
+	opts ...vectorstore.DeleteOption) error {
+	s.mu.Lock()
+	s.deleteCalls++
+	config := &vectorstore.DeleteConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	if config.DeleteAll {
+		s.documents = make(map[string]vectorstore.DocumentMetadata)
+		s.mu.Unlock()
+		return nil
+	}
+
+	for _, id := range config.DocumentIDs {
+		delete(s.documents, id)
+	}
+
+	if config.Filter != nil {
+		for id, meta := range s.documents {
+			if sourceName, ok := meta.Metadata[source.MetaSourceName]; ok {
+				if config.Filter[source.MetaSourceName] == sourceName {
+					delete(s.documents, id)
+				}
+			}
+		}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *syncMockVectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	s.mu.RLock()
+	s.getMetaCalls++
+	config := &vectorstore.GetMetadataConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for id, meta := range s.documents {
+		if config.Filter != nil {
+			if sourceName, ok := meta.Metadata[source.MetaSourceName]; ok {
+				if config.Filter[source.MetaSourceName] == sourceName {
+					result[id] = meta
+				}
+			}
+		} else {
+			result[id] = meta
+		}
+	}
+	s.mu.RUnlock()
+	return result, nil
+}
+
+func (s *syncMockVectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	s.mu.RLock()
+	n := len(s.documents)
+	s.mu.RUnlock()
+	return n, nil
+}
+
+func (s *syncMockVectorStore) Search(ctx context.Context, q *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
+	return nil, nil
+}
+
+func (s *syncMockVectorStore) Close() error {
+	return nil
+}
+
+// TestAddSource tests the AddSource functionality
+func TestBuiltinKnowledge_AddSource(t *testing.T) {
+	tests := []struct {
+		name        string
+		enableSync  bool
+		expectError bool
+	}{
+		{
+			name:        "with_sync_enabled",
+			enableSync:  true,
+			expectError: false,
+		},
+		{
+			name:        "with_sync_disabled",
+			enableSync:  false,
+			expectError: false,
+		},
+		{
+			name:        "duplicate_source",
+			enableSync:  false,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := New(
+				WithEnableSourceSync(tt.enableSync),
+			)
+			kb.vectorStore = newSyncMockVectorStore()
+			kb.embedder = stubEmbedder{}
+
+			// Add first source
+			src1 := &mockSource{name: "test-source", docCount: 2}
+			err := kb.AddSource(context.Background(), src1)
+			if err != nil {
+				t.Fatalf("Failed to add first source: %v", err)
+			}
+
+			if tt.name == "duplicate_source" {
+				// Try to add duplicate source
+				src2 := &mockSource{name: "test-source", docCount: 3}
+				err = kb.AddSource(context.Background(), src2)
+				if tt.expectError && err == nil {
+					t.Error("Expected error when adding duplicate source, but got none")
+				}
+				if !tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+
+			// Verify source was added to internal list
+			if len(kb.sources) != 1 {
+				t.Errorf("Expected 1 source, got %d", len(kb.sources))
+			}
+			if kb.sources[0].Name() != "test-source" {
+				t.Errorf("Expected source name 'test-source', got '%s'", kb.sources[0].Name())
+			}
+		})
+	}
+}
+
+// TestRemoveSource tests the RemoveSource functionality
+func TestBuiltinKnowledge_RemoveSource(t *testing.T) {
+	tests := []struct {
+		name        string
+		enableSync  bool
+		expectError bool
+	}{
+		{
+			name:        "with_sync_enabled",
+			enableSync:  true,
+			expectError: false,
+		},
+		{
+			name:        "with_sync_disabled",
+			enableSync:  false,
+			expectError: false,
+		},
+		{
+			name:        "nonexistent_source_sync_disabled",
+			enableSync:  false,
+			expectError: true,
+		},
+		{
+			name:        "nonexistent_source_sync_enabled",
+			enableSync:  true,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := New(
+				WithEnableSourceSync(tt.enableSync),
+			)
+			store := newSyncMockVectorStore()
+			kb.vectorStore = store
+			kb.embedder = stubEmbedder{}
+
+			// Add a source first
+			src := &mockSource{name: "test-source", docCount: 2}
+			err := kb.AddSource(context.Background(), src)
+			if err != nil {
+				t.Fatalf("Failed to add source: %v", err)
+			}
+
+			if strings.Contains(tt.name, "nonexistent_source") {
+				// Try to remove non-existent source
+				err = kb.RemoveSource(context.Background(), "nonexistent")
+				if tt.expectError && err == nil {
+					t.Error("Expected error when removing non-existent source, but got none")
+				}
+				if !tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			} else {
+				// Remove the source
+				err = kb.RemoveSource(context.Background(), "test-source")
+				if tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if !tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				// Verify source was removed from internal list
+				if len(kb.sources) != 0 {
+					t.Errorf("Expected 0 sources, got %d", len(kb.sources))
+				}
+
+				// Verify vector store deletion was called
+				if store.deleteCalls == 0 {
+					t.Error("Expected vector store deletion to be called")
+				}
+			}
+		})
+	}
+}
+
+// TestReloadSource tests the ReloadSource functionality
+func TestBuiltinKnowledge_ReloadSource(t *testing.T) {
+	tests := []struct {
+		name        string
+		enableSync  bool
+		expectError bool
+	}{
+		{
+			name:        "with_sync_enabled",
+			enableSync:  true,
+			expectError: false,
+		},
+		{
+			name:        "with_sync_disabled",
+			enableSync:  false,
+			expectError: false,
+		},
+		{
+			name:        "nonexistent_source_sync_disabled",
+			enableSync:  false,
+			expectError: true,
+		},
+		{
+			name:        "nonexistent_source_sync_enabled",
+			enableSync:  true,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := New(
+				WithEnableSourceSync(tt.enableSync),
+			)
+			store := newSyncMockVectorStore()
+			kb.vectorStore = store
+			kb.embedder = stubEmbedder{}
+
+			// Add a source first
+			src := &mockSource{name: "test-source", docCount: 2}
+			err := kb.AddSource(context.Background(), src)
+			if err != nil {
+				t.Fatalf("Failed to add source: %v", err)
+			}
+
+			if strings.Contains(tt.name, "nonexistent_source") {
+				// Try to reload non-existent source
+				err = kb.ReloadSource(context.Background(), &mockSource{name: "nonexistent", docCount: 1})
+				if tt.expectError && err == nil {
+					t.Error("Expected error when reloading non-existent source, but got none")
+				}
+				if !tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			} else {
+				// Reload the source with different document count
+				newSrc := &mockSource{name: "test-source", docCount: 3}
+				err = kb.ReloadSource(context.Background(), newSrc)
+				if tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if !tt.expectError && err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				// Verify source is still in the list
+				if len(kb.sources) != 1 {
+					t.Errorf("Expected 1 source, got %d", len(kb.sources))
+				}
+			}
+		})
+	}
+}
+
+// TestIncrementalSyncFunctions tests the incremental sync helper functions
+func TestIncrementalSyncFunctions(t *testing.T) {
+	kb := New(WithEnableSourceSync(true))
+	store := newSyncMockVectorStore()
+	kb.vectorStore = store
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+
+	// Test refreshSourceDocInfo
+	err := kb.refreshSourceDocInfo(ctx, "test-source")
+	if err != nil {
+		t.Fatalf("refreshSourceDocInfo failed: %v", err)
+	}
+
+	// Test refreshAllDocInfo
+	err = kb.refreshAllDocInfo(ctx)
+	if err != nil {
+		t.Fatalf("refreshAllDocInfo failed: %v", err)
+	}
+
+	// Test convertMetaToDocumentInfo
+	meta := &vectorstore.DocumentMetadata{
+		Metadata: map[string]interface{}{
+			source.MetaURI:        "test://uri",
+			source.MetaSourceName: "test-source",
+			source.MetaChunkIndex: 0,
+		},
+	}
+	docInfo := convertMetaToDocumentInfo("doc-1", meta)
+	if docInfo.URI != "test://uri" {
+		t.Errorf("Expected URI 'test://uri', got '%s'", docInfo.URI)
+	}
+	if docInfo.SourceName != "test-source" {
+		t.Errorf("Expected SourceName 'test-source', got '%s'", docInfo.SourceName)
+	}
+	if docInfo.ChunkIndex != 0 {
+		t.Errorf("Expected ChunkIndex 0, got %d", docInfo.ChunkIndex)
+	}
+
+	// Test rebuildDocumentInfo
+	kb.cacheMetaInfo = map[string]BuiltinDocumentInfo{
+		"doc-1": docInfo,
+	}
+	kb.rebuildDocumentInfo()
+
+	if len(kb.cacheURIInfo["test://uri"]) != 1 {
+		t.Errorf("Expected 1 document in cacheURIInfo, got %d", len(kb.cacheURIInfo["test://uri"]))
+	}
+	if len(kb.cacheSourceInfo["test-source"]) != 1 {
+		t.Errorf("Expected 1 document in cacheSourceInfo, got %d", len(kb.cacheSourceInfo["test-source"]))
+	}
+
+	// Test generateDocumentID
+	docID := generateDocumentID("test-source", "test://uri", "content", 0, map[string]interface{}{"key": "value"})
+	if docID == "" {
+		t.Error("generateDocumentID returned empty string")
+	}
+
+	// Test shouldProcessDocument
+	doc := &document.Document{
+		ID:      docID,
+		Content: "content",
+		Metadata: map[string]interface{}{
+			source.MetaURI:        "test://uri",
+			source.MetaSourceName: "test-source",
+			source.MetaChunkIndex: 0,
+		},
+	}
+	shouldProcess, err := kb.shouldProcessDocument(doc)
+	if err != nil {
+		t.Fatalf("shouldProcessDocument failed: %v", err)
+	}
+	if !shouldProcess {
+		t.Error("Expected document to be processed")
+	}
+
+	// Test cleanupOrphanDocuments
+	err = kb.cleanupOrphanDocuments(ctx)
+	if err != nil {
+		t.Fatalf("cleanupOrphanDocuments failed: %v", err)
+	}
+
+	// Test clearVectorStoreMetadata
+	kb.clearVectorStoreMetadata()
+	if len(kb.cacheMetaInfo) != 0 {
+		t.Error("Expected cacheMetaInfo to be cleared")
+	}
+}
+
+// mockVectorStoreWithMetadata is an enhanced mock that supports GetMetadata
+type mockVectorStoreWithMetadata struct {
+	stubVectorStore
+	metadata map[string]vectorstore.DocumentMetadata
+}
+
+func (m *mockVectorStoreWithMetadata) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	if m.metadata == nil {
+		return make(map[string]vectorstore.DocumentMetadata), nil
+	}
+
+	// Apply filters if any
+	config := &vectorstore.GetMetadataConfig{}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for id, meta := range m.metadata {
+		// Apply document ID filter
+		if len(config.IDs) > 0 {
+			found := false
+			for _, docID := range config.IDs {
+				if id == docID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		// Apply metadata filters
+		if len(config.Filter) > 0 {
+			match := true
+			for key, value := range config.Filter {
+				if metaValue, exists := meta.Metadata[key]; !exists || metaValue != value {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		result[id] = meta
+	}
+
+	return result, nil
+}
+
+// Test ShowDocumentInfo functionality using table-driven tests
+func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupKB        func() *BuiltinKnowledge
+		options        []ShowDocumentInfoOption
+		expectError    bool
+		expectedErrMsg string
+		validateResult func([]BuiltinDocumentInfo) bool
+	}{
+		{
+			name: "successful_show_all_documents",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								source.MetaChunkSize:  100,
+								"category":            "test",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								source.MetaChunkSize:  200,
+								"category":            "demo",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options:     []ShowDocumentInfoOption{},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 2 &&
+					docs[0].SourceName != "" &&
+					docs[1].SourceName != ""
+			},
+		},
+		{
+			name: "filter_by_source_name",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoSourceName("test-source-1"),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].SourceName == "test-source-1"
+			},
+		},
+		{
+			name: "filter_by_document_ids",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoIDs([]string{"doc-1"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].URI == "file:///test1.txt"
+			},
+		},
+		{
+			name: "filter_by_metadata",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								"category":            "important",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "test-source",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								"category":            "normal",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoFilter(map[string]interface{}{"category": "important"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 && docs[0].URI == "file:///test1.txt"
+			},
+		},
+		{
+			name: "no_vector_store_configured",
+			setupKB: func() *BuiltinKnowledge {
+				return &BuiltinKnowledge{}
+			},
+			options:        []ShowDocumentInfoOption{},
+			expectError:    true,
+			expectedErrMsg: "vector store not configured",
+		},
+		{
+			name: "empty_result",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: make(map[string]vectorstore.DocumentMetadata),
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options:     []ShowDocumentInfoOption{},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 0
+			},
+		},
+		{
+			name: "multiple_filters_combined",
+			setupKB: func() *BuiltinKnowledge {
+				mockStore := &mockVectorStoreWithMetadata{
+					metadata: map[string]vectorstore.DocumentMetadata{
+						"doc-1": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-1",
+								source.MetaURI:        "file:///test1.txt",
+								source.MetaChunkIndex: 0,
+								"category":            "test",
+							},
+						},
+						"doc-2": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-2",
+								source.MetaURI:        "file:///test2.txt",
+								source.MetaChunkIndex: 1,
+								"category":            "test",
+							},
+						},
+						"doc-3": {
+							Metadata: map[string]interface{}{
+								source.MetaSourceName: "source-1",
+								source.MetaURI:        "file:///test3.txt",
+								source.MetaChunkIndex: 2,
+								"category":            "demo",
+							},
+						},
+					},
+				}
+				kb := &BuiltinKnowledge{vectorStore: mockStore}
+				return kb
+			},
+			options: []ShowDocumentInfoOption{
+				WithShowDocumentInfoSourceName("source-1"),
+				WithShowDocumentInfoFilter(map[string]interface{}{"category": "test"}),
+			},
+			expectError: false,
+			validateResult: func(docs []BuiltinDocumentInfo) bool {
+				return len(docs) == 1 &&
+					docs[0].SourceName == "source-1" &&
+					docs[0].URI == "file:///test1.txt"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := tt.setupKB()
+			result, err := kb.ShowDocumentInfo(context.Background(), tt.options...)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+					return
+				}
+				if tt.expectedErrMsg != "" && !strings.Contains(err.Error(), tt.expectedErrMsg) {
+					t.Errorf("Expected error message to contain '%s', got '%s'", tt.expectedErrMsg, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+
+			if tt.validateResult != nil && !tt.validateResult(result) {
+				t.Errorf("Result validation failed for test case '%s'", tt.name)
+			}
+		})
+	}
 }

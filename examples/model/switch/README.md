@@ -4,7 +4,7 @@ This example demonstrates dynamic model switching using LLMAgent without the Run
 
 ## Prerequisites
 
-- Go 1.23 or later.
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint).
 
 ## Overview

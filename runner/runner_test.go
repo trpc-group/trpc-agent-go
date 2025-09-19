@@ -128,7 +128,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 	// Verify session contains both user message and agent response.
 	// Should have: user message + agent response + runner done = 3 events.
-	assert.Len(t, sess.Events, 3)
+	assert.Len(t, sess.Events, 2)
 
 	// Verify user event.
 	userEvent := sess.Events[0]
@@ -219,6 +219,96 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 
 	// Should have no events, user message was empty and not added to session, and session service filtered event start with user.
 	assert.Len(t, sess.Events, 0)
+}
+
+func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user"
+	sessionID := "seed-session"
+	seedHistory := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewAssistantMessage("prev reply"),
+		model.NewUserMessage("hello"),
+	}
+
+	message := model.NewUserMessage("hello")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.WithMessages(seedHistory))
+	require.NoError(t, err)
+
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Expect: due to EnsureEventStartWithUser filtering, only the first user
+	// event from seed is kept, plus agent response and runner completion = 3
+	require.Len(t, sess.Events, 2)
+	// Ensure we did not append a duplicate user message beyond the seed.
+	userCount := 0
+	for _, e := range sess.Events {
+		if e.Author == authorUser {
+			userCount++
+		}
+	}
+	require.Equal(t, 1, userCount)
+}
+
+func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user2"
+	sessionID := "seed-session2"
+	seedHistory := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewAssistantMessage("prev reply"),
+		model.NewUserMessage("hello"),
+	}
+
+	// Different latest user, should be appended in addition to seeded user.
+	message := model.NewUserMessage("hello too")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.WithMessages(seedHistory))
+	require.NoError(t, err)
+
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Expect: seeded first user retained + appended user + agent response + runner completion = 4
+	require.Len(t, sess.Events, 3)
+
+	// Verify the first two events are users with expected contents.
+	if !(len(sess.Events) >= 2) {
+		t.Fatalf("expected at least two events")
+	}
+	// Event 0: seeded user
+	if sess.Events[0].Author != authorUser {
+		t.Fatalf("expected first event author user, got %s", sess.Events[0].Author)
+	}
+	if got := sess.Events[0].Response.Choices[0].Message.Content; got != "hello" {
+		t.Fatalf("expected seeded user content 'hello', got %q", got)
+	}
+	// Event 1: appended user
+	if sess.Events[1].Author != authorUser {
+		t.Fatalf("expected second event author user, got %s", sess.Events[1].Author)
+	}
+	if got := sess.Events[1].Response.Choices[0].Message.Content; got != "hello too" {
+		t.Fatalf("expected appended user content 'hello too', got %q", got)
+	}
 }
 
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.

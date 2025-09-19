@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -96,6 +97,9 @@ type Invocation struct {
 
 	// eventFilterKey is used to filter events for flow or agent
 	eventFilterKey string
+
+	// parent is the parent invocation, if any
+	parent *Invocation
 }
 
 // DefaultWaitNoticeTimeoutErr is the default error returned when a wait notice times out.
@@ -141,14 +145,22 @@ func WithKnowledgeFilter(filter map[string]any) RunOption {
 	}
 }
 
-// WithMessages sets the initial conversation history for this run.
-// When provided, the content processor will prefer these messages and
-// will not derive messages from session events or the single
-// `invocation.Message` to prevent duplication. The messages should be
-// in chronological order (system -> user/assistant alternating).
+// WithMessages sets the caller-supplied conversation history for this run.
+// Runner uses this history to auto-seed an empty Session (once) and to
+// populate `invocation.Message` via RunWithMessages for compatibility. The
+// content processor itself does not read this field; it derives messages from
+// Session events (and may fall back to a single `invocation.Message` when the
+// Session is empty).
 func WithMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.Messages = messages
+	}
+}
+
+// WithRequestID sets the request id for the RunOptions.
+func WithRequestID(requestID string) RunOption {
+	return func(opts *RunOptions) {
+		opts.RequestID = requestID
 	}
 }
 
@@ -162,12 +174,15 @@ type RunOptions struct {
 	// KnowledgeFilter contains key-value pairs that will be merged into the knowledge filter
 	KnowledgeFilter map[string]any
 
-	// Messages allows callers to provide a full conversation history
-	// directly to the agent invocation without relying on the session
-	// service. When provided, the content processor will prefer these
-	// messages and skip deriving content from session events or the
-	// single `invocation.Message` to avoid duplication.
+	// Messages allows callers to provide a full conversation history to Runner.
+	// Runner will seed an empty Session with this history automatically and
+	// then rely on Session events for subsequent turns. The content processor
+	// ignores this field and reads only from Session events (or falls back to
+	// `invocation.Message` when no events exist).
 	Messages []model.Message
+
+	// RequestID is the request id of the request.
+	RequestID string
 }
 
 // NewInvocation create a new invocation
@@ -208,6 +223,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:        inv.noticeMu,
 		noticeChanMap:   inv.noticeChanMap,
 		eventFilterKey:  inv.eventFilterKey,
+		parent:          inv,
 	}
 
 	for _, opt := range invocationOpts {
@@ -241,6 +257,10 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 		return
 	}
 
+	e.RequestID = inv.RunOptions.RequestID
+	if inv.parent != nil {
+		e.ParentInvocationID = inv.parent.InvocationID
+	}
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
 	e.FilterKey = inv.GetEventFilterKey()
@@ -255,10 +275,14 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
+	ch := inv.AddNoticeChannel(ctx, key)
+	if ch == nil {
+		return fmt.Errorf("notice channel create failed. for %s.", key)
+	}
 	if timeout == WaitNoticeWithoutTimeout {
 		// no timeout, maybe wait for ever
 		select {
-		case <-inv.AddNoticeChannel(ctx, key):
+		case <-ch:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -266,7 +290,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	}
 
 	select {
-	case <-inv.AddNoticeChannel(ctx, key):
+	case <-ch:
 	case <-time.After(timeout):
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
@@ -275,8 +299,20 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	return nil
 }
 
+func panic_recover() {
+	nilPointerErr := "runtime error: invalid memory address or nil pointer dereference"
+	if r := recover(); r != nil {
+		if err, ok := r.(error); ok && err.Error() == nilPointerErr {
+			log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
+			return
+		}
+		panic(r)
+	}
+}
+
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
+	defer panic_recover()
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
@@ -295,6 +331,7 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
+	defer panic_recover()
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 

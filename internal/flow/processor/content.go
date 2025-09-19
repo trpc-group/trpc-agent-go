@@ -61,8 +61,8 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 // NewContentRequestProcessor creates a new content request processor.
 func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor {
 	processor := &ContentRequestProcessor{
-		IncludeContents:  IncludeContentsAll, // Default to include all contents.
-		AddContextPrefix: true,               // Default to add context prefix.
+		IncludeContents:  IncludeContentsFiltered, // Default only to include filtered contents.
+		AddContextPrefix: true,                    // Default to add context prefix.
 	}
 
 	// Apply options.
@@ -87,20 +87,6 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	if invocation == nil {
-		return
-	}
-
-	// 0. If caller supplied explicit messages via RunOptions, prefer them
-	// and skip deriving from session or the single invocation message to
-	// avoid duplication. This supports use cases where the upstream
-	// system maintains the conversation history and passes it in each run.
-	if len(invocation.RunOptions.Messages) > 0 {
-		req.Messages = append(req.Messages, invocation.RunOptions.Messages...)
-
-		// Send a preprocessing event and return early.
-		evt := event.New(invocation.InvocationID, invocation.AgentName, event.WithObject(model.ObjectTypePreprocessingContent))
-		log.Debugf("Content request processor: used explicit messages (%d)", len(invocation.RunOptions.Messages))
-		agent.EmitEvent(ctx, invocation, ch, evt)
 		return
 	}
 
@@ -152,12 +138,12 @@ func (p *ContentRequestProcessor) getContents(
 
 		// Skip events without content, or generated neither by user nor by model
 		// or has empty text. E.g. events purely for mutating session states.
-		if !evt.IsValidContent() {
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
 			continue
 		}
 
 		// Skip events not belong to current branch.
-		if !evt.Filter(filterKey) {
+		if p.IncludeContents == IncludeContentsFiltered && !evt.Filter(filterKey) {
 			continue
 		}
 

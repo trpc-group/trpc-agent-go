@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // TestReadDocuments verifies that File Source correctly reads documents with
@@ -61,7 +62,7 @@ func TestReadDocuments(t *testing.T) {
 			t.Fatalf("expected multiple chunks, got %d", len(docs))
 		}
 		for _, d := range docs {
-			sz, ok := d.Metadata["chunk_size"].(int)
+			sz, ok := d.Metadata[source.MetaChunkSize].(int)
 			if !ok {
 				t.Fatalf("chunk_size metadata missing or not int")
 			}

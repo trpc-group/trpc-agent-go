@@ -15,22 +15,22 @@ The `LLMAgent` is a concrete implementation of the `agent.Agent` interface that 
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required, automatically read by OpenAI SDK) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK) | `https://api.openai.com/v1` |
+| Variable          | Description                                                                | Default Value               |
+| ----------------- | -------------------------------------------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required, automatically read by OpenAI SDK) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK)     | `https://api.openai.com/v1` |
 
 **Note**: `OPENAI_API_KEY` and `OPENAI_BASE_URL` are automatically read by the OpenAI SDK. You don't need to manually read these environment variables in your code. The SDK handles this automatically when creating the client.
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
+| Argument | Description              | Default Value |
+| -------- | ------------------------ | ------------- |
 | `-model` | Name of the model to use | `gpt-4o-mini` |
 
 ## Usage

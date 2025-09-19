@@ -18,7 +18,7 @@ Runner provides the interface to run Agents, responsible for session management 
 ┌─────────────────────┐
 │       Runner        │  - Session management.
 └─────────┬───────────┘  - Event stream processing.
-          │ 
+          │
           │ r.agent.Run(ctx, invocation)
           │
 ┌─────────▼───────────┐
@@ -26,7 +26,7 @@ Runner provides the interface to run Agents, responsible for session management 
 └─────────┬───────────┘  - Returns <-chan *event.Event.
           │
           │ Implementation is determined by the Agent.
-          │ 
+          │
 ┌─────────▼───────────┐
 │    Agent Impl       │  e.g., LLMAgent, ChainAgent.
 └─────────────────────┘
@@ -36,7 +36,7 @@ Runner provides the interface to run Agents, responsible for session management 
 
 ### 📋 Requirements
 
-- Go 1.23 or higher.
+- Go 1.21 or later.
 - Valid LLM API key (OpenAI-compatible interface).
 - Redis (optional, for distributed session management).
 
@@ -48,7 +48,7 @@ package main
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -58,33 +58,33 @@ import (
 func main() {
     // 1. Create model.
     llmModel := openai.New("DeepSeek-V3-Online-64K")
-    
+
     // 2. Create Agent.
-    agent := llmagent.New("assistant", 
+    agent := llmagent.New("assistant",
         llmagent.WithModel(llmModel),
         llmagent.WithInstruction("You are a helpful AI assistant."),
         llmagent.WithGenerationConfig(model.GenerationConfig{Stream: true}), // Enable streaming output.
     )
-    
+
     // 3. Create Runner.
     r := runner.NewRunner("my-app", agent)
-    
+
     // 4. Run conversation.
     ctx := context.Background()
     userMessage := model.NewUserMessage("Hello!")
-    
+
     eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
     if err != nil {
         panic(err)
     }
-    
+
     // 5. Handle responses.
     for event := range eventChan {
         if event.Error != nil {
             fmt.Printf("Error: %s\n", event.Error.Message)
             continue
         }
-        
+
         if len(event.Choices) > 0 {
             fmt.Print(event.Choices[0].Delta.Content)
         }
@@ -157,9 +157,12 @@ eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 eventChan, err := r.Run(ctx, userID, sessionID, message)
 ```
 
-#### Pass Conversation History (no session dependency)
+#### Provide Conversation History (auto-seed + session reuse)
 
-If your upstream service maintains the conversation and you want to pass the full history (`[]model.Message`) directly to the Agent, use one of the following approaches:
+If your upstream service maintains the conversation and you want the agent to
+see that context, you can pass a full history (`[]model.Message`) directly. The
+runner will seed an empty session with that history automatically and then
+merge in new session events.
 
 Option A: Use the convenience helper `runner.RunWithMessages`
 
@@ -174,7 +177,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
 ```
 
-Example: `examples/runwithmessages`
+Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
+continues reusing the session)
 
 Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
 
@@ -183,7 +187,12 @@ msgs := []model.Message{ /* as above */ }
 ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msgs))
 ```
 
-Note: When `[]model.Message` is provided, the content processor prioritizes this history and skips deriving messages from the Session or the single `message`, avoiding duplication. In `RunWithMessages`, Runner sets `invocation.Message` to the latest user message to preserve compatibility with graph-based agents that use initial user input.
+When `[]model.Message` is provided, the runner persists that history into the
+session on first use (if empty). The content processor does not read this
+option; it only derives messages from session events (or falls back to the
+single `invocation.Message` if the session has no events). `RunWithMessages`
+still sets `invocation.Message` to the latest user turn so graph/flow agents
+that inspect it continue to work.
 
 ## 💾 Session Management
 
@@ -205,7 +214,7 @@ import "trpc.group/trpc-go/trpc-agent-go/session/redis"
 // Create Redis session service.
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379"))
-    
+
 r := runner.NewRunner("app", agent,
     runner.WithSessionService(sessionService))
 ```
@@ -312,20 +321,20 @@ for event := range eventChan {
         fmt.Printf("Error: %s\n", event.Error.Message)
         continue
     }
-    
+
     // Streaming content.
     if len(event.Choices) > 0 {
         choice := event.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
-    
+
     // Tool invocation.
     if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
         for _, toolCall := range event.Choices[0].Message.ToolCalls {
             fmt.Printf("Call tool: %s\n", toolCall.Function.Name)
         }
     }
-    
+
     // Completion event.
     if event.Done {
         break
@@ -343,24 +352,24 @@ import (
 
 func processEvents(eventChan <-chan *event.Event) error {
     var fullResponse strings.Builder
-    
+
     for event := range eventChan {
         // Handle errors.
         if event.Error != nil {
             return fmt.Errorf("Event error: %w", event.Error)
         }
-        
+
         // Handle tool calls.
         if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 Tool Call:")
             for _, toolCall := range event.Choices[0].Message.ToolCalls {
-                fmt.Printf("  • %s (ID: %s)\n", 
+                fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
-                fmt.Printf("    Params: %s\n", 
+                fmt.Printf("    Params: %s\n",
                     string(toolCall.Function.Arguments))
             }
         }
-        
+
         // Handle tool responses.
         if event.Response != nil {
             for _, choice := range event.Response.Choices {
@@ -370,7 +379,7 @@ func processEvents(eventChan <-chan *event.Event) error {
                 }
             }
         }
-        
+
         // Handle streaming content.
         if len(event.Choices) > 0 {
             content := event.Choices[0].Delta.Content
@@ -379,13 +388,13 @@ func processEvents(eventChan <-chan *event.Event) error {
                 fullResponse.WriteString(content)
             }
         }
-        
+
         if event.Done {
             fmt.Println() // New line.
             break
         }
     }
-    
+
     return nil
 }
 ```
@@ -396,17 +405,16 @@ Runner creates and manages the Invocation structure:
 
 ```go
 // The Invocation created by Runner contains the following fields.
-invocation := &agent.Invocation{
-    Agent:             r.agent,                // Agent instance.
-    Session:           sess,                   // Session object.
-    InvocationID:      invocationID,           // Unique identifier.
-    EndInvocation:     false,                  // End flag.
-    Message:           message,                // User message.
-    RunOptions:        ro,                     // Run options.
-    // Note: Invocation also includes other fields such as AgentName, Branch, Model,
-    // TransferInfo, AgentCallbacks, ModelCallbacks, ToolCallbacks, etc.,
-    // but these fields are used and managed internally by the Agent.
-}
+invocation := agent.NewInvocation(
+    agent.WithInvocationAgent(r.agent),                               // Agent instance.
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}), // Session object.
+    agent.WithInvocationEndInvocation(false),                         // End flag.
+    agent.WithInvocationMessage(model.NewUserMessage("User input")),  // User message.
+    agent.WithInvocationRunOptions(ro),                               // Run options.
+)
+// Note: Invocation also includes other fields such as AgentName, Branch, Model,
+// TransferInfo, AgentCallbacks, ModelCallbacks, ToolCallbacks, etc.,
+// but these fields are used and managed internally by the Agent.
 ```
 
 ## ✅ Best Practices
@@ -458,7 +466,7 @@ for event := range eventChan {
 import (
     "context"
     "fmt"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -470,7 +478,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
     if err != nil {
         return fmt.Errorf("Runner.Run failed: %v", err)
     }
-    
+
     // Check the event stream.
     for event := range eventChan {
         if event.Error != nil {
@@ -480,7 +488,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
             break
         }
     }
-    
+
     return nil
 }
 ```

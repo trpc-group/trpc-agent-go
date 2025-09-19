@@ -1,17 +1,18 @@
 module trpc.group/trpc-go/trpc-agent-go/memory/redis
 
-go 1.24.1
+go 1.21
 
-replace trpc.group/trpc-go/trpc-agent-go => ../../
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
+)
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/redis/go-redis/v9 v9.11.0
 	github.com/stretchr/testify v1.10.0
-	trpc.group/trpc-go/trpc-agent-go v0.1.2
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.2-0.20250807061029-66942a6b44d9
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0
 )
 
 require (
@@ -24,4 +25,5 @@ require (
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333 // indirect
 )

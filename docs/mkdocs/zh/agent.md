@@ -172,14 +172,13 @@ Invocation 是 Agent 执行流程的上下文对象，包含了单次调用所�
 import "trpc.group/trpc-go/trpc-agent-go/agent"
 
 // 创建 Invocation 对象（高级用法）
-invocation := &agent.Invocation{
-    AgentName:     "demo-agent",                                                   // Agent 名称
-    InvocationID:  "demo-invocation-001",                                          // 调用 ID
-    EndInvocation: false,                                                          // 是否结束调用
-    Model:         modelInstance,                                                  // 使用的模型
-    Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"), // 用户消息
-    Session:       &session.Session{ID: "session-001"},
-}
+invocation := agent.NewInvocation(
+    agent.WithInvocationAgent(r.agent),                               // Agent 实例
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}), // Session
+    agent.WithInvocationEndInvocation(false),                         // 是否结束调用
+    agent.WithInvocationMessage(model.NewUserMessage("User input")),  // 用户消息
+    agent.WithInvocationModel(modelInstance),                         // 使用的模型
+)
 
 // 直接调用 Agent（高级用法）
 ctx := context.Background()
@@ -348,16 +347,14 @@ callbacks := &agent.AgentCallbacks{
 }
 
 // 在 Invocation 中使用回调
-invocation := &agent.Invocation{
-    AgentName:     "demo-agent",
-    InvocationID:  "demo-001",
-    AgentCallbacks: callbacks,
-    Model:         modelInstance,
-    Message:       model.NewUserMessage("用户输入"),
-    Session: &session.Session{
-        ID: "session-001",
-    },
-}
+invocation := agent.NewInvocation(
+    agent.WithInvocationAgent(r.agent),
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}),
+    agent.WithInvocationEndInvocation(false),
+    agent.WithInvocationMessage(model.NewUserMessage("用户输入")),
+    agent.WithInvocationRunOptions(ro),
+    agent.WithInvocationAgentCallbacks(callbacks),
+)
 ```
 
 回调机制让你能够精确控制 Agent 的执行过程，实现更复杂的业务逻辑。

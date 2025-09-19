@@ -12,6 +12,7 @@ package parallelagent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,7 +94,6 @@ func (m *mockAgent) Tools() []tool.Tool {
 type legacyOptions struct {
 	Name              string
 	SubAgents         []agent.Agent
-	Tools             []tool.Tool
 	ChannelBufferSize int
 	AgentCallbacks    *agent.Callbacks
 }
@@ -102,9 +102,6 @@ func newFromLegacy(o legacyOptions) *ParallelAgent {
 	opts := []Option{}
 	if len(o.SubAgents) > 0 {
 		opts = append(opts, WithSubAgents(o.SubAgents))
-	}
-	if len(o.Tools) > 0 {
-		opts = append(opts, WithTools(o.Tools))
 	}
 	if o.ChannelBufferSize > 0 {
 		opts = append(opts, WithChannelBufferSize(o.ChannelBufferSize))
@@ -363,4 +360,130 @@ func TestParallelAgent_BeforeResp(t *testing.T) {
 	}
 	require.NotNil(t, first)
 	require.Equal(t, "before", first.Object)
+}
+
+// panicTestAgent is a mock agent that panics during execution.
+type panicTestAgent struct {
+	name string
+}
+
+func (p *panicTestAgent) Info() agent.Info {
+	return agent.Info{Name: p.name, Description: "Panic test agent"}
+}
+
+func (p *panicTestAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (p *panicTestAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (p *panicTestAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Simulate panic - like the user mentioned Rerank method panic
+	panic("test panic in custom method (similar to Rerank panic)")
+}
+
+func (p *panicTestAgent) Tools() []tool.Tool {
+	return nil
+}
+
+// TestParallelAgent_PanicRecovery tests that ParallelAgent properly recovers from panics in sub-agents.
+func TestParallelAgent_PanicRecovery(t *testing.T) {
+	// Create a normal agent and a panic agent
+	normalAgent := &mockAgent{name: "normal-agent", eventCount: 1}
+	panickyAgent := &panicTestAgent{name: "panic-test-agent"}
+
+	// Create parallel agent
+	parallelAgent := newFromLegacy(legacyOptions{
+		Name:      "test-parallel",
+		SubAgents: []agent.Agent{normalAgent, panickyAgent},
+	})
+
+	// Create invocation
+	invocation := &agent.Invocation{
+		AgentName:    "test-parallel",
+		InvocationID: "test-panic-recovery",
+	}
+
+	// Set timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Run the parallel agent
+	eventChan, err := parallelAgent.Run(ctx, invocation)
+	require.NoError(t, err, "ParallelAgent.Run should not return error even when sub-agent panics")
+
+	// Collect events
+	var events []*event.Event
+	var errorEvents []*event.Event
+	var normalEvents []*event.Event
+
+	for evt := range eventChan {
+		events = append(events, evt)
+		if evt.Error != nil {
+			errorEvents = append(errorEvents, evt)
+			t.Logf("Received error event: %v", evt.Error.Message)
+		} else {
+			normalEvents = append(normalEvents, evt)
+		}
+	}
+
+	// Verify we received events
+	require.Greater(t, len(events), 0, "Should have received some events")
+
+	// Verify we got an error event about the panic
+	require.Greater(t, len(errorEvents), 0, "Should have received at least one error event from panic")
+
+	// Check that the error event contains panic information
+	foundPanicError := false
+	for _, evt := range errorEvents {
+		if evt.Error != nil && strings.Contains(evt.Error.Message, "panic") {
+			foundPanicError = true
+			break
+		}
+	}
+	require.True(t, foundPanicError, "Should have received an error event describing the panic")
+
+	// Verify that the normal agent still ran successfully
+	require.Greater(t, len(normalEvents), 0, "Normal agent should have produced events despite panic in other agent")
+}
+
+// TestParallelAgent_MultiplePanics tests recovery from multiple simultaneous panics.
+func TestParallelAgent_MultiplePanics(t *testing.T) {
+	// Create multiple panic agents
+	panicAgent1 := &panicTestAgent{name: "panic-agent-1"}
+	panicAgent2 := &panicTestAgent{name: "panic-agent-2"}
+	normalAgent := &mockAgent{name: "normal-agent", eventCount: 1}
+
+	// Create parallel agent
+	parallelAgent := newFromLegacy(legacyOptions{
+		Name:      "test-multi-panic",
+		SubAgents: []agent.Agent{panicAgent1, normalAgent, panicAgent2},
+	})
+
+	// Create invocation
+	invocation := &agent.Invocation{
+		AgentName:    "test-multi-panic",
+		InvocationID: "test-multiple-panics",
+	}
+
+	// Set timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Run the parallel agent
+	eventChan, err := parallelAgent.Run(ctx, invocation)
+	require.NoError(t, err, "Should handle multiple panics gracefully")
+
+	// Collect events
+	var errorEvents []*event.Event
+	for evt := range eventChan {
+		if evt.Error != nil {
+			errorEvents = append(errorEvents, evt)
+		}
+	}
+
+	// Should have received error events for both panics
+	require.GreaterOrEqual(t, len(errorEvents), 2, "Should have error events for multiple panics")
 }
