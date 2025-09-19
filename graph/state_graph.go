@@ -610,12 +610,17 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 			author = config.NodeID
 		}
 		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
+		invocation, ok := agent.InvocationFromContext(ctx)
+		if !ok {
+			invocation = agent.NewInvocation(
+				agent.WithInvocationID(config.InvocationID),
+				agent.WithInvocationModel(config.LLMModel),
+				agent.WithInvocationSession(&session.Session{ID: config.SessionID}),
+			)
+		}
+
 		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceCallLLM(config.Span, &agent.Invocation{
-			InvocationID: config.InvocationID,
-			Model:        config.LLMModel,
-			Session:      &session.Session{ID: config.SessionID},
-		}, config.Request, config.Response, llmEvent.ID)
+		itelemetry.TraceCallLLM(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
 		select {
 		case config.EventChan <- llmEvent:
 		case <-ctx.Done():
@@ -738,7 +743,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		agentCallbacks, _ := state[StateKeyAgentCallbacks].(*agent.Callbacks)
 
 		// Build invocation for the target agent.
-		invocation := buildAgentInvocation(state, targetAgent, agentCallbacks)
+		invocation := buildAgentInvocation(ctx, state, targetAgent, agentCallbacks)
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1219,7 +1224,7 @@ func MessagesStateSchema() *StateSchema {
 }
 
 // buildAgentInvocation builds an invocation for the target agent.
-func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
+func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
 	// Extract user input from state.
 	var userInput string
 	if input, exists := state[StateKeyUserInput]; exists {
@@ -1234,23 +1239,25 @@ func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *
 			sessionData = sessData
 		}
 	}
-	// Extract execution context for invocation ID.
-	var invocationID string
-	if execCtx, exists := state[StateKeyExecContext]; exists {
-		if execContext, ok := execCtx.(*ExecutionContext); ok {
-			invocationID = execContext.InvocationID
-		}
+
+	// clone a new Invocation from parent.
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
+		invocation := parentInvocation.Clone(
+			agent.WithInvocationAgent(targetAgent),
+			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+			agent.WithInvocationAgentCallbacks(agentCallbacks),
+		)
+		return invocation
 	}
 	// Create the invocation.
-	invocation := &agent.Invocation{
-		Agent:          targetAgent,
-		AgentName:      targetAgent.Info().Name,
-		Message:        model.NewUserMessage(userInput),
-		Session:        sessionData,
-		InvocationID:   invocationID,
-		AgentCallbacks: agentCallbacks,
-		RunOptions:     agent.RunOptions{RuntimeState: state},
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+		agent.WithInvocationAgentCallbacks(agentCallbacks),
+		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationSession(sessionData),
+	)
 	return invocation
 }
 

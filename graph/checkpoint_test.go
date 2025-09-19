@@ -543,13 +543,25 @@ func (d *dummyAgent) FindSubAgent(name string) agent.Agent { return nil }
 func TestBuildAgentInvocation(t *testing.T) {
 	d := &dummyAgent{name: "ag"}
 	s := &session.Session{ID: "s1"}
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(d),
+		agent.WithInvocationID("inv-x"),
+		agent.WithInvocationSession(s),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
 	exec := &ExecutionContext{InvocationID: "inv-x"}
 	st := State{StateKeyUserInput: "hello", StateKeySession: s, StateKeyExecContext: exec}
-	inv := buildAgentInvocation(st, d, nil)
-	require.NotNil(t, inv)
-	require.Equal(t, "ag", inv.AgentName)
-	require.Equal(t, "hello", inv.Message.Content)
-	require.Equal(t, "inv-x", inv.InvocationID)
+	newInv := buildAgentInvocation(ctx, st, d, nil)
+	require.NotNil(t, newInv)
+	require.Equal(t, "ag", newInv.AgentName)
+	require.Equal(t, "hello", newInv.Message.Content)
+
+	newInv = buildAgentInvocation(context.Background(), st, d, nil)
+	require.NotNil(t, newInv)
+	require.Equal(t, "ag", newInv.AgentName)
+	require.Equal(t, "hello", newInv.Message.Content)
+
 }
 
 func TestExtractToolCallsFromState_SuccessAndErrors(t *testing.T) {
