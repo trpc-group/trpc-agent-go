@@ -55,16 +55,12 @@ func main() {
 	)
 
 	// Create an invocation context.
-	invocation := &agent.Invocation{
-		AgentName:     name,
-		InvocationID:  "demo-invocation-001",
-		EndInvocation: false,
-		Model:         modelInstance,
-		Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"),
-		Session: &session.Session{
-			ID: "session-001",
-		},
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationAgent(llmAgent),
+		agent.WithInvocationSession(&session.Session{ID: "session-001"}),
+		agent.WithInvocationMessage(model.NewUserMessage("Hello! Can you tell me about yourself?")),
+		agent.WithInvocationModel(modelInstance),
+	)
 
 	// Run the agent.
 	ctx := context.Background()

@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -485,12 +486,9 @@ func (p *FunctionCallResponseProcessor) waitForCompletion(ctx context.Context, i
 	}
 
 	completionID := agent.AppendEventNoticeKeyPrefix + lastEvent.ID
-	select {
-	case <-invocation.AddNoticeChannel(ctx, completionID):
-	case <-time.After(eventCompletionTimeout):
-		log.Warnf("Timeout waiting for completion of event %s", lastEvent.ID)
-	case <-ctx.Done():
-		return ctx.Err()
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	if errors.Is(err, context.Canceled) {
+		return err
 	}
 	return nil
 }

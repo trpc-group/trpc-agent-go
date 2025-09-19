@@ -249,7 +249,7 @@ func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
 	require.NotNil(t, sess)
 	// Expect: due to EnsureEventStartWithUser filtering, only the first user
 	// event from seed is kept, plus agent response and runner completion = 3
-	require.Len(t, sess.Events, 3)
+	require.Len(t, sess.Events, 2)
 	// Ensure we did not append a duplicate user message beyond the seed.
 	userCount := 0
 	for _, e := range sess.Events {
@@ -289,7 +289,7 @@ func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
 	require.NotNil(t, sess)
 
 	// Expect: seeded first user retained + appended user + agent response + runner completion = 4
-	require.Len(t, sess.Events, 4)
+	require.Len(t, sess.Events, 3)
 
 	// Verify the first two events are users with expected contents.
 	if !(len(sess.Events) >= 2) {

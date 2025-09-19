@@ -172,14 +172,13 @@ Invocation is the context object for Agent execution flow, containing all inform
 import "trpc.group/trpc-go/trpc-agent-go/agent"
 
 // Create Invocation object (advanced usage).
-invocation := &agent.Invocation{
-    AgentName:     "demo-agent",                                                   // Agent name.
-    InvocationID:  "demo-invocation-001",                                          // Invocation ID.
-    EndInvocation: false,                                                          // Whether to end invocation.
-    Model:         modelInstance,                                                  // Model to use.
-    Message:       model.NewUserMessage("Hello! Can you tell me about yourself?"), // User message.
-    Session:       &session.Session{ID: "session-001"},
-}
+invocation := agent.NewInvocation(
+    agent.WithAgentName(agent),                                                                  // Agent.
+    agent.WithInvocationMessage(model.NewUserMessage("Hello! Can you tell me about yourself?")), // User message.
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}),                            // session object.
+    agent.WithInvocationEndInvocation(false),                                                    // Whether to end invocation.
+    agent.WithInvocationModel(modelInstance),                                                    // Model to use.
+)
 
 // Call Agent directly (advanced usage).
 ctx := context.Background()
@@ -348,16 +347,15 @@ callbacks := &agent.AgentCallbacks{
 }
 
 // Use callbacks in Invocation.
-invocation := &agent.Invocation{
-    AgentName:     "demo-agent",
-    InvocationID:  "demo-001",
-    AgentCallbacks: callbacks,
-    Model:         modelInstance,
-    Message:       model.NewUserMessage("User input"),
-    Session: &session.Session{
-        ID: "session-001",
-    },
-}
+invocation := agent.NewInvocation(
+    agent.WithInvocationAgent(agent),
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}),
+    agent.WithInvocationEndInvocation(false),
+    agent.WithInvocationMessage(model.NewUserMessage("User input")),
+    agent.WithInvocationRunOptions(ro),
+    agent.WithInvocationAgentCallbacks(callbacks),
+    agent.WithInvocationModel(modelInstance),
+)
 ```
 
 The callback mechanism allows you to precisely control the Agent's execution process and implement more complex business logic.

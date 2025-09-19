@@ -56,9 +56,9 @@ func ExampleGraphAgent_Run() {
 	}
 
 	// Run the agent
-	invocation := &agent.Invocation{
-		Message: model.NewUserMessage("process this"),
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("process this")),
+	)
 
 	events, err := graphAgent.Run(context.Background(), invocation)
 	if err != nil {

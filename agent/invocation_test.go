@@ -216,3 +216,17 @@ func TestInvocation_CleanupNotice(t *testing.T) {
 	<-ch
 	require.Equal(t, 0, len(inv.noticeChanMap))
 }
+
+func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
+	inv := &Invocation{}
+
+	ch := inv.AddNoticeChannel(context.Background(), "test-key")
+	require.Nil(t, ch)
+}
+
+func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
+	inv := &Invocation{}
+
+	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
+	require.Error(t, err)
+}

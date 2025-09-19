@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -274,10 +275,14 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
+	ch := inv.AddNoticeChannel(ctx, key)
+	if ch == nil {
+		return fmt.Errorf("notice channel create failed. for %s.", key)
+	}
 	if timeout == WaitNoticeWithoutTimeout {
 		// no timeout, maybe wait for ever
 		select {
-		case <-inv.AddNoticeChannel(ctx, key):
+		case <-ch:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -285,7 +290,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	}
 
 	select {
-	case <-inv.AddNoticeChannel(ctx, key):
+	case <-ch:
 	case <-time.After(timeout):
 		return NewWaitNoticeTimeoutError(fmt.Sprintf("Timeout waiting for completion of event %s", key))
 	case <-ctx.Done():
@@ -294,8 +299,20 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 	return nil
 }
 
+func panic_recover() {
+	nilPointerErr := "runtime error: invalid memory address or nil pointer dereference"
+	if r := recover(); r != nil {
+		if err, ok := r.(error); ok && err.Error() == nilPointerErr {
+			log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
+			return
+		}
+		panic(r)
+	}
+}
+
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
+	defer panic_recover()
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
@@ -314,6 +331,7 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
+	defer panic_recover()
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
