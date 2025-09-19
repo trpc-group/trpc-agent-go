@@ -601,10 +601,11 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 		return nil
 	}
 
-	// Convert state to channel values.
+	// Convert state to channel values with deep copy to avoid concurrent
+	// mutations of nested maps/slices during checkpoint serialization.
 	channelValues := make(map[string]any)
 	for k, v := range state {
-		channelValues[k] = v
+		channelValues[k] = deepCopyAny(v)
 	}
 
 	// Create channel versions (simple incrementing integers for now).
@@ -1321,25 +1322,33 @@ func (e *Executor) newNodeCallbackContext(
 
 // buildTaskStateCopy returns the per-task input state, including overlay.
 func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State {
+	// Always construct an isolated deep copy so node code can freely mutate
+	// maps/slices without racing with other goroutines or the global state.
 	execCtx.stateMutex.RLock()
 	defer execCtx.stateMutex.RUnlock()
 
-	var stateCopy State
+	var base State
 	if t.Input != nil {
 		if inputState, ok := t.Input.(State); ok {
-			stateCopy = make(State, len(inputState))
-			maps.Copy(stateCopy, inputState)
+			base = inputState
 		}
 	}
-	if stateCopy == nil {
-		stateCopy = make(State, len(execCtx.State))
-		maps.Copy(stateCopy, execCtx.State)
-		if t.Overlay != nil && e.graph.Schema() != nil {
-			stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
-		}
+	if base == nil {
+		base = execCtx.State
 	}
+
+	// Deep copy the base state to avoid sharing nested references.
+	stateCopy := deepCopyState(base)
+
+	// Apply overlay if present to form the isolated input view.
+	if t.Overlay != nil && e.graph.Schema() != nil {
+		stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+	}
+
+	// Inject execution context helpers used by nodes.
 	stateCopy[StateKeyExecContext] = execCtx
 	stateCopy[StateKeyCurrentNodeID] = t.NodeID
+
 	return stateCopy
 }
 
@@ -1507,38 +1516,30 @@ func (e *Executor) executeNodeFunction(
 		return nil, fmt.Errorf("node %s not found", nodeID)
 	}
 
-	// Execute the node with read lock on state.
-	execCtx.stateMutex.RLock()
-
-	// Determine the state to use for this task.
-	var stateCopy State
+	// Prefer the prebuilt task input which is already a deep copy created by
+	// buildTaskStateCopy. If missing (e.g., legacy paths), deep-copy the
+	// current global state here as a fallback.
+	var input State
 	if t.Input != nil {
-		// Use the task's input state (for fan-out branches).
-		if inputState, ok := t.Input.(State); ok {
-			stateCopy = make(State, len(inputState))
-			maps.Copy(stateCopy, inputState)
-		} else {
-			// Fallback to global state if Input is not State type.
-			stateCopy = make(State, len(execCtx.State))
-			maps.Copy(stateCopy, execCtx.State)
-		}
-	} else {
-		// Use the global execution state.
-		stateCopy = make(State, len(execCtx.State))
-		maps.Copy(stateCopy, execCtx.State)
-		// Apply overlay if present to form the isolated input view.
-		if t.Overlay != nil && e.graph.Schema() != nil {
-			stateCopy = e.graph.Schema().ApplyUpdate(stateCopy, t.Overlay)
+		if s, ok := t.Input.(State); ok {
+			input = s
 		}
 	}
 
-	// Add execution context to state so nodes can access event channel.
-	stateCopy[StateKeyExecContext] = execCtx
-	// Add current node ID to state so nodes can access it.
-	stateCopy[StateKeyCurrentNodeID] = nodeID
-	execCtx.stateMutex.RUnlock()
+	if input == nil {
+		execCtx.stateMutex.RLock()
+		input = deepCopyState(execCtx.State)
+		// Apply overlay if present to form the isolated input view.
+		if t.Overlay != nil && e.graph.Schema() != nil {
+			input = e.graph.Schema().ApplyUpdate(input, t.Overlay)
+		}
+		execCtx.stateMutex.RUnlock()
+		// Inject execution context helpers used by nodes.
+		input[StateKeyExecContext] = execCtx
+		input[StateKeyCurrentNodeID] = nodeID
+	}
 
-	return node.Function(ctx, stateCopy)
+	return node.Function(ctx, input)
 }
 
 // emitNodeErrorEvent emits the node error event.
@@ -2059,7 +2060,7 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// including any updates from nodes that haven't been written to channels yet.
 	channelValues := make(map[string]any)
 	for k, v := range state {
-		channelValues[k] = v
+		channelValues[k] = deepCopyAny(v)
 	}
 
 	// Create channel versions from current channel states

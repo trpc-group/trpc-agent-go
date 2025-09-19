@@ -405,17 +405,16 @@ Runner creates and manages the Invocation structure:
 
 ```go
 // The Invocation created by Runner contains the following fields.
-invocation := &agent.Invocation{
-    Agent:             r.agent,                // Agent instance.
-    Session:           sess,                   // Session object.
-    InvocationID:      invocationID,           // Unique identifier.
-    EndInvocation:     false,                  // End flag.
-    Message:           message,                // User message.
-    RunOptions:        ro,                     // Run options.
-    // Note: Invocation also includes other fields such as AgentName, Branch, Model,
-    // TransferInfo, AgentCallbacks, ModelCallbacks, ToolCallbacks, etc.,
-    // but these fields are used and managed internally by the Agent.
-}
+invocation := agent.NewInvocation(
+    agent.WithInvocationAgent(r.agent),                               // Agent instance.
+    agent.WithInvocationSession(&session.Session{ID: "session-001"}), // Session object.
+    agent.WithInvocationEndInvocation(false),                         // End flag.
+    agent.WithInvocationMessage(model.NewUserMessage("User input")),  // User message.
+    agent.WithInvocationRunOptions(ro),                               // Run options.
+)
+// Note: Invocation also includes other fields such as AgentName, Branch, Model,
+// TransferInfo, AgentCallbacks, ModelCallbacks, ToolCallbacks, etc.,
+// but these fields are used and managed internally by the Agent.
 ```
 
 ## ✅ Best Practices
