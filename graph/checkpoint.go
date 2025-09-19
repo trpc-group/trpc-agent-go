@@ -547,9 +547,12 @@ func (cm *CheckpointManager) CreateCheckpoint(
 		return nil, fmt.Errorf("checkpoint saver is not configured")
 	}
 
-	// Convert state to channel values.
+	// Convert state to channel values with deep copy to prevent races when
+	// the saver serializes the checkpoint concurrently with node execution.
 	channelValues := make(map[string]any)
-	maps.Copy(channelValues, state)
+	for k, v := range state {
+		channelValues[k] = deepCopyAny(v)
+	}
 
 	// Create channel versions (simple incrementing integers for now).
 	channelVersions := make(map[string]int64)
@@ -602,9 +605,11 @@ func (cm *CheckpointManager) ResumeFromCheckpoint(
 		return nil, fmt.Errorf("checkpoint data is nil")
 	}
 
-	// Convert channel values back to state..
+	// Convert channel values back to state.
 	state := make(State)
-	maps.Copy(state, tuple.Checkpoint.ChannelValues)
+	for k, v := range tuple.Checkpoint.ChannelValues {
+		state[k] = v
+	}
 
 	return state, nil
 }
