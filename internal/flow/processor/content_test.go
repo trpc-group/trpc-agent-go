@@ -10,12 +10,16 @@
 package processor
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
@@ -222,7 +226,7 @@ func TestContentRequestProcessor_getContents_Basic(t *testing.T) {
 		},
 	}
 
-	msgs := p.getContents("main", events, "agent-a")
+	msgs := p.convertEventsToMessages(events, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, model.RoleUser, msgs[0].Role)
 	assert.Equal(t, "hello world", msgs[0].Content)
@@ -270,7 +274,7 @@ func TestContentRequestProcessor_getContents_ForeignAgentConvert(t *testing.T) {
 				},
 			}
 
-			msgs := p.getContents("main", events, "agent-a")
+			msgs := p.convertEventsToMessages(events, "agent-a")
 			assert.Len(t, msgs, 1)
 			assert.Equal(t, model.RoleUser, msgs[0].Role)
 			assert.NotEmpty(t, msgs[0].Content)
@@ -315,7 +319,38 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 
 	// Current branch main/feature should include events whose branch is
 	// prefix of the current, i.e. "main" only.
-	msgs := p.getContents("main/feature", events, "agent-a")
+	filtered := p.eventsInBranch(events, "main/feature")
+	msgs := p.convertEventsToMessages(filtered, "agent-a")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, "kept", msgs[0].Content)
+}
+
+func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	assert.True(t, p.AddSessionSummary)
+}
+
+func TestContentRequestProcessor_WithMaxHistoryRuns_Truncates(t *testing.T) {
+	p := NewContentRequestProcessor(WithMaxHistoryRuns(2))
+
+	// Build a session with 4 simple user events in branch "agent-a".
+	events := make([]event.Event, 0, 4)
+	for i := 0; i < 4; i++ {
+		events = append(events, event.Event{
+			Author:    "user",
+			Branch:    "agent-a",
+			Timestamp: time.Now().Add(time.Duration(i+1) * time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("m%d", i+1)},
+			}}},
+		})
+	}
+
+	inv := &agent.Invocation{AgentName: "agent-a", Session: &session.Session{Events: events, Summaries: map[string]*session.Summary{}}}
+	msgs := p.getBranchIncrementalMessages(inv)
+
+	// Should be truncated to 2 messages and keep the most recent ones.
+	assert.Len(t, msgs, 2)
+	assert.Equal(t, "m3", msgs[0].Content)
+	assert.Equal(t, "m4", msgs[1].Content)
 }

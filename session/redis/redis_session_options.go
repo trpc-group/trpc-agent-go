@@ -9,7 +9,11 @@
 
 package redis
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
 
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
@@ -22,6 +26,8 @@ type ServiceOpts struct {
 	userStateTTL       time.Duration // TTL for user state
 	enableAsyncPersist bool
 	asyncPersisterNum  int // number of worker goroutines for async persistence
+	// summarizer integrates LLM summarization.
+	summarizer summary.SessionSummarizer
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -97,5 +103,12 @@ func WithAsyncPersisterNum(num int) ServiceOpt {
 			num = defaultAsyncPersisterNum
 		}
 		opts.asyncPersisterNum = num
+	}
+}
+
+// WithSummarizer injects a summarizer for LLM-based summaries.
+func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summarizer = s
 	}
 }

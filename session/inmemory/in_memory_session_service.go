@@ -20,6 +20,8 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -649,6 +651,175 @@ func (s *SessionService) Close() error {
 	return nil
 }
 
+// CreateSessionSummary generates a summary for the session and stores it on the session object.
+// This implementation preserves original events and updates session.Summaries only.
+func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if s.opts.summarizer == nil {
+		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		return nil
+	}
+
+	app := s.getOrCreateAppSessions(key.AppName)
+	app.mu.Lock()
+	userSessions, ok := app.sessions[key.UserID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("user not found: %s", key.UserID)
+	}
+	swt, ok := userSessions[key.SessionID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession := getValidSession(swt)
+	if storedSession == nil {
+		app.mu.Unlock()
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	app.mu.Unlock()
+
+	branches := groupEventsByBranch(storedSession.Events)
+	if len(branches) == 0 {
+		return nil
+	}
+
+	// Ensure summaries map exists.
+	app.mu.Lock()
+	swt, ok = app.sessions[key.UserID][key.SessionID]
+	if !ok {
+		app.mu.Unlock()
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	storedSession = getValidSession(swt)
+	if storedSession == nil {
+		app.mu.Unlock()
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	if storedSession.Summaries == nil {
+		storedSession.Summaries = make(map[string]*session.Summary)
+	}
+	app.mu.Unlock()
+
+	for b, evs := range branches {
+		prev := storedSession.Summaries[b]
+		var since time.Time
+		if prev != nil {
+			since = prev.UpdatedAt
+		}
+		delta := computeDeltaSince(evs, since)
+		if !force && len(delta) == 0 {
+			continue
+		}
+
+		// Prepend previous summary as a synthetic system event to provide context.
+		input := delta
+		if prev != nil && prev.Summary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prev.Summary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
+		}
+
+		tmp := buildBranchSession(storedSession, b, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp)
+		if err != nil || text == "" {
+			continue
+		}
+
+		if err := s.writeSummaryUnderLock(app, key, b, text); err != nil {
+			log.Warnf("write summary for branch %s failed: %v", b, err)
+		}
+	}
+	return nil
+}
+
+// groupEventsByBranch groups events by branch identifier.
+func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+	m := make(map[string][]event.Event)
+	for _, e := range evs {
+		m[e.Branch] = append(m[e.Branch], e)
+	}
+	return m
+}
+
+// computeDeltaSince returns events that occurred strictly after the given time.
+func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
+	if since.IsZero() {
+		return evs
+	}
+	out := make([]event.Event, 0, len(evs))
+	for _, e := range evs {
+		if e.Timestamp.After(since) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// buildBranchSession builds a temporary session containing branch events.
+func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+	return &session.Session{
+		ID:        base.ID + ":" + branch,
+		AppName:   base.AppName,
+		UserID:    base.UserID,
+		State:     nil,
+		Events:    evs,
+		UpdatedAt: time.Now(),
+		CreatedAt: base.CreatedAt,
+	}
+}
+
+// writeSummaryUnderLock writes a summary for a branch under app lock and refreshes TTL.
+func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, branch string, text string) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	swt, ok := app.sessions[key.UserID][key.SessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+	cur := getValidSession(swt)
+	if cur == nil {
+		return fmt.Errorf("session expired: %s", key.SessionID)
+	}
+	if cur.Summaries == nil {
+		cur.Summaries = make(map[string]*session.Summary)
+	}
+	cur.Summaries[branch] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	cur.UpdatedAt = time.Now()
+	swt.session = cur
+	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
+	return nil
+}
+
+// GetSessionSummaryText returns previously stored summary from session summaries if present.
+func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	// Prefer structured summaries on session.
+	if sess.Summaries != nil {
+		if sum, ok := sess.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
+			return sum.Summary, true
+		}
+		for _, s := range sess.Summaries {
+			if s != nil && s.Summary != "" {
+				return s.Summary, true
+			}
+		}
+	}
+	return "", false
+}
+
 // updateStoredSession updates the stored session with the given event.
 func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
@@ -658,7 +829,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 		}
 	}
 	sess.UpdatedAt = time.Now()
-	// merge event state delta to session state
+	// Merge event state delta to session state.
 	isession.ApplyEventStateDelta(sess, e)
 }
 
@@ -668,13 +839,13 @@ func copySession(sess *session.Session) *session.Session {
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     make(session.StateMap), // Create new state to avoid reference sharing
+		State:     make(session.StateMap), // Create new state to avoid reference sharing.
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
-		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
+		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
 	}
 
-	// copy state
+	// Copy state.
 	if sess.State != nil {
 		for k, v := range sess.State {
 			copiedValue := make([]byte, len(v))
@@ -682,7 +853,20 @@ func copySession(sess *session.Session) *session.Session {
 			copiedSess.State[k] = copiedValue
 		}
 	}
+	// Copy events.
 	copy(copiedSess.Events, sess.Events)
+	// Copy summaries.
+	if sess.Summaries != nil {
+		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
+		for b, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			// Shallow copy is fine since Summary is immutable after write.
+			copied := *sum
+			copiedSess.Summaries[b] = &copied
+		}
+	}
 	return copiedSess
 }
 

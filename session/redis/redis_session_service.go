@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -39,10 +40,11 @@ const (
 
 // SessionState is the state of a session.
 type SessionState struct {
-	ID        string           `json:"id"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID        string                      `json:"id"`
+	State     session.StateMap            `json:"state"`
+	CreatedAt time.Time                   `json:"createdAt"`
+	UpdatedAt time.Time                   `json:"updatedAt"`
+	Summaries map[string]*session.Summary `json:"summaries,omitempty"`
 }
 
 // Service is the redis session service.
@@ -826,4 +828,163 @@ func applyOptions(opts ...session.Option) *session.Options {
 		o(opt)
 	}
 	return opt
+}
+
+// groupEventsByBranch groups events by branch identifier.
+func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+	m := make(map[string][]event.Event)
+	for _, e := range evs {
+		m[e.Branch] = append(m[e.Branch], e)
+	}
+	return m
+}
+
+// computeDeltaSince returns events that occurred strictly after the given time.
+func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
+	if since.IsZero() {
+		return evs
+	}
+	out := make([]event.Event, 0, len(evs))
+	for _, e := range evs {
+		if e.Timestamp.After(since) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// buildBranchSession builds a temporary session containing branch events.
+func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+	return &session.Session{
+		ID:        base.ID + ":" + branch,
+		AppName:   base.AppName,
+		UserID:    base.UserID,
+		State:     nil,
+		Events:    evs,
+		UpdatedAt: time.Now(),
+		CreatedAt: base.CreatedAt,
+	}
+}
+
+// persistSessionState writes the provided state back to Redis and refreshes TTL.
+func (s *Service) persistSessionState(ctx context.Context, sessKey string, sessionID string, st *SessionState) error {
+	st.UpdatedAt = time.Now()
+	updatedStateBytes, err := json.Marshal(st)
+	if err != nil {
+		return fmt.Errorf("marshal session state failed: %w", err)
+	}
+	pipe := s.redisClient.TxPipeline()
+	pipe.HSet(ctx, sessKey, sessionID, string(updatedStateBytes))
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, sessKey, s.sessionTTL)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("store summary failed: %w", err)
+	}
+	return nil
+}
+
+// CreateSessionSummary generates a summary for the session and persists it on the
+// session state as a structured field. It performs per-branch delta summarization.
+func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+	if sess == nil {
+		return fmt.Errorf("nil session")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if s.opts.summarizer == nil {
+		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+		return nil
+	}
+
+	// Load current session state JSON from Redis.
+	sessKey := getSessionStateKey(key)
+	stateBytes, err := s.redisClient.HGet(ctx, sessKey, key.SessionID).Bytes()
+	if err != nil {
+		return fmt.Errorf("get session state failed: %w", err)
+	}
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return fmt.Errorf("unmarshal session state failed: %w", err)
+	}
+	if sessState.Summaries == nil {
+		sessState.Summaries = make(map[string]*session.Summary)
+	}
+
+	branches := groupEventsByBranch(sess.Events)
+	if len(branches) == 0 {
+		return nil
+	}
+
+	updatedAny := false
+	for b, evs := range branches {
+		var since time.Time
+		var prevSummary string
+		if prev := sessState.Summaries[b]; prev != nil {
+			since = prev.UpdatedAt
+			prevSummary = prev.Summary
+		}
+		delta := computeDeltaSince(evs, since)
+		if !force && len(delta) == 0 {
+			continue
+		}
+
+		// Prepend previous summary as a synthetic system event to provide context.
+		input := delta
+		if prevSummary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
+		}
+
+		tmp := buildBranchSession(sess, b, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp)
+		if err != nil || text == "" {
+			continue
+		}
+		sessState.Summaries[b] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+		updatedAny = true
+	}
+
+	if !updatedAny {
+		return nil
+	}
+	return s.persistSessionState(ctx, sessKey, key.SessionID, sessState)
+}
+
+// GetSessionSummaryText returns the latest summary text from the session state if present.
+func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
+	if err != nil {
+		return "", false
+	}
+	sessState := &SessionState{}
+	if err := json.Unmarshal(stateBytes, sessState); err != nil {
+		return "", false
+	}
+	if sessState.Summaries == nil {
+		return "", false
+	}
+	if sum, ok := sessState.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
+		return sum.Summary, true
+	}
+	for _, s := range sessState.Summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
+	return "", false
 }

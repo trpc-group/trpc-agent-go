@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -34,11 +35,18 @@ const (
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// IncludeContents determines how to include content from session events.
-	// Options: "none", "all", "filtered" (default: "all").
+	// Options: "none", "all", "filtered" (default: "filtered").
 	IncludeContents string
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
+
+	// AddSessionSummary controls whether to prepend the current branch summary
+	// as a system message to the request if available.
+	AddSessionSummary bool
+	// MaxHistoryRuns limits the number of recent messages appended after
+	// branch-incremental selection (0 means unlimited).
+	MaxHistoryRuns int
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -55,6 +63,22 @@ func WithIncludeContents(includeContents string) ContentOption {
 func WithAddContextPrefix(addPrefix bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddContextPrefix = addPrefix
+	}
+}
+
+// WithAddSessionSummary controls whether to prepend the current branch summary
+// as a system message when available.
+func WithAddSessionSummary(add bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.AddSessionSummary = add
+	}
+}
+
+// WithMaxHistoryRuns limits the number of recent messages appended after
+// branch-incremental selection (0 means unlimited).
+func WithMaxHistoryRuns(n int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.MaxHistoryRuns = n
 	}
 }
 
@@ -90,26 +114,37 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// Process session events if available and includeContents is not "none".
+	// Prepend session summary as a system message if enabled and available.
+	if p.AddSessionSummary && invocation.Session != nil {
+		if msg := p.getSessionSummaryMessage(invocation); msg != nil {
+			// Prepend to the front of messages.
+			req.Messages = append([]model.Message{*msg}, req.Messages...)
+		}
+	}
+
+	// Append branch-incremental messages from session events when allowed.
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
-		sessionMessages := p.getContents(
-			invocation.GetEventFilterKey(), // Current branch for filtering
-			invocation.Session.Events,
-			invocation.AgentName, // Current agent name for filtering
-		)
-		req.Messages = append(req.Messages, sessionMessages...)
+		messages := p.getBranchIncrementalMessages(invocation)
+		req.Messages = append(req.Messages, messages...)
 	}
 
 	// Include the current invocation message if:
 	// 1. It has content, AND
 	// 2. There's no session OR the session has no events
 	// This prevents duplication when using Runner (which adds user message to session)
-	// while ensuring standalone usage works (where invocation.Message is the source)
+	// while ensuring standalone usage works (where invocation.Message is the source).
 	if invocation.Message.Content != "" &&
 		(invocation.Session == nil || len(invocation.Session.Events) == 0) {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
+	}
+
+	// Safety fallback: if messages are still empty, include the current.
+	// invocation message when non-empty to avoid empty model input.
+	if len(req.Messages) == 0 && invocation.Message.Content != "" {
+		req.Messages = append(req.Messages, invocation.Message)
+		log.Debugf("Content request processor: fallback added invocation message to avoid empty input.")
 	}
 
 	// Send a preprocessing event.
@@ -120,58 +155,105 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	))
 }
 
-// getContents gets the contents for the LLM request from session events.
-func (p *ContentRequestProcessor) getContents(
-	filterKey string,
+// getSessionSummaryMessage returns the current-branch session summary as a
+// system message if available and non-empty.
+func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) *model.Message {
+	if inv.Session == nil || inv.Session.Summaries == nil {
+		return nil
+	}
+	branch := inv.GetEventFilterKey()
+	if branch == "" {
+		branch = inv.AgentName
+	}
+	sum := inv.Session.Summaries[branch]
+	if sum == nil || sum.Summary == "" {
+		return nil
+	}
+	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}
+}
+
+// getBranchIncrementalMessages converts branch-incremental events into messages
+// and applies MaxHistoryRuns truncation.
+func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invocation) []model.Message {
+	branch := inv.GetEventFilterKey()
+	if branch == "" {
+		branch = inv.AgentName
+	}
+	var evs []event.Event
+	if inv.Session != nil {
+		if inv.Session.Summaries != nil {
+			if sum := inv.Session.Summaries[branch]; sum != nil {
+				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, branch)
+			} else {
+				evs = p.eventsInBranch(inv.Session.Events, branch)
+			}
+		} else {
+			evs = p.eventsInBranch(inv.Session.Events, branch)
+		}
+	}
+	msgs := p.convertEventsToMessages(evs, inv.AgentName)
+	if p.MaxHistoryRuns > 0 && len(msgs) > p.MaxHistoryRuns {
+		msgs = msgs[len(msgs)-p.MaxHistoryRuns:]
+	}
+	return msgs
+}
+
+// eventsSince returns events after the given time and matching the branch filter.
+func (p *ContentRequestProcessor) eventsSince(
+	events []event.Event,
+	since time.Time,
+	branch string,
+) []event.Event {
+	var result []event.Event
+	for _, evt := range events {
+		if evt.Timestamp.After(since) && evt.Filter(branch) && evt.IsValidContent() {
+			result = append(result, evt)
+		}
+	}
+	return result
+}
+
+// eventsInBranch returns all events matching the branch filter.
+func (p *ContentRequestProcessor) eventsInBranch(
+	events []event.Event,
+	branch string,
+) []event.Event {
+	var result []event.Event
+	for _, evt := range events {
+		if evt.Filter(branch) && evt.IsValidContent() {
+			result = append(result, evt)
+		}
+	}
+	return result
+}
+
+// convertEventsToMessages converts a list of events (already filtered for
+// validity/branch) into model messages, reusing the same conversion rules
+// as getContents.
+func (p *ContentRequestProcessor) convertEventsToMessages(
 	events []event.Event,
 	agentName string,
 ) []model.Message {
-	var filteredEvents []event.Event
-
-	// Parse the events, leaving the contents and the function calls and
-	// responses from the current agent.
-	for _, evt := range events {
-		// Create a local copy to avoid implicit memory aliasing.
-		// This bug is fixed in go 1.22.
-		// See: https://tip.golang.org/doc/go1.22#language
-		evt := evt
-
-		// Skip events without content, or generated neither by user nor by model
-		// or has empty text. E.g. events purely for mutating session states.
-		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
-			continue
-		}
-
-		// Skip events not belong to current branch.
-		if p.IncludeContents == IncludeContentsFiltered && !evt.Filter(filterKey) {
-			continue
-		}
-
-		// Convert foreign events or keep as-is.
-		if p.isOtherAgentReply(agentName, &evt) {
-			filteredEvents = append(filteredEvents, p.convertForeignEvent(&evt))
-		} else {
-			filteredEvents = append(filteredEvents, evt)
-		}
-	}
-
 	// Rearrange events for function call/response consistency.
-	resultEvents := p.rearrangeLatestFuncResp(filteredEvents)
+	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
 	// Convert events to messages.
 	var messages []model.Message
 	for _, evt := range resultEvents {
-		if len(evt.Choices) > 0 {
-			for _, choice := range evt.Choices {
+		// Convert foreign events or keep as-is.
+		ev := evt
+		if p.isOtherAgentReply(agentName, &ev) {
+			ev = p.convertForeignEvent(&ev)
+		}
+		if len(ev.Choices) > 0 {
+			for _, choice := range ev.Choices {
 				if choice.Message.Content != "" || choice.Message.ToolID != "" || len(choice.Message.ToolCalls) > 0 {
-					// Remove client function call IDs if needed (simplified).
 					messages = append(messages, choice.Message)
 				}
 			}
 		}
 	}
-
 	return messages
 }
 
@@ -327,6 +409,8 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	// Map function response IDs to event indices.
 	for i, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
+		// This bug is fixed in go 1.22.
+		// See: https://tip.golang.org/doc/go1.22#language
 		evt := evt
 
 		if evt.IsToolResultResponse() {
@@ -340,6 +424,8 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 	var resultEvents []event.Event
 	for _, evt := range events {
 		// Create a local copy to avoid implicit memory aliasing.
+		// This bug is fixed in go 1.22.
+		// See: https://tip.golang.org/doc/go1.22#language
 		evt := evt
 
 		if evt.IsToolResultResponse() {
