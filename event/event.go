@@ -235,9 +235,9 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		select {
 		case ch <- e:
 			log.Debugf("EmitEventWithTimeout: event sent, event: %+v", *e)
-			// case <-ctx.Done():
-			// 	log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
-			// 	return ctx.Err()
+		case <-ctx.Done():
+			log.Warnf("EmitEventWithTimeout: context cancelled, event: %+v", *e)
+			return ctx.Err()
 		}
 		return nil
 	}
