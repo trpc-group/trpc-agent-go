@@ -1239,7 +1239,8 @@ func serializeFinalState(e *event.Event, state State) {
 			key == StateKeySession {
 			continue
 		}
-		if jsonData, err := json.Marshal(value); err == nil {
+		// Marshal a deep-copied snapshot to avoid racing on shared references.
+		if jsonData, err := json.Marshal(deepCopyAny(value)); err == nil {
 			e.StateDelta[key] = jsonData
 		}
 	}
