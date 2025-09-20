@@ -163,8 +163,8 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	initialState := ga.createInitialState(invocation)
 
 	// Execute the graph.
-	if invocation.AgentCallbacks != nil {
-		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	if ga.agentCallbacks != nil {
+		customResponse, err := ga.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -182,7 +182,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	if err != nil {
 		return nil, err
 	}
-	if invocation.AgentCallbacks != nil {
+	if ga.agentCallbacks != nil {
 		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
 	}
 	return eventChan, nil
@@ -235,8 +235,6 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent and agent name.
 	invocation.Agent = ga
 	invocation.AgentName = ga.name
-	// Set agent callbacks.
-	invocation.AgentCallbacks = ga.agentCallbacks
 	// Set model callbacks.
 	invocation.ModelCallbacks = ga.modelCallbacks
 	// Set tool callbacks.
@@ -285,7 +283,7 @@ func (ga *GraphAgent) wrapEventChannel(
 			}
 		}
 		// After all events are processed, run after agent callbacks
-		customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		customResponse, err := ga.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 		var evt *event.Event
 		if err != nil {
 			// Send error event.
