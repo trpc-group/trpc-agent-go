@@ -1217,29 +1217,6 @@ func (m *Model) handleNonStreamingResponse(
 	if err := m.handleAfterModelCallbacks(ctx, request, response, responseChan); err != nil {
 		return
 	}
-	if m.modelCallbacks != nil {
-		rsp, err := m.modelCallbacks.RunAfterModel(ctx, request, response, nil)
-		if err != nil {
-			log.Errorf("After model callback failed. : %v", err)
-			response = &model.Response{
-				Error: &model.ResponseError{
-					Message: err.Error(),
-					Type:    model.ErrorTypeModelCallbackError,
-				},
-				Timestamp: time.Now(),
-				Done:      true,
-			}
-			select {
-			case responseChan <- response:
-			case <-ctx.Done():
-			}
-			return
-		}
-
-		if rsp != nil {
-			response = rsp
-		}
-	}
 
 	select {
 	case responseChan <- response:
