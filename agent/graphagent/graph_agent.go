@@ -235,8 +235,6 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent and agent name.
 	invocation.Agent = ga
 	invocation.AgentName = ga.name
-	// Set agent callbacks.
-	invocation.AgentCallbacks = ga.agentCallbacks
 	// Set model callbacks.
 	invocation.ModelCallbacks = ga.modelCallbacks
 	// Set tool callbacks.
