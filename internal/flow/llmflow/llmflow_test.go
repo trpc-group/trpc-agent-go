@@ -90,9 +90,10 @@ func (m *mockAgentWithTools) FindSubAgent(name string) agent.Agent {
 
 // mockModel implements model.Model for testing
 type mockModel struct {
-	ShouldError bool
-	responses   []*model.Response
-	currentIdx  int
+	ShouldError    bool
+	responses      []*model.Response
+	currentIdx     int
+	modelCallbacks *model.Callbacks
 }
 
 func (m *mockModel) Info() model.Info {
@@ -107,10 +108,25 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	}
 
 	respChan := make(chan *model.Response, len(m.responses))
+	if m.modelCallbacks != nil {
+		rsp, err := m.modelCallbacks.RunBeforeModel(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if rsp != nil {
+			// If a before model callback returns a custom response, return it immediately.
+			respChan <- rsp
+			close(respChan)
+			return respChan, nil
+		}
+	}
 
 	go func() {
 		defer close(respChan)
 		for _, resp := range m.responses {
+			if err := m.handleAfterModelCallbacks(ctx, req, resp, respChan); err != nil {
+				return
+			}
 			select {
 			case respChan <- resp:
 			case <-ctx.Done():
@@ -120,6 +136,36 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	}()
 
 	return respChan, nil
+}
+
+func (m *mockModel) handleAfterModelCallbacks(ctx context.Context, request *model.Request, response *model.Response,
+	responseChan chan<- *model.Response) error {
+	// Run after model callbacks if they exist.
+	if m.modelCallbacks != nil {
+		rsp, err := m.modelCallbacks.RunAfterModel(ctx, request, response, nil)
+		if err != nil {
+			log.Errorf("After model callback failed. : %v", err)
+			response = &model.Response{
+				Error: &model.ResponseError{
+					Message: err.Error(),
+					Type:    model.ErrorTypeModelCallbackError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}
+			select {
+			case responseChan <- response:
+			case <-ctx.Done():
+			}
+			return err
+		}
+
+		if rsp != nil {
+			*response = *rsp
+		}
+	}
+
+	return nil
 }
 
 // mockRequestProcessor implements flow.RequestProcessor
@@ -179,11 +225,11 @@ func TestModelCallbacks_BeforeSkip(t *testing.T) {
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
-		InvocationID:   "test-invocation",
-		AgentName:      "test-agent",
-		ModelCallbacks: modelCallbacks,
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
 		Model: &mockModel{
-			responses: []*model.Response{{ID: "should-not-be-called"}},
+			responses:      []*model.Response{{ID: "should-not-be-called"}},
+			modelCallbacks: modelCallbacks,
 		},
 		Session: &session.Session{
 			ID: "test-session",
@@ -213,11 +259,11 @@ func TestModelCBs_BeforeCustom(t *testing.T) {
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
-		InvocationID:   "test-invocation",
-		AgentName:      "test-agent",
-		ModelCallbacks: modelCallbacks,
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
 		Model: &mockModel{
-			responses: []*model.Response{{ID: "should-not-be-called"}},
+			responses:      []*model.Response{{ID: "should-not-be-called"}},
+			modelCallbacks: modelCallbacks,
 		},
 		Session: &session.Session{
 			ID: "test-session",
@@ -247,11 +293,11 @@ func TestModelCallbacks_BeforeError(t *testing.T) {
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
-		InvocationID:   "test-invocation",
-		AgentName:      "test-agent",
-		ModelCallbacks: modelCallbacks,
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
 		Model: &mockModel{
-			responses: []*model.Response{{ID: "should-not-be-called"}},
+			responses:      []*model.Response{{ID: "should-not-be-called"}},
+			modelCallbacks: modelCallbacks,
 		},
 	}
 	eventChan, err := llmFlow.Run(ctx, invocation)
@@ -282,11 +328,11 @@ func TestModelCBs_AfterOverride(t *testing.T) {
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
-		InvocationID:   "test-invocation",
-		AgentName:      "test-agent",
-		ModelCallbacks: modelCallbacks,
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
 		Model: &mockModel{
-			responses: []*model.Response{{ID: "original"}},
+			responses:      []*model.Response{{ID: "original"}},
+			modelCallbacks: modelCallbacks,
 		},
 		Session: &session.Session{
 			ID: "test-session",
@@ -319,11 +365,11 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 
 	llmFlow := New(nil, nil, Options{})
 	invocation := &agent.Invocation{
-		InvocationID:   "test-invocation",
-		AgentName:      "test-agent",
-		ModelCallbacks: modelCallbacks,
+		InvocationID: "test-invocation",
+		AgentName:    "test-agent",
 		Model: &mockModel{
-			responses: []*model.Response{{ID: "original"}},
+			responses:      []*model.Response{{ID: "original"}},
+			modelCallbacks: modelCallbacks,
 		},
 		Session: &session.Session{
 			ID: "test-session",

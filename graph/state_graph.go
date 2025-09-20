@@ -503,7 +503,6 @@ func (r *llmRunner) executeModel(
 		},
 	}
 	invocationID, sessionID, eventChan := extractExecutionContext(state)
-	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
 	var nodeID string
 	if nodeIDData, exists := state[StateKeyCurrentNodeID]; exists {
 		if id, ok := nodeIDData.(string); ok {
@@ -515,14 +514,13 @@ func (r *llmRunner) executeModel(
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
 	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
-		ModelCallbacks: modelCallbacks,
-		LLMModel:       r.llmModel,
-		Request:        request,
-		EventChan:      eventChan,
-		InvocationID:   invocationID,
-		SessionID:      sessionID,
-		Span:           span,
-		NodeID:         nodeID,
+		LLMModel:     r.llmModel,
+		Request:      request,
+		EventChan:    eventChan,
+		InvocationID: invocationID,
+		SessionID:    sessionID,
+		Span:         span,
+		NodeID:       nodeID,
 	})
 	endTime := time.Now()
 	var modelOutput string
@@ -580,30 +578,19 @@ func extractExecutionContext(state State) (invocationID string, sessionID string
 
 // modelResponseConfig contains configuration for processing model responses.
 type modelResponseConfig struct {
-	Response       *model.Response
-	ModelCallbacks *model.Callbacks
-	EventChan      chan<- *event.Event
-	InvocationID   string
-	SessionID      string
-	LLMModel       model.Model
-	Request        *model.Request
-	Span           oteltrace.Span
+	Response     *model.Response
+	EventChan    chan<- *event.Event
+	InvocationID string
+	SessionID    string
+	LLMModel     model.Model
+	Request      *model.Request
+	Span         oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
 }
 
 // processModelResponse processes a single model response.
 func processModelResponse(ctx context.Context, config modelResponseConfig) error {
-	if config.ModelCallbacks != nil {
-		customResponse, err := config.ModelCallbacks.RunAfterModel(ctx, config.Request, config.Response, nil)
-		if err != nil {
-			config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return fmt.Errorf("callback after model error: %w", err)
-		}
-		if customResponse != nil {
-			config.Response = customResponse
-		}
-	}
 	if config.EventChan != nil && !config.Response.Done {
 		author := config.LLMModel.Info().Name
 		if config.NodeID != "" {
@@ -636,7 +623,6 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 
 func runModel(
 	ctx context.Context,
-	modelCallbacks *model.Callbacks,
 	llmModel model.Model,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
@@ -647,20 +633,6 @@ func runModel(
 	span.SetAttributes(
 		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
 	)
-
-	if modelCallbacks != nil {
-		customResponse, err := modelCallbacks.RunBeforeModel(ctx, request)
-		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback before model error: %w", err)
-		}
-		if customResponse != nil {
-			responseChan := make(chan *model.Response, 1)
-			responseChan <- customResponse
-			close(responseChan)
-			return responseChan, nil
-		}
-	}
 	// Generate content.
 	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
@@ -914,20 +886,19 @@ func emitModelCompleteEvent(
 
 // modelExecutionConfig contains configuration for model execution with events.
 type modelExecutionConfig struct {
-	ModelCallbacks *model.Callbacks
-	LLMModel       model.Model
-	Request        *model.Request
-	EventChan      chan<- *event.Event
-	InvocationID   string
-	SessionID      string
-	NodeID         string // Add NodeID for parallel execution support
-	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
-	Span           oteltrace.Span
+	LLMModel      model.Model
+	Request       *model.Request
+	EventChan     chan<- *event.Event
+	InvocationID  string
+	SessionID     string
+	NodeID        string // Add NodeID for parallel execution support
+	NodeResultKey string // Add NodeResultKey for configurable result key pattern
+	Span          oteltrace.Span
 }
 
 // executeModelWithEvents executes the model with event processing.
 func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
-	responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+	responseChan, err := runModel(ctx, config.LLMModel, config.Request)
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 		return nil, fmt.Errorf("failed to run model: %w", err)
@@ -937,15 +908,14 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 	var toolCalls []model.ToolCall
 	for response := range responseChan {
 		if err := processModelResponse(ctx, modelResponseConfig{
-			Response:       response,
-			ModelCallbacks: config.ModelCallbacks,
-			EventChan:      config.EventChan,
-			InvocationID:   config.InvocationID,
-			SessionID:      config.SessionID,
-			LLMModel:       config.LLMModel,
-			Request:        config.Request,
-			Span:           config.Span,
-			NodeID:         config.NodeID,
+			Response:     response,
+			EventChan:    config.EventChan,
+			InvocationID: config.InvocationID,
+			SessionID:    config.SessionID,
+			LLMModel:     config.LLMModel,
+			Request:      config.Request,
+			Span:         config.Span,
+			NodeID:       config.NodeID,
 		}); err != nil {
 			return nil, err
 		}

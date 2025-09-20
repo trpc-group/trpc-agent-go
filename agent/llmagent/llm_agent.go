@@ -123,6 +123,7 @@ func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 }
 
 // WithModelCallbacks sets the model callbacks.
+// Deprecated: use the model's own ModelCallbacks.
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ModelCallbacks = callbacks
@@ -298,6 +299,7 @@ type Options struct {
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
+	// Deprecated: use the model's own ModelCallbacks.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
@@ -356,7 +358,6 @@ type LLMAgent struct {
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
-	modelCallbacks       *model.Callbacks
 	toolCallbacks        *tool.Callbacks
 	outputKey            string         // Key to store output in session state
 	outputSchema         map[string]any // JSON schema for output validation
@@ -441,7 +442,6 @@ func New(name string, opts ...Option) *LLMAgent {
 		planner:              options.Planner,
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
-		modelCallbacks:       options.ModelCallbacks,
 		toolCallbacks:        options.ToolCallbacks,
 		outputKey:            options.OutputKey,
 		outputSchema:         options.OutputSchema,
@@ -605,7 +605,6 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 
 	// Set callbacks.
 	invocation.AgentCallbacks = a.agentCallbacks
-	invocation.ModelCallbacks = a.modelCallbacks
 	invocation.ToolCallbacks = a.toolCallbacks
 }
 
