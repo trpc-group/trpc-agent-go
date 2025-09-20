@@ -94,6 +94,7 @@ func WithInvocationAgentCallbacks(agentCallbacks *Callbacks) InvocationOptions {
 }
 
 // WithInvocationModelCallbacks set modelCallbacks for the Invocation.
+// Deprecated: use the model's own ModelCallbacks.
 func WithInvocationModelCallbacks(modelCallbacks *model.Callbacks) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.ModelCallbacks = modelCallbacks
