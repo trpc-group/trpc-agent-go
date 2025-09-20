@@ -87,6 +87,7 @@ func WithInvocationTransferInfo(transferInfo *TransferInfo) InvocationOptions {
 }
 
 // WithInvocationAgentCallbacks set agentCallbacks for the Invocation.
+// Deprecated: use the agent's own AgentCallbacks.
 func WithInvocationAgentCallbacks(agentCallbacks *Callbacks) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.AgentCallbacks = agentCallbacks
