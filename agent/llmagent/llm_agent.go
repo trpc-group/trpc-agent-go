@@ -357,7 +357,6 @@ type LLMAgent struct {
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
 	modelCallbacks       *model.Callbacks
-	toolCallbacks        *tool.Callbacks
 	outputKey            string         // Key to store output in session state
 	outputSchema         map[string]any // JSON schema for output validation
 	inputSchema          map[string]any // JSON schema for input validation
@@ -394,7 +393,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		responseProcessors = append(responseProcessors, orp)
 	}
 
-	responseProcessors = append(responseProcessors, processor.NewFunctionCallResponseProcessor(options.EnableParallelTools))
+	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	responseProcessors = append(responseProcessors, toolcallProcessor)
 
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
@@ -442,7 +442,6 @@ func New(name string, opts ...Option) *LLMAgent {
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
 		modelCallbacks:       options.ModelCallbacks,
-		toolCallbacks:        options.ToolCallbacks,
 		outputKey:            options.OutputKey,
 		outputSchema:         options.OutputSchema,
 		inputSchema:          options.InputSchema,
@@ -606,7 +605,6 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set callbacks.
 	invocation.AgentCallbacks = a.agentCallbacks
 	invocation.ModelCallbacks = a.modelCallbacks
-	invocation.ToolCallbacks = a.toolCallbacks
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

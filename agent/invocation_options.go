@@ -101,6 +101,7 @@ func WithInvocationModelCallbacks(modelCallbacks *model.Callbacks) InvocationOpt
 }
 
 // WithInvocationToolCallbacks set toolCallbacks for the Invocation.
+// Deprecated: use tool's ToolCallbacks instead
 func WithInvocationToolCallbacks(toolCallbacks *tool.Callbacks) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.ToolCallbacks = toolCallbacks

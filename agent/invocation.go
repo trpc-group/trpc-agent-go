@@ -79,6 +79,7 @@ type Invocation struct {
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
+	// Deprecated: use agent's ToolCallbacks instead.
 	ToolCallbacks *tool.Callbacks
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
