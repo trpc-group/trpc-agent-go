@@ -77,6 +77,7 @@ type Invocation struct {
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *Callbacks
 	// ModelCallbacks contains callbacks for model operations.
+	// Deprecated: use the model's own ModelCallbacks.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks

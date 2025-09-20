@@ -41,6 +41,7 @@ func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 }
 
 // WithModelCallbacks sets the model callbacks.
+// Deprecated: use the model's own ModelCallbacks.
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ModelCallbacks = callbacks
@@ -91,6 +92,7 @@ type Options struct {
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
+	// Deprecated: use the model's own ModelCallbacks.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
@@ -110,7 +112,6 @@ type GraphAgent struct {
 	executor          *graph.Executor
 	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
-	modelCallbacks    *model.Callbacks
 	toolCallbacks     *tool.Callbacks
 	initialState      graph.State
 	channelBufferSize int
@@ -147,7 +148,6 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executor:          executor,
 		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
-		modelCallbacks:    options.ModelCallbacks,
 		toolCallbacks:     options.ToolCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
@@ -237,8 +237,6 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.AgentName = ga.name
 	// Set agent callbacks.
 	invocation.AgentCallbacks = ga.agentCallbacks
-	// Set model callbacks.
-	invocation.ModelCallbacks = ga.modelCallbacks
 	// Set tool callbacks.
 	invocation.ToolCallbacks = ga.toolCallbacks
 }
