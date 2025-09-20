@@ -218,8 +218,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo supports control transfer between Agents.
 	TransferInfo *TransferInfo
-	// AgentCallbacks allows inserting custom logic at different stages of Agent execution.
-	AgentCallbacks *AgentCallbacks
 	// ModelCallbacks allows inserting custom logic at different stages of model calls.
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks allows inserting custom logic at different stages of tool calls.
@@ -347,15 +345,7 @@ callbacks := &agent.AgentCallbacks{
 }
 
 // Use callbacks in Invocation.
-invocation := agent.NewInvocation(
-    agent.WithInvocationAgent(agent),
-    agent.WithInvocationSession(&session.Session{ID: "session-001"}),
-    agent.WithInvocationEndInvocation(false),
-    agent.WithInvocationMessage(model.NewUserMessage("User input")),
-    agent.WithInvocationRunOptions(ro),
-    agent.WithInvocationAgentCallbacks(callbacks),
-    agent.WithInvocationModel(modelInstance),
-)
+llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 ```
 
 The callback mechanism allows you to precisely control the Agent's execution process and implement more complex business logic.
