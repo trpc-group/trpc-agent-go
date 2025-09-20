@@ -75,6 +75,7 @@ type Invocation struct {
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
 	// AgentCallbacks contains callbacks for agent operations.
+	// Deprecated:use agent self AgentCallbacks instead.
 	AgentCallbacks *Callbacks
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks

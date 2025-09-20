@@ -118,9 +118,6 @@ func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent and agent name
 	invocation.Agent = a
 	invocation.AgentName = a.name
-
-	// Set agent callbacks if available.
-	invocation.AgentCallbacks = a.agentCallbacks
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -129,11 +126,11 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return false
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 	var evt *event.Event
 
 	if err != nil {
@@ -223,11 +220,11 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 	var evt *event.Event
 	if err != nil {
 		// Send error event.
