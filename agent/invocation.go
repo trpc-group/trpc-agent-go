@@ -74,9 +74,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
-	// AgentCallbacks contains callbacks for agent operations.
-	// Deprecated: use the agent's own AgentCallbacks.
-	AgentCallbacks *Callbacks
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.

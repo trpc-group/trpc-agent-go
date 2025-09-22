@@ -154,7 +154,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 		return nil, nil
 	})
 
-	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2", AgentCallbacks: cb}
+	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
 	wrapped := llm.wrapEventChannel(context.Background(), inv, orig)
