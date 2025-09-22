@@ -1154,13 +1154,13 @@ func (m *Model) handleNonStreamingResponse(
 
 			response.Choices[i].Message.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
-				id := toolCall.ID
-				if id == "" {
+				synthesizedID := toolCall.ID
+				if synthesizedID == "" {
 					// Synthesize ID for providers that omit it (e.g., gpt-5-nano).
-					id = fmt.Sprintf("auto_call_%d", j)
+					synthesizedID = fmt.Sprintf("auto_call_%d", j)
 				}
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
-					ID:   id,
+					ID:   synthesizedID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
 						Name:      toolCall.Function.Name,
