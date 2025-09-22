@@ -114,7 +114,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// Prepend session summary as a system message if enabled and available.
+	// 1) Prepend session summary as a system message if enabled and available.
 	if p.AddSessionSummary && invocation.Session != nil {
 		if msg := p.getSessionSummaryMessage(invocation); msg != nil {
 			// Prepend to the front of messages.
@@ -122,25 +122,30 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// Append branch-incremental messages from session events when allowed.
+	// 2) Append branch-incremental messages from session events when allowed.
+	var addedFromSession int
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		messages := p.getBranchIncrementalMessages(invocation)
 		req.Messages = append(req.Messages, messages...)
+		addedFromSession = len(messages)
 	}
 
-	// Include the current invocation message if:
+	// 3) Include the current invocation message if:
 	// 1. It has content, AND
 	// 2. There's no session OR the session has no events
 	// This prevents duplication when using Runner (which adds user message to session)
-	// while ensuring standalone usage works (where invocation.Message is the source).
+	// while ensuring standalone usage works (where invocation.Message is the source)
+	// Additionally, when the session exists but has no messages for the
+	// current branch (e.g. sub agent first turn), include the invocation
+	// message so the sub agent receives the tool arguments as a user input.
 	if invocation.Message.Content != "" &&
-		(invocation.Session == nil || len(invocation.Session.Events) == 0) {
+		(invocation.Session == nil || len(invocation.Session.Events) == 0 || addedFromSession == 0) {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
 	}
 
-	// Safety fallback: if messages are still empty, include the current.
+	// 4) Safety fallback: if messages are still empty, include the current
 	// invocation message when non-empty to avoid empty model input.
 	if len(req.Messages) == 0 && invocation.Message.Content != "" {
 		req.Messages = append(req.Messages, invocation.Message)
@@ -162,9 +167,6 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 		return nil
 	}
 	branch := inv.GetEventFilterKey()
-	if branch == "" {
-		branch = inv.AgentName
-	}
 	sum := inv.Session.Summaries[branch]
 	if sum == nil || sum.Summary == "" {
 		return nil
@@ -176,9 +178,6 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 // and applies MaxHistoryRuns truncation.
 func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invocation) []model.Message {
 	branch := inv.GetEventFilterKey()
-	if branch == "" {
-		branch = inv.AgentName
-	}
 	var evs []event.Event
 	if inv.Session != nil {
 		if inv.Session.Summaries != nil {
@@ -188,6 +187,7 @@ func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invoca
 				evs = p.eventsInBranch(inv.Session.Events, branch)
 			}
 		} else {
+			// No summaries yet; include all events in branch.
 			evs = p.eventsInBranch(inv.Session.Events, branch)
 		}
 	}
