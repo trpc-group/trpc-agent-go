@@ -1725,9 +1725,9 @@ func (e *Executor) executeNodeFunction(
 		// Inject execution context helpers used by nodes.
 		tmp[StateKeyExecContext] = execCtx
 		tmp[StateKeyCurrentNodeID] = nodeID
-		tmp[StateKeyModelCallbacks] = node.modelCallbacks
 		input = tmp
 	}
+	input[StateKeyModelCallbacks] = node.callbacks
 
 	return node.Function(ctx, input)
 }
