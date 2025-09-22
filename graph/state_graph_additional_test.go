@@ -121,6 +121,8 @@ func TestBuilderOptions_Destinations_And_Callbacks(t *testing.T) {
 		RegisterOnNodeError(onErr1)
 
 	// Add node with destinations and per-node callbacks
+	// Also add the declared destination node "A" so validation succeeds.
+	sg.AddNode("A", func(ctx context.Context, st State) (any, error) { return st, nil })
 	sg.AddNode("n", func(ctx context.Context, st State) (any, error) { return st, nil },
 		WithDestinations(map[string]string{"A": "toA"}),
 		WithNodeCallbacks(cbs),
