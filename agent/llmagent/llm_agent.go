@@ -269,6 +269,13 @@ func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
 	}
 }
 
+// WithEndInvocationAfterTransfer sets whether end invocation after transfer.
+func WithEndInvocationAfterTransfer(end bool) Option {
+	return func(opts *Options) {
+		opts.EndInvocationAfterTransfer = end
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -340,6 +347,8 @@ type Options struct {
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
 	StructuredOutputType reflect.Type
 	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
+	// when the transfer is complete. Defaults to true.
 	EndInvocationAfterTransfer bool
 }
 
