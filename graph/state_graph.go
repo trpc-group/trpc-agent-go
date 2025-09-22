@@ -83,6 +83,13 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
+// WithToolSets sets the tool sets for the node.
+func WithToolSets(toolSets []tool.ToolSet) Option {
+	return func(node *Node) {
+		node.toolSets = toolSets
+	}
+}
+
 // WithDestinations declares potential dynamic routing targets for a node.
 // This is used for static validation (existence) and visualization only.
 // It does not influence runtime execution.
@@ -189,7 +196,11 @@ func (sg *StateGraph) AddLLMNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id))
+	node := &Node{}
+	for _, opt := range opts {
+		opt(node)
+	}
+	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id), WithLLMToolSets(node.toolSets))
 	// Add LLM node type option
 	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
 	sg.AddNode(id, llmNodeFunc, llmOpts...)
@@ -202,7 +213,7 @@ func (sg *StateGraph) AddToolsNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	toolsNodeFunc := NewToolsNodeFunc(tools)
+	toolsNodeFunc := NewToolsNodeFunc(tools, opts...)
 	// Add tool node type option
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
@@ -344,6 +355,20 @@ type LLMNodeFuncOption func(*llmRunner)
 func WithLLMNodeID(nodeID string) LLMNodeFuncOption {
 	return func(runner *llmRunner) {
 		runner.nodeID = nodeID
+	}
+}
+
+// WithLLMToolSets sets the tool sets for the LLM node function.
+func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		if runner.tools == nil {
+			runner.tools = make(map[string]tool.Tool)
+		}
+		for _, toolSet := range toolSets {
+			for _, tool := range toolSet.Tools(context.Background()) {
+				runner.tools[tool.Declaration().Name] = tool
+			}
+		}
 	}
 }
 
@@ -510,7 +535,9 @@ func (r *llmRunner) executeModel(
 			nodeID = id
 		}
 	}
-	modelInput := extractModelInput(State{StateKeyMessages: messages}, "")
+	// Build model input metadata from the original state and instruction
+	// so events accurately reflect both instruction and user input.
+	modelInput := extractModelInput(state, r.instruction)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
@@ -672,7 +699,19 @@ func runModel(
 
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
 // This implements tools node functionality using the tools package interface.
-func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
+func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
+	node := &Node{}
+	for _, opt := range opts {
+		opt(node)
+	}
+	if tools == nil {
+		tools = make(map[string]tool.Tool)
+	}
+	for _, toolSet := range node.toolSets {
+		for _, tool := range toolSet.Tools(context.Background()) {
+			tools[tool.Declaration().Name] = tool
+		}
+	}
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
 		defer span.End()
@@ -750,7 +789,10 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
 
 		// Execute the target agent.
-		agentEventChan, err := targetAgent.Run(ctx, invocation)
+		// Important: wrap the context with the sub-invocation so downstream
+		// callbacks (model/tool) can access it via agent.InvocationFromContext(ctx).
+		subCtx := agent.NewInvocationContext(ctx, invocation)
+		agentEventChan, err := targetAgent.Run(subCtx, invocation)
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()

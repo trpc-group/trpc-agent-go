@@ -91,6 +91,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Process session events if available and includeContents is not "none".
+	var addedFromSession int
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		sessionMessages := p.getContents(
 			invocation.GetEventFilterKey(), // Current branch for filtering
@@ -98,6 +99,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.AgentName, // Current agent name for filtering
 		)
 		req.Messages = append(req.Messages, sessionMessages...)
+		addedFromSession = len(sessionMessages)
 	}
 
 	// Include the current invocation message if:
@@ -105,8 +107,11 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	// 2. There's no session OR the session has no events
 	// This prevents duplication when using Runner (which adds user message to session)
 	// while ensuring standalone usage works (where invocation.Message is the source)
+	// Additionally, when the session exists but has no messages for the
+	// current branch (e.g. sub agent first turn), include the invocation
+	// message so the sub agent receives the tool arguments as a user input.
 	if invocation.Message.Content != "" &&
-		(invocation.Session == nil || len(invocation.Session.Events) == 0) {
+		(invocation.Session == nil || len(invocation.Session.Events) == 0 || addedFromSession == 0) {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)

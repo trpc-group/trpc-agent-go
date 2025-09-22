@@ -43,6 +43,15 @@ var (
 )
 
 // Executor executes a graph with the given initial state using Pregel-style BSP execution.
+//
+// Runtime isolation principle:
+//   - Executor is designed to be reusable across concurrent runs.
+//   - It must not hold per-run mutable state; such data lives in ExecutionContext.
+//   - Checkpoint-derived artifacts (e.g., lastCheckpoint, pendingWrites) are
+//     carried inside ExecutionContext and never stored on the Executor.
+//
+// This makes it safe to share a single Executor instance between many
+// concurrent invocations without cross-run interference.
 type Executor struct {
 	graph                 *Graph
 	channelBufferSize     int
@@ -52,9 +61,6 @@ type Executor struct {
 	checkpointSaveTimeout time.Duration
 	checkpointSaver       CheckpointSaver
 	checkpointManager     *CheckpointManager
-	lastCheckpoint        *Checkpoint
-	pendingWrites         []PendingWrite
-	nextNodesToExecute    []string // Nodes to execute when resuming from checkpoint.
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -181,6 +187,124 @@ type Step struct {
 // deepCopyAny performs a deep copy of common JSON-serializable Go types to
 // avoid sharing mutable references (maps/slices) across goroutines.
 func deepCopyAny(value any) any {
+	// Use a visited set keyed by underlying pointer to break reference cycles
+	// across pointers, maps, and slices. The values are the already-created
+	// copies to return when revisiting the same reference.
+	visited := make(map[uintptr]any)
+
+	var copyRecursive func(reflect.Value) any
+	copyRecursive = func(rv reflect.Value) any {
+		if !rv.IsValid() {
+			return nil
+		}
+
+		switch rv.Kind() {
+		case reflect.Interface:
+			if rv.IsNil() {
+				return nil
+			}
+			return copyRecursive(rv.Elem())
+
+		case reflect.Ptr:
+			if rv.IsNil() {
+				return nil
+			}
+			ptr := rv.Pointer()
+			if cached, ok := visited[ptr]; ok {
+				return cached
+			}
+			elem := rv.Elem()
+			newPtr := reflect.New(elem.Type())
+			// Cache before descending to handle self-referential structures.
+			visited[ptr] = newPtr.Interface()
+			newPtr.Elem().Set(reflect.ValueOf(copyRecursive(elem)))
+			return newPtr.Interface()
+
+		case reflect.Map:
+			if rv.IsNil() {
+				return reflect.Zero(rv.Type()).Interface()
+			}
+			ptr := rv.Pointer()
+			if cached, ok := visited[ptr]; ok {
+				return cached
+			}
+			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+			visited[ptr] = newMap.Interface()
+			for _, mk := range rv.MapKeys() {
+				mv := rv.MapIndex(mk)
+				newMap.SetMapIndex(mk, reflect.ValueOf(copyRecursive(mv)))
+			}
+			return newMap.Interface()
+
+		case reflect.Slice:
+			if rv.IsNil() {
+				return reflect.Zero(rv.Type()).Interface()
+			}
+			ptr := rv.Pointer()
+			if cached, ok := visited[ptr]; ok {
+				return cached
+			}
+			l := rv.Len()
+			newSlice := reflect.MakeSlice(rv.Type(), l, l)
+			visited[ptr] = newSlice.Interface()
+			for i := 0; i < l; i++ {
+				newSlice.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
+			}
+			return newSlice.Interface()
+
+		case reflect.Array:
+			l := rv.Len()
+			newArr := reflect.New(rv.Type()).Elem()
+			for i := 0; i < l; i++ {
+				newArr.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
+			}
+			return newArr.Interface()
+
+		case reflect.Struct:
+			// Create a new struct and copy only exported fields to avoid
+			// touching unexported sync primitives, etc.
+			newStruct := reflect.New(rv.Type()).Elem()
+			for i := 0; i < rv.NumField(); i++ {
+				ft := rv.Type().Field(i)
+				if ft.PkgPath != "" { // unexported
+					continue
+				}
+				dstField := newStruct.Field(i)
+				if !dstField.CanSet() {
+					continue
+				}
+				srcField := rv.Field(i)
+				copied := copyRecursive(srcField)
+				// If copied is nil, Set with a typed zero value to avoid
+				// "reflect: call of reflect.Value.Set on zero Value".
+				if copied == nil {
+					dstField.Set(reflect.Zero(dstField.Type()))
+					continue
+				}
+				srcVal := reflect.ValueOf(copied)
+				// Align types as needed.
+				if srcVal.Type().AssignableTo(dstField.Type()) {
+					dstField.Set(srcVal)
+				} else if srcVal.Type().ConvertibleTo(dstField.Type()) {
+					dstField.Set(srcVal.Convert(dstField.Type()))
+				} else {
+					// Fallback: set zero value if types are incompatible.
+					dstField.Set(reflect.Zero(dstField.Type()))
+				}
+			}
+			return newStruct.Interface()
+
+		case reflect.Func, reflect.Chan, reflect.UnsafePointer:
+			// Not safely copyable/serializable; return zero value.
+			return reflect.Zero(rv.Type()).Interface()
+
+		default:
+			// Scalars and other immutable kinds – return as-is.
+			return rv.Interface()
+		}
+	}
+
+	// Fast-path for common JSON-compatible types without reflection.
 	switch v := value.(type) {
 	case map[string]any:
 		copied := make(map[string]any, len(v))
@@ -208,35 +332,9 @@ func deepCopyAny(value any) any {
 		return copied
 	case time.Time:
 		return v
-	default:
-		// Fallback: handle generic maps/slices via reflection to avoid sharing.
-		rv := reflect.ValueOf(value)
-		switch rv.Kind() {
-		case reflect.Map:
-			if rv.IsNil() {
-				return value
-			}
-			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
-			for _, mk := range rv.MapKeys() {
-				mv := rv.MapIndex(mk)
-				newMap.SetMapIndex(mk, reflect.ValueOf(deepCopyAny(mv.Interface())))
-			}
-			return newMap.Interface()
-		case reflect.Slice:
-			if rv.IsNil() {
-				return value
-			}
-			l := rv.Len()
-			newSlice := reflect.MakeSlice(rv.Type(), l, l)
-			for i := 0; i < l; i++ {
-				newSlice.Index(i).Set(reflect.ValueOf(deepCopyAny(rv.Index(i).Interface())))
-			}
-			return newSlice.Interface()
-		default:
-			// For other scalar or struct types, rely on value semantics.
-			return v
-		}
 	}
+
+	return copyRecursive(reflect.ValueOf(value))
 }
 
 // deepCopyState clones the State, recursively copying nested maps/slices.
@@ -264,7 +362,18 @@ func (e *Executor) Execute(
 	eventChan := make(chan *event.Event, e.channelBufferSize)
 	// Start execution in a goroutine.
 	go func() {
-		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				log.Errorf("panic in executor goroutine: %v\n%s", r, string(stack))
+				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
+					WithPregelEventInvocationID(invocation.InvocationID),
+					WithPregelEventStepNumber(-1),
+					WithPregelEventError(fmt.Sprintf("executor panic: %v", r)),
+				))
+			}
+			close(eventChan)
+		}()
 		if err := e.executeGraph(ctx, initialState, invocation, eventChan, startTime); err != nil {
 			// Check if this is an interrupt error.
 			if IsInterruptError(err) {
@@ -291,18 +400,21 @@ func (e *Executor) executeGraph(
 	eventChan chan<- *event.Event,
 	startTime time.Time,
 ) error {
-	execState, checkpointConfig, resumed, resumedStep :=
+	execState, checkpointConfig, resumed, resumedStep, lastCkpt, restoredPending :=
 		e.prepareCheckpointAndState(ctx, initialState, invocation)
 
 	execState = e.processResumeCommand(execState, initialState)
 
 	execCtx := e.buildExecutionContext(
-		eventChan, invocation.InvocationID, execState, resumed,
+		eventChan, invocation.InvocationID, execState, resumed, lastCkpt,
 	)
+	if len(restoredPending) > 0 {
+		execCtx.pendingWrites = append(execCtx.pendingWrites[:0], restoredPending...)
+	}
 
-	if resumed && e.pendingWrites != nil {
-		log.Debugf("🔧 Executor: applying %d pending writes", len(e.pendingWrites))
-		e.applyPendingWrites(ctx, invocation, execCtx, e.pendingWrites)
+	if resumed && len(execCtx.pendingWrites) > 0 {
+		log.Debugf("🔧 Executor: applying %d pending writes", len(execCtx.pendingWrites))
+		e.applyPendingWrites(ctx, invocation, execCtx, execCtx.pendingWrites)
 	}
 
 	if e.checkpointSaver != nil && !resumed {
@@ -332,11 +444,11 @@ func (e *Executor) prepareCheckpointAndState(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
 	if e.checkpointSaver == nil {
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
-		return execState, nil, false, 0
+		return execState, nil, false, 0, nil, nil
 	}
 	return e.resumeOrInitWithSaver(ctx, initialState, invocation)
 }
@@ -346,7 +458,7 @@ func (e *Executor) resumeOrInitWithSaver(
 	ctx context.Context,
 	initialState State,
 	invocation *agent.Invocation,
-) (State, map[string]any, bool, int) {
+) (State, map[string]any, bool, int, *Checkpoint, []PendingWrite) {
 	var lineageID string
 	if id, ok := initialState[CfgKeyLineageID].(string); ok && id != "" {
 		lineageID = id
@@ -375,7 +487,7 @@ func (e *Executor) resumeOrInitWithSaver(
 		log.Debug("No checkpoint found, starting fresh")
 		execState := e.initializeState(initialState)
 		e.initializeChannels(execState, true)
-		return execState, checkpointConfig, false, 0
+		return execState, checkpointConfig, false, 0, nil, nil
 	}
 
 	log.Debugf("Resuming from checkpoint ID=%s", tuple.Checkpoint.ID)
@@ -387,18 +499,18 @@ func (e *Executor) resumeOrInitWithSaver(
 		resumedStep = tuple.Metadata.Step
 		log.Debugf("Resuming from step %d", resumedStep)
 	}
-	e.lastCheckpoint = tuple.Checkpoint
+	lastCheckpoint := tuple.Checkpoint
 	e.initializeChannels(restored, true)
 	if tuple.Config != nil {
 		checkpointConfig = tuple.Config
 	}
-	e.pendingWrites = tuple.PendingWrites
+	pending := tuple.PendingWrites
 	log.Debugf(
 		"Loaded checkpoint - PendingWrites=%d, NextNodes=%v, NextChannels=%v",
-		len(e.pendingWrites), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
+		len(pending), tuple.Checkpoint.NextNodes, tuple.Checkpoint.NextChannels,
 	)
 	e.applyExecutableNextNodes(restored, tuple)
-	return restored, checkpointConfig, true, resumedStep
+	return restored, checkpointConfig, true, resumedStep, lastCheckpoint, pending
 }
 
 // restoreStateFromCheckpoint converts checkpoint channel values back into state.
@@ -450,7 +562,7 @@ func (e *Executor) mergeInitialStateNonInternal(restored, initial State) State {
 // This is important for initial checkpoints (step -1) that have the entry
 // point set, so a forked resume can continue from the beginning.
 func (e *Executor) applyExecutableNextNodes(restored State, tuple *CheckpointTuple) {
-	if len(e.pendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
+	if len(tuple.PendingWrites) != 0 || len(tuple.Checkpoint.NextNodes) == 0 {
 		return
 	}
 	for _, nodeID := range tuple.Checkpoint.NextNodes {
@@ -482,10 +594,11 @@ func (e *Executor) buildExecutionContext(
 	invocationID string,
 	state State,
 	resumed bool,
+	lastCheckpoint *Checkpoint,
 ) *ExecutionContext {
 	versionsSeen := make(map[string]map[string]int64)
-	if resumed && e.lastCheckpoint != nil && e.lastCheckpoint.VersionsSeen != nil {
-		for nodeID, nodeVersions := range e.lastCheckpoint.VersionsSeen {
+	if resumed && lastCheckpoint != nil && lastCheckpoint.VersionsSeen != nil {
+		for nodeID, nodeVersions := range lastCheckpoint.VersionsSeen {
 			versionsSeen[nodeID] = make(map[string]int64)
 			for ch, version := range nodeVersions {
 				versionsSeen[nodeID][ch] = version
@@ -497,12 +610,13 @@ func (e *Executor) buildExecutionContext(
 		)
 	}
 	return &ExecutionContext{
-		Graph:        e.graph,
-		State:        state,
-		EventChan:    eventChan,
-		InvocationID: invocationID,
-		resumed:      resumed,
-		versionsSeen: versionsSeen,
+		Graph:          e.graph,
+		State:          state,
+		EventChan:      eventChan,
+		InvocationID:   invocationID,
+		resumed:        resumed,
+		versionsSeen:   versionsSeen,
+		lastCheckpoint: lastCheckpoint,
 	}
 }
 
@@ -570,10 +684,17 @@ func (e *Executor) buildCompletionEvent(
 	startTime time.Time,
 	stepsExecuted int,
 ) *event.Event {
-	// Take a deep snapshot of the final state under read lock to avoid
-	// concurrent map iteration/write during later JSON marshaling.
+	// Take a deep snapshot of the final state under read lock.
+	// IMPORTANT: Skip volatile/non-serializable keys (e.g., Session, callbacks, exec context)
+	// to avoid racing on their internal maps/slices managed by other goroutines.
 	execCtx.stateMutex.RLock()
-	finalStateCopy := deepCopyState(execCtx.State)
+	finalStateCopy := make(State, len(execCtx.State))
+	for k, v := range execCtx.State {
+		if isUnsafeStateKey(k) {
+			continue
+		}
+		finalStateCopy[k] = deepCopyAny(v)
+	}
 	execCtx.stateMutex.RUnlock()
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
@@ -584,15 +705,32 @@ func (e *Executor) buildCompletionEvent(
 	if completionEvent.StateDelta == nil {
 		completionEvent.StateDelta = make(map[string][]byte)
 	}
-	execCtx.stateMutex.RLock()
-	stateSnapshot := deepCopyState(execCtx.State)
-	execCtx.stateMutex.RUnlock()
-	for key, value := range stateSnapshot {
+	// Reuse the deep-copied snapshot to populate StateDelta to avoid an
+	// additional full deep copy.
+	for key, value := range finalStateCopy {
 		if jsonData, err := json.Marshal(value); err == nil {
 			completionEvent.StateDelta[key] = jsonData
 		}
 	}
 	return completionEvent
+}
+
+// isUnsafeStateKey reports whether the key points to values that are
+// non-serializable or potentially mutated concurrently by other subsystems
+// (e.g., session service), which should be excluded from final snapshots.
+func isUnsafeStateKey(key string) bool {
+	switch key {
+	case StateKeyExecContext,
+		StateKeyParentAgent,
+		StateKeyToolCallbacks,
+		StateKeyModelCallbacks,
+		StateKeyAgentCallbacks,
+		StateKeyCurrentNodeID,
+		StateKeySession:
+		return true
+	default:
+		return false
+	}
 }
 
 // createCheckpoint creates a checkpoint for the current state.
@@ -605,6 +743,9 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 	// mutations of nested maps/slices during checkpoint serialization.
 	channelValues := make(map[string]any)
 	for k, v := range state {
+		if isUnsafeStateKey(k) {
+			continue
+		}
 		channelValues[k] = deepCopyAny(v)
 	}
 
@@ -777,26 +918,34 @@ func getConfigKeys(config map[string]any) []string {
 }
 
 // resumeFromCheckpoint resumes execution from a specific checkpoint.
-func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.Invocation,
-	config map[string]any) (State, error) {
+//
+// This helper does not mutate Executor's fields. It only reads from the
+// checkpoint store, reconstructs a state memory image, and primes channels
+// by replaying pending writes (if any) using a temporary ExecutionContext.
+// The caller is responsible for threading any returned checkpoint metadata
+// into the per-execution context (ExecutionContext) as needed.
+func (e *Executor) resumeFromCheckpoint(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	config map[string]any,
+) (State, *Checkpoint, []PendingWrite, error) {
 	log.Debugf("resumeFromCheckpoint: called with config keys: %v", getConfigKeys(config))
 
 	if e.checkpointSaver == nil {
-		// No checkpoint saver, returning nil
-		return nil, nil
+		// No checkpoint saver
+		return nil, nil, nil, nil
 	}
 
 	tuple, err := e.checkpointSaver.GetTuple(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to retrieve checkpoint: %w", err)
 	}
 
 	if tuple == nil {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 
-	// Record last checkpoint for version-based planning.
-	e.lastCheckpoint = tuple.Checkpoint
+	// Note: lastCheckpoint is now carried per-execution in ExecutionContext.
 
 	// Convert channel values back to state.
 	state := make(State)
@@ -837,7 +986,7 @@ func (e *Executor) resumeFromCheckpoint(ctx context.Context, invocation *agent.I
 		}
 	}
 
-	return state, nil
+	return state, tuple.Checkpoint, tuple.PendingWrites, nil
 }
 
 // initializeState initializes the execution state with schema defaults.
@@ -973,7 +1122,7 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 	triggerToNodes := e.graph.getTriggerToNodes()
 
 	// If this is a resumed execution, use version-based triggering
-	if execCtx.resumed && e.lastCheckpoint != nil {
+	if execCtx.resumed && execCtx.lastCheckpoint != nil {
 		tasks = e.planBasedOnVersionTriggers(execCtx, step)
 	} else {
 		// Use traditional availability-based triggering
@@ -987,7 +1136,7 @@ func (e *Executor) planBasedOnChannelTriggers(execCtx *ExecutionContext, step in
 func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step int) []*Task {
 	var tasks []*Task
 
-	if e.lastCheckpoint == nil {
+	if execCtx.lastCheckpoint == nil {
 		return tasks
 	}
 
@@ -1019,7 +1168,7 @@ func (e *Executor) planBasedOnVersionTriggers(execCtx *ExecutionContext, step in
 			}
 
 			// Check if this node should be triggered based on version tracking.
-			if e.shouldTriggerNode(nodeID, channelName, currentVersion, e.lastCheckpoint) {
+			if e.shouldTriggerNode(nodeID, channelName, currentVersion, execCtx.lastCheckpoint) {
 				task := e.createTask(nodeID, execCtx.State, step)
 				if task != nil {
 					tasks = append(tasks, task)
@@ -1134,7 +1283,15 @@ func (e *Executor) executeStep(
 		wg.Add(1)
 		go func(t *Task) {
 			defer wg.Done()
-			results <- e.executeSingleTask(ctx, invocation, execCtx, t, step)
+			defer func() {
+				if r := recover(); r != nil {
+					log.Errorf("panic executing task %s: %v\n%s", t.NodeID, r, string(debug.Stack()))
+					results <- fmt.Errorf("task panic: %v", r)
+				}
+			}()
+			if err := e.executeSingleTask(ctx, invocation, execCtx, t, step); err != nil {
+				results <- err
+			}
 		}(t)
 	}
 
@@ -1322,8 +1479,9 @@ func (e *Executor) newNodeCallbackContext(
 
 // buildTaskStateCopy returns the per-task input state, including overlay.
 func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State {
-	// Always construct an isolated deep copy so node code can freely mutate
-	// maps/slices without racing with other goroutines or the global state.
+	// Always construct an isolated state copy so node code can freely mutate
+	// without racing with other goroutines. Skip or shallow-copy unsafe keys
+	// whose internals may be mutated concurrently by other subsystems.
 	execCtx.stateMutex.RLock()
 	defer execCtx.stateMutex.RUnlock()
 
@@ -1337,8 +1495,31 @@ func (e *Executor) buildTaskStateCopy(execCtx *ExecutionContext, t *Task) State 
 		base = execCtx.State
 	}
 
-	// Deep copy the base state to avoid sharing nested references.
-	stateCopy := deepCopyState(base)
+	stateCopy := make(State, len(base))
+	for k, v := range base {
+		if isUnsafeStateKey(k) {
+			// Preserve pointer/reference without deep copying to avoid racing
+			// on nested structures (e.g., session internals) during reflection.
+			stateCopy[k] = v
+			continue
+		}
+		stateCopy[k] = deepCopyAny(v)
+	}
+
+	// Preserve callback pointers that contain function values which cannot be
+	// deep-copied safely via reflection (functions would become nil and cause
+	// panics when invoked). For these keys, reuse the original pointer from the
+	// base state.
+	for _, cbKey := range []string{
+		StateKeyNodeCallbacks,
+		StateKeyToolCallbacks,
+		StateKeyModelCallbacks,
+		StateKeyAgentCallbacks,
+	} {
+		if v, ok := base[cbKey]; ok && v != nil {
+			stateCopy[cbKey] = v
+		}
+	}
 
 	// Apply overlay if present to form the isolated input view.
 	if t.Overlay != nil && e.graph.Schema() != nil {
@@ -1528,15 +1709,23 @@ func (e *Executor) executeNodeFunction(
 
 	if input == nil {
 		execCtx.stateMutex.RLock()
-		input = deepCopyState(execCtx.State)
+		tmp := make(State, len(execCtx.State))
+		for k, v := range execCtx.State {
+			if isUnsafeStateKey(k) {
+				tmp[k] = v
+				continue
+			}
+			tmp[k] = deepCopyAny(v)
+		}
 		// Apply overlay if present to form the isolated input view.
 		if t.Overlay != nil && e.graph.Schema() != nil {
-			input = e.graph.Schema().ApplyUpdate(input, t.Overlay)
+			tmp = e.graph.Schema().ApplyUpdate(tmp, t.Overlay)
 		}
 		execCtx.stateMutex.RUnlock()
 		// Inject execution context helpers used by nodes.
-		input[StateKeyExecContext] = execCtx
-		input[StateKeyCurrentNodeID] = nodeID
+		tmp[StateKeyExecContext] = execCtx
+		tmp[StateKeyCurrentNodeID] = nodeID
+		input = tmp
 	}
 
 	return node.Function(ctx, input)
@@ -2060,6 +2249,9 @@ func (e *Executor) createCheckpointFromState(state State, step int, execCtx *Exe
 	// including any updates from nodes that haven't been written to channels yet.
 	channelValues := make(map[string]any)
 	for k, v := range state {
+		if isUnsafeStateKey(k) {
+			continue
+		}
 		channelValues[k] = deepCopyAny(v)
 	}
 

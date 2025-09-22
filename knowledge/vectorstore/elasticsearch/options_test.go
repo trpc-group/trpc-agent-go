@@ -62,3 +62,21 @@ func TestOptionSettersOverrideValues(t *testing.T) {
 	assert.Equal(t, "body", opt.contentFieldName)
 	assert.Equal(t, "vec", opt.embeddingFieldName)
 }
+
+func TestWithExtraOptions(t *testing.T) {
+	t.Run("accumulation", func(t *testing.T) {
+		opt := defaultOptions
+
+		WithExtraOptions("first")(&opt)
+		WithExtraOptions(2, true)(&opt)
+
+		assert.Equal(t, []any{"first", 2, true}, opt.extraOptions)
+	})
+
+	t.Run("empty noop", func(t *testing.T) {
+		opt := defaultOptions
+
+		WithExtraOptions()(&opt)
+		assert.Nil(t, opt.extraOptions)
+	})
+}
