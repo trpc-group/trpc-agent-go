@@ -535,7 +535,9 @@ func (r *llmRunner) executeModel(
 			nodeID = id
 		}
 	}
-	modelInput := extractModelInput(State{StateKeyMessages: messages}, "")
+	// Build model input metadata from the original state and instruction
+	// so events accurately reflect both instruction and user input.
+	modelInput := extractModelInput(state, r.instruction)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
