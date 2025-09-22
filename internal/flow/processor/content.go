@@ -206,7 +206,9 @@ func (p *ContentRequestProcessor) eventsSince(
 ) []event.Event {
 	var result []event.Event
 	for _, evt := range events {
-		if evt.Timestamp.After(since) && evt.Filter(branch) && evt.IsValidContent() {
+		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
+			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(branch)) &&
+			evt.Timestamp.After(since) {
 			result = append(result, evt)
 		}
 	}
@@ -220,7 +222,8 @@ func (p *ContentRequestProcessor) eventsInBranch(
 ) []event.Event {
 	var result []event.Event
 	for _, evt := range events {
-		if evt.Filter(branch) && evt.IsValidContent() {
+		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
+			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(branch)) {
 			result = append(result, evt)
 		}
 	}
