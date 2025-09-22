@@ -789,7 +789,10 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
 
 		// Execute the target agent.
-		agentEventChan, err := targetAgent.Run(ctx, invocation)
+		// Important: wrap the context with the sub-invocation so downstream
+		// callbacks (model/tool) can access it via agent.InvocationFromContext(ctx).
+		subCtx := agent.NewInvocationContext(ctx, invocation)
+		agentEventChan, err := targetAgent.Run(subCtx, invocation)
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()
