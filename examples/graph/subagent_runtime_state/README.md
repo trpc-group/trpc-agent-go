@@ -1,14 +1,14 @@
-Sub‑Agent Runtime State (GraphAgent)
+## Sub‑Agent Runtime State (GraphAgent)
 
-This example is English‑first and demonstrates:
+This example demonstrates:
 
 - GraphAgent with a pre‑processing node → LLMAgent sub‑agent flow
 - Passing graph state to the sub‑agent via `Invocation.RunOptions.RuntimeState`
-- Injecting scene knowledge in a system message (English, tool‑friendly)
+- Injecting scene knowledge in a system message (tool‑friendly)
 - Parsing time up front and letting tools use `parsed_time` instead of LLM‑guessed values
 - Interactive streaming from the single graph event channel
 
-What happens
+What happens:
 
 - Pre node loads scene context and parses time from the latest user input, then writes
   `scene_id`, `scene_info`, and `parsed_time` into graph state.
@@ -19,7 +19,7 @@ What happens
 - The `schedule_meeting` tool uses `parsed_time` when present; otherwise the agent asks for clarification.
 - All events stream through one channel. This example prints LLM deltas (💬) and tool completions.
 
-Run
+Run:
 
 1) Provide credentials via flags or env:
 
