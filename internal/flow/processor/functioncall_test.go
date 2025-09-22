@@ -75,7 +75,7 @@ func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 
 func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	// Prepare invocation with a parent agent that has a sub-agent named weather-agent.
 	inv := &agent.Invocation{
@@ -124,7 +124,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 
 func TestExecuteToolCall(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	// Prepare invocation with a parent agent that has a sub-agent named weather-agent.
 	inv := &agent.Invocation{
@@ -202,7 +202,7 @@ func TestExecuteToolCallsInParallel(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	evt, err := NewFunctionCallResponseProcessor(true).executeToolCallsInParallel(ctx, inv, response,
+	evt, err := NewFunctionCallResponseProcessor(true, nil).executeToolCallsInParallel(ctx, inv, response,
 		toolCalls, tools, nil)
 	require.NoError(t, err)
 	require.NotNil(t, evt.Choices)
@@ -278,7 +278,7 @@ func TestFlow_EnableParallelTools_ForcesSerialExecution(t *testing.T) {
 	// Test with EnableParallelTools = false (default)
 	startTime := time.Now()
 	eventChan := make(chan *event.Event, 100)
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 	req := &model.Request{
 		Tools: toolMap,
 	}
@@ -424,7 +424,7 @@ func runParallelToolTest(t *testing.T, tc parallelTestCase) {
 		toolMap[tool.Declaration().Name] = tool
 	}
 	startTime := time.Now()
-	p := NewFunctionCallResponseProcessor(!tc.disableParallel)
+	p := NewFunctionCallResponseProcessor(!tc.disableParallel, nil)
 	req := &model.Request{
 		Tools: toolMap,
 	}
@@ -583,7 +583,7 @@ func TestFlow_ParallelToolExecution_Unified(t *testing.T) {
 
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	// Invocation without matching sub-agent and with a mock model to satisfy logging.
 	inv := &agent.Invocation{
@@ -854,7 +854,7 @@ func TestNewToolCallResponseEvent_Constructor(t *testing.T) {
 
 // Test that executeStreamableTool emits partial tool.response events to the channel.
 func TestExecuteStreamableTool_EmitsPartialEvents(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-stream", AgentName: "tester", Branch: "b1", Model: &mockModel{}}
 
@@ -923,7 +923,7 @@ func (m *skipSummCallableTool) LongRunning() bool { return m.longRun }
 // Verify SkipSummarization propagation and EndInvocation flag in the sequential path.
 func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	t1 := &skipSummCallableTool{
 		declaration: &tool.Declaration{Name: "t1"},
@@ -957,7 +957,7 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 // Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
 func TestHandleFunctionCalls_SkipSummarization_NoChildEvents_SetsEndInvocation(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	t1 := &skipSummCallableTool{
 		declaration: &tool.Declaration{Name: "t1"},
@@ -992,7 +992,7 @@ func TestHandleFunctionCalls_SkipSummarization_NoChildEvents_SetsEndInvocation(t
 // Verify SkipSummarization propagation and EndInvocation in parallel execution.
 func TestHandleFunctionCalls_SkipSummarization_Parallel_PropagatesFlag(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(true)
+	p := NewFunctionCallResponseProcessor(true, nil)
 
 	tSkip := &skipSummCallableTool{
 		declaration: &tool.Declaration{Name: "ts"},
@@ -1039,7 +1039,7 @@ func (s *finalOnlyInnerEventStreamTool) StreamableCall(ctx context.Context, _ []
 
 // Ensure the final full inner assistant message is forwarded when there were no prior deltas.
 func TestExecuteStreamableTool_ForwardsFinalOnlyInnerMessage(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-final", AgentName: "parent", Branch: "br", Model: &mockModel{}}
 	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "inner-final"}}
@@ -1104,7 +1104,7 @@ func (p *prefTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamRe
 
 // Ensure executeTool respects streamInnerPreference: when false, fallback to callable path.
 func TestExecuteTool_RespectsStreamInnerPreference(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-pref", AgentName: "tester", Model: &mockModel{}}
 	toolCall := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "pref"}}
@@ -1165,7 +1165,7 @@ func (s *structStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.
 }
 
 func TestExecuteStreamableTool_ChunkStructJSON(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-json", AgentName: "tester", Branch: "br", Model: &mockModel{}}
 	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "s"}}
@@ -1198,7 +1198,7 @@ func (s *innerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*t
 }
 
 func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-fwd", AgentName: "parent", Branch: "b", Model: &mockModel{}}
 	tc := model.ToolCall{ID: "c1", Function: model.FunctionDefinitionParam{Name: "inner"}}
@@ -1221,7 +1221,7 @@ func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
 }
 
 func TestWaitForCompletion_SignalReceived(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	ch := make(chan string, 1)
 	inv := agent.NewInvocation()
@@ -1234,7 +1234,7 @@ func TestWaitForCompletion_SignalReceived(t *testing.T) {
 }
 
 func TestWaitForCompletion_ContextCancelled(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	inv := agent.NewInvocation()
@@ -1326,7 +1326,7 @@ func (m *mockTransferAgent) FindSubAgent(name string) agent.Agent {
 
 func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) {
 	ctx := context.Background()
-	p := NewFunctionCallResponseProcessor(false)
+	p := NewFunctionCallResponseProcessor(false, nil)
 
 	inv := &agent.Invocation{
 		AgentName:    "test-agent",
@@ -1369,7 +1369,7 @@ func TestHandleFunctionCallsAndSendEvent_StopErrorEmitsErrorEvent(t *testing.T) 
 }
 
 func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(true)
+	p := NewFunctionCallResponseProcessor(true, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	res := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
@@ -1377,13 +1377,14 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 }
 
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(false)
-	ctx := context.Background()
-	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
-	inv.ToolCallbacks.RegisterBeforeTool(func(_ context.Context, _ string,
+	cb := tool.NewCallbacks()
+	cb.RegisterBeforeTool(func(_ context.Context, _ string,
 		_ *tool.Declaration, _ []byte) (any, error) {
 		return map[string]any{"v": 1}, nil
 	})
+	p := NewFunctionCallResponseProcessor(false, cb)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
 	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
@@ -1393,13 +1394,14 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 }
 
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(false)
-	ctx := context.Background()
-	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
-	inv.ToolCallbacks.RegisterBeforeTool(func(_ context.Context, _ string,
+	cb := tool.NewCallbacks()
+	cb.RegisterBeforeTool(func(_ context.Context, _ string,
 		_ *tool.Declaration, _ []byte) (any, error) {
 		return nil, fmt.Errorf("fail")
 	})
+	p := NewFunctionCallResponseProcessor(false, cb)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
 	_, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
@@ -1407,13 +1409,14 @@ func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 }
 
 func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
-	p := NewFunctionCallResponseProcessor(false)
-	ctx := context.Background()
-	inv := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
-	inv.ToolCallbacks.RegisterAfterTool(func(_ context.Context, _ string,
+	cb := tool.NewCallbacks()
+	cb.RegisterAfterTool(func(_ context.Context, _ string,
 		_ *tool.Declaration, _ []byte, _ any, _ error) (any, error) {
 		return map[string]any{"ok": true}, nil
 	})
+	p := NewFunctionCallResponseProcessor(false, cb)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
 	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
@@ -1422,11 +1425,13 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	require.JSONEq(t, string(b), string(mustJSON(res)))
 
 	// AfterError branch.
-	inv2 := &agent.Invocation{ToolCallbacks: tool.NewCallbacks()}
-	inv2.ToolCallbacks.RegisterAfterTool(func(_ context.Context, _ string,
+	cb = tool.NewCallbacks()
+	cb.RegisterAfterTool(func(_ context.Context, _ string,
 		_ *tool.Declaration, _ []byte, _ any, _ error) (any, error) {
 		return nil, fmt.Errorf("bad")
 	})
+	inv2 := &agent.Invocation{}
+	p.toolCallbacks = cb
 	_, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.Error(t, err)
 }
@@ -1445,7 +1450,7 @@ func (e *errStreamTool) StreamableCall(ctx context.Context, _ []byte) (*tool.Str
 }
 
 func TestExecuteStreamableTool_StreamableCallError(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false)
+	f := NewFunctionCallResponseProcessor(false, nil)
 	ctx := context.Background()
 	inv := &agent.Invocation{InvocationID: "inv-s", AgentName: "tester", Branch: "b", Model: &mockModel{}}
 	tc := model.ToolCall{ID: "x", Function: model.FunctionDefinitionParam{Name: "s"}}
