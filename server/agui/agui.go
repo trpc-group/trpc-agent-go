@@ -20,17 +20,18 @@ import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
+// DefaultNewService is the default function to create a new service.
+var DefaultNewService = sse.New
+
 // Server provides AG-UI server.
 type Server struct {
-	address        string
-	path           string
-	agent          agent.Agent
-	sessionService session.Service
-	service        service.Service
+	address string
+	path    string
+	agent   agent.Agent
+	service service.Service
 }
 
 // New creates a AG-UI server instance.
@@ -39,26 +40,21 @@ func New(agent agent.Agent, opt ...Option) (*Server, error) {
 		return nil, errors.New("agui: agent must not be nil")
 	}
 	opts := newOptions(opt...)
-	sessionService := opts.sessionService
-	if sessionService == nil {
-		sessionService = inmemory.NewSessionService()
-	}
-	service := opts.service
-	if service == nil {
-		runner := runner.NewRunner(
-			agent.Info().Name,
-			agent,
-			runner.WithSessionService(sessionService),
-		)
+	aguiService := opts.service
+	if aguiService == nil {
+		sessionService := opts.sessionService
+		if sessionService == nil {
+			sessionService = inmemory.NewSessionService()
+		}
+		runner := runner.NewRunner(agent.Info().Name, agent, runner.WithSessionService(sessionService))
 		aguiRunner := aguirunner.New(runner, opts.runnerOptions...)
-		service = sse.New(aguiRunner, sse.WithAddress(opts.address), sse.WithPath(opts.path))
+		aguiService = DefaultNewService(aguiRunner, service.WithAddress(opts.address), service.WithPath(opts.path))
 	}
 	server := &Server{
-		address:        opts.address,
-		path:           opts.path,
-		agent:          agent,
-		sessionService: sessionService,
-		service:        service,
+		address: opts.address,
+		path:    opts.path,
+		agent:   agent,
+		service: aguiService,
 	}
 	return server, nil
 }

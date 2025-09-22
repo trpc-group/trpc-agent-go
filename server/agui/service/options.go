@@ -7,36 +7,27 @@
 //
 //
 
-package sse
+package service
 
-// options holds the options for the SSE service.
-type options struct {
-	addr string
-	path string
-}
-
-// newOptions creates a new options instance.
-func newOptions(opt ...Option) *options {
-	opts := &options{}
-	for _, o := range opt {
-		o(opts)
-	}
-	return opts
+// Options holds the options for the SSE service.
+type Options struct {
+	Address string // Address is the listening address.
+	Path    string // Path is the request url path.
 }
 
 // Option is a function that configures the options.
-type Option func(*options)
+type Option func(*Options)
 
 // WithAddress sets the listening address.
 func WithAddress(addr string) Option {
-	return func(s *options) {
-		s.addr = addr
+	return func(s *Options) {
+		s.Address = addr
 	}
 }
 
 // WithPath sets the request path.
 func WithPath(path string) Option {
-	return func(s *options) {
-		s.path = path
+	return func(s *Options) {
+		s.Path = path
 	}
 }

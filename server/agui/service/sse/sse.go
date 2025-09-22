@@ -21,9 +21,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-// sseService is a SSE service implementation.
-type sseService struct {
-	addr       string
+// sse is a SSE service implementation.
+type sse struct {
+	address    string
 	path       string
 	writer     *aguisse.SSEWriter
 	runner     runner.Runner
@@ -31,22 +31,25 @@ type sseService struct {
 }
 
 // New creates a new SSE service.
-func New(runner runner.Runner, opt ...Option) service.Service {
-	opts := newOptions(opt...)
-	s := &sseService{
-		addr:   opts.addr,
-		path:   opts.path,
-		runner: runner,
-		writer: aguisse.NewSSEWriter(),
+func New(runner runner.Runner, opt ...service.Option) service.Service {
+	opts := service.Options{}
+	for _, o := range opt {
+		o(&opts)
+	}
+	s := &sse{
+		address: opts.Address,
+		path:    opts.Path,
+		runner:  runner,
+		writer:  aguisse.NewSSEWriter(),
 	}
 	return s
 }
 
 // Serve starts the SSE service and listens on the address.
-func (s *sseService) Serve(ctx context.Context) error {
+func (s *sse) Serve(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(s.path, s.handle)
-	s.httpServer = &http.Server{Addr: s.addr, Handler: mux}
+	s.httpServer = &http.Server{Addr: s.address, Handler: mux}
 	err := s.httpServer.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -55,7 +58,7 @@ func (s *sseService) Serve(ctx context.Context) error {
 }
 
 // Close stops the SSE service.
-func (s *sseService) Close(ctx context.Context) error {
+func (s *sse) Close(ctx context.Context) error {
 	if s.httpServer == nil {
 		return errors.New("http server not running")
 	}
@@ -63,7 +66,7 @@ func (s *sseService) Close(ctx context.Context) error {
 }
 
 // handle handles an AG-UI run request.
-func (s *sseService) handle(w http.ResponseWriter, r *http.Request) {
+func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 	if s.runner == nil {
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
@@ -81,6 +84,7 @@ func (s *sseService) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	for event := range eventsCh {
 		if err := s.writer.WriteEvent(r.Context(), w, event); err != nil {
 			return
