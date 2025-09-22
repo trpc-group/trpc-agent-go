@@ -13,6 +13,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -831,10 +832,16 @@ func applyOptions(opts ...session.Option) *session.Options {
 }
 
 // groupEventsByBranch groups events by branch identifier.
-func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+// groupEventsByFilterKey groups events by filter key with backward
+// compatibility. If the event version is not current, fall back to Branch.
+func groupEventsByFilterKey(evs []event.Event) map[string][]event.Event {
 	m := make(map[string][]event.Event)
 	for _, e := range evs {
-		m[e.Branch] = append(m[e.Branch], e)
+		key := e.FilterKey
+		if e.Version != event.CurrentVersion {
+			key = e.Branch
+		}
+		m[key] = append(m[key], e)
 	}
 	return m
 }
@@ -886,9 +893,13 @@ func (s *Service) persistSessionState(ctx context.Context, sessKey string, sessi
 
 // CreateSessionSummary generates a summary for the session and persists it on the
 // session state as a structured field. It performs per-branch delta summarization.
-func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	if s.opts.summarizer == nil {
+		return nil
+	}
+
 	if sess == nil {
-		return fmt.Errorf("nil session")
+		return errors.New("nil session")
 	}
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
@@ -913,16 +924,61 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		sessState.Summaries = make(map[string]*session.Summary)
 	}
 
-	branches := groupEventsByBranch(sess.Events)
-	if len(branches) == 0 {
+	// When filterKey is provided, collect all events that match it via
+	// hierarchical filtering (event.Filter(filterKey)) and summarize as a
+	// single group.
+	if filterKey != "" {
+		matched := make([]event.Event, 0, len(sess.Events))
+		for _, e := range sess.Events {
+			if e.Filter(filterKey) {
+				matched = append(matched, e)
+			}
+		}
+		if len(matched) == 0 {
+			return nil
+		}
+
+		var since time.Time
+		var prevSummary string
+		if prev := sessState.Summaries[filterKey]; prev != nil {
+			since = prev.UpdatedAt
+			prevSummary = prev.Summary
+		}
+		delta := computeDeltaSince(matched, since)
+		if !force && len(delta) == 0 {
+			return nil
+		}
+
+		input := delta
+		if prevSummary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
+		}
+
+		tmp := buildBranchSession(sess, filterKey, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp)
+		if err != nil || text == "" {
+			return nil
+		}
+		sessState.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+		return s.persistSessionState(ctx, sessKey, key.SessionID, sessState)
+	}
+
+	groups := groupEventsByFilterKey(sess.Events)
+	if len(groups) == 0 {
 		return nil
 	}
 
 	updatedAny := false
-	for b, evs := range branches {
+	for fk, evs := range groups {
 		var since time.Time
 		var prevSummary string
-		if prev := sessState.Summaries[b]; prev != nil {
+		if prev := sessState.Summaries[fk]; prev != nil {
 			since = prev.UpdatedAt
 			prevSummary = prev.Summary
 		}
@@ -943,12 +999,12 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 			input = append(input, delta...)
 		}
 
-		tmp := buildBranchSession(sess, b, input)
+		tmp := buildBranchSession(sess, fk, input)
 		text, err := s.opts.summarizer.Summarize(ctx, tmp)
 		if err != nil || text == "" {
 			continue
 		}
-		sessState.Summaries[b] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+		sessState.Summaries[fk] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
 		updatedAny = true
 	}
 

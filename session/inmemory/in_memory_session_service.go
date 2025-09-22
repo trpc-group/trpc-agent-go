@@ -12,6 +12,7 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -653,17 +654,17 @@ func (s *SessionService) Close() error {
 
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
 // This implementation preserves original events and updates session.Summaries only.
-func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	if s.opts.summarizer == nil {
+		return nil
+	}
+
 	if sess == nil {
-		return fmt.Errorf("nil session")
+		return errors.New("nil session")
 	}
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
 		return err
-	}
-	if s.opts.summarizer == nil {
-		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
-		return nil
 	}
 
 	app := s.getOrCreateAppSessions(key.AppName)
@@ -685,8 +686,72 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	branches := groupEventsByBranch(storedSession.Events)
-	if len(branches) == 0 {
+	// When filterKey is provided, collect all events that match it via
+	// hierarchical filtering (event.Filter(filterKey)) and summarize as a
+	// single group. This ensures parent agents can summarize content from
+	// their sub-agents.
+	if filterKey != "" {
+		matched := make([]event.Event, 0, len(storedSession.Events))
+		for _, e := range storedSession.Events {
+			if e.Filter(filterKey) {
+				matched = append(matched, e)
+			}
+		}
+		if len(matched) == 0 {
+			return nil
+		}
+
+		// Ensure summaries map exists.
+		app.mu.Lock()
+		swt, ok = app.sessions[key.UserID][key.SessionID]
+		if !ok {
+			app.mu.Unlock()
+			return fmt.Errorf("session not found: %s", key.SessionID)
+		}
+		storedSession = getValidSession(swt)
+		if storedSession == nil {
+			app.mu.Unlock()
+			return fmt.Errorf("session expired: %s", key.SessionID)
+		}
+		if storedSession.Summaries == nil {
+			storedSession.Summaries = make(map[string]*session.Summary)
+		}
+		app.mu.Unlock()
+
+		prev := storedSession.Summaries[filterKey]
+		var since time.Time
+		if prev != nil {
+			since = prev.UpdatedAt
+		}
+		delta := computeDeltaSince(matched, since)
+		if !force && len(delta) == 0 {
+			return nil
+		}
+
+		input := delta
+		if prev != nil && prev.Summary != "" {
+			input = make([]event.Event, 0, len(delta)+1)
+			input = append(input, event.Event{
+				Author:    "system",
+				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prev.Summary}}}},
+				Timestamp: time.Now(),
+			})
+			input = append(input, delta...)
+		}
+
+		tmp := buildBranchSession(storedSession, filterKey, input)
+		text, err := s.opts.summarizer.Summarize(ctx, tmp)
+		if err != nil || text == "" {
+			return nil
+		}
+		if err := s.writeSummaryUnderLock(app, key, filterKey, text); err != nil {
+			log.Warnf("write summary for branch %s failed: %v", filterKey, err)
+		}
+		return nil
+	}
+
+	groups := groupEventsByFilterKey(storedSession.Events)
+	if len(groups) == 0 {
 		return nil
 	}
 
@@ -707,8 +772,8 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	for b, evs := range branches {
-		prev := storedSession.Summaries[b]
+	for fk, evs := range groups {
+		prev := storedSession.Summaries[fk]
 		var since time.Time
 		if prev != nil {
 			since = prev.UpdatedAt
@@ -730,24 +795,30 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 			input = append(input, delta...)
 		}
 
-		tmp := buildBranchSession(storedSession, b, input)
+		tmp := buildBranchSession(storedSession, fk, input)
 		text, err := s.opts.summarizer.Summarize(ctx, tmp)
 		if err != nil || text == "" {
 			continue
 		}
 
-		if err := s.writeSummaryUnderLock(app, key, b, text); err != nil {
-			log.Warnf("write summary for branch %s failed: %v", b, err)
+		if err := s.writeSummaryUnderLock(app, key, fk, text); err != nil {
+			log.Warnf("write summary for branch %s failed: %v", fk, err)
 		}
 	}
 	return nil
 }
 
 // groupEventsByBranch groups events by branch identifier.
-func groupEventsByBranch(evs []event.Event) map[string][]event.Event {
+// groupEventsByFilterKey groups events by filter key with backward
+// compatibility. If the event version is not current, fall back to Branch.
+func groupEventsByFilterKey(evs []event.Event) map[string][]event.Event {
 	m := make(map[string][]event.Event)
 	for _, e := range evs {
-		m[e.Branch] = append(m[e.Branch], e)
+		key := e.FilterKey
+		if e.Version != event.CurrentVersion {
+			key = e.Branch
+		}
+		m[key] = append(m[key], e)
 	}
 	return m
 }

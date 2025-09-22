@@ -110,10 +110,12 @@ type Service interface {
 	AppendEvent(ctx context.Context, session *Session, event *event.Event, options ...Option) error
 
 	// CreateSessionSummary triggers summarization for the session.
+	// When filterKey is non-empty, implementations should limit work to the
+	// matching branch using hierarchical rules consistent with event.Filter.
 	// Implementations should preserve original events and store summaries on
 	// the session object. The operation should be non-blocking for the main
 	// flow where possible. Implementations may group deltas by branch internally.
-	CreateSessionSummary(ctx context.Context, sess *Session, force bool) error
+	CreateSessionSummary(ctx context.Context, sess *Session, filterKey string, force bool) error
 
 	// GetSessionSummaryText returns the latest summary text for the session if any.
 	// The boolean indicates whether a summary exists.

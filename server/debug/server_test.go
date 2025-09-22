@@ -345,7 +345,7 @@ func (m *mockSessionService) Close() error {
 }
 
 // Implement new session.Service summary methods.
-func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, force bool) error {
+func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 	return nil
 }
 

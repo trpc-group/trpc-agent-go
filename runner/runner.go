@@ -218,6 +218,17 @@ func (r *runner) Run(
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
+
+				// Trigger summarization immediately after appending a qualifying event.
+				// Run asynchronously so it never blocks event emission.
+				go func(sessCopy *session.Session, filterKey string) {
+					// Prefer filter-specific summarization to avoid scanning all branches.
+					if err := r.sessionService.CreateSessionSummary(
+						context.Background(), sessCopy, filterKey, false,
+					); err != nil {
+						log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+					}
+				}(sess, agentEvent.FilterKey)
 			}
 
 			if agentEvent.RequiresCompletion {
@@ -247,16 +258,6 @@ func (r *runner) Run(
 		if err := r.sessionService.AppendEvent(ctx, sess, runnerCompletionEvent); err != nil {
 			log.Errorf("Failed to append runner completion event to session: %v", err)
 		}
-
-		// Final attempt to summarize after completion.
-		// Run asynchronously with a short timeout to avoid blocking the main
-		// response flow. The service will perform per-branch delta summarization
-		// using the previous summary (if any) plus the new delta events.
-		go func(sessCopy *session.Session) {
-			if err := r.sessionService.CreateSessionSummary(context.Background(), sessCopy, true); err != nil {
-				log.Debugf("Auto summarize on completion skipped or failed: %v.", err)
-			}
-		}(sess)
 
 		// Send the runner completion event to output channel.
 		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)

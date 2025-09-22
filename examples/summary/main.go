@@ -161,7 +161,7 @@ func (c *summaryChat) processMessage(ctx context.Context, userMessage string) er
 			fmt.Printf("⚠️ load session failed: %v\n", err)
 			return nil
 		}
-		if err := c.sessionService.CreateSessionSummary(ctx, sess, true); err != nil {
+		if err := c.sessionService.CreateSessionSummary(ctx, sess, "", true); err != nil {
 			fmt.Printf("⚠️ force summarize failed: %v\n", err)
 			return nil
 		}

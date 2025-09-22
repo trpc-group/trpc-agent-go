@@ -389,7 +389,7 @@ func (m *MockService) AppendEvent(ctx context.Context, session *Session, event *
 	return nil
 }
 
-func (m *MockService) CreateSessionSummary(ctx context.Context, sess *Session, force bool) error {
+func (m *MockService) CreateSessionSummary(ctx context.Context, sess *Session, filterKey string, force bool) error {
 	return nil
 }
 
