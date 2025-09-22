@@ -169,6 +169,106 @@ schema.AddField("counter", graph.StateField{
 
 ## 使用指南
 
+### 节点 I/O 约定
+
+节点之间仅通过共享状态 State 传递数据。每个节点返回一个 state delta，按 Schema 的 Reducer 合并到全局 State，下游节点从 State 读取上游产出。
+
+- 常用内置键（对用户可见）
+  - `user_input`：一次性用户输入，被下一个 LLM/Agent 节点消费后清空
+  - `one_shot_messages`：一次性完整消息覆盖，用于下一次 LLM 调用，执行后清空
+  - `messages`：持久化的消息历史（LLM/Tools 会追加），支持 MessageOp 补丁
+  - `last_response`：最近一次助手文本回复
+  - `node_responses`：map[nodeID]any，按节点保存最终文本回复。最近结果用 `last_response`
+
+- 函数节点（Function node）
+  - 输入：完整 State
+  - 输出：返回 `graph.State` 增量，写入自定义键（需在 Schema 中声明），如 `{"parsed_time":"..."}`
+
+- LLM 节点
+  - 输入优先级：`one_shot_messages` → `user_input` → `messages`
+  - 输出：
+    - 向 `messages` 追加助手消息
+    - 设置 `last_response`
+    - 设置 `node_responses[<llm_node_id>]`
+
+- Tools 节点
+  - 输入：从 `messages` 中寻找最新的带 `tool_calls` 的助手消息
+  - 输出：向 `messages` 追加工具返回消息
+
+- Agent 节点（子代理）
+  - 输入：Graph 的 State 通过 `Invocation.RunOptions.RuntimeState` 传入子代理
+    - 子代理的 Model/Tool 回调可通过 `agent.InvocationFromContext(ctx)` 访问
+  - 结束输出：
+    - 设置 `last_response`
+    - 设置 `node_responses[<agent_node_id>]`
+    - 清空 `user_input`
+
+推荐用法
+
+- 在 Schema 中声明业务字段（如 `parsed_time`、`final_payload`），函数节点写入/读取。
+- 需要给 LLM 节点注入结构化提示时，可在前置节点写入 `one_shot_messages`（例如加入包含解析信息的 system message）。
+- 需要消费上游文本结果时：紧邻下游读取 `last_response`，或在任意后续节点读取 `node_responses[节点ID]`。
+
+示例：
+
+- `examples/graph/io_conventions`：函数 + LLM + Agent 的 I/O 演示
+- `examples/graph/io_conventions_tools`：加入 Tools 节点，展示如何获取工具 JSON 并落入 State
+
+#### 状态键常量与来源（可直接引用）
+
+- 导入包：`import "trpc.group/trpc-go/trpc-agent-go/graph"`
+- 常量定义位置：`graph/state.go`
+
+- 用户可见、常用键
+  - `user_input` → 常量 `graph.StateKeyUserInput`
+  - `one_shot_messages` → 常量 `graph.StateKeyOneShotMessages`
+  - `messages` → 常量 `graph.StateKeyMessages`
+  - `last_response` → 常量 `graph.StateKeyLastResponse`
+  - `node_responses` → 常量 `graph.StateKeyNodeResponses`
+
+- 其他常用键
+  - `session` → `graph.StateKeySession`
+  - `metadata` → `graph.StateKeyMetadata`
+  - `current_node_id` → `graph.StateKeyCurrentNodeID`
+  - `exec_context` → `graph.StateKeyExecContext`
+  - `tool_callbacks` → `graph.StateKeyToolCallbacks`
+  - `model_callbacks` → `graph.StateKeyModelCallbacks`
+  - `agent_callbacks` → `graph.StateKeyAgentCallbacks`
+  - `parent_agent` → `graph.StateKeyParentAgent`
+
+使用示例：
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func myNode(ctx context.Context, state graph.State) (any, error) {
+    // 读取上一节点文本输出
+    last, _ := state[graph.StateKeyLastResponse].(string)
+    // 写入自定义字段
+    return graph.State{"my_key": last}, nil
+}
+```
+
+#### 事件元数据键（StateDelta）
+
+- 导入包：`import "trpc.group/trpc-go/trpc-agent-go/graph"`
+- 常量定义位置：`graph/events.go`
+
+- 模型元数据：`_model_metadata` → `graph.MetadataKeyModel`（结构体 `graph.ModelExecutionMetadata`）
+- 工具元数据：`_tool_metadata` → `graph.MetadataKeyTool`（结构体 `graph.ToolExecutionMetadata`）
+
+使用示例：
+
+```go
+if b, ok := event.StateDelta[graph.MetadataKeyModel]; ok {
+    var md graph.ModelExecutionMetadata
+    _ = json.Unmarshal(b, &md)
+}
+```
+
 ### 1. 创建 GraphAgent 和 Runner
 
 用户主要通过创建 GraphAgent 然后通过 Runner 来使用 Graph 包。这是推荐的使用模式：
