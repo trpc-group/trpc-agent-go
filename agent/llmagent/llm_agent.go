@@ -339,6 +339,8 @@ type Options struct {
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
 	StructuredOutputType reflect.Type
+	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	EndInvocationAfterTransfer bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -367,7 +369,10 @@ type LLMAgent struct {
 
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	var options Options = Options{
+		ChannelBufferSize:          defaultChannelBufferSize,
+		EndInvocationAfterTransfer: true,
+	}
 
 	// Apply function options.
 	for _, opt := range opts {
@@ -398,7 +403,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor()
+		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
 		responseProcessors = append(responseProcessors, transferResponseProcessor)
 	}
 

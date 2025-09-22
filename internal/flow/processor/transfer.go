@@ -19,11 +19,15 @@ import (
 )
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
-type TransferResponseProcessor struct{}
+type TransferResponseProcessor struct {
+	EndInvocationAfterTransfer bool
+}
 
 // NewTransferResponseProcessor creates a new transfer response processor.
-func NewTransferResponseProcessor() *TransferResponseProcessor {
-	return &TransferResponseProcessor{}
+func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor {
+	return &TransferResponseProcessor{
+		EndInvocationAfterTransfer: endInvocation,
+	}
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -146,5 +150,5 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
 	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
 	invocation.TransferInfo = nil
-	invocation.EndInvocation = true
+	invocation.EndInvocation = p.EndInvocationAfterTransfer
 }
