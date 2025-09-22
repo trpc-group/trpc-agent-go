@@ -47,14 +47,6 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	}
 }
 
-// WithToolCallbacks sets the tool callbacks.
-// Deprecated: use tool node ToolCallbacks instead.
-func WithToolCallbacks(callbacks *tool.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ToolCallbacks = callbacks
-	}
-}
-
 // WithInitialState sets the initial state for graph execution.
 func WithInitialState(state graph.State) Option {
 	return func(opts *Options) {
@@ -93,9 +85,6 @@ type Options struct {
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
-	// ToolCallbacks contains callbacks for tool operations.
-	// Deprecated: use tool node ToolCallbacks instead.
-	ToolCallbacks *tool.Callbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
