@@ -74,12 +74,14 @@ type subAgentCall struct {
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
+	toolCallbacks       *tool.Callbacks
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
-func NewFunctionCallResponseProcessor(enableParallelTools bool) *FunctionCallResponseProcessor {
+func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *tool.Callbacks) *FunctionCallResponseProcessor {
 	return &FunctionCallResponseProcessor{
 		enableParallelTools: enableParallelTools,
+		toolCallbacks:       toolCallbacks,
 	}
 }
 
@@ -545,8 +547,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 ) (any, error) {
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
-	if invocation.ToolCallbacks != nil {
-		customResult, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
+	if p.toolCallbacks != nil {
+		customResult, callbackErr := p.toolCallbacks.RunBeforeTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -569,8 +571,8 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 
 	// Run after tool callbacks if they exist.
-	if invocation.ToolCallbacks != nil {
-		customResult, callbackErr := invocation.ToolCallbacks.RunAfterTool(
+	if p.toolCallbacks != nil {
+		customResult, callbackErr := p.toolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,

@@ -24,7 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -78,8 +77,6 @@ type Invocation struct {
 	AgentCallbacks *Callbacks
 	// ModelCallbacks contains callbacks for model operations.
 	ModelCallbacks *model.Callbacks
-	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.Callbacks
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput

@@ -89,6 +89,9 @@ type Node struct {
 	// Declared destinations for dynamic routing visualization and static checks.
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
+
+	// just for tool node.
+	toolCallbacks *tool.Callbacks
 }
 
 // Edge represents an edge in the graph.

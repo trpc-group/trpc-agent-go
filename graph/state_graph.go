@@ -153,6 +153,15 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 	}
 }
 
+// WithToolCallbacks sets multiple callbacks for this specific node.
+// This allows setting tool callbacks directly on the node.
+// It's effect just for tool node.
+func WithToolCallbacks(callbacks *tool.Callbacks) Option {
+	return func(node *Node) {
+		node.toolCallbacks = callbacks
+	}
+}
+
 // WithAgentNodeEventCallback sets a callback that will be executed when an agent event is emitted.
 // This callback is specific to this node and will be executed in addition to any global callbacks.
 func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
