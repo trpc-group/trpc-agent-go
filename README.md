@@ -336,7 +336,7 @@ See individual `README.md` files in each example folder for usage details.
 
 Architecture
 
-![architecture](docs/assets/img/component_architecture.png)
+![architecture](docs/mkdocs/assets/img/component_architecture.png)
 
 ### 🔄 **Execution Flow**
 
@@ -361,7 +361,7 @@ Key packages:
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 
 Execution flow
-![execution](docs/assets/img/timing_diagram.png)
+![execution](docs/mkdocs/assets/img/timing_diagram.png)
 
 ## Using Built-in Agents
 
