@@ -23,8 +23,9 @@ import (
 
 // mockAgent minimal implementation for transfer tests.
 type mockAgent struct {
-	name string
-	emit bool
+	name             string
+	emit             bool
+	gotEndInvocation bool
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
@@ -35,6 +36,8 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 	ch := make(chan *event.Event, 1)
 	go func() {
 		defer close(ch)
+		// Record whether the invocation was incorrectly marked as ended.
+		m.gotEndInvocation = inv.EndInvocation
 		if m.emit {
 			ch <- event.New(inv.InvocationID, m.name)
 		}
@@ -86,6 +89,9 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	require.Len(t, evts, 2)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
+
+	// Ensure EndInvocation is NOT propagated to child invocation.
+	require.False(t, target.gotEndInvocation)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {

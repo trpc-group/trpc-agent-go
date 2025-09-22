@@ -102,9 +102,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Create new invocation for the target agent.
+	// Do NOT propagate EndInvocation from the coordinator.
+	// end_invocation is intended to end the current (parent) invocation
+	// after transfer, not the target agent's invocation.
 	targetInvocation := invocation.Clone(
 		agent.WithInvocationAgent(targetAgent),
-		agent.WithInvocationEndInvocation(transferInfo.EndInvocation),
 	)
 
 	// Set the message for the target agent.
