@@ -970,6 +970,7 @@ func (m *Model) sendFinalResponse(
 			hasToolCall = true
 			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
 		}
+
 		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls)
 
 		select {
