@@ -10,9 +10,9 @@ nav:
   - Components:
       - Agent:
         - Agent: agent.md
+        - Multi Agent: multiagent.md
+        - Graph Agent: graph.md
         - Custom Agent: custom-agent.md
-        - Multi-Agent: multiagent.md
-        - Graph: graph.md
       - Runner: runner.md
       - Model: model.md
       - Memory: memory.md
@@ -45,9 +45,9 @@ plugins:
             - 组件:
                 - Agent: 
                   - Agent: agent.md
+                  - Multi Agent: multiagent.md
+                  - Graph Agent: graph.md
                   - 自定义 Agent: custom-agent.md
-                  - Multi-Agent: multiagent.md
-                  - Graph: graph.md
                 - Runner: runner.md
                 - Model: model.md
                 - Memory: memory.md
