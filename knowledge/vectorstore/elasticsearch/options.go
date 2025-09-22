@@ -58,6 +58,8 @@ type options struct {
 	contentFieldName string
 	// embeddingFieldName is the Elasticsearch field name for embedding.
 	embeddingFieldName string
+	// extraOptions allows passing builder-specific extras to the storage client.
+	extraOptions []any
 }
 
 // defaultOptions returns default configuration.
@@ -221,5 +223,12 @@ func WithContentField(field string) Option {
 func WithEmbeddingField(field string) Option {
 	return func(o *options) {
 		o.embeddingFieldName = field
+	}
+}
+
+// WithExtraOptions sets extra builder-specific options for the storage client.
+func WithExtraOptions(extraOptions ...any) Option {
+	return func(o *options) {
+		o.extraOptions = append(o.extraOptions, extraOptions...)
 	}
 }
