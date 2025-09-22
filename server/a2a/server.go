@@ -153,6 +153,29 @@ type messageProcessor struct {
 	debugLogging        bool
 }
 
+func isFinalStreamingEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+
+	rsp := evt.Response
+	if !rsp.Done {
+		return false
+	}
+
+	if rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
+		return false
+	}
+
+	for _, choice := range rsp.Choices {
+		if choice.Message.Role == model.RoleTool || len(choice.Message.ToolCalls) > 0 || choice.Message.ToolID != "" {
+			return false
+		}
+	}
+
+	return true
+}
+
 // handleDefaultError provides a fallback error handling mechanism
 func (m *messageProcessor) handleError(
 	ctx context.Context,
@@ -436,8 +459,8 @@ func (m *messageProcessor) processBatchStreamingEvents(
 		}
 
 		// Check if this is the final event - stop processing if done
-		if agentEvent.Response.Done {
-			log.Debug("received agent final event, stopping batch processing")
+		if isFinalStreamingEvent(agentEvent) {
+			log.Debugf("received final event, stopping batch processing (eventID=%s)", agentEvent.ID)
 			return false, nil
 		}
 	}
