@@ -20,7 +20,7 @@ import (
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
 type TransferResponseProcessor struct {
-	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	// endInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
 	endInvocationAfterTransfer bool
