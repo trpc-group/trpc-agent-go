@@ -191,7 +191,6 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
-	modelCallbacks        *model.Callbacks
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -242,19 +241,10 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
-	// ModelCallbacks holds model operation callbacks.
-	ModelCallbacks *model.Callbacks
 }
 
 // Option is a function that configures an OpenAI model.
 type Option func(*options)
-
-// WithModelCallbacks sets the model callbacks for the OpenAI client.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
-	return func(opts *options) {
-		opts.ModelCallbacks = callbacks
-	}
-}
 
 // WithAPIKey sets the API key for the OpenAI client.
 func WithAPIKey(key string) Option {
@@ -429,7 +419,6 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
 		batchBaseURL:          o.BatchBaseURL,
-		modelCallbacks:        o.ModelCallbacks,
 	}
 }
 
@@ -450,20 +439,6 @@ func (m *Model) GenerateContent(
 	}
 
 	responseChan := make(chan *model.Response, m.channelBufferSize)
-	// Run before model callbacks if they exist.
-	if m.modelCallbacks != nil {
-		customResponse, err := m.modelCallbacks.RunBeforeModel(ctx, request)
-		if err != nil {
-			log.Errorf("Before model callback failed: %v", err)
-			return nil, err
-		}
-
-		if customResponse != nil {
-			responseChan <- customResponse
-			close(responseChan)
-			return responseChan, nil
-		}
-	}
 
 	// Convert our request format to OpenAI format.
 	chatRequest := openai.ChatCompletionNewParams{
@@ -543,9 +518,9 @@ func (m *Model) GenerateContent(
 		}
 
 		if request.Stream {
-			m.handleStreamingResponse(ctx, request, chatRequest, responseChan, opts...)
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, request, chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
 		}
 	}()
 
@@ -823,7 +798,6 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletion
 // handleStreamingResponse handles streaming chat completion responses.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
-	request *model.Request,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
 	opts ...openaiopt.RequestOption,
@@ -862,10 +836,6 @@ func (m *Model) handleStreamingResponse(
 
 		response := m.createPartialResponse(chunk)
 
-		if err := m.handleAfterModelCallbacks(ctx, request, response, responseChan); err != nil {
-			return
-		}
-
 		select {
 		case responseChan <- response:
 		case <-ctx.Done():
@@ -874,7 +844,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, request, stream, acc, idToIndexMap, responseChan)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.
@@ -986,7 +956,6 @@ func (m *Model) createPartialResponse(chunk openai.ChatCompletionChunk) *model.R
 // sendFinalResponse sends the final response with accumulated data.
 func (m *Model) sendFinalResponse(
 	ctx context.Context,
-	request *model.Request,
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
@@ -1002,11 +971,6 @@ func (m *Model) sendFinalResponse(
 			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
 		}
 		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls)
-
-		// Run after model callbacks.
-		if err := m.handleAfterModelCallbacks(ctx, request, finalResponse, responseChan); err != nil {
-			return
-		}
 
 		select {
 		case responseChan <- finalResponse:
@@ -1120,7 +1084,6 @@ func (m *Model) createFinalResponse(
 // handleNonStreamingResponse handles non-streaming chat completion responses.
 func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
-	request *model.Request,
 	chatRequest openai.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
 	opts ...openaiopt.RequestOption,
@@ -1213,45 +1176,10 @@ func (m *Model) handleNonStreamingResponse(
 		response.SystemFingerprint = &chatCompletion.SystemFingerprint
 	}
 
-	// Run after model callbacks if they exist.
-	if err := m.handleAfterModelCallbacks(ctx, request, response, responseChan); err != nil {
-		return
-	}
-
 	select {
 	case responseChan <- response:
 	case <-ctx.Done():
 	}
-}
-
-func (m *Model) handleAfterModelCallbacks(ctx context.Context, request *model.Request, response *model.Response,
-	responseChan chan<- *model.Response) error {
-	// Run after model callbacks if they exist.
-	if m.modelCallbacks != nil {
-		rsp, err := m.modelCallbacks.RunAfterModel(ctx, request, response, nil)
-		if err != nil {
-			log.Errorf("After model callback failed. : %v", err)
-			response = &model.Response{
-				Error: &model.ResponseError{
-					Message: err.Error(),
-					Type:    model.ErrorTypeModelCallbackError,
-				},
-				Timestamp: time.Now(),
-				Done:      true,
-			}
-			select {
-			case responseChan <- response:
-			case <-ctx.Done():
-			}
-			return err
-		}
-
-		if rsp != nil {
-			*response = *rsp
-		}
-	}
-
-	return nil
 }
 
 // FileOptions is the options for file operations.

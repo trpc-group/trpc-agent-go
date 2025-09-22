@@ -123,7 +123,6 @@ func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 }
 
 // WithModelCallbacks sets the model callbacks.
-// Deprecated: use the model's own ModelCallbacks.
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ModelCallbacks = callbacks
@@ -299,7 +298,6 @@ type Options struct {
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
 	// ModelCallbacks contains callbacks for model operations.
-	// Deprecated: use the model's own ModelCallbacks.
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
@@ -406,6 +404,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
 		ChannelBufferSize: options.ChannelBufferSize,
+		ModelCallbacks:    options.ModelCallbacks,
 	}
 
 	llmFlow := llmflow.New(

@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -37,14 +36,6 @@ func WithDescription(description string) Option {
 func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
 		opts.AgentCallbacks = callbacks
-	}
-}
-
-// WithModelCallbacks sets the model callbacks.
-// Deprecated: use the model's own ModelCallbacks.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ModelCallbacks = callbacks
 	}
 }
 
@@ -91,9 +82,6 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
-	// ModelCallbacks contains callbacks for model operations.
-	// Deprecated: use the model's own ModelCallbacks.
-	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
 	// InitialState is the initial state for graph execution.

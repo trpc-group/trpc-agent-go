@@ -220,6 +220,8 @@ type Invocation struct {
 	TransferInfo *TransferInfo
 	// AgentCallbacks allows inserting custom logic at different stages of Agent execution.
 	AgentCallbacks *AgentCallbacks
+    // ModelCallbacks allows inserting custom logic at different stages of model calls.
+	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks allows inserting custom logic at different stages of tool calls.
 	ToolCallbacks *tool.ToolCallbacks
 

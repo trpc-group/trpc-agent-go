@@ -22,7 +22,6 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -690,67 +689,15 @@ func TestNewAgentNodeFunc_RunError(t *testing.T) {
 }
 
 // Dummy model to test one-shot stage
-type dummyModel struct {
-	modelCallbacks *model.Callbacks
-}
+type dummyModel struct{}
 
 func (d *dummyModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
 	ch := make(chan *model.Response, 1)
-	if d.modelCallbacks != nil {
-		rsp, err := d.modelCallbacks.RunBeforeModel(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		if rsp != nil {
-			// If a before model callback returns a custom response, return it immediately.
-			ch <- rsp
-			close(ch)
-			return ch, nil
-		}
-	}
-
-	go func() {
-		defer close(ch)
-		rsp := &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
-		if err := d.handleAfterModelCallbacks(ctx, req, rsp, ch); err != nil {
-			return
-		}
-		ch <- rsp
-	}()
-
+	ch <- &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
+	close(ch)
 	return ch, nil
 }
 func (d *dummyModel) Info() model.Info { return model.Info{Name: "dummy"} }
-
-func (m *dummyModel) handleAfterModelCallbacks(ctx context.Context, request *model.Request, response *model.Response,
-	responseChan chan<- *model.Response) error {
-	// Run after model callbacks if they exist.
-	if m.modelCallbacks != nil {
-		rsp, err := m.modelCallbacks.RunAfterModel(ctx, request, response, nil)
-		if err != nil {
-			log.Errorf("After model callback failed: %v", err)
-			response = &model.Response{
-				Error: &model.ResponseError{
-					Message: err.Error(),
-					Type:    model.ErrorTypeModelCallbackError,
-				},
-				Timestamp: time.Now(),
-				Done:      true,
-			}
-			select {
-			case responseChan <- response:
-			case <-ctx.Done():
-			}
-			return err
-		}
-
-		if rsp != nil {
-			*response = *rsp
-		}
-	}
-
-	return nil
-}
 
 func TestLLMRunner_ExecuteOneShotStage(t *testing.T) {
 	r := &llmRunner{llmModel: &dummyModel{}, instruction: "inst", tools: nil, nodeID: "node1"}
@@ -793,13 +740,14 @@ func TestExecuteModelWithEvents_NoResponseError(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
 	_, err := executeModelWithEvents(context.Background(), modelExecutionConfig{
-		LLMModel:     &emptyModel{},
-		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
-		EventChan:    make(chan *event.Event, 1),
-		InvocationID: "inv",
-		SessionID:    "sid",
-		Span:         span,
-		NodeID:       "n",
+		ModelCallbacks: nil,
+		LLMModel:       &emptyModel{},
+		Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		EventChan:      make(chan *event.Event, 1),
+		InvocationID:   "inv",
+		SessionID:      "sid",
+		Span:           span,
+		NodeID:         "n",
 	})
 	require.Error(t, err)
 }
@@ -809,9 +757,7 @@ func TestRunModel_BeforeModelCustomResponse(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
 		return &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("custom")}}}, nil
 	})
-	ch, err := runModel(context.Background(), &dummyModel{
-		modelCallbacks: cbs,
-	}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	ch, err := runModel(context.Background(), cbs, &dummyModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.NoError(t, err)
 	rsp := <-ch
 	require.NotNil(t, rsp)
@@ -825,14 +771,15 @@ func TestProcessModelResponse_EventAndErrors(t *testing.T) {
 	evch := make(chan *event.Event, 1)
 	rsp := &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}}
 	err := processModelResponse(context.Background(), modelResponseConfig{
-		Response:     rsp,
-		EventChan:    evch,
-		InvocationID: "inv",
-		SessionID:    "sid",
-		LLMModel:     &dummyModel{},
-		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
-		Span:         span,
-		NodeID:       "nodeX",
+		Response:       rsp,
+		ModelCallbacks: nil,
+		EventChan:      evch,
+		InvocationID:   "inv",
+		SessionID:      "sid",
+		LLMModel:       &dummyModel{},
+		Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		Span:           span,
+		NodeID:         "nodeX",
 	})
 	require.NoError(t, err)
 	require.NotNil(t, <-evch)
@@ -897,15 +844,14 @@ func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 	})
 	evch := make(chan *event.Event, 1)
 	err := processModelResponse(context.Background(), modelResponseConfig{
-		Response:     &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
-		EventChan:    evch,
-		InvocationID: "inv",
-		SessionID:    "sid",
-		LLMModel: &dummyModel{
-			modelCallbacks: cbs,
-		},
-		Request: &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
-		Span:    span,
+		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
+		ModelCallbacks: cbs,
+		EventChan:      evch,
+		InvocationID:   "inv",
+		SessionID:      "sid",
+		LLMModel:       &dummyModel{},
+		Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		Span:           span,
 	})
 	require.NoError(t, err)
 }
@@ -926,13 +872,14 @@ func TestExecuteModelWithEvents_ToolCallsMerged(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
 	res, err := executeModelWithEvents(context.Background(), modelExecutionConfig{
-		LLMModel:     &toolCallStreamModel{},
-		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
-		EventChan:    make(chan *event.Event, 2),
-		InvocationID: "inv",
-		SessionID:    "sid",
-		Span:         span,
-		NodeID:       "node",
+		ModelCallbacks: nil,
+		LLMModel:       &toolCallStreamModel{},
+		Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		EventChan:      make(chan *event.Event, 2),
+		InvocationID:   "inv",
+		SessionID:      "sid",
+		Span:           span,
+		NodeID:         "node",
 	})
 	require.NoError(t, err)
 	r := res.(*model.Response)
@@ -1090,18 +1037,15 @@ func TestProcessModelResponse_AfterModelError(t *testing.T) {
 	cbs := model.NewCallbacks().RegisterAfterModel(func(ctx context.Context, req *model.Request, rsp *model.Response, modelErr error) (*model.Response, error) {
 		return nil, assert.AnError
 	})
-	ml := &dummyModel{modelCallbacks: cbs}
-	ch, err := ml.GenerateContent(context.Background(), &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
-	require.NoError(t, err)
-	rsp := <-ch
-	err = processModelResponse(context.Background(), modelResponseConfig{
-		Response:     rsp,
-		EventChan:    make(chan *event.Event, 1),
-		InvocationID: "inv",
-		LLMModel:     ml,
-		SessionID:    "sid",
-		Request:      &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
-		Span:         span,
+	err := processModelResponse(context.Background(), modelResponseConfig{
+		Response:       &model.Response{Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("ok")}}},
+		ModelCallbacks: cbs,
+		EventChan:      make(chan *event.Event, 1),
+		InvocationID:   "inv",
+		SessionID:      "sid",
+		LLMModel:       &dummyModel{},
+		Request:        &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}},
+		Span:           span,
 	})
 	require.Error(t, err)
 }
@@ -1114,7 +1058,7 @@ func (e *errModel) GenerateContent(ctx context.Context, req *model.Request) (<-c
 func (e *errModel) Info() model.Info { return model.Info{Name: "err"} }
 
 func TestRunModel_GenerateContentError(t *testing.T) {
-	_, err := runModel(context.Background(), &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	_, err := runModel(context.Background(), nil, &errModel{}, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
 	require.Error(t, err)
 }
 

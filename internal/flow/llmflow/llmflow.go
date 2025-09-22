@@ -34,6 +34,7 @@ const (
 // Options contains configuration options for creating a Flow.
 type Options struct {
 	ChannelBufferSize int // Buffer size for event channels (default: 256)
+	ModelCallbacks    *model.Callbacks
 }
 
 // Flow provides the basic flow implementation.
@@ -41,6 +42,7 @@ type Flow struct {
 	requestProcessors  []flow.RequestProcessor
 	responseProcessors []flow.ResponseProcessor
 	channelBufferSize  int
+	modelCallbacks     *model.Callbacks
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -60,6 +62,7 @@ func New(
 		requestProcessors:  requestProcessors,
 		responseProcessors: responseProcessors,
 		channelBufferSize:  channelBufferSize,
+		modelCallbacks:     opts.ModelCallbacks,
 	}
 }
 
@@ -167,13 +170,18 @@ func (f *Flow) processStreamingResponses(
 	var lastEvent *event.Event
 
 	for response := range responseChan {
+		// Handle after model callbacks.
+		customResp, err := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
+		if err != nil {
+			return lastEvent, err
+		}
+		if customResp != nil {
+			response = customResp
+		}
+
 		// 4. Create and send LLM response using the clean constructor.
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
-		if response != nil && response.Error != nil && response.Error.Type == model.ErrorTypeModelCallbackError {
-			return lastEvent, errors.New(response.Error.Message)
-		}
-
 		lastEvent = llmResponseEvent
 		// 5. Check context cancellation.
 		if err := agent.CheckContextCancelled(ctx); err != nil {
@@ -190,6 +198,32 @@ func (f *Flow) processStreamingResponses(
 	}
 
 	return lastEvent, nil
+}
+
+// handleAfterModelCallbacks processes after model callbacks.
+func (f *Flow) handleAfterModelCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	response *model.Response,
+	eventChan chan<- *event.Event,
+) (*model.Response, error) {
+	customResp, err := f.runAfterModelCallbacks(ctx, invocation, llmRequest, response)
+	if err != nil {
+		if _, ok := agent.AsStopError(err); ok {
+			return nil, err
+		}
+
+		log.Errorf("After model callback failed for agent %s: %v", invocation.AgentName, err)
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		))
+		return nil, err
+	}
+	return customResp, nil
 }
 
 // createLLMResponseEvent creates a new LLM response event.
@@ -217,6 +251,18 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 		}
 	}
 	return longRunningToolIDs
+}
+
+func (f *Flow) runAfterModelCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	response *model.Response,
+) (*model.Response, error) {
+	if cb := f.modelCallbacks; cb == nil {
+		return response, nil
+	}
+	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -250,6 +296,22 @@ func (f *Flow) callLLM(
 	}
 
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
+
+	// Run before model callbacks if they exist.
+	if f.modelCallbacks != nil {
+		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
+		if err != nil {
+			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
+			return nil, err
+		}
+		if customResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			responseChan := make(chan *model.Response, 1)
+			responseChan <- customResponse
+			close(responseChan)
+			return responseChan, nil
+		}
+	}
 
 	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)

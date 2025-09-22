@@ -15,10 +15,9 @@ import (
 
 // Error type constants for ResponseError.Type field.
 const (
-	ErrorTypeStreamError        = "stream_error"
-	ErrorTypeAPIError           = "api_error"
-	ErrorTypeFlowError          = "flow_error"
-	ErrorTypeModelCallbackError = "model_callback_error"
+	ErrorTypeStreamError = "stream_error"
+	ErrorTypeAPIError    = "api_error"
+	ErrorTypeFlowError   = "flow_error"
 )
 
 // Object type constants for Response.Object field.

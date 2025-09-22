@@ -40,7 +40,6 @@ const (
 	// StateKeyToolCallbacks is the key of the tool callbacks.
 	StateKeyToolCallbacks = "tool_callbacks"
 	// StateKeyModelCallbacks is the key of the model callbacks.
-	// Deprecated: use the model's own ModelCallbacks.
 	StateKeyModelCallbacks = "model_callbacks"
 	// StateKeyAgentCallbacks is the key of the agent callbacks.
 	StateKeyAgentCallbacks = "agent_callbacks"
