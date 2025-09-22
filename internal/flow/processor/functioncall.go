@@ -706,10 +706,16 @@ func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv
 // shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
 // content to avoid duplicate large blocks in the parent transcript. We still
 // aggregate its text from deltas for the final tool.response content.
+// However, we must forward chat.completion events that contain tool_calls.
 func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event) bool {
 	if ev.Response != nil && len(ev.Response.Choices) > 0 {
 		ch := ev.Response.Choices[0]
 		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
+			// Always forward if the message contains tool_calls (for proper tool call/response pairing)
+			if len(ch.Message.ToolCalls) > 0 {
+				return true
+			}
+			// Suppress regular assistant messages without tool_calls
 			return false
 		}
 	}

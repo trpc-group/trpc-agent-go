@@ -1461,3 +1461,98 @@ func TestMarshalChunkToText_MarshalError(t *testing.T) {
 	text := marshalChunkToText(func() {})
 	require.NotEmpty(t, text)
 }
+
+func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_ToolCalls(t *testing.T) {
+	processor := &FunctionCallResponseProcessor{}
+
+	// Test chat.completion event with tool_calls should be forwarded
+	eventWithToolCalls := &event.Event{
+		Response: &model.Response{
+			Object: "chat.completion",
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: ""},
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "I'll calculate that for you.",
+					ToolCalls: []model.ToolCall{{
+						ID: "call_123",
+						Function: model.FunctionDefinitionParam{
+							Name: "calculator",
+						},
+					}},
+				},
+			}},
+			IsPartial: false,
+		},
+	}
+
+	shouldForward := processor.shouldForwardInnerEvent(eventWithToolCalls)
+	require.True(t, shouldForward, "Events with tool_calls should be forwarded for proper tool call/response pairing")
+}
+
+func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_RegularMessage(t *testing.T) {
+	processor := &FunctionCallResponseProcessor{}
+
+	// Test regular assistant message without tool_calls should NOT be forwarded
+	eventWithoutToolCalls := &event.Event{
+		Response: &model.Response{
+			Object: "chat.completion",
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: ""},
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					Content:   "The calculation is complete.",
+					ToolCalls: []model.ToolCall{}, // No tool calls
+				},
+			}},
+			IsPartial: false,
+		},
+	}
+
+	shouldForward := processor.shouldForwardInnerEvent(eventWithoutToolCalls)
+	require.False(t, shouldForward, "Regular assistant messages without tool_calls should be suppressed")
+}
+
+func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_PartialEvents(t *testing.T) {
+	processor := &FunctionCallResponseProcessor{}
+
+	// Test partial events should be forwarded
+	partialEvent := &event.Event{
+		Response: &model.Response{
+			Object: "chat.completion",
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "Calculating..."},
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "",
+				},
+			}},
+			IsPartial: true,
+		},
+	}
+
+	shouldForward := processor.shouldForwardInnerEvent(partialEvent)
+	require.True(t, shouldForward, "Partial events should be forwarded")
+}
+
+func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_NoToolCallsButHasDelta(t *testing.T) {
+	processor := &FunctionCallResponseProcessor{}
+
+	// Test events with delta content should be forwarded
+	eventWithDelta := &event.Event{
+		Response: &model.Response{
+			Object: "chat.completion",
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "I am thinking..."},
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "",
+				},
+			}},
+			IsPartial: false,
+		},
+	}
+
+	shouldForward := processor.shouldForwardInnerEvent(eventWithDelta)
+	require.True(t, shouldForward, "Events with delta content should be forwarded")
+}
