@@ -1483,6 +1483,17 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			expectedCount: 1,
 		},
 		{
+			name: "ToolCall_NoID_Synthesized", // first tool call lacks id entirely; expect synthesized auto_call_0.
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"calc","arguments":"{\"a\":1}"}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedTool:  "calc",
+			expectedArgs:  `{"a":1}`,
+			expectedCount: 1,
+		},
+		{
 			name: "ID_Index_Mapping_Verification", // Test ID -> Index mapping with multiple tool calls.
 			chunks: []string{
 				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,                                                                                       // Start boundary
