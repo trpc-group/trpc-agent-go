@@ -23,13 +23,13 @@ type TransferResponseProcessor struct {
 	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
 	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
 	// when the transfer is complete. Defaults to true.
-	EndInvocationAfterTransfer bool
+	endInvocationAfterTransfer bool
 }
 
 // NewTransferResponseProcessor creates a new transfer response processor.
 func NewTransferResponseProcessor(endInvocation bool) *TransferResponseProcessor {
 	return &TransferResponseProcessor{
-		EndInvocationAfterTransfer: endInvocation,
+		endInvocationAfterTransfer: endInvocation,
 	}
 }
 
@@ -153,5 +153,5 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
 	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
 	invocation.TransferInfo = nil
-	invocation.EndInvocation = p.EndInvocationAfterTransfer
+	invocation.EndInvocation = p.endInvocationAfterTransfer
 }
