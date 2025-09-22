@@ -208,7 +208,7 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (*model.Response, error) {
-	customResp, err := f.runAfterModelCallbacks(ctx, invocation, llmRequest, response)
+	customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -255,11 +255,10 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 
 func (f *Flow) runAfterModelCallbacks(
 	ctx context.Context,
-	invocation *agent.Invocation,
 	req *model.Request,
 	response *model.Response,
 ) (*model.Response, error) {
-	if cb := f.modelCallbacks; cb == nil {
+	if f.modelCallbacks == nil {
 		return response, nil
 	}
 	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
