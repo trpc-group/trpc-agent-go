@@ -263,16 +263,7 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	}
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
-
-	// Preserve FilterKey for events created by sub-agents to prevent infinite loops.
-	// If the event already has a FilterKey different from the current invocation,
-	// keep the original FilterKey.
-	if e.FilterKey != "" && e.FilterKey != inv.GetEventFilterKey() {
-		// Keep the original FilterKey - this is a sub-agent event
-		// being forwarded by parent agent, don't overwrite it
-	} else {
-		e.FilterKey = inv.GetEventFilterKey()
-	}
+	e.FilterKey = inv.GetEventFilterKey()
 }
 
 // EmitEvent inject invocation information into event and emit it to channel.

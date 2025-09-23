@@ -950,7 +950,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 			shouldForward = true
 		}
 		if shouldForward {
-			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
+			if err := event.EmitEvent(ctx, eventChan, ev); err != nil {
 				return err
 			}
 		}

@@ -231,29 +231,6 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestInjectIntoEvent_PreserveFilterKey(t *testing.T) {
-	// Test that InjectIntoEvent preserves existing FilterKey when it differs from invocation's FilterKey
-	parentInv := &Invocation{
-		AgentName:      "parent-agent",
-		eventFilterKey: "parent-filter",
-	}
-
-	// Create an event with a different FilterKey (simulating sub-agent event)
-	ev := &event.Event{
-		FilterKey: "sub-agent-filter",
-		Author:    "sub-agent",
-		Response: &model.Response{
-			Object: "tool.response",
-		},
-	}
-
-	// Call InjectIntoEvent
-	InjectIntoEvent(parentInv, ev)
-
-	// FilterKey should be preserved (not overwritten by parent's FilterKey)
-	require.Equal(t, "sub-agent-filter", ev.FilterKey, "FilterKey should be preserved for sub-agent events")
-}
-
 func TestInjectIntoEvent_SetFilterKey(t *testing.T) {
 	// Test that InjectIntoEvent sets FilterKey when event doesn't have one or has same FilterKey
 	inv := &Invocation{
@@ -282,38 +259,4 @@ func TestInjectIntoEvent_SetFilterKey(t *testing.T) {
 	}
 	InjectIntoEvent(inv, ev2)
 	require.Equal(t, "test-filter", ev2.FilterKey, "FilterKey should remain when same as invocation")
-}
-
-func TestInjectIntoEvent_PreserveChatCompletionFilterKey(t *testing.T) {
-	// Test specific case for chat.completion events with different FilterKey
-	parentInv := &Invocation{
-		AgentName:      "chat-assistant",
-		eventFilterKey: "agent-tool-chat",
-	}
-
-	// Sub-agent's chat.completion event with tool_calls
-	ev := &event.Event{
-		FilterKey: "math-specialist",
-		Author:    "math-specialist",
-		Response: &model.Response{
-			Object: "chat.completion",
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Role: model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{
-						ID: "call_123",
-						Function: model.FunctionDefinitionParam{
-							Name: "calculator",
-						},
-					}},
-				},
-			}},
-		},
-	}
-
-	InjectIntoEvent(parentInv, ev)
-
-	// FilterKey should be preserved to prevent infinite loops in AgentTool
-	require.Equal(t, "math-specialist", ev.FilterKey,
-		"chat.completion FilterKey should be preserved for sub-agent tool calls")
 }
