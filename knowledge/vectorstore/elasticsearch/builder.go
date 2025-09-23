@@ -56,7 +56,9 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
+		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+			searchBody.PostFilter(filterQuery)
+		}
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -79,7 +81,9 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
+		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+			searchBody.PostFilter(filterQuery)
+		}
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -124,7 +128,9 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		searchBody.PostFilter(vs.buildFilterQuery(query.Filter))
+		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+			searchBody.PostFilter(filterQuery)
+		}
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
