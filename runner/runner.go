@@ -222,7 +222,7 @@ func (r *runner) Run(
 				// Trigger summarization immediately after appending a qualifying event.
 				// Run asynchronously so it never blocks event emission.
 				go func(sessCopy *session.Session, filterKey string) {
-					// Prefer filter-specific summarization to avoid scanning all branches.
+					// Prefer filter-specific summarization to avoid scanning all filters.
 					if err := r.sessionService.CreateSessionSummary(
 						context.Background(), sessCopy, filterKey, false,
 					); err != nil {

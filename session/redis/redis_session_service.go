@@ -861,7 +861,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	}
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
-		return err
+		return fmt.Errorf("check session key failed: %w", err)
 	}
 	if s.opts.summarizer == nil {
 		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
