@@ -1408,6 +1408,7 @@ func (e *Executor) executeSingleTask(
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
+	// We need to skip intermediate nodes after fan out.
 	if !fanOut {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
@@ -1574,6 +1575,8 @@ func (e *Executor) runBeforeCallbacks(
 	if err != nil {
 		return true, err
 	}
+
+	// We need to skip intermediate nodes after fan out.
 	if !fanOut {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
