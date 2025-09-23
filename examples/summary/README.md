@@ -4,7 +4,7 @@ This example demonstrates LLM-driven session summarization integrated with the f
 
 - Preserves original `events`.
 - Stores summary separately from events (not inserted as system events).
-- Feeds LLM with "latest summary + incremental event window" to control context size.
+- Feeds LLM with "latest summary + incremental events since last summary" to keep context coherent without truncation.
 - Uses `SessionSummarizer` directly with session service for summarization.
 
 ## What it shows
@@ -13,12 +13,11 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - Simple trigger configuration using event-count threshold.
 - Prompt construction that injects the latest summary and recent events.
 - Backend-specific persistence:
-  - In-memory service mirrors summary text to `sess.State`.
-  - Redis service mirrors summary text to Redis `SessionState.State` (see service code).
+  - Summary text is stored in `sess.Summaries[filterKey]` for both backends.
 
 ## Prerequisites
 
-- Go 1.23 or later.
+- Go 1.21 or later.
 - Model configuration (e.g., OpenAI-compatible) via environment variables.
 
 Environment variables:
@@ -48,8 +47,7 @@ Command-line flags:
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
 - `-timeSec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
 - `-maxlen`: Max generated summary length (0=unlimited). Default: `0`.
-- `-addSummary`: Prepend latest branch summary as system message. Default: `true`.
-- `-maxHistoryRuns`: Max recent messages after incremental selection (0=unlimited). Default: `0`.
+- `-addSummary`: Prepend latest filter summary as system message. Default: `true`.
 
 ## Interaction
 
@@ -112,11 +110,11 @@ User → Runner → Agent(Model) → Session Service → SessionSummarizer
 ```
 
 - The `Runner` orchestrates the conversation and writes events.
-- The `Runner` automatically triggers summarization asynchronously after completion via `CreateSessionSummary`.
+- The `Runner` automatically triggers summarization asynchronously immediately after each qualifying event is appended via `CreateSessionSummary`.
 - The `SessionSummarizer` generates summaries using the configured LLM model.
 - The `session.Service` stores summary text in its backend storage (in-memory or Redis).
 - Summary injection happens automatically in the `ContentRequestProcessor` for subsequent turns.
-- You can control summary injection and history truncation with `-addSummary` and `-maxHistoryRuns`.
+- You can control summary injection with `-addSummary`.
 
 ## Summary Options
 
