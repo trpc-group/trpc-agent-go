@@ -94,7 +94,10 @@ func main() {
 			ctx, span := atrace.Tracer.Start(ctx, "process-message")
 			span.SetAttributes(attribute.String("user-message", msg))
 			defer span.End()
-			err := a.ProcessMessage(ctx, msg)
+			result, err := a.ProcessMessage(ctx, msg)
+			if result != "" {
+				span.SetAttributes(attribute.String("output", result))
+			}
 			if err != nil {
 				span.SetAttributes(attribute.String("error", err.Error()))
 				log.Fatalf("Chat system failed to run: %v", err)

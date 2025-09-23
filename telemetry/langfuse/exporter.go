@@ -251,71 +251,26 @@ func transformExecuteTool(span *tracepb.Span) {
 func transformRunRunner(span *tracepb.Span) {
 	var newAttributes []*commonpb.KeyValue
 
+	newAttributes = append(newAttributes, &commonpb.KeyValue{
+		Key: observationType,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_StringValue{StringValue: "agent"},
+		},
+	})
 	// Process existing attributes
 	for _, attr := range span.Attributes {
 		switch attr.Key {
-		case itelemetry.KeyRunnerName:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceName,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceName,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		case itelemetry.KeyRunnerUserID:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceUserID,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceUserID,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		case itelemetry.KeyRunnerSessionID:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceSessionID,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceSessionID,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
 		case itelemetry.KeyRunnerInput:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceInput,
+					Key: observationInput,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
 					},
 				})
 			} else {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceInput,
+					Key: observationInput,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
 					},
@@ -325,14 +280,14 @@ func transformRunRunner(span *tracepb.Span) {
 		case itelemetry.KeyRunnerOutput:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceOutput,
+					Key: observationOutput,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
 					},
 				})
 			} else {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: traceOutput,
+					Key: observationOutput,
 					Value: &commonpb.AnyValue{
 						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
 					},
