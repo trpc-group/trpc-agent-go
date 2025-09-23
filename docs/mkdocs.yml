@@ -8,9 +8,11 @@ docs_dir: mkdocs/
 nav:
   - Overview: index.md
   - Components:
-      - Agent: agent.md
-      - Custom Agent: custom-agent.md
-      - Multi-Agent: multiagent.md
+      - Agent:
+        - Agent: agent.md
+        - Multi Agent: multiagent.md
+        - Graph Agent: graph.md
+        - Custom Agent: custom-agent.md
       - Runner: runner.md
       - Model: model.md
       - Memory: memory.md
@@ -19,7 +21,6 @@ nav:
       - Session: session.md
       - Knowledge: knowledge.md
       - Planner: planner.md
-      - Graph: graph.md
       - Event: event.md
   - Debug: debugserver.md
   - Observability: observability.md
@@ -42,9 +43,11 @@ plugins:
           nav:
             - 概览: index.md
             - 组件:
-                - Agent: agent.md
-                - 自定义 Agent: custom-agent.md
-                - Multi-Agent: multiagent.md
+                - Agent: 
+                  - Agent: agent.md
+                  - Multi Agent: multiagent.md
+                  - Graph Agent: graph.md
+                  - 自定义 Agent: custom-agent.md
                 - Runner: runner.md
                 - Model: model.md
                 - Memory: memory.md

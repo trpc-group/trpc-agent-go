@@ -39,13 +39,6 @@ func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	}
 }
 
-// WithToolCallbacks sets the tool callbacks.
-func WithToolCallbacks(callbacks *tool.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ToolCallbacks = callbacks
-	}
-}
-
 // WithInitialState sets the initial state for graph execution.
 func WithInitialState(state graph.State) Option {
 	return func(opts *Options) {
@@ -82,8 +75,6 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
-	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.Callbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -100,7 +91,6 @@ type GraphAgent struct {
 	executor          *graph.Executor
 	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
-	toolCallbacks     *tool.Callbacks
 	initialState      graph.State
 	channelBufferSize int
 }
@@ -136,7 +126,6 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executor:          executor,
 		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
-		toolCallbacks:     options.ToolCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
 	}, nil
@@ -225,8 +214,6 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.AgentName = ga.name
 	// Set agent callbacks.
 	invocation.AgentCallbacks = ga.agentCallbacks
-	// Set tool callbacks.
-	invocation.ToolCallbacks = ga.toolCallbacks
 }
 
 // Tools returns the list of tools available to this agent.

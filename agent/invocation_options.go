@@ -16,7 +16,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // InvocationOptions is the options for the Invocation.
@@ -90,13 +89,6 @@ func WithInvocationTransferInfo(transferInfo *TransferInfo) InvocationOptions {
 func WithInvocationAgentCallbacks(agentCallbacks *Callbacks) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.AgentCallbacks = agentCallbacks
-	}
-}
-
-// WithInvocationToolCallbacks set toolCallbacks for the Invocation.
-func WithInvocationToolCallbacks(toolCallbacks *tool.Callbacks) InvocationOptions {
-	return func(inv *Invocation) {
-		inv.ToolCallbacks = toolCallbacks
 	}
 }
 
