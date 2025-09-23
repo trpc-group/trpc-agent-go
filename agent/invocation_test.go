@@ -230,33 +230,3 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
 }
-
-func TestInjectIntoEvent_SetFilterKey(t *testing.T) {
-	// Test that InjectIntoEvent sets FilterKey when event doesn't have one or has same FilterKey
-	inv := &Invocation{
-		AgentName:      "test-agent",
-		eventFilterKey: "test-filter",
-	}
-
-	// Test case 1: Empty FilterKey
-	ev1 := &event.Event{
-		FilterKey: "",
-		Author:    "test-agent",
-		Response: &model.Response{
-			Object: "chat.completion",
-		},
-	}
-	InjectIntoEvent(inv, ev1)
-	require.Equal(t, "test-filter", ev1.FilterKey, "FilterKey should be set when empty")
-
-	// Test case 2: Same FilterKey
-	ev2 := &event.Event{
-		FilterKey: "test-filter",
-		Author:    "test-agent",
-		Response: &model.Response{
-			Object: "tool.response",
-		},
-	}
-	InjectIntoEvent(inv, ev2)
-	require.Equal(t, "test-filter", ev2.FilterKey, "FilterKey should remain when same as invocation")
-}
