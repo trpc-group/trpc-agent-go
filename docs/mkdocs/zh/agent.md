@@ -218,8 +218,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo 支持 Agent 之间的控制权转移
 	TransferInfo *TransferInfo
-	// AgentCallbacks 允许在 Agent 执行的不同阶段插入自定义逻辑
-	AgentCallbacks *AgentCallbacks
 	// ModelCallbacks 允许在模型调用的不同阶段插入自定义逻辑
 	ModelCallbacks *model.ModelCallbacks
 	// ToolCallbacks 允许在工具调用的不同阶段插入自定义逻辑
@@ -346,15 +344,8 @@ callbacks := &agent.AgentCallbacks{
     },
 }
 
-// 在 Invocation 中使用回调
-invocation := agent.NewInvocation(
-    agent.WithInvocationAgent(r.agent),
-    agent.WithInvocationSession(&session.Session{ID: "session-001"}),
-    agent.WithInvocationEndInvocation(false),
-    agent.WithInvocationMessage(model.NewUserMessage("用户输入")),
-    agent.WithInvocationRunOptions(ro),
-    agent.WithInvocationAgentCallbacks(callbacks),
-)
+// 在 llmAgent中使用回掉
+llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 ```
 
 回调机制让你能够精确控制 Agent 的执行过程，实现更复杂的业务逻辑。

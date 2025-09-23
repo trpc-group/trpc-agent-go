@@ -552,12 +552,12 @@ func TestBuildAgentInvocation(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	exec := &ExecutionContext{InvocationID: "inv-x"}
 	st := State{StateKeyUserInput: "hello", StateKeySession: s, StateKeyExecContext: exec}
-	newInv := buildAgentInvocation(ctx, st, d, nil)
+	newInv := buildAgentInvocation(ctx, st, d)
 	require.NotNil(t, newInv)
 	require.Equal(t, "ag", newInv.AgentName)
 	require.Equal(t, "hello", newInv.Message.Content)
 
-	newInv = buildAgentInvocation(context.Background(), st, d, nil)
+	newInv = buildAgentInvocation(context.Background(), st, d)
 	require.NotNil(t, newInv)
 	require.Equal(t, "ag", newInv.AgentName)
 	require.Equal(t, "hello", newInv.Message.Content)

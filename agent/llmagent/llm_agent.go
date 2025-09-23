@@ -557,8 +557,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
-	if invocation.AgentCallbacks != nil {
-		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	if a.agentCallbacks != nil {
+		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -580,7 +580,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	}
 
 	// If we have after agent callbacks, we need to wrap the event channel.
-	if invocation.AgentCallbacks != nil {
+	if a.agentCallbacks != nil {
 		return a.wrapEventChannel(ctx, invocation, flowEventChan), nil
 	}
 
@@ -603,7 +603,6 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.StructuredOutput = a.structuredOutput
 
 	// Set callbacks.
-	invocation.AgentCallbacks = a.agentCallbacks
 	invocation.ModelCallbacks = a.modelCallbacks
 }
 
@@ -626,8 +625,8 @@ func (a *LLMAgent) wrapEventChannel(
 		}
 
 		// After all events are processed, run after agent callbacks
-		if invocation.AgentCallbacks != nil {
-			customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		if a.agentCallbacks != nil {
+			customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
 			var evt *event.Event
 			if err != nil {
 				// Send error event.
