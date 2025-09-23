@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Special node identifiers for graph routing.
@@ -75,6 +76,7 @@ type Node struct {
 	Function    NodeFunc
 	Type        NodeType // Type of the node (function, llm, tool, etc.)
 
+	toolSets []tool.ToolSet
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 
@@ -87,6 +89,9 @@ type Node struct {
 	// Declared destinations for dynamic routing visualization and static checks.
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
+
+	// just for tool node.
+	toolCallbacks *tool.Callbacks
 }
 
 // Edge represents an edge in the graph.

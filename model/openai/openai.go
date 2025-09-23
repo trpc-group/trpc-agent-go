@@ -1019,10 +1019,17 @@ func (m *Model) processAccumulatedToolCalls(
 			}
 		}
 
+		// Some providers (e.g., gpt-5-nano) may omit the tool_call ID.
+		// Synthesize a stable ID from the index to ensure proper pairing.
+		synthesizedID := toolCall.ID
+		if synthesizedID == "" {
+			synthesizedID = fmt.Sprintf("auto_call_%d", originalIndex)
+		}
+
 		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
 			Index: func() *int { idx := originalIndex; return &idx }(),
-			ID:    toolCall.ID,
-			Type:  functionToolType, // openapi only supports a function type for now.
+			ID:    synthesizedID,
+			Type:  functionToolType, // OpenAI supports function tools for now.
 			Function: model.FunctionDefinitionParam{
 				Name:      toolCall.Function.Name,
 				Arguments: []byte(toolCall.Function.Arguments),
@@ -1147,8 +1154,13 @@ func (m *Model) handleNonStreamingResponse(
 
 			response.Choices[i].Message.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
+				synthesizedID := toolCall.ID
+				if synthesizedID == "" {
+					// Synthesize ID for providers that omit it (e.g., gpt-5-nano).
+					synthesizedID = fmt.Sprintf("auto_call_%d", j)
+				}
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
-					ID:   toolCall.ID,
+					ID:   synthesizedID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
 						Name:      toolCall.Function.Name,
