@@ -693,16 +693,6 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	return contents, nil
 }
 
-// normalizeInnerEvent ensures invocation ID and branch are set for inner events.
-func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv *agent.Invocation) {
-	if ev.InvocationID == "" {
-		ev.InvocationID = inv.InvocationID
-	}
-	if ev.Branch == "" {
-		ev.Branch = inv.Branch
-	}
-}
-
 // shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
 // content to avoid duplicate large blocks in the parent transcript. We still
 // aggregate its text from deltas for the final tool.response content.
@@ -711,11 +701,11 @@ func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event)
 	if ev.Response != nil && len(ev.Response.Choices) > 0 {
 		ch := ev.Response.Choices[0]
 		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
-			// Always forward if the message contains tool_calls (for proper tool call/response pairing)
+			// Always forward if the message contains tool_calls (for proper tool call/response pairing).
 			if len(ch.Message.ToolCalls) > 0 {
 				return true
 			}
-			// Suppress regular assistant messages without tool_calls
+			// Suppress regular assistant messages without tool_calls.
 			return false
 		}
 	}
@@ -941,7 +931,6 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 ) error {
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
-		f.normalizeInnerEvent(ev, invocation)
 		// Default forwarding rule suppresses the final full assistant message to avoid
 		// duplication, but if we have not emitted any prior deltas/content from the
 		// inner stream, forward this final message so callers still see the sub-agent output.
