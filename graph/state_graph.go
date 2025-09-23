@@ -972,8 +972,8 @@ func emitModelCompleteEvent(
 
 // modelExecutionConfig contains configuration for model execution with events.
 type modelExecutionConfig struct {
-	LLMModel       model.Model
 	ModelCallbacks *model.Callbacks
+	LLMModel       model.Model
 	Request        *model.Request
 	EventChan      chan<- *event.Event
 	InvocationID   string
