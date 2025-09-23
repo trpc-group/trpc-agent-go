@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -129,7 +130,9 @@ func SummarizeAndPersist(
 	}
 
 	for key, evs := range groupEventsByFilterKey(base.Events) {
-		_ = process(key, evs)
+		if err := process(key, evs); err != nil {
+			log.Warnf("summarize and persist failed for filter %s: %v", key, err)
+		}
 	}
 	return nil
 }
