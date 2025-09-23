@@ -183,7 +183,7 @@ func buildGraphAndSubAgent(modelName, baseURL, apiKey string) (*graph.Graph, age
 		return nil, nil
 	})
 
-	toolCbs := (&tool.Callbacks{}).RegisterBeforeTool(func(ctx context.Context, toolName string, decl *tool.Declaration, args []byte) (any, error) {
+	toolCbs := (&tool.Callbacks{}).RegisterBeforeTool(func(ctx context.Context, toolName string, decl *tool.Declaration, args *[]byte) (any, error) {
 		// Demonstrate we can read parsed_time from runtime state inside sub‑agent callback
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.RunOptions.RuntimeState != nil {
 			if v, ok2 := inv.RunOptions.RuntimeState["parsed_time"].(string); ok2 && v != "" {

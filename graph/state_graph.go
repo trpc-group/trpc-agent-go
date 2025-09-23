@@ -853,7 +853,7 @@ func runTool(
 ) (any, error) {
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
+			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
 		if err != nil {
 			return nil, fmt.Errorf("callback before tool error: %w", err)
 		}

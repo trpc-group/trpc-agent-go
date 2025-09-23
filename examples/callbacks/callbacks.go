@@ -37,7 +37,7 @@ var (
 		})
 
 	_ = tool.NewCallbacks().
-		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
 			fmt.Printf("🌐 Global BeforeTool: executing %s\n", toolName)
 			return nil, nil
 		}).
@@ -122,8 +122,12 @@ func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
 
 // createBeforeToolCallback creates the before tool callback.
 func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+		if jsonArgs != nil {
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(*jsonArgs))
+		} else {
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=<nil>\n", toolName)
+		}
 
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 			fmt.Printf("🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=%s, id=%s)\n", inv.AgentName, inv.InvocationID)
@@ -131,7 +135,7 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 			fmt.Printf("🟠 BeforeToolCallback: ❌ Invocation NOT found in ctx\n")
 		}
 
-		if c.shouldReturnCustomToolResult(toolName, jsonArgs) {
+		if jsonArgs != nil && c.shouldReturnCustomToolResult(toolName, *jsonArgs) {
 			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
 			return c.createCustomCalculatorResult(), nil
 		}

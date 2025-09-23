@@ -552,7 +552,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
-			toolCall.Function.Arguments,
+			&toolCall.Function.Arguments,
 		)
 		if callbackErr != nil {
 			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)

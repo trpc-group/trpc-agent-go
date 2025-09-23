@@ -1379,7 +1379,7 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	cb := tool.NewCallbacks()
 	cb.RegisterBeforeTool(func(_ context.Context, _ string,
-		_ *tool.Declaration, _ []byte) (any, error) {
+		_ *tool.Declaration, _ *[]byte) (any, error) {
 		return map[string]any{"v": 1}, nil
 	})
 	p := NewFunctionCallResponseProcessor(false, cb)
@@ -1396,7 +1396,7 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 	cb := tool.NewCallbacks()
 	cb.RegisterBeforeTool(func(_ context.Context, _ string,
-		_ *tool.Declaration, _ []byte) (any, error) {
+		_ *tool.Declaration, _ *[]byte) (any, error) {
 		return nil, fmt.Errorf("fail")
 	})
 	p := NewFunctionCallResponseProcessor(false, cb)

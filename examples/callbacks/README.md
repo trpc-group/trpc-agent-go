@@ -109,7 +109,7 @@ modelCallbacks := model.NewCallbacks().
 ```go
 // Traditional registration
 toolCallbacks := tool.NewCallbacks()
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
     // Your logic here
     return nil, nil
 })
@@ -120,7 +120,7 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolD
 
 // Chain registration (recommended)
 toolCallbacks := tool.NewCallbacks().
-    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
         // Your logic here
         return nil, nil
     }).
@@ -187,7 +187,7 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 **Example: Mocking a tool result in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
     if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
         // Return a mock result and skip actual tool execution.
         return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
