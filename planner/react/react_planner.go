@@ -121,17 +121,6 @@ func (p *Planner) ProcessPlanningResponse(
 			}
 			processedChoice.Message.ToolCalls = filteredToolCalls
 		}
-
-		// Process text content if present.
-		if choice.Message.Content != "" {
-			processedChoice.Message.Content = choice.Message.Content
-		}
-
-		// Process delta content for streaming responses.
-		if choice.Delta.Content != "" {
-			processedChoice.Delta.Content = choice.Delta.Content
-		}
-
 		processedResponse.Choices[i] = processedChoice
 	}
 
