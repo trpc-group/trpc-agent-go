@@ -787,11 +787,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
 		}
 
-		// Extract agent callbacks from state.
-		agentCallbacks, _ := state[StateKeyAgentCallbacks].(*agent.Callbacks)
-
 		// Build invocation for the target agent.
-		invocation := buildAgentInvocation(ctx, state, targetAgent, agentCallbacks)
+		invocation := buildAgentInvocation(ctx, state, targetAgent)
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -1275,7 +1272,7 @@ func MessagesStateSchema() *StateSchema {
 }
 
 // buildAgentInvocation builds an invocation for the target agent.
-func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
+func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent) *agent.Invocation {
 	// Extract user input from state.
 	var userInput string
 	if input, exists := state[StateKeyUserInput]; exists {
@@ -1297,7 +1294,6 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-			agent.WithInvocationAgentCallbacks(agentCallbacks),
 		)
 		return invocation
 	}
@@ -1305,7 +1301,6 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 	invocation := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-		agent.WithInvocationAgentCallbacks(agentCallbacks),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
 	)
