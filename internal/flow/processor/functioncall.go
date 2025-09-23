@@ -705,6 +705,10 @@ func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event)
 			if len(ch.Message.ToolCalls) > 0 {
 				return true
 			}
+			// Always forward chat.completion events (for multi-agent internal communication).
+			if ev.Response.Object == "chat.completion" {
+				return true
+			}
 			// Suppress regular assistant messages without tool_calls.
 			return false
 		}

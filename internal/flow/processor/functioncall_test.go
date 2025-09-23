@@ -1497,9 +1497,10 @@ func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_RegularMessage(t 
 	processor := &FunctionCallResponseProcessor{}
 
 	// Test regular assistant message without tool_calls should NOT be forwarded
+	// Use a different Object type to distinguish from multi-agent communication
 	eventWithoutToolCalls := &event.Event{
 		Response: &model.Response{
-			Object: "chat.completion",
+			Object: "text_completion", // Different from chat.completion
 			Choices: []model.Choice{{
 				Delta: model.Message{Content: ""},
 				Message: model.Message{
@@ -1558,4 +1559,27 @@ func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_NoToolCallsButHas
 
 	shouldForward := processor.shouldForwardInnerEvent(eventWithDelta)
 	require.True(t, shouldForward, "Events with delta content should be forwarded")
+}
+
+func TestFunctionCallResponseProcessor_ShouldForwardInnerEvent_ChatCompletion(t *testing.T) {
+	processor := &FunctionCallResponseProcessor{}
+
+	// Test chat.completion events should be forwarded (for multi-agent communication)
+	chatCompletionEvent := &event.Event{
+		Response: &model.Response{
+			Object: "chat.completion",
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: ""},
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					Content:   "Analysis result from step 1 agent",
+					ToolCalls: []model.ToolCall{}, // No tool calls
+				},
+			}},
+			IsPartial: false,
+		},
+	}
+
+	shouldForward := processor.shouldForwardInnerEvent(chatCompletionEvent)
+	require.True(t, shouldForward, "chat.completion events should be forwarded for multi-agent communication")
 }
