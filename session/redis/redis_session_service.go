@@ -25,8 +25,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -831,48 +831,6 @@ func applyOptions(opts ...session.Option) *session.Options {
 	return opt
 }
 
-// groupEventsByBranch groups events by branch identifier.
-// groupEventsByFilterKey groups events by filter key with backward
-// compatibility. If the event version is not current, fall back to Branch.
-func groupEventsByFilterKey(evs []event.Event) map[string][]event.Event {
-	m := make(map[string][]event.Event)
-	for _, e := range evs {
-		key := e.FilterKey
-		if e.Version != event.CurrentVersion {
-			key = e.Branch
-		}
-		m[key] = append(m[key], e)
-	}
-	return m
-}
-
-// computeDeltaSince returns events that occurred strictly after the given time.
-func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
-	if since.IsZero() {
-		return evs
-	}
-	out := make([]event.Event, 0, len(evs))
-	for _, e := range evs {
-		if e.Timestamp.After(since) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// buildBranchSession builds a temporary session containing branch events.
-func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
-	return &session.Session{
-		ID:        base.ID + ":" + branch,
-		AppName:   base.AppName,
-		UserID:    base.UserID,
-		State:     nil,
-		Events:    evs,
-		UpdatedAt: time.Now(),
-		CreatedAt: base.CreatedAt,
-	}
-}
-
 // persistSessionState writes the provided state back to Redis and refreshes TTL.
 func (s *Service) persistSessionState(ctx context.Context, sessKey string, sessionID string, st *SessionState) error {
 	st.UpdatedAt = time.Now()
@@ -924,94 +882,19 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		sessState.Summaries = make(map[string]*session.Summary)
 	}
 
-	// When filterKey is provided, collect all events that match it via
-	// hierarchical filtering (event.Filter(filterKey)) and summarize as a
-	// single group.
-	if filterKey != "" {
-		matched := make([]event.Event, 0, len(sess.Events))
-		for _, e := range sess.Events {
-			if e.Filter(filterKey) {
-				matched = append(matched, e)
-			}
+	// Define getters and writers working on the loaded sessState JSON.
+	getPrev := func(k string) (string, time.Time) {
+		if prev := sessState.Summaries[k]; prev != nil {
+			return prev.Summary, prev.UpdatedAt
 		}
-		if len(matched) == 0 {
-			return nil
-		}
-
-		var since time.Time
-		var prevSummary string
-		if prev := sessState.Summaries[filterKey]; prev != nil {
-			since = prev.UpdatedAt
-			prevSummary = prev.Summary
-		}
-		delta := computeDeltaSince(matched, since)
-		if !force && len(delta) == 0 {
-			return nil
-		}
-
-		input := delta
-		if prevSummary != "" {
-			input = make([]event.Event, 0, len(delta)+1)
-			input = append(input, event.Event{
-				Author:    "system",
-				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
-				Timestamp: time.Now(),
-			})
-			input = append(input, delta...)
-		}
-
-		tmp := buildBranchSession(sess, filterKey, input)
-		text, err := s.opts.summarizer.Summarize(ctx, tmp)
-		if err != nil || text == "" {
-			return nil
-		}
-		sessState.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+		return "", time.Time{}
+	}
+	write := func(k string, text string) error {
+		sessState.Summaries[k] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
 		return s.persistSessionState(ctx, sessKey, key.SessionID, sessState)
 	}
 
-	groups := groupEventsByFilterKey(sess.Events)
-	if len(groups) == 0 {
-		return nil
-	}
-
-	updatedAny := false
-	for fk, evs := range groups {
-		var since time.Time
-		var prevSummary string
-		if prev := sessState.Summaries[fk]; prev != nil {
-			since = prev.UpdatedAt
-			prevSummary = prev.Summary
-		}
-		delta := computeDeltaSince(evs, since)
-		if !force && len(delta) == 0 {
-			continue
-		}
-
-		// Prepend previous summary as a synthetic system event to provide context.
-		input := delta
-		if prevSummary != "" {
-			input = make([]event.Event, 0, len(delta)+1)
-			input = append(input, event.Event{
-				Author:    "system",
-				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
-				Timestamp: time.Now(),
-			})
-			input = append(input, delta...)
-		}
-
-		tmp := buildBranchSession(sess, fk, input)
-		text, err := s.opts.summarizer.Summarize(ctx, tmp)
-		if err != nil || text == "" {
-			continue
-		}
-		sessState.Summaries[fk] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
-		updatedAny = true
-	}
-
-	if !updatedAny {
-		return nil
-	}
-	return s.persistSessionState(ctx, sessKey, key.SessionID, sessState)
+	return sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force, getPrev, write)
 }
 
 // GetSessionSummaryText returns the latest summary text from the session state if present.

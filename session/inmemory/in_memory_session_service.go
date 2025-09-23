@@ -21,9 +21,8 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
-	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 const (
@@ -686,76 +685,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	// When filterKey is provided, collect all events that match it via
-	// hierarchical filtering (event.Filter(filterKey)) and summarize as a
-	// single group. This ensures parent agents can summarize content from
-	// their sub-agents.
-	if filterKey != "" {
-		matched := make([]event.Event, 0, len(storedSession.Events))
-		for _, e := range storedSession.Events {
-			if e.Filter(filterKey) {
-				matched = append(matched, e)
-			}
-		}
-		if len(matched) == 0 {
-			return nil
-		}
-
-		// Ensure summaries map exists.
-		app.mu.Lock()
-		swt, ok = app.sessions[key.UserID][key.SessionID]
-		if !ok {
-			app.mu.Unlock()
-			return fmt.Errorf("session not found: %s", key.SessionID)
-		}
-		storedSession = getValidSession(swt)
-		if storedSession == nil {
-			app.mu.Unlock()
-			return fmt.Errorf("session expired: %s", key.SessionID)
-		}
-		if storedSession.Summaries == nil {
-			storedSession.Summaries = make(map[string]*session.Summary)
-		}
-		app.mu.Unlock()
-
-		prev := storedSession.Summaries[filterKey]
-		var since time.Time
-		if prev != nil {
-			since = prev.UpdatedAt
-		}
-		delta := computeDeltaSince(matched, since)
-		if !force && len(delta) == 0 {
-			return nil
-		}
-
-		input := delta
-		if prev != nil && prev.Summary != "" {
-			input = make([]event.Event, 0, len(delta)+1)
-			input = append(input, event.Event{
-				Author:    "system",
-				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prev.Summary}}}},
-				Timestamp: time.Now(),
-			})
-			input = append(input, delta...)
-		}
-
-		tmp := buildBranchSession(storedSession, filterKey, input)
-		text, err := s.opts.summarizer.Summarize(ctx, tmp)
-		if err != nil || text == "" {
-			return nil
-		}
-		if err := s.writeSummaryUnderLock(app, key, filterKey, text); err != nil {
-			log.Warnf("write summary for branch %s failed: %v", filterKey, err)
-		}
-		return nil
-	}
-
-	groups := groupEventsByFilterKey(storedSession.Events)
-	if len(groups) == 0 {
-		return nil
-	}
-
-	// Ensure summaries map exists.
+	// Ensure summaries map exists before writes.
 	app.mu.Lock()
 	swt, ok = app.sessions[key.UserID][key.SessionID]
 	if !ok {
@@ -772,82 +702,18 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	for fk, evs := range groups {
-		prev := storedSession.Summaries[fk]
-		var since time.Time
-		if prev != nil {
-			since = prev.UpdatedAt
+	// Define getters and writers.
+	getPrev := func(k string) (string, time.Time) {
+		if sum := storedSession.Summaries[k]; sum != nil {
+			return sum.Summary, sum.UpdatedAt
 		}
-		delta := computeDeltaSince(evs, since)
-		if !force && len(delta) == 0 {
-			continue
-		}
-
-		// Prepend previous summary as a synthetic system event to provide context.
-		input := delta
-		if prev != nil && prev.Summary != "" {
-			input = make([]event.Event, 0, len(delta)+1)
-			input = append(input, event.Event{
-				Author:    "system",
-				Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prev.Summary}}}},
-				Timestamp: time.Now(),
-			})
-			input = append(input, delta...)
-		}
-
-		tmp := buildBranchSession(storedSession, fk, input)
-		text, err := s.opts.summarizer.Summarize(ctx, tmp)
-		if err != nil || text == "" {
-			continue
-		}
-
-		if err := s.writeSummaryUnderLock(app, key, fk, text); err != nil {
-			log.Warnf("write summary for branch %s failed: %v", fk, err)
-		}
+		return "", time.Time{}
 	}
-	return nil
-}
+	write := func(k string, text string) error {
+		return s.writeSummaryUnderLock(app, key, k, text)
+	}
 
-// groupEventsByBranch groups events by branch identifier.
-// groupEventsByFilterKey groups events by filter key with backward
-// compatibility. If the event version is not current, fall back to Branch.
-func groupEventsByFilterKey(evs []event.Event) map[string][]event.Event {
-	m := make(map[string][]event.Event)
-	for _, e := range evs {
-		key := e.FilterKey
-		if e.Version != event.CurrentVersion {
-			key = e.Branch
-		}
-		m[key] = append(m[key], e)
-	}
-	return m
-}
-
-// computeDeltaSince returns events that occurred strictly after the given time.
-func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
-	if since.IsZero() {
-		return evs
-	}
-	out := make([]event.Event, 0, len(evs))
-	for _, e := range evs {
-		if e.Timestamp.After(since) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// buildBranchSession builds a temporary session containing branch events.
-func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
-	return &session.Session{
-		ID:        base.ID + ":" + branch,
-		AppName:   base.AppName,
-		UserID:    base.UserID,
-		State:     nil,
-		Events:    evs,
-		UpdatedAt: time.Now(),
-		CreatedAt: base.CreatedAt,
-	}
+	return sisession.SummarizeAndPersist(ctx, s.opts.summarizer, storedSession, filterKey, force, getPrev, write)
 }
 
 // writeSummaryUnderLock writes a summary for a branch under app lock and refreshes TTL.
