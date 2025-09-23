@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -43,6 +44,34 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 	if agt.FindSubAgent("notfound") != nil {
 		t.Errorf("FindSubAgent should return nil for missing")
 	}
+}
+
+// Test that buildRequestProcessors wires AddSessionSummary into
+// ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
+	// true case.
+	optsTrue := &Options{AddSessionSummary: true}
+	procs := buildRequestProcessors("test-agent", optsTrue)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.AddSessionSummary)
+
+	// false case.
+	optsFalse := &Options{AddSessionSummary: false}
+	procs = buildRequestProcessors("test-agent", optsFalse)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.False(t, crp.AddSessionSummary)
 }
 
 func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {

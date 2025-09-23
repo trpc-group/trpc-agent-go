@@ -250,9 +250,9 @@ func WithAddContextPrefix(addPrefix bool) Option {
 
 // WithAddSessionSummary controls whether to prepend the current-branch summary
 // as a system message in the request context when available.
-func WithAddSessionSummary(add bool) Option {
+func WithAddSessionSummary(addSummary bool) Option {
 	return func(opts *Options) {
-		opts.AddSessionSummary = add
+		opts.AddSessionSummary = addSummary
 	}
 }
 
@@ -343,7 +343,6 @@ type Options struct {
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
 
-	// Content context controls
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
