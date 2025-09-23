@@ -40,13 +40,9 @@ type ContentRequestProcessor struct {
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
-
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message to the request if available.
 	AddSessionSummary bool
-	// MaxHistoryRuns limits the number of recent messages appended after
-	// branch-incremental selection (0 means unlimited).
-	MaxHistoryRuns int
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -71,14 +67,6 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 func WithAddSessionSummary(add bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddSessionSummary = add
-	}
-}
-
-// WithMaxHistoryRuns limits the number of recent messages appended after
-// branch-incremental selection (0 means unlimited).
-func WithMaxHistoryRuns(n int) ContentOption {
-	return func(p *ContentRequestProcessor) {
-		p.MaxHistoryRuns = n
 	}
 }
 
@@ -174,8 +162,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}
 }
 
-// getBranchIncrementalMessages converts branch-incremental events into messages
-// and applies MaxHistoryRuns truncation.
+// getBranchIncrementalMessages converts branch-incremental events into messages.
 func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invocation) []model.Message {
 	branch := inv.GetEventFilterKey()
 	var evs []event.Event
@@ -192,9 +179,9 @@ func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invoca
 		}
 	}
 	msgs := p.convertEventsToMessages(evs, inv.AgentName)
-	if p.MaxHistoryRuns > 0 && len(msgs) > p.MaxHistoryRuns {
-		msgs = msgs[len(msgs)-p.MaxHistoryRuns:]
-	}
+	// Note: We preserve all incremental messages to maintain context integrity.
+	// MaxHistoryRuns is not applied to incremental messages as they represent
+	// a complete work unit that should not be truncated.
 	return msgs
 }
 
