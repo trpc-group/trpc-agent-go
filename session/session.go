@@ -37,8 +37,8 @@ type Session struct {
 	UserID  string        `json:"userID"`  // UserID is the user id.
 	State   StateMap      `json:"state"`   // State is the session state with delta support.
 	Events  []event.Event `json:"events"`  // Events is the session events.
-	// Summaries holds branch-aware summaries. The key is the normalized branch identifier.
-	Summaries map[string]*Summary `json:"summaries,omitempty"` // Summaries is the branch-aware summaries.
+	// Summaries holds filter-aware summaries. The key is the event filter key.
+	Summaries map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
 	UpdatedAt time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
 	CreatedAt time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 }

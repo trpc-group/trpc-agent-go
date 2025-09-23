@@ -110,10 +110,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// 2) Append branch-incremental messages from session events when allowed.
+	// 2) Append per-filter incremental messages from session events when allowed.
 	var addedFromSession int
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
-		messages := p.getBranchIncrementalMessages(invocation)
+		messages := p.getFilterIncrementalMessages(invocation)
 		req.Messages = append(req.Messages, messages...)
 		addedFromSession = len(messages)
 	}
@@ -154,28 +154,28 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	if inv.Session == nil || inv.Session.Summaries == nil {
 		return nil
 	}
-	branch := inv.GetEventFilterKey()
-	sum := inv.Session.Summaries[branch]
+	filter := inv.GetEventFilterKey()
+	sum := inv.Session.Summaries[filter]
 	if sum == nil || sum.Summary == "" {
 		return nil
 	}
 	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}
 }
 
-// getBranchIncrementalMessages converts branch-incremental events into messages.
-func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invocation) []model.Message {
-	branch := inv.GetEventFilterKey()
+// getFilterIncrementalMessages converts per-filter incremental events into messages.
+func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invocation) []model.Message {
+	filter := inv.GetEventFilterKey()
 	var evs []event.Event
 	if inv.Session != nil {
 		if inv.Session.Summaries != nil {
-			if sum := inv.Session.Summaries[branch]; sum != nil {
-				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, branch)
+			if sum := inv.Session.Summaries[filter]; sum != nil {
+				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, filter)
 			} else {
-				evs = p.eventsInBranch(inv.Session.Events, branch)
+				evs = p.eventsInFilter(inv.Session.Events, filter)
 			}
 		} else {
-			// No summaries yet; include all events in branch.
-			evs = p.eventsInBranch(inv.Session.Events, branch)
+			// No summaries yet; include all events for this filter.
+			evs = p.eventsInFilter(inv.Session.Events, filter)
 		}
 	}
 	msgs := p.convertEventsToMessages(evs, inv.AgentName)
@@ -185,16 +185,16 @@ func (p *ContentRequestProcessor) getBranchIncrementalMessages(inv *agent.Invoca
 	return msgs
 }
 
-// eventsSince returns events after the given time and matching the branch filter.
+// eventsSince returns events after the given time and matching the filter key.
 func (p *ContentRequestProcessor) eventsSince(
 	events []event.Event,
 	since time.Time,
-	branch string,
+	filter string,
 ) []event.Event {
 	var result []event.Event
 	for _, evt := range events {
 		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(branch)) &&
+			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) &&
 			evt.Timestamp.After(since) {
 			result = append(result, evt)
 		}
@@ -202,15 +202,15 @@ func (p *ContentRequestProcessor) eventsSince(
 	return result
 }
 
-// eventsInBranch returns all events matching the branch filter.
-func (p *ContentRequestProcessor) eventsInBranch(
+// eventsInFilter returns all events matching the filter key.
+func (p *ContentRequestProcessor) eventsInFilter(
 	events []event.Event,
-	branch string,
+	filter string,
 ) []event.Event {
 	var result []event.Event
 	for _, evt := range events {
 		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(branch)) {
+			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) {
 			result = append(result, evt)
 		}
 	}
