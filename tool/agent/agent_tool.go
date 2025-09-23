@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -160,28 +160,18 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 		message := model.NewUserMessage(string(jsonArgs))
 
 		if ok && parentInv != nil && parentInv.Session != nil {
-			// Filter out previous sub-agent events to prevent pollution in multi-round conversations.
-			// Keep parent agent events to maintain necessary context.
-			subAgentFilterKey := at.agent.Info().Name
-			if parentInv.Session != nil && len(parentInv.Session.Events) > 0 {
-				cleanedEvents := make([]event.Event, 0, len(parentInv.Session.Events))
-				for _, ev := range parentInv.Session.Events {
-					// Keep events that don't belong to this sub-agent (including parent agent events).
-					if ev.FilterKey != subAgentFilterKey {
-						cleanedEvents = append(cleanedEvents, ev)
-					}
-				}
-				// Update the session copy with cleaned events.
-				parentInv.Session.Events = cleanedEvents
-			}
+			// Use random FilterKey for automatic isolation across multiple invocations.
+			// This avoids the need for manual session cleanup while ensuring that
+			// each AgentTool call has its own isolated event context.
+			uniqueFilterKey := at.agent.Info().Name + "-" + uuid.NewString()
 
 			subInv := parentInv.Clone(
 				agent.WithInvocationAgent(at.agent),
 				agent.WithInvocationMessage(message),
 				// Reset event filter key to the sub-agent name so that content
 				// processors fetch session messages belonging to the sub-agent,
-				// not the parent agent.
-				agent.WithInvocationEventFilterKey(at.agent.Info().Name),
+				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
+				agent.WithInvocationEventFilterKey(uniqueFilterKey),
 			)
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)
