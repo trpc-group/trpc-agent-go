@@ -90,6 +90,15 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithGenerationConfig sets the generation config for an LLM node.
+// Effective only for nodes added via AddLLMNode.
+func WithGenerationConfig(cfg model.GenerationConfig) Option {
+	return func(node *Node) {
+		c := cfg
+		node.llmGenerationConfig = &c
+	}
+}
+
 // WithDestinations declares potential dynamic routing targets for a node.
 // This is used for static validation (existence) and visualization only.
 // It does not influence runtime execution.
@@ -216,7 +225,12 @@ func (sg *StateGraph) AddLLMNode(
 	for _, opt := range opts {
 		opt(node)
 	}
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id), WithLLMToolSets(node.toolSets))
+	// Build LLM-specific options from node config
+	llmOptsForFunc := []LLMNodeFuncOption{WithLLMNodeID(id), WithLLMToolSets(node.toolSets)}
+	if node.llmGenerationConfig != nil {
+		llmOptsForFunc = append(llmOptsForFunc, WithLLMGenerationConfig(*node.llmGenerationConfig))
+	}
+	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
 	// Add LLM node type option
 	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
 	sg.AddNode(id, llmNodeFunc, llmOpts...)
@@ -388,6 +402,13 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMGenerationConfig sets the generation configuration for the LLM runner.
+func WithLLMGenerationConfig(cfg model.GenerationConfig) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.generationConfig = cfg
+	}
+}
+
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(
@@ -397,9 +418,10 @@ func NewLLMNodeFunc(
 	opts ...LLMNodeFuncOption,
 ) NodeFunc {
 	runner := &llmRunner{
-		llmModel:    llmModel,
-		instruction: instruction,
-		tools:       tools,
+		llmModel:         llmModel,
+		instruction:      instruction,
+		tools:            tools,
+		generationConfig: model.GenerationConfig{Stream: true},
 	}
 	for _, opt := range opts {
 		opt(runner)
@@ -419,10 +441,11 @@ func NewLLMNodeFunc(
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter
 // lists.
 type llmRunner struct {
-	llmModel    model.Model
-	instruction string
-	tools       map[string]tool.Tool
-	nodeID      string
+	llmModel         model.Model
+	instruction      string
+	tools            map[string]tool.Tool
+	nodeID           string
+	generationConfig model.GenerationConfig
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -537,11 +560,9 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 ) (any, error) {
 	request := &model.Request{
-		Messages: messages,
-		Tools:    r.tools,
-		GenerationConfig: model.GenerationConfig{
-			Stream: true,
-		},
+		Messages:         messages,
+		Tools:            r.tools,
+		GenerationConfig: r.generationConfig,
 	}
 	invocationID, sessionID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
