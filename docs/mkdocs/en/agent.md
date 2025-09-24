@@ -218,10 +218,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo supports control transfer between Agents.
 	TransferInfo *TransferInfo
-	// ModelCallbacks allows inserting custom logic at different stages of model calls.
-	ModelCallbacks *model.ModelCallbacks
-	// ToolCallbacks allows inserting custom logic at different stages of tool calls.
-	ToolCallbacks *tool.ToolCallbacks
 
     // notice
 	noticeChanMap map[string]chan any

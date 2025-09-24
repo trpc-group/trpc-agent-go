@@ -263,6 +263,9 @@ func WithBaseURL(url string) Option {
 // WithChannelBufferSize sets the channel buffer size for the OpenAI client.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *options) {
+		if size <= 0 {
+			size = defaultChannelBufferSize
+		}
 		opts.ChannelBufferSize = size
 	}
 }
@@ -374,7 +377,8 @@ func WithBatchBaseURL(url string) Option {
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
-		Variant: VariantOpenAI, // The default variant is VariantOpenAI.
+		Variant:           VariantOpenAI, // The default variant is VariantOpenAI.
+		ChannelBufferSize: defaultChannelBufferSize,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -394,12 +398,6 @@ func New(name string, opts ...Option) *Model {
 
 	client := openai.NewClient(clientOpts...)
 
-	// Set default channel buffer size if not specified.
-	channelBufferSize := o.ChannelBufferSize
-	if channelBufferSize <= 0 {
-		channelBufferSize = defaultChannelBufferSize
-	}
-
 	// Set default batch completion window if not specified.
 	batchCompletionWindow := o.BatchCompletionWindow
 	if batchCompletionWindow == "" {
@@ -411,7 +409,7 @@ func New(name string, opts ...Option) *Model {
 		name:                  name,
 		baseURL:               o.BaseURL,
 		apiKey:                o.APIKey,
-		channelBufferSize:     channelBufferSize,
+		channelBufferSize:     o.ChannelBufferSize,
 		chatRequestCallback:   o.ChatRequestCallback,
 		chatResponseCallback:  o.ChatResponseCallback,
 		chatChunkCallback:     o.ChatChunkCallback,

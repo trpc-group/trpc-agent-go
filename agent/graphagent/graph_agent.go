@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -37,13 +36,6 @@ func WithDescription(description string) Option {
 func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
 		opts.AgentCallbacks = callbacks
-	}
-}
-
-// WithModelCallbacks sets the model callbacks.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ModelCallbacks = callbacks
 	}
 }
 
@@ -83,8 +75,6 @@ type Options struct {
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
-	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.Callbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
@@ -101,7 +91,6 @@ type GraphAgent struct {
 	executor          *graph.Executor
 	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
-	modelCallbacks    *model.Callbacks
 	initialState      graph.State
 	channelBufferSize int
 }
@@ -137,7 +126,6 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		executor:          executor,
 		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
-		modelCallbacks:    options.ModelCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
 	}, nil
@@ -224,8 +212,6 @@ func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent and agent name.
 	invocation.Agent = ga
 	invocation.AgentName = ga.name
-	// Set model callbacks.
-	invocation.ModelCallbacks = ga.modelCallbacks
 }
 
 // Tools returns the list of tools available to this agent.

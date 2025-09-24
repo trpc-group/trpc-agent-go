@@ -173,6 +173,13 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 	}
 }
 
+// WithModelCallbacks sets the model callbacks for LLM node.
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
+	return func(node *Node) {
+		node.modelCallbacks = callbacks
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.

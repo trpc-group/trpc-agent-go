@@ -356,7 +356,6 @@ type LLMAgent struct {
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
-	modelCallbacks       *model.Callbacks
 	outputKey            string         // Key to store output in session state
 	outputSchema         map[string]any // JSON schema for output validation
 	inputSchema          map[string]any // JSON schema for input validation
@@ -405,6 +404,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
 		ChannelBufferSize: options.ChannelBufferSize,
+		ModelCallbacks:    options.ModelCallbacks,
 	}
 
 	llmFlow := llmflow.New(
@@ -441,7 +441,6 @@ func New(name string, opts ...Option) *LLMAgent {
 		planner:              options.Planner,
 		subAgents:            options.SubAgents,
 		agentCallbacks:       options.AgentCallbacks,
-		modelCallbacks:       options.ModelCallbacks,
 		outputKey:            options.OutputKey,
 		outputSchema:         options.OutputSchema,
 		inputSchema:          options.InputSchema,
@@ -601,9 +600,6 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Propagate structured output configuration into invocation and request path.
 	invocation.StructuredOutputType = a.structuredOutputType
 	invocation.StructuredOutput = a.structuredOutput
-
-	// Set callbacks.
-	invocation.ModelCallbacks = a.modelCallbacks
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.

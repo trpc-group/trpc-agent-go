@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -90,6 +91,8 @@ type Node struct {
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
 
+	// It's effect just for LLM node
+	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
 }
