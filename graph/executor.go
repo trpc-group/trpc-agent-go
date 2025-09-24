@@ -1399,7 +1399,7 @@ func (e *Executor) executeSingleTask(
 	}
 
 	// Handle result and process channel writes.
-	fanOut, err := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, result)
 	if err != nil {
 		return err
 	}
@@ -1409,7 +1409,7 @@ func (e *Executor) executeSingleTask(
 
 	// Process conditional edges after node execution.
 	// We need to skip intermediate nodes after fan out.
-	if !fanOut {
+	if !routed {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 		}
@@ -1571,13 +1571,13 @@ func (e *Executor) runBeforeCallbacks(
 	if customResult == nil {
 		return false, nil
 	}
-	fanOut, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
+	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
 	if err != nil {
 		return true, err
 	}
 
 	// We need to skip intermediate nodes after fan out.
-	if !fanOut {
+	if !routed {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
 			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
 		}
@@ -1772,7 +1772,7 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 		return false, nil
 	}
 	// Handle node result by concrete type.
-	fanOut := false
+	routed := false
 	switch v := result.(type) {
 	case State: // State update.
 		e.updateStateFromResult(execCtx, v)
@@ -1785,22 +1785,22 @@ func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invoc
 			// channels from static edges for this task to prevent double-triggering
 			// the downstream node (once via GoTo, once via edge writes).
 			if v.GoTo != "" {
-				fanOut = true
+				routed = true
 			}
 		}
 	case []*Command: // Fan-out commands.
 		// Fan-out: enqueue tasks with overlays.
-		fanOut = true
+		routed = true
 		e.enqueueCommands(execCtx, t, v)
 	default:
 	}
 
 	// Process channel writes, unless this is a fan-out case to avoid double trigger.
-	if !fanOut && len(t.Writes) > 0 {
+	if !routed && len(t.Writes) > 0 {
 		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
 	}
 
-	return fanOut, nil
+	return routed, nil
 }
 
 // enqueueCommands enqueues a set of commands as pending tasks for subsequent steps.
