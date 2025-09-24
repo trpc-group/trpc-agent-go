@@ -18,19 +18,21 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
 )
 
 var (
 	flagModel            = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
 	flagMaxPromptTokens  = flag.Int("max-prompt-tokens", 512, "Max prompt tokens budget for tailoring")
+	flagCounter          = flag.String("counter", "simple", "Token counter: simple|tiktoken")
 	flagStrategy         = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
 	flagPreserveSystem   = flag.Bool("preserve-system", true, "Preserve the first system message when applicable")
 	flagPreserveLastTurn = flag.Bool("preserve-last-turn", true, "Preserve the last turn (1~2 messages)")
+	flagStreaming        = flag.Bool("streaming", true, "Stream assistant responses")
 )
 
 // Interactive demo with /bulk to generate many messages and showcase
@@ -38,19 +40,25 @@ var (
 func main() {
 	flag.Parse()
 
-	counter := model.NewSimpleTokenCounter(*flagMaxPromptTokens)
+	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxPromptTokens)
 	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy), *flagPreserveSystem, *flagPreserveLastTurn)
 	modelInstance := openai.New(*flagModel,
 		openai.WithTokenTailoring(counter, strategy, *flagMaxPromptTokens),
 	)
 
-	fmt.Printf("Token Tailoring Demo\n")
-	fmt.Printf("Model=%s Strategy=%s MaxPromptTokens=%d PreserveSystem=%t PreserveLastTurn=%t\n",
-		*flagModel, strings.ToLower(*flagStrategy), *flagMaxPromptTokens, *flagPreserveSystem, *flagPreserveLastTurn)
-	fmt.Println("Commands:")
-	fmt.Println("  /bulk N         - append N synthetic user messages")
-	fmt.Println("  /history        - show current message count")
-	fmt.Println("  /exit           - quit")
+	fmt.Printf("✂️  Token Tailoring Demo\n")
+	fmt.Printf("🧩 model: %s\n", *flagModel)
+	fmt.Printf("🔢 max-prompt-tokens: %d\n", *flagMaxPromptTokens)
+	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
+	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
+	fmt.Printf("🛡️ preserve-system: %t\n", *flagPreserveSystem)
+	fmt.Printf("🛡️ preserve-last-turn: %t\n", *flagPreserveLastTurn)
+	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
+	fmt.Println("==================================================")
+	fmt.Println("💡 Commands:")
+	fmt.Println("  /bulk N     - append N synthetic user messages")
+	fmt.Println("  /history    - show current message count")
+	fmt.Println("  /exit       - quit")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -86,6 +94,18 @@ func buildStrategy(counter model.TokenCounter, strategyName string, preserveSyst
 	}
 }
 
+func buildCounter(name string, modelName string, maxPromptTokens int) model.TokenCounter {
+	switch name {
+	case "tiktoken":
+		if c, err := tiktoken.New(modelName, maxPromptTokens); err == nil {
+			return c
+		} else {
+			log.Warn("tiktoken counter init failed, falling back to simple", err)
+		}
+	}
+	return model.NewSimpleTokenCounter(maxPromptTokens)
+}
+
 func handleCommand(messages *[]model.Message, line string) bool {
 	switch {
 	case strings.HasPrefix(line, "/exit"):
@@ -118,7 +138,7 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 
 	req := &model.Request{
 		Messages:         cloneMessages(*messages),
-		GenerationConfig: model.GenerationConfig{Stream: false},
+		GenerationConfig: model.GenerationConfig{Stream: *flagStreaming},
 	}
 
 	ch, err := m.GenerateContent(ctx, req)
@@ -126,42 +146,58 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 		log.Warn("generate content failed", err)
 	}
 
-	final := waitResponse(ch)
+	final := renderResponse(ch, *flagStreaming)
 	fmt.Printf("\n[tailor] maxPromptTokens=%d before=%d after=%d\n",
 		*flagMaxPromptTokens, before, len(req.Messages))
-	if final != "" {
+	// Show a concise summary of the tailored messages (index, role, truncated content)
+	fmt.Printf("[tailor] messages (after tailoring):\n%s", summarizeMessages(req.Messages, 12))
+	if !*flagStreaming && final != "" {
 		fmt.Printf("🤖 Assistant: %s\n\n", strings.TrimSpace(final))
 		*messages = append(*messages, model.NewAssistantMessage(final))
 	}
 }
 
-func waitResponse(ch <-chan *model.Response) string {
+// renderResponse prints streaming or non-streaming responses similar to runner example.
+func renderResponse(ch <-chan *model.Response, streaming bool) string {
 	var final string
-	timeout := time.After(8 * time.Second)
-	for {
-		select {
-		case resp, ok := <-ch:
-			if !ok {
-				return final
-			}
-			if resp == nil {
-				continue
-			}
-			if resp.Error != nil {
-				fmt.Printf("\n❌ Error: %s\n", resp.Error.Message)
-				return final
+	printedPrefix := false
+	for resp := range ch {
+		if resp == nil {
+			continue
+		}
+		if resp.Error != nil {
+			fmt.Printf("\n❌ Error: %s\n", resp.Error.Message)
+			break
+		}
+		if streaming {
+			if len(resp.Choices) > 0 {
+				delta := resp.Choices[0].Delta.Content
+				if delta != "" {
+					if !printedPrefix {
+						fmt.Print("🤖 Assistant: ")
+						printedPrefix = true
+					}
+					fmt.Print(delta)
+					final += delta
+				}
 			}
 			if resp.Done {
-				if len(resp.Choices) > 0 {
-					final = resp.Choices[0].Message.Content
+				if printedPrefix {
+					fmt.Println()
 				}
-				return final
+				break
 			}
-		case <-timeout:
-			fmt.Println("\n⏱️  Timed out waiting for response. Proceeding.")
-			return final
+			continue
+		}
+		// Non-streaming mode
+		if resp.Done {
+			if len(resp.Choices) > 0 {
+				final = resp.Choices[0].Message.Content
+			}
+			break
 		}
 	}
+	return final
 }
 
 func cloneMessages(in []model.Message) []model.Message {
@@ -178,4 +214,54 @@ func repeat(s string, n int) string {
 		out = append(out, s...)
 	}
 	return string(out)
+}
+
+// summarizeMessages returns a concise multi-line preview of messages with truncation.
+func summarizeMessages(msgs []model.Message, maxItems int) string {
+	var b strings.Builder
+	for i, m := range msgs {
+		if i >= maxItems {
+			fmt.Fprintf(&b, "... (%d more)\n", len(msgs)-i)
+			break
+		}
+		role := string(m.Role)
+		content := firstNonEmpty(
+			strings.TrimSpace(m.Content),
+			strings.TrimSpace(m.ReasoningContent),
+			firstTextPart(m),
+		)
+		content = truncate(content, 100)
+		// replace newlines to keep one-line per message
+		content = strings.ReplaceAll(content, "\n", " ")
+		fmt.Fprintf(&b, "[%d] %s: %s\n", i, role, content)
+	}
+	return b.String()
+}
+
+func firstTextPart(m model.Message) string {
+	for _, p := range m.ContentParts {
+		if p.Text != nil {
+			return strings.TrimSpace(*p.Text)
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
 }
