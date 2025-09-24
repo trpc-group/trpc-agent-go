@@ -18,7 +18,7 @@ import (
 // Returns (customResult, error).
 // - customResult: if not nil, this result will be returned and tool execution will be skipped.
 // - error: if not nil, tool execution will be stopped with this error.
-type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs []byte) (any, error)
+type BeforeToolCallback func(ctx context.Context, toolName string, toolDeclaration *Declaration, jsonArgs *[]byte) (any, error)
 
 // AfterToolCallback is called after a tool is executed.
 // Returns (customResult, error).
@@ -58,7 +58,7 @@ func (c *Callbacks) RunBeforeTool(
 	ctx context.Context,
 	toolName string,
 	toolDeclaration *Declaration,
-	jsonArgs []byte,
+	jsonArgs *[]byte,
 ) (any, error) {
 	for _, cb := range c.BeforeTool {
 		customResult, err := cb(ctx, toolName, toolDeclaration, jsonArgs)
