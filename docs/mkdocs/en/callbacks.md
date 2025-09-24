@@ -36,13 +36,22 @@ Example:
 
 ```go
 modelCallbacks := model.NewCallbacks().
+  // Before: respond to a special prompt to skip the real model call.
   RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
-    // Block or mock as needed.
+    if len(req.Messages) > 0 && strings.Contains(req.Messages[len(req.Messages)-1].Content, "/ping") {
+      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}}, nil
+    }
     return nil, nil
   }).
+  // After: annotate successful responses, keep errors untouched.
   RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    // Post-process response with access to the original request.
-    return nil, nil
+    if runErr != nil || resp == nil || len(resp.Choices) == 0 {
+      return resp, runErr
+    }
+    c := resp.Choices[0]
+    c.Message.Content = c.Message.Content + "\n\n-- answered by callback"
+    resp.Choices[0] = c
+    return resp, nil
   })
 ```
 
@@ -102,8 +111,13 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   }).
   RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
-    // Optionally override result or log.
-    return nil, nil
+    if runErr != nil {
+      return nil, runErr
+    }
+    if s, ok := result.(string); ok {
+      return s + "\n-- post processed by tool callback", nil
+    }
+    return result, nil
   })
 ```
 
@@ -136,11 +150,25 @@ Example:
 
 ```go
 agentCallbacks := agent.NewCallbacks().
+  // Before: if the user message contains /abort, return a fixed response and skip the rest.
   RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    if inv != nil && strings.Contains(inv.GetUserMessageContent(), "/abort") {
+      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}}, nil
+    }
     return nil, nil
   }).
+  // After: append a footer to successful responses.
   RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    return nil, nil
+    if runErr != nil {
+      return nil, runErr
+    }
+    if inv == nil || inv.Response == nil || len(inv.Response.Choices) == 0 {
+      return nil, nil
+    }
+    c := inv.Response.Choices[0]
+    c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
+    inv.Response.Choices[0] = c
+    return inv.Response, nil
   })
 ```
 

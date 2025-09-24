@@ -6,7 +6,7 @@
 
 - ModelCallbacks（模型回调）
 - ToolCallbacks（工具回调）
-- AgentCallbacks（代理回调）
+- AgentCallbacks（Agent 回调）
 
 每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
 
@@ -33,11 +33,22 @@ type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *mod
 
 ```go
 modelCallbacks := model.NewCallbacks().
+  // Before：对特定提示直接返回固定响应，跳过真实模型调用
   RegisterBeforeModel(func(ctx context.Context, req *model.Request) (*model.Response, error) {
+    if len(req.Messages) > 0 && strings.Contains(req.Messages[len(req.Messages)-1].Content, "/ping") {
+      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "pong"}}}}, nil
+    }
     return nil, nil
   }).
+  // After：在成功时追加提示信息，或在出错时包装错误信息
   RegisterAfterModel(func(ctx context.Context, req *model.Request, resp *model.Response, runErr error) (*model.Response, error) {
-    return nil, nil
+    if runErr != nil || resp == nil || len(resp.Choices) == 0 {
+      return resp, runErr
+    }
+    c := resp.Choices[0]
+    c.Message.Content = c.Message.Content + "\n\n-- answered by callback"
+    resp.Choices[0] = c
+    return resp, nil
   })
 ```
 
@@ -94,7 +105,13 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   }).
   RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
-    return nil, nil
+    if runErr != nil {
+      return nil, runErr
+    }
+    if s, ok := result.(string); ok {
+      return s + "\n-- post processed by tool callback", nil
+    }
+    return result, nil
   })
 ```
 
@@ -128,11 +145,25 @@ type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr
 
 ```go
 agentCallbacks := agent.NewCallbacks().
+  // Before：当用户消息包含 /abort 时，直接返回固定响应，跳过后续流程
   RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+    if inv != nil && strings.Contains(inv.GetUserMessageContent(), "/abort") {
+      return &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "aborted by callback"}}}}, nil
+    }
     return nil, nil
   }).
+  // After：在成功响应末尾追加标注
   RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
-    return nil, nil
+    if runErr != nil {
+      return nil, runErr
+    }
+    if inv == nil || inv.Response == nil || len(inv.Response.Choices) == 0 {
+      return nil, nil
+    }
+    c := inv.Response.Choices[0]
+    c.Message.Content = c.Message.Content + "\n\n-- handled by agent callback"
+    inv.Response.Choices[0] = c
+    return inv.Response, nil
   })
 ```
 
