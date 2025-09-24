@@ -487,32 +487,32 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	call := model.ToolCall{ID: "id", Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)}}
 
 	// Before callback returns custom result
-	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte) (any, error) {
+	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return map[string]any{"short": true}, nil
 	})
-	res, err := runTool(ctx, call, cbs, tdecl)
+	res, _, err := runTool(ctx, call, cbs, tdecl)
 	require.NoError(t, err)
 	m, _ := res.(map[string]any)
 	require.Equal(t, true, m["short"])
 
 	// Before callback returns error
-	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte) (any, error) {
+	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return nil, assert.AnError
 	})
-	_, err = runTool(ctx, call, cbs2, tdecl)
+	_, _, err = runTool(ctx, call, cbs2, tdecl)
 	require.Error(t, err)
 
 	// After callback returns custom result
 	cbs3 := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
 		return map[string]any{"override": true}, nil
 	})
-	res, err = runTool(ctx, call, cbs3, tdecl)
+	res, _, err = runTool(ctx, call, cbs3, tdecl)
 	require.NoError(t, err)
 	m2, _ := res.(map[string]any)
 	require.Equal(t, true, m2["override"])
 
 	// Not callable tool
-	_, err = runTool(ctx, call, nil, &notCallableTool{})
+	_, _, err = runTool(ctx, call, nil, &notCallableTool{})
 	require.Error(t, err)
 }
 
