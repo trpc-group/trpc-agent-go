@@ -10,12 +10,14 @@
 // Package evalresult provides evaluation result for evaluation set.
 package evalresult
 
+import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+
 // EvalMetricResult represents the result of a single metric evaluation.
 type EvalMetricResult struct {
 	// MetricName identifies the metric.
 	MetricName string `json:"metric_name"`
 	// Score obtained for this metric.
-	Score *float64 `json:"score,omitempty"`
+	Score float64 `json:"score,omitempty"`
 	// Status of this metric evaluation.
 	Status EvalStatus `json:"status"`
 	// Threshold that was used.
@@ -26,8 +28,8 @@ type EvalMetricResult struct {
 
 // EvalMetricResultPerInvocation represents metric results for a single invocation.
 type EvalMetricResultPerInvocation struct {
-	// InvocationIndex is the index of the invocation in the conversation.
-	InvocationIndex int `json:"invocation_index"`
+	ActualInvocation   *evalset.Invocation `json:"actual_invocation"`
+	ExpectedInvocation *evalset.Invocation `json:"expected_invocation"`
 	// MetricResults contains results for each metric for this invocation.
-	MetricResults []EvalMetricResult `json:"metric_results"`
+	MetricResults []*EvalMetricResult `json:"metric_results"`
 }

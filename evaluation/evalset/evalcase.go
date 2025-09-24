@@ -20,7 +20,7 @@ type EvalCase struct {
 	// EvalID uniquely identifies this evaluation case.
 	EvalID string `json:"evalId"`
 	// Conversation contains the sequence of invocations.
-	Conversation []Invocation `json:"conversation"`
+	Conversation []*Invocation `json:"conversation"`
 	// SessionInput contains initialization data for the session.
 	SessionInput *SessionInput `json:"sessionInput,omitempty"`
 	// CreationTimestamp when this eval case was created.
@@ -54,33 +54,18 @@ type Part struct {
 type IntermediateData struct {
 	// ToolUses represents tool calls made during execution.
 	ToolUses []FunctionCall `json:"toolUses,omitempty"`
-	// ToolResponses represents responses from tool calls.
-	ToolResponses []ToolResponse `json:"toolResponses,omitempty"`
 	// IntermediateResponses from sub-agents or intermediate steps.
 	IntermediateResponses []IntermediateMessage `json:"intermediateResponses,omitempty"`
 }
 
 // SessionInput represents values that help initialize a session.
 type SessionInput struct {
+	// AppName identifies the app.
+	AppName string `json:"appName"`
 	// UserID identifies the user.
 	UserID string `json:"userId"`
 	// State contains the initial state of the session.
 	State map[string]interface{} `json:"state,omitempty"`
-}
-
-// ToolResponse mirrors a function/tool response payload from a tool call.
-// Keep minimal to avoid coupling with model.Response which is LLM specific.
-type ToolResponse struct {
-	// Name is the function/tool name.
-	Name string `json:"name"`
-	// Response is the structured response payload.
-	Response map[string]interface{} `json:"response"`
-	// ID is an optional identifier for correlating responses.
-	ID string `json:"id,omitempty"`
-	// WillContinue indicates non-blocking function calls will continue to send responses.
-	WillContinue *bool `json:"willContinue,omitempty"`
-	// Scheduling specifies how the response should be scheduled in the conversation.
-	Scheduling *string `json:"scheduling,omitempty"`
 }
 
 // IntermediateMessage preserves author and parts for intermediate agent outputs.
@@ -109,33 +94,16 @@ func (t EpochTime) MarshalJSON() ([]byte, error) {
 	if t.Time.IsZero() {
 		return []byte("0"), nil
 	}
-	sec := float64(t.Time.UnixNano()) / 1e9
-	return json.Marshal(sec)
+	unixSeconds := float64(t.Time.UnixNano()) / float64(time.Second)
+	return json.Marshal(unixSeconds)
 }
 
 // UnmarshalJSON implements json.Unmarshaler to decode unix seconds (float).
 func (t *EpochTime) UnmarshalJSON(b []byte) error {
-	// Accept number or string
-	var f float64
-	if err := json.Unmarshal(b, &f); err == nil {
-		t.Time = time.Unix(0, int64(f*1e9)).UTC()
-		return nil
+	var unixSeconds float64
+	if err := json.Unmarshal(b, &unixSeconds); err != nil {
+		return err
 	}
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		// try parse as float string
-		var ff float64
-		if err2 := json.Unmarshal([]byte(s), &ff); err2 == nil {
-			t.Time = time.Unix(0, int64(ff*1e9)).UTC()
-			return nil
-		}
-		// fallback: RFC3339 string
-		if tm, err3 := time.Parse(time.RFC3339, s); err3 == nil {
-			t.Time = tm
-			return nil
-		}
-	}
-	// If all parsing fails, leave zero value
-	t.Time = time.Time{}
+	t.Time = time.Unix(0, int64(unixSeconds*float64(time.Second))).UTC()
 	return nil
 }

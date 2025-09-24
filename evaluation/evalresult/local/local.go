@@ -24,25 +24,21 @@ import (
 )
 
 // Manager implements the evalresult.Manager interface using local file storage.
-type Manager struct {
+type manager struct {
 	baseDir string
 	mu      sync.Mutex
 }
 
 // NewManager creates a new local file evaluation result manager.
 // Use functional options (see option.go) to override the default directory.
-func NewManager(opts ...Option) *Manager {
-	m := &Manager{baseDir: "evalset_results"}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(m)
-		}
-	}
+func NewManager(opt ...evalresult.Option) evalresult.Manager {
+	opts := evalresult.NewOptions(opt...)
+	m := &manager{baseDir: opts.BaseDir}
 	return m
 }
 
 // Save stores an evaluation result to local file.
-func (m *Manager) Save(ctx context.Context, result *evalresult.EvalSetResult) error {
+func (m *manager) Save(ctx context.Context, result *evalresult.EvalSetResult) error {
 	_ = ctx
 	if result == nil {
 		return errors.New("result is nil")
@@ -76,7 +72,7 @@ func (m *Manager) Save(ctx context.Context, result *evalresult.EvalSetResult) er
 }
 
 // Get retrieves an evaluation result by evalSetResultID from local file.
-func (m *Manager) Get(ctx context.Context, evalSetResultID string) (*evalresult.EvalSetResult, error) {
+func (m *manager) Get(ctx context.Context, evalSetResultID string) (*evalresult.EvalSetResult, error) {
 	_ = ctx
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -84,7 +80,7 @@ func (m *Manager) Get(ctx context.Context, evalSetResultID string) (*evalresult.
 }
 
 // List returns all available evaluation results from local files.
-func (m *Manager) List(ctx context.Context) ([]*evalresult.EvalSetResult, error) {
+func (m *manager) List(ctx context.Context) ([]*evalresult.EvalSetResult, error) {
 	_ = ctx
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,12 +110,12 @@ func (m *Manager) List(ctx context.Context) ([]*evalresult.EvalSetResult, error)
 	return results, nil
 }
 
-func (m *Manager) resultPath(evalSetResultID string) string {
+func (m *manager) resultPath(evalSetResultID string) string {
 	filename := fmt.Sprintf("%s.evalset_result.json", evalSetResultID)
 	return filepath.Join(m.baseDir, filename)
 }
 
-func (m *Manager) load(evalSetResultID string) (*evalresult.EvalSetResult, error) {
+func (m *manager) load(evalSetResultID string) (*evalresult.EvalSetResult, error) {
 	path := m.resultPath(evalSetResultID)
 	f, err := os.Open(path)
 	if err != nil {

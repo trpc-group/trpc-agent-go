@@ -1,14 +1,4 @@
-//
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
-//
-// Copyright (C) 2025 Tencent.  All rights reserved.
-//
-// trpc-agent-go is licensed under the Apache License Version 2.0.
-//
-//
-
-// Package metric provides metrics for evaluation.
-package metric
+package evalset
 
 // EvalMetric represents a metric used to evaluate a particular aspect of an eval case
 type EvalMetric struct {

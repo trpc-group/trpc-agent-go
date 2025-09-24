@@ -116,7 +116,7 @@ evaluation/
 ┌─────────────────────────────────────┐
 │           AgentEvaluator            │  ← 用户入口层
 ├─────────────────────────────────────┤
-│         EvaluationService           │  ← 评估服务层
+│         Service                     │  ← 评估服务层
 ├─────────────────────────────────────┤
 │    Evaluator Registry & Metrics     │  ← 评估器层
 ├─────────────────────────────────────┤
@@ -366,7 +366,7 @@ type JudgeModelOptions struct {
 **服务接口:**
 
 ```go
-type EvaluationService interface {
+type Service interface {
     // 推理阶段：从 EvalSet 拿到 expected，对 Runner 触发调用，返回有序 channel。
     PerformInference(ctx context.Context, request *InferenceRequest) (<-chan *InferenceResult, error)
 
@@ -436,7 +436,7 @@ type EvaluateRequest struct {
 
 ```go
 type AgentEvaluator struct {
-    service  service.EvaluationService
+    service  service.Service
     registry *evaluator.Registry
     cfg      AgentEvaluatorConfig
 }
@@ -446,7 +446,7 @@ func NewAgentEvaluator(opts ...Option) *AgentEvaluator
 func (a *AgentEvaluator) Evaluate(ctx context.Context, runner runner.Runner) (*EvaluationResult, error)
 ```
 
-通过 Option 模式注入 `EvaluationService`、`Evaluator.Registry`、默认指标阈值等依赖；若未显式提供，默认使用 `service/local.New()` 与内置注册表，保持与 ADK `AgentEvaluator` 类似的开箱体验。
+通过 Option 模式注入 `service.Service`、`Evaluator.Registry`、默认指标阈值等依赖；若未显式提供，默认使用 `service/local.New()` 与内置注册表，保持与 ADK `AgentEvaluator` 类似的开箱体验。
 
 **评估结果:**
 

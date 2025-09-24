@@ -1,320 +1,231 @@
 package evaluation
 
 import (
-    "context"
-    "errors"
-    "time"
+	"context"
+	"errors"
+	"fmt"
+	"time"
 
-    "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
-    "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
-    "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-    "trpc.group/trpc-go/trpc-agent-go/evaluation/service"
-    localservice "trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 )
 
-// Config represents the configuration for the evaluation system.
-type Config struct {
-    MaxConcurrency  int  `json:"max_concurrency" yaml:"max_concurrency"`
-    TimeoutSeconds  int  `json:"timeout_seconds" yaml:"timeout_seconds"`
-    EnableMetrics   bool `json:"enable_metrics" yaml:"enable_metrics"`
+type AgentEvaluator interface {
+	Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error)
 }
 
-// AgentEvaluator provides a simplified interface for evaluating agents.
-type AgentEvaluator struct {
-    service  service.EvaluationService
-    registry *evaluator.Registry
-    cfg      AgentEvaluatorConfig
+func NewAgentEvaluator(agent agent.Agent, opt ...Option) (AgentEvaluator, error) {
+	if agent == nil {
+		return nil, errors.New("agent is nil")
+	}
+	opts := newOptions(opt...)
+	a := &agentEvaluator{
+		agent:             agent,
+		evalService:       opts.evalService,
+		evalSetManager:    opts.evalSetManager,
+		evalResultManager: opts.evalResultManager,
+		registry:          opts.registry,
+		numRuns:           opts.numRuns,
+		evalMetrics:       opts.evalMetrics,
+	}
+	if a.numRuns <= 0 {
+		return nil, errors.New("num runs must be greater than 0")
+	}
+	if a.evalService == nil {
+		a.evalService = local.New(a.agent,
+			service.WithEvalSetManager(a.evalSetManager),
+			service.WithEvalResultManager(a.evalResultManager),
+			service.WithEvaluatorRegistry(a.registry),
+		)
+	}
+	return a, nil
 }
 
-// AgentEvaluatorConfig contains configuration for AgentEvaluator.
-type AgentEvaluatorConfig struct {
-    NumRuns              int                        `json:"num_runs"`
-    PrintDetailedResults bool                       `json:"print_detailed_results"`
-    DefaultCriteria      map[string]float64         `json:"default_criteria"`
-
-    AppName         string                     `json:"app_name"`
-    EvalSetID       string                     `json:"eval_set_id"`
-    EvalCaseIDs     []string                   `json:"eval_case_ids"`
-    Metrics         []metric.EvalMetric        `json:"metrics"`
-    InferenceConfig service.InferenceConfig    `json:"inference_config"`
-    ConcurrencyConfig service.ConcurrencyConfig `json:"concurrency_config"`
+type agentEvaluator struct {
+	agent             agent.Agent
+	evalService       service.Service
+	evalSetManager    evalset.Manager
+	evalResultManager evalresult.Manager
+	registry          evaluator.Registry
+	numRuns           int
+	evalMetrics       []*evalset.EvalMetric
 }
 
-// MetricSummary contains summary information for a metric.
-type MetricSummary struct {
-    MetricName   string                `json:"metric_name"`
-    OverallScore *float64              `json:"overall_score,omitempty"`
-    Threshold    float64               `json:"threshold"`
-    Status       evalresult.EvalStatus `json:"status"`
-    NumSamples   int                   `json:"num_samples"`
-}
-
-// EvaluationResult represents the final evaluation result.
 type EvaluationResult struct {
-    OverallStatus evalresult.EvalStatus `json:"overall_status"`
-    MetricResults map[string]MetricSummary `json:"metric_results"`
-    TotalCases    int                   `json:"total_cases"`
-    ExecutionTime time.Duration         `json:"execution_time"`
+	AppName       string
+	EvalSetID     string
+	OverallStatus evalresult.EvalStatus
+	ExecutionTime time.Duration
+	EvalCases     []*EvaluationCaseResult
 }
 
-// Option configures an AgentEvaluator instance.
-type Option func(*AgentEvaluator)
-
-// WithEvaluationService overrides the evaluation service implementation.
-func WithEvaluationService(s service.EvaluationService) Option {
-    return func(ae *AgentEvaluator) { ae.service = s }
+type EvaluationCaseResult struct {
+	EvalCaseID      string
+	OverallStatus   evalresult.EvalStatus
+	EvalCaseResults []*evalresult.EvalCaseResult
+	Metrics         []*evalresult.EvalMetricResult
 }
 
-// WithRegistry overrides the evaluator registry used by AgentEvaluator.
-func WithRegistry(r *evaluator.Registry) Option {
-    return func(ae *AgentEvaluator) {
-        ae.registry = r
-        if ls, ok := ae.service.(*localservice.Service); ok && r != nil {
-            ls.SetRegistry(r)
-        }
-    }
+func (a *agentEvaluator) Evaluate(ctx context.Context, evalSetID string) (*EvaluationResult, error) {
+	if evalSetID == "" {
+		return nil, fmt.Errorf("eval set id is not configured")
+	}
+
+	start := time.Now()
+	evalCases, err := a.executeRuns(ctx, evalSetID)
+	if err != nil {
+		return nil, err
+	}
+
+	status := summarizeOverallStatus(evalCases)
+
+	return &EvaluationResult{
+		AppName:       a.agent.Info().Name,
+		EvalSetID:     evalSetID,
+		OverallStatus: status,
+		ExecutionTime: time.Since(start),
+		EvalCases:     evalCases,
+	}, nil
 }
 
-// WithAgentEvaluatorConfig configures core evaluation parameters.
-func WithAgentEvaluatorConfig(cfg AgentEvaluatorConfig) Option {
-    return func(ae *AgentEvaluator) { ae.cfg = cfg }
+func (a *agentEvaluator) executeRuns(
+	ctx context.Context,
+	evalSetID string,
+) ([]*EvaluationCaseResult, error) {
+	caseResults := make(map[string][]*evalresult.EvalCaseResult)
+	for i := 0; i < a.numRuns; i++ {
+		results, err := a.runEvaluationOnce(ctx, evalSetID)
+		if err != nil {
+			return nil, err
+		}
+		for _, res := range results {
+			caseResults[res.EvalID] = append(caseResults[res.EvalID], res)
+		}
+	}
+	results := make([]*EvaluationCaseResult, 0, len(caseResults))
+	for caseID, runs := range caseResults {
+		result, err := assembleCaseResults(caseID, runs)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
-// NewAgentEvaluator creates a new AgentEvaluator applying the provided options.
-func NewAgentEvaluator(opts ...Option) *AgentEvaluator {
-    ae := &AgentEvaluator{
-        cfg: AgentEvaluatorConfig{
-            NumRuns:              1,
-            PrintDetailedResults: true,
-            DefaultCriteria:      map[string]float64{},
-        },
-    }
-    for _, opt := range opts {
-        opt(ae)
-    }
-
-    if ae.registry == nil {
-        ae.registry = DefaultRegistry()
-    }
-
-    if ae.service == nil {
-        ae.service = localservice.New(localservice.WithEvaluatorRegistry(ae.registry))
-    } else if ls, ok := ae.service.(*localservice.Service); ok {
-        ls.SetRegistry(ae.registry)
-    }
-
-    return ae
+func assembleCaseResults(caseID string, runs []*evalresult.EvalCaseResult) (*EvaluationCaseResult, error) {
+	type data struct {
+		count     int
+		score     float64
+		threshold float64
+	}
+	metricsMap := make(map[string]*data)
+	for _, result := range runs {
+		for _, metric := range result.OverallEvalMetricResults {
+			if metric.Status != evalresult.EvalStatusNotEvaluated {
+				if _, ok := metricsMap[metric.MetricName]; !ok {
+					metricsMap[metric.MetricName] = &data{threshold: metric.Threshold}
+				}
+				metricsMap[metric.MetricName].count++
+				metricsMap[metric.MetricName].score += metric.Score
+			}
+		}
+	}
+	metrics := make([]*evalresult.EvalMetricResult, 0, len(metricsMap))
+	for name, agg := range metricsMap {
+		average := agg.score / float64(agg.count)
+		status := evalresult.EvalStatusNotEvaluated
+		if average >= agg.threshold {
+			status = evalresult.EvalStatusPassed
+		} else {
+			status = evalresult.EvalStatusFailed
+		}
+		metrics = append(metrics, &evalresult.EvalMetricResult{
+			MetricName: name,
+			Score:      average,
+			Status:     status,
+			Threshold:  agg.threshold,
+		})
+	}
+	caseStatus := summarizeMetricsStatus(metrics)
+	if caseStatus == evalresult.EvalStatusNotEvaluated {
+		caseStatus = summarizeRunStatus(runs)
+	}
+	return &EvaluationCaseResult{
+		EvalCaseID:      caseID,
+		OverallStatus:   caseStatus,
+		EvalCaseResults: runs,
+		Metrics:         metrics,
+	}, nil
 }
 
-// WithService replaces the evaluation service.
-func (ae *AgentEvaluator) WithService(s service.EvaluationService) *AgentEvaluator {
-    ae.service = s
-    if ls, ok := s.(*localservice.Service); ok && ae.registry != nil {
-        ls.SetRegistry(ae.registry)
-    }
-    return ae
+func (a *agentEvaluator) runEvaluationOnce(ctx context.Context, evalSetID string) ([]*evalresult.EvalCaseResult, error) {
+	inferenceResults, err := a.evalService.Inference(ctx, &service.InferenceRequest{
+		AppName:   a.agent.Info().Name,
+		EvalSetID: evalSetID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("inference: %w", err)
+	}
+
+	caseResults, err := a.evalService.Evaluate(ctx, &service.EvaluateRequest{
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMertrics: a.evalMetrics,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("evaluate: %w", err)
+	}
+
+	return caseResults, nil
 }
 
-// WithRegistry sets a new registry and updates the underlying service if possible.
-func (ae *AgentEvaluator) WithRegistry(r *evaluator.Registry) *AgentEvaluator {
-    ae.registry = r
-    if ls, ok := ae.service.(*localservice.Service); ok && r != nil {
-        ls.SetRegistry(r)
-    }
-    return ae
+func summarizeRunStatus(results []*evalresult.EvalCaseResult) evalresult.EvalStatus {
+	statuses := make([]evalresult.EvalStatus, 0, len(results))
+	for _, res := range results {
+		if res != nil {
+			statuses = append(statuses, res.FinalEvalStatus)
+		}
+	}
+	return reduceStatuses(statuses)
 }
 
-// Evaluate evaluates an agent using the provided runner.
-func (ae *AgentEvaluator) Evaluate(ctx context.Context, run runner.Runner) (*EvaluationResult, error) {
-    start := time.Now()
-
-    if ae.service == nil {
-        return nil, errors.New("evaluation service not configured")
-    }
-    if ae.registry == nil {
-        ae.registry = DefaultRegistry()
-        if ls, ok := ae.service.(*localservice.Service); ok {
-            ls.SetRegistry(ae.registry)
-        }
-    }
-    if run == nil {
-        return nil, errors.New("runner is nil")
-    }
-    if ae.cfg.EvalSetID == "" {
-        return nil, errors.New("eval set id is required")
-    }
-
-    numRuns := ae.cfg.NumRuns
-    if numRuns <= 0 {
-        numRuns = 1
-    }
-
-    metrics := ae.prepareMetrics()
-
-    inferenceResults := make([]service.InferenceResult, 0)
-    for i := 0; i < numRuns; i++ {
-        req := &service.InferenceRequest{
-            AppName:         ae.cfg.AppName,
-            EvalSetID:       ae.cfg.EvalSetID,
-            EvalCaseIDs:     ae.cfg.EvalCaseIDs,
-            InferenceConfig: ae.cfg.InferenceConfig,
-            Runner:          run,
-        }
-        ch, err := ae.service.PerformInference(ctx, req)
-        if err != nil {
-            return nil, err
-        }
-        for res := range ch {
-            if res == nil {
-                continue
-            }
-            inferenceResults = append(inferenceResults, *res)
-        }
-    }
-
-    if len(inferenceResults) == 0 {
-        return &EvaluationResult{
-            OverallStatus: evalresult.EvalStatusNotEvaluated,
-            MetricResults: make(map[string]MetricSummary),
-            TotalCases:    0,
-            ExecutionTime: time.Since(start),
-        }, nil
-    }
-
-    evalReq := &service.EvaluateRequest{
-        InferenceResults: inferenceResults,
-        EvaluateConfig: service.EvaluateConfig{
-            Metrics:            metrics,
-            InferenceConfig:    ae.cfg.InferenceConfig,
-            ConcurrencyConfig:  ae.cfg.ConcurrencyConfig,
-        },
-    }
-
-    evalCh, err := ae.service.Evaluate(ctx, evalReq)
-    if err != nil {
-        return nil, err
-    }
-
-    agg := newMetricAggregator(metrics)
-    overallStatus := evalresult.EvalStatusPassed
-    totalCases := 0
-
-    for res := range evalCh {
-        if res == nil {
-            continue
-        }
-        totalCases++
-        agg.AddCaseResults(res.OverallEvalMetricResults)
-        overallStatus = combineStatus(overallStatus, res.FinalEvalStatus)
-    }
-
-    if totalCases == 0 {
-        overallStatus = evalresult.EvalStatusNotEvaluated
-    }
-
-    result := &EvaluationResult{
-        OverallStatus: overallStatus,
-        MetricResults: agg.Summary(),
-        TotalCases:    totalCases,
-        ExecutionTime: time.Since(start),
-    }
-    return result, nil
+func summarizeMetricsStatus(metrics []*evalresult.EvalMetricResult) evalresult.EvalStatus {
+	statuses := make([]evalresult.EvalStatus, 0, len(metrics))
+	for _, metric := range metrics {
+		if metric != nil {
+			statuses = append(statuses, metric.Status)
+		}
+	}
+	return reduceStatuses(statuses)
 }
 
-func (ae *AgentEvaluator) prepareMetrics() []metric.EvalMetric {
-    if len(ae.cfg.Metrics) > 0 {
-        return ae.cfg.Metrics
-    }
-    metrics := make([]metric.EvalMetric, 0, len(ae.cfg.DefaultCriteria))
-    for name, threshold := range ae.cfg.DefaultCriteria {
-        metrics = append(metrics, metric.EvalMetric{MetricName: name, Threshold: threshold})
-    }
-    if len(metrics) == 0 {
-        metrics = append(metrics, metric.EvalMetric{
-            MetricName: metric.MetricResponseMatchScore,
-            Threshold:  1.0,
-        })
-    }
-    return metrics
+func summarizeOverallStatus(cases []*EvaluationCaseResult) evalresult.EvalStatus {
+	statuses := make([]evalresult.EvalStatus, 0, len(cases))
+	for _, c := range cases {
+		if c != nil {
+			statuses = append(statuses, c.OverallStatus)
+		}
+	}
+	return reduceStatuses(statuses)
 }
 
-// metricAggregator accumulates metric statistics across cases.
-type metricAggregator struct {
-    entries map[string]*metricAggregate
-}
-
-type metricAggregate struct {
-    sum       float64
-    count     int
-    threshold float64
-    status    evalresult.EvalStatus
-}
-
-func newMetricAggregator(metrics []metric.EvalMetric) *metricAggregator {
-    ma := &metricAggregator{entries: make(map[string]*metricAggregate, len(metrics))}
-    for _, m := range metrics {
-        ma.entries[m.MetricName] = &metricAggregate{
-            threshold: m.Threshold,
-            status:    evalresult.EvalStatusPassed,
-        }
-    }
-    return ma
-}
-
-func (m *metricAggregator) AddCaseResults(results []evalresult.EvalMetricResult) {
-    for _, res := range results {
-        entry := m.entries[res.MetricName]
-        if entry == nil {
-            // Ignore metrics that were not part of the request configuration.
-            continue
-        }
-        if res.Score != nil {
-            entry.sum += *res.Score
-            entry.count++
-        }
-        entry.status = combineStatus(entry.status, res.Status)
-        if entry.threshold == 0 {
-            entry.threshold = res.Threshold
-        }
-    }
-}
-
-func (m *metricAggregator) Summary() map[string]MetricSummary {
-    summaries := make(map[string]MetricSummary, len(m.entries))
-    for name, entry := range m.entries {
-        var scorePtr *float64
-        if entry.count > 0 {
-            avg := entry.sum / float64(entry.count)
-            scorePtr = &avg
-        }
-        status := entry.status
-        if entry.count == 0 && status == evalresult.EvalStatusPassed {
-            status = evalresult.EvalStatusNotEvaluated
-        }
-        summaries[name] = MetricSummary{
-            MetricName:   name,
-            OverallScore: scorePtr,
-            Threshold:    entry.threshold,
-            Status:       status,
-            NumSamples:   entry.count,
-        }
-    }
-    return summaries
-}
-
-func combineStatus(current, incoming evalresult.EvalStatus) evalresult.EvalStatus {
-    if incoming == evalresult.EvalStatusFailed {
-        return evalresult.EvalStatusFailed
-    }
-    if current == evalresult.EvalStatusFailed {
-        return evalresult.EvalStatusFailed
-    }
-    if incoming == evalresult.EvalStatusUnknown && current == evalresult.EvalStatusPassed {
-        return evalresult.EvalStatusNotEvaluated
-    }
-    if incoming == evalresult.EvalStatusNotEvaluated && current == evalresult.EvalStatusPassed {
-        return evalresult.EvalStatusNotEvaluated
-    }
-    return current
+func reduceStatuses(statuses []evalresult.EvalStatus) evalresult.EvalStatus {
+	status := evalresult.EvalStatusNotEvaluated
+	for _, s := range statuses {
+		switch s {
+		case evalresult.EvalStatusFailed:
+			return evalresult.EvalStatusFailed
+		case evalresult.EvalStatusPassed:
+			if status != evalresult.EvalStatusFailed {
+				status = evalresult.EvalStatusPassed
+			}
+		}
+	}
+	return status
 }

@@ -24,7 +24,7 @@ type EvalSet struct {
 	// Description of the evaluation set.
 	Description string `json:"description,omitempty"`
 	// EvalCases contains all the evaluation cases.
-	EvalCases []EvalCase `json:"eval_cases"`
+	EvalCases []*EvalCase `json:"eval_cases"`
 	// CreationTimestamp when this eval set was created.
 	CreationTimestamp time.Time `json:"creation_timestamp"`
 }
@@ -32,15 +32,15 @@ type EvalSet struct {
 // Manager defines the interface for managing evaluation sets.
 type Manager interface {
 	// Get returns an EvalSet identified by evalSetID.
-	Get(ctx context.Context, evalSetID string) (*EvalSet, error)
+	Get(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
 	// Create creates and returns an empty EvalSet given the evalSetID.
-	Create(ctx context.Context, evalSetID string) (*EvalSet, error)
+	Create(ctx context.Context, appName, evalSetID string) (*EvalSet, error)
 	// GetCase returns an EvalCase if found, otherwise nil.
-	GetCase(ctx context.Context, evalSetID, evalCaseID string) (*EvalCase, error)
+	GetCase(ctx context.Context, appName, evalSetID, evalCaseID string) (*EvalCase, error)
 	// AddCase adds the given EvalCase to an existing EvalSet identified by evalSetID.
-	AddCase(ctx context.Context, evalSetID string, evalCase *EvalCase) error
+	AddCase(ctx context.Context, appName, evalSetID string, evalCase *EvalCase) error
 	// UpdateCase updates an existing EvalCase given the evalSetID.
-	UpdateCase(ctx context.Context, evalSetID string, updatedEvalCase *EvalCase) error
+	UpdateCase(ctx context.Context, appName, evalSetID string, updatedEvalCase *EvalCase) error
 	// DeleteCase deletes the given EvalCase identified by evalSetID and evalCaseID.
-	DeleteCase(ctx context.Context, evalSetID, evalCaseID string) error
+	DeleteCase(ctx context.Context, appName, evalSetID, evalCaseID string) error
 }
