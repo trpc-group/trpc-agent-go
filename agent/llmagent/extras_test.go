@@ -130,9 +130,9 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 		return &model.Response{Object: "after", Done: true}, nil
 	})
 
-	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent", AgentCallbacks: cb}
+	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
 
-	llm := &LLMAgent{}
+	llm := &LLMAgent{agentCallbacks: cb}
 	wrapped := llm.wrapEventChannel(context.Background(), inv, orig)
 
 	var objs []string
@@ -154,7 +154,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 		return nil, nil
 	})
 
-	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2", AgentCallbacks: cb}
+	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
 	wrapped := llm.wrapEventChannel(context.Background(), inv, orig)

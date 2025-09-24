@@ -85,13 +85,6 @@ func WithInvocationTransferInfo(transferInfo *TransferInfo) InvocationOptions {
 	}
 }
 
-// WithInvocationAgentCallbacks set agentCallbacks for the Invocation.
-func WithInvocationAgentCallbacks(agentCallbacks *Callbacks) InvocationOptions {
-	return func(inv *Invocation) {
-		inv.AgentCallbacks = agentCallbacks
-	}
-}
-
 // WithInvocationStructuredOutput set structuredOutput for the Invocation.
 func WithInvocationStructuredOutput(structuredOutput *model.StructuredOutput) InvocationOptions {
 	return func(inv *Invocation) {

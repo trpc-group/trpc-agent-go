@@ -150,3 +150,43 @@ func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
 	// Verify that PostFilter is set when filter is provided
 	assert.NotNil(t, result.PostFilter)
 }
+
+func TestBuildVectorSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
+	vs := &VectorStore{option: options{maxResults: 10}}
+	query := &vectorstore.SearchQuery{
+		Vector:     []float64{0.1, 0.2},
+		SearchMode: vectorstore.SearchModeVector,
+		Filter:     &vectorstore.SearchFilter{},
+	}
+	res, err := vs.buildVectorSearchQuery(query)
+	require.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.Nil(t, res.PostFilter)
+}
+
+func TestBuildKeywordSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
+	vs := &VectorStore{option: options{maxResults: 10}}
+	query := &vectorstore.SearchQuery{
+		Query:      "hello",
+		SearchMode: vectorstore.SearchModeKeyword,
+		Filter:     &vectorstore.SearchFilter{},
+	}
+	res, err := vs.buildKeywordSearchQuery(query)
+	require.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.Nil(t, res.PostFilter)
+}
+
+func TestBuildHybridSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
+	vs := &VectorStore{option: options{maxResults: 10}}
+	query := &vectorstore.SearchQuery{
+		Vector:     []float64{0.1, 0.2},
+		Query:      "hello",
+		SearchMode: vectorstore.SearchModeHybrid,
+		Filter:     &vectorstore.SearchFilter{},
+	}
+	res, err := vs.buildHybridSearchQuery(query)
+	require.NoError(t, err)
+	assert.NotNil(t, res)
+	assert.Nil(t, res.PostFilter)
+}
