@@ -78,6 +78,31 @@ func (c *SimpleTokenCounter) RemainingTokens(ctx context.Context, messages []Mes
 }
 
 // MiddleOutStrategy removes messages from the middle until within token budget.
+//
+// Background (Lost-in-the-Middle):
+// Large context LLMs often exhibit positional bias: information at the beginning
+// and end of a sequence tends to receive disproportionately higher attention,
+// while content in the middle is comparatively neglected ("lost in the middle").
+// Recent analyses describe a U-shaped "attention basin" where boundary items
+// receive higher attention than mid-sequence items. See, for example, the
+// attention-basin analysis and mitigation via attention-guided reranking in
+// "Attention Basin: Why Contextual Position Matters in Large Language Models"
+// (Yi et al., 2025). This phenomenon implies that when we must drop content to
+// fit a context budget, removing mid-sequence items preferentially can be a
+// reasonable heuristic because these items are less likely to be attended to
+// compared to boundary content.
+//
+// Rationale:
+//   - Preferentially preserve the head (earlier instructions/system prompts) and
+//     the tail (most recent interaction), both of which are typically more salient
+//     to generation due to positional bias.
+//   - Remove from the middle first to minimize loss of impactful context.
+//
+// Note:
+// This is a heuristic strategy. Depending on application semantics, HeadOut or
+// TailOut may be preferable. When accurate token accounting is needed, pair this
+// with a tiktoken-based counter. For details on positional bias, see arXiv:
+// 2508.05128 (Attention Basin).
 // After trimming, if the first message is a tool result, it will be removed.
 type MiddleOutStrategy struct {
 	tokenCounter TokenCounter
