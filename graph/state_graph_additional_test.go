@@ -106,6 +106,47 @@ DONE:
 	require.True(t, found, "expected model event input to contain instruction and user input: %v", modelInputs)
 }
 
+func TestAddLLMNode_GenerationConfigOption(t *testing.T) {
+	schema := MessagesStateSchema()
+	cm := &captureModel{}
+	sg := NewStateGraph(schema)
+
+	temp := 0.2
+	maxTok := 128
+
+	cfg := model.GenerationConfig{
+		Stream:      false,
+		Temperature: &temp,
+		MaxTokens:   &maxTok,
+		Stop:        []string{"END"},
+	}
+
+	sg.AddLLMNode("llm", cm, "inst", nil, WithGenerationConfig(cfg))
+
+	// Sanity: node exists
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+
+	// Execute node
+	_, err := n.Function(context.Background(), State{StateKeyUserInput: "hi"})
+	require.NoError(t, err)
+
+	// Verify request picked up generation config
+	require.NotNil(t, cm.lastReq)
+	got := cm.lastReq.GenerationConfig
+	require.Equal(t, cfg.Stream, got.Stream)
+	if cfg.Temperature != nil {
+		require.NotNil(t, got.Temperature)
+		require.InDelta(t, *cfg.Temperature, *got.Temperature, 1e-9)
+	}
+	if cfg.MaxTokens != nil {
+		require.NotNil(t, got.MaxTokens)
+		require.Equal(t, *cfg.MaxTokens, *got.MaxTokens)
+	}
+	require.Equal(t, cfg.Stop, got.Stop)
+
+}
+
 func TestBuilderOptions_Destinations_And_Callbacks(t *testing.T) {
 	sg := NewStateGraph(NewStateSchema())
 

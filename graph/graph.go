@@ -95,6 +95,10 @@ type Node struct {
 	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
+
+	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
+	// If set, AddLLMNode forwards it to the underlying LLM runner.
+	llmGenerationConfig *model.GenerationConfig
 }
 
 // Edge represents an edge in the graph.
