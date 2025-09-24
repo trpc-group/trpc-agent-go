@@ -1399,7 +1399,8 @@ func (e *Executor) executeSingleTask(
 	}
 
 	// Handle result and process channel writes.
-	if err := e.handleNodeResult(ctx, invocation, execCtx, t, result); err != nil {
+	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	if err != nil {
 		return err
 	}
 
@@ -1407,10 +1408,12 @@ func (e *Executor) executeSingleTask(
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
-	if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
-		return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+	// We need to skip intermediate nodes after routed.
+	if !routed {
+		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+		}
 	}
-
 	// Emit node completion event.
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 
@@ -1568,12 +1571,18 @@ func (e *Executor) runBeforeCallbacks(
 	if customResult == nil {
 		return false, nil
 	}
-	if err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult); err != nil {
+	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, customResult)
+	if err != nil {
 		return true, err
 	}
-	if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
-		return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+
+	// We need to skip intermediate nodes after routed.
+	if !routed {
+		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
+			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+		}
 	}
+
 	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
 	return true, nil
 }
@@ -1759,40 +1768,40 @@ func (e *Executor) emitNodeErrorEvent(
 
 // handleNodeResult handles the result from node execution.
 func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
-	execCtx *ExecutionContext, t *Task, result any) error {
+	execCtx *ExecutionContext, t *Task, result any) (bool, error) {
 	if result == nil {
-		return nil
+		return false, nil
 	}
 	// Handle node result by concrete type.
-	fanOut := false
+	routed := false
 	switch v := result.(type) {
 	case State: // State update.
 		e.updateStateFromResult(execCtx, v)
 	case *Command: // Single command.
 		if v != nil {
 			if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
-				return err
+				return false, err
 			}
 			// If the command explicitly routes via GoTo, avoid also writing to
 			// channels from static edges for this task to prevent double-triggering
 			// the downstream node (once via GoTo, once via edge writes).
 			if v.GoTo != "" {
-				fanOut = true
+				routed = true
 			}
 		}
 	case []*Command: // Fan-out commands.
 		// Fan-out: enqueue tasks with overlays.
-		fanOut = true
+		routed = true
 		e.enqueueCommands(execCtx, t, v)
 	default:
 	}
 
 	// Process channel writes, unless this is a fan-out case to avoid double trigger.
-	if !fanOut && len(t.Writes) > 0 {
+	if !routed && len(t.Writes) > 0 {
 		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
 	}
 
-	return nil
+	return routed, nil
 }
 
 // enqueueCommands enqueues a set of commands as pending tasks for subsequent steps.
