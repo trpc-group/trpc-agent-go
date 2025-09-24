@@ -34,6 +34,7 @@ const (
 // Options contains configuration options for creating a Flow.
 type Options struct {
 	ChannelBufferSize int // Buffer size for event channels (default: 256)
+	ModelCallbacks    *model.Callbacks
 }
 
 // Flow provides the basic flow implementation.
@@ -41,6 +42,7 @@ type Flow struct {
 	requestProcessors  []flow.RequestProcessor
 	responseProcessors []flow.ResponseProcessor
 	channelBufferSize  int
+	modelCallbacks     *model.Callbacks
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -60,6 +62,7 @@ func New(
 		requestProcessors:  requestProcessors,
 		responseProcessors: responseProcessors,
 		channelBufferSize:  channelBufferSize,
+		modelCallbacks:     opts.ModelCallbacks,
 	}
 }
 
@@ -180,7 +183,6 @@ func (f *Flow) processStreamingResponses(
 		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
 		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
-
 		// 5. Check context cancellation.
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return lastEvent, err
@@ -206,7 +208,7 @@ func (f *Flow) handleAfterModelCallbacks(
 	response *model.Response,
 	eventChan chan<- *event.Event,
 ) (*model.Response, error) {
-	customResp, err := runAfterModelCallbacks(ctx, invocation, llmRequest, response)
+	customResp, err := f.runAfterModelCallbacks(ctx, llmRequest, response)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return nil, err
@@ -251,16 +253,15 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 	return longRunningToolIDs
 }
 
-func runAfterModelCallbacks(
+func (f *Flow) runAfterModelCallbacks(
 	ctx context.Context,
-	invocation *agent.Invocation,
 	req *model.Request,
 	response *model.Response,
 ) (*model.Response, error) {
-	if cb := invocation.ModelCallbacks; cb == nil {
+	if f.modelCallbacks == nil {
 		return response, nil
 	}
-	return invocation.ModelCallbacks.RunAfterModel(ctx, req, response, nil)
+	return f.modelCallbacks.RunAfterModel(ctx, req, response, nil)
 }
 
 // preprocess handles pre-LLM call preparation using request processors.
@@ -296,8 +297,8 @@ func (f *Flow) callLLM(
 	log.Debugf("Calling LLM for agent %s", invocation.AgentName)
 
 	// Run before model callbacks if they exist.
-	if invocation.ModelCallbacks != nil {
-		customResponse, err := invocation.ModelCallbacks.RunBeforeModel(ctx, llmRequest)
+	if f.modelCallbacks != nil {
+		customResponse, err := f.modelCallbacks.RunBeforeModel(ctx, llmRequest)
 		if err != nil {
 			log.Errorf("Before model callback failed for agent %s: %v", invocation.AgentName, err)
 			return nil, err
@@ -310,6 +311,7 @@ func (f *Flow) callLLM(
 			return responseChan, nil
 		}
 	}
+
 	// Call the model.
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
 	if err != nil {

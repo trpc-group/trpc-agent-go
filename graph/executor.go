@@ -1728,6 +1728,7 @@ func (e *Executor) executeNodeFunction(
 		input = tmp
 	}
 	input[StateKeyToolCallbacks] = node.toolCallbacks
+	input[StateKeyModelCallbacks] = node.modelCallbacks
 
 	return node.Function(ctx, input)
 }

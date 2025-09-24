@@ -73,8 +73,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
-	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.Callbacks
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
