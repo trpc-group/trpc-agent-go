@@ -109,7 +109,7 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	choice, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	choice, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 
@@ -151,7 +151,7 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	choice, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	choice, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
 	require.NotNil(t, choice)
@@ -600,7 +600,7 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	choice, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
+	choice, _, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
 	require.NoError(t, err)
 	require.NotNil(t, choice)
 	assert.Equal(t, ErrorToolNotFound, choice.Message.Content)
@@ -1379,7 +1379,7 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	cb := tool.NewCallbacks()
 	cb.RegisterBeforeTool(func(_ context.Context, _ string,
-		_ *tool.Declaration, _ []byte) (any, error) {
+		_ *tool.Declaration, _ *[]byte) (any, error) {
 		return map[string]any{"v": 1}, nil
 	})
 	p := NewFunctionCallResponseProcessor(false, cb)
@@ -1387,7 +1387,7 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"v": 1})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -1396,7 +1396,7 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 	cb := tool.NewCallbacks()
 	cb.RegisterBeforeTool(func(_ context.Context, _ string,
-		_ *tool.Declaration, _ []byte) (any, error) {
+		_ *tool.Declaration, _ *[]byte) (any, error) {
 		return nil, fmt.Errorf("fail")
 	})
 	p := NewFunctionCallResponseProcessor(false, cb)
@@ -1404,7 +1404,7 @@ func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	_, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.Error(t, err)
 }
 
@@ -1419,7 +1419,7 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	res, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	res, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"ok": true})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -1432,7 +1432,7 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	})
 	inv2 := &agent.Invocation{}
 	p.toolCallbacks = cb
-	_, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
 	require.Error(t, err)
 }
 

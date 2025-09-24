@@ -49,7 +49,7 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 
 ### 2. ToolCallbacks
 
-- **BeforeToolCallback**: Triggered before each tool invocation. Use for argument validation, mocking tool results, or logging.
+- **BeforeToolCallback**: Triggered before each tool invocation. Use for argument validation, mocking tool results, logging, or **modifying tool arguments**. The `jsonArgs` parameter is a pointer, allowing callbacks to modify arguments that will be passed to the tool.
 - **AfterToolCallback**: Triggered after each tool invocation. Use for result post-processing, formatting, or logging.
 
 **Example output:**
@@ -57,8 +57,16 @@ This example demonstrates how to use the `Runner` orchestration component in a m
 ```
 🟠 BeforeToolCallback: tool=calculator, args={"operation":"add","a":1,"b":2}
 🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=..., id=...)
+🟠 BeforeToolCallback: Modified args for calculator: {"original":{"operation":"add","a":1,"b":2},"timestamp":"1703123456"}
 🟤 AfterToolCallback: tool=calculator, args={...}, result=..., err=<nil>
 ```
+
+**Key Feature**: The `BeforeToolCallback` receives `jsonArgs` as a pointer (`*[]byte`), enabling scenarios like:
+
+- **Argument Modification**: Modify tool arguments before execution
+- **Argument Validation**: Validate and sanitize inputs
+- **Argument Enrichment**: Add metadata, timestamps, or context to arguments
+- **Argument Transformation**: Convert or reformat arguments for specific tools
 
 ### 3. AgentCallbacks
 
@@ -109,7 +117,7 @@ modelCallbacks := model.NewCallbacks().
 ```go
 // Traditional registration
 toolCallbacks := tool.NewCallbacks()
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
     // Your logic here
     return nil, nil
 })
@@ -120,7 +128,7 @@ toolCallbacks.RegisterAfterTool(func(ctx context.Context, toolName string, toolD
 
 // Chain registration (recommended)
 toolCallbacks := tool.NewCallbacks().
-    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+    RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
         // Your logic here
         return nil, nil
     }).
@@ -165,7 +173,7 @@ After declaring and registering your callbacks, pass them to the agent during co
 You can short-circuit (skip) the default execution of a model, tool, or agent by returning a non-nil response/result from the corresponding callback. This is useful for mocking, early returns, blocking, or custom logic.
 
 - **ModelCallbacks**: If `BeforeModelCallback` returns a non-nil `*model.Response`, the model will not be called and this response will be used directly.
-- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly.
+- **ToolCallbacks**: If `BeforeToolCallback` returns a non-nil result, the tool will not be executed and this result will be used directly. Additionally, `BeforeToolCallback` can modify tool arguments via the `jsonArgs` pointer parameter.
 - **AgentCallbacks**: If `BeforeAgentCallback` returns a non-nil `*model.Response`, the agent execution will be skipped and this response will be used.
 
 **Example: Using original request in AfterModelCallback**
@@ -187,10 +195,25 @@ modelCallbacks.RegisterAfterModel(func(ctx context.Context, req *model.Request, 
 **Example: Mocking a tool result in BeforeToolCallback**
 
 ```go
-toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-    if toolName == "calculator" && strings.Contains(string(jsonArgs), "42") {
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+    if toolName == "calculator" && jsonArgs != nil && strings.Contains(string(*jsonArgs), "42") {
         // Return a mock result and skip actual tool execution.
         return calculatorResult{Operation: "custom", A: 42, B: 42, Result: 4242}, nil
+    }
+    return nil, nil
+})
+```
+
+**Example: Modifying tool arguments in BeforeToolCallback**
+
+```go
+toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+    if jsonArgs != nil && toolName == "calculator" {
+        // Add timestamp to arguments for logging purposes
+        originalArgs := string(*jsonArgs)
+        modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
+        *jsonArgs = []byte(modifiedArgs)
+        fmt.Printf("Modified args for %s: %s\n", toolName, modifiedArgs)
     }
     return nil, nil
 })
@@ -263,6 +286,7 @@ go run . -streaming=false
   - Input/output interception and modification
   - Content safety and moderation
   - Tool mocking or fallback
+  - **Tool argument modification and enrichment**
   - **Original request access for content restoration**
 
 ---
@@ -274,6 +298,7 @@ go run . -streaming=false
 - **Safety & Compliance**: Moderate model outputs and tool results
 - **Business Extensions**: Insert custom business logic as needed
 - **Content Processing**: Access original input for post-processing workflows
+- **Argument Processing**: Modify, validate, or enrich tool arguments before execution
 
 ---
 

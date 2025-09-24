@@ -852,40 +852,51 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	}
 }
 
+// runTool executes a tool with before/after callbacks and returns the result.
+// Parameters:
+//   - ctx: context for cancellation and tracing
+//   - toolCall: the tool call to execute, including function name and arguments
+//   - toolCallbacks: callbacks to execute before and after tool execution
+//   - t: the tool implementation to execute
+//
+// Returns:
+//   - any: the result from tool execution or custom callback result
+//   - []byte: the modified arguments after before-tool callbacks (for telemetry)
+//   - error: any error that occurred during execution
 func runTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
-) (any, error) {
+) (any, []byte, error) {
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
+			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("callback before tool error: %w", err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
-			return customResult, nil
+			return customResult, toolCall.Function.Arguments, nil
 		}
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
 				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
 			if err != nil {
-				return nil, fmt.Errorf("callback after tool error: %w", err)
+				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
-				return customResult, nil
+				return customResult, toolCall.Function.Arguments, nil
 			}
 		}
-		return result, nil
+		return result, toolCall.Function.Arguments, nil
 	}
-	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1126,15 +1137,15 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		}
 	}
 
-	// Emit tool execution start event.
+	// Execute the tool with callbacks and get modified arguments.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
+	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+
+	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		config.EventChan, config.InvocationID, name, id, nodeID,
-		startTime, config.ToolCall.Function.Arguments,
+		startTime, modifiedArgs,
 	)
-
-	// Execute the tool.
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
-	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(toolCompleteEventConfig{
 		EventChan:    config.EventChan,
@@ -1145,9 +1156,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		StartTime:    startTime,
 		Result:       result,
 		Error:        err,
-		Arguments:    config.ToolCall.Function.Arguments,
+		Arguments:    modifiedArgs,
 	})
-	itelemetry.TraceToolCall(span, t.Declaration(), config.ToolCall.Function.Arguments, event)
+	itelemetry.TraceToolCall(span, t.Declaration(), modifiedArgs, event)
 	span.End()
 
 	if err != nil {

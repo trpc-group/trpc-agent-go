@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -37,8 +38,10 @@ var (
 		})
 
 	_ = tool.NewCallbacks().
-		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
 			fmt.Printf("🌐 Global BeforeTool: executing %s\n", toolName)
+			// Note: jsonArgs is a pointer, so modifications will be visible to the caller.
+			// This allows callbacks to modify tool arguments before execution.
 			return nil, nil
 		}).
 		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {
@@ -122,8 +125,12 @@ func (c *multiTurnChatWithCallbacks) createToolCallbacks() *tool.Callbacks {
 
 // createBeforeToolCallback creates the before tool callback.
 func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
-		fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(jsonArgs))
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
+		if jsonArgs != nil {
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=%s\n", toolName, string(*jsonArgs))
+		} else {
+			fmt.Printf("\n🟠 BeforeToolCallback: tool=%s, args=<nil>\n", toolName)
+		}
 
 		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 			fmt.Printf("🟠 BeforeToolCallback: ✅ Invocation present in ctx (agent=%s, id=%s)\n", inv.AgentName, inv.InvocationID)
@@ -131,7 +138,17 @@ func (c *multiTurnChatWithCallbacks) createBeforeToolCallback() tool.BeforeToolC
 			fmt.Printf("🟠 BeforeToolCallback: ❌ Invocation NOT found in ctx\n")
 		}
 
-		if c.shouldReturnCustomToolResult(toolName, jsonArgs) {
+		// Demonstrate argument modification capability.
+		// Since jsonArgs is a pointer, we can modify the arguments that will be passed to the tool.
+		if jsonArgs != nil && toolName == "calculator" {
+			// Example: Add a timestamp to the arguments for logging purposes.
+			originalArgs := string(*jsonArgs)
+			modifiedArgs := fmt.Sprintf(`{"original":%s,"timestamp":"%d"}`, originalArgs, time.Now().Unix())
+			*jsonArgs = []byte(modifiedArgs)
+			fmt.Printf("🟠 BeforeToolCallback: Modified args for calculator: %s\n", modifiedArgs)
+		}
+
+		if jsonArgs != nil && c.shouldReturnCustomToolResult(toolName, *jsonArgs) {
 			fmt.Println("\n🟠 BeforeToolCallback: triggered, custom result returned for calculator with 42.")
 			return c.createCustomCalculatorResult(), nil
 		}

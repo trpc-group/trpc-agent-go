@@ -47,7 +47,7 @@ func TestRegisterBeforeTool(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		return nil, nil
 	}
@@ -55,6 +55,37 @@ func TestRegisterBeforeTool(t *testing.T) {
 	callbacks.RegisterBeforeTool(callback)
 
 	require.Equal(t, 1, len(callbacks.BeforeTool))
+}
+
+func TestRunBeforeTool_ModifyArgsViaPointer(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	// Register a callback that modifies the args by reassigning through pointer.
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		toolName string,
+		toolDeclaration *tool.Declaration,
+		jsonArgs *[]byte,
+	) (any, error) {
+		if jsonArgs != nil {
+			// Change the content to verify propagation to caller.
+			*jsonArgs = []byte(`{"x":2}`)
+		}
+		return nil, nil
+	})
+
+	declaration := &tool.Declaration{
+		Name:        "test-tool",
+		Description: "A test tool",
+	}
+
+	args := []byte(`{"x":1}`)
+
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
+
+	require.NoError(t, err)
+	require.Nil(t, customResult)
+	require.JSONEq(t, `{"x":2}`, string(args))
 }
 
 func TestRegisterAfterTool(t *testing.T) {
@@ -86,7 +117,7 @@ func TestRunBeforeTool_Empty(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
 
 	require.NoError(t, err)
 	require.Nil(t, customResult)
@@ -100,7 +131,7 @@ func TestRunBeforeTool_Skip(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		return nil, nil
 	}
@@ -114,7 +145,7 @@ func TestRunBeforeTool_Skip(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
 
 	require.NoError(t, err)
 	require.Nil(t, customResult)
@@ -130,7 +161,7 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		return expectedResult, nil
 	}
@@ -144,7 +175,7 @@ func TestRunBeforeTool_CustomResult(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
 
 	require.NoError(t, err)
 	require.NotNil(t, customResult)
@@ -164,7 +195,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		return nil, NewError(expectedErr)
 	}
@@ -178,7 +209,7 @@ func TestRunBeforeTool_Error(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
 
 	require.Error(t, err)
 	require.EqualError(t, err, expectedErr)
@@ -195,7 +226,7 @@ func TestRunBeforeTool_Multiple(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		callCount++
 		return nil, nil
@@ -205,7 +236,7 @@ func TestRunBeforeTool_Multiple(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		callCount++
 		return map[string]string{"result": "from-second"}, nil
@@ -221,7 +252,7 @@ func TestRunBeforeTool_Multiple(t *testing.T) {
 
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", declaration, &args)
 
 	require.NoError(t, err)
 	require.Equal(t, 2, callCount)
@@ -394,7 +425,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 		ctx context.Context,
 		toolName string,
 		toolDeclaration *tool.Declaration,
-		jsonArgs []byte,
+		jsonArgs *[]byte,
 	) (any, error) {
 		if toolName == "skip-tool" {
 			return map[string]string{"skipped": "true"}, nil
@@ -403,7 +434,10 @@ func TestToolCallbacks_Integration(t *testing.T) {
 		// Modify args for certain tools.
 		if toolName == "modify-args" {
 			var args map[string]any
-			if err := json.Unmarshal(jsonArgs, &args); err != nil {
+			if jsonArgs == nil {
+				return nil, nil
+			}
+			if err := json.Unmarshal(*jsonArgs, &args); err != nil {
 				return nil, err
 			}
 			args["modified"] = true
@@ -437,7 +471,7 @@ func TestToolCallbacks_Integration(t *testing.T) {
 	declaration := &tool.Declaration{Name: "skip-tool", Description: "A tool to skip"}
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "skip-tool", declaration, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "skip-tool", declaration, &args)
 	require.NoError(t, err)
 	require.NotNil(t, customResult)
 
@@ -470,7 +504,7 @@ func TestToolCallbacks_EdgeCases(t *testing.T) {
 	// Test with nil declaration.
 	args := []byte(`{"test": "value"}`)
 
-	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", nil, args)
+	customResult, err := callbacks.RunBeforeTool(context.Background(), "test-tool", nil, &args)
 	require.NoError(t, err)
 	require.Nil(t, customResult)
 
@@ -482,7 +516,7 @@ func TestToolCallbacks_EdgeCases(t *testing.T) {
 	require.Nil(t, customResult)
 
 	// Test with empty tool name.
-	customResult, err = callbacks.RunBeforeTool(context.Background(), "", declaration, args)
+	customResult, err = callbacks.RunBeforeTool(context.Background(), "", declaration, &args)
 	require.NoError(t, err)
 	require.Nil(t, customResult)
 }
@@ -490,7 +524,7 @@ func TestToolCallbacks_EdgeCases(t *testing.T) {
 func TestCallbacksChainRegistration(t *testing.T) {
 	// Test chain registration.
 	callbacks := tool.NewCallbacks().
-		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+		RegisterBeforeTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
 			return nil, nil
 		}).
 		RegisterAfterTool(func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte, result any, runErr error) (any, error) {

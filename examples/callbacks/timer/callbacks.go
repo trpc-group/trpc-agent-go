@@ -226,7 +226,7 @@ func (e *toolTimerExample) createAfterModelCallback() model.AfterModelCallback {
 
 // createBeforeToolCallback creates the before tool callback for timing.
 func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
-	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs []byte) (any, error) {
+	return func(ctx context.Context, toolName string, toolDeclaration *tool.Declaration, jsonArgs *[]byte) (any, error) {
 		// Record start time and store it in the instance variable.
 		startTime := time.Now()
 		if e.toolStartTimes == nil {
@@ -240,7 +240,12 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 			"tool_execution",
 			trace.WithAttributes(
 				attribute.String("tool.name", toolName),
-				attribute.String("tool.args", string(jsonArgs)),
+				attribute.String("tool.args", func() string {
+					if jsonArgs == nil {
+						return ""
+					}
+					return string(*jsonArgs)
+				}()),
 			),
 		)
 		// Store span in instance variable for later use.
@@ -250,7 +255,11 @@ func (e *toolTimerExample) createBeforeToolCallback() tool.BeforeToolCallback {
 		e.toolSpans[toolName] = span
 
 		fmt.Printf("⏱️  BeforeToolCallback: %s started at %s\n", toolName, startTime.Format("15:04:05.000"))
-		fmt.Printf("   Args: %s\n", string(jsonArgs))
+		if jsonArgs != nil {
+			fmt.Printf("   Args: %s\n", string(*jsonArgs))
+		} else {
+			fmt.Printf("   Args: <nil>\n")
+		}
 
 		return nil, nil
 	}
