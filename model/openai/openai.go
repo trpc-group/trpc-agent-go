@@ -460,18 +460,47 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
-	// Apply token tailoring best-effort if configured.
-	if m.tokenCounter != nil && m.tailoringStrategy != nil && m.maxTokens > 0 && len(request.Messages) > 0 {
-		if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxTokens); err != nil {
-			log.Warn("token tailoring failed in openai.Model", err)
-		} else {
-			request.Messages = tailored
-		}
-	}
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
 
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 
-	// Convert our request format to OpenAI format.
+	chatRequest, opts := m.buildChatRequest(request)
+
+	go func() {
+		defer close(responseChan)
+
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, &chatRequest)
+		}
+
+		if request.Stream {
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		} else {
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		}
+	}()
+
+	return responseChan, nil
+}
+
+// applyTokenTailoring performs best-effort token tailoring if configured.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxTokens <= 0 {
+		return
+	}
+	if len(request.Messages) == 0 {
+		return
+	}
+	if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxTokens); err != nil {
+		log.Warn("token tailoring failed in openai.Model", err)
+	} else {
+		request.Messages = tailored
+	}
+}
+
+// buildChatRequest converts our Request to OpenAI request params and options.
+func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
 	chatRequest := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
@@ -540,22 +569,7 @@ func (m *Model) GenerateContent(
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-
-	go func() {
-		defer close(responseChan)
-
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, &chatRequest)
-		}
-
-		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		}
-	}()
-
-	return responseChan, nil
+	return chatRequest, opts
 }
 
 // convertMessages converts our Message format to OpenAI's format.
