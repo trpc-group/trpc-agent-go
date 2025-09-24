@@ -4,18 +4,18 @@
 
 回调分为三类：
 
-- ModelCallbacks（模型回调）.
-- ToolCallbacks（工具回调）.
-- AgentCallbacks（代理回调）.
+- ModelCallbacks（模型回调）
+- ToolCallbacks（工具回调）
+- AgentCallbacks（代理回调）
 
-每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果短路默认执行。
+每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
 
 ---
 
 ## ModelCallbacks
 
-- BeforeModelCallback：模型推理前触发.
-- AfterModelCallback：模型完成后触发（或按流式阶段）.
+- BeforeModelCallback：模型推理前触发
+- AfterModelCallback：模型完成后触发（或按流式阶段）
 
 签名：
 
@@ -26,8 +26,8 @@ type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *mod
 
 要点：
 
-- Before 可返回非空响应以跳过模型调用.
-- After 可获取原始请求 `req`，便于内容还原与后处理.
+- Before 可返回非空响应以跳过模型调用
+- After 可获取原始请求 `req`，便于内容还原与后处理
 
 示例：
 
@@ -45,13 +45,13 @@ modelCallbacks := model.NewCallbacks().
 
 ## ToolCallbacks
 
-- BeforeToolCallback：工具调用前触发.
-- AfterToolCallback：工具调用后触发.
+- BeforeToolCallback：工具调用前触发
+- AfterToolCallback：工具调用后触发
 
 签名：
 
 ```go
-// Before：可短路并可通过指针修改参数.
+// Before：可提前返回，并可通过指针修改参数
 type BeforeToolCallback func(
   ctx context.Context,
   toolName string,
@@ -59,7 +59,7 @@ type BeforeToolCallback func(
   jsonArgs *[]byte, // 指针：可修改，修改对调用方可见
 ) (any, error)
 
-// After：可覆盖结果.
+// After：可覆盖结果
 type AfterToolCallback func(
   ctx context.Context,
   toolName string,
@@ -72,14 +72,14 @@ type AfterToolCallback func(
 
 参数修改（重要）：
 
-- BeforeToolCallback 接收 `*[]byte`，回调内部可替换切片（如 `*jsonArgs = newBytes`）.
+- BeforeToolCallback 接收 `*[]byte`，回调内部可替换切片（如 `*jsonArgs = newBytes`）
 - 修改后的参数将用于：
-  - 实际工具执行.
-  - 遥测 Trace 与图事件（emitToolStartEvent/emitToolCompleteEvent）上报.
+  - 实际工具执行
+  - 可观测 Trace 与图事件（emitToolStartEvent/emitToolCompleteEvent）上报
 
-短路：
+提前返回：
 
-- BeforeToolCallback 返回非空结果时，会跳过实际工具执行，直接使用该结果.
+- BeforeToolCallback 返回非空结果时，会跳过实际工具执行，直接使用该结果
 
 示例：
 
@@ -98,19 +98,19 @@ toolCallbacks := tool.NewCallbacks().
   })
 ```
 
-遥测与事件：
+可观测与事件：
 
 - 修改后的参数会同步到：
 
-  - `TraceToolCall` 遥测属性.
-  - 图事件 `emitToolStartEvent` 与 `emitToolCompleteEvent`.
+  - `TraceToolCall` 可观测属性
+  - 图事件 `emitToolStartEvent` 与 `emitToolCompleteEvent`
 
 ---
 
 ## AgentCallbacks
 
-- BeforeAgentCallback：Agent 执行前触发.
-- AfterAgentCallback：Agent 执行后触发.
+- BeforeAgentCallback：Agent 执行前触发
+- AfterAgentCallback：Agent 执行后触发
 
 签名：
 
@@ -121,8 +121,8 @@ type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr
 
 要点：
 
-- Before 可返回自定义 `*model.Response` 以短路.
-- After 可返回替换响应.
+- Before 可返回自定义 `*model.Response` 以中止后续流程
+- After 可返回替换响应
 
 示例：
 
@@ -192,7 +192,7 @@ _ = agent.NewCallbacks().
 
 ## Mock 与参数修改示例
 
-Mock 工具结果并短路执行：
+Mock 工具结果并中止后续流程：
 
 ```go
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
@@ -203,7 +203,7 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 })
 ```
 
-执行前修改参数（并在遥测/事件中体现）：
+执行前修改参数（并在可观测/事件中体现）：
 
 ```go
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
