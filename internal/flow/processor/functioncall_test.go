@@ -1464,8 +1464,3 @@ func TestMarshalChunkToText_MarshalError(t *testing.T) {
 	text := marshalChunkToText(func() {})
 	require.NotEmpty(t, text)
 }
-
-
-
-
-
