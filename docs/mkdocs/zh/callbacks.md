@@ -138,7 +138,7 @@ type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr
 
 要点：
 
-- Before 可返回自定义 `*model.Response` 以中止后续流程
+- Before 可返回自定义 `*model.Response` 以中止后续模型调用
 - After 可返回替换响应
 
 示例：
@@ -223,7 +223,7 @@ _ = agent.NewCallbacks().
 
 ## Mock 与参数修改示例
 
-Mock 工具结果并中止后续流程：
+Mock 工具结果并中止后续工具调用：
 
 ```go
 toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, jsonArgs *[]byte) (any, error) {
