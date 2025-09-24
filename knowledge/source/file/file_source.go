@@ -13,6 +13,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -120,7 +121,19 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	metadata[source.MetaFileSize] = fileInfo.Size()
 	metadata[source.MetaFileMode] = fileInfo.Mode().String()
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
+
+	// Get absolute path for URI
+	// Not include ip address and port
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	fileURL := (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaURI] = fileURL
+	metadata[source.MetaSourceName] = s.name
+
 	// Add metadata to all documents.
+	chunkIndex := 0
 	for _, doc := range documents {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]interface{})
@@ -128,6 +141,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
+		chunkIndex++
 	}
 	return documents, nil
 }
@@ -143,4 +157,13 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 		s.metadata = make(map[string]interface{})
 	}
 	s.metadata[key] = value
+}
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
 }

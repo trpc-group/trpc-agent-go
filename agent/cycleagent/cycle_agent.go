@@ -32,7 +32,6 @@ type EscalationFunc func(*event.Event) bool
 type CycleAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	maxIterations     *int // Optional maximum number of iterations
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
@@ -47,7 +46,6 @@ type Option func(*Options)
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	maxIterations     *int
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
@@ -59,12 +57,6 @@ type Options struct {
 // or the maximum number of iterations is reached.
 func WithSubAgents(sub []agent.Agent) Option {
 	return func(o *Options) { o.subAgents = sub }
-}
-
-// WithTools configures tools available to the cycle agent.
-// These tools can be used by any sub-agent during loop execution.
-func WithTools(tools []tool.Tool) Option {
-	return func(o *Options) { o.tools = tools }
 }
 
 // WithMaxIterations sets the maximum number of loop iterations.
@@ -111,7 +103,6 @@ func New(name string, opts ...Option) *CycleAgent {
 	return &CycleAgent{
 		name:              name,
 		subAgents:         cfg.subAgents,
-		tools:             cfg.tools,
 		maxIterations:     cfg.maxIterations,
 		channelBufferSize: cfg.channelBufferSize,
 		agentCallbacks:    cfg.agentCallbacks,
@@ -126,23 +117,11 @@ func (a *CycleAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := *baseInvocation
+	subInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+	)
 
-	// Update agent-specific fields for proper agent attribution.
-	subInvocation.Agent = subAgent
-	subInvocation.AgentName = subAgent.Info().Name
-	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
-
-	// Set branch info for hierarchical event filtering.
-	// Do not use the sub-agent name here, it will cause the sub-agent unable to see the
-	// previous agent's conversation history.
-	if baseInvocation.Branch != "" {
-		subInvocation.Branch = baseInvocation.Branch
-	} else {
-		subInvocation.Branch = a.name
-	}
-
-	return &subInvocation
+	return subInvocation
 }
 
 // shouldEscalate checks if an event indicates escalation using injectable logic.
@@ -194,15 +173,9 @@ func (a *CycleAgent) isEscalationCheckEvent(evt *event.Event) bool {
 
 // setupInvocation prepares the invocation for execution.
 func (a *CycleAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
-
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -211,36 +184,28 @@ func (a *CycleAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return false
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	return false // Continue execution
@@ -256,29 +221,26 @@ func (a *CycleAgent) runSubAgent(
 	// Create a proper invocation for the sub-agent with correct attribution.
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
+	// Reset invocation information in context
+	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+
 	// Run the sub-agent.
-	subEventChan, err := subAgent.Run(ctx, subInvocation)
+	subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
 	if err != nil {
 		// Send error event and escalate.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates escalation
 	}
 
 	// Forward events from the sub-agent and check for escalation.
 	for subEvent := range subEventChan {
-		select {
-		case eventChan <- subEvent:
-		case <-ctx.Done():
-			return true // Indicates early return
+		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
+			return true
 		}
 
 		// Check if this event indicates escalation.
@@ -298,10 +260,8 @@ func (a *CycleAgent) runSubAgentsLoop(
 ) bool {
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
-			return true // Indicates early return
-		default:
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return true
 		}
 
 		// Run the sub-agent.
@@ -310,10 +270,8 @@ func (a *CycleAgent) runSubAgentsLoop(
 		}
 
 		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
-			return true // Indicates early return
-		default:
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			return true
 		}
 	}
 	return false // No escalation
@@ -325,37 +283,30 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
 	}
+
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
@@ -363,11 +314,11 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, a.channelBufferSize)
 
+	// Setup invocation.
+	a.setupInvocation(invocation)
+
 	go func() {
 		defer close(eventChan)
-
-		// Setup invocation.
-		a.setupInvocation(invocation)
 
 		// Handle before agent callbacks.
 		if a.handleBeforeAgentCallbacks(ctx, invocation, eventChan) {
@@ -379,10 +330,8 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
 			// Check if context was cancelled.
-			select {
-			case <-ctx.Done():
+			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
-			default:
 			}
 
 			// Run sub-agents loop.
@@ -403,7 +352,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
 func (a *CycleAgent) Tools() []tool.Tool {
-	return a.tools
+	return []tool.Tool{}
 }
 
 // Info implements the agent.Agent interface.

@@ -92,7 +92,7 @@ func (ts *ToolSet) Close() error {
 		}
 	}
 
-	log.Info("MCP tool set closed successfully")
+	log.Debug("MCP tool set closed successfully")
 	return nil
 }
 
@@ -190,7 +190,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return nil
 	}
 
-	log.Info("Connecting to MCP server", "transport", m.config.Transport)
+	log.Debug("Connecting to MCP server", "transport", m.config.Transport)
 
 	client, err := m.createClient()
 	if err != nil {
@@ -209,7 +209,7 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Info("Successfully connected to MCP server")
+	log.Debug("Successfully connected to MCP server")
 	return nil
 }
 
@@ -278,6 +278,19 @@ func (m *mcpSessionManager) createClient() (mcp.Connector, error) {
 	}
 }
 
+// createTimeoutContext creates a context with timeout if configured and no existing deadline.
+// Returns the context and a cancel function. The caller should defer the cancel function.
+func (m *mcpSessionManager) createTimeoutContext(ctx context.Context, operation string) (context.Context, context.CancelFunc) {
+	if m.config.Timeout > 0 {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			timeoutCtx, cancel := context.WithTimeout(ctx, m.config.Timeout)
+			log.Debug("Applied MCP timeout", "timeout", m.config.Timeout, "operation", operation)
+			return timeoutCtx, cancel
+		}
+	}
+	return ctx, func() {} // Return no-op cancel function for consistency.
+}
+
 // initialize initializes the MCP session.
 func (m *mcpSessionManager) initialize(ctx context.Context) error {
 	if m.initialized {
@@ -286,13 +299,15 @@ func (m *mcpSessionManager) initialize(ctx context.Context) error {
 
 	log.Debug("Initializing MCP session")
 
+	initCtx, cancel := m.createTimeoutContext(ctx, "initialize")
+	defer cancel()
 	initReq := &mcp.InitializeRequest{}
-	initResp, err := m.client.Initialize(ctx, initReq)
+	initResp, err := m.client.Initialize(initCtx, initReq)
 	if err != nil {
 		return fmt.Errorf("failed to initialize MCP session: %w", err)
 	}
 
-	log.Info("MCP session initialized",
+	log.Debug("MCP session initialized",
 		"server_name", initResp.ServerInfo.Name,
 		"server_version", initResp.ServerInfo.Version,
 		"protocol_version", initResp.ProtocolVersion)
@@ -312,8 +327,10 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 
 	log.Debug("Listing tools from MCP server")
 
+	listCtx, cancel := m.createTimeoutContext(ctx, "listTools")
+	defer cancel()
 	listReq := &mcp.ListToolsRequest{}
-	listResp, err := m.client.ListTools(ctx, listReq)
+	listResp, err := m.client.ListTools(listCtx, listReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tools: %w", err)
 	}
@@ -333,11 +350,13 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 
 	log.Debug("Calling tool", "name", name, "arguments", arguments)
 
+	toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
+	defer cancel()
 	callReq := &mcp.CallToolRequest{}
 	callReq.Params.Name = name
 	callReq.Params.Arguments = arguments
 
-	callResp, err := m.client.CallTool(ctx, callReq)
+	callResp, err := m.client.CallTool(toolCtx, callReq)
 	if err != nil {
 		// Enhanced error with parameter information.
 		enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, err)
@@ -383,7 +402,7 @@ func (m *mcpSessionManager) close() error {
 		return nil
 	}
 
-	log.Info("Closing MCP session")
+	log.Debug("Closing MCP session")
 
 	err := m.client.Close()
 	m.connected = false
@@ -395,7 +414,7 @@ func (m *mcpSessionManager) close() error {
 		return fmt.Errorf("failed to close MCP client: %w", err)
 	}
 
-	log.Info("MCP session closed successfully")
+	log.Debug("MCP session closed successfully")
 	return nil
 }
 

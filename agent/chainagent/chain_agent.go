@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -26,7 +27,6 @@ const defaultChannelBufferSize = 256
 type ChainAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -39,7 +39,6 @@ type Option func(*Options)
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -49,12 +48,6 @@ type Options struct {
 // influencing the next agent's execution.
 func WithSubAgents(subAgents []agent.Agent) Option {
 	return func(o *Options) { o.subAgents = subAgents }
-}
-
-// WithTools sets the tools available to the chain agent.
-// These tools can be used by any sub-agent in the chain during execution.
-func WithTools(tools []tool.Tool) Option {
-	return func(o *Options) { o.tools = tools }
 }
 
 // WithChannelBufferSize sets the buffer size for the event channel.
@@ -93,7 +86,6 @@ func New(name string, opts ...Option) *ChainAgent {
 	return &ChainAgent{
 		name:              name,
 		subAgents:         cfg.subAgents,
-		tools:             cfg.tools,
 		channelBufferSize: cfg.channelBufferSize,
 		agentCallbacks:    cfg.agentCallbacks,
 	}
@@ -106,23 +98,11 @@ func (a *ChainAgent) createSubAgentInvocation(
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
 	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := *baseInvocation
+	subInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+	)
 
-	// Update agent-specific fields.
-	subInvocation.Agent = subAgent
-	subInvocation.AgentName = subAgent.Info().Name
-	subInvocation.TransferInfo = nil // Clear transfer info for sub-agents.
-
-	// Set branch info to track sequence in multi-agent scenarios.
-	// Do not include sub-agent name in branch, so that the chain sub-agents can
-	// observe each other's events.
-	if baseInvocation.Branch != "" {
-		subInvocation.Branch = baseInvocation.Branch
-	} else {
-		subInvocation.Branch = a.name
-	}
-
-	return &subInvocation
+	return subInvocation
 }
 
 // Run implements the agent.Agent interface.
@@ -161,15 +141,9 @@ func (a *ChainAgent) executeChainRun(
 
 // setupInvocation prepares the invocation for execution.
 func (a *ChainAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
-
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	// Set agent and agent name.
+	invocation.Agent = a
+	invocation.AgentName = a.name
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -178,36 +152,28 @@ func (a *ChainAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return false
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
-		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
+		agent.EmitEvent(ctx, invocation, eventChan, event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+		))
 		return true // Indicates early return
 	}
 	return false // Continue execution
@@ -223,37 +189,32 @@ func (a *ChainAgent) executeSubAgents(
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
+		// Reset invocation information in context
+		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+
 		// Run the sub-agent.
-		subEventChan, err := subAgent.Run(ctx, subInvocation)
+		subEventChan, err := subAgent.Run(subAgentCtx, subInvocation)
+		log.Warnf("subEventChan run failed. agent name: %s, err:%v", subInvocation.AgentName, err)
 		if err != nil {
-			// Send error event.
-			errorEvent := event.NewErrorEvent(
+			agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				model.ErrorTypeFlowError,
 				err.Error(),
-			)
-			select {
-			case eventChan <- errorEvent:
-			case <-ctx.Done():
-			}
+			))
 			return
 		}
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
-			select {
-			case eventChan <- subEvent:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return
 			}
 		}
 
-		// Check if context was cancelled.
-		select {
-		case <-ctx.Done():
+		if err := agent.CheckContextCancelled(ctx); err != nil {
+			log.Warnf("Chain agent %q cancelled execution of sub-agent %q", a.name, subAgent.Info().Name)
 			return
-		default:
 		}
 	}
 }
@@ -264,43 +225,35 @@ func (a *ChainAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
+		evt = event.NewResponseEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			customResponse,
 		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
 	}
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
 func (a *ChainAgent) Tools() []tool.Tool {
-	return a.tools
+	return []tool.Tool{}
 }
 
 // Info implements the agent.Agent interface.

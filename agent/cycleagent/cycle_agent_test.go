@@ -97,7 +97,6 @@ func (m *mockAgent) Tools() []tool.Tool {
 type legacyOptions struct {
 	Name              string
 	SubAgents         []agent.Agent
-	Tools             []tool.Tool
 	MaxIterations     *int
 	ChannelBufferSize int
 	AgentCallbacks    *agent.Callbacks
@@ -107,9 +106,6 @@ type legacyOptions struct {
 // newFromLegacy converts legacyOptions to functional options constructor.
 func newFromLegacy(o legacyOptions) *CycleAgent {
 	opts := []Option{WithSubAgents(o.SubAgents)}
-	if len(o.Tools) > 0 {
-		opts = append(opts, WithTools(o.Tools))
-	}
 	if o.MaxIterations != nil {
 		opts = append(opts, WithMaxIterations(*o.MaxIterations))
 	}
@@ -533,14 +529,14 @@ func (e *errorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *ev
 
 func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 	parent := newFromLegacy(legacyOptions{Name: "parent"})
-	base := &agent.Invocation{InvocationID: "base", AgentName: "parent", Branch: "branchA"}
+	base := agent.NewInvocation(agent.WithInvocationAgent(parent))
 	child := &noopAgent{name: "child"}
 
 	inv := parent.createSubAgentInvocation(child, base)
 
 	require.Equal(t, "child", inv.AgentName)
 	// Branch should stay unchanged when base.Branch non-empty.
-	require.Equal(t, "branchA", inv.Branch)
+	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
 	// Ensure TransferInfo cleared.
 	require.Nil(t, inv.TransferInfo)
 }

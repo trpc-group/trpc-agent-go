@@ -12,15 +12,13 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"strings"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/telemetry/agent"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -28,27 +26,14 @@ import (
 )
 
 func main() {
-	// https://langfuse.com/integrations/native/opentelemetry
-	langFuseSecretKey := getEnv("LANGFUSE_SECRET_KEY", "your-secret-key")
-	langFusePublicKey := getEnv("LANGFUSE_PUBLIC_KEY", "your-public-key")
-	langFuseHost := getEnv("LANGFUSE_HOST", "http://localhost:3000")
-	otelEndpointPath := "/api/public/otel/v1/traces"
-
-	// Start trace
-	clean, err := atrace.Start(
-		context.Background(),
-		atrace.WithEndpointURL(langFuseHost+otelEndpointPath),
-		atrace.WithProtocol("http"),
-		atrace.WithHeaders(map[string]string{
-			"Authorization": fmt.Sprintf("Basic %s", encodeAuth(langFusePublicKey, langFuseSecretKey)),
-		}),
-	)
+	// Start trace with Langfuse integration using environment variables
+	clean, err := langfuse.Start(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to start trace telemetry: %v", err)
 	}
 	defer func() {
-		if err := clean(); err != nil {
-			log.Printf("Failed to clean up metric telemetry: %v", err)
+		if err := clean(context.Background()); err != nil {
+			log.Printf("Failed to clean up trace telemetry: %v", err)
 		}
 	}()
 
@@ -65,27 +50,31 @@ func main() {
 		"Create a test file in the current directory",
 		"Find information about Tesla company",
 	}
-	// Attributes represent additional key-value descriptors that can be bound to a metric observer or recorder.
-	commonAttrs := []attribute.KeyValue{
-		attribute.String("agentName", agentName),
-		attribute.String("modelName", *modelName),
-	}
-
-	ctx, span := atrace.Tracer.Start(
-		context.Background(),
-		agentName,
-		trace.WithAttributes(commonAttrs...),
-	)
-	defer span.End()
 
 	for _, msg := range userMessage {
 		func() {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute)
-			defer cancel()
-			ctx, span := atrace.Tracer.Start(ctx, "process-message")
-			span.SetAttributes(attribute.String("user-message", msg))
+			// Attributes represent additional key-value descriptors that can be bound to a metric observer or recorder.
+			commonAttrs := []attribute.KeyValue{
+				attribute.String("agentName", agentName),
+				attribute.String("modelName", *modelName),
+				attribute.String("langfuse.environment", "development"),
+				attribute.String("langfuse.session.id", "session-1"),
+				attribute.String("langfuse.user.id", "user-1"),
+				attribute.String("langfuse.trace.input", msg),
+			}
+
+			ctx, span := atrace.Tracer.Start(
+				context.Background(),
+				agentName,
+				trace.WithAttributes(commonAttrs...),
+			)
 			defer span.End()
-			err := a.ProcessMessage(ctx, msg)
+
+			result, err := a.ProcessMessage(ctx, msg)
+			if result != "" {
+				span.SetAttributes(attribute.String("langfuse.trace.output", result))
+			}
+
 			if err != nil {
 				span.SetAttributes(attribute.String("error", err.Error()))
 				log.Fatalf("Chat system failed to run: %v", err)
@@ -93,19 +82,6 @@ func main() {
 			span.SetAttributes(attribute.String("error", "<nil>"))
 		}()
 	}
-}
-
-func encodeAuth(pk, sk string) string {
-	auth := pk + ":" + sk
-	return base64.StdEncoding.EncodeToString([]byte(auth))
-}
-
-// getEnv returns the value of the environment variable or the default if not set.
-func getEnv(key, defaultValue string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-	return defaultValue
 }
 
 func printGuideMessage(modelName string) {

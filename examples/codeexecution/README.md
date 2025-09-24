@@ -16,7 +16,7 @@ The code execution system allows you to execute code snippets in various program
 
 ## Prerequisites
 
-- Go 1.23 or later
+- Go 1.23.0 or later
 - Valid OpenAI API key (or compatible API endpoint) for LLM functionality
 - Docker installed and running (for ContainerCodeExecutor)
 - Python 3.x, Go, and Bash interpreters (for LocalCodeExecutor)
@@ -27,23 +27,23 @@ The code execution system allows you to execute code snippets in various program
 
 Executes code directly on the local machine. Suitable for trusted environments.
 
-### ContainerCodeExecutor  
+### ContainerCodeExecutor
 
 Executes code in isolated Docker containers. Provides better security and isolation.
 
 ## Environment Variables
 
-| Variable | Description | Default Value |
-|----------|-------------|---------------|
-| `OPENAI_API_KEY` | API key for the model service (required, automatically read by OpenAI SDK) | `` |
-| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK) | `https://api.openai.com/v1` |
+| Variable          | Description                                                                | Default Value               |
+| ----------------- | -------------------------------------------------------------------------- | --------------------------- |
+| `OPENAI_API_KEY`  | API key for the model service (required, automatically read by OpenAI SDK) | ``                          |
+| `OPENAI_BASE_URL` | Base URL for the model API endpoint (automatically read by OpenAI SDK)     | `https://api.openai.com/v1` |
 
 **Note**: `OPENAI_API_KEY` and `OPENAI_BASE_URL` are automatically read by the OpenAI SDK. You don't need to manually read these environment variables in your code. The SDK handles this automatically when creating the client.
 
 ## Command Line Arguments
 
-| Argument | Description | Default Value |
-|----------|-------------|---------------|
+| Argument | Description              | Default Value   |
+| -------- | ------------------------ | --------------- |
 | `-model` | Name of the model to use | `deepseek-chat` |
 
 ## Usage
@@ -64,12 +64,11 @@ export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 go run main.go -model deepseek-chat
 ```
 
-
 ## Example Output
 
 When you run the example, you might see output like:
 
-```
+````
 Creating LLMAgent with configuration:
 - Model Name: deepseek-chat
 - OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment
@@ -84,7 +83,7 @@ Processing events from LLMAgent:
 ID: 30641681-7f0f-46cc-b992-003458af0c3d
 Author: data_science_agent
 InvocationID: invocation-7d8497e5-d9d0-462c-bee0-4be82e8924a2
-Object: 
+Object:
 Message Content: I'll analyze the given sample data (5, 12, 8, 15, 7, 9, 11) using Python's standard library functions. Here's the complete analysis in a single code block:
 
 ```python
@@ -111,9 +110,10 @@ print(f"Mean: {mean:.2f}")
 print(f"Median: {median}")
 print(f"Standard deviation: {stdev:.2f}")
 print(f"Variance: {variance:.2f}")
-```
+````
 
 This code will:
+
 1. Import the necessary statistics module
 2. Process the given data
 3. Calculate all basic statistical measures
@@ -127,7 +127,7 @@ Done: true
 ID: 815e45db-7ae0-48c2-a330-da924d2a8122
 Author: data_science_agent
 InvocationID: invocation-7d8497e5-d9d0-462c-bee0-4be82e8924a2
-Object: 
+Object:
 Message Content: Code execution result:
 Original data: [5, 12, 8, 15, 7, 9, 11]
 Sorted data: [5, 7, 8, 9, 11, 12, 15]
@@ -139,7 +139,6 @@ Median: 9
 Standard deviation: 3.36
 Variance: 11.29
 
-
 Done: false
 
 --- Event 330 ---
@@ -150,6 +149,7 @@ Object: runner.completion
 Done: true
 
 === Execution Complete ===
+
 ```
 
 ### Security Considerations
@@ -161,3 +161,4 @@ When using code execution, especially with user-provided code:
 3. **Resource Limits**: Consider Docker resource limits for container execution
 4. **Input Validation**: Validate code input before execution
 5. **Network Isolation**: Containers run with limited network access
+```

@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/base64"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -46,12 +47,11 @@ func (d *defaultA2AEventConverter) ConvertToEvent(
 	invocation *agent.Invocation,
 ) (*event.Event, error) {
 	if result.Result == nil {
-		return &event.Event{
-			Author:       agentName,
-			InvocationID: invocation.InvocationID,
-			Response: &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		}, nil
+		return event.NewResponseEvent(
+			invocation.InvocationID,
+			agentName,
+			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
+		), nil
 	}
 
 	var responseMsg *protocol.Message
@@ -82,12 +82,11 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvent(
 	invocation *agent.Invocation,
 ) (*event.Event, error) {
 	if result.Result == nil {
-		return &event.Event{
-			Author:       agentName,
-			InvocationID: invocation.InvocationID,
-			Response: &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
-		}, nil
+		return event.NewResponseEvent(
+			invocation.InvocationID,
+			agentName,
+			&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: ""}}}},
+		), nil
 	}
 
 	var event *event.Event
@@ -194,7 +193,7 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	invocation *agent.Invocation) *event.Event {
 
 	// Convert A2A parts to model content parts
-	var content string
+	var content strings.Builder
 
 	// Don't handle content parts of output temporally
 	for _, part := range msg.Parts {
@@ -204,13 +203,13 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 				log.Warnf("unexpected part type: %T", part)
 				continue
 			}
-			content += p.Text
+			content.WriteString(p.Text)
 		}
 	}
 	// Create message with both content and content parts
 	message := model.Message{
 		Role:    model.RoleAssistant,
-		Content: content,
+		Content: content.String(),
 	}
 	event := event.New(invocation.InvocationID, agentName)
 	if isStreaming {

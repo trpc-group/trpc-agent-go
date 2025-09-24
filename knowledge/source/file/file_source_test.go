@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // TestReadDocuments verifies that File Source correctly reads documents with
@@ -61,7 +62,7 @@ func TestReadDocuments(t *testing.T) {
 			t.Fatalf("expected multiple chunks, got %d", len(docs))
 		}
 		for _, d := range docs {
-			sz, ok := d.Metadata["chunk_size"].(int)
+			sz, ok := d.Metadata[source.MetaChunkSize].(int)
 			if !ok {
 				t.Fatalf("chunk_size metadata missing or not int")
 			}
@@ -91,6 +92,10 @@ func (stubReader) ReadFromURL(url string) ([]*document.Document, error) {
 }
 
 func (stubReader) Name() string { return "stub" }
+
+func (stubReader) SupportedExtensions() []string {
+	return []string{".txt"}
+}
 
 // TestProcessFile_Directory ensures an error is returned when a directory path
 // is passed to processFile.

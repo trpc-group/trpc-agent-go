@@ -18,10 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -84,7 +86,7 @@ func (m *mockAgent) Tools() []tool.Tool {
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -126,7 +128,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 	// Verify session contains both user message and agent response.
 	// Should have: user message + agent response + runner done = 3 events.
-	assert.Len(t, sess.Events, 3)
+	assert.Len(t, sess.Events, 2)
 
 	// Verify user event.
 	userEvent := sess.Events[0]
@@ -141,7 +143,7 @@ func TestRunner_SessionIntegration(t *testing.T) {
 
 func TestRunner_SessionCreateIfMissing(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -181,7 +183,7 @@ func TestRunner_SessionCreateIfMissing(t *testing.T) {
 
 func TestRunner_EmptyMessageHandling(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a mock agent.
 	mockAgent := &mockAgent{name: "test-agent"}
@@ -219,10 +221,100 @@ func TestRunner_EmptyMessageHandling(t *testing.T) {
 	assert.Len(t, sess.Events, 0)
 }
 
+func TestRunner_SkipAppendingSeedUserMessage(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user"
+	sessionID := "seed-session"
+	seedHistory := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewAssistantMessage("prev reply"),
+		model.NewUserMessage("hello"),
+	}
+
+	message := model.NewUserMessage("hello")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.WithMessages(seedHistory))
+	require.NoError(t, err)
+
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	// Expect: due to EnsureEventStartWithUser filtering, only the first user
+	// event from seed is kept, plus agent response and runner completion = 3
+	require.Len(t, sess.Events, 2)
+	// Ensure we did not append a duplicate user message beyond the seed.
+	userCount := 0
+	for _, e := range sess.Events {
+		if e.Author == authorUser {
+			userCount++
+		}
+	}
+	require.Equal(t, 1, userCount)
+}
+
+func TestRunner_AppendsDifferentUserAfterSeed(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	mockAgent := &mockAgent{name: "test-agent"}
+	runner := NewRunner("test-app", mockAgent, WithSessionService(sessionService))
+
+	ctx := context.Background()
+	userID := "seed-user2"
+	sessionID := "seed-session2"
+	seedHistory := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewAssistantMessage("prev reply"),
+		model.NewUserMessage("hello"),
+	}
+
+	// Different latest user, should be appended in addition to seeded user.
+	message := model.NewUserMessage("hello too")
+
+	eventCh, err := runner.Run(ctx, userID, sessionID, message, agent.WithMessages(seedHistory))
+	require.NoError(t, err)
+
+	for range eventCh {
+		// drain channel
+	}
+
+	sess, err := sessionService.GetSession(ctx, session.Key{AppName: "test-app", UserID: userID, SessionID: sessionID})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Expect: seeded first user retained + appended user + agent response + runner completion = 4
+	require.Len(t, sess.Events, 3)
+
+	// Verify the first two events are users with expected contents.
+	if !(len(sess.Events) >= 2) {
+		t.Fatalf("expected at least two events")
+	}
+	// Event 0: seeded user
+	if sess.Events[0].Author != authorUser {
+		t.Fatalf("expected first event author user, got %s", sess.Events[0].Author)
+	}
+	if got := sess.Events[0].Response.Choices[0].Message.Content; got != "hello" {
+		t.Fatalf("expected seeded user content 'hello', got %q", got)
+	}
+	// Event 1: appended user
+	if sess.Events[1].Author != authorUser {
+		t.Fatalf("expected second event author user, got %s", sess.Events[1].Author)
+	}
+	if got := sess.Events[1].Response.Choices[0].Message.Content; got != "hello too" {
+		t.Fatalf("expected appended user content 'hello too', got %q", got)
+	}
+}
+
 // TestRunner_InvocationInjection verifies that runner correctly injects invocation into context.
 func TestRunner_InvocationInjection(t *testing.T) {
 	// Create an in-memory session service.
-	sessionService := inmemory.NewSessionService()
+	sessionService := sessioninmemory.NewSessionService()
 
 	// Create a simple mock agent that verifies invocation is in context.
 	mockAgent := &invocationVerificationAgent{name: "test-agent"}
@@ -336,4 +428,46 @@ func (m *invocationVerificationAgent) Run(ctx context.Context, invocation *agent
 
 func (m *invocationVerificationAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+func TestWithMemoryService(t *testing.T) {
+	t.Run("sets memory service in options", func(t *testing.T) {
+		memoryService := memoryinmemory.NewMemoryService()
+		opts := &Options{}
+
+		option := WithMemoryService(memoryService)
+		option(opts)
+
+		assert.Equal(t, memoryService, opts.memoryService, "Memory service should be set in options")
+	})
+
+	t.Run("sets nil memory service", func(t *testing.T) {
+		opts := &Options{}
+
+		option := WithMemoryService(nil)
+		option(opts)
+
+		assert.Nil(t, opts.memoryService, "Memory service should be nil")
+	})
+}
+
+func TestWithArtifactService(t *testing.T) {
+	t.Run("sets artifact service in options", func(t *testing.T) {
+		artifactService := artifactinmemory.NewService()
+		opts := &Options{}
+
+		option := WithArtifactService(artifactService)
+		option(opts)
+
+		assert.Equal(t, artifactService, opts.artifactService, "Artifact service should be set in options")
+	})
+
+	t.Run("sets nil artifact service", func(t *testing.T) {
+		opts := &Options{}
+
+		option := WithArtifactService(nil)
+		option(opts)
+
+		assert.Nil(t, opts.artifactService, "Artifact service should be nil")
+	})
 }

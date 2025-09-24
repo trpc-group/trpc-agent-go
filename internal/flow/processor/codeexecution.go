@@ -31,7 +31,10 @@ func NewCodeExecutionResponseProcessor() *CodeExecutionResponseProcessor {
 // ProcessResponse processes the model response, extracts code blocks, executes them,
 // and emits events for the code execution result.
 func (p *CodeExecutionResponseProcessor) ProcessResponse(
-	ctx context.Context, invocation *agent.Invocation, rsp *model.Response, ch chan<- *event.Event) {
+	ctx context.Context, invocation *agent.Invocation, req *model.Request, rsp *model.Response, ch chan<- *event.Event) {
+	if invocation == nil {
+		return
+	}
 	ce, ok := invocation.Agent.(agent.CodeExecutor)
 	if !ok || ce == nil {
 		return
@@ -57,41 +60,50 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	agent.EmitEvent(ctx, invocation, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: truncatedContent},
 				},
 			},
-		}))
+		}),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	))
 
 	codeExecutionResult, err := e.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
 		CodeBlocks:  codeBlocks,
 		ExecutionID: invocation.Session.ID,
 	})
 	if err != nil {
-		ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		agent.EmitEvent(ctx, invocation, ch, event.New(
+			invocation.InvocationID,
+			invocation.AgentName,
 			event.WithResponse(&model.Response{
 				Choices: []model.Choice{
 					{
 						Message: model.Message{Role: model.RoleAssistant, Content: "Code execution failed: " + err.Error()},
 					},
 				},
-			}))
+			}),
+			event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+		))
 		return
 	}
-	ch <- event.New(invocation.InvocationID, invocation.AgentName, event.WithBranch(invocation.Branch),
-		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	agent.EmitEvent(ctx, invocation, ch, event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
 		event.WithResponse(&model.Response{
 			Choices: []model.Choice{
 				{
 					Message: model.Message{Role: model.RoleAssistant, Content: codeExecutionResult.String()},
 				},
 			},
-		}))
+		}),
+		event.WithObject(model.ObjectTypePostprocessingCodeExecution),
+	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
 }

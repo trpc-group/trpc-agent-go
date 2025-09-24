@@ -32,9 +32,13 @@ func NewTransferResponseProcessor() *TransferResponseProcessor {
 func (p *TransferResponseProcessor) ProcessResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	req *model.Request,
 	rsp *model.Response,
 	ch chan<- *event.Event,
 ) {
+	if invocation == nil {
+		return
+	}
 	if rsp == nil {
 		log.Errorf("Transfer response processor: response is nil")
 		return
@@ -60,22 +64,21 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	if targetAgent == nil {
 		log.Errorf("Target agent '%s' not found in sub-agents", targetAgentName)
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: target agent '"+targetAgentName+"' not found",
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return
 	}
 
 	// Create transfer event to notify about the handoff.
-	transferEvent := event.New(invocation.InvocationID, invocation.AgentName)
-	transferEvent.Object = model.ObjectTypeTransfer
+	transferEvent := event.New(
+		invocation.InvocationID,
+		invocation.AgentName,
+		event.WithObject(model.ObjectTypeTransfer),
+	)
 	transferEvent.Response = &model.Response{
 		ID:        "transfer-" + rsp.ID,
 		Object:    model.ObjectTypeTransfer,
@@ -94,26 +97,17 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	}
 
 	// Send transfer event.
-	select {
-	case ch <- transferEvent:
-		log.Debugf("Transfer response processor: sent transfer event")
-	case <-ctx.Done():
-		log.Debugf("Transfer response processor: context cancelled")
+	if err := agent.EmitEvent(ctx, invocation, ch, transferEvent); err != nil {
 		return
 	}
 
 	// Create new invocation for the target agent.
-	targetInvocation := &agent.Invocation{
-		Agent:             targetAgent,
-		AgentName:         targetAgent.Info().Name,
-		InvocationID:      invocation.InvocationID, // Keep same invocation ID for continuity
-		EndInvocation:     transferInfo.EndInvocation,
-		Session:           invocation.Session,
-		Model:             invocation.Model,
-		EventCompletionCh: invocation.EventCompletionCh,
-		RunOptions:        invocation.RunOptions,
-		TransferInfo:      nil, // Clear transfer info for target agent
-	}
+	// Do NOT propagate EndInvocation from the coordinator.
+	// end_invocation is intended to end the current (parent) invocation
+	// after transfer, not the target agent's invocation.
+	targetInvocation := invocation.Clone(
+		agent.WithInvocationAgent(targetAgent),
+	)
 
 	// Set the message for the target agent.
 	if transferInfo.Message != "" {
@@ -121,45 +115,36 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
-	} else {
-		// Use the original message if no specific message for target agent.
-		targetInvocation.Message = invocation.Message
 	}
 
-	// Actually call the target agent's Run method.
-	targetEventChan, err := targetAgent.Run(ctx, targetInvocation)
+	// Actually call the target agent's Run method with the target invocation in context
+	// so tools can correctly access agent.InvocationFromContext(ctx).
+	log.Debugf("Transfer response processor: starting target agent '%s'", targetAgent.Info().Name)
+	targetCtx := agent.NewInvocationContext(ctx, targetInvocation)
+	targetEventChan, err := targetAgent.Run(targetCtx, targetInvocation)
 	if err != nil {
 		log.Errorf("Failed to run target agent '%s': %v", targetAgent.Info().Name, err)
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		agent.EmitEvent(ctx, invocation, ch, event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			model.ErrorTypeFlowError,
 			"Transfer failed: "+err.Error(),
-		)
-		select {
-		case ch <- errorEvent:
-		case <-ctx.Done():
-		}
+		))
 		return
 	}
 
 	// Forward all events from the target agent.
 	for targetEvent := range targetEventChan {
-		select {
-		case ch <- targetEvent:
-			log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
-		case <-ctx.Done():
+		if err := event.EmitEvent(ctx, ch, targetEvent); err != nil {
 			return
 		}
+		log.Debugf("Transfer response processor: forwarded event from target agent %s", targetAgent.Info().Name)
 	}
 
-	// Clear the transfer info from the original invocation.
+	// Clear the transfer info and end the original invocation to stop further LLM calls.
+	// Do NOT mutate Agent/AgentName here to avoid author mismatches for any in-flight LLM stream.
+	log.Debugf("Transfer response processor: target agent '%s' completed; ending original invocation", targetAgent.Info().Name)
 	invocation.TransferInfo = nil
-
-	// Update the original invocation to reflect the transfer.
-	invocation.Agent = targetAgent
-	invocation.AgentName = targetAgent.Info().Name
-	// Always end the original invocation after transfer.
 	invocation.EndInvocation = true
 }

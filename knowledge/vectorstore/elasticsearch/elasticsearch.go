@@ -52,13 +52,9 @@ const (
 
 // Elasticsearch field name constants.
 const (
-	fieldID        = "id"
-	fieldName      = "name"
-	fieldContent   = "content"
-	fieldEmbedding = "embedding"
-	fieldMetadata  = "metadata"
-	fieldCreatedAt = "created_at"
-	fieldUpdatedAt = "updated_at"
+	defaultFieldMetadata  = "metadata"
+	defaultFieldCreatedAt = "created_at"
+	defaultFieldUpdatedAt = "updated_at"
 )
 
 // esDocument represents a document in Elasticsearch format using composition.
@@ -115,6 +111,7 @@ func New(opts ...Option) (*VectorStore, error) {
 		storage.WithEnableDebugLogger(option.enableDebugLogger),
 		storage.WithRetryOnStatus(option.retryOnStatus),
 		storage.WithMaxRetries(option.maxRetries),
+		storage.WithExtraOptions(option.extraOptions...),
 		storage.WithVersion(option.version),
 	)
 	if err != nil {
@@ -165,18 +162,19 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	tm.Properties = make(map[string]types.Property)
 
 	// id: keyword
-	tm.Properties[fieldID] = types.NewKeywordProperty()
+	tm.Properties[vs.option.idFieldName] = types.NewKeywordProperty()
 	// name/content: text
-	tm.Properties[fieldName] = types.NewTextProperty()
-	tm.Properties[fieldContent] = types.NewTextProperty()
+	tm.Properties[vs.option.nameFieldName] = types.NewTextProperty()
+	contentField := vs.option.contentFieldName
+	tm.Properties[contentField] = types.NewTextProperty()
 	// metadata: object with dynamic true
 	metaObj := types.NewObjectProperty()
 	dm := dynamicmapping.True
 	metaObj.Dynamic = &dm
-	tm.Properties[fieldMetadata] = metaObj
+	tm.Properties[defaultFieldMetadata] = metaObj
 	// created_at / updated_at: date
-	tm.Properties[fieldCreatedAt] = types.NewDateProperty()
-	tm.Properties[fieldUpdatedAt] = types.NewDateProperty()
+	tm.Properties[defaultFieldCreatedAt] = types.NewDateProperty()
+	tm.Properties[defaultFieldUpdatedAt] = types.NewDateProperty()
 	// embedding: dense_vector with dims, index, similarity
 	dv := types.NewDenseVectorProperty()
 	dims := vs.option.vectorDimension
@@ -185,7 +183,8 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	dv.Index = &indexed
 	sim := densevectorsimilarity.Cosine
 	dv.Similarity = &sim
-	tm.Properties[fieldEmbedding] = dv
+	embeddingField := vs.option.embeddingFieldName
+	tm.Properties[embeddingField] = dv
 
 	// Settings: shards/replicas are strings in IndexSettings
 	is := types.NewIndexSettings()
@@ -526,4 +525,253 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 func (vs *VectorStore) Close() error {
 	// Elasticsearch client doesn't need explicit close.
 	return nil
+}
+
+// Count counts the number of documents.
+func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
+	config := vectorstore.ApplyCountOptions(opts...)
+
+	// Build count query
+	countQuery := vs.buildCountQuery(config.Filter)
+
+	// Marshal count query
+	queryBytes, err := json.Marshal(countQuery)
+	if err != nil {
+		return 0, fmt.Errorf("elasticsearch marshal count query: %w", err)
+	}
+
+	// Execute count query directly
+	return vs.client.Count(ctx, vs.option.indexName, queryBytes)
+}
+
+// DeleteByFilter deletes documents by filter.
+func (vs *VectorStore) DeleteByFilter(ctx context.Context, opts ...vectorstore.DeleteOption) error {
+	config := vectorstore.ApplyDeleteOptions(opts...)
+	if err := vs.validateDeleteConfig(config); err != nil {
+		return err
+	}
+
+	if config.DeleteAll {
+		return vs.deleteAll(ctx)
+	}
+
+	return vs.deleteByFilter(ctx, config)
+}
+
+// GetMetadata retrieves metadata from the vector store.
+func (vs *VectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetMetadataOption) (map[string]vectorstore.DocumentMetadata, error) {
+	config, err := vectorstore.ApplyGetMetadataOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	// refresh index to ensure the metadata is up to date
+	if err := vs.client.Refresh(ctx, vs.option.indexName); err != nil {
+		return nil, fmt.Errorf("elasticsearch refresh index: %w", err)
+	}
+
+	if config.Limit < 0 && config.Offset < 0 {
+		return vs.getAllMetadata(ctx, config)
+	}
+
+	return vs.queryMetadataBatch(ctx, config.Limit, config.Offset, config.IDs, config.Filter)
+}
+
+// buildCountQuery builds a count query with optional filters.
+func (vs *VectorStore) buildCountQuery(filter map[string]interface{}) *types.SearchRequestBody {
+	query := types.NewSearchRequestBody()
+	query.Size = &[]int{0}[0] // Set size to 0 for count query
+
+	if len(filter) > 0 {
+		boolQuery := types.NewBoolQuery()
+		for key, value := range filter {
+			termQuery := types.NewTermQuery()
+			termQuery.Value = value
+			mustClause := types.NewQuery()
+			mustClause.Term = map[string]types.TermQuery{
+				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
+			}
+			boolQuery.Must = append(boolQuery.Must, *mustClause)
+		}
+		query.Query = &types.Query{Bool: boolQuery}
+	}
+
+	return query
+}
+
+// validateDeleteConfig validates delete configuration.
+func (vs *VectorStore) validateDeleteConfig(config *vectorstore.DeleteConfig) error {
+	if config.DeleteAll && (len(config.DocumentIDs) > 0 || len(config.Filter) > 0) {
+		return fmt.Errorf("elasticsearch delete all documents, but document ids or filter are provided")
+	}
+	if !config.DeleteAll && len(config.DocumentIDs) == 0 && len(config.Filter) == 0 {
+		return fmt.Errorf("elasticsearch delete by filter: no filter conditions specified")
+	}
+	return nil
+}
+
+// deleteAll deletes all documents from the index.
+func (vs *VectorStore) deleteAll(ctx context.Context) error {
+	// Use delete by query with match_all
+	deleteQuery := types.NewSearchRequestBody()
+	matchAllQuery := types.NewMatchAllQuery()
+	deleteQuery.Query = &types.Query{MatchAll: matchAllQuery}
+
+	// Marshal delete query
+	queryBytes, err := json.Marshal(deleteQuery)
+	if err != nil {
+		return fmt.Errorf("elasticsearch marshal delete all query: %w", err)
+	}
+
+	// Execute delete by query
+	if err := vs.client.DeleteByQuery(ctx, vs.option.indexName, queryBytes); err != nil {
+		return fmt.Errorf("elasticsearch delete all documents: %w", err)
+	}
+
+	log.Infof("elasticsearch deleted all documents from index %s", vs.option.indexName)
+	return nil
+}
+
+// deleteByFilter deletes documents by filter conditions.
+func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
+	deleteQuery := types.NewSearchRequestBody()
+	boolQuery := types.NewBoolQuery()
+
+	// Add document ID filters
+	if len(config.DocumentIDs) > 0 {
+		idsQuery := types.NewIdsQuery()
+		idsQuery.Values = config.DocumentIDs
+		mustClause := types.NewQuery()
+		mustClause.Ids = idsQuery
+		boolQuery.Must = append(boolQuery.Must, *mustClause)
+	}
+
+	// Add metadata filters
+	for key, value := range config.Filter {
+		termQuery := types.NewTermQuery()
+		termQuery.Value = value
+		mustClause := types.NewQuery()
+		mustClause.Term = map[string]types.TermQuery{
+			fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
+		}
+		boolQuery.Must = append(boolQuery.Must, *mustClause)
+	}
+
+	deleteQuery.Query = &types.Query{Bool: boolQuery}
+
+	// Marshal delete query
+	queryBytes, err := json.Marshal(deleteQuery)
+	if err != nil {
+		return fmt.Errorf("elasticsearch marshal delete query: %w", err)
+	}
+
+	// Execute delete by query
+	if err := vs.client.DeleteByQuery(ctx, vs.option.indexName, queryBytes); err != nil {
+		return fmt.Errorf("elasticsearch delete by filter: %w", err)
+	}
+
+	log.Infof("elasticsearch executed delete by filter query")
+	return nil
+}
+
+// getAllMetadata retrieves all metadata in batches.
+func (vs *VectorStore) getAllMetadata(ctx context.Context, config *vectorstore.GetMetadataConfig) (map[string]vectorstore.DocumentMetadata, error) {
+	result := make(map[string]vectorstore.DocumentMetadata)
+	const batchSize = 5000
+
+	for offset := 0; ; offset += batchSize {
+		batch, err := vs.queryMetadataBatch(ctx, batchSize, offset, config.IDs, config.Filter)
+		if err != nil {
+			return nil, err
+		}
+
+		for docID, metadata := range batch {
+			result[docID] = metadata
+		}
+
+		if len(batch) < batchSize {
+			break
+		}
+	}
+
+	return result, nil
+}
+
+// queryMetadataBatch executes a single metadata query with the given limit and offset.
+func (vs *VectorStore) queryMetadataBatch(
+	ctx context.Context,
+	limit,
+	offset int,
+	docIDs []string,
+	filters map[string]interface{},
+) (map[string]vectorstore.DocumentMetadata, error) {
+	metadataQuery := types.NewSearchRequestBody()
+	metadataQuery.Size = &limit
+	metadataQuery.From = &offset
+
+	// Only return id and metadata fields
+	includes := []string{vs.option.idFieldName, defaultFieldMetadata}
+	sourceFilter := types.NewSourceFilter()
+	sourceFilter.Includes = includes
+	metadataQuery.Source_ = sourceFilter
+
+	// Build query with filters
+	if len(docIDs) > 0 || len(filters) > 0 {
+		boolQuery := types.NewBoolQuery()
+
+		// Add document ID filters
+		if len(docIDs) > 0 {
+			idsQuery := types.NewIdsQuery()
+			idsQuery.Values = docIDs
+			mustClause := types.NewQuery()
+			mustClause.Ids = idsQuery
+			boolQuery.Must = append(boolQuery.Must, *mustClause)
+		}
+
+		// Add metadata filters
+		for key, value := range filters {
+			termQuery := types.NewTermQuery()
+			termQuery.Value = value
+			mustClause := types.NewQuery()
+			mustClause.Term = map[string]types.TermQuery{
+				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
+			}
+			boolQuery.Must = append(boolQuery.Must, *mustClause)
+		}
+
+		metadataQuery.Query = &types.Query{Bool: boolQuery}
+	}
+
+	data, err := vs.search(ctx, vs.option.indexName, metadataQuery)
+	if err != nil {
+		return nil, fmt.Errorf("elasticsearch search metadata: %w", err)
+	}
+
+	var response search.Response
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, fmt.Errorf("elasticsearch unmarshal metadata response: %w", err)
+	}
+
+	result := make(map[string]vectorstore.DocumentMetadata)
+	for _, hit := range response.Hits.Hits {
+		if hit.Id_ == nil || len(hit.Source_) == 0 {
+			continue
+		}
+
+		var source esDocument
+		if err := json.Unmarshal(hit.Source_, &source); err != nil {
+			continue // Skip invalid documents
+		}
+
+		metadata := make(map[string]interface{})
+		if source.Metadata != nil {
+			metadata = source.Metadata
+		}
+
+		result[*hit.Id_] = vectorstore.DocumentMetadata{
+			Metadata: metadata,
+		}
+	}
+
+	return result, nil
 }

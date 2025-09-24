@@ -13,20 +13,15 @@ package dir
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/docx"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 )
 
 const (
@@ -68,65 +63,19 @@ func New(dirPaths []string, opts ...Option) *Source {
 	return s
 }
 
-// initializeReaders initializes all available readers.
+// initializeReaders sets up readers for different file types.
 func (s *Source) initializeReaders() {
-	// Build readers map.
-	s.readers = make(map[string]reader.Reader)
-
-	// Decide whether to use custom chunk configuration.
-	if s.chunkSize <= 0 && s.chunkOverlap <= 0 {
-		// Default readers.
-		s.readers["text"] = text.New()
-		s.readers["pdf"] = pdf.New()
-		s.readers["markdown"] = markdown.New()
-		s.readers["json"] = json.New()
-		s.readers["csv"] = csv.New()
-		s.readers["docx"] = docx.New()
-		return
+	// Use the common reader initialization with chunk configuration.
+	if s.chunkSize > 0 || s.chunkOverlap > 0 {
+		s.readers = isource.GetReadersWithChunkConfig(s.chunkSize, s.chunkOverlap)
+	} else {
+		s.readers = isource.GetReaders()
 	}
-
-	// Build chunking options.
-	var fixedOpts []chunking.Option
-	var mdOpts []chunking.MarkdownOption
-	if s.chunkSize > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithChunkSize(s.chunkSize))
-		mdOpts = append(mdOpts, chunking.WithMarkdownChunkSize(s.chunkSize))
-	}
-	if s.chunkOverlap > 0 {
-		fixedOpts = append(fixedOpts, chunking.WithOverlap(s.chunkOverlap))
-		mdOpts = append(mdOpts, chunking.WithMarkdownOverlap(s.chunkOverlap))
-	}
-
-	fixedChunk := chunking.NewFixedSizeChunking(fixedOpts...)
-	markdownChunk := chunking.NewMarkdownChunking(mdOpts...)
-
-	s.readers["text"] = text.New(text.WithChunkingStrategy(fixedChunk))
-	s.readers["pdf"] = pdf.New(pdf.WithChunkingStrategy(fixedChunk))
-	s.readers["markdown"] = markdown.New(markdown.WithChunkingStrategy(markdownChunk))
-	s.readers["json"] = json.New(json.WithChunkingStrategy(fixedChunk))
-	s.readers["csv"] = csv.New(csv.WithChunkingStrategy(fixedChunk))
-	s.readers["docx"] = docx.New(docx.WithChunkingStrategy(fixedChunk))
 }
 
 // getFileType determines the file type based on the file extension.
 func (s *Source) getFileType(filePath string) string {
-	ext := filepath.Ext(filePath)
-	switch ext {
-	case ".txt", ".text":
-		return "text"
-	case ".pdf":
-		return "pdf"
-	case ".md", ".markdown":
-		return "markdown"
-	case ".json":
-		return "json"
-	case ".csv":
-		return "csv"
-	case ".docx", ".doc":
-		return "docx"
-	default:
-		return "text"
-	}
+	return isource.GetFileType(filePath)
 }
 
 // ReadDocuments reads all files in the directories and returns documents using appropriate readers.
@@ -268,6 +217,16 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	metadata[source.MetaFileMode] = fileInfo.Mode().String()
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
 
+	// Get absolute path for URI
+	// Not include ip address and port
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	fileURL := (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaURI] = fileURL
+	metadata[source.MetaSourceName] = s.name
+
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
@@ -284,4 +243,13 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 // SetMetadata sets a metadata value for the directory source.
 func (s *Source) SetMetadata(key string, value interface{}) {
 	s.metadata[key] = value
+}
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
 }

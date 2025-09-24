@@ -22,18 +22,18 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
-// SQLBuilderTestSuite contains the test suite for SQL builder
+// SQLBuilderTestSuite contains the test suite for SQL builder.
 type SQLBuilderTestSuite struct {
 	suite.Suite
 	pool *pgxpool.Pool
 }
 
-// Run the test suite
+// Run the test suite.
 func TestSQLBuilderSuite(t *testing.T) {
 	suite.Run(t, new(SQLBuilderTestSuite))
 }
 
-// SetupSuite runs once before all tests
+// SetupSuite runs once before all tests.
 func (suite *SQLBuilderTestSuite) SetupSuite() {
 	// Use the same environment variables as pgvector_test.go
 	host := getEnvOrDefault("PGVECTOR_HOST", "")
@@ -47,7 +47,7 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 	password := getEnvOrDefault("PGVECTOR_PASSWORD", "")
 	database := getEnvOrDefault("PGVECTOR_DATABASE", "trpc_agent_unit_test")
 
-	// Build connection string
+	// Build connection string.
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		host, port, user, password, database)
 
@@ -57,14 +57,14 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 		return
 	}
 
-	// Test connection
+	// Test connection.
 	err = pool.Ping(context.Background())
 	if err != nil {
 		suite.T().Skipf("Skipping SQL Builder tests: cannot ping PostgreSQL: %v", err)
 		return
 	}
 
-	// Enable pgvector extension
+	// Enable pgvector extension.
 	_, err = pool.Exec(context.Background(), "CREATE EXTENSION IF NOT EXISTS vector")
 	if err != nil {
 		suite.T().Skipf("Skipping SQL Builder tests: cannot enable vector extension: %v", err)
@@ -74,35 +74,35 @@ func (suite *SQLBuilderTestSuite) SetupSuite() {
 	suite.pool = pool
 }
 
-// TearDownSuite runs once after all tests
+// TearDownSuite runs once after all tests.
 func (suite *SQLBuilderTestSuite) TearDownSuite() {
 	if suite.pool != nil {
 		suite.pool.Close()
 	}
 }
 
-// SetupTest runs before each test
+// SetupTest runs before each test.
 func (suite *SQLBuilderTestSuite) SetupTest() {
 	if suite.pool == nil {
 		suite.T().Skip("Database connection not available")
 	}
 
-	// Create test table
+	// Create test table.
 	createTableSQL := fmt.Sprintf(sqlCreateTable, "test_documents", 3)
 	_, err := suite.pool.Exec(context.Background(), createTableSQL)
 	require.NoError(suite.T(), err)
 
-	// Create vector index
+	// Create vector index.
 	indexSQL := fmt.Sprintf(sqlCreateIndex, "test_documents", "test_documents")
 	_, err = suite.pool.Exec(context.Background(), indexSQL)
 	require.NoError(suite.T(), err)
 
-	// Create text index for full-text search
+	// Create text index for full-text search.
 	textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, "test_documents", "test_documents", "english")
 	_, err = suite.pool.Exec(context.Background(), textIndexSQL)
 	require.NoError(suite.T(), err)
 
-	// Insert test data
+	// Insert test data.
 	testData := []struct {
 		id       string
 		name     string
@@ -119,23 +119,23 @@ func (suite *SQLBuilderTestSuite) SetupTest() {
 	for _, data := range testData {
 		upsertSQL := fmt.Sprintf(sqlUpsertDocument, "test_documents")
 		vector := pgvector.NewVector(data.vector)
-		now := int64(1640995200) // Fixed timestamp for testing
+		now := int64(1640995200) // Fixed timestamp for testing.
 		_, err := suite.pool.Exec(context.Background(), upsertSQL,
 			data.id, data.name, data.content, vector, data.metadata, now, now)
 		require.NoError(suite.T(), err)
 	}
 }
 
-// TearDownTest runs after each test
+// TearDownTest runs after each test.
 func (suite *SQLBuilderTestSuite) TearDownTest() {
 	if suite.pool == nil {
 		return
 	}
-	// Clean up test table
+	// Clean up test table.
 	_, _ = suite.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_documents")
 }
 
-// TestUpdateBuilder tests the update builder functionality
+// TestUpdateBuilder tests the update builder functionality.
 func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 	tests := []struct {
 		name        string
@@ -173,32 +173,32 @@ func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			ub := newUpdateBuilder(tt.table, tt.id, "english")
+			ub := newUpdateBuilder(tt.table, tt.id)
 
-			// Test initial state
+			// Test initial state.
 			assert.Equal(suite.T(), tt.table, ub.table)
 			assert.Equal(suite.T(), tt.id, ub.id)
 
-			// Add fields
+			// Add fields.
 			for field, value := range tt.fields {
 				ub.addField(field, value)
 			}
 
 			sql, args := ub.build()
 
-			// Verify SQL structure
+			// Verify SQL structure.
 			assert.Equal(suite.T(), tt.expectedSQL, sql)
 			assert.Len(suite.T(), args, tt.expectedLen)
 			assert.Equal(suite.T(), tt.id, args[0])
 
-			// Test executing the update
+			// Test executing the update.
 			_, err := suite.pool.Exec(context.Background(), sql, args...)
 			assert.NoError(suite.T(), err)
 		})
 	}
 }
 
-// TestQueryBuilders tests all query builder types
+// TestQueryBuilders tests all query builder types.
 func (suite *SQLBuilderTestSuite) TestQueryBuilders() {
 	tests := []struct {
 		name          string
@@ -270,40 +270,40 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilders() {
 				qb = newFilterQueryBuilder("test_documents", "english")
 			}
 
-			// Test initial state
+			// Test initial state.
 			assert.Equal(suite.T(), tt.mode, qb.searchMode)
 			assert.Equal(suite.T(), tt.expectedOrder, qb.orderClause)
 
-			// Setup query
+			// Setup query.
 			tt.setupFunc(qb)
 
 			sql, args := qb.build(10)
 
-			// Verify SQL structure
+			// Verify SQL structure.
 			for _, expected := range tt.expectedSQL {
 				assert.Contains(suite.T(), sql, expected)
 			}
 
-			// Verify arguments
+			// Verify arguments.
 			assert.Greater(suite.T(), len(args), 0)
 
-			// Test executing the query
+			// Test executing the query.
 			rows, err := suite.pool.Query(context.Background(), sql, args...)
 			assert.NoError(suite.T(), err)
 			defer rows.Close()
 
-			// Should return results (basic smoke test)
+			// Should return results (basic smoke test).
 			count := 0
 			for rows.Next() {
 				count++
 			}
-			// For some queries we might get 0 results, that's okay
+			// For some queries we might get 0 results, that's okay.
 			assert.GreaterOrEqual(suite.T(), count, 0)
 		})
 	}
 }
 
-// TestBuildSelectClause tests the dynamic SELECT clause building
+// TestBuildSelectClause tests the dynamic SELECT clause building.
 func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 	tests := []struct {
 		name                string
@@ -372,12 +372,12 @@ func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 			qb.textQueryPos = tt.textQueryPos
 			selectClause := qb.buildSelectClause()
 
-			// Check expected contains
+			// Check expected contains.
 			for _, expected := range tt.expectedContains {
 				assert.Contains(suite.T(), selectClause, expected)
 			}
 
-			// Check expected not contains
+			// Check expected not contains.
 			for _, notExpected := range tt.expectedNotContains {
 				assert.NotContains(suite.T(), selectClause, notExpected)
 			}
@@ -385,7 +385,7 @@ func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 	}
 }
 
-// TestQueryBuilderEdgeCases tests edge cases and error conditions
+// TestQueryBuilderEdgeCases tests edge cases and error conditions.
 func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 	tests := []struct {
 		name                string
@@ -431,26 +431,250 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 		suite.Run(tt.name, func() {
 			qb := newVectorQueryBuilder("test_documents", "english")
 
-			// Add filters
+			// Add filters.
 			qb.addIDFilter(tt.idFilter)
 			qb.addMetadataFilter(tt.metadataFilter)
 
 			sql, args := qb.build(10)
 
-			// Check expected contains
+			// Check expected contains.
 			for _, expected := range tt.expectedContains {
 				assert.Contains(suite.T(), sql, expected)
 			}
 
-			// Check expected not contains
+			// Check expected not contains.
 			for _, notExpected := range tt.expectedNotContains {
 				assert.NotContains(suite.T(), sql, notExpected)
 			}
 
-			// Check args expectation
+			// Check args expectation.
 			if tt.expectArgs {
 				assert.Greater(suite.T(), len(args), 0)
 			}
 		})
 	}
+}
+
+func TestMetadataQueryBuilder_Basic(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "SELECT id, metadata")
+	assert.Contains(t, sql, "FROM test_table")
+	assert.Contains(t, sql, "WHERE 1=1")
+	assert.Contains(t, sql, "ORDER BY created_at")
+	assert.Contains(t, sql, "LIMIT $1 OFFSET $2")
+	assert.Equal(t, []interface{}{10, 0}, args)
+}
+
+func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	mqb.addIDFilter([]string{"id1", "id2", "id3"})
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "id IN ($1, $2, $3)")
+	assert.Equal(t, []interface{}{"id1", "id2", "id3", 10, 0}, args)
+}
+
+func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	filter := map[string]interface{}{
+		"category": "test",
+		"status":   "active",
+	}
+	mqb.addMetadataFilter(filter)
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	assert.Contains(t, sql, "metadata @> $1::jsonb")
+	assert.Len(t, args, 3) // metadata JSON, limit, offset
+	assert.Equal(t, 10, args[1])
+	assert.Equal(t, 0, args[2])
+}
+
+func TestMetadataQueryBuilder_WithBothFilters(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+	mqb.addIDFilter([]string{"id1", "id2"})
+	filter := map[string]interface{}{
+		"category": "test",
+	}
+	mqb.addMetadataFilter(filter)
+
+	sql, args := mqb.buildWithPagination(5, 10)
+
+	assert.Contains(t, sql, "id IN ($1, $2)")
+	assert.Contains(t, sql, "metadata @> $3::jsonb")
+	assert.Contains(t, sql, "WHERE 1=1 AND id IN ($1, $2) AND metadata @> $3::jsonb")
+	assert.Len(t, args, 5) // id1, id2, metadata JSON, limit, offset
+	assert.Equal(t, "id1", args[0])
+	assert.Equal(t, "id2", args[1])
+	assert.Equal(t, 5, args[3])  // limit
+	assert.Equal(t, 10, args[4]) // offset
+}
+
+func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
+	mqb := newMetadataQueryBuilder("test_table")
+
+	// Test with empty ID filter
+	mqb.addIDFilter([]string{})
+	mqb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := mqb.buildWithPagination(10, 0)
+
+	// Should only have the basic WHERE 1=1 condition
+	assert.Contains(t, sql, "WHERE 1=1")
+	assert.NotContains(t, sql, "id IN")
+	assert.NotContains(t, sql, "metadata @>")
+	assert.Equal(t, []interface{}{10, 0}, args)
+}
+
+// TestCountQueryBuilder_Basic tests basic count query building
+func TestCountQueryBuilder_Basic(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestCountQueryBuilder_WithMetadataFilter tests count query with metadata filter
+func TestCountQueryBuilder_WithMetadataFilter(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	filter := map[string]interface{}{
+		"category": "science",
+		"status":   "published",
+	}
+	cqb.addMetadataFilter(filter)
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1 AND metadata @> $1::jsonb", sql)
+	assert.Len(t, args, 1)
+
+	// Verify the JSON argument contains the filter
+	jsonArg, ok := args[0].(string)
+	assert.True(t, ok)
+	assert.Contains(t, jsonArg, "category")
+	assert.Contains(t, jsonArg, "science")
+	assert.Contains(t, jsonArg, "status")
+	assert.Contains(t, jsonArg, "published")
+}
+
+// TestCountQueryBuilder_EmptyFilter tests count query with empty filter
+func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
+	cqb := newCountQueryBuilder("test_table")
+
+	// Add empty filter (should be ignored)
+	cqb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := cqb.build()
+
+	assert.Equal(t, "SELECT COUNT(*) FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestDeleteSQLBuilder_Basic tests basic delete query building
+func TestDeleteSQLBuilder_Basic(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestDeleteSQLBuilder_WithIDFilter tests delete query with ID filter
+func TestDeleteSQLBuilder_WithIDFilter(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+	dsb.addIDFilter([]string{"doc1", "doc2", "doc3"})
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2, $3)", sql)
+	assert.Equal(t, []interface{}{"doc1", "doc2", "doc3"}, args)
+}
+
+// TestDeleteSQLBuilder_WithMetadataFilter tests delete query with metadata filter
+func TestDeleteSQLBuilder_WithMetadataFilter(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	filter := map[string]interface{}{
+		"category": "test",
+		"status":   "deleted",
+	}
+	dsb.addMetadataFilter(filter)
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND metadata @> $1::jsonb", sql)
+	assert.Len(t, args, 1)
+
+	// Verify the JSON argument contains the filter
+	jsonArg, ok := args[0].(string)
+	assert.True(t, ok)
+	assert.Contains(t, jsonArg, "category")
+	assert.Contains(t, jsonArg, "test")
+	assert.Contains(t, jsonArg, "status")
+	assert.Contains(t, jsonArg, "deleted")
+}
+
+// TestDeleteSQLBuilder_WithBothFilters tests delete query with both ID and metadata filters
+func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+	dsb.addIDFilter([]string{"doc1", "doc2"})
+
+	filter := map[string]interface{}{
+		"category": "test",
+	}
+	dsb.addMetadataFilter(filter)
+
+	sql, args := dsb.build()
+
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2) AND metadata @> $3::jsonb", sql)
+	assert.Equal(t, []interface{}{"doc1", "doc2", "{\"category\":\"test\"}"}, args)
+}
+
+// TestDeleteSQLBuilder_EmptyFilters tests delete query with empty filters
+func TestDeleteSQLBuilder_EmptyFilters(t *testing.T) {
+	dsb := newDeleteSQLBuilder("test_table")
+
+	// Test with empty ID filter
+	dsb.addIDFilter([]string{})
+	dsb.addMetadataFilter(map[string]interface{}{})
+
+	sql, args := dsb.build()
+
+	// Should only have the basic WHERE 1=1 condition
+	assert.Equal(t, "DELETE FROM test_table WHERE 1=1", sql)
+	assert.Empty(t, args)
+}
+
+// TestDeleteSQLBuilder_Integration tests delete query execution integration
+func (suite *SQLBuilderTestSuite) TestDeleteSQLBuilder_Integration() {
+	// First verify document exists
+	countSQL := "SELECT COUNT(*) FROM test_documents WHERE id IN ('doc1', 'doc2')"
+	var initialCount int
+	err := suite.pool.QueryRow(context.Background(), countSQL).Scan(&initialCount)
+	require.NoError(suite.T(), err)
+	assert.Greater(suite.T(), initialCount, 0)
+
+	// Build delete query
+	dsb := newDeleteSQLBuilder("test_documents")
+	dsb.addIDFilter([]string{"doc1", "doc2"})
+
+	sql, args := dsb.build()
+
+	// Execute delete
+	_, err = suite.pool.Exec(context.Background(), sql, args...)
+	assert.NoError(suite.T(), err)
+
+	// Verify documents were deleted
+	var finalCount int
+	err = suite.pool.QueryRow(context.Background(), countSQL).Scan(&finalCount)
+	require.NoError(suite.T(), err)
+	assert.Equal(suite.T(), 0, finalCount)
 }

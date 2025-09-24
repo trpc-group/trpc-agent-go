@@ -177,12 +177,29 @@ func TestService_CreateSession(t *testing.T) {
 
 func TestService_AppendEvent_UpdateTime(t *testing.T) {
 	tests := []struct {
-		name        string
-		setupEvents func() []*event.Event
-		validate    func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event)
+		name                   string
+		enableAsyncPersistence bool
+		setupEvents            func() []*event.Event
+		validate               func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event)
 	}{
 		{
 			name: "single_event_updates_time",
+			setupEvents: func() []*event.Event {
+				return []*event.Event{
+					createTestEvent("event123", "test-agent", "Test message for append event test", time.Now(), false),
+				}
+			},
+			validate: func(t *testing.T, initialTime time.Time, finalSess *session.Session, events []*event.Event) {
+				assert.True(t, finalSess.UpdatedAt.After(initialTime),
+					"UpdatedAt should be updated after appending event. Initial: %v, Updated: %v",
+					initialTime, finalSess.UpdatedAt)
+				assert.Equal(t, 1, len(finalSess.Events))
+				assert.Equal(t, events[0].ID, finalSess.Events[0].ID)
+			},
+		},
+		{
+			name:                   "single_event_updates_time_async_persistence",
+			enableAsyncPersistence: true,
 			setupEvents: func() []*event.Event {
 				return []*event.Event{
 					createTestEvent("event123", "test-agent", "Test message for append event test", time.Now(), false),
@@ -246,7 +263,8 @@ func TestService_AppendEvent_UpdateTime(t *testing.T) {
 			redisURL, cleanup := setupTestRedis(t)
 			defer cleanup()
 
-			service, err := NewService(WithRedisClientURL(redisURL))
+			service, err := NewService(WithRedisClientURL(redisURL),
+				WithEnableAsyncPersist(tt.enableAsyncPersistence))
 			require.NoError(t, err)
 			defer service.Close()
 
@@ -1010,6 +1028,86 @@ func TestService_UserStateTTL(t *testing.T) {
 			tt.validate(t, client, userKey)
 		})
 	}
+}
+
+func TestService_AsyncPersisterNum_DefaultClamp(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(0),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	assert.Equal(t, defaultAsyncPersisterNum, len(service.eventPairChans))
+}
+
+func TestService_AppendEvent_NoPanic_AfterClose(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithEnableAsyncPersist(true),
+		WithAsyncPersisterNum(2),
+	)
+	require.NoError(t, err)
+
+	// Create a session.
+	sessionKey := session.Key{
+		AppName:   "testapp",
+		UserID:    "user123",
+		SessionID: "session123",
+	}
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Close service to close channels.
+	service.Close()
+
+	// Append after close should not panic due to recover in AppendEvent.
+	evt := createTestEvent("event-after-close", "agent", "msg", time.Now(), false)
+	assert.NotPanics(t, func() {
+		_ = service.AppendEvent(context.Background(), sess, evt)
+	})
+}
+
+func TestService_SessionEventLimit_TrimsOldest(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	limit := 3
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSessionEventLimit(limit),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	// Create session.
+	sessionKey := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session123"}
+	sess, err := service.CreateSession(context.Background(), sessionKey, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append 5 events with increasing timestamps.
+	base := time.Now().Add(-5 * time.Minute)
+	ids := []string{"e1", "e2", "e3", "e4", "e5"}
+	for i, id := range ids {
+		evt := createTestEvent(id, "agent", "content", base.Add(time.Duration(i)*time.Second), false)
+		err := service.AppendEvent(context.Background(), sess, evt, session.WithEventTime(evt.Timestamp))
+		require.NoError(t, err)
+	}
+
+	// Get session and verify only latest 'limit' events remain in chronological order.
+	got, err := service.GetSession(context.Background(), sessionKey, session.WithEventNum(0))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Events, limit)
+	// Should keep e3, e4, e5 in chronological order.
+	assert.Equal(t, []string{"e3", "e4", "e5"}, []string{got.Events[0].ID, got.Events[1].ID, got.Events[2].ID})
 }
 
 func TestEnsureEventStartWithUser(t *testing.T) {

@@ -152,6 +152,9 @@ func (s *Source) processURL(urlStr string) ([]*document.Document, error) {
 	metadata[source.MetaURLPath] = parsedURL.Path
 	metadata[source.MetaURLScheme] = parsedURL.Scheme
 
+	metadata[source.MetaURI] = urlStr
+	metadata[source.MetaSourceName] = s.name
+
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
@@ -207,4 +210,13 @@ func (s *Source) SetMetadata(key string, value interface{}) {
 		s.metadata = make(map[string]interface{})
 	}
 	s.metadata[key] = value
+}
+
+// GetMetadata returns the metadata associated with this source.
+func (s *Source) GetMetadata() map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range s.metadata {
+		result[k] = v
+	}
+	return result
 }

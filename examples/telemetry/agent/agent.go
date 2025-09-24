@@ -90,34 +90,47 @@ func NewMultiToolChatAgent(agentName, modelName string) *MultiToolChatAgent {
 }
 
 // ProcessMessage processes a single message exchange
-func (c *MultiToolChatAgent) ProcessMessage(ctx context.Context, userMessage string) error {
+func (c *MultiToolChatAgent) ProcessMessage(ctx context.Context, userMessage string) (string, error) {
+	var output strings.Builder
 	fmt.Printf("👤 User message: %s\n", userMessage)
 	message := model.NewUserMessage(userMessage)
 
 	// Run agent through runner
 	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
 	if err != nil {
-		return fmt.Errorf("failed to run agent: %w", err)
+		return output.String(), fmt.Errorf("failed to run agent: %w", err)
 	}
 
 	// Process streaming response
-	return c.processStreamingResponse(eventChan)
+	streamOutput, err := c.processStreamingResponse(eventChan)
+	if err != nil {
+		return output.String(), err
+	}
+
+	output.WriteString(streamOutput)
+	return output.String(), nil
 }
 
 // processStreamingResponse processes streaming response, including tool call visualization
-func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Event) error {
-	fmt.Print("🤖 Assistant: ")
+func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Event) (string, error) {
+	var output strings.Builder
+
+	assistantPrefix := "🤖 Assistant: "
+	fmt.Print(assistantPrefix)
+	output.WriteString(assistantPrefix)
 
 	var (
-		fullContent       string
 		toolCallsDetected bool
 		assistantStarted  bool
 	)
 
 	for event := range eventChan {
+
 		// Handle errors
 		if event.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", event.Error.Message)
+			errorMsg := fmt.Sprintf("\n❌ Error: %s\n", event.Error.Message)
+			fmt.Print(errorMsg)
+			output.WriteString(errorMsg)
 			continue
 		}
 
@@ -125,17 +138,29 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
-				fmt.Printf("\n")
+				newline := "\n"
+				fmt.Print(newline)
+				output.WriteString(newline)
 			}
-			fmt.Printf("🔧 Tool calls:\n")
+			toolCallsHeader := "🔧 Tool calls:\n"
+			fmt.Print(toolCallsHeader)
+			output.WriteString(toolCallsHeader)
+
 			for _, toolCall := range event.Choices[0].Message.ToolCalls {
 				toolIcon := getToolIcon(toolCall.Function.Name)
-				fmt.Printf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
+				toolCallMsg := fmt.Sprintf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
+				fmt.Print(toolCallMsg)
+				output.WriteString(toolCallMsg)
+
 				if len(toolCall.Function.Arguments) > 0 {
-					fmt.Printf("     Arguments: %s\n", string(toolCall.Function.Arguments))
+					argsMsg := fmt.Sprintf("     Arguments: %s\n", string(toolCall.Function.Arguments))
+					fmt.Print(argsMsg)
+					output.WriteString(argsMsg)
 				}
 			}
-			fmt.Printf("\n⚡ Executing...\n")
+			executingMsg := "\n⚡ Executing...\n"
+			fmt.Print(executingMsg)
+			output.WriteString(executingMsg)
 		}
 
 		// Detect tool responses
@@ -143,9 +168,11 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 			hasToolResponse := false
 			for _, choice := range event.Response.Choices {
 				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ Tool result (ID: %s): %s\n",
+					toolResultMsg := fmt.Sprintf("✅ Tool result (ID: %s): %s\n",
 						choice.Message.ToolID,
 						formatToolResult(choice.Message.Content))
+					fmt.Print(toolResultMsg)
+					output.WriteString(toolResultMsg)
 					hasToolResponse = true
 				}
 			}
@@ -162,23 +189,27 @@ func (c *MultiToolChatAgent) processStreamingResponse(eventChan <-chan *event.Ev
 			if choice.Delta.Content != "" {
 				if !assistantStarted {
 					if toolCallsDetected {
-						fmt.Printf("\n🤖 Assistant: ")
+						assistantRestart := "\n🤖 Assistant: "
+						fmt.Print(assistantRestart)
+						output.WriteString(assistantRestart)
 					}
 					assistantStarted = true
 				}
 				fmt.Print(choice.Delta.Content)
-				fullContent += choice.Delta.Content
+				output.WriteString(choice.Delta.Content)
 			}
 		}
 
 		// Check if this is the final event
 		if event.Done && !c.isToolEvent(event) {
-			fmt.Printf("\n")
+			finalNewline := "\n"
+			fmt.Print(finalNewline)
+			output.WriteString(finalNewline)
 			break
 		}
 	}
 
-	return nil
+	return output.String(), nil
 }
 
 // isToolEvent checks if the event is a tool response (not a final response)

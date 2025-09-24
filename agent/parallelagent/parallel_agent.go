@@ -13,10 +13,12 @@ package parallelagent
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -31,7 +33,6 @@ const defaultChannelBufferSize = 256
 type ParallelAgent struct {
 	name              string
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -44,7 +45,6 @@ type Option func(*Options)
 // This struct is exported to allow external packages to inspect or modify options.
 type Options struct {
 	subAgents         []agent.Agent
-	tools             []tool.Tool
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
 }
@@ -54,12 +54,6 @@ type Options struct {
 // into a single output stream.
 func WithSubAgents(sub []agent.Agent) Option {
 	return func(o *Options) { o.subAgents = sub }
-}
-
-// WithTools registers tools available to the parallel agent.
-// These tools can be used by any sub-agent during parallel execution.
-func WithTools(tools []tool.Tool) Option {
-	return func(o *Options) { o.tools = tools }
 }
 
 // WithChannelBufferSize sets the buffer size for the event channel.
@@ -92,44 +86,38 @@ func New(name string, opts ...Option) *ParallelAgent {
 	return &ParallelAgent{
 		name:              name,
 		subAgents:         cfg.subAgents,
-		tools:             cfg.tools,
 		channelBufferSize: cfg.channelBufferSize,
 		agentCallbacks:    cfg.agentCallbacks,
 	}
 }
 
-// createBranchInvocationForSubAgent creates an isolated branch invocation for each sub-agent.
+// createBranchInvocation creates an isolated branch invocation for each sub-agent.
 // This ensures parallel execution doesn't interfere with each other.
-func (a *ParallelAgent) createBranchInvocationForSubAgent(
+func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
 ) *agent.Invocation {
-	// Create a copy of the invocation.
-	branchInvocation := *baseInvocation
-	branchInvocation.Agent = subAgent
-	branchInvocation.AgentName = subAgent.Info().Name
-
 	// Create unique invocation ID for this branch.
-	branchSuffix := a.name + "." + branchInvocation.AgentName
-	branchInvocation.InvocationID = baseInvocation.InvocationID + "." + branchSuffix
+	eventFilterKey := baseInvocation.GetEventFilterKey()
+	if eventFilterKey == "" {
+		eventFilterKey = a.name + agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	} else {
+		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
+	}
 
-	// Set branch identifier for hierarchical event filtering.
-	branchInvocation.Branch = branchInvocation.InvocationID
+	branchInvocation := baseInvocation.Clone(
+		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
+	)
 
-	return &branchInvocation
+	return branchInvocation
 }
 
 // setupInvocation prepares the invocation for execution.
 func (a *ParallelAgent) setupInvocation(invocation *agent.Invocation) {
-	// Set agent name if not already set.
-	if invocation.AgentName == "" {
-		invocation.AgentName = a.name
-	}
-
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && a.agentCallbacks != nil {
-		invocation.AgentCallbacks = a.agentCallbacks
-	}
+	// Set agent and agent name
+	invocation.Agent = a
+	invocation.AgentName = a.name
 }
 
 // handleBeforeAgentCallbacks handles pre-execution callbacks.
@@ -138,39 +126,32 @@ func (a *ParallelAgent) handleBeforeAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) bool {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return false
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
+	customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+	var evt *event.Event
+
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response and then close.
-		customEvent := event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
-		return true // Indicates early return
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
-	return false // Continue execution
+
+	if evt == nil {
+		return false // Continue execution
+	}
+
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
+	return true
 }
 
 // startSubAgents starts all sub-agents in parallel and returns their event channels.
@@ -187,24 +168,40 @@ func (a *ParallelAgent) startSubAgents(
 		wg.Add(1)
 		go func(idx int, sa agent.Agent) {
 			defer wg.Done()
+			// Recover from panics in sub-agent execution to prevent
+			// the whole service from crashing.
+			defer func() {
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					log.Errorf("Sub-agent execution panic for %s (index: %d, parent: %s): %v\n%s",
+						sa.Info().Name, idx, invocation.AgentName, r, string(stack))
+					// Send error event for the panic.
+					errorEvent := event.NewErrorEvent(
+						invocation.InvocationID,
+						invocation.AgentName,
+						model.ErrorTypeFlowError,
+						fmt.Sprintf("sub-agent %s panic: %v", sa.Info().Name, r),
+					)
+					agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+				}
+			}()
 
 			// Create branch invocation for this sub-agent.
-			branchInvocation := a.createBranchInvocationForSubAgent(sa, invocation)
+			branchInvocation := a.createBranchInvocation(sa, invocation)
+
+			// Reset invocation information in context
+			branchAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
 
 			// Run the sub-agent.
-			subEventChan, err := sa.Run(ctx, branchInvocation)
+			subEventChan, err := sa.Run(branchAgentCtx, branchInvocation)
 			if err != nil {
 				// Send error event.
-				errorEvent := event.NewErrorEvent(
+				agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
 					invocation.InvocationID,
 					invocation.AgentName,
 					model.ErrorTypeFlowError,
 					err.Error(),
-				)
-				select {
-				case eventChan <- errorEvent:
-				case <-ctx.Done():
-				}
+				))
 				return
 			}
 
@@ -223,37 +220,26 @@ func (a *ParallelAgent) handleAfterAgentCallbacks(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	if invocation.AgentCallbacks == nil {
+	if a.agentCallbacks == nil {
 		return
 	}
 
-	customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	customResponse, err := a.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+	var evt *event.Event
 	if err != nil {
 		// Send error event.
-		errorEvent := event.NewErrorEvent(
+		evt = event.NewErrorEvent(
 			invocation.InvocationID,
 			invocation.AgentName,
 			agent.ErrorTypeAgentCallbackError,
 			err.Error(),
 		)
-		select {
-		case eventChan <- errorEvent:
-		case <-ctx.Done():
-		}
-		return
-	}
-	if customResponse != nil {
+	} else if customResponse != nil {
 		// Create an event from the custom response.
-		customEvent := event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			customResponse,
-		)
-		select {
-		case eventChan <- customEvent:
-		case <-ctx.Done():
-		}
+		evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 	}
+
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // Run implements the agent.Agent interface.
@@ -314,18 +300,16 @@ func (a *ParallelAgent) mergeEventStreams(
 		wg.Add(1)
 		go func(inputChan <-chan *event.Event) {
 			defer wg.Done()
-			for {
-				select {
-				case evt, ok := <-inputChan:
-					if !ok {
-						return // Channel closed.
-					}
-					select {
-					case outputChan <- evt:
-					case <-ctx.Done():
-						return
-					}
-				case <-ctx.Done():
+			// Recover from potential panics during event merging.
+			defer func() {
+				if r := recover(); r != nil {
+					// Log the panic but don't propagate error events here since
+					// we're already in the event merging phase.
+					log.Errorf("Event merging panic in parallel agent %s: %v", a.name, r)
+				}
+			}()
+			for evt := range inputChan {
+				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
 				}
 			}
@@ -339,7 +323,7 @@ func (a *ParallelAgent) mergeEventStreams(
 // Tools implements the agent.Agent interface.
 // It returns the tools available to this agent.
 func (a *ParallelAgent) Tools() []tool.Tool {
-	return a.tools
+	return []tool.Tool{}
 }
 
 // Info implements the agent.Agent interface.

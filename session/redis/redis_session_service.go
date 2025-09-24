@@ -15,12 +15,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
@@ -29,6 +32,9 @@ var _ session.Service = (*Service)(nil)
 
 const (
 	defaultSessionEventLimit = 1000
+	defaultTimeout           = 2 * time.Second
+	defaultChanBufferSize    = 100
+	defaultAsyncPersisterNum = 10
 )
 
 // SessionState is the state of a session.
@@ -46,20 +52,28 @@ type SessionState struct {
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
 type Service struct {
-	opts         ServiceOpts
-	redisClient  redis.UniversalClient
-	sessionTTL   time.Duration // TTL for session state and event list
-	appStateTTL  time.Duration // TTL for app state
-	userStateTTL time.Duration // TTL for user state
+	opts           ServiceOpts
+	redisClient    redis.UniversalClient
+	sessionTTL     time.Duration            // TTL for session state and event list
+	appStateTTL    time.Duration            // TTL for app state
+	userStateTTL   time.Duration            // TTL for user state
+	eventPairChans []chan *sessionEventPair // channel for session events to persistence
+	once           sync.Once
+}
+type sessionEventPair struct {
+	key   session.Key
+	event *event.Event
 }
 
 // NewService creates a new redis session service.
 func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := ServiceOpts{
-		sessionEventLimit: defaultSessionEventLimit,
-		sessionTTL:        0,
-		appStateTTL:       0,
-		userStateTTL:      0,
+		sessionEventLimit:  defaultSessionEventLimit,
+		sessionTTL:         0,
+		appStateTTL:        0,
+		userStateTTL:       0,
+		asyncPersisterNum:  defaultAsyncPersisterNum,
+		enableAsyncPersist: false,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -79,13 +93,17 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create redis client from instance name failed: %w", err)
 		}
-		return &Service{
+		s := &Service{
 			opts:         opts,
 			redisClient:  redisClient,
 			sessionTTL:   opts.sessionTTL,
 			appStateTTL:  opts.appStateTTL,
 			userStateTTL: opts.userStateTTL,
-		}, nil
+		}
+		if opts.enableAsyncPersist {
+			s.startAsyncPersistWorker()
+		}
+		return s, nil
 	}
 
 	redisClient, err = builder(
@@ -95,13 +113,18 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create redis client from url failed: %w", err)
 	}
-	return &Service{
+
+	s := &Service{
 		opts:         opts,
 		redisClient:  redisClient,
 		sessionTTL:   opts.sessionTTL,
 		appStateTTL:  opts.appStateTTL,
 		userStateTTL: opts.userStateTTL,
-	}, nil
+	}
+	if opts.enableAsyncPersist {
+		s.startAsyncPersistWorker()
+	}
+	return s, nil
 }
 
 // CreateSession creates a new session.
@@ -380,17 +403,50 @@ func (s *Service) AppendEvent(
 	// update user session with the given event
 	isession.UpdateUserSession(sess, event, opts...)
 
+	// persist event to redis asynchronously
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if err, ok := r.(error); ok && err.Error() == "send on closed channel" {
+					log.Errorf("redis session service append event failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		// TODO: Init hash index at session creation to prevent duplicate computation.
+		hKey := getEventKey(key)
+		n := len(s.eventPairChans)
+		index := int(murmur3.Sum32([]byte(hKey))) % n
+		select {
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: event}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
 	if err := s.addEvent(ctx, key, event); err != nil {
 		return fmt.Errorf("redis session service append event failed: %w", err)
 	}
+
 	return nil
 }
 
 // Close closes the service.
 func (s *Service) Close() error {
-	if s.redisClient != nil {
-		return s.redisClient.Close()
-	}
+	s.once.Do(func() {
+		// close redis connection
+		if s.redisClient != nil {
+			s.redisClient.Close()
+		}
+
+		for _, ch := range s.eventPairChans {
+			close(ch)
+		}
+	})
+
 	return nil
 }
 
@@ -694,19 +750,29 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 	}
 
 	txPipe := s.redisClient.TxPipeline()
+
+	// update session state
 	txPipe.HSet(ctx, getSessionStateKey(key), key.SessionID, string(updatedStateBytes))
-	txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
-		Score:  float64(event.Timestamp.UnixNano()),
-		Member: eventBytes,
-	})
-	if s.opts.sessionEventLimit > 0 {
-		txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
-	}
 	// Set TTL for session state and event list if configured
 	if s.sessionTTL > 0 {
 		txPipe.Expire(ctx, getSessionStateKey(key), s.sessionTTL)
-		txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
 	}
+
+	// update event list if the event has response and is not partial
+	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		txPipe.ZAdd(ctx, getEventKey(key), redis.Z{
+			Score:  float64(event.Timestamp.UnixNano()),
+			Member: eventBytes,
+		})
+		if s.opts.sessionEventLimit > 0 {
+			txPipe.ZRemRangeByRank(ctx, getEventKey(key), 0, -(int64(s.opts.sessionEventLimit) + 1))
+		}
+		// Set TTL for session state and event list if configured
+		if s.sessionTTL > 0 {
+			txPipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		}
+	}
+
 	if _, err := txPipe.Exec(ctx); err != nil {
 		return fmt.Errorf("store event failed: %w", err)
 	}
@@ -721,6 +787,27 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 		return fmt.Errorf("redis session service delete session state failed: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) startAsyncPersistWorker() {
+	persisterNum := s.opts.asyncPersisterNum
+	// init event pair chan
+	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	for i := 0; i < persisterNum; i++ {
+		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+	}
+
+	for _, eventPairChan := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
+			for eventPair := range eventPairChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
+					log.Errorf("redis session service persistence event failed: %w", err)
+				}
+				cancel()
+			}
+		}(eventPairChan)
+	}
 }
 
 func mergeState(appState, userState session.StateMap, sess *session.Session) *session.Session {

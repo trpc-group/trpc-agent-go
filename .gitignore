@@ -17,3 +17,10 @@ dpskv3.sh
 .cursorignore
 !LICENSE
 .kiro
+.claude*
+CLAUDE.md
+*test*.sh
+*test*.exp
+*test*.py
+*.db
+.codex

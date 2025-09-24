@@ -136,17 +136,17 @@ func (a *chatApp) startChat(ctx context.Context) error {
 
 // processMessage constructs an invocation and prints the agent response.
 func (a *chatApp) processMessage(ctx context.Context, text string) error {
-	inv := &agent.Invocation{
-		InvocationID: fmt.Sprintf("inv-%d", time.Now().UnixNano()),
-		Session: &session.Session{
-			ID:      a.sessionID,
-			AppName: "model-switch",
-			UserID:  "user",
-		},
-		Message: model.NewUserMessage(text),
+	session := &session.Session{
+		ID:      a.sessionID,
+		AppName: "model-switch",
+		UserID:  "user",
 	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(session),
+		agent.WithInvocationMessage(model.NewUserMessage(text)),
+	)
 
-	events, err := a.agent.Run(ctx, inv)
+	events, err := a.agent.Run(ctx, invocation)
 	if err != nil {
 		return err
 	}

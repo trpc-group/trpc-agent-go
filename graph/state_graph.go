@@ -83,6 +83,22 @@ func WithNodeType(nodeType NodeType) Option {
 	}
 }
 
+// WithToolSets sets the tool sets for the node.
+func WithToolSets(toolSets []tool.ToolSet) Option {
+	return func(node *Node) {
+		node.toolSets = toolSets
+	}
+}
+
+// WithGenerationConfig sets the generation config for an LLM node.
+// Effective only for nodes added via AddLLMNode.
+func WithGenerationConfig(cfg model.GenerationConfig) Option {
+	return func(node *Node) {
+		c := cfg
+		node.llmGenerationConfig = &c
+	}
+}
+
 // WithDestinations declares potential dynamic routing targets for a node.
 // This is used for static validation (existence) and visualization only.
 // It does not influence runtime execution.
@@ -146,6 +162,15 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 	}
 }
 
+// WithToolCallbacks sets multiple callbacks for this specific node.
+// This allows setting tool callbacks directly on the node.
+// It's effect just for tool node.
+func WithToolCallbacks(callbacks *tool.Callbacks) Option {
+	return func(node *Node) {
+		node.toolCallbacks = callbacks
+	}
+}
+
 // WithAgentNodeEventCallback sets a callback that will be executed when an agent event is emitted.
 // This callback is specific to this node and will be executed in addition to any global callbacks.
 func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
@@ -154,6 +179,13 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 			node.callbacks = NewNodeCallbacks()
 		}
 		node.callbacks.AgentEvent = append(node.callbacks.AgentEvent, callback)
+	}
+}
+
+// WithModelCallbacks sets the model callbacks for LLM node.
+func WithModelCallbacks(callbacks *model.Callbacks) Option {
+	return func(node *Node) {
+		node.modelCallbacks = callbacks
 	}
 }
 
@@ -189,7 +221,16 @@ func (sg *StateGraph) AddLLMNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id))
+	node := &Node{}
+	for _, opt := range opts {
+		opt(node)
+	}
+	// Build LLM-specific options from node config
+	llmOptsForFunc := []LLMNodeFuncOption{WithLLMNodeID(id), WithLLMToolSets(node.toolSets)}
+	if node.llmGenerationConfig != nil {
+		llmOptsForFunc = append(llmOptsForFunc, WithLLMGenerationConfig(*node.llmGenerationConfig))
+	}
+	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
 	// Add LLM node type option
 	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
 	sg.AddNode(id, llmNodeFunc, llmOpts...)
@@ -202,7 +243,7 @@ func (sg *StateGraph) AddToolsNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	toolsNodeFunc := NewToolsNodeFunc(tools)
+	toolsNodeFunc := NewToolsNodeFunc(tools, opts...)
 	// Add tool node type option
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
@@ -347,6 +388,27 @@ func WithLLMNodeID(nodeID string) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMToolSets sets the tool sets for the LLM node function.
+func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		if runner.tools == nil {
+			runner.tools = make(map[string]tool.Tool)
+		}
+		for _, toolSet := range toolSets {
+			for _, tool := range toolSet.Tools(context.Background()) {
+				runner.tools[tool.Declaration().Name] = tool
+			}
+		}
+	}
+}
+
+// WithLLMGenerationConfig sets the generation configuration for the LLM runner.
+func WithLLMGenerationConfig(cfg model.GenerationConfig) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.generationConfig = cfg
+	}
+}
+
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(
@@ -356,15 +418,16 @@ func NewLLMNodeFunc(
 	opts ...LLMNodeFuncOption,
 ) NodeFunc {
 	runner := &llmRunner{
-		llmModel:    llmModel,
-		instruction: instruction,
-		tools:       tools,
+		llmModel:         llmModel,
+		instruction:      instruction,
+		tools:            tools,
+		generationConfig: model.GenerationConfig{Stream: true},
 	}
 	for _, opt := range opts {
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "llm_node_execution")
+		ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
 		defer span.End()
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
@@ -378,10 +441,11 @@ func NewLLMNodeFunc(
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter
 // lists.
 type llmRunner struct {
-	llmModel    model.Model
-	instruction string
-	tools       map[string]tool.Tool
-	nodeID      string
+	llmModel         model.Model
+	instruction      string
+	tools            map[string]tool.Tool
+	nodeID           string
+	generationConfig model.GenerationConfig
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -496,11 +560,9 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 ) (any, error) {
 	request := &model.Request{
-		Messages: messages,
-		Tools:    r.tools,
-		GenerationConfig: model.GenerationConfig{
-			Stream: true,
-		},
+		Messages:         messages,
+		Tools:            r.tools,
+		GenerationConfig: r.generationConfig,
 	}
 	invocationID, sessionID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
@@ -510,7 +572,9 @@ func (r *llmRunner) executeModel(
 			nodeID = id
 		}
 	}
-	modelInput := extractModelInput(State{StateKeyMessages: messages}, "")
+	// Build model input metadata from the original state and instruction
+	// so events accurately reflect both instruction and user input.
+	modelInput := extractModelInput(state, r.instruction)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
@@ -610,12 +674,17 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 			author = config.NodeID
 		}
 		llmEvent := event.NewResponseEvent(config.InvocationID, author, config.Response)
+		invocation, ok := agent.InvocationFromContext(ctx)
+		if !ok {
+			invocation = agent.NewInvocation(
+				agent.WithInvocationID(config.InvocationID),
+				agent.WithInvocationModel(config.LLMModel),
+				agent.WithInvocationSession(&session.Session{ID: config.SessionID}),
+			)
+		}
+
 		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceCallLLM(config.Span, &agent.Invocation{
-			InvocationID: config.InvocationID,
-			Model:        config.LLMModel,
-			Session:      &session.Session{ID: config.SessionID},
-		}, config.Request, config.Response, llmEvent.ID)
+		itelemetry.TraceCallLLM(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
 		select {
 		case config.EventChan <- llmEvent:
 		case <-ctx.Done():
@@ -667,9 +736,21 @@ func runModel(
 
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
 // This implements tools node functionality using the tools package interface.
-func NewToolsNodeFunc(tools map[string]tool.Tool) NodeFunc {
+func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
+	node := &Node{}
+	for _, opt := range opts {
+		opt(node)
+	}
+	if tools == nil {
+		tools = make(map[string]tool.Tool)
+	}
+	for _, toolSet := range node.toolSets {
+		for _, tool := range toolSet.Tools(context.Background()) {
+			tools[tool.Declaration().Name] = tool
+		}
+	}
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, "tools_node_execution")
+		ctx, span := trace.Tracer.Start(ctx, "execute_tools_node")
 		defer span.End()
 
 		// Extract and validate messages from state.
@@ -734,18 +815,18 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
 		}
 
-		// Extract agent callbacks from state.
-		agentCallbacks, _ := state[StateKeyAgentCallbacks].(*agent.Callbacks)
-
 		// Build invocation for the target agent.
-		invocation := buildAgentInvocation(state, targetAgent, agentCallbacks)
+		invocation := buildAgentInvocation(ctx, state, targetAgent)
 
 		// Emit agent execution start event.
 		startTime := time.Now()
 		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
 
 		// Execute the target agent.
-		agentEventChan, err := targetAgent.Run(ctx, invocation)
+		// Important: wrap the context with the sub-invocation so downstream
+		// callbacks (model/tool) can access it via agent.InvocationFromContext(ctx).
+		subCtx := agent.NewInvocationContext(ctx, invocation)
+		agentEventChan, err := targetAgent.Run(subCtx, invocation)
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()
@@ -792,54 +873,51 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	}
 }
 
+// runTool executes a tool with before/after callbacks and returns the result.
+// Parameters:
+//   - ctx: context for cancellation and tracing
+//   - toolCall: the tool call to execute, including function name and arguments
+//   - toolCallbacks: callbacks to execute before and after tool execution
+//   - t: the tool implementation to execute
+//
+// Returns:
+//   - any: the result from tool execution or custom callback result
+//   - []byte: the modified arguments after before-tool callbacks (for telemetry)
+//   - error: any error that occurred during execution
 func runTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
-) (any, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("execute_tool %s", toolCall.Function.Name))
-	defer span.End()
-
-	// Set span attributes for tool execution.
-	span.SetAttributes(
-		attribute.String("trpc.go.agent.tool_name", toolCall.Function.Name),
-		attribute.String("trpc.go.agent.tool_id", toolCall.ID),
-		attribute.String("trpc.go.agent.tool_description", t.Declaration().Description),
-	)
-
+) (any, []byte, error) {
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
+			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("callback before tool error: %w", err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
-			return customResult, nil
+			return customResult, toolCall.Function.Arguments, nil
 		}
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
 				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
 			if err != nil {
-				span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
-				return nil, fmt.Errorf("callback after tool error: %w", err)
+				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
-				return customResult, nil
+				return customResult, toolCall.Function.Arguments, nil
 			}
 		}
-		return result, nil
+		return result, toolCall.Function.Arguments, nil
 	}
-	span.SetAttributes(attribute.String("trpc.go.agent.error", fmt.Sprintf("tool %s is not callable", toolCall.Function.Name)))
-	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -929,9 +1007,9 @@ type modelExecutionConfig struct {
 	EventChan      chan<- *event.Event
 	InvocationID   string
 	SessionID      string
+	NodeID         string // Add NodeID for parallel execution support
+	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	Span           oteltrace.Span
-	// NodeID, when provided, is used as the event author.
-	NodeID string
 }
 
 // executeModelWithEvents executes the model with event processing.
@@ -1080,17 +1158,17 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		}
 	}
 
-	// Emit tool execution start event.
+	// Execute the tool with callbacks and get modified arguments.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
+	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+
+	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		config.EventChan, config.InvocationID, name, id, nodeID,
-		startTime, config.ToolCall.Function.Arguments,
+		startTime, modifiedArgs,
 	)
-
-	// Execute the tool.
-	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
-
 	// Emit tool execution complete event.
-	emitToolCompleteEvent(toolCompleteEventConfig{
+	event := emitToolCompleteEvent(toolCompleteEventConfig{
 		EventChan:    config.EventChan,
 		InvocationID: config.InvocationID,
 		ToolName:     name,
@@ -1099,8 +1177,10 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		StartTime:    startTime,
 		Result:       result,
 		Error:        err,
-		Arguments:    config.ToolCall.Function.Arguments,
+		Arguments:    modifiedArgs,
 	})
+	itelemetry.TraceToolCall(span, t.Declaration(), modifiedArgs, event)
+	span.End()
 
 	if err != nil {
 		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
@@ -1158,9 +1238,9 @@ type toolCompleteEventConfig struct {
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
-func emitToolCompleteEvent(config toolCompleteEventConfig) {
+func emitToolCompleteEvent(config toolCompleteEventConfig) *event.Event {
 	if config.EventChan == nil {
-		return
+		return nil
 	}
 
 	endTime := time.Now()
@@ -1188,6 +1268,7 @@ func emitToolCompleteEvent(config toolCompleteEventConfig) {
 	case config.EventChan <- toolCompleteEvent:
 	default:
 	}
+	return toolCompleteEvent
 }
 
 // extractToolCallbacks extracts tool callbacks from the state.
@@ -1230,7 +1311,7 @@ func MessagesStateSchema() *StateSchema {
 }
 
 // buildAgentInvocation builds an invocation for the target agent.
-func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *agent.Callbacks) *agent.Invocation {
+func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent) *agent.Invocation {
 	// Extract user input from state.
 	var userInput string
 	if input, exists := state[StateKeyUserInput]; exists {
@@ -1245,22 +1326,23 @@ func buildAgentInvocation(state State, targetAgent agent.Agent, agentCallbacks *
 			sessionData = sessData
 		}
 	}
-	// Extract execution context for invocation ID.
-	var invocationID string
-	if execCtx, exists := state[StateKeyExecContext]; exists {
-		if execContext, ok := execCtx.(*ExecutionContext); ok {
-			invocationID = execContext.InvocationID
-		}
+
+	// clone a new Invocation from parent.
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
+		invocation := parentInvocation.Clone(
+			agent.WithInvocationAgent(targetAgent),
+			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+		)
+		return invocation
 	}
 	// Create the invocation.
-	invocation := &agent.Invocation{
-		Agent:          targetAgent,
-		AgentName:      targetAgent.Info().Name,
-		Message:        model.NewUserMessage(userInput),
-		Session:        sessionData,
-		InvocationID:   invocationID,
-		AgentCallbacks: agentCallbacks,
-	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationSession(sessionData),
+	)
 	return invocation
 }
 

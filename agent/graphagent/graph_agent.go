@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -33,31 +32,10 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithTools sets the list of tools available to the agent.
-func WithTools(tools []tool.Tool) Option {
-	return func(opts *Options) {
-		opts.Tools = tools
-	}
-}
-
 // WithAgentCallbacks sets the agent callbacks.
 func WithAgentCallbacks(callbacks *agent.Callbacks) Option {
 	return func(opts *Options) {
 		opts.AgentCallbacks = callbacks
-	}
-}
-
-// WithModelCallbacks sets the model callbacks.
-func WithModelCallbacks(callbacks *model.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ModelCallbacks = callbacks
-	}
-}
-
-// WithToolCallbacks sets the tool callbacks.
-func WithToolCallbacks(callbacks *tool.Callbacks) Option {
-	return func(opts *Options) {
-		opts.ToolCallbacks = callbacks
 	}
 }
 
@@ -82,24 +60,27 @@ func WithSubAgents(subAgents []agent.Agent) Option {
 	}
 }
 
+// WithCheckpointSaver sets the checkpoint saver for the executor.
+func WithCheckpointSaver(saver graph.CheckpointSaver) Option {
+	return func(opts *Options) {
+		opts.CheckpointSaver = saver
+	}
+}
+
 // Options contains configuration options for creating a GraphAgent.
 type Options struct {
 	// Description is a description of the agent.
 	Description string
-	// Tools is the list of tools available to the agent.
-	Tools []tool.Tool
 	// SubAgents is the list of sub-agents available to this agent.
 	SubAgents []agent.Agent
 	// AgentCallbacks contains callbacks for agent operations.
 	AgentCallbacks *agent.Callbacks
-	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.Callbacks
-	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.Callbacks
 	// InitialState is the initial state for graph execution.
 	InitialState graph.State
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
+	// CheckpointSaver is the checkpoint saver for the executor.
+	CheckpointSaver graph.CheckpointSaver
 }
 
 // GraphAgent is an agent that executes a graph.
@@ -108,11 +89,8 @@ type GraphAgent struct {
 	description       string
 	graph             *graph.Graph
 	executor          *graph.Executor
-	tools             []tool.Tool
 	subAgents         []agent.Agent
 	agentCallbacks    *agent.Callbacks
-	modelCallbacks    *model.Callbacks
-	toolCallbacks     *tool.Callbacks
 	initialState      graph.State
 	channelBufferSize int
 }
@@ -127,8 +105,16 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		opt(&options)
 	}
 
-	executor, err := graph.NewExecutor(g,
+	// Build executor options.
+	var executorOpts []graph.ExecutorOption
+	executorOpts = append(executorOpts,
 		graph.WithChannelBufferSize(options.ChannelBufferSize))
+	if options.CheckpointSaver != nil {
+		executorOpts = append(executorOpts,
+			graph.WithCheckpointSaver(options.CheckpointSaver))
+	}
+
+	executor, err := graph.NewExecutor(g, executorOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create graph executor: %w", err)
 	}
@@ -138,11 +124,8 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 		description:       options.Description,
 		graph:             g,
 		executor:          executor,
-		tools:             options.Tools,
 		subAgents:         options.SubAgents,
 		agentCallbacks:    options.AgentCallbacks,
-		modelCallbacks:    options.ModelCallbacks,
-		toolCallbacks:     options.ToolCallbacks,
 		initialState:      options.InitialState,
 		channelBufferSize: options.ChannelBufferSize,
 	}, nil
@@ -150,7 +133,39 @@ func New(name string, g *graph.Graph, opts ...Option) (*GraphAgent, error) {
 
 // Run executes the graph with the provided invocation.
 func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	// Setup invocation.
+	ga.setupInvocation(invocation)
+
 	// Prepare initial state.
+	initialState := ga.createInitialState(invocation)
+
+	// Execute the graph.
+	if ga.agentCallbacks != nil {
+		customResponse, err := ga.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		if err != nil {
+			return nil, fmt.Errorf("before agent callback failed: %w", err)
+		}
+		if customResponse != nil {
+			// Create a channel that returns the custom response and then closes.
+			eventChan := make(chan *event.Event, 1)
+			// Create an event from the custom response.
+			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			agent.EmitEvent(ctx, invocation, eventChan, customevent)
+			close(eventChan)
+			return eventChan, nil
+		}
+	}
+	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if ga.agentCallbacks != nil {
+		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
+	}
+	return eventChan, nil
+}
+
+func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.State {
 	var initialState graph.State
 
 	if ga.initialState != nil {
@@ -168,8 +183,20 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 
 	// Add invocation message to state.
+	// When resuming from checkpoint, only add user input if it's meaningful content
+	// (not just a resume signal), following LangGraph's pattern.
+	isResuming := invocation.RunOptions.RuntimeState != nil &&
+		invocation.RunOptions.RuntimeState[graph.CfgKeyCheckpointID] != nil
+
 	if invocation.Message.Content != "" {
-		initialState[graph.StateKeyUserInput] = invocation.Message.Content
+		// If resuming and the message is just "resume", don't add it as input
+		// This allows pure checkpoint resumption without input interference
+		if isResuming && invocation.Message.Content == "resume" {
+			// Skip adding user_input to preserve checkpoint state
+		} else {
+			// Add user input for normal execution or resume with meaningful input
+			initialState[graph.StateKeyUserInput] = invocation.Message.Content
+		}
 	}
 	// Add session context if available.
 	if invocation.Session != nil {
@@ -177,48 +204,18 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 	// Add parent agent to state so agent nodes can access sub-agents.
 	initialState[graph.StateKeyParentAgent] = ga
-	// Set agent callbacks if available.
-	if invocation.AgentCallbacks == nil && ga.agentCallbacks != nil {
-		invocation.AgentCallbacks = ga.agentCallbacks
-	}
-	// Set model callbacks if available.
-	if invocation.ModelCallbacks == nil && ga.modelCallbacks != nil {
-		invocation.ModelCallbacks = ga.modelCallbacks
-	}
-	// Set tool callbacks if available.
-	if invocation.ToolCallbacks == nil && ga.toolCallbacks != nil {
-		invocation.ToolCallbacks = ga.toolCallbacks
-	}
-	// Execute the graph.
-	if invocation.AgentCallbacks != nil {
-		customResponse, err := invocation.AgentCallbacks.RunBeforeAgent(ctx, invocation)
-		if err != nil {
-			return nil, fmt.Errorf("before agent callback failed: %w", err)
-		}
-		if customResponse != nil {
-			// Create a channel that returns the custom response and then closes.
-			eventChan := make(chan *event.Event, 1)
-			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
-			eventChan <- customEvent
-			close(eventChan)
-			return eventChan, nil
-		}
-	}
-	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
-	if err != nil {
-		return nil, err
-	}
-	if invocation.AgentCallbacks != nil {
-		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
-	}
-	return eventChan, nil
+
+	return initialState
 }
 
-// Tools returns the list of tools that this agent has access to.
-func (ga *GraphAgent) Tools() []tool.Tool {
-	return ga.tools
+func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent and agent name.
+	invocation.Agent = ga
+	invocation.AgentName = ga.name
 }
+
+// Tools returns the list of tools available to this agent.
+func (ga *GraphAgent) Tools() []tool.Tool { return nil }
 
 // Info returns the basic information about this agent.
 func (ga *GraphAgent) Info() agent.Info {
@@ -254,42 +251,36 @@ func (ga *GraphAgent) wrapEventChannel(
 		defer close(wrappedChan)
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			select {
-			case wrappedChan <- evt:
-			case <-ctx.Done():
+			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
 		// After all events are processed, run after agent callbacks
-		customResponse, err := invocation.AgentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		customResponse, err := ga.agentCallbacks.RunAfterAgent(ctx, invocation, nil)
+		var evt *event.Event
 		if err != nil {
 			// Send error event.
-			errorEvent := event.NewErrorEvent(
+			evt = event.NewErrorEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				agent.ErrorTypeAgentCallbackError,
 				err.Error(),
 			)
-			select {
-			case wrappedChan <- errorEvent:
-			case <-ctx.Done():
-				return
-			}
-			return
-		}
-		if customResponse != nil {
+		} else if customResponse != nil {
 			// Create an event from the custom response.
-			customEvent := event.NewResponseEvent(
+			evt = event.NewResponseEvent(
 				invocation.InvocationID,
 				invocation.AgentName,
 				customResponse,
 			)
-			select {
-			case wrappedChan <- customEvent:
-			case <-ctx.Done():
-				return
-			}
 		}
+
+		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 	}()
 	return wrappedChan
+}
+
+// Executor returns the graph executor for direct access to checkpoint management.
+func (ga *GraphAgent) Executor() *graph.Executor {
+	return ga.executor
 }

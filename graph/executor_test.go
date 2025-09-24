@@ -16,8 +16,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -37,7 +41,7 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 
 	// Create analysis tool
 	complexityTool := function.NewFunctionTool(
-		func(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
+		func(ctx context.Context, args map[string]any) (map[string]any, error) {
 			text := args["text"].(string)
 			wordCount := len(strings.Fields(text))
 			var level string
@@ -46,7 +50,7 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 			} else {
 				level = "simple"
 			}
-			return map[string]interface{}{
+			return map[string]any{
 				"level":      level,
 				"word_count": wordCount,
 			}, nil
@@ -116,15 +120,11 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Create executor
 	executor, err := NewExecutor(graph)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	require.NoError(t, err, "Failed to create executor")
 
 	// Test with complex document
 	t.Run("Complex_Document", func(t *testing.T) {
@@ -133,21 +133,27 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		invocation := &agent.Invocation{InvocationID: "test-complex-doc"}
 
 		eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-		if err != nil {
-			t.Fatalf("Failed to execute graph: %v", err)
-		}
+		require.NoError(t, err, "Failed to execute graph")
 
 		var finalState State
+		var allEvents []string
 		for event := range eventChan {
-			if event.Done && event.StateDelta != nil {
-				finalState = make(State)
+			// Log all events for debugging
+			if event.StateDelta != nil {
+				allEvents = append(allEvents, fmt.Sprintf("Event with %d keys", len(event.StateDelta)))
+			}
+
+			if event.StateDelta != nil {
+				if finalState == nil {
+					finalState = make(State)
+				}
 				for key, valueBytes := range event.StateDelta {
 					if key == MetadataKeyNode || key == MetadataKeyPregel ||
 						key == MetadataKeyChannel || key == MetadataKeyState ||
 						key == MetadataKeyCompletion {
 						continue
 					}
-					var value interface{}
+					var value any
 					if err := json.Unmarshal(valueBytes, &value); err == nil {
 						finalState[key] = value
 					}
@@ -159,21 +165,15 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		}
 
 		// Verify results
-		if finalState == nil {
-			t.Fatal("No final state received")
-		}
+		require.NotNil(t, finalState, "No final state received")
 
-		if result, ok := finalState[StateKeyLastResponse].(string); !ok {
-			t.Error("Expected final response")
-		} else if !strings.Contains(result, "FINAL OUTPUT:") {
-			t.Errorf("Expected formatted output, got: %s", result)
-		}
+		result, ok := finalState[StateKeyLastResponse].(string)
+		require.True(t, ok, "Expected final response")
+		assert.Contains(t, result, "FINAL OUTPUT:", "Expected formatted output")
 
-		if wordCount, ok := finalState["word_count"].(float64); !ok {
-			t.Error("Expected word count")
-		} else if wordCount < 100 {
-			t.Errorf("Expected high word count, got: %f", wordCount)
-		}
+		wordCount, ok := finalState["word_count"].(float64)
+		require.True(t, ok, "Expected word count")
+		assert.GreaterOrEqual(t, wordCount, float64(100), "Expected high word count")
 	})
 
 	// Test with simple document
@@ -183,21 +183,21 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		invocation := &agent.Invocation{InvocationID: "test-simple-doc"}
 
 		eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-		if err != nil {
-			t.Fatalf("Failed to execute graph: %v", err)
-		}
+		require.NoError(t, err, "Failed to execute graph")
 
 		var finalState State
 		for event := range eventChan {
-			if event.Done && event.StateDelta != nil {
-				finalState = make(State)
+			if event.StateDelta != nil {
+				if finalState == nil {
+					finalState = make(State)
+				}
 				for key, valueBytes := range event.StateDelta {
 					if key == MetadataKeyNode || key == MetadataKeyPregel ||
 						key == MetadataKeyChannel || key == MetadataKeyState ||
 						key == MetadataKeyCompletion {
 						continue
 					}
-					var value interface{}
+					var value any
 					if err := json.Unmarshal(valueBytes, &value); err == nil {
 						finalState[key] = value
 					}
@@ -209,21 +209,15 @@ func TestDocumentProcessingWorkflow(t *testing.T) {
 		}
 
 		// Verify results
-		if finalState == nil {
-			t.Fatal("No final state received")
-		}
+		require.NotNil(t, finalState, "No final state received")
 
-		if result, ok := finalState[StateKeyLastResponse].(string); !ok {
-			t.Error("Expected final response")
-		} else if !strings.Contains(result, "FINAL OUTPUT:") {
-			t.Errorf("Expected formatted output, got: %s", result)
-		}
+		result, ok := finalState[StateKeyLastResponse].(string)
+		require.True(t, ok, "Expected final response")
+		assert.Contains(t, result, "FINAL OUTPUT:", "Expected formatted output")
 
-		if wordCount, ok := finalState["word_count"].(float64); !ok {
-			t.Error("Expected word count")
-		} else if wordCount > 50 {
-			t.Errorf("Expected low word count, got: %f", wordCount)
-		}
+		wordCount, ok := finalState["word_count"].(float64)
+		require.True(t, ok, "Expected word count")
+		assert.LessOrEqual(t, wordCount, float64(50), "Expected low word count")
 	})
 }
 
@@ -318,15 +312,11 @@ func TestBasicLinearWorkflow(t *testing.T) {
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Create executor
 	executor, err := NewExecutor(graph)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	require.NoError(t, err, "Failed to create executor")
 
 	// Execute with initial state
 	initialState := State{
@@ -339,9 +329,7 @@ func TestBasicLinearWorkflow(t *testing.T) {
 	}
 
 	eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-	if err != nil {
-		t.Fatalf("Failed to execute graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to execute graph")
 
 	// Process events and track state
 	var finalState State
@@ -362,7 +350,7 @@ func TestBasicLinearWorkflow(t *testing.T) {
 						continue
 					}
 					// Unmarshal the value
-					var value interface{}
+					var value any
 					if err := json.Unmarshal(valueBytes, &value); err == nil {
 						finalState[key] = value
 					}
@@ -373,15 +361,11 @@ func TestBasicLinearWorkflow(t *testing.T) {
 	}
 
 	// Verify results
-	if finalState == nil {
-		t.Fatal("No final state received")
-	}
+	require.NotNil(t, finalState, "No final state received")
 
-	if result, ok := finalState["result"].(string); !ok {
-		t.Error("Expected result field in final state")
-	} else if result != "Final counter: 1, Steps: 1" {
-		t.Errorf("Expected result 'Final counter: 1, Steps: 1', got '%s'", result)
-	}
+	result, ok := finalState["result"].(string)
+	require.True(t, ok, "Expected result field in final state")
+	assert.Equal(t, "Final counter: 1, Steps: 1", result, "Expected specific result")
 }
 
 // TestBasicConditionalRouting tests conditional edge routing based on state
@@ -443,24 +427,18 @@ func TestBasicConditionalRouting(t *testing.T) {
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Test short path
 	t.Run("Short Path", func(t *testing.T) {
 		executor, err := NewExecutor(graph)
-		if err != nil {
-			t.Fatalf("Failed to create executor: %v", err)
-		}
+		require.NoError(t, err, "Failed to create executor")
 
 		initialState := State{"input": "hi"}
 		invocation := &agent.Invocation{InvocationID: "test-short"}
 
 		eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-		if err != nil {
-			t.Fatalf("Failed to execute graph: %v", err)
-		}
+		require.NoError(t, err, "Failed to execute graph")
 
 		var finalState State
 		for event := range eventChan {
@@ -479,7 +457,7 @@ func TestBasicConditionalRouting(t *testing.T) {
 							continue
 						}
 						// Unmarshal the value
-						var value interface{}
+						var value any
 						if err := json.Unmarshal(valueBytes, &value); err == nil {
 							finalState[key] = value
 						}
@@ -489,37 +467,27 @@ func TestBasicConditionalRouting(t *testing.T) {
 			}
 		}
 
-		if finalState == nil {
-			t.Fatal("No final state received")
-		}
+		require.NotNil(t, finalState, "No final state received")
 
-		if result, ok := finalState["result"].(string); !ok {
-			t.Error("Expected result field")
-		} else if result != "Processed as short text" {
-			t.Errorf("Expected 'Processed as short text', got '%s'", result)
-		}
+		result, ok := finalState["result"].(string)
+		require.True(t, ok, "Expected result field")
+		assert.Equal(t, "Processed as short text", result, "Expected short processing result")
 
-		if path, ok := finalState["path"].(string); !ok {
-			t.Error("Expected path field")
-		} else if path != "short" {
-			t.Errorf("Expected path 'short', got '%s'", path)
-		}
+		path, ok := finalState["path"].(string)
+		require.True(t, ok, "Expected path field")
+		assert.Equal(t, "short", path, "Expected short path")
 	})
 
 	// Test long path
 	t.Run("Long Path", func(t *testing.T) {
 		executor, err := NewExecutor(graph)
-		if err != nil {
-			t.Fatalf("Failed to create executor: %v", err)
-		}
+		require.NoError(t, err, "Failed to create executor")
 
 		initialState := State{"input": "this is a very long input text"}
 		invocation := &agent.Invocation{InvocationID: "test-long"}
 
 		eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-		if err != nil {
-			t.Fatalf("Failed to execute graph: %v", err)
-		}
+		require.NoError(t, err, "Failed to execute graph")
 
 		var finalState State
 		for event := range eventChan {
@@ -538,7 +506,7 @@ func TestBasicConditionalRouting(t *testing.T) {
 							continue
 						}
 						// Unmarshal the value
-						var value interface{}
+						var value any
 						if err := json.Unmarshal(valueBytes, &value); err == nil {
 							finalState[key] = value
 						}
@@ -548,21 +516,15 @@ func TestBasicConditionalRouting(t *testing.T) {
 			}
 		}
 
-		if finalState == nil {
-			t.Fatal("No final state received")
-		}
+		require.NotNil(t, finalState, "No final state received")
 
-		if result, ok := finalState["result"].(string); !ok {
-			t.Error("Expected result field")
-		} else if result != "Processed as long text" {
-			t.Errorf("Expected 'Processed as long text', got '%s'", result)
-		}
+		result, ok := finalState["result"].(string)
+		require.True(t, ok, "Expected result field")
+		assert.Equal(t, "Processed as long text", result, "Expected long processing result")
 
-		if path, ok := finalState["path"].(string); !ok {
-			t.Error("Expected path field")
-		} else if path != "long" {
-			t.Errorf("Expected path 'long', got '%s'", path)
-		}
+		path, ok := finalState["path"].(string)
+		require.True(t, ok, "Expected path field")
+		assert.Equal(t, "long", path, "Expected long path")
 	})
 }
 
@@ -613,29 +575,22 @@ func TestBasicCommandRouting(t *testing.T) {
 		AddNode("decision", decisionNode).
 		AddNode("finish", finishNode).
 		SetEntryPoint("decision").
-		AddEdge("decision", "finish"). // Add edge to make finish reachable
 		SetFinishPoint("finish")
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Create executor
 	executor, err := NewExecutor(graph)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	require.NoError(t, err, "Failed to create executor")
 
 	// Execute
 	initialState := State{"counter": 0}
 	invocation := &agent.Invocation{InvocationID: "test-command"}
 
 	eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-	if err != nil {
-		t.Fatalf("Failed to execute graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to execute graph")
 
 	// Process events and capture final state
 	var finalState State
@@ -655,7 +610,7 @@ func TestBasicCommandRouting(t *testing.T) {
 					continue
 				}
 				// Unmarshal the value
-				var value interface{}
+				var value any
 				if err := json.Unmarshal(valueBytes, &value); err == nil {
 					finalState[key] = value
 				}
@@ -669,15 +624,11 @@ func TestBasicCommandRouting(t *testing.T) {
 	}
 
 	// Verify results
-	if finalState == nil {
-		t.Fatal("No final state received")
-	}
+	require.NotNil(t, finalState, "No final state received")
 
-	if result, ok := finalState["result"].(string); !ok {
-		t.Error("Expected result field")
-	} else if result != "Workflow completed" {
-		t.Errorf("Expected 'Workflow completed', got '%s'", result)
-	}
+	result, ok := finalState["result"].(string)
+	require.True(t, ok, "Expected result field")
+	assert.Equal(t, "Workflow completed", result, "Expected completion message")
 
 	// Handle both int and float64 (JSON unmarshaling can produce either)
 	var counter int
@@ -691,9 +642,7 @@ func TestBasicCommandRouting(t *testing.T) {
 		return
 	}
 
-	if counter != 3 {
-		t.Errorf("Expected counter 3, got %d", counter)
-	}
+	assert.Equal(t, 3, counter, "Expected counter to be 3")
 }
 
 // TestSimpleCommandRouting tests basic command routing functionality
@@ -730,24 +679,18 @@ func TestSimpleCommandRouting(t *testing.T) {
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Create executor
 	executor, err := NewExecutor(graph)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	require.NoError(t, err, "Failed to create executor")
 
 	// Execute
 	initialState := State{"step": 0}
 	invocation := &agent.Invocation{InvocationID: "test-command-simple"}
 
 	eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-	if err != nil {
-		t.Fatalf("Failed to execute graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to execute graph")
 
 	// Process events
 	var finalState State
@@ -767,7 +710,7 @@ func TestSimpleCommandRouting(t *testing.T) {
 						continue
 					}
 					// Unmarshal the value
-					var value interface{}
+					var value any
 					if err := json.Unmarshal(valueBytes, &value); err == nil {
 						finalState[key] = value
 					}
@@ -778,21 +721,15 @@ func TestSimpleCommandRouting(t *testing.T) {
 	}
 
 	// Verify results
-	if finalState == nil {
-		t.Fatal("No final state received")
-	}
+	require.NotNil(t, finalState, "No final state received")
 
-	if result, ok := finalState["result"].(string); !ok {
-		t.Error("Expected result field")
-	} else if result != "completed" {
-		t.Errorf("Expected result 'completed', got '%s'", result)
-	}
+	result, ok := finalState["result"].(string)
+	require.True(t, ok, "Expected result field")
+	assert.Equal(t, "completed", result, "Expected completion result")
 
-	if step, ok := finalState["step"].(float64); !ok { // JSON unmarshals numbers as float64
-		t.Error("Expected step field")
-	} else if step != 2 {
-		t.Errorf("Expected step 2, got %v", step)
-	}
+	step, ok := finalState["step"].(float64) // JSON unmarshals numbers as float64
+	require.True(t, ok, "Expected step field")
+	assert.Equal(t, float64(2), step, "Expected step to be 2")
 }
 
 // TestCustomerSupportIssueClassification tests a simple customer support workflow
@@ -868,15 +805,11 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 
 	// Compile graph
 	graph, err := stateGraph.Compile()
-	if err != nil {
-		t.Fatalf("Failed to compile graph: %v", err)
-	}
+	require.NoError(t, err, "Failed to compile graph")
 
 	// Create executor
 	executor, err := NewExecutor(graph)
-	if err != nil {
-		t.Fatalf("Failed to create executor: %v", err)
-	}
+	require.NoError(t, err, "Failed to create executor")
 
 	// Test scenarios
 	testCases := []struct {
@@ -907,21 +840,21 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 			invocation := &agent.Invocation{InvocationID: "test-" + strings.ToLower(tc.name)}
 
 			eventChan, err := executor.Execute(context.Background(), initialState, invocation)
-			if err != nil {
-				t.Fatalf("Failed to execute graph: %v", err)
-			}
+			require.NoError(t, err, "Failed to execute graph")
 
 			var finalState State
 			for event := range eventChan {
-				if event.Done && event.StateDelta != nil {
-					finalState = make(State)
+				if event.StateDelta != nil {
+					if finalState == nil {
+						finalState = make(State)
+					}
 					for key, valueBytes := range event.StateDelta {
 						if key == MetadataKeyNode || key == MetadataKeyPregel ||
 							key == MetadataKeyChannel || key == MetadataKeyState ||
 							key == MetadataKeyCompletion {
 							continue
 						}
-						var value interface{}
+						var value any
 						if err := json.Unmarshal(valueBytes, &value); err == nil {
 							finalState[key] = value
 						}
@@ -933,21 +866,15 @@ func TestCustomerSupportIssueClassification(t *testing.T) {
 			}
 
 			// Verify results
-			if finalState == nil {
-				t.Fatal("No final state received")
-			}
+			require.NotNil(t, finalState, "No final state received")
 
-			if routedTo, ok := finalState["routed_to"].(string); !ok {
-				t.Error("Expected routed_to field")
-			} else if routedTo != tc.expectedRoute {
-				t.Errorf("Expected route %s, got %s", tc.expectedRoute, routedTo)
-			}
+			routedTo, ok := finalState["routed_to"].(string)
+			require.True(t, ok, "Expected routed_to field")
+			assert.Equal(t, tc.expectedRoute, routedTo, "Expected correct route")
 
-			if result, ok := finalState[StateKeyLastResponse].(string); !ok {
-				t.Error("Expected final response")
-			} else if !strings.Contains(result, "ISSUE ROUTED:") {
-				t.Errorf("Expected routing message, got: %s", result)
-			}
+			result, ok := finalState[StateKeyLastResponse].(string)
+			require.True(t, ok, "Expected final response")
+			assert.Contains(t, result, "ISSUE ROUTED:", "Expected routing message")
 		})
 	}
 }
@@ -994,4 +921,1021 @@ func (m *IssueClassificationMockModel) Info() model.Info {
 	return model.Info{
 		Name: "issue-classification-mock-model",
 	}
+}
+
+// TestBeforeCallbackShortCircuit ensures that a BeforeNode callback returning a
+// custom result short-circuits node execution and that the custom result is
+// applied to state.
+func TestBeforeCallbackShortCircuit(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("result", StateField{Type: reflect.TypeOf(""), Reducer: DefaultReducer})
+	g := NewStateGraph(schema)
+
+	// This node would error if executed; the callback should short-circuit it.
+	g.AddNode("danger", func(ctx context.Context, s State) (any, error) {
+		return nil, fmt.Errorf("should not run")
+	}).SetEntryPoint("danger").SetFinishPoint("danger")
+
+	// Global callbacks: Before returns a custom State to short-circuit.
+	cbs := NewNodeCallbacks()
+	cbs.RegisterBeforeNode(func(ctx context.Context, cb *NodeCallbackContext, st State) (any, error) {
+		if cb.NodeID == "danger" {
+			return State{"result": "ok"}, nil
+		}
+		return nil, nil
+	})
+	g.WithNodeCallbacks(cbs)
+
+	compiled, err := g.Compile()
+	require.NoError(t, err, "compile failed.")
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err, "executor failed.")
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-short"})
+	require.NoError(t, err, "execute failed.")
+
+	var final State
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			final = make(State)
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+
+	require.NotNil(t, final, "no final state.")
+	res, ok := final["result"].(string)
+	require.True(t, ok, "expected result field.")
+	require.Equal(t, "ok", res, "expected short-circuit result.")
+}
+
+// TestCommandGoToRouting ensures Command{GoTo} triggers the target node and
+// state Update is applied, without double-triggering via static writes.
+func TestCommandGoToRouting(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("x", StateField{Type: reflect.TypeOf(0), Reducer: DefaultReducer}).
+		AddField("routed", StateField{Type: reflect.TypeOf(false), Reducer: DefaultReducer})
+
+	sg := NewStateGraph(schema)
+	sg.AddNode("start", func(ctx context.Context, s State) (any, error) {
+		return &Command{Update: State{"x": 1}, GoTo: "B"}, nil
+	})
+	sg.AddNode("B", func(ctx context.Context, s State) (any, error) {
+		return State{"routed": true}, nil
+	})
+	sg.SetEntryPoint("start")
+	sg.AddEdge("start", "B") // Static edge present; GoTo routing should avoid double.
+	sg.SetFinishPoint("B")
+
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-goto"})
+	require.NoError(t, err)
+
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+	// Expect both x update and routed result.
+	if xv, ok := final["x"].(float64); ok {
+		require.Equal(t, float64(1), xv)
+	} else if xi, ok := final["x"].(int); ok {
+		require.Equal(t, 1, xi)
+	} else {
+		t.Fatalf("expected x numeric, got %T", final["x"])
+	}
+	rv, ok := final["routed"].(bool)
+	require.True(t, ok)
+	require.True(t, rv)
+}
+
+// TestAfterCallbackOverride ensures AfterNode callback can override node result.
+func TestAfterCallbackOverride(t *testing.T) {
+	schema := NewStateSchema().
+		AddField("result", StateField{Type: reflect.TypeOf(""), Reducer: DefaultReducer})
+	g := NewStateGraph(schema)
+	g.AddNode("N", func(ctx context.Context, s State) (any, error) { return State{"result": "orig"}, nil })
+	g.SetEntryPoint("N").SetFinishPoint("N")
+
+	cbs := NewNodeCallbacks()
+	cbs.RegisterAfterNode(func(ctx context.Context, cb *NodeCallbackContext, s State, res any, nodeErr error) (any, error) {
+		return State{"result": "override"}, nil
+	})
+	g.WithNodeCallbacks(cbs)
+	compiled, err := g.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+
+	ch, err := exec.Execute(context.Background(), State{}, &agent.Invocation{InvocationID: "inv-after"})
+	require.NoError(t, err)
+	final := make(State)
+	for ev := range ch {
+		if ev.Done && ev.StateDelta != nil {
+			for k, vb := range ev.StateDelta {
+				if k == MetadataKeyNode || k == MetadataKeyPregel || k == MetadataKeyChannel || k == MetadataKeyState || k == MetadataKeyCompletion {
+					continue
+				}
+				var v any
+				if err := json.Unmarshal(vb, &v); err == nil {
+					final[k] = v
+				}
+			}
+		}
+	}
+	rv, ok := final["result"].(string)
+	require.True(t, ok)
+	require.Equal(t, "override", rv)
+}
+
+// TestShouldTriggerNode tests the shouldTriggerNode logic with various scenarios.
+func TestShouldTriggerNode(t *testing.T) {
+	exec := &Executor{}
+
+	tests := []struct {
+		name           string
+		nodeID         string
+		channelName    string
+		currentVersion int64
+		lastCheckpoint *Checkpoint
+		expected       bool
+	}{
+		{
+			name:           "no_checkpoint_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: nil,
+			expected:       true,
+		},
+		{
+			name:           "no_versions_seen_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{VersionsSeen: nil},
+			expected:       true,
+		},
+		{
+			name:           "node_never_run_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"other_node": {"channel1": 1},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "node_hasnt_seen_channel_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"other_channel": 1},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "newer_version_should_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 3,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:           "same_version_should_not_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 2,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:           "older_version_should_not_trigger",
+			nodeID:         "node1",
+			channelName:    "channel1",
+			currentVersion: 1,
+			lastCheckpoint: &Checkpoint{
+				VersionsSeen: map[string]map[string]int64{
+					"node1": {"channel1": 2},
+				},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := exec.shouldTriggerNode(tt.nodeID, tt.channelName, tt.currentVersion, tt.lastCheckpoint)
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestFork tests the Fork function with various scenarios.
+func TestFork(t *testing.T) {
+	// Create a mock checkpoint saver
+	saver := &mockCheckpointSaver{
+		cfgToTuple: make(map[string]*CheckpointTuple),
+	}
+
+	exec := &Executor{checkpointSaver: saver}
+
+	// Test case 1: No checkpoint saver configured
+	t.Run("no_checkpoint_saver", func(t *testing.T) {
+		execNoSaver := &Executor{checkpointSaver: nil}
+		_, err := execNoSaver.Fork(context.Background(), map[string]any{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "checkpoint saver is not configured")
+	})
+
+	// Test case 2: Source checkpoint not found
+	t.Run("source_checkpoint_not_found", func(t *testing.T) {
+		config := map[string]any{"lineage_id": "test", "checkpoint_id": "nonexistent"}
+		_, err := exec.Fork(context.Background(), config)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "source checkpoint not found")
+	})
+
+	// Test case 3: Successful fork
+	t.Run("successful_fork", func(t *testing.T) {
+		// Create a source checkpoint
+		sourceCheckpoint := &Checkpoint{
+			ID:              "source-1",
+			ChannelVersions: map[string]int64{"channel1": 1},
+			NextNodes:       []string{"node1"},
+		}
+		sourceMetadata := &CheckpointMetadata{
+			Step: 5,
+		}
+		sourceTuple := &CheckpointTuple{
+			Checkpoint:    sourceCheckpoint,
+			Metadata:      sourceMetadata,
+			PendingWrites: []PendingWrite{{TaskID: "task1", Channel: "channel1", Value: []byte("test")}},
+		}
+
+		// Mock the saver to return the source checkpoint
+		config := map[string]any{
+			"configurable": map[string]any{
+				"lineage_id":    "test",
+				"checkpoint_id": "source-1",
+				"namespace":     "ns1",
+			},
+		}
+		saver.cfgToTuple[fmt.Sprintf("%v", config)] = sourceTuple
+
+		// Mock PutFull to return updated config
+		saver.putFullFunc = func(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+			return map[string]any{
+				"configurable": map[string]any{
+					"lineage_id":    "test",
+					"checkpoint_id": "forked-1",
+					"namespace":     "ns1",
+				},
+			}, nil
+		}
+
+		result, err := exec.Fork(context.Background(), config)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		configurable, ok := result["configurable"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "test", configurable["lineage_id"])
+		require.Equal(t, "forked-1", configurable["checkpoint_id"])
+		require.Equal(t, "ns1", configurable["namespace"])
+	})
+
+	// Test case 4: Fork with no pending writes
+	t.Run("fork_no_pending_writes", func(t *testing.T) {
+		// Create a source checkpoint with no pending writes
+		sourceCheckpoint := &Checkpoint{
+			ID:              "source-2",
+			ChannelVersions: map[string]int64{"channel1": 1},
+			NextNodes:       []string{"node1"},
+		}
+		sourceMetadata := &CheckpointMetadata{
+			Step: 3,
+		}
+		sourceTuple := &CheckpointTuple{
+			Checkpoint:    sourceCheckpoint,
+			Metadata:      sourceMetadata,
+			PendingWrites: nil, // No pending writes
+		}
+
+		config := map[string]any{
+			"configurable": map[string]any{
+				"lineage_id":    "test2",
+				"checkpoint_id": "source-2",
+				"namespace":     "ns2",
+			},
+		}
+		saver.cfgToTuple[fmt.Sprintf("%v", config)] = sourceTuple
+
+		saver.putFullFunc = func(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+			return map[string]any{
+				"configurable": map[string]any{
+					"lineage_id":    "test2",
+					"checkpoint_id": "forked-2",
+					"namespace":     "ns2",
+				},
+			}, nil
+		}
+
+		result, err := exec.Fork(context.Background(), config)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		configurable, ok := result["configurable"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "test2", configurable["lineage_id"])
+		require.Equal(t, "forked-2", configurable["checkpoint_id"])
+	})
+}
+
+// mockCheckpointSaver is a mock implementation for testing Fork function.
+type mockCheckpointSaver struct {
+	cfgToTuple  map[string]*CheckpointTuple
+	putFullFunc func(ctx context.Context, req PutFullRequest) (map[string]any, error)
+}
+
+func (m *mockCheckpointSaver) GetTuple(ctx context.Context, config map[string]any) (*CheckpointTuple, error) {
+	key := fmt.Sprintf("%v", config)
+	tuple, exists := m.cfgToTuple[key]
+	if !exists {
+		return nil, nil
+	}
+	return tuple, nil
+}
+
+func (m *mockCheckpointSaver) PutFull(ctx context.Context, req PutFullRequest) (map[string]any, error) {
+	if m.putFullFunc != nil {
+		return m.putFullFunc(ctx, req)
+	}
+	return req.Config, nil
+}
+
+func (m *mockCheckpointSaver) Get(ctx context.Context, config map[string]any) (*Checkpoint, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) Put(ctx context.Context, req PutRequest) (map[string]any, error) {
+	return req.Config, nil
+}
+
+func (m *mockCheckpointSaver) List(ctx context.Context, config map[string]any, filter *CheckpointFilter) ([]*CheckpointTuple, error) {
+	return nil, nil
+}
+
+func (m *mockCheckpointSaver) PutWrites(ctx context.Context, req PutWritesRequest) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) DeleteLineage(ctx context.Context, lineageID string) error {
+	return nil
+}
+
+func (m *mockCheckpointSaver) Close() error {
+	return nil
+}
+
+// TestParallelFanOutWithCommands verifies that a node returning []*Command
+// fan-outs into multiple tasks that execute in parallel with isolated overlays
+// and that their results are merged back into the global State via reducers.
+func TestParallelFanOutWithCommands(t *testing.T) {
+	// Define schema with a results slice using StringSliceReducer for merging.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns two commands to the same worker with different overlays.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []*Command{
+			{Update: State{"param": "A"}, GoTo: "worker"},
+			{Update: State{"param": "B"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: reads overlay param and appends into results.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		p, _ := state["param"].(string)
+		if p == "" {
+			return State{}, nil
+		}
+		return State{"results": []string{p}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-commands"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results
+	require.NotNil(t, finalState, "No final state received")
+
+	vals, ok := finalState["results"].([]any)
+	if !ok {
+		// It can also come as []string depending on unmarshalling; handle both.
+		if vs, ok2 := finalState["results"].([]string); ok2 {
+			assert.Len(t, vs, 2, "Expected 2 results")
+			m := map[string]bool{}
+			for _, s := range vs {
+				m[s] = true
+			}
+			assert.True(t, m["A"], "Expected result to contain A")
+			assert.True(t, m["B"], "Expected result to contain B")
+			return
+		}
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
+	assert.Len(t, vals, 2, "Expected 2 results")
+	m := map[string]bool{}
+	for _, v := range vals {
+		if s, ok := v.(string); ok {
+			m[s] = true
+		}
+	}
+	assert.True(t, m["A"], "Expected result to contain A")
+	assert.True(t, m["B"], "Expected result to contain B")
+}
+
+// TestFanOutWithGlobalStateAccess tests that fan-out branches can access global state.
+func TestFanOutWithGlobalStateAccess(t *testing.T) {
+	// Define schema with both global and local fields
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns commands with local params but needs global state access.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []*Command{
+			{Update: State{"local_param": "task1"}, GoTo: "worker"},
+			{Update: State{"local_param": "task2"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: should be able to access both global state and local overlay.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		// Access local parameter from overlay.
+		localParam, _ := state["local_param"].(string)
+
+		// Access global state (should be available).
+		globalValue, _ := state["global_value"]
+
+		result := fmt.Sprintf("%s_%v", localParam, globalValue)
+		return State{"results": []string{result}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	// Set initial global state.
+	initialState := State{"global_value": "global"}
+	invocation := &agent.Invocation{InvocationID: "test-fanout-global-state"}
+	eventChan, err := executor.Execute(context.Background(), initialState, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Handle both []string and []interface{} types from JSON unmarshalling.
+	if vs, ok := finalState["results"].([]string); ok {
+		assert.GreaterOrEqual(t, len(vs), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, s := range vs {
+			m[s] = true
+		}
+		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
+		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
+	} else if vals, ok := finalState["results"].([]interface{}); ok {
+		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, v := range vals {
+			if s, ok := v.(string); ok {
+				m[s] = true
+			}
+		}
+		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
+		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
+	} else {
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
+}
+
+// TestFanOutWithEmptyCommands tests edge case of empty command slice
+func TestFanOutWithEmptyCommands(t *testing.T) {
+	// Define schema.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns empty command slice.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []*Command{} // Empty slice
+		return cmds, nil
+	})
+
+	// Worker node: should not be executed.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		return State{"results": []string{"should_not_execute"}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-empty-commands"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results - should be empty since no commands were executed.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Results should be empty or not present
+	if results, exists := finalState["results"]; exists {
+		if vs, ok := results.([]string); ok {
+			assert.Len(t, vs, 0, "Expected no results for empty commands")
+		}
+	}
+}
+
+// TestFanOutWithNilCommandUpdate tests edge case of nil command update.
+func TestFanOutWithNilCommandUpdate(t *testing.T) {
+	// Define schema.
+	schema := NewStateSchema().
+		AddField("results", StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+
+	// Build graph.
+	stateGraph := NewStateGraph(schema)
+
+	// Fan-out node: returns commands with nil update.
+	stateGraph.AddNode("fanout", func(ctx context.Context, state State) (any, error) {
+		cmds := []*Command{
+			{Update: nil, GoTo: "worker"}, // nil update
+			{Update: State{"param": "valid"}, GoTo: "worker"},
+		}
+		return cmds, nil
+	})
+
+	// Worker node: handles both nil and valid updates.
+	stateGraph.AddNode("worker", func(ctx context.Context, state State) (any, error) {
+		param, _ := state["param"].(string)
+		if param == "" {
+			param = "nil_update"
+		}
+		return State{"results": []string{param}}, nil
+	})
+
+	// Entry is fanout; connect fanout -> worker and finish at worker.
+	stateGraph.SetEntryPoint("fanout")
+	stateGraph.AddEdge("fanout", "worker")
+	stateGraph.SetFinishPoint("worker")
+
+	// Compile and execute.
+	graph, err := stateGraph.Compile()
+	require.NoError(t, err, "Failed to compile graph")
+
+	executor, err := NewExecutor(graph)
+	require.NoError(t, err, "Failed to create executor")
+
+	invocation := &agent.Invocation{InvocationID: "test-fanout-nil-update"}
+	eventChan, err := executor.Execute(context.Background(), State{}, invocation)
+	require.NoError(t, err, "Failed to execute graph")
+
+	var finalState State
+	for event := range eventChan {
+		if event.Done && event.StateDelta != nil {
+			finalState = make(State)
+			for key, valueBytes := range event.StateDelta {
+				if key == MetadataKeyNode || key == MetadataKeyPregel ||
+					key == MetadataKeyChannel || key == MetadataKeyState ||
+					key == MetadataKeyCompletion {
+					continue
+				}
+				var value any
+				if err := json.Unmarshal(valueBytes, &value); err == nil {
+					finalState[key] = value
+				}
+			}
+		}
+		if event.Done {
+			break
+		}
+	}
+
+	// Verify results.
+	require.NotNil(t, finalState, "No final state received")
+
+	// Handle both []string and []interface{} types from JSON unmarshalling
+	if vs, ok := finalState["results"].([]string); ok {
+		assert.GreaterOrEqual(t, len(vs), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, s := range vs {
+			m[s] = true
+		}
+		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
+		assert.True(t, m["valid"], "Expected result to contain valid")
+	} else if vals, ok := finalState["results"].([]interface{}); ok {
+		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
+		m := map[string]bool{}
+		for _, v := range vals {
+			if s, ok := v.(string); ok {
+				m[s] = true
+			}
+		}
+		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
+		assert.True(t, m["valid"], "Expected result to contain valid")
+	} else {
+		t.Fatalf("Expected results slice in final state, got %T: %v", finalState["results"], finalState["results"])
+	}
+}
+
+// TestEmitStateUpdateEventConcurrency ensures no panic when emitting state
+// update events while state is being concurrently mutated.
+func TestEmitStateUpdateEventConcurrency(t *testing.T) {
+	// Build a minimal graph.
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddNode("noop", func(ctx context.Context, s State) (any, error) {
+		return State{"ok": true}, nil
+	})
+	sg.SetEntryPoint("noop")
+	sg.SetFinishPoint("noop")
+	g, err := sg.Compile()
+	require.NoError(t, err, "compile graph failed.")
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err, "create executor failed.")
+
+	// Prepare execution context with nested map to stress JSON encoding.
+	evtCh := make(chan *event.Event, 1024)
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{"nested": map[string]any{"a": 1}},
+		EventChan:    evtCh,
+		InvocationID: "test-inv",
+	}
+
+	// Concurrently mutate the nested map while emitting events.
+	stopCh := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+				execCtx.stateMutex.Lock()
+				m := execCtx.State["nested"].(map[string]any)
+				m[fmt.Sprintf("k%v", time.Now().UnixNano())] = time.Now().Unix()
+				execCtx.stateMutex.Unlock()
+			}
+		}
+	}()
+
+	// Rapidly emit state update events; should not panic.
+	for i := 0; i < 200; i++ {
+		exec.emitStateUpdateEvent(context.Background(), nil, execCtx)
+	}
+	close(stopCh)
+}
+
+// TestProcessConditionalEdgesConcurrency ensures no panic when evaluating
+// conditional edges while state is concurrently mutated.
+func TestProcessConditionalEdgesConcurrency(t *testing.T) {
+	// Build a graph with a conditional edge.
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddNode("start", func(ctx context.Context, s State) (any, error) {
+		return State{"x": 1}, nil
+	})
+	sg.AddNode("A", func(ctx context.Context, s State) (any, error) { return State{"done": true}, nil })
+	sg.SetEntryPoint("start")
+	sg.SetFinishPoint("A")
+	sg.AddConditionalEdges("start", func(ctx context.Context, s State) (string, error) {
+		// Read a key that may be mutated concurrently.
+		if _, ok := s["flip"].(bool); ok {
+			return "A", nil
+		}
+		return "A", nil
+	}, map[string]string{"A": "A"})
+	g, err := sg.Compile()
+	require.NoError(t, err, "compile graph failed.")
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err, "create executor failed.")
+
+	evtCh := make(chan *event.Event, 1024)
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        State{"flip": false},
+		EventChan:    evtCh,
+		InvocationID: "test-inv-2",
+	}
+
+	// Mutate the state concurrently.
+	stopCh := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+				execCtx.stateMutex.Lock()
+				execCtx.State["flip"] = !execCtx.State["flip"].(bool)
+				execCtx.stateMutex.Unlock()
+			}
+		}
+	}()
+
+	// Repeatedly process conditional edges; should not panic.
+	for i := 0; i < 200; i++ {
+		require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", i), "conditional processing failed.")
+	}
+	close(stopCh)
+}
+
+// minimalNoopNode returns a trivial node function for building test graphs.
+func minimalNoopNode(_ context.Context, _ State) (any, error) { return nil, nil }
+
+func TestNewExecutor_InvalidGraph_ReturnsError(t *testing.T) {
+	// Graph created without entry point should fail validation in NewExecutor
+	g := New(NewStateSchema())
+	exec, err := NewExecutor(g)
+	require.Nil(t, exec)
+	require.Error(t, err)
+}
+
+func TestNewExecutor_NodeTimeout_MinimumEnforced(t *testing.T) {
+	// Build a minimal valid graph
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", minimalNoopNode).SetEntryPoint("a").SetFinishPoint("a")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	// StepTimeout < 2s -> derived node timeout < 1s -> should clamp to 1s
+	exec, err := NewExecutor(g, WithStepTimeout(1500*time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+	require.Equal(t, time.Second, exec.nodeTimeout)
+
+	// StepTimeout large -> derived node timeout should be half of step timeout
+	exec2, err := NewExecutor(g, WithStepTimeout(5*time.Second))
+	require.NoError(t, err)
+	require.NotNil(t, exec2)
+	require.Equal(t, 2500*time.Millisecond, exec2.nodeTimeout)
+}
+
+func TestExecutor_Execute_NilInvocation_Error(t *testing.T) {
+	// Build a minimal valid graph
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("a", minimalNoopNode).SetEntryPoint("a").SetFinishPoint("a")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	// invocation is nil -> should return error before starting execution
+	ch, err := exec.Execute(context.Background(), State{}, nil)
+	require.Error(t, err)
+	require.Nil(t, ch)
+}
+
+func TestDeepCopyAny_Branches(t *testing.T) {
+	// []int branch
+	ints := []int{1, 2, 3}
+	gotIntsAny := deepCopyAny(ints)
+	gotInts, ok := gotIntsAny.([]int)
+	require.True(t, ok)
+	require.Equal(t, ints, gotInts)
+	if len(gotInts) > 0 && len(ints) > 0 {
+		require.NotSame(t, &ints[0], &gotInts[0])
+	}
+	gotInts[0] = 99
+	require.Equal(t, []int{1, 2, 3}, ints) // original unchanged
+
+	// []float64 branch
+	floats := []float64{1.5, 2.5}
+	gotFloatsAny := deepCopyAny(floats)
+	gotFloats, ok := gotFloatsAny.([]float64)
+	require.True(t, ok)
+	require.Equal(t, floats, gotFloats)
+	if len(gotFloats) > 0 && len(floats) > 0 {
+		require.NotSame(t, &floats[0], &gotFloats[0])
+	}
+	gotFloats[0] = 7.7
+	require.Equal(t, []float64{1.5, 2.5}, floats) // original unchanged
+
+	// time.Time branch
+	now := time.Now()
+	gotTime := deepCopyAny(now)
+	// should return the same value
+	require.True(t, gotTime.(time.Time).Equal(now))
+
+	// reflect.Map: typed nil map should be returned as typed nil
+	var nilMap map[string]int
+	gotNilMap := deepCopyAny(nilMap)
+	require.Equal(t, reflect.TypeOf(nilMap), reflect.TypeOf(gotNilMap))
+	require.True(t, reflect.ValueOf(gotNilMap).IsNil())
+
+	// reflect.Map: non-nil map with non-any value type
+	m := map[string]int{"a": 1}
+	gotMapAny := deepCopyAny(m)
+	gotMap, ok := gotMapAny.(map[string]int)
+	require.True(t, ok)
+	require.Equal(t, m, gotMap)
+	gotMap["a"] = 42
+	require.Equal(t, 1, m["a"]) // original unchanged
+
+	// reflect.Slice: typed nil slice should be returned as typed nil
+	type pair struct{ A int }
+	var nilSlice []pair
+	gotNilSlice := deepCopyAny(nilSlice)
+	require.Equal(t, reflect.TypeOf(nilSlice), reflect.TypeOf(gotNilSlice))
+	require.True(t, reflect.ValueOf(gotNilSlice).IsNil())
+
+	// reflect.Slice: non-nil slice of custom type
+	s := []pair{{1}, {2}}
+	gotSliceAny := deepCopyAny(s)
+	gotSlice, ok := gotSliceAny.([]pair)
+	require.True(t, ok)
+	require.Equal(t, s, gotSlice)
+	if len(gotSlice) > 0 && len(s) > 0 {
+		require.NotSame(t, &s[0], &gotSlice[0])
+	}
+	gotSlice[0].A = 99
+	require.Equal(t, []pair{{1}, {2}}, s) // original unchanged
+}
+
+// TestExecuteNodeFunction_RecoversFromPanic ensures that panics in user node functions
+// are recovered and converted into errors, without crashing the executor.
+func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
+	// Build graph with a single node that panics
+	sg := NewStateGraph(NewStateSchema())
+	sg.AddNode("boom", func(ctx context.Context, state State) (any, error) {
+		panic("kaboom")
+	}).SetEntryPoint("boom").SetFinishPoint("boom")
+	g, err := sg.Compile()
+	require.NoError(t, err)
+
+	exec, err := NewExecutor(g)
+	require.NoError(t, err)
+
+	execCtx := &ExecutionContext{
+		Graph:        g,
+		State:        make(State),
+		InvocationID: "panic-test",
+	}
+	task := &Task{NodeID: "boom", TaskID: "boom-0"}
+
+	res, runErr := exec.executeNodeFunction(context.Background(), execCtx, task)
+	require.Error(t, runErr)
+	require.Nil(t, res)
+	require.Contains(t, runErr.Error(), "kaboom")
+	require.Contains(t, runErr.Error(), "node boom panic")
 }

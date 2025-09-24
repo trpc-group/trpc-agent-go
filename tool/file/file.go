@@ -58,6 +58,13 @@ func WithReadFileEnabled(e bool) Option {
 	}
 }
 
+// WithReadMultipleFilesEnabled enables or disables the read multiple files functionality, default is true.
+func WithReadMultipleFilesEnabled(e bool) Option {
+	return func(f *fileToolSet) {
+		f.readMultipleFilesEnabled = e
+	}
+}
+
 // WithListFileEnabled enables or disables the list file functionality, default is true.
 func WithListFileEnabled(e bool) Option {
 	return func(f *fileToolSet) {
@@ -109,17 +116,18 @@ func WithMaxFileSize(s int64) Option {
 
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
-	baseDir               string
-	saveFileEnabled       bool
-	readFileEnabled       bool
-	listFileEnabled       bool
-	searchFileEnabled     bool
-	searchContentEnabled  bool
-	replaceContentEnabled bool
-	createDirMode         os.FileMode
-	createFileMode        os.FileMode
-	maxFileSize           int64
-	tools                 []tool.CallableTool
+	baseDir                  string
+	saveFileEnabled          bool
+	readFileEnabled          bool
+	readMultipleFilesEnabled bool
+	listFileEnabled          bool
+	searchFileEnabled        bool
+	searchContentEnabled     bool
+	replaceContentEnabled    bool
+	createDirMode            os.FileMode
+	createFileMode           os.FileMode
+	maxFileSize              int64
+	tools                    []tool.CallableTool
 }
 
 // Tools implements the ToolSet interface.
@@ -137,16 +145,17 @@ func (f *fileToolSet) Close() error {
 func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	// Apply default configuration.
 	fileToolSet := &fileToolSet{
-		baseDir:               defaultBaseDir,
-		saveFileEnabled:       true,
-		readFileEnabled:       true,
-		listFileEnabled:       true,
-		searchFileEnabled:     true,
-		searchContentEnabled:  true,
-		replaceContentEnabled: true,
-		createDirMode:         defaultCreateDirMode,
-		createFileMode:        defaultCreateFileMode,
-		maxFileSize:           defaultMaxFileSize,
+		baseDir:                  defaultBaseDir,
+		saveFileEnabled:          true,
+		readFileEnabled:          true,
+		readMultipleFilesEnabled: true,
+		listFileEnabled:          true,
+		searchFileEnabled:        true,
+		searchContentEnabled:     true,
+		replaceContentEnabled:    true,
+		createDirMode:            defaultCreateDirMode,
+		createFileMode:           defaultCreateFileMode,
+		maxFileSize:              defaultMaxFileSize,
 	}
 	// Apply user-provided options.
 	for _, opt := range opts {
@@ -169,6 +178,9 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	}
 	if fileToolSet.readFileEnabled {
 		tools = append(tools, fileToolSet.readFileTool())
+	}
+	if fileToolSet.readMultipleFilesEnabled {
+		tools = append(tools, fileToolSet.readMultipleFilesTool())
 	}
 	if fileToolSet.listFileEnabled {
 		tools = append(tools, fileToolSet.listFileTool())
@@ -195,14 +207,26 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 	return filepath.Join(f.baseDir, relativePath), nil
 }
 
+// matchFiles matches files with the given pattern in the target path.
+// It returns a list of relative paths, filtered out the "", "." and ".." paths.
 func (f *fileToolSet) matchFiles(targetPath string, pattern string, caseSensitive bool) ([]string, error) {
+	if pattern == "" {
+		return nil, fmt.Errorf("pattern cannot be empty")
+	}
 	opts := []doublestar.GlobOption{}
 	if !caseSensitive {
 		opts = append(opts, doublestar.WithCaseInsensitive())
 	}
-	files, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
+	matches, err := doublestar.Glob(os.DirFS(targetPath), pattern, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("searching files with pattern '%s': %w", pattern, err)
+	}
+	files := matches[:0]
+	for _, match := range matches {
+		if match == "" || match == "." || match == ".." {
+			continue
+		}
+		files = append(files, match)
 	}
 	return files, nil
 }

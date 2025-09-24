@@ -263,6 +263,9 @@ func WithBaseURL(url string) Option {
 // WithChannelBufferSize sets the channel buffer size for the OpenAI client.
 func WithChannelBufferSize(size int) Option {
 	return func(opts *options) {
+		if size <= 0 {
+			size = defaultChannelBufferSize
+		}
 		opts.ChannelBufferSize = size
 	}
 }
@@ -374,7 +377,8 @@ func WithBatchBaseURL(url string) Option {
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
-		Variant: VariantOpenAI, // The default variant is VariantOpenAI.
+		Variant:           VariantOpenAI, // The default variant is VariantOpenAI.
+		ChannelBufferSize: defaultChannelBufferSize,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -394,12 +398,6 @@ func New(name string, opts ...Option) *Model {
 
 	client := openai.NewClient(clientOpts...)
 
-	// Set default channel buffer size if not specified.
-	channelBufferSize := o.ChannelBufferSize
-	if channelBufferSize <= 0 {
-		channelBufferSize = defaultChannelBufferSize
-	}
-
 	// Set default batch completion window if not specified.
 	batchCompletionWindow := o.BatchCompletionWindow
 	if batchCompletionWindow == "" {
@@ -411,7 +409,7 @@ func New(name string, opts ...Option) *Model {
 		name:                  name,
 		baseURL:               o.BaseURL,
 		apiKey:                o.APIKey,
-		channelBufferSize:     channelBufferSize,
+		channelBufferSize:     o.ChannelBufferSize,
 		chatRequestCallback:   o.ChatRequestCallback,
 		chatResponseCallback:  o.ChatResponseCallback,
 		chatChunkCallback:     o.ChatChunkCallback,
@@ -466,9 +464,10 @@ func (m *Model) GenerateContent(
 		}
 	}
 
-	// Set optional parameters if provided.
+	// MaxTokens is deprecated and not compatible with o-series models.
+	// Use MaxCompletionTokens instead.
 	if request.MaxTokens != nil {
-		chatRequest.MaxTokens = openai.Int(int64(*request.MaxTokens)) // Convert to int64
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
@@ -1018,10 +1017,17 @@ func (m *Model) processAccumulatedToolCalls(
 			}
 		}
 
+		// Some providers (e.g., gpt-5-nano) may omit the tool_call ID.
+		// Synthesize a stable ID from the index to ensure proper pairing.
+		synthesizedID := toolCall.ID
+		if synthesizedID == "" {
+			synthesizedID = fmt.Sprintf("auto_call_%d", originalIndex)
+		}
+
 		accumulatedToolCalls = append(accumulatedToolCalls, model.ToolCall{
 			Index: func() *int { idx := originalIndex; return &idx }(),
-			ID:    toolCall.ID,
-			Type:  functionToolType, // openapi only supports a function type for now.
+			ID:    synthesizedID,
+			Type:  functionToolType, // OpenAI supports function tools for now.
 			Function: model.FunctionDefinitionParam{
 				Name:      toolCall.Function.Name,
 				Arguments: []byte(toolCall.Function.Arguments),
@@ -1146,8 +1152,13 @@ func (m *Model) handleNonStreamingResponse(
 
 			response.Choices[i].Message.ToolCalls = make([]model.ToolCall, len(choice.Message.ToolCalls))
 			for j, toolCall := range choice.Message.ToolCalls {
+				synthesizedID := toolCall.ID
+				if synthesizedID == "" {
+					// Synthesize ID for providers that omit it (e.g., gpt-5-nano).
+					synthesizedID = fmt.Sprintf("auto_call_%d", j)
+				}
 				response.Choices[i].Message.ToolCalls[j] = model.ToolCall{
-					ID:   toolCall.ID,
+					ID:   synthesizedID,
 					Type: string(toolCall.Type),
 					Function: model.FunctionDefinitionParam{
 						Name:      toolCall.Function.Name,
