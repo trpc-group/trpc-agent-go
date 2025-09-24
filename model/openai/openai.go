@@ -191,6 +191,9 @@ type Model struct {
 	batchCompletionWindow openai.BatchNewParamsCompletionWindow
 	batchMetadata         map[string]string
 	batchBaseURL          string
+	tokenCounter          model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategy     model.TailoringStrategy // Tailoring strategy for token tailoring.
+	maxTokens             int                     // Max tokens for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -241,6 +244,12 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// TokenCounter count tokens for token tailoring.
+	TokenCounter model.TokenCounter
+	// TailoringStrategy defines the strategy for token tailoring.
+	TailoringStrategy model.TailoringStrategy
+	// MaxTokens is the max tokens for token tailoring.
+	MaxTokens int
 }
 
 // Option is a function that configures an OpenAI model.
@@ -374,6 +383,16 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
+// WithTokenTailoring enables automatic token tailoring inside the OpenAI model.
+// It will reduce request messages before sending when they exceed maxTokens.
+func WithTokenTailoring(counter model.TokenCounter, strategy model.TailoringStrategy, maxTokens int) Option {
+	return func(opts *options) {
+		opts.TokenCounter = counter
+		opts.TailoringStrategy = strategy
+		opts.MaxTokens = maxTokens
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -419,6 +438,9 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow: batchCompletionWindow,
 		batchMetadata:         o.BatchMetadata,
 		batchBaseURL:          o.BatchBaseURL,
+		tokenCounter:          o.TokenCounter,
+		tailoringStrategy:     o.TailoringStrategy,
+		maxTokens:             o.MaxTokens,
 	}
 }
 
@@ -436,6 +458,15 @@ func (m *Model) GenerateContent(
 ) (<-chan *model.Response, error) {
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
+	}
+
+	// Apply token tailoring best-effort if configured.
+	if m.tokenCounter != nil && m.tailoringStrategy != nil && m.maxTokens > 0 && len(request.Messages) > 0 {
+		if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxTokens); err != nil {
+			log.Warn("token tailoring failed in openai.Model", err)
+		} else {
+			request.Messages = tailored
+		}
 	}
 
 	responseChan := make(chan *model.Response, m.channelBufferSize)

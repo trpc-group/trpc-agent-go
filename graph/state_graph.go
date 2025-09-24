@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -388,6 +389,15 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 	}
 }
 
+// WithTokenTailoring configures token tailoring for the LLM node.
+func WithTokenTailoring(maxTokens int, tokenCounter model.TokenCounter, strategy model.TailoringStrategy) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.maxTokens = maxTokens
+		runner.tokenCounter = tokenCounter
+		runner.tailoringStrategy = strategy
+	}
+}
+
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(
@@ -423,6 +433,10 @@ type llmRunner struct {
 	instruction string
 	tools       map[string]tool.Tool
 	nodeID      string
+	// Token tailoring configuration.
+	tokenCounter      model.TokenCounter
+	tailoringStrategy model.TailoringStrategy
+	maxTokens         int
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -536,6 +550,15 @@ func (r *llmRunner) executeModel(
 	messages []model.Message,
 	span oteltrace.Span,
 ) (any, error) {
+	// Apply token tailoring before building request if configured.
+	if r.tokenCounter != nil && r.tailoringStrategy != nil && r.maxTokens > 0 {
+		if tailored, err := r.tailoringStrategy.TailorMessages(ctx,
+			messages, r.maxTokens); err != nil {
+			log.Warn("token tailoring failed", err)
+		} else {
+			messages = tailored
+		}
+	}
 	request := &model.Request{
 		Messages: messages,
 		Tools:    r.tools,
