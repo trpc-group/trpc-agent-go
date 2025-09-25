@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -221,4 +222,101 @@ func TestAddToolsAndAgentNode_Types(t *testing.T) {
 	sg.AddAgentNode("agent")
 	require.Equal(t, NodeTypeTool, sg.graph.nodes["tools"].Type)
 	require.Equal(t, NodeTypeAgent, sg.graph.nodes["agent"].Type)
+}
+
+func TestLLMNode_PlaceholdersInjected_FromSessionState(t *testing.T) {
+	schema := MessagesStateSchema()
+	cm := &captureModel{}
+	sg := NewStateGraph(schema)
+	instr := "Hello {research_topics}. {user:topics?} - {app:banner?}"
+	sg.AddLLMNode("llm", cm, instr, nil)
+
+	// Build a minimal exec context and session with state for placeholder injection.
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-ph", EventChan: ch}
+	sess := &session.Session{ID: "s1", State: session.StateMap{
+		"research_topics": []byte("AI"),
+		"user:topics":     []byte("DL"),
+		"app:banner":      []byte("Banner"),
+	}}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "llm",
+		StateKeySession:       sess,
+		StateKeyUserInput:     "ask",
+	}
+
+	n := sg.graph.nodes["llm"]
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	// Verify request has system message with injected content.
+	require.NotNil(t, cm.lastReq)
+	require.GreaterOrEqual(t, len(cm.lastReq.Messages), 1)
+	sys := cm.lastReq.Messages[0]
+	require.Equal(t, model.RoleSystem, sys.Role)
+	require.Contains(t, sys.Content, "AI")
+	require.Contains(t, sys.Content, "DL")
+	require.Contains(t, sys.Content, "Banner")
+	require.NotContains(t, sys.Content, "{research_topics}")
+	require.NotContains(t, sys.Content, "{user:topics}")
+	require.NotContains(t, sys.Content, "{app:banner}")
+
+	// Drain model events and verify model input uses injected instruction.
+	var inputs []string
+	for {
+		select {
+		case e := <-ch:
+			if e != nil && e.StateDelta != nil {
+				if b, ok := e.StateDelta[MetadataKeyModel]; ok {
+					var meta ModelExecutionMetadata
+					_ = json.Unmarshal(b, &meta)
+					if meta.Input != "" {
+						inputs = append(inputs, meta.Input)
+					}
+				}
+			}
+		default:
+			goto DONE
+		}
+	}
+DONE:
+	require.NotEmpty(t, inputs)
+	found := false
+	for _, in := range inputs {
+		if in == "Hello AI. DL - Banner\n\nask" || in == "Hello AI. DL - Banner" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "model input should contain injected instruction: %v", inputs)
+}
+
+func TestLLMNode_PlaceholdersOptionalMissing(t *testing.T) {
+	schema := MessagesStateSchema()
+	cm := &captureModel{}
+	sg := NewStateGraph(schema)
+	instr := "Show {research_topics} {user:topics?} {app:banner?}"
+	sg.AddLLMNode("llm", cm, instr, nil)
+
+	ch := make(chan *event.Event, 4)
+	exec := &ExecutionContext{InvocationID: "inv-ph2", EventChan: ch}
+	// Only provide research_topics; optional prefixed keys are omitted.
+	sess := &session.Session{ID: "s2", State: session.StateMap{
+		"research_topics": []byte("AI"),
+	}}
+	state := State{StateKeyExecContext: exec, StateKeyCurrentNodeID: "llm", StateKeySession: sess}
+
+	n := sg.graph.nodes["llm"]
+	_, err := n.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	require.NotNil(t, cm.lastReq)
+	require.GreaterOrEqual(t, len(cm.lastReq.Messages), 1)
+	sys := cm.lastReq.Messages[0]
+	require.Equal(t, model.RoleSystem, sys.Role)
+	// research_topics is injected; optional ones are blanked out (no braces remain)
+	require.Contains(t, sys.Content, "AI")
+	require.NotContains(t, sys.Content, "{user:topics?")
+	require.NotContains(t, sys.Content, "{app:banner?")
 }
