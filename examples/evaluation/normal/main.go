@@ -29,14 +29,14 @@ import (
 
 func main() {
 	ctx := context.Background()
-	scripted := newScriptedAgent()
+	agent := newMockAgent()
 	evalSetManager := evalsetinmemory.New()
 	metricManager := metricinmemory.New()
 	const evalSetID = "demo_tool_evalset"
-	if _, err := evalSetManager.Create(ctx, scripted.Info().Name, evalSetID); err != nil {
+	if _, err := evalSetManager.Create(ctx, agent.Info().Name, evalSetID); err != nil {
 		log.Fatalf("create eval set: %v", err)
 	}
-	if err := evalSetManager.AddCase(ctx, scripted.Info().Name, evalSetID, buildDemoEvalCase(scripted.Info().Name)); err != nil {
+	if err := evalSetManager.AddCase(ctx, agent.Info().Name, evalSetID, buildDemoEvalCase(agent.Info().Name)); err != nil {
 		log.Fatalf("add eval case: %v", err)
 	}
 	metrics := []*metric.EvalMetric{
@@ -45,12 +45,12 @@ func main() {
 			Threshold:  1.0,
 		},
 	}
-	if err := metricManager.Save(ctx, scripted.Info().Name, evalSetID, metrics); err != nil {
+	if err := metricManager.Save(ctx, agent.Info().Name, evalSetID, metrics); err != nil {
 		log.Fatalf("save metrics: %v", err)
 	}
 
 	evaluator, err := evaluation.NewAgentEvaluator(
-		scripted,
+		agent,
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 	)
@@ -79,12 +79,12 @@ func main() {
 	}
 }
 
-type scriptedAgent struct {
+type mockAgent struct {
 	info   agent.Info
-	script map[string]scriptStep
+	script map[string]mockStep
 }
 
-type scriptStep struct {
+type mockStep struct {
 	final string
 	tool  *toolCallSpec
 }
@@ -100,27 +100,27 @@ type scenario struct {
 	tool   *toolCallSpec
 }
 
-func newScriptedAgent() *scriptedAgent {
-	steps := make(map[string]scriptStep)
+func newMockAgent() *mockAgent {
+	steps := make(map[string]mockStep)
 	for _, scene := range demoScenarios() {
-		steps[scene.prompt] = scriptStep{final: scene.final, tool: scene.tool}
+		steps[scene.prompt] = mockStep{final: scene.final, tool: scene.tool}
 	}
-	return &scriptedAgent{
+	return &mockAgent{
 		info: agent.Info{
 			Name:        "demo-eval-agent",
-			Description: "Scripted agent that mirrors expected evaluation outputs",
+			Description: "agent agent that mirrors expected evaluation outputs",
 		},
 		script: steps,
 	}
 }
 
-func (a *scriptedAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+func (a *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	if invocation == nil {
 		return nil, fmt.Errorf("invocation is nil")
 	}
 	step, ok := a.script[invocation.Message.Content]
 	if !ok {
-		return nil, fmt.Errorf("no scripted response for %q", invocation.Message.Content)
+		return nil, fmt.Errorf("no agent response for %q", invocation.Message.Content)
 	}
 	ch := make(chan *event.Event, 2)
 	go func() {
@@ -181,10 +181,10 @@ func (a *scriptedAgent) Run(ctx context.Context, invocation *agent.Invocation) (
 	return ch, nil
 }
 
-func (a *scriptedAgent) Tools() []tool.Tool              { return nil }
-func (a *scriptedAgent) Info() agent.Info                { return a.info }
-func (a *scriptedAgent) SubAgents() []agent.Agent        { return nil }
-func (a *scriptedAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *mockAgent) Tools() []tool.Tool              { return nil }
+func (a *mockAgent) Info() agent.Info                { return a.info }
+func (a *mockAgent) SubAgents() []agent.Agent        { return nil }
+func (a *mockAgent) FindSubAgent(string) agent.Agent { return nil }
 
 func demoScenarios() []scenario {
 	return []scenario{
