@@ -9,12 +9,13 @@ nav:
   - Overview: index.md
   - Components:
       - Agent:
-        - Agent: agent.md
-        - Multi Agent: multiagent.md
-        - Graph Agent: graph.md
-        - Custom Agent: custom-agent.md
+          - Agent: agent.md
+          - Multi Agent: multiagent.md
+          - Graph Agent: graph.md
+          - Custom Agent: custom-agent.md
       - Runner: runner.md
       - Model: model.md
+      - Callbacks: callbacks.md
       - Memory: memory.md
       - Artifact: artifact.md
       - Tool: tool.md
@@ -43,13 +44,14 @@ plugins:
           nav:
             - 概览: index.md
             - 组件:
-                - Agent: 
-                  - Agent: agent.md
-                  - Multi Agent: multiagent.md
-                  - Graph Agent: graph.md
-                  - 自定义 Agent: custom-agent.md
+                - Agent:
+                    - Agent: agent.md
+                    - Multi Agent: multiagent.md
+                    - Graph Agent: graph.md
+                    - 自定义 Agent: custom-agent.md
                 - Runner: runner.md
                 - Model: model.md
+                - Callbacks: callbacks.md
                 - Memory: memory.md
                 - Artifact: artifact.md
                 - Tool: tool.md
