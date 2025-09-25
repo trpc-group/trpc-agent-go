@@ -20,20 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
-// groupEventsByFilterKey groups events by filter key with backward
-// compatibility. If the event version is not current, fall back to Branch.
-// The empty key is a valid group key.
-func groupEventsByFilterKey(evs []event.Event) map[string][]event.Event {
-	m := make(map[string][]event.Event)
-	for _, e := range evs {
-		key := e.FilterKey
-		if e.Version != event.CurrentVersion {
-			key = e.Branch
-		}
-		m[key] = append(m[key], e)
-	}
-	return m
-}
+// authorSystem is the system author.
+const authorSystem = "system"
 
 // computeDeltaSince returns events that occurred strictly after the given
 // time. When since is zero, all events are returned.
@@ -58,7 +46,7 @@ func prependPrevSummary(prevSummary string, delta []event.Event, now time.Time) 
 	}
 	out := make([]event.Event, 0, len(delta)+1)
 	out = append(out, event.Event{
-		Author:    "system",
+		Author:    authorSystem,
 		Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: prevSummary}}}},
 		Timestamp: now,
 	})
@@ -66,10 +54,11 @@ func prependPrevSummary(prevSummary string, delta []event.Event, now time.Time) 
 	return out
 }
 
-// buildBranchSession builds a temporary session containing branch events.
-func buildBranchSession(base *session.Session, branch string, evs []event.Event) *session.Session {
+// buildFilterSession builds a temporary session containing filterKey events.
+// When filterKey=="", it represents the full-session input.
+func buildFilterSession(base *session.Session, filterKey string, evs []event.Event) *session.Session {
 	return &session.Session{
-		ID:        base.ID + ":" + branch,
+		ID:        base.ID + ":" + filterKey,
 		AppName:   base.AppName,
 		UserID:    base.UserID,
 		State:     nil,
@@ -79,11 +68,10 @@ func buildBranchSession(base *session.Session, branch string, evs []event.Event)
 	}
 }
 
-// SummarizeAndPersist performs per-branch delta summarization using the given
-// summarizer and writes results via the provided write callback.
-// - When filterKey is non-empty, summarizes the filtered branch only.
-// - When filterKey is empty, summarizes all branches grouped by filter key.
-// The getPrev callback returns previous summary text and its UpdatedAt time.
+// SummarizeAndPersist performs per-filterKey delta summarization using the given
+// summarizer and writes results to base.Summaries.
+// - When filterKey is non-empty, summarizes only that filter's events.
+// - When filterKey is empty, summarizes all events as a single full-session summary.
 func SummarizeAndPersist(
 	ctx context.Context,
 	m summary.SessionSummarizer,
@@ -112,7 +100,7 @@ func SummarizeAndPersist(
 			return false, nil
 		}
 		input := prependPrevSummary(prevText, delta, time.Now())
-		tmp := buildBranchSession(base, key, input)
+		tmp := buildFilterSession(base, key, input)
 		if !force && !m.ShouldSummarize(tmp) {
 			return false, nil
 		}

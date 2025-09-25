@@ -700,8 +700,9 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	return nil
 }
 
-// writeSummaryUnderLock writes a summary for a branch under app lock and refreshes TTL.
-func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, branch string, text string) error {
+// writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
+// When filterKey is "", it represents the full-session summary.
+func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, text string) error {
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	swt, ok := app.sessions[key.UserID][key.SessionID]
@@ -715,7 +716,7 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	if cur.Summaries == nil {
 		cur.Summaries = make(map[string]*session.Summary)
 	}
-	cur.Summaries[branch] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	cur.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
 	cur.UpdatedAt = time.Now()
 	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)

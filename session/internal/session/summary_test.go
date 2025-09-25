@@ -31,10 +31,10 @@ func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (
 }
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
-func makeEvent(content string, ts time.Time, branch string) event.Event {
+func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
-		Branch:    branch,
-		FilterKey: branch,
+		Branch:    filterKey,
+		FilterKey: filterKey,
 		Timestamp: ts,
 		Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: content}}}},
 	}

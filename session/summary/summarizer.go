@@ -44,8 +44,6 @@ const (
 		"</conversation>\n\n" +
 		"Summary:"
 
-	// authorSystem is the system author.
-	authorSystem = "system"
 	// authorUser is the user author.
 	authorUser = "user"
 	// authorUnknown is the unknown author.

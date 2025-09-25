@@ -848,8 +848,8 @@ func applyOptions(opts ...session.Option) *session.Options {
 	return opt
 }
 
-// CreateSessionSummary generates a summary for the session and persists it on the
-// session state as a structured field. It performs per-branch delta summarization.
+// CreateSessionSummary generates a summary for the session (async-ready).
+// It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 	if s.opts.summarizer == nil {
 		return nil
@@ -863,16 +863,8 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	// Load previous summaries from separate hash.
+	// Define target redis key for summaries persistence.
 	sumKey := getSessionSummaryKey(key)
-	prevBytes, err := s.redisClient.HGet(ctx, sumKey, key.SessionID).Bytes()
-	var prev map[string]*session.Summary
-	if err == nil && len(prevBytes) > 0 {
-		_ = json.Unmarshal(prevBytes, &prev)
-	}
-	if prev == nil {
-		prev = make(map[string]*session.Summary)
-	}
 
 	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
@@ -882,8 +874,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 	// Persist: read back the latest summaries map from memory (updated in place) and write to Redis.
-	prev = sess.Summaries
-	bytes, jerr := json.Marshal(prev)
+	bytes, jerr := json.Marshal(sess.Summaries)
 	if jerr != nil {
 		return fmt.Errorf("marshal summaries failed: %w", jerr)
 	}
