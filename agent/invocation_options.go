@@ -32,7 +32,9 @@ func WithInvocationID(id string) InvocationOptions {
 func WithInvocationAgent(agent Agent) InvocationOptions {
 	return func(inv *Invocation) {
 		inv.Agent = agent
-		inv.AgentName = agent.Info().Name
+		if agent != nil {
+			inv.AgentName = agent.Info().Name
+		}
 	}
 }
 

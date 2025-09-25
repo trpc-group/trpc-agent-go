@@ -223,10 +223,14 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		opt(newInv)
 	}
 
-	if inv.Branch != "" && newInv.AgentName != "" {
+	if newInv.Branch != "" {
+		// seted by WithInvocationBranch
+	} else if inv.Branch != "" && newInv.AgentName != "" {
 		newInv.Branch = inv.Branch + BranchDelimiter + newInv.AgentName
 	} else if newInv.AgentName != "" {
 		newInv.Branch = newInv.AgentName
+	} else {
+		newInv.Branch = inv.Branch
 	}
 
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
