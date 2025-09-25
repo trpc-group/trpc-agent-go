@@ -72,6 +72,49 @@ llmAgent := llmagent.New(
 )
 ```
 
+### Placeholder Variables (Session State Injection)
+
+LLMAgent automatically injects session state into `Instruction` and the optional `SystemPrompt` via placeholder variables. Supported patterns:
+
+- `{key}`: Replace with the string value of `session.State["key"]`
+- `{key?}`: Optional; if missing, replaced with an empty string
+- `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)
+
+Notes:
+
+- If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
+- Values are read from `invocation.Session.State` (Runner + SessionService set/merge this automatically)
+
+Example:
+
+```go
+llm := llmagent.New(
+  "research-agent",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithInstruction(
+    "You are a research assistant. Focus: {research_topics}. " +
+    "User interests: {user:topics?}. App banner: {app:banner?}.",
+  ),
+)
+
+// Initialize session state (Runner + SessionService)
+_ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
+  "topics": []byte("quantum computing, cryptography"),
+})
+_ = sessionService.UpdateAppState(ctx, app, session.StateMap{
+  "banner": []byte("Research Mode"),
+})
+// Unprefixed keys live directly in session.State
+_, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user, SessionID: sid}, session.StateMap{
+  "research_topics": []byte("AI, ML, DL"),
+})
+```
+
+See also:
+
+- Examples: `examples/placeholder`, `examples/outputkey`
+- Session API: `docs/mkdocs/en/session.md`
+
 ### Using Runner to Execute Agent
 
 Use Runner to execute the Agent, which is the recommended usage:

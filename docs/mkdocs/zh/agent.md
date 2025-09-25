@@ -72,6 +72,49 @@ llmAgent := llmagent.New(
 )
 ```
 
+### 占位符变量（会话状态注入）
+
+LLMAgent 会自动在 `Instruction` 和可选的 `SystemPrompt` 中注入会话状态。支持的占位符语法：
+
+- `{key}`：替换为 `session.State["key"]` 的字符串值
+- `{key?}`：可选；如果不存在，替换为空字符串
+- `{user:subkey}` / `{app:subkey}` / `{temp:subkey}`：访问用户/应用/临时命名空间（SessionService 会把 app/user 作用域的状态合并进 session，并带上前缀）
+
+注意：
+
+- 对于非可选的 `{key}`，若找不到则保留原样（便于 LLM 感知缺失上下文）
+- 值读取自 `invocation.Session.State`（Runner + SessionService 会自动设置/合并）
+
+示例：
+
+```go
+llm := llmagent.New(
+  "research-agent",
+  llmagent.WithModel(modelInstance),
+  llmagent.WithInstruction(
+    "You are a research assistant. Focus: {research_topics}. " +
+    "User interests: {user:topics?}. App banner: {app:banner?}.",
+  ),
+)
+
+// 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
+_ = sessionService.UpdateUserState(ctx, session.UserKey{AppName: app, UserID: user}, session.StateMap{
+  "topics": []byte("quantum computing, cryptography"),
+})
+_ = sessionService.UpdateAppState(ctx, app, session.StateMap{
+  "banner": []byte("Research Mode"),
+})
+// 无前缀键直接存到 session.State
+_, _ = sessionService.CreateSession(ctx, session.Key{AppName: app, UserID: user, SessionID: sid}, session.StateMap{
+  "research_topics": []byte("AI, ML, DL"),
+})
+```
+
+进一步阅读：
+
+- 示例：`examples/placeholder`、`examples/outputkey`
+- Session API：`docs/mkdocs/zh/session.md`
+
 ### 使用 Runner 执行 Agent
 
 使用 Runner 来执行 Agent，这是推荐的使用方式：

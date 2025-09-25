@@ -440,6 +440,33 @@ stateGraph.AddLLMNode("analyze", model,
     节点执行，再回到 LLM 节点时，因为 `user_input` 已被清空，LLM 将走
     “Messages only” 分支，以历史中的 tool 响应继续推理。
 
+#### LLM 指令中的占位符
+
+LLM 节点的 `instruction` 支持占位符注入（与 LLMAgent 规则一致）：
+
+- `{key}` → 替换为 `session.State["key"]`
+- `{key?}` → 可选，缺失时替换为空
+- `{user:subkey}`、`{app:subkey}`、`{temp:subkey}` → 访问用户/应用/临时命名空间（SessionService 会将 app/user 作用域合并到 session，并带上前缀）
+
+说明：
+
+- GraphAgent 会把当前 `*session.Session` 写入图状态的 `StateKeySession`，LLM 节点据此读取注入值
+- 无前缀键（如 `research_topics`）需要直接存在于 `session.State`
+
+示例：
+
+```go
+mdl := openai.New(modelName)
+stateGraph.AddLLMNode(
+  "research",
+  mdl,
+  "You are a research assistant. Focus: {research_topics}. User: {user:topics?}. App: {app:banner?}.",
+  nil,
+)
+```
+
+可参考可运行示例：`examples/graph/placeholder`。
+
 #### 通过 Reducer 与 MessageOp 实现的原子更新
 
 Graph 包的消息状态支持 `MessageOp` 补丁操作（如 `ReplaceLastUser`、
