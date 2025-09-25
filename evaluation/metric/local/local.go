@@ -25,7 +25,7 @@ import (
 type manager struct {
 	mu       sync.RWMutex
 	baseDir  string
-	pathFunc metric.PathFunc
+	pathFunc metric.PathBuilder
 }
 
 // New creates a filesystem-backed metric manager.
@@ -33,7 +33,7 @@ func New(opts ...metric.Option) metric.Manager {
 	options := metric.NewOptions(opts...)
 	return &manager{
 		baseDir:  options.BaseDir,
-		pathFunc: options.PathFunc,
+		pathFunc: options.PathBuilder,
 	}
 }
 

@@ -7,6 +7,7 @@
 //
 //
 
+// Package registry manages the registration and retrieval of evaluators.
 package registry
 
 import (

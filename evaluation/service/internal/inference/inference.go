@@ -73,7 +73,7 @@ func inferencePerInvocation(
 			continue
 		}
 		if event.Error != nil {
-			return nil, fmt.Errorf("event error: %w", event.Error)
+			return nil, fmt.Errorf("event: %v", event.Error)
 		}
 		// Capture the invocation ID.
 		if invocationID == "" && event.InvocationID != "" {

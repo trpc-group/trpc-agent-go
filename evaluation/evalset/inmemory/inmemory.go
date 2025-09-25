@@ -32,7 +32,7 @@ type manager struct {
 	evalCases map[string]map[string]map[string]*evalset.EvalCase
 }
 
-// NewManager creates a new in-memory evaluation set manager.
+// New creates a new in-memory evaluation set manager.
 func New() evalset.Manager {
 	return &manager{
 		evalSets:  make(map[string]map[string]*evalset.EvalSet),

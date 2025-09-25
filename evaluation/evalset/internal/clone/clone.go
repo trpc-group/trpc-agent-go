@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package clone provides functions to clone evaluation sets and cases.
 package clone
 
 import (
@@ -7,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
+// CloneEvalCase clones an evaluation case.
 func CloneEvalCase(evalCase *evalset.EvalCase) (*evalset.EvalCase, error) {
 	if evalCase == nil {
 		return nil, errors.New("eval case is nil")
@@ -22,6 +33,7 @@ func CloneEvalCase(evalCase *evalset.EvalCase) (*evalset.EvalCase, error) {
 	return &clonedEvalCase, nil
 }
 
+// CloneEvalSet clones an evaluation set.
 func CloneEvalSet(evalSet *evalset.EvalSet) (*evalset.EvalSet, error) {
 	if evalSet == nil {
 		return nil, errors.New("eval set is nil")
