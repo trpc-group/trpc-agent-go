@@ -7,6 +7,7 @@
 //
 //
 
+// Package local provides a local file storage implementation for metrics.
 package local
 
 import (

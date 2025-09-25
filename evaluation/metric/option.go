@@ -53,7 +53,7 @@ func WithBaseDir(dir string) Option {
 }
 
 // WithPathBuilder overrides how metric file paths are generated.
-func WithPathFunc(p PathBuilder) Option {
+func WithPathBuilder(p PathBuilder) Option {
 	return func(o *Options) {
 		o.PathBuilder = p
 	}

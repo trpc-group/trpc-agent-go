@@ -7,6 +7,7 @@
 //
 //
 
+// Package inmemory provides an in-memory metric manager.
 package inmemory
 
 import (

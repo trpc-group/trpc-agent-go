@@ -7,7 +7,7 @@
 //
 //
 
-// Package local provides a local file storage implementation for evaluation results.
+// Package inmemory provides an in-memory storage implementation for evaluation results.
 package inmemory
 
 import (
@@ -16,28 +16,25 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 )
 
-// Manager implements the evalresult.Manager interface using local file storage.
+// manager implements evalresult.Manager backed by process memory.
 type manager struct {
-	baseDir string
-	mu      sync.Mutex
+	mu      sync.RWMutex
+	results map[string]*evalresult.EvalSetResult
 }
 
-// NewManager creates a new local file evaluation result manager.
-// Use functional options (see option.go) to override the default directory.
-func NewManager(opt ...evalresult.Option) evalresult.Manager {
-	opts := evalresult.NewOptions(opt...)
-	m := &manager{baseDir: opts.BaseDir}
-	return m
+// NewManager creates a new in-memory evaluation result manager.
+func NewManager() evalresult.Manager {
+	return &manager{
+		results: make(map[string]*evalresult.EvalSetResult),
+	}
 }
 
-// Save stores an evaluation result to local file.
+// Save stores a deep-copied evaluation result keyed by EvalSetResultID.
 func (m *manager) Save(ctx context.Context, result *evalresult.EvalSetResult) error {
 	_ = ctx
 	if result == nil {
@@ -46,85 +43,64 @@ func (m *manager) Save(ctx context.Context, result *evalresult.EvalSetResult) er
 	if result.EvalSetResultID == "" {
 		return errors.New("result id is empty")
 	}
+
+	cloned, err := cloneEvalSetResult(result)
+	if err != nil {
+		return fmt.Errorf("clone result: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := os.MkdirAll(m.baseDir, 0o755); err != nil {
-		return err
-	}
-	path := m.resultPath(result.EvalSetResultID)
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(result); err != nil {
-		f.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
+	m.results[result.EvalSetResultID] = cloned
+	return nil
 }
 
-// Get retrieves an evaluation result by evalSetResultID from local file.
+// Get retrieves a copied evaluation result by its identifier.
 func (m *manager) Get(ctx context.Context, evalSetResultID string) (*evalresult.EvalSetResult, error) {
 	_ = ctx
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.load(evalSetResultID)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	stored, ok := m.results[evalSetResultID]
+	if !ok {
+		return nil, fmt.Errorf("%w: eval set result %s", os.ErrNotExist, evalSetResultID)
+	}
+	cloned, err := cloneEvalSetResult(stored)
+	if err != nil {
+		return nil, fmt.Errorf("clone result: %w", err)
+	}
+	return cloned, nil
 }
 
-// List returns all available evaluation results from local files.
+// List returns copies of all stored evaluation results.
 func (m *manager) List(ctx context.Context) ([]*evalresult.EvalSetResult, error) {
 	_ = ctx
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	entries, err := os.ReadDir(m.baseDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []*evalresult.EvalSetResult{}, nil
-		}
-		return nil, err
-	}
-	var results []*evalresult.EvalSetResult
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".evalset_result.json") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".evalset_result.json")
-		res, err := m.load(id)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	results := make([]*evalresult.EvalSetResult, 0, len(m.results))
+	for _, stored := range m.results {
+		cloned, err := cloneEvalSetResult(stored)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("clone result: %w", err)
 		}
-		results = append(results, res)
+		results = append(results, cloned)
 	}
 	return results, nil
 }
 
-func (m *manager) resultPath(evalSetResultID string) string {
-	filename := fmt.Sprintf("%s.evalset_result.json", evalSetResultID)
-	return filepath.Join(m.baseDir, filename)
-}
-
-func (m *manager) load(evalSetResultID string) (*evalresult.EvalSetResult, error) {
-	path := m.resultPath(evalSetResultID)
-	f, err := os.Open(path)
+// cloneEvalSetResult performs a deep copy using JSON round-tripping to avoid shared references.
+func cloneEvalSetResult(result *evalresult.EvalSetResult) (*evalresult.EvalSetResult, error) {
+	if result == nil {
+		return nil, errors.New("result is nil")
+	}
+	data, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	var res evalresult.EvalSetResult
-	if err := json.NewDecoder(f).Decode(&res); err != nil {
+	var cloned evalresult.EvalSetResult
+	if err := json.Unmarshal(data, &cloned); err != nil {
 		return nil, err
 	}
-	return &res, nil
+	return &cloned, nil
 }

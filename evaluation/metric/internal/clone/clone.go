@@ -7,6 +7,7 @@
 //
 //
 
+// Package clone provides functions to clone metrics.
 package clone
 
 import "trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
