@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -444,8 +445,9 @@ func (r *llmRunner) executeOneShotStage(
 	oneShotMsgs []model.Message,
 	span oteltrace.Span,
 ) (any, error) {
-	used := ensureSystemHead(oneShotMsgs, r.instruction)
-	result, err := r.executeModel(ctx, state, used, span)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(oneShotMsgs, instr)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -476,7 +478,8 @@ func (r *llmRunner) executeUserInputStage(
 			history = msgs
 		}
 	}
-	used := ensureSystemHead(history, r.instruction)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(history, instr)
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
@@ -487,7 +490,7 @@ func (r *llmRunner) executeUserInputStage(
 		used = append(used, model.NewUserMessage(userInput))
 		ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
 	}
-	result, err := r.executeModel(ctx, state, used, span)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -512,8 +515,9 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 			history = msgs
 		}
 	}
-	used := ensureSystemHead(history, r.instruction)
-	result, err := r.executeModel(ctx, state, used, span)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(history, instr)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -535,6 +539,7 @@ func (r *llmRunner) executeModel(
 	state State,
 	messages []model.Message,
 	span oteltrace.Span,
+	instructionUsed string,
 ) (any, error) {
 	request := &model.Request{
 		Messages: messages,
@@ -553,7 +558,7 @@ func (r *llmRunner) executeModel(
 	}
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
-	modelInput := extractModelInput(state, r.instruction)
+	modelInput := extractModelInput(state, instructionUsed)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
 	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
@@ -576,6 +581,27 @@ func (r *llmRunner) executeModel(
 	}
 	emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
 	return result, err
+}
+
+// processInstruction resolves placeholder variables in the instruction using
+// the session state present in the graph state (if any). It supports keys like
+// {user:...}, {app:...}, and optional suffix {?} consistent with llmagent.
+func (r *llmRunner) processInstruction(state State) string {
+	instr := r.instruction
+	if instr == "" {
+		return instr
+	}
+	// Extract session from graph state.
+	if sessVal, ok := state[StateKeySession]; ok {
+		if sess, ok := sessVal.(*session.Session); ok && sess != nil {
+			// Build a minimal invocation carrying only the session for injection.
+			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+			if injected, err := stateinject.InjectSessionState(instr, inv); err == nil {
+				return injected
+			}
+		}
+	}
+	return instr
 }
 
 // extractAssistantMessage extracts the assistant message from model result.
