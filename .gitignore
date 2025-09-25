@@ -5,6 +5,7 @@
 
 .vscode/
 .idea/
+node_modules/
 *.out
 *.log
 coverage.out
