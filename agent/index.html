@@ -635,6 +635,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#placeholder-variables-session-state-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Placeholder Variables (Session State Injection)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#using-runner-to-execute-agent" class="md-nav__link">
     <span class="md-ellipsis">
       Using Runner to Execute Agent
@@ -1225,6 +1234,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#placeholder-variables-session-state-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Placeholder Variables (Session State Injection)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#using-runner-to-execute-agent" class="md-nav__link">
     <span class="md-ellipsis">
       Using Runner to Execute Agent
@@ -1442,8 +1460,19 @@
 </span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">genConfig</span><span class="p">),</span><span class="w">                                           </span><span class="c1">// Set generation parameters.</span>
 </span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="using-runner-to-execute-agent">Using Runner to Execute Agent</h3>
-<p>Use Runner to execute the Agent, which is the recommended usage:</p>
+<h3 id="placeholder-variables-session-state-injection">Placeholder Variables (Session State Injection)</h3>
+<p>LLMAgent automatically injects session state into <code>Instruction</code> and the optional <code>SystemPrompt</code> via placeholder variables. Supported patterns:</p>
+<ul>
+<li><code>{key}</code>: Replace with the string value of <code>session.State["key"]</code></li>
+<li><code>{key?}</code>: Optional; if missing, replaced with an empty string</li>
+<li><code>{user:subkey}</code> / <code>{app:subkey}</code> / <code>{temp:subkey}</code>: Use user/app/temp scoped keys (session services merge app/user state into session with these prefixes)</li>
+</ul>
+<p>Notes:</p>
+<ul>
+<li>If a non-optional key is not found, the original <code>{key}</code> is preserved (helps the LLM notice missing context)</li>
+<li>Values are read from <code>invocation.Session.State</code> (Runner + SessionService set/merge this automatically)</li>
+</ul>
+<p>Example:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
@@ -1454,20 +1483,43 @@
 <span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-5-10">10</a></span>
-<span class="normal"><a href="#__codelineno-5-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="c1">// Create Runner.</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmAgent</span><span class="p">)</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="c1">// Send message directly without creating complex Invocation.</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hello! Can you tell me about yourself?&quot;</span><span class="p">)</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to execute Agent: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span>
+<span class="normal"><a href="#__codelineno-5-16">16</a></span>
+<span class="normal"><a href="#__codelineno-5-17">17</a></span>
+<span class="normal"><a href="#__codelineno-5-18">18</a></span>
+<span class="normal"><a href="#__codelineno-5-19">19</a></span>
+<span class="normal"><a href="#__codelineno-5-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="s">&quot;research-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="s">&quot;You are a research assistant. Focus: {research_topics}. &quot;</span><span class="w"> </span><span class="o">+</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="s">&quot;User interests: {user:topics?}. App banner: {app:banner?}.&quot;</span><span class="p">,</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">  </span><span class="p">),</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="p">)</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="c1">// Initialize session state (Runner + SessionService)</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">UpdateUserState</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">UserID</span><span class="p">:</span><span class="w"> </span><span class="nx">user</span><span class="p">},</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">StateMap</span><span class="p">{</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">  </span><span class="s">&quot;topics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;quantum computing, cryptography&quot;</span><span class="p">),</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="p">})</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">UpdateAppState</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">StateMap</span><span class="p">{</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="w">  </span><span class="s">&quot;banner&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;Research Mode&quot;</span><span class="p">),</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="p">})</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="c1">// Unprefixed keys live directly in session.State</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">CreateSession</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Key</span><span class="p">{</span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="nx">app</span><span class="p">,</span><span class="w"> </span><span class="nx">UserID</span><span class="p">:</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">SessionID</span><span class="p">:</span><span class="w"> </span><span class="nx">sid</span><span class="p">},</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">StateMap</span><span class="p">{</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">  </span><span class="s">&quot;research_topics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nb">byte</span><span class="p">(</span><span class="s">&quot;AI, ML, DL&quot;</span><span class="p">),</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="handling-event-stream">Handling Event Stream</h3>
-<p>Receive execution results through the event channel:</p>
+<p>See also:</p>
+<ul>
+<li>Examples: <code>examples/placeholder</code>, <code>examples/outputkey</code></li>
+<li>Session API: <code>docs/mkdocs/en/session.md</code></li>
+</ul>
+<h3 id="using-runner-to-execute-agent">Using Runner to Execute Agent</h3>
+<p>Use Runner to execute the Agent, which is the recommended usage:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
@@ -1478,43 +1530,19 @@
 <span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-6-10">10</a></span>
-<span class="normal"><a href="#__codelineno-6-11">11</a></span>
-<span class="normal"><a href="#__codelineno-6-12">12</a></span>
-<span class="normal"><a href="#__codelineno-6-13">13</a></span>
-<span class="normal"><a href="#__codelineno-6-14">14</a></span>
-<span class="normal"><a href="#__codelineno-6-15">15</a></span>
-<span class="normal"><a href="#__codelineno-6-16">16</a></span>
-<span class="normal"><a href="#__codelineno-6-17">17</a></span>
-<span class="normal"><a href="#__codelineno-6-18">18</a></span>
-<span class="normal"><a href="#__codelineno-6-19">19</a></span>
-<span class="normal"><a href="#__codelineno-6-20">20</a></span>
-<span class="normal"><a href="#__codelineno-6-21">21</a></span>
-<span class="normal"><a href="#__codelineno-6-22">22</a></span>
-<span class="normal"><a href="#__codelineno-6-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;context&quot;</span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
 </span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="c1">// Handle Event.</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="c1">// Check for errors.</span>
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;err: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">        </span><span class="k">continue</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="c1">// Handle content.</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">            </span><span class="c1">// Streaming output.</span>
-</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="w">    </span><span class="c1">// Check if completed.</span>
-</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23"></a><span class="p">}</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="c1">// Create Runner.</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmAgent</span><span class="p">)</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="c1">// Send message directly without creating complex Invocation.</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hello! Can you tell me about yourself?&quot;</span><span class="p">)</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;user-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to execute Agent: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="handling-event-stream_1">Handling Event Stream</h3>
+<h3 id="handling-event-stream">Handling Event Stream</h3>
 <p>Receive execution results through the event channel:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
@@ -1535,41 +1563,35 @@
 <span class="normal"><a href="#__codelineno-7-17">17</a></span>
 <span class="normal"><a href="#__codelineno-7-18">18</a></span>
 <span class="normal"><a href="#__codelineno-7-19">19</a></span>
-<span class="normal"><a href="#__codelineno-7-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="c1">// Handle Event.</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="c1">// Check for errors.</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;err: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">        </span><span class="k">continue</span>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="c1">// Handle content.</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">            </span><span class="c1">// Streaming output.</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">    </span><span class="c1">// Check if completed.</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">        </span><span class="k">break</span>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-7-20">20</a></span>
+<span class="normal"><a href="#__codelineno-7-21">21</a></span>
+<span class="normal"><a href="#__codelineno-7-22">22</a></span>
+<span class="normal"><a href="#__codelineno-7-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="c1">// Handle Event.</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="c1">// Check for errors.</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;err: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="c1">// Handle content.</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">            </span><span class="c1">// Streaming output.</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="c1">// Check if completed.</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The complete code for this example can be found at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a></p>
-<p><strong>Why is Runner recommended?</strong></p>
-<ol>
-<li><strong>Simpler Interface</strong>: No need to create complex Invocation objects</li>
-<li><strong>Integrated Services</strong>: Automatically integrates Session, Memory and other services</li>
-<li><strong>Better Management</strong>: Unified management of Agent execution flow</li>
-<li><strong>Production Ready</strong>: Suitable for production environment use</li>
-</ol>
-<p><strong>💡 Tip:</strong> Want to learn more about Runner's detailed usage and advanced features? Please check <a href="../runner/">Runner</a></p>
-<p><strong>Advanced Usage: Direct Agent Usage</strong></p>
-<p>If you need more fine-grained control, you can also use the Agent interface directly, but this requires creating Invocation objects:</p>
-<h2 id="core-concepts">Core Concepts</h2>
-<h3 id="invocation-advanced-usage">Invocation (Advanced Usage)</h3>
-<p>Invocation is the context object for Agent execution flow, containing all information needed for a single call. <strong>Note: This is advanced usage, we recommend using Runner to simplify operations.</strong></p>
+<h3 id="handling-event-stream_1">Handling Event Stream</h3>
+<p>Receive execution results through the event channel:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
@@ -1586,31 +1608,44 @@
 <span class="normal"><a href="#__codelineno-8-14">14</a></span>
 <span class="normal"><a href="#__codelineno-8-15">15</a></span>
 <span class="normal"><a href="#__codelineno-8-16">16</a></span>
-<span class="normal"><a href="#__codelineno-8-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="c1">// Create Invocation object (advanced usage).</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="nx">invocation</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewInvocation</span><span class="p">(</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithAgentName</span><span class="p">(</span><span class="nx">agent</span><span class="p">),</span><span class="w">                                                                  </span><span class="c1">// Agent.</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationMessage</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hello! Can you tell me about yourself?&quot;</span><span class="p">)),</span><span class="w"> </span><span class="c1">// User message.</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationSession</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span><span class="p">{</span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;session-001&quot;</span><span class="p">}),</span><span class="w">                            </span><span class="c1">// session object.</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationEndInvocation</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span><span class="w">                                                    </span><span class="c1">// Whether to end invocation.</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span><span class="w">                                                    </span><span class="c1">// Model to use.</span>
-</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="p">)</span>
-</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a>
-</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="c1">// Call Agent directly (advanced usage).</span>
-</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">)</span>
-</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to execute Agent: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-8-17">17</a></span>
+<span class="normal"><a href="#__codelineno-8-18">18</a></span>
+<span class="normal"><a href="#__codelineno-8-19">19</a></span>
+<span class="normal"><a href="#__codelineno-8-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="c1">// Handle Event.</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="k">for</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">eventChan</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="c1">// Check for errors.</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;err: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Error</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">        </span><span class="k">continue</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="c1">// Handle content.</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a><span class="w">        </span><span class="nx">choice</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">            </span><span class="c1">// Streaming output.</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="w">            </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">choice</span><span class="p">.</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">)</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="w">    </span><span class="c1">// Check if completed.</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Done</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>When to use direct calls?</strong></p>
-<ul>
-<li>Need complete control over execution flow</li>
-<li>Custom Session and Memory management</li>
-<li>Implement special invocation logic</li>
-<li>Debugging and testing scenarios</li>
-</ul>
+<p>The complete code for this example can be found at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a></p>
+<p><strong>Why is Runner recommended?</strong></p>
+<ol>
+<li><strong>Simpler Interface</strong>: No need to create complex Invocation objects</li>
+<li><strong>Integrated Services</strong>: Automatically integrates Session, Memory and other services</li>
+<li><strong>Better Management</strong>: Unified management of Agent execution flow</li>
+<li><strong>Production Ready</strong>: Suitable for production environment use</li>
+</ol>
+<p><strong>💡 Tip:</strong> Want to learn more about Runner's detailed usage and advanced features? Please check <a href="../runner/">Runner</a></p>
+<p><strong>Advanced Usage: Direct Agent Usage</strong></p>
+<p>If you need more fine-grained control, you can also use the Agent interface directly, but this requires creating Invocation objects:</p>
+<h2 id="core-concepts">Core Concepts</h2>
+<h3 id="invocation-advanced-usage">Invocation (Advanced Usage)</h3>
+<p>Invocation is the context object for Agent execution flow, containing all information needed for a single call. <strong>Note: This is advanced usage, we recommend using Runner to simplify operations.</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
@@ -1627,52 +1662,30 @@
 <span class="normal"><a href="#__codelineno-9-14">14</a></span>
 <span class="normal"><a href="#__codelineno-9-15">15</a></span>
 <span class="normal"><a href="#__codelineno-9-16">16</a></span>
-<span class="normal"><a href="#__codelineno-9-17">17</a></span>
-<span class="normal"><a href="#__codelineno-9-18">18</a></span>
-<span class="normal"><a href="#__codelineno-9-19">19</a></span>
-<span class="normal"><a href="#__codelineno-9-20">20</a></span>
-<span class="normal"><a href="#__codelineno-9-21">21</a></span>
-<span class="normal"><a href="#__codelineno-9-22">22</a></span>
-<span class="normal"><a href="#__codelineno-9-23">23</a></span>
-<span class="normal"><a href="#__codelineno-9-24">24</a></span>
-<span class="normal"><a href="#__codelineno-9-25">25</a></span>
-<span class="normal"><a href="#__codelineno-9-26">26</a></span>
-<span class="normal"><a href="#__codelineno-9-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="c1">// Invocation is the context object for Agent execution flow, containing all information needed for a single call.</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="c1">// Agent specifies the Agent instance to call.</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">Agent</span><span class="w"> </span><span class="nx">Agent</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="c1">// AgentName identifies the name of the Agent instance to call.</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nx">AgentName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="c1">// InvocationID provides a unique identifier for each call.</span>
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for hierarchical event filtering.</span>
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">    </span><span class="c1">// EndInvocation is a flag indicating whether to end the invocation.</span>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="nx">EndInvocation</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="c1">// Session maintains the context state of the conversation.</span>
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">    </span><span class="nx">Session</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="w">    </span><span class="c1">// Model specifies the model instance to use.</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">Model</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span>
-</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="w">    </span><span class="c1">// Message is the specific content sent by the user to the Agent.</span>
-</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a><span class="w">    </span><span class="nx">Message</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span>
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="w">    </span><span class="c1">// RunOptions are option configurations for the Run method.</span>
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="w">    </span><span class="nx">RunOptions</span><span class="w"> </span><span class="nx">RunOptions</span>
-</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21"></a><span class="w">    </span><span class="c1">// TransferInfo supports control transfer between Agents.</span>
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22"></a><span class="w">    </span><span class="nx">TransferInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TransferInfo</span>
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23"></a>
-</span><span id="__span-9-24"><a id="__codelineno-9-24" name="__codelineno-9-24"></a><span class="w">    </span><span class="c1">// notice</span>
-</span><span id="__span-9-25"><a id="__codelineno-9-25" name="__codelineno-9-25"></a><span class="w">    </span><span class="nx">noticeChanMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">chan</span><span class="w"> </span><span class="kt">any</span>
-</span><span id="__span-9-26"><a id="__codelineno-9-26" name="__codelineno-9-26"></a><span class="w">    </span><span class="nx">noticeMu</span><span class="w">      </span><span class="o">*</span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
-</span><span id="__span-9-27"><a id="__codelineno-9-27" name="__codelineno-9-27"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-9-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="c1">// Create Invocation object (advanced usage).</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="nx">invocation</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">NewInvocation</span><span class="p">(</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithAgentName</span><span class="p">(</span><span class="nx">agent</span><span class="p">),</span><span class="w">                                                                  </span><span class="c1">// Agent.</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationMessage</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hello! Can you tell me about yourself?&quot;</span><span class="p">)),</span><span class="w"> </span><span class="c1">// User message.</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationSession</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span><span class="p">{</span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;session-001&quot;</span><span class="p">}),</span><span class="w">                            </span><span class="c1">// session object.</span>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationEndInvocation</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span><span class="w">                                                    </span><span class="c1">// Whether to end invocation.</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithInvocationModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span><span class="w">                                                    </span><span class="c1">// Model to use.</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="p">)</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="c1">// Call Agent directly (advanced usage).</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmAgent</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">)</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to execute Agent: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h3 id="event">Event</h3>
-<p>Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</p>
-<p>Events mainly include the following types:</p>
+<p><strong>When to use direct calls?</strong></p>
 <ul>
-<li>Model conversation events</li>
-<li>Tool call and response events</li>
-<li>Agent transfer events</li>
-<li>Error events</li>
+<li>Need complete control over execution flow</li>
+<li>Custom Session and Memory management</li>
+<li>Implement special invocation logic</li>
+<li>Debugging and testing scenarios</li>
 </ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
@@ -1692,29 +1705,51 @@
 <span class="normal"><a href="#__codelineno-10-16">16</a></span>
 <span class="normal"><a href="#__codelineno-10-17">17</a></span>
 <span class="normal"><a href="#__codelineno-10-18">18</a></span>
-<span class="normal"><a href="#__codelineno-10-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="c1">// Response contains model response content, tool call results and statistics.</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="c1">// InvocationID is associated with a specific invocation.</span>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">    </span><span class="c1">// Author is the source of the event, such as Agent or tool.</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="c1">// ID is the unique identifier of the event.</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="c1">// Timestamp records the time when the event occurred.</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for hierarchical event filtering.</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="c1">// RequiresCompletion identifies whether this event requires a completion signal.</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span>
+<span class="normal"><a href="#__codelineno-10-24">24</a></span>
+<span class="normal"><a href="#__codelineno-10-25">25</a></span>
+<span class="normal"><a href="#__codelineno-10-26">26</a></span>
+<span class="normal"><a href="#__codelineno-10-27">27</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// Invocation is the context object for Agent execution flow, containing all information needed for a single call.</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Invocation</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="c1">// Agent specifies the Agent instance to call.</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">Agent</span><span class="w"> </span><span class="nx">Agent</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="c1">// AgentName identifies the name of the Agent instance to call.</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="nx">AgentName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">    </span><span class="c1">// InvocationID provides a unique identifier for each call.</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for hierarchical event filtering.</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="c1">// EndInvocation is a flag indicating whether to end the invocation.</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="nx">EndInvocation</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="c1">// Session maintains the context state of the conversation.</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">Session</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="c1">// Model specifies the model instance to use.</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">    </span><span class="nx">Model</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Model</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="c1">// Message is the specific content sent by the user to the Agent.</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">Message</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">    </span><span class="c1">// RunOptions are option configurations for the Run method.</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="nx">RunOptions</span><span class="w"> </span><span class="nx">RunOptions</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="c1">// TransferInfo supports control transfer between Agents.</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="w">    </span><span class="nx">TransferInfo</span><span class="w"> </span><span class="o">*</span><span class="nx">TransferInfo</span>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a>
+</span><span id="__span-10-24"><a id="__codelineno-10-24" name="__codelineno-10-24"></a><span class="w">    </span><span class="c1">// notice</span>
+</span><span id="__span-10-25"><a id="__codelineno-10-25" name="__codelineno-10-25"></a><span class="w">    </span><span class="nx">noticeChanMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">chan</span><span class="w"> </span><span class="kt">any</span>
+</span><span id="__span-10-26"><a id="__codelineno-10-26" name="__codelineno-10-26"></a><span class="w">    </span><span class="nx">noticeMu</span><span class="w">      </span><span class="o">*</span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+</span><span id="__span-10-27"><a id="__codelineno-10-27" name="__codelineno-10-27"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The streaming nature of Events allows you to see the Agent's working process in real-time, just like having a natural conversation with a real person. You only need to iterate through the Event stream, check the content and status of each Event, and you can completely handle the Agent's execution results.</p>
-<h3 id="agent-interface">Agent Interface</h3>
-<p>The Agent interface defines the core behaviors that all Agents must implement. This interface allows you to uniformly use different types of Agents while supporting tool calls and sub-Agent management.</p>
+<h3 id="event">Event</h3>
+<p>Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</p>
+<p>Events mainly include the following types:</p>
+<ul>
+<li>Model conversation events</li>
+<li>Tool call and response events</li>
+<li>Agent transfer events</li>
+<li>Error events</li>
+</ul>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
@@ -1727,19 +1762,60 @@
 <span class="normal"><a href="#__codelineno-11-10">10</a></span>
 <span class="normal"><a href="#__codelineno-11-11">11</a></span>
 <span class="normal"><a href="#__codelineno-11-12">12</a></span>
-<span class="normal"><a href="#__codelineno-11-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Agent</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="c1">// Run receives execution context and invocation information, returns an event channel. Through this channel, you can receive Agent execution progress and results in real-time.</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="c1">// Tools returns the list of tools that this Agent can access and execute.</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="nx">Tools</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="c1">// Info method provides basic information about the Agent, including name and description, for easy identification and management.</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="nx">Info</span><span class="p">()</span><span class="w"> </span><span class="nx">Info</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="c1">// SubAgents returns the list of sub-Agents available to this Agent.</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="c1">// SubAgents and FindSubAgent methods support collaboration between Agents. An Agent can delegate tasks to other Agents, building complex multi-Agent systems.</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="nx">SubAgents</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">Agent</span>
-</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="c1">// FindSubAgent finds sub-Agent by name.</span>
-</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="nx">FindSubAgent</span><span class="p">(</span><span class="nx">name</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="nx">Agent</span>
-</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-11-13">13</a></span>
+<span class="normal"><a href="#__codelineno-11-14">14</a></span>
+<span class="normal"><a href="#__codelineno-11-15">15</a></span>
+<span class="normal"><a href="#__codelineno-11-16">16</a></span>
+<span class="normal"><a href="#__codelineno-11-17">17</a></span>
+<span class="normal"><a href="#__codelineno-11-18">18</a></span>
+<span class="normal"><a href="#__codelineno-11-19">19</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="c1">// Event is the real-time feedback generated during Agent execution, reporting execution progress in real-time through Event streams.</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="c1">// Response contains model response content, tool call results and statistics.</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="c1">// InvocationID is associated with a specific invocation.</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="c1">// Author is the source of the event, such as Agent or tool.</span>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="c1">// ID is the unique identifier of the event.</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="c1">// Timestamp records the time when the event occurred.</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for hierarchical event filtering.</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15"></a><span class="w">    </span><span class="c1">// RequiresCompletion identifies whether this event requires a completion signal.</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls. Agent clients can understand which function calls are long-running through this field, only valid for function call events.</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The streaming nature of Events allows you to see the Agent's working process in real-time, just like having a natural conversation with a real person. You only need to iterate through the Event stream, check the content and status of each Event, and you can completely handle the Agent's execution results.</p>
+<h3 id="agent-interface">Agent Interface</h3>
+<p>The Agent interface defines the core behaviors that all Agents must implement. This interface allows you to uniformly use different types of Agents while supporting tool calls and sub-Agent management.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-12-10">10</a></span>
+<span class="normal"><a href="#__codelineno-12-11">11</a></span>
+<span class="normal"><a href="#__codelineno-12-12">12</a></span>
+<span class="normal"><a href="#__codelineno-12-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Agent</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="c1">// Run receives execution context and invocation information, returns an event channel. Through this channel, you can receive Agent execution progress and results in real-time.</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="c1">// Tools returns the list of tools that this Agent can access and execute.</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">Tools</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="c1">// Info method provides basic information about the Agent, including name and description, for easy identification and management.</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="w">    </span><span class="nx">Info</span><span class="p">()</span><span class="w"> </span><span class="nx">Info</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="c1">// SubAgents returns the list of sub-Agents available to this Agent.</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="c1">// SubAgents and FindSubAgent methods support collaboration between Agents. An Agent can delegate tasks to other Agents, building complex multi-Agent systems.</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">SubAgents</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">Agent</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="c1">// FindSubAgent finds sub-Agent by name.</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="nx">FindSubAgent</span><span class="p">(</span><span class="nx">name</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="nx">Agent</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The framework provides multiple types of Agent implementations, including LLMAgent, ChainAgent, ParallelAgent, CycleAgent, and GraphAgent. For detailed information about different types of Agents and multi-Agent systems, please refer to <a href="../multiagent/">Multi-Agent</a>.</p>
 <h2 id="callbacks">Callbacks</h2>
@@ -1747,76 +1823,76 @@
 <h3 id="callback-types">Callback Types</h3>
 <p>The framework provides three types of callbacks:</p>
 <p><strong>Agent Callbacks</strong>: Triggered before and after Agent execution</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
-<span class="normal"><a href="#__codelineno-12-2">2</a></span>
-<span class="normal"><a href="#__codelineno-12-3">3</a></span>
-<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="nx">BeforeAgent</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeAgentCallback</span><span class="w">  </span><span class="c1">// Callbacks before Agent runs.</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">AfterAgent</span><span class="w">  </span><span class="p">[]</span><span class="nx">AfterAgentCallback</span><span class="w">   </span><span class="c1">// Callbacks after Agent runs.</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p><strong>Model Callbacks</strong>: Triggered before and after model calls</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
 <span class="normal"><a href="#__codelineno-13-2">2</a></span>
 <span class="normal"><a href="#__codelineno-13-3">3</a></span>
-<span class="normal"><a href="#__codelineno-13-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ModelCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="nx">BeforeModel</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeModelCallback</span><span class="w">  </span><span class="c1">// Callbacks before model calls.</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">AfterModel</span><span class="w">  </span><span class="p">[]</span><span class="nx">AfterModelCallback</span><span class="w">   </span><span class="c1">// Callbacks after model calls.</span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">AgentCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="nx">BeforeAgent</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeAgentCallback</span><span class="w">  </span><span class="c1">// Callbacks before Agent runs.</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">AfterAgent</span><span class="w">  </span><span class="p">[]</span><span class="nx">AfterAgentCallback</span><span class="w">   </span><span class="c1">// Callbacks after Agent runs.</span>
 </span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Tool Callbacks</strong>: Triggered before and after tool calls</p>
+<p><strong>Model Callbacks</strong>: Triggered before and after model calls</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
 <span class="normal"><a href="#__codelineno-14-2">2</a></span>
 <span class="normal"><a href="#__codelineno-14-3">3</a></span>
-<span class="normal"><a href="#__codelineno-14-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ToolCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">BeforeTool</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeToolCallback</span><span class="w">  </span><span class="c1">// Callbacks before tool calls.</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">AfterTool</span><span class="w"> </span><span class="p">[]</span><span class="nx">AfterToolCallback</span><span class="w">    </span><span class="c1">// Callbacks after tool calls.</span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ModelCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">BeforeModel</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeModelCallback</span><span class="w">  </span><span class="c1">// Callbacks before model calls.</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">AfterModel</span><span class="w">  </span><span class="p">[]</span><span class="nx">AfterModelCallback</span><span class="w">   </span><span class="c1">// Callbacks after model calls.</span>
 </span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p><strong>Tool Callbacks</strong>: Triggered before and after tool calls</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span>
+<span class="normal"><a href="#__codelineno-15-3">3</a></span>
+<span class="normal"><a href="#__codelineno-15-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ToolCallbacks</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="nx">BeforeTool</span><span class="w"> </span><span class="p">[]</span><span class="nx">BeforeToolCallback</span><span class="w">  </span><span class="c1">// Callbacks before tool calls.</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">AfterTool</span><span class="w"> </span><span class="p">[]</span><span class="nx">AfterToolCallback</span><span class="w">    </span><span class="c1">// Callbacks after tool calls.</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
 <h3 id="usage-example">Usage Example</h3>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-15-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-15-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-15-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-15-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-15-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-15-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-15-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-15-10">10</a></span>
-<span class="normal"><a href="#__codelineno-15-11">11</a></span>
-<span class="normal"><a href="#__codelineno-15-12">12</a></span>
-<span class="normal"><a href="#__codelineno-15-13">13</a></span>
-<span class="normal"><a href="#__codelineno-15-14">14</a></span>
-<span class="normal"><a href="#__codelineno-15-15">15</a></span>
-<span class="normal"><a href="#__codelineno-15-16">16</a></span>
-<span class="normal"><a href="#__codelineno-15-17">17</a></span>
-<span class="normal"><a href="#__codelineno-15-18">18</a></span>
-<span class="normal"><a href="#__codelineno-15-19">19</a></span>
-<span class="normal"><a href="#__codelineno-15-20">20</a></span>
-<span class="normal"><a href="#__codelineno-15-21">21</a></span>
-<span class="normal"><a href="#__codelineno-15-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="c1">// Create Agent callbacks.</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AgentCallbacks</span><span class="p">{</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">BeforeAgent</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentCallback</span><span class="p">{</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="w">            </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s started execution&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">)</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a><span class="w">    </span><span class="nx">AfterAgent</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentCallback</span><span class="p">{</span>
-</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">runErr</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">runErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a><span class="w">                </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s execution error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">,</span><span class="w"> </span><span class="nx">runErr</span><span class="p">)</span>
-</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a><span class="w">                </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s execution completed&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">)</span>
-</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-15-18"><a id="__codelineno-15-18" name="__codelineno-15-18"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-15-19"><a id="__codelineno-15-19" name="__codelineno-15-19"></a><span class="p">}</span>
-</span><span id="__span-15-20"><a id="__codelineno-15-20" name="__codelineno-15-20"></a>
-</span><span id="__span-15-21"><a id="__codelineno-15-21" name="__codelineno-15-21"></a><span class="c1">// Use callbacks in Invocation.</span>
-</span><span id="__span-15-22"><a id="__codelineno-15-22" name="__codelineno-15-22"></a><span class="nx">llmagent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;llmagent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">))</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-16-10">10</a></span>
+<span class="normal"><a href="#__codelineno-16-11">11</a></span>
+<span class="normal"><a href="#__codelineno-16-12">12</a></span>
+<span class="normal"><a href="#__codelineno-16-13">13</a></span>
+<span class="normal"><a href="#__codelineno-16-14">14</a></span>
+<span class="normal"><a href="#__codelineno-16-15">15</a></span>
+<span class="normal"><a href="#__codelineno-16-16">16</a></span>
+<span class="normal"><a href="#__codelineno-16-17">17</a></span>
+<span class="normal"><a href="#__codelineno-16-18">18</a></span>
+<span class="normal"><a href="#__codelineno-16-19">19</a></span>
+<span class="normal"><a href="#__codelineno-16-20">20</a></span>
+<span class="normal"><a href="#__codelineno-16-21">21</a></span>
+<span class="normal"><a href="#__codelineno-16-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="c1">// Create Agent callbacks.</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AgentCallbacks</span><span class="p">{</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">    </span><span class="nx">BeforeAgent</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">BeforeAgentCallback</span><span class="p">{</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="w">            </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s started execution&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">)</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="w">    </span><span class="nx">AfterAgent</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">AfterAgentCallback</span><span class="p">{</span>
+</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="w">        </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="w"> </span><span class="o">*</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">,</span><span class="w"> </span><span class="nx">runErr</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">runErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="w">                </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s execution error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">,</span><span class="w"> </span><span class="nx">runErr</span><span class="p">)</span>
+</span><span id="__span-16-13"><a id="__codelineno-16-13" name="__codelineno-16-13"></a><span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-16-14"><a id="__codelineno-16-14" name="__codelineno-16-14"></a><span class="w">                </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Agent %s execution completed&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">invocation</span><span class="p">.</span><span class="nx">AgentName</span><span class="p">)</span>
+</span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-16-17"><a id="__codelineno-16-17" name="__codelineno-16-17"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-16-18"><a id="__codelineno-16-18" name="__codelineno-16-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-16-19"><a id="__codelineno-16-19" name="__codelineno-16-19"></a><span class="p">}</span>
+</span><span id="__span-16-20"><a id="__codelineno-16-20" name="__codelineno-16-20"></a>
+</span><span id="__span-16-21"><a id="__codelineno-16-21" name="__codelineno-16-21"></a><span class="c1">// Use callbacks in Invocation.</span>
+</span><span id="__span-16-22"><a id="__codelineno-16-22" name="__codelineno-16-22"></a><span class="nx">llmagent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;llmagent&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
 <p>The callback mechanism allows you to precisely control the Agent's execution process and implement more complex business logic.</p>
 <h2 id="advanced-usage">Advanced Usage</h2>
@@ -1852,7 +1928,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 24, 2025 02:40:54 UTC">2025-09-24 02:40:54</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 25, 2025 09:06:34 UTC">2025-09-25 09:06:34</span>
   </span>
 
     
