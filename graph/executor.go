@@ -1289,22 +1289,22 @@ func (e *Executor) executeStep(
 					results <- fmt.Errorf("task panic: %v", r)
 				}
 			}()
-			// create a new invocation for each task, if invocation is not nil.
-			nodeInvocation, nodeCtx := invocation, ctx
+			// create a new invocation for each task, if parent invocation is not nil.
+			taskInvocation, taskCtx := invocation, ctx
 			if invocation != nil {
 				branch := t.NodeID
 				if invocation.Branch != "" {
 					branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
 				}
-				nodeInvocation = invocation.Clone(
+				taskInvocation = invocation.Clone(
 					agent.WithInvocationAgent(invocation.Agent),
 					agent.WithInvocationBranch(branch),
 				)
 				// set new context for each task.
-				nodeCtx = agent.NewInvocationContext(ctx, nodeInvocation)
+				taskCtx = agent.NewInvocationContext(ctx, taskInvocation)
 			}
 
-			if err := e.executeSingleTask(nodeCtx, nodeInvocation, execCtx, t, step); err != nil {
+			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
 				results <- err
 			}
 		}(t)
