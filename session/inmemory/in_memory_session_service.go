@@ -685,35 +685,19 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	}
 	app.mu.Unlock()
 
-	// Ensure summaries map exists before writes.
-	app.mu.Lock()
-	swt, ok = app.sessions[key.UserID][key.SessionID]
-	if !ok {
-		app.mu.Unlock()
-		return fmt.Errorf("session not found: %s", key.SessionID)
+	// Run summarization which updates storedSession.Summaries in place.
+	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, storedSession, filterKey, force)
+	if err != nil {
+		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
-	storedSession = getValidSession(swt)
-	if storedSession == nil {
-		app.mu.Unlock()
-		return fmt.Errorf("session expired: %s", key.SessionID)
+	if !updated {
+		return nil
 	}
-	if storedSession.Summaries == nil {
-		storedSession.Summaries = make(map[string]*session.Summary)
+	// Persist to in-memory store under lock.
+	if err := s.writeSummaryUnderLock(app, key, filterKey, storedSession.Summaries[filterKey].Summary); err != nil {
+		return fmt.Errorf("write summary under lock failed: %w", err)
 	}
-	app.mu.Unlock()
-
-	// Define getters and writers.
-	getPrev := func(k string) (string, time.Time) {
-		if sum := storedSession.Summaries[k]; sum != nil {
-			return sum.Summary, sum.UpdatedAt
-		}
-		return "", time.Time{}
-	}
-	write := func(k string, text string) error {
-		return s.writeSummaryUnderLock(app, key, k, text)
-	}
-
-	return sisession.SummarizeAndPersist(ctx, s.opts.summarizer, storedSession, filterKey, force, getPrev, write)
+	return nil
 }
 
 // writeSummaryUnderLock writes a summary for a branch under app lock and refreshes TTL.
@@ -745,7 +729,8 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 	}
 	// Prefer structured summaries on session.
 	if sess.Summaries != nil {
-		if sum, ok := sess.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
+		// Prefer full-summary under empty filterKey.
+		if sum, ok := sess.Summaries[""]; ok && sum != nil && sum.Summary != "" {
 			return sum.Summary, true
 		}
 		for _, s := range sess.Summaries {

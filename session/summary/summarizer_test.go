@@ -81,7 +81,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("truncation when max length set", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithMaxSummaryLength(10))
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(10))
 		sess := &session.Session{ID: "truncate", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "abcdefghijklmno"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
@@ -95,7 +95,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 	})
 
 	t.Run("no truncation when max length is zero", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithMaxSummaryLength(0))
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(0))
 		long := strings.Repeat("abc", 200)
 		sess := &session.Session{ID: "no-trunc", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: long}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
@@ -146,7 +146,7 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 }
 
 func TestSessionSummarizer_Metadata(t *testing.T) {
-	s := NewSummarizer(&fakeModel{}, WithMaxSummaryLength(0))
+	s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(0))
 	md := s.Metadata()
 	assert.Equal(t, "fake", md[metadataKeyModelName])
 	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])

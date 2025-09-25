@@ -26,11 +26,12 @@ func WithPrompt(prompt string) Option {
 	}
 }
 
-// WithMaxSummaryLength sets the maximum length for generated summaries.
-func WithMaxSummaryLength(maxSummaryLength int) Option {
+// WithMaxSummaryChars sets the maximum character count (runes) for summaries.
+// A value <= 0 means no truncation.
+func WithMaxSummaryChars(maxChars int) Option {
 	return func(s *sessionSummarizer) {
-		if maxSummaryLength > 0 {
-			s.maxSummaryLength = maxSummaryLength
+		if maxChars > 0 {
+			s.maxSummaryChars = maxChars
 		}
 	}
 }

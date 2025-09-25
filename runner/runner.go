@@ -231,6 +231,13 @@ func (r *runner) Run(
 					); err != nil {
 						log.Debugf("Auto summarize after append skipped or failed: %v.", err)
 					}
+					// Additionally, generate a full-session summary (filterKey="") for
+					// IncludeContentsAll consumers. This is also best-effort and non-blocking.
+					if err := r.sessionService.CreateSessionSummary(
+						context.Background(), sessCopy, "", false,
+					); err != nil {
+						log.Debugf("Auto full summarize skipped or failed: %v.", err)
+					}
 				}(sess, agentEvent.FilterKey)
 			}
 

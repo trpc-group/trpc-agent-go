@@ -36,7 +36,7 @@ go run main.go -model gpt-4o-mini
 Quick start with immediate summarization:
 
 ```bash
-go run main.go -events 0 -tokens 0 -timeSec 0
+go run main.go -events 0 -tokens 0 -time-sec 0
 ```
 
 Command-line flags:
@@ -45,9 +45,9 @@ Command-line flags:
 - `-streaming`: Enable streaming mode for responses. Default: `true`.
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
-- `-timeSec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
-- `-maxlen`: Max generated summary length (0=unlimited). Default: `0`.
-- `-addSummary`: Prepend latest filter summary as system message. Default: `true`.
+- `-time-sec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
+- `-max-chars`: Max summary characters (runes) (0=unlimited). Default: `0`.
+- `-add-summary`: Prepend latest filter summary as system message. Default: `true`.
 
 ## Interaction
 
@@ -66,7 +66,7 @@ Service: inmemory
 EventThreshold: 1
 TokenThreshold: 0
 TimeThreshold: 0s
-MaxLen: 0
+MaxChars: 0
 Streaming: true
 ==================================================
 ✅ Summary chat ready! Session: summary-session-1757649727
@@ -122,7 +122,7 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 ### Basic Options
 
-- **`WithMaxSummaryLength(maxLength int)`**: Sets the maximum length for generated summaries. When set to 0 (default), no truncation is applied.
+- **`WithMaxSummaryChars(maxChars int)`**: Sets the maximum character count (runes) for generated summaries. When set to 0 (default), no truncation is applied.
 
 - **`WithPrompt(prompt string)`**: Sets a custom prompt for summarization. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the extracted conversation when generating the summary.
 
@@ -145,13 +145,13 @@ The `SessionSummarizer` supports various configuration options to customize summ
 ```go
 // Basic configuration
 sum := summary.NewSummarizer(model,
-    summary.WithMaxSummaryLength(500),
+    summary.WithMaxSummaryChars(500),
     summary.WithEventThreshold(10),
 )
 
 // Complex trigger configuration
 sum := summary.NewSummarizer(model,
-    summary.WithMaxSummaryLength(1000),
+    summary.WithMaxSummaryChars(1000),
     summary.WithChecksAny(
         summary.CheckEventThreshold(5),
         summary.CheckTokenThreshold(1000),

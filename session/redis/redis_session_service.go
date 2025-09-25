@@ -469,6 +469,10 @@ func getSessionStateKey(key session.Key) string {
 	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
 }
 
+func getSessionSummaryKey(key session.Key) string {
+	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+}
+
 func (s *Service) getSession(
 	ctx context.Context,
 	key session.Key,
@@ -478,15 +482,19 @@ func (s *Service) getSession(
 	sessKey := getSessionStateKey(key)
 	userStateKey := getUserStateKey(key)
 	appStateKey := getAppStateKey(key.AppName)
+	sessSummaryKey := getSessionSummaryKey(key)
 	pipe := s.redisClient.Pipeline()
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
 	appStateCmd := pipe.HGetAll(ctx, appStateKey)
 
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
+	// Read summaries from separate hash in the same pipeline.
+	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 	// Add TTL refresh commands to the same pipeline if configured
 	if s.sessionTTL > 0 {
 		pipe.Expire(ctx, sessKey, s.sessionTTL)
 		pipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		pipe.Expire(ctx, sessSummaryKey, s.sessionTTL)
 	}
 	if s.appStateTTL > 0 {
 		pipe.Expire(ctx, appStateKey, s.appStateTTL)
@@ -535,6 +543,14 @@ func (s *Service) getSession(
 		Events:    events[0],
 		UpdatedAt: sessState.UpdatedAt,
 		CreatedAt: sessState.CreatedAt,
+	}
+
+	// Populate summaries from separate hash if present.
+	if bytes, err := summariesCmd.Bytes(); err == nil && len(bytes) > 0 {
+		var summaries map[string]*session.Summary
+		if uerr := json.Unmarshal(bytes, &summaries); uerr == nil && len(summaries) > 0 {
+			sess.Summaries = summaries
+		}
 	}
 
 	// filter events to ensure they start with RoleUser
@@ -785,6 +801,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
 	txPipe := s.redisClient.TxPipeline()
 	txPipe.HDel(ctx, getSessionStateKey(key), key.SessionID)
+	txPipe.HDel(ctx, getSessionSummaryKey(key), key.SessionID)
 	txPipe.Del(ctx, getEventKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("redis session service delete session state failed: %w", err)
@@ -831,24 +848,6 @@ func applyOptions(opts ...session.Option) *session.Options {
 	return opt
 }
 
-// persistSessionState writes the provided state back to Redis and refreshes TTL.
-func (s *Service) persistSessionState(ctx context.Context, sessKey string, sessionID string, st *SessionState) error {
-	st.UpdatedAt = time.Now()
-	updatedStateBytes, err := json.Marshal(st)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-	pipe := s.redisClient.TxPipeline()
-	pipe.HSet(ctx, sessKey, sessionID, string(updatedStateBytes))
-	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, sessKey, s.sessionTTL)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("store summary failed: %w", err)
-	}
-	return nil
-}
-
 // CreateSessionSummary generates a summary for the session and persists it on the
 // session state as a structured field. It performs per-branch delta summarization.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
@@ -863,38 +862,40 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
 	}
-	if s.opts.summarizer == nil {
-		log.Debugf("summarizer manager not configured; skip session summary for %s", key.SessionID)
+
+	// Load previous summaries from separate hash.
+	sumKey := getSessionSummaryKey(key)
+	prevBytes, err := s.redisClient.HGet(ctx, sumKey, key.SessionID).Bytes()
+	var prev map[string]*session.Summary
+	if err == nil && len(prevBytes) > 0 {
+		_ = json.Unmarshal(prevBytes, &prev)
+	}
+	if prev == nil {
+		prev = make(map[string]*session.Summary)
+	}
+
+	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force)
+	if err != nil {
+		return fmt.Errorf("summarize and persist failed: %w", err)
+	}
+	if !updated {
 		return nil
 	}
-
-	// Load current session state JSON from Redis.
-	sessKey := getSessionStateKey(key)
-	stateBytes, err := s.redisClient.HGet(ctx, sessKey, key.SessionID).Bytes()
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
+	// Persist: read back the latest summaries map from memory (updated in place) and write to Redis.
+	prev = sess.Summaries
+	bytes, jerr := json.Marshal(prev)
+	if jerr != nil {
+		return fmt.Errorf("marshal summaries failed: %w", jerr)
 	}
-	sessState := &SessionState{}
-	if err := json.Unmarshal(stateBytes, sessState); err != nil {
-		return fmt.Errorf("unmarshal session state failed: %w", err)
+	pipe := s.redisClient.TxPipeline()
+	pipe.HSet(ctx, sumKey, key.SessionID, string(bytes))
+	if s.sessionTTL > 0 {
+		pipe.Expire(ctx, sumKey, s.sessionTTL)
 	}
-	if sessState.Summaries == nil {
-		sessState.Summaries = make(map[string]*session.Summary)
+	if _, perr := pipe.Exec(ctx); perr != nil {
+		return fmt.Errorf("store summaries failed: %w", perr)
 	}
-
-	// Define getters and writers working on the loaded sessState JSON.
-	getPrev := func(k string) (string, time.Time) {
-		if prev := sessState.Summaries[k]; prev != nil {
-			return prev.Summary, prev.UpdatedAt
-		}
-		return "", time.Time{}
-	}
-	write := func(k string, text string) error {
-		sessState.Summaries[k] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
-		return s.persistSessionState(ctx, sessKey, key.SessionID, sessState)
-	}
-
-	return sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force, getPrev, write)
+	return nil
 }
 
 // GetSessionSummaryText returns the latest summary text from the session state if present.
@@ -906,6 +907,20 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
+	// Prefer local in-memory session summaries when available.
+	if len(sess.Summaries) > 0 {
+		if text, ok := pickSummaryText(sess.Summaries); ok {
+			return text, true
+		}
+	}
+	// Prefer separate summaries hash.
+	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {
+		var summaries map[string]*session.Summary
+		if uerr := json.Unmarshal(bytes, &summaries); uerr == nil && len(summaries) > 0 {
+			return pickSummaryText(summaries)
+		}
+	}
+	// Legacy fallback to sess state (for compatibility during transition).
 	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
 	if err != nil {
 		return "", false
@@ -917,10 +932,20 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	if sessState.Summaries == nil {
 		return "", false
 	}
-	if sum, ok := sessState.Summaries["root"]; ok && sum != nil && sum.Summary != "" {
+	return pickSummaryText(sessState.Summaries)
+}
+
+// pickSummaryText picks a non-empty summary string with preference for the
+// all-contents key "" (empty filterKey). No special handling for "root".
+func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
+	if summaries == nil {
+		return "", false
+	}
+	// Prefer full-summary stored under empty filterKey.
+	if sum, ok := summaries[""]; ok && sum != nil && sum.Summary != "" {
 		return sum.Summary, true
 	}
-	for _, s := range sessState.Summaries {
+	for _, s := range summaries {
 		if s != nil && s.Summary != "" {
 			return s.Summary, true
 		}

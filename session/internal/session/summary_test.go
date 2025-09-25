@@ -50,38 +50,27 @@ func TestSummarizeAndPersist_FilteredBranch_RespectsDeltaAndShould(t *testing.T)
 
 	// allow=false and force=false should skip.
 	s := &fakeSummarizer{allow: false, out: "sum"}
-	var wroteKey, wroteText string
-	err := SummarizeAndPersist(context.Background(), s, base, "b1", false,
-		func(key string) (string, time.Time) { return "prev", now.Add(-time.Hour) },
-		func(key string, text string) error { wroteKey, wroteText = key, text; return nil },
-	)
+	updated, err := SummarizeAndPersist(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
-	require.Equal(t, "", wroteKey)
+	require.False(t, updated)
 
 	// allow=true should write.
 	s.allow = true
-	wroteKey, wroteText = "", ""
-	err = SummarizeAndPersist(context.Background(), s, base, "b1", false,
-		func(key string) (string, time.Time) { return "prev", now.Add(-time.Hour) },
-		func(key string, text string) error { wroteKey, wroteText = key, text; return nil },
-	)
+	updated, err = SummarizeAndPersist(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
-	require.Equal(t, "b1", wroteKey)
-	require.Equal(t, "sum", wroteText)
+	require.True(t, updated)
+	require.NotNil(t, base.Summaries)
+	require.Equal(t, "sum", base.Summaries["b1"].Summary)
 
 	// force=true should write even when ShouldSummarize=false.
 	s.allow = false
-	wroteKey, wroteText = "", ""
-	err = SummarizeAndPersist(context.Background(), s, base, "b1", true,
-		func(key string) (string, time.Time) { return "", time.Time{} },
-		func(key string, text string) error { wroteKey, wroteText = key, text; return nil },
-	)
+	updated, err = SummarizeAndPersist(context.Background(), s, base, "b1", true)
 	require.NoError(t, err)
-	require.Equal(t, "b1", wroteKey)
-	require.Equal(t, "sum", wroteText)
+	require.True(t, updated)
+	require.Equal(t, "sum", base.Summaries["b1"].Summary)
 }
 
-func TestSummarizeAndPersist_AllBranches_MultipleWrites(t *testing.T) {
+func TestSummarizeAndPersist_FullSession_SingleWrite(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
 	base.Events = []event.Event{
@@ -89,14 +78,9 @@ func TestSummarizeAndPersist_AllBranches_MultipleWrites(t *testing.T) {
 		makeEvent("e2", now.Add(-30*time.Second), "b2"),
 	}
 	s := &fakeSummarizer{allow: true, out: "sum"}
-	writes := make(map[string]string)
-
-	err := SummarizeAndPersist(context.Background(), s, base, "", false,
-		func(key string) (string, time.Time) { return "", time.Time{} },
-		func(key string, text string) error { writes[key] = text; return nil },
-	)
+	updated, err := SummarizeAndPersist(context.Background(), s, base, "", false)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(writes))
-	require.Equal(t, "sum", writes["b1"])
-	require.Equal(t, "sum", writes["b2"])
+	require.True(t, updated)
+	require.NotNil(t, base.Summaries)
+	require.Equal(t, "sum", base.Summaries[""].Summary)
 }

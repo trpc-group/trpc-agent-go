@@ -54,18 +54,18 @@ const (
 
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model            model.Model
-	prompt           string
-	checks           []Checker
-	maxSummaryLength int
+	model           model.Model
+	prompt          string
+	checks          []Checker
+	maxSummaryChars int
 }
 
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:           defaultSummarizerPrompt,
-		checks:           []Checker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryLength: 0,           // The max summary length is 0 by default, which means no truncation.
+		prompt:          defaultSummarizerPrompt,
+		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryChars: 0,           // 0 means no truncation by characters.
 	}
 	s.model = m
 
@@ -116,9 +116,13 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
 	}
 
-	// Truncate if too long (only when maxSummaryLength > 0).
-	if s.maxSummaryLength > 0 && len(summaryText) > s.maxSummaryLength {
-		summaryText = summaryText[:s.maxSummaryLength] + "..."
+	// Truncate by characters (runes) if configured (> 0).
+	if s.maxSummaryChars > 0 {
+		runes := []rune(summaryText)
+		if len(runes) > s.maxSummaryChars {
+			runes = runes[:s.maxSummaryChars]
+			summaryText = string(runes) + "..."
+		}
 	}
 	return summaryText, nil
 }
@@ -133,7 +137,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 	}
 	return map[string]any{
 		metadataKeyModelName:        modelName,
-		metadataKeyMaxSummaryLength: s.maxSummaryLength,
+		metadataKeyMaxSummaryLength: s.maxSummaryChars,
 		metadataKeyModelAvailable:   modelAvailable,
 		metadataKeyCheckFunctions:   len(s.checks),
 	}

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -91,34 +90,45 @@ func SummarizeAndPersist(
 	base *session.Session,
 	filterKey string,
 	force bool,
-	getPrev func(key string) (string, time.Time),
-	write func(key string, text string) error,
-) error {
+) (updated bool, err error) {
 	if m == nil || base == nil {
-		return nil
+		return false, nil
 	}
 
-	process := func(key string, evs []event.Event) error {
+	process := func(key string, evs []event.Event) (bool, error) {
 		if len(evs) == 0 {
-			return nil
+			return false, nil
 		}
-		prevText, prevAt := getPrev(key)
+		var prevText string
+		var prevAt time.Time
+		if base != nil && base.Summaries != nil {
+			if s := base.Summaries[key]; s != nil {
+				prevText = s.Summary
+				prevAt = s.UpdatedAt
+			}
+		}
 		delta := computeDeltaSince(evs, prevAt)
 		if !force && len(delta) == 0 {
-			return nil
+			return false, nil
 		}
 		input := prependPrevSummary(prevText, delta, time.Now())
 		tmp := buildBranchSession(base, key, input)
 		if !force && !m.ShouldSummarize(tmp) {
-			return nil
+			return false, nil
 		}
 		text, err := m.Summarize(ctx, tmp)
 		if err != nil || text == "" {
-			return nil
+			return false, nil
 		}
-		return write(key, text)
+		if base.Summaries == nil {
+			base.Summaries = make(map[string]*session.Summary)
+		}
+		base.Summaries[key] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+		return true, nil
 	}
 
+	// When filterKey is empty, summarize all events as a single branch with key="".
+	var evs []event.Event
 	if filterKey != "" {
 		matched := make([]event.Event, 0, len(base.Events))
 		for _, e := range base.Events {
@@ -126,13 +136,9 @@ func SummarizeAndPersist(
 				matched = append(matched, e)
 			}
 		}
-		return process(filterKey, matched)
+		evs = matched
+	} else {
+		evs = base.Events
 	}
-
-	for key, evs := range groupEventsByFilterKey(base.Events) {
-		if err := process(key, evs); err != nil {
-			log.Warnf("summarize and persist failed for filter %s: %v", key, err)
-		}
-	}
-	return nil
+	return process(filterKey, evs)
 }

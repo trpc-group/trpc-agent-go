@@ -30,13 +30,13 @@ import (
 )
 
 var (
-	modelName   = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
-	streaming   = flag.Bool("streaming", true, "Enable streaming mode for responses")
-	flagEvents  = flag.Int("events", 1, "Event count threshold to trigger summarization")
-	flagTokens  = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
-	flagTimeSec = flag.Int("timeSec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
-	flagMaxLen  = flag.Int("maxlen", 0, "Max generated summary length (0=unlimited)")
-	flagAddSum  = flag.Bool("addSummary", true, "Prepend latest branch summary as system message for LLM input")
+	modelName    = flag.String("model", "deepseek-chat", "Model name to use for LLM summarization and chat")
+	streaming    = flag.Bool("streaming", true, "Enable streaming mode for responses")
+	flagEvents   = flag.Int("events", 1, "Event count threshold to trigger summarization")
+	flagTokens   = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
+	flagTimeSec  = flag.Int("time-sec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
+	flagMaxChars = flag.Int("max-chars", 0, "Max summary characters (runes) (0=unlimited)")
+	flagAddSum   = flag.Bool("add-summary", true, "Prepend latest branch summary as system message for LLM input")
 )
 
 func main() {
@@ -75,7 +75,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	llm := openai.New(c.modelName)
 
 	// Summarizer.
-	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryLength(*flagMaxLen),
+	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryChars(*flagMaxChars),
 		summary.WithChecksAny(
 			summary.CheckEventThreshold(*flagEvents),
 			summary.CheckTokenThreshold(*flagTokens),
@@ -108,7 +108,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("EventThreshold: %d\n", *flagEvents)
 	fmt.Printf("TokenThreshold: %d\n", *flagTokens)
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
-	fmt.Printf("MaxLen: %d\n", *flagMaxLen)
+	fmt.Printf("MaxChars: %d\n", *flagMaxChars)
 	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Printf("AddSummary: %v\n", *flagAddSum)
 	fmt.Println(strings.Repeat("=", 50))

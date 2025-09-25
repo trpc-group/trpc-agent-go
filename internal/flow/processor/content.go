@@ -155,6 +155,10 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 		return nil
 	}
 	filter := inv.GetEventFilterKey()
+	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
+	if p.IncludeContents == IncludeContentsAll {
+		filter = ""
+	}
 	sum := inv.Session.Summaries[filter]
 	if sum == nil || sum.Summary == "" {
 		return nil
@@ -168,7 +172,7 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 	var evs []event.Event
 	if inv.Session != nil {
 		if inv.Session.Summaries != nil {
-			if sum := inv.Session.Summaries[filter]; sum != nil {
+			if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
 				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, filter)
 			} else {
 				evs = p.eventsInFilter(inv.Session.Events, filter)
@@ -238,9 +242,7 @@ func (p *ContentRequestProcessor) convertEventsToMessages(
 		}
 		if len(ev.Choices) > 0 {
 			for _, choice := range ev.Choices {
-				if choice.Message.Content != "" || choice.Message.ToolID != "" || len(choice.Message.ToolCalls) > 0 {
-					messages = append(messages, choice.Message)
-				}
+				messages = append(messages, choice.Message)
 			}
 		}
 	}
