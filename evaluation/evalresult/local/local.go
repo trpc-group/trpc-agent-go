@@ -23,7 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 )
 
-// Manager implements the evalresult.Manager interface using local file storage.
+// manager implements the evalresult.Manager interface using local file storage.
 type manager struct {
 	baseDir string
 	mu      sync.Mutex

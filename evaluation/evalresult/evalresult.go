@@ -14,6 +14,8 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 // EvalCaseResult represents the evaluation result for a single eval case.
@@ -23,11 +25,11 @@ type EvalCaseResult struct {
 	// EvalID identifies the eval case.
 	EvalID string `json:"eval_id"`
 	// FinalEvalStatus is the final eval status for this eval case.
-	FinalEvalStatus EvalStatus `json:"final_eval_status"`
+	FinalEvalStatus status.EvalStatus `json:"final_eval_status"`
 	// OverallEvalMetricResults contains overall result for each metric for the entire eval case.
-	OverallEvalMetricResults []*EvalMetricResult `json:"overall_eval_metric_results"`
+	OverallEvalMetricResults []*metric.EvalMetricResult `json:"overall_eval_metric_results"`
 	// EvalMetricResultPerInvocation contains result for each metric on a per invocation basis.
-	EvalMetricResultPerInvocation []*EvalMetricResultPerInvocation `json:"eval_metric_result_per_invocation"`
+	EvalMetricResultPerInvocation []*metric.EvalMetricResultPerInvocation `json:"eval_metric_result_per_invocation"`
 	// SessionID is the session id of the session generated as result of inferencing stage of the eval.
 	SessionID string `json:"session_id"`
 	// UserID is the user id used during inferencing stage of the eval.

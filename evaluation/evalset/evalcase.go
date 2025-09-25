@@ -13,6 +13,8 @@ package evalset
 import (
 	"encoding/json"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // EvalCase represents a single evaluation case.
@@ -41,21 +43,26 @@ type Invocation struct {
 	CreationTimestamp EpochTime `json:"creationTimestamp"`
 }
 
+// Content represents the content of a message.
 type Content struct {
-	Role  string `json:"role"`
+	// Role represents the role of the content.
+	Role model.Role `json:"role"`
+	// Parts represents the parts of the content.
 	Parts []Part `json:"parts,omitempty"`
 }
 
+// Part represents a part of a message.
 type Part struct {
+	// Text represents the text of the part.
 	Text string `json:"text,omitempty"`
 }
 
 // IntermediateData contains intermediate execution data.
 type IntermediateData struct {
 	// ToolUses represents tool calls made during execution.
-	ToolUses []FunctionCall `json:"toolUses,omitempty"`
+	ToolUses []*FunctionCall `json:"toolUses,omitempty"`
 	// IntermediateResponses from sub-agents or intermediate steps.
-	IntermediateResponses []IntermediateMessage `json:"intermediateResponses,omitempty"`
+	IntermediateResponses []*IntermediateMessage `json:"intermediateResponses,omitempty"`
 }
 
 // SessionInput represents values that help initialize a session.
@@ -73,7 +80,7 @@ type IntermediateMessage struct {
 	// Author is typically the sub-agent name.
 	Author string `json:"author"`
 	// Parts are multimodal content parts (text/image/audio/file).
-	Parts []Part `json:"parts,omitempty"`
+	Parts []*Part `json:"parts,omitempty"`
 }
 
 // FunctionCall mirrors GenAI FunctionCall shape for ADK compatibility.

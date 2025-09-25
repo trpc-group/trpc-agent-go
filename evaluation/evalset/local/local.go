@@ -26,9 +26,9 @@ import (
 
 // manager implements evalset.Manager backed by the local filesystem.
 type manager struct {
-	mu       sync.RWMutex
-	baseDir  string
-	pathFunc evalset.PathFunc
+	mu          sync.RWMutex
+	baseDir     string
+	pathBuilder evalset.PathBuilder
 }
 
 // NewManager creates a new local file evaluation set manager.
@@ -36,8 +36,8 @@ type manager struct {
 func NewManager(opt ...evalset.Option) evalset.Manager {
 	opts := evalset.NewOptions(opt...)
 	return &manager{
-		baseDir:  opts.BaseDir,
-		pathFunc: opts.PathFunc,
+		baseDir:     opts.BaseDir,
+		pathBuilder: opts.PathBuilder,
 	}
 }
 
@@ -167,7 +167,7 @@ func (m *manager) DeleteCase(_ context.Context, appName, evalSetID, evalCaseID s
 }
 
 func (m *manager) evalSetPath(appName, evalSetID string) string {
-	return m.pathFunc(m.baseDir, appName, evalSetID)
+	return m.pathBuilder(m.baseDir, appName, evalSetID)
 }
 
 func (m *manager) load(appName, evalSetID string) (*evalset.EvalSet, error) {

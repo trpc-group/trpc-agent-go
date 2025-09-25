@@ -7,39 +7,44 @@
 //
 //
 
-// Package evaluator provides evaluator for evaluation.
-package evaluator
+package registry
 
 import (
 	"errors"
 	"sort"
 	"sync"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
 )
 
+// Registry manages the registration and retrieval of evaluators
 type Registry interface {
-	Register(name string, e Evaluator) error
-	Get(name string) (Evaluator, error)
-	List() []string
+	Register(name string, e evaluator.Evaluator) error
 	Unregister(name string) error
-	GetEvaluatorForMetric(metric string) (Evaluator, error)
+	Get(name string) (evaluator.Evaluator, error)
+	List() []string
 }
 
 // Registry manages the registration and retrieval of evaluators
 type registry struct {
 	mu         sync.RWMutex
-	evaluators map[string]Evaluator
+	evaluators map[string]evaluator.Evaluator
 }
 
 // NewRegistry creates a new evaluator registry
 func NewRegistry() Registry {
-	return &registry{
-		evaluators: make(map[string]Evaluator),
+	r := &registry{
+		evaluators: make(map[string]evaluator.Evaluator),
 	}
+	toolTrajectory := tooltrajectory.New()
+	r.Register(toolTrajectory.Name(), toolTrajectory)
+	return r
 }
 
 // Register adds an evaluator to the registry
 // If an evaluator with the same name exists, returns an error.
-func (r *registry) Register(name string, e Evaluator) error {
+func (r *registry) Register(name string, e evaluator.Evaluator) error {
 	if e == nil {
 		return errors.New("evaluator is nil")
 	}
@@ -59,7 +64,7 @@ func (r *registry) Register(name string, e Evaluator) error {
 }
 
 // Get retrieves an evaluator by name
-func (r *registry) Get(name string) (Evaluator, error) {
+func (r *registry) Get(name string) (evaluator.Evaluator, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if e, ok := r.evaluators[name]; ok {
@@ -89,11 +94,4 @@ func (r *registry) Unregister(name string) error {
 	}
 	delete(r.evaluators, name)
 	return nil
-}
-
-// GetEvaluatorForMetric returns the evaluator that supports a specific metric
-// NOTE: This requires a convention that evaluator.Name() matches metric name
-// or you maintain a separate mapping externally. For now, we assume name-match.
-func (r *registry) GetEvaluatorForMetric(metric string) (Evaluator, error) {
-	return r.Get(metric)
 }

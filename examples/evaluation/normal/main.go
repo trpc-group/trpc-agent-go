@@ -7,21 +7,21 @@
 //
 //
 
-// Package main provides a minimal end-to-end example of running a local
-// evaluation with the built-in tool trajectory metric.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -29,148 +29,239 @@ import (
 
 func main() {
 	ctx := context.Background()
-
-	// Prepare a deterministic agent and populate an evaluation set the agent must satisfy.
-	agentInstance := &calculatorAgent{name: "demo-eval-agent"}
-	appName := agentInstance.Info().Name
-	evalSetID := "sample-eval-set"
-
+	scripted := newScriptedAgent()
 	evalSetManager := evalsetinmemory.New()
-	if _, err := evalSetManager.Create(ctx, appName, evalSetID); err != nil {
-		panic(fmt.Errorf("create eval set: %w", err))
+	metricManager := metricinmemory.New()
+	const evalSetID = "demo_tool_evalset"
+	if _, err := evalSetManager.Create(ctx, scripted.Info().Name, evalSetID); err != nil {
+		log.Fatalf("create eval set: %v", err)
 	}
-	if err := addSampleEvalCase(ctx, evalSetManager, appName, evalSetID); err != nil {
-		panic(err)
+	if err := evalSetManager.AddCase(ctx, scripted.Info().Name, evalSetID, buildDemoEvalCase(scripted.Info().Name)); err != nil {
+		log.Fatalf("add eval case: %v", err)
+	}
+	metrics := []*metric.EvalMetric{
+		{
+			MetricName: "tool_trajectory_avg_score",
+			Threshold:  1.0,
+		},
+	}
+	if err := metricManager.Save(ctx, scripted.Info().Name, evalSetID, metrics); err != nil {
+		log.Fatalf("save metrics: %v", err)
 	}
 
-	// Register the tool trajectory evaluator so the local service can locate it by metric name.
-	registry := evaluator.NewRegistry()
-	toolTrajectory := tooltrajectory.New()
-	if err := registry.Register(toolTrajectory.Name(), toolTrajectory); err != nil {
-		panic(fmt.Errorf("register evaluator: %w", err))
-	}
-
-	// Configure the agent evaluator with the prepared managers and metrics.
-	trajectoryMetric := &evalset.EvalMetric{
-		MetricName: toolTrajectory.Name(),
-		Threshold:  1.0,
-	}
-	agentEvaluator, err := evaluation.NewAgentEvaluator(
-		agentInstance,
+	evaluator, err := evaluation.NewAgentEvaluator(
+		scripted,
 		evaluation.WithEvalSetManager(evalSetManager),
-		evaluation.WithEvaluatorRegistry(registry),
-		evaluation.WithEvalMetrics([]*evalset.EvalMetric{trajectoryMetric}),
+		evaluation.WithMetricManager(metricManager),
 	)
 	if err != nil {
-		panic(fmt.Errorf("new agent evaluator: %w", err))
+		log.Fatalf("create agent evaluator: %v", err)
 	}
 
-	// Run the evaluation and print a compact summary.
-	result, err := agentEvaluator.Evaluate(ctx, evalSetID)
+	result, err := evaluator.Evaluate(ctx, evalSetID)
 	if err != nil {
-		panic(fmt.Errorf("evaluate: %w", err))
+		log.Fatalf("evaluate: %v", err)
 	}
-
-	fmt.Printf("App: %s\nEval Set: %s\nOverall Status: %s\nExecution Time: %s\n", result.AppName, result.EvalSetID, result.OverallStatus.String(), result.ExecutionTime)
+	fmt.Printf("Evaluation summary for %s on set %s\n", result.AppName, result.EvalSetID)
+	fmt.Printf("Overall status: %s (took %s)\n\n", result.OverallStatus, result.ExecutionTime)
 	for _, caseResult := range result.EvalCases {
-		fmt.Printf("\nCase %s => %s\n", caseResult.EvalCaseID, caseResult.OverallStatus.String())
-		for _, metric := range caseResult.Metrics {
-			fmt.Printf("  • Metric %s: score=%.1f threshold=%.1f status=%s\n", metric.MetricName, metric.Score, metric.Threshold, metric.Status.String())
+		fmt.Printf("Case %s -> %s\n", caseResult.EvalCaseID, caseResult.OverallStatus)
+		for _, metricResult := range caseResult.MetricResults {
+			fmt.Printf(
+				"  Metric %s: score %.2f (threshold %.2f) -> %s\n",
+				metricResult.MetricName,
+				metricResult.Score,
+				metricResult.Threshold,
+				metricResult.Status,
+			)
 		}
+		fmt.Println()
 	}
 }
 
-func addSampleEvalCase(ctx context.Context, manager evalset.Manager, appName, evalSetID string) error {
-	now := time.Now().UTC()
-	evalCase := &evalset.EvalCase{
-		EvalID:            "case-1",
-		CreationTimestamp: evalset.EpochTime{Time: now},
-		SessionInput: &evalset.SessionInput{
-			AppName: appName,
-			UserID:  "eval-user",
+type scriptedAgent struct {
+	info   agent.Info
+	script map[string]scriptStep
+}
+
+type scriptStep struct {
+	final string
+	tool  *toolCallSpec
+}
+
+type toolCallSpec struct {
+	name string
+	args map[string]any
+}
+
+type scenario struct {
+	prompt string
+	final  string
+	tool   *toolCallSpec
+}
+
+func newScriptedAgent() *scriptedAgent {
+	steps := make(map[string]scriptStep)
+	for _, scene := range demoScenarios() {
+		steps[scene.prompt] = scriptStep{final: scene.final, tool: scene.tool}
+	}
+	return &scriptedAgent{
+		info: agent.Info{
+			Name:        "demo-eval-agent",
+			Description: "Scripted agent that mirrors expected evaluation outputs",
 		},
-		Conversation: []*evalset.Invocation{
-			{
-				InvocationID:      "expected-invocation-1",
-				CreationTimestamp: evalset.EpochTime{Time: now},
-				UserContent: &evalset.Content{
-					Role:  "user",
-					Parts: []evalset.Part{{Text: "Use the calculator tool to add 2 and 2."}},
+		script: steps,
+	}
+}
+
+func (a *scriptedAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	if invocation == nil {
+		return nil, fmt.Errorf("invocation is nil")
+	}
+	step, ok := a.script[invocation.Message.Content]
+	if !ok {
+		return nil, fmt.Errorf("no scripted response for %q", invocation.Message.Content)
+	}
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		if step.tool != nil {
+			payload, err := json.Marshal(step.tool.args)
+			if err != nil {
+				log.Printf("marshal tool args: %v", err)
+				return
+			}
+			toolEvent := event.NewResponseEvent(invocation.InvocationID, a.info.Name, &model.Response{
+				Object:    model.ObjectTypeChatCompletionChunk,
+				Created:   time.Now().Unix(),
+				Done:      false,
+				IsPartial: false,
+				Choices: []model.Choice{
+					{
+						Index: 0,
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{
+								{
+									Type: "function",
+									ID:   fmt.Sprintf("%s-call", step.tool.name),
+									Function: model.FunctionDefinitionParam{
+										Name:      step.tool.name,
+										Arguments: payload,
+									},
+								},
+							},
+						},
+					},
 				},
-				FinalResponse: &evalset.Content{
-					Role:  "assistant",
-					Parts: []evalset.Part{{Text: "The answer is 4."}},
+			})
+			if err := event.EmitEvent(ctx, ch, toolEvent); err != nil {
+				log.Printf("emit tool event: %v", err)
+				return
+			}
+		}
+		finalEvent := event.NewResponseEvent(invocation.InvocationID, a.info.Name, &model.Response{
+			Object:  model.ObjectTypeChatCompletion,
+			Created: time.Now().Unix(),
+			Done:    true,
+			Choices: []model.Choice{
+				{
+					Index: 0,
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: step.final,
+					},
 				},
-				IntermediateData: &evalset.IntermediateData{
-					ToolUses: []evalset.FunctionCall{{
-						ID:   "call-1",
-						Name: "calculator",
-					}},
+			},
+		})
+		if err := event.EmitEvent(ctx, ch, finalEvent); err != nil {
+			log.Printf("emit final event: %v", err)
+		}
+	}()
+	return ch, nil
+}
+
+func (a *scriptedAgent) Tools() []tool.Tool              { return nil }
+func (a *scriptedAgent) Info() agent.Info                { return a.info }
+func (a *scriptedAgent) SubAgents() []agent.Agent        { return nil }
+func (a *scriptedAgent) FindSubAgent(string) agent.Agent { return nil }
+
+func demoScenarios() []scenario {
+	return []scenario{
+		{
+			prompt: "What's the weather like in Seattle today?",
+			final:  "Forecast for Seattle: 22°C and sunny with light breeze.",
+			tool: &toolCallSpec{
+				name: "lookup_weather",
+				args: map[string]any{"location": "Seattle"},
+			},
+		},
+		{
+			prompt: "Great, should I pack sunscreen or an umbrella?",
+			final:  "Conditions stay sunny all day—bring sunscreen, no umbrella needed.",
+			tool: &toolCallSpec{
+				name: "packing_recommendation",
+				args: map[string]any{
+					"conditions":     "sunny",
+					"duration_hours": 8,
 				},
 			},
 		},
 	}
-	if err := manager.AddCase(ctx, appName, evalSetID, evalCase); err != nil {
-		return fmt.Errorf("add eval case: %w", err)
+}
+
+func buildDemoEvalCase(appName string) *evalset.EvalCase {
+	scenarios := demoScenarios()
+	invocations := make([]*evalset.Invocation, 0, len(scenarios))
+	now := time.Now().UTC()
+
+	for idx, scene := range scenarios {
+		var toolUses []*evalset.FunctionCall
+		if scene.tool != nil {
+			toolUses = []*evalset.FunctionCall{
+				{
+					Name: scene.tool.name,
+					Args: cloneArgs(scene.tool.args),
+				},
+			}
+		}
+
+		invocations = append(invocations, &evalset.Invocation{
+			InvocationID: fmt.Sprintf("invocation-%d", idx+1),
+			UserContent: &evalset.Content{
+				Role:  model.RoleUser,
+				Parts: []evalset.Part{{Text: scene.prompt}},
+			},
+			FinalResponse: &evalset.Content{
+				Role:  model.RoleAssistant,
+				Parts: []evalset.Part{{Text: scene.final}},
+			},
+			IntermediateData:  &evalset.IntermediateData{ToolUses: toolUses},
+			CreationTimestamp: evalset.EpochTime{Time: now},
+		})
 	}
-	return nil
-}
 
-// calculatorAgent emits a fixed set of events that exercise the tool trajectory metric.
-type calculatorAgent struct {
-	name string
-}
-
-func (a *calculatorAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
-	_ = inv
-	out := make(chan *event.Event, 2)
-	go func() {
-		defer close(out)
-		invocationID := fmt.Sprintf("actual-%d", time.Now().UnixNano())
-		// Emit a tool-call event so the evaluator can compare the trajectory.
-		out <- event.NewResponseEvent(invocationID, a.name, &model.Response{
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Role: model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{
-						ID:   "call-1",
-						Type: "function",
-						Function: model.FunctionDefinitionParam{
-							Name: "calculator",
-						},
-					}},
-				},
-			}},
-		})
-		// Emit the final assistant answer.
-		out <- event.NewResponseEvent(invocationID, a.name, &model.Response{
-			Done: true,
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: "The answer is 4.",
-				},
-			}},
-		})
-	}()
-	return out, nil
-}
-
-func (a *calculatorAgent) Tools() []tool.Tool {
-	return nil
-}
-
-func (a *calculatorAgent) Info() agent.Info {
-	return agent.Info{
-		Name:        a.name,
-		Description: "Deterministic calculator agent used for evaluation demos",
+	return &evalset.EvalCase{
+		EvalID:       "tool-trajectory-case",
+		Conversation: invocations,
+		SessionInput: &evalset.SessionInput{
+			AppName: appName,
+			UserID:  "demo-user",
+			State: map[string]any{
+				"region": "US",
+			},
+		},
+		CreationTimestamp: evalset.EpochTime{Time: now},
 	}
 }
 
-func (a *calculatorAgent) SubAgents() []agent.Agent {
-	return nil
-}
-
-func (a *calculatorAgent) FindSubAgent(string) agent.Agent {
-	return nil
+func cloneArgs(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }

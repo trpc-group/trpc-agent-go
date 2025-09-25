@@ -5,68 +5,83 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 )
 
+// defaultNumRuns is the default number of runs.
+const defaultNumRuns = 1
+
+// options holds the configuration options for the evaluation.
 type options struct {
-	evalService       service.Service
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
-	registry          evaluator.Registry
+	metricManager     metric.Manager
+	evaluatorRegistry registry.Registry
+	evalService       service.Service
 	numRuns           int
-	evalMetrics       []*evalset.EvalMetric
 }
 
+// newOptions creates a new options with the default values.
 func newOptions(opt ...Option) *options {
+	// Initialize options with default values.
 	opts := &options{
-		numRuns:           1,
+		numRuns:           defaultNumRuns,
 		evalSetManager:    evalsetinmemory.New(),
 		evalResultManager: evalresultinmemory.NewManager(),
-		registry:          evaluator.NewRegistry(),
+		metricManager:     metricinmemory.New(),
+		evaluatorRegistry: registry.NewRegistry(),
 	}
+	// Apply user options.
 	for _, o := range opt {
 		o(opts)
 	}
 	return opts
 }
 
+// Option defines a function type for configuring the evaluation.
 type Option func(*options)
 
-func WithEvaluationService(s service.Service) Option {
-	return func(o *options) {
-		o.evalService = s
-	}
-}
-
+// WithEvalSetManager sets the eval set manager.
 func WithEvalSetManager(m evalset.Manager) Option {
 	return func(o *options) {
 		o.evalSetManager = m
 	}
 }
 
+// WithEvalResultManager sets the eval result manager.
 func WithEvalResultManager(m evalresult.Manager) Option {
 	return func(o *options) {
 		o.evalResultManager = m
 	}
 }
 
-func WithEvaluatorRegistry(r evaluator.Registry) Option {
+// WithMetricManager sets the metric manager.
+func WithMetricManager(m metric.Manager) Option {
 	return func(o *options) {
-		o.registry = r
+		o.metricManager = m
 	}
 }
 
+// WithEvaluatorRegistry sets the evaluator registry.
+func WithEvaluatorRegistry(r registry.Registry) Option {
+	return func(o *options) {
+		o.evaluatorRegistry = r
+	}
+}
+
+// WithEvaluationService sets the evaluation service.
+func WithEvaluationService(s service.Service) Option {
+	return func(o *options) {
+		o.evalService = s
+	}
+}
+
+// WithNumRuns sets the number of runs.
 func WithNumRuns(numRuns int) Option {
 	return func(o *options) {
-		if numRuns > 0 {
-			o.numRuns = numRuns
-		}
-	}
-}
-
-func WithEvalMetrics(metrics []*evalset.EvalMetric) Option {
-	return func(o *options) {
-		o.evalMetrics = append(o.evalMetrics, metrics...)
+		o.numRuns = numRuns
 	}
 }

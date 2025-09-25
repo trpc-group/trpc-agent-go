@@ -12,22 +12,26 @@ package evalset
 
 import "path/filepath"
 
-const DefaultEvalSetExtension = ".evalset.json"
+const (
+	defaultBaseDir = "evalsets"
+	// DefaultEvalSetExtension is the default extension for eval set files.
+	DefaultEvalSetExtension = ".evalset.json"
+)
 
-// PathFunc builds the absolute path where an eval set should be stored.
-type PathFunc func(baseDir, appName, evalSetID string) string
+// PathBuilder builds the absolute path where an eval set should be stored.
+type PathBuilder func(baseDir, appName, evalSetID string) string
 
 // Options configure the local evaluation set manager.
 type Options struct {
-	BaseDir  string
-	PathFunc PathFunc
+	BaseDir     string
+	PathBuilder PathBuilder
 }
 
-// NewOptions constructs Options with sensible defaults mirroring the Python implementation.
+// NewOptions constructs Options with the default values.
 func NewOptions(opts ...Option) *Options {
 	options := &Options{
-		BaseDir:  "evalsets",
-		PathFunc: defaultPathFunc,
+		BaseDir:     defaultBaseDir,
+		PathBuilder: defaultPathBuilder,
 	}
 	for _, o := range opts {
 		o(options)
@@ -46,12 +50,12 @@ func WithBaseDir(dir string) Option {
 }
 
 // WithEvalSetPathFunc overrides how eval set file paths are generated.
-func WithEvalSetPathFunc(fn PathFunc) Option {
+func WithEvalSetPathFunc(p PathBuilder) Option {
 	return func(o *Options) {
-		o.PathFunc = fn
+		o.PathBuilder = p
 	}
 }
 
-func defaultPathFunc(baseDir, appName, evalSetID string) string {
+func defaultPathBuilder(baseDir, appName, evalSetID string) string {
 	return filepath.Join(baseDir, appName, evalSetID+DefaultEvalSetExtension)
 }
