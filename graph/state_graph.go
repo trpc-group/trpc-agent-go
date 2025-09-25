@@ -91,6 +91,15 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithGenerationConfig sets the generation config for an LLM node.
+// Effective only for nodes added via AddLLMNode.
+func WithGenerationConfig(cfg model.GenerationConfig) Option {
+	return func(node *Node) {
+		c := cfg
+		node.llmGenerationConfig = &c
+	}
+}
+
 // WithDestinations declares potential dynamic routing targets for a node.
 // This is used for static validation (existence) and visualization only.
 // It does not influence runtime execution.
@@ -217,7 +226,12 @@ func (sg *StateGraph) AddLLMNode(
 	for _, opt := range opts {
 		opt(node)
 	}
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, WithLLMNodeID(id), WithLLMToolSets(node.toolSets))
+	// Build LLM-specific options from node config
+	llmOptsForFunc := []LLMNodeFuncOption{WithLLMNodeID(id), WithLLMToolSets(node.toolSets)}
+	if node.llmGenerationConfig != nil {
+		llmOptsForFunc = append(llmOptsForFunc, WithLLMGenerationConfig(*node.llmGenerationConfig))
+	}
+	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
 	// Add LLM node type option
 	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
 	sg.AddNode(id, llmNodeFunc, llmOpts...)
@@ -389,6 +403,13 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 	}
 }
 
+// WithLLMGenerationConfig sets the generation configuration for the LLM runner.
+func WithLLMGenerationConfig(cfg model.GenerationConfig) LLMNodeFuncOption {
+	return func(runner *llmRunner) {
+		runner.generationConfig = cfg
+	}
+}
+
 // WithTokenTailoring configures token tailoring for the LLM node.
 func WithTokenTailoring(maxTokens int, tokenCounter model.TokenCounter, strategy model.TailoringStrategy) LLMNodeFuncOption {
 	return func(runner *llmRunner) {
@@ -407,9 +428,10 @@ func NewLLMNodeFunc(
 	opts ...LLMNodeFuncOption,
 ) NodeFunc {
 	runner := &llmRunner{
-		llmModel:    llmModel,
-		instruction: instruction,
-		tools:       tools,
+		llmModel:         llmModel,
+		instruction:      instruction,
+		tools:            tools,
+		generationConfig: model.GenerationConfig{Stream: true},
 	}
 	for _, opt := range opts {
 		opt(runner)
@@ -432,6 +454,7 @@ type llmRunner struct {
 	instruction       string
 	tools             map[string]tool.Tool
 	nodeID            string
+	generationConfig  model.GenerationConfig
 	tokenCounter      model.TokenCounter      // TokenCounter count tokens for token tailoring.
 	tailoringStrategy model.TailoringStrategy // TailoringStrategy defines the strategy for token tailoring.
 	maxTokens         int                     // MaxTokens is the max tokens for token tailoring.
@@ -551,11 +574,9 @@ func (r *llmRunner) executeModel(
 	// Apply token tailoring before building request if configured.
 	messages = r.applyTokenTailoring(ctx, messages)
 	request := &model.Request{
-		Messages: messages,
-		Tools:    r.tools,
-		GenerationConfig: model.GenerationConfig{
-			Stream: true,
-		},
+		Messages:         messages,
+		Tools:            r.tools,
+		GenerationConfig: r.generationConfig,
 	}
 	invocationID, sessionID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
@@ -882,40 +903,51 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	}
 }
 
+// runTool executes a tool with before/after callbacks and returns the result.
+// Parameters:
+//   - ctx: context for cancellation and tracing
+//   - toolCall: the tool call to execute, including function name and arguments
+//   - toolCallbacks: callbacks to execute before and after tool execution
+//   - t: the tool implementation to execute
+//
+// Returns:
+//   - any: the result from tool execution or custom callback result
+//   - []byte: the modified arguments after before-tool callbacks (for telemetry)
+//   - error: any error that occurred during execution
 func runTool(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	toolCallbacks *tool.Callbacks,
 	t tool.Tool,
-) (any, error) {
+) (any, []byte, error) {
 	if toolCallbacks != nil {
 		customResult, err := toolCallbacks.RunBeforeTool(
-			ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments)
+			ctx, toolCall.Function.Name, t.Declaration(), &toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("callback before tool error: %w", err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("callback before tool error: %w", err)
 		}
 		if customResult != nil {
-			return customResult, nil
+			return customResult, toolCall.Function.Arguments, nil
 		}
 	}
 	if callableTool, ok := t.(tool.CallableTool); ok {
 		result, err := callableTool.Call(ctx, toolCall.Function.Arguments)
 		if err != nil {
-			return nil, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, err)
 		}
 		if toolCallbacks != nil {
 			customResult, err := toolCallbacks.RunAfterTool(
 				ctx, toolCall.Function.Name, t.Declaration(), toolCall.Function.Arguments, result, err)
 			if err != nil {
-				return nil, fmt.Errorf("callback after tool error: %w", err)
+				return nil, toolCall.Function.Arguments, fmt.Errorf("callback after tool error: %w", err)
 			}
 			if customResult != nil {
-				return customResult, nil
+				return customResult, toolCall.Function.Arguments, nil
 			}
 		}
-		return result, nil
+		return result, toolCall.Function.Arguments, nil
 	}
-	return nil, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
+	return nil, toolCall.Function.Arguments, fmt.Errorf("tool %s is not callable", toolCall.Function.Name)
 }
 
 // extractModelInput extracts the model input from state and instruction.
@@ -1156,15 +1188,15 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		}
 	}
 
-	// Emit tool execution start event.
+	// Execute the tool with callbacks and get modified arguments.
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
+	result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
+
+	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		config.EventChan, config.InvocationID, name, id, nodeID,
-		startTime, config.ToolCall.Function.Arguments,
+		startTime, modifiedArgs,
 	)
-
-	// Execute the tool.
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, config.ToolCall.Function.Name))
-	result, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t)
 	// Emit tool execution complete event.
 	event := emitToolCompleteEvent(toolCompleteEventConfig{
 		EventChan:    config.EventChan,
@@ -1175,9 +1207,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		StartTime:    startTime,
 		Result:       result,
 		Error:        err,
-		Arguments:    config.ToolCall.Function.Arguments,
+		Arguments:    modifiedArgs,
 	})
-	itelemetry.TraceToolCall(span, t.Declaration(), config.ToolCall.Function.Arguments, event)
+	itelemetry.TraceToolCall(span, t.Declaration(), modifiedArgs, event)
 	span.End()
 
 	if err != nil {
