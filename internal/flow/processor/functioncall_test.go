@@ -1029,9 +1029,10 @@ func (s *finalOnlyInnerEventStreamTool) StreamableCall(ctx context.Context, _ []
 	go func() {
 		defer st.Writer.Close()
 		// Final full assistant message only, no deltas prior.
-		inner := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
+		inner := event.New("inv-final", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
 			Message: model.Message{Role: model.RoleAssistant, Content: "final"},
 		}}}))
+		inner.Branch = "br"
 		st.Writer.Send(tool.StreamChunk{Content: inner}, nil)
 	}()
 	return st.Reader, nil
@@ -1188,10 +1189,12 @@ func (s *innerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*t
 	go func() {
 		defer st.Writer.Close()
 		// delta chunk
-		ev1 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev1}, nil)
 		// final full assistant message
-		ev2 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev2}, nil)
 	}()
 	return st.Reader, nil

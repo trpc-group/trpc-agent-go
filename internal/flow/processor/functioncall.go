@@ -708,29 +708,6 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	return contents, nil
 }
 
-// normalizeInnerEvent ensures invocation ID and branch are set for inner events.
-func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv *agent.Invocation) {
-	if ev.InvocationID == "" {
-		ev.InvocationID = inv.InvocationID
-	}
-	if ev.Branch == "" {
-		ev.Branch = inv.Branch
-	}
-}
-
-// shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
-// content to avoid duplicate large blocks in the parent transcript. We still
-// aggregate its text from deltas for the final tool.response content.
-func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event) bool {
-	if ev.Response != nil && len(ev.Response.Choices) > 0 {
-		ch := ev.Response.Choices[0]
-		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
-			return false
-		}
-	}
-	return true
-}
-
 // appendInnerEventContent extracts textual content from an inner event and appends it.
 func (f *FunctionCallResponseProcessor) appendInnerEventContent(ev *event.Event, contents *[]any) {
 	if ev.Response != nil && len(ev.Response.Choices) > 0 {
@@ -950,18 +927,10 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 ) error {
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
-		f.normalizeInnerEvent(ev, invocation)
-		// Default forwarding rule suppresses the final full assistant message to avoid
-		// duplication, but if we have not emitted any prior deltas/content from the
-		// inner stream, forward this final message so callers still see the sub-agent output.
-		shouldForward := f.shouldForwardInnerEvent(ev)
-		if !shouldForward && contents != nil && len(*contents) == 0 {
-			shouldForward = true
-		}
-		if shouldForward {
-			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
-				return err
-			}
+		// With random FilterKey isolation, we can safely forward all inner events
+		// since they are properly isolated and won't pollute the parent session.
+		if err := event.EmitEvent(ctx, eventChan, ev); err != nil {
+			return err
 		}
 		f.appendInnerEventContent(ev, contents)
 		return nil
