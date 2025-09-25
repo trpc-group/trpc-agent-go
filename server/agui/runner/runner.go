@@ -18,14 +18,14 @@ import (
 	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/event"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/sdk"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
-	Run(ctx context.Context, runAgentInput *sdk.RunAgentInput) (<-chan events.Event, error)
+	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan events.Event, error)
 }
 
 // New wraps a trpc-agent-go runner with AG-UI specific translation logic.
@@ -45,7 +45,7 @@ type runner struct {
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
-func (r *runner) Run(ctx context.Context, runAgentInput *sdk.RunAgentInput) (<-chan events.Event, error) {
+func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan events.Event, error) {
 	if r.runner == nil {
 		return nil, errors.New("agui: runner is nil")
 	}
@@ -57,7 +57,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *sdk.RunAgentInput) (<-c
 	return events, nil
 }
 
-func (r *runner) run(ctx context.Context, runAgentInput *sdk.RunAgentInput, events chan<- events.Event) {
+func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- events.Event) {
 	defer close(events)
 	bridge := event.NewBridge(runAgentInput.ThreadID, runAgentInput.RunID)
 	events <- bridge.NewRunStartedEvent()

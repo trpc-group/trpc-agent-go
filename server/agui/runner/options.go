@@ -12,7 +12,7 @@ package runner
 import (
 	"context"
 
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/sdk"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
 
 // options holds the options for the runner.
@@ -23,7 +23,7 @@ type options struct {
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		userIDResolver: func(ctx context.Context, input *sdk.RunAgentInput) (string, error) {
+		userIDResolver: func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 			return "user", nil
 		},
 	}
@@ -37,7 +37,7 @@ func newOptions(opt ...Option) *options {
 type Option func(*options)
 
 // UserIDResolver is a function that derives the user identifier for an AG-UI run.
-type UserIDResolver func(ctx context.Context, input *sdk.RunAgentInput) (string, error)
+type UserIDResolver func(ctx context.Context, input *adapter.RunAgentInput) (string, error)
 
 // WithUserIDResolver sets the user ID resolver.
 func WithUserIDResolver(resolver UserIDResolver) Option {

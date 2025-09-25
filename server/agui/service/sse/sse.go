@@ -16,8 +16,8 @@ import (
 	"net/http"
 
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/sdk"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
@@ -71,7 +71,7 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
 	}
-	runAgentInput, err := sdk.DecodeRunAgentInput(r.Body)
+	runAgentInput, err := adapter.RunAgentInputFromReader(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -7,8 +7,8 @@
 //
 //
 
-// Package sdk is a placeholder for the AG-UI Go SDK.
-package sdk
+// Package adapter provides the adapter for the AG-UI SDK.
+package adapter
 
 import (
 	"encoding/json"
@@ -17,10 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// NOTE: This file should be removed when the AG-UI Go SDK exposes the official structure.
-
-// RunAgentInput captures the parameters for an AG-UI run request.
-// NOTE: This type should be removed when the AG-UI Go SDK exposes the official structure.
+// RunAgentInput represents the parameters for an AG-UI run request.
 type RunAgentInput struct {
 	ThreadID       string          `json:"threadId"`
 	RunID          string          `json:"runId"`
@@ -29,8 +26,8 @@ type RunAgentInput struct {
 	ForwardedProps map[string]any  `json:"forwardedProps"`
 }
 
-// DecodeRunAgentInput deserialises an AG-UI run request payload.
-func DecodeRunAgentInput(r io.Reader) (*RunAgentInput, error) {
+// RunAgentInputFromReader parses an AG-UI run request payload from a reader.
+func RunAgentInputFromReader(r io.Reader) (*RunAgentInput, error) {
 	var input RunAgentInput
 	dec := json.NewDecoder(r)
 	if err := dec.Decode(&input); err != nil {
