@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -173,6 +174,34 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
 				agent.WithInvocationEventFilterKey(uniqueFilterKey),
 			)
+			// Store tool input as Event via sub-agent's event channel (safe concurrency).
+			// This ensures the tool input is available throughout all LLM calls within this AgentTool invocation.
+			if message.Content != "" {
+				evt := event.NewResponseEvent(
+					subInv.InvocationID,
+					"user", // Use "user" as author like Runner does for user messages.
+					&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+				)
+				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
+
+				// Mark event as requiring completion notification for synchronization.
+				evt.RequiresCompletion = true
+
+				// Send the tool input event as the first event in the stream.
+
+				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
+					return
+				}
+
+				// Wait for the event to be processed and stored in session before starting sub-agent.
+				// This prevents race condition where sub-agent's subsequent LLM calls happen before tool input is stored.
+				completionID := agent.AppendEventNoticeKeyPrefix + evt.ID
+				if err := subInv.AddNoticeChannelAndWait(ctx, completionID, agent.WaitNoticeWithoutTimeout); err != nil {
+					log.Warnf("AgentTool: Failed to wait for tool input event completion: %v", err)
+					// Continue anyway - this is not a fatal error.
+				}
+			}
+
 			subCtx := agent.NewInvocationContext(ctx, subInv)
 			evCh, err := at.agent.Run(subCtx, subInv)
 			if err != nil {
