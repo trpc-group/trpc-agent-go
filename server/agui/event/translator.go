@@ -27,15 +27,27 @@ func (b *bridge) Translate(event *agentevent.Event) ([]aguievents.Event, error) 
 	if rsp.Error != nil {
 		return []aguievents.Event{b.NewRunErrorEvent(rsp.Error.Message)}, nil
 	}
+	events := []aguievents.Event{}
+	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
+		textMessageEvents, err := b.textMessageEvent(rsp)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, textMessageEvents...)
+	}
 	if rsp.IsToolCallResponse() {
-		return b.toolCallEvent(rsp)
+		toolCallEvents, err := b.toolCallEvent(rsp)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, toolCallEvents...)
 	}
 	if rsp.IsToolResultResponse() {
-		return b.toolResultEvent(rsp)
-	}
-	events, err := b.textMessageEvent(rsp)
-	if err != nil {
-		return nil, err
+		toolResultEvents, err := b.toolResultEvent(rsp)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, toolResultEvents...)
 	}
 	if rsp.IsFinalResponse() {
 		events = append(events, b.NewRunFinishedEvent())

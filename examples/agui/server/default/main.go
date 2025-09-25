@@ -1,3 +1,11 @@
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package main
 
 import (
@@ -18,6 +26,8 @@ import (
 var (
 	modelName = flag.String("model", "deepseek-chat", "Model to use")
 	isStream  = flag.Bool("stream", true, "Whether to stream the response")
+	address   = flag.String("address", "127.0.0.1:8080", "Listen address")
+	path      = flag.String("path", "/agui", "HTTP path")
 )
 
 func main() {
@@ -42,7 +52,7 @@ func main() {
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction("You are a helpful assistant."),
 	)
-	server, err := agui.New(agent)
+	server, err := agui.New(agent, agui.WithAddress(*address), agui.WithPath(*path))
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)
 	}

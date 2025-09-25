@@ -9,19 +9,16 @@ This folder collects runnable demos that showcase how to integrate the `tRPC-Age
 
 1. Start the default AG-UI server:
 
-   ```bash
-   go run ./server/default
-   ```
+```bash
+go run ./server/default
+```
 
 2. In another terminal start the Bubble Tea client:
 
-   ```bash
-   go run ./client/bubbletea/main.go
-   ```
+```bash
+go run ./client/bubbletea/main.go
+```
 
-3. Ask a question such as `calculate 1.2+3.5` and watch the live event stream in
-   the terminal. A full transcript example is documented in
-   [`client/bubbletea/README.md`](client/bubbletea/README.md).
+3. Ask a question such as `calculate 1.2+3.5` and watch the live event stream in the terminal. A full transcript example is documented in [`client/bubbletea/README.md`](client/bubbletea/README.md).
 
-See the individual README files under `client/` and `server/` for more background
-and configuration options.
+See the individual README files under `client/` and `server/` for more background and configuration options.
