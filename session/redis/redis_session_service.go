@@ -39,6 +39,32 @@ const (
 	defaultAsyncPersisterNum = 10
 )
 
+// luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
+// JSON map only if the incoming UpdatedAt is newer-or-equal.
+// KEYS[1] = sesssum:{app}:{user}
+// ARGV[1] = sessionID
+// ARGV[2] = filterKey
+// ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
+var luaSummariesSetIfNewer = redis.NewScript(
+	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
+		"local fk = ARGV[2]\n" +
+		"local newSum = cjson.decode(ARGV[3])\n" +
+		"if not cur or cur == '' then\n" +
+		"  local m = {}\n" +
+		"  m[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"local map = cjson.decode(cur)\n" +
+		"local old = map[fk]\n" +
+		"if not old or old.UpdatedAt <= newSum.UpdatedAt then\n" +
+		"  map[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"return 0\n",
+)
+
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string                      `json:"id"`
@@ -863,9 +889,6 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	// Define target redis key for summaries persistence.
-	sumKey := getSessionSummaryKey(key)
-
 	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
@@ -873,18 +896,22 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if !updated {
 		return nil
 	}
-	// Persist: read back the latest summaries map from memory (updated in place) and write to Redis.
-	bytes, jerr := json.Marshal(sess.Summaries)
+	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
+	sum := sess.Summaries[filterKey]
+	payload, jerr := json.Marshal(sum)
 	if jerr != nil {
-		return fmt.Errorf("marshal summaries failed: %w", jerr)
+		return fmt.Errorf("marshal summary failed: %w", jerr)
 	}
-	pipe := s.redisClient.TxPipeline()
-	pipe.HSet(ctx, sumKey, key.SessionID, string(bytes))
+	sumKey := getSessionSummaryKey(key)
+	if _, perr := luaSummariesSetIfNewer.Run(
+		ctx, s.redisClient, []string{sumKey}, key.SessionID, filterKey, string(payload),
+	).Result(); perr != nil {
+		return fmt.Errorf("store summaries (lua) failed: %w", perr)
+	}
 	if s.sessionTTL > 0 {
-		pipe.Expire(ctx, sumKey, s.sessionTTL)
-	}
-	if _, perr := pipe.Exec(ctx); perr != nil {
-		return fmt.Errorf("store summaries failed: %w", perr)
+		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
+			return fmt.Errorf("expire summaries failed: %w", err)
+		}
 	}
 	return nil
 }

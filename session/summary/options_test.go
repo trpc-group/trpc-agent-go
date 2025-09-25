@@ -20,6 +20,13 @@ import (
 )
 
 func TestOptions(t *testing.T) {
+	t.Run("WithPrompt", func(t *testing.T) {
+		s := NewSummarizer(&testModel{}, WithPrompt("test"))
+		sm, ok := s.(*sessionSummarizer)
+		assert.True(t, ok)
+		assert.Equal(t, "test", sm.prompt)
+	})
+
 	t.Run("WithTokenThreshold", func(t *testing.T) {
 		// Verify metadata increments and logic via isolated checks.
 		s := NewSummarizer(&testModel{}, WithTokenThreshold(2))
@@ -75,7 +82,7 @@ func TestOptions(t *testing.T) {
 		assert.True(t, s.ShouldSummarize(sess))
 	})
 
-	t.Run("WithMaxLength_MetadataAndTruncation", func(t *testing.T) {
+	t.Run("WithMaxSummaryChars_MetadataAndTruncation", func(t *testing.T) {
 		// Set a small max length and ensure metadata reflects it and output is truncated.
 		s := NewSummarizer(&testModel{}, WithMaxSummaryChars(50))
 		md := s.Metadata()
@@ -93,7 +100,7 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, originalEventCount, len(sess.Events), "events should remain unchanged.")
 	})
 
-	t.Run("WithMaxLength_IgnoresNonPositive", func(t *testing.T) {
+	t.Run("WithMaxSummaryChars_IgnoresNonPositive", func(t *testing.T) {
 		// Non-positive should be ignored, default remains in metadata.
 		s := NewSummarizer(&testModel{}, WithMaxSummaryChars(0))
 		md := s.Metadata()
