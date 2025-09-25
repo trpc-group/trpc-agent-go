@@ -507,6 +507,33 @@ Tool-call pairing and second entry into LLM:
 - Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.
 - When returning from tools to the LLM node, since `user_input` is cleared, the LLM follows the “Messages only” branch and continues based on the tool response in history.
 
+#### Placeholder Variables in LLM Instructions
+
+LLM nodes support placeholder injection in their `instruction` string (same rules as LLMAgent):
+
+- `{key}` → replaced by `session.State["key"]`
+- `{key?}` → optional; missing values become empty
+- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}` → access user/app/temp scopes (session services merge app/user state into session with these prefixes)
+
+Notes:
+
+- GraphAgent writes the current `*session.Session` into graph state under `StateKeySession`; the LLM node reads values from there
+- Unprefixed keys (e.g., `research_topics`) must be present directly in `session.State`
+
+Example:
+
+```go
+mdl := openai.New(modelName)
+stateGraph.AddLLMNode(
+  "research",
+  mdl,
+  "You are a research assistant. Focus: {research_topics}. User: {user:topics?}. App: {app:banner?}.",
+  nil,
+)
+```
+
+See the runnable example: `examples/graph/placeholder`.
+
 ### 6. Runner Configuration
 
 Runner provides session management and execution environment:
