@@ -20,26 +20,27 @@ import (
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
 func (b *bridge) Translate(event *agentevent.Event) ([]aguievents.Event, error) {
-	if event == nil {
+	if event == nil || event.Response == nil {
 		return nil, errors.New("event is nil")
 	}
-	if event.Response != nil {
-		rsp := event.Response
-		if rsp.Error != nil {
-			return []aguievents.Event{b.NewRunErrorEvent(rsp.Error.Message)}, nil
-		}
-		if rsp.IsToolCallResponse() {
-			return b.toolCallEvent(rsp)
-		}
-		if rsp.IsToolResultResponse() {
-			return b.toolResultEvent(rsp)
-		}
-		if rsp.IsFinalResponse() {
-			return []aguievents.Event{aguievents.NewTextMessageEndEvent(rsp.ID), b.NewRunFinishedEvent()}, nil
-		}
-		return b.textMessageEvent(rsp)
+	rsp := event.Response
+	if rsp.Error != nil {
+		return []aguievents.Event{b.NewRunErrorEvent(rsp.Error.Message)}, nil
 	}
-	return nil, nil
+	if rsp.IsToolCallResponse() {
+		return b.toolCallEvent(rsp)
+	}
+	if rsp.IsToolResultResponse() {
+		return b.toolResultEvent(rsp)
+	}
+	events, err := b.textMessageEvent(rsp)
+	if err != nil {
+		return nil, err
+	}
+	if rsp.IsFinalResponse() {
+		events = append(events, b.NewRunFinishedEvent())
+	}
+	return events, nil
 }
 
 // textMessageEvent translates a text message trpc-agent-go event to AG-UI events.
@@ -53,9 +54,19 @@ func (b *bridge) textMessageEvent(rsp *model.Response) ([]aguievents.Event, erro
 		b.lastMessageID = rsp.ID
 		switch rsp.Object {
 		case model.ObjectTypeChatCompletionChunk:
-			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole("assistant")))
+			role := rsp.Choices[0].Delta.Role.String()
+			events = append(events, aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)))
 		case model.ObjectTypeChatCompletion:
-			return nil, errors.New("non-streaming response is not supported, waiting for agui sdk support")
+			if rsp.Choices[0].Message.Content == "" {
+				return nil, nil
+			}
+			role := rsp.Choices[0].Message.Role.String()
+			events = append(events,
+				aguievents.NewTextMessageStartEvent(rsp.ID, aguievents.WithRole(role)),
+				aguievents.NewTextMessageContentEvent(rsp.ID, rsp.Choices[0].Message.Content),
+				aguievents.NewTextMessageEndEvent(rsp.ID),
+			)
+			return events, nil
 		default:
 			return nil, errors.New("invalid response object")
 		}
