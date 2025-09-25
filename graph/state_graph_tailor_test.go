@@ -36,11 +36,15 @@ func (m *mockModel) GenerateContent(ctx context.Context, request *model.Request)
 // dummyCounter implements TokenCounter but is not used by the strategy in these tests.
 type dummyCounter struct{}
 
-func (d *dummyCounter) CountTokens(ctx context.Context, messages []model.Message) (int, error) {
+func (d *dummyCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
 	return 0, nil
 }
-func (d *dummyCounter) RemainingTokens(ctx context.Context, messages []model.Message) (int, error) {
-	return 0, nil
+
+func (d *dummyCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
 }
 
 // errStrategy returns an error to simulate tailoring failure.

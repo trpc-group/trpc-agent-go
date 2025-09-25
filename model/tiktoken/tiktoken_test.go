@@ -22,16 +22,10 @@ func TestTiktokenCounter_CountTokens(t *testing.T) {
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
-	msgs := []model.Message{
-		model.NewUserMessage("Hello, world!"),
-		model.NewAssistantMessage("Hi there!"),
-	}
-	used, err := counter.CountTokens(context.Background(), msgs)
+	msg := model.NewUserMessage("Hello, world!")
+	used, err := counter.CountTokens(context.Background(), msg)
 	require.NoError(t, err)
 	require.Greater(t, used, 0)
-	rem, err := counter.RemainingTokens(context.Background(), msgs)
-	require.NoError(t, err)
-	require.Equal(t, 4000-used, rem)
 }
 
 func TestTiktokenCounter_ModelFallback(t *testing.T) {
@@ -39,15 +33,10 @@ func TestTiktokenCounter_ModelFallback(t *testing.T) {
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
-	msgs := []model.Message{
-		model.NewUserMessage("alpha beta gamma"),
-	}
-	used, err := counter.CountTokens(context.Background(), msgs)
+	msg := model.NewUserMessage("alpha beta gamma")
+	used, err := counter.CountTokens(context.Background(), msg)
 	require.NoError(t, err)
 	require.Greater(t, used, 0)
-	rem, err := counter.RemainingTokens(context.Background(), msgs)
-	require.NoError(t, err)
-	require.Equal(t, 3000-used, rem)
 }
 
 func TestTiktokenCounter_ContentPartsAndReasoning(t *testing.T) {
@@ -62,20 +51,18 @@ func TestTiktokenCounter_ContentPartsAndReasoning(t *testing.T) {
 		ReasoningContent: "think",
 		ContentParts:     []model.ContentPart{{Type: model.ContentTypeText, Text: &text}},
 	}
-	used, err := counter.CountTokens(context.Background(), []model.Message{msg})
+	used, err := counter.CountTokens(context.Background(), msg)
 	require.NoError(t, err)
 	require.Greater(t, used, 0)
 }
 
-func TestTiktokenCounter_EmptyMessages(t *testing.T) {
+func TestTiktokenCounter_EmptyMessage(t *testing.T) {
 	counter, err := New("gpt-4o", 100)
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
-	used, err := counter.CountTokens(context.Background(), nil)
+	msg := model.Message{}
+	used, err := counter.CountTokens(context.Background(), msg)
 	require.NoError(t, err)
 	require.Equal(t, 0, used)
-	rem, err := counter.RemainingTokens(context.Background(), nil)
-	require.NoError(t, err)
-	require.Equal(t, 100, rem)
 }

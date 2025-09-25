@@ -7,6 +7,7 @@ This example demonstrates interactive token tailoring using `openai.WithTokenTai
 - Configure a model with token tailoring via option.
 - Use a simple counter (or swap to the `tiktoken` submodule) to enforce a prompt budget.
 - Interactively send messages; use `/bulk N` to append many user messages and observe trimming.
+- Demonstrates optimized O(n) time complexity token tailoring with prefix sum and binary search.
 
 ## Prerequisites
 
@@ -21,19 +22,17 @@ cd examples/tailor
 # Basic run with flags (defaults shown):
 go run . \
   -model deepseek-chat \
-  -max-prompt-tokens 512 \
+  -token-limit 512 \
   -counter tiktoken \  # or: simple
   -strategy middle \
-  -preserve-system=true \
-  -preserve-last-turn=true \
   -streaming=true
 ```
 
 Then type:
 
 ```
-/bulk 30
-Hello
+/bulk 10
+What is LLM
 ```
 
 You should see lines like (banner + tailoring stats + message summary):
@@ -41,11 +40,9 @@ You should see lines like (banner + tailoring stats + message summary):
 ```
 ✂️  Token Tailoring Demo
 🧩 model: deepseek-chat
-🔢 max-prompt-tokens: 512
+🔢 token-limit: 512
 🧮 counter: tiktoken
 🎛️ strategy: middle
-🛡️ preserve-system: true
-🛡️ preserve-last-turn: true
 📡 streaming: true
 ==================================================
 💡 Commands:
@@ -53,31 +50,61 @@ You should see lines like (banner + tailoring stats + message summary):
   /history    - show current message count
   /exit       - quit
 
-[tailor] maxPromptTokens=512 before=35 after=6
+👤 You: /bulk 10
+Added 10 messages. Total=11
+👤 You: What is LLM
+🤖 Assistant: An LLM (Large Language Model) is a type of artificial intelligence model designed to understand, generate, and work with human language...
+
+[tailor] tokenLimit=512 before=12 after=7
 [tailor] messages (after tailoring):
 [0] system: You are a helpful assistant.
-[1] user: synthetic 1: lorem ipsum ...
-...
-[5] user: Hello
+[1] user: synthetic 1: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...
+[2] user: synthetic 2: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...
+[3] user: synthetic 8: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...
+[4] user: synthetic 9: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...
+[5] user: synthetic 10: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum...
+[6] user: What is LLM
+👤 You: /exit
+👋 Goodbye!
 ```
 
-The first line indicates tailoring happened and how many messages remain. The second block lists the messages sent after tailoring (index, role, truncated content).
+The output shows:
+
+- Interactive conversation with the AI assistant
+- Token tailoring statistics: `[tailor] tokenLimit=512 before=12 after=7`
+- The tailored messages that were sent to the model (index, role, truncated content)
+- Different strategies produce different message selections (middle strategy preserves head and tail messages)
+
+## Important Configuration Notes
+
+✅ **Automatic Preservation**: The system automatically preserves important messages:
+
+- **System message**: Always preserved to maintain AI role and behavior
+- **Last turn**: Always preserved to maintain conversation continuity
+
+This ensures optimal user experience without manual configuration.
 
 ## Notes
 
 - You can switch to the `tiktoken` submodule counter for higher accuracy without changing the root Go version.
 - Use `-streaming=true|false` to control streamed vs non-streamed responses. In streaming mode, tokens are printed incrementally; in non-streaming, the final answer is printed once.
 - Available strategies:
-  - `MiddleOutStrategy` (remove from the middle first; implicitly preserves head and tail)
-  - `HeadOutStrategy` (remove from the head; options to preserve system and last turn)
-  - `TailOutStrategy` (remove from the tail; options to preserve system and last turn)
+  - `middle` (MiddleOutStrategy): Removes from the middle first, preserves head and tail messages
+  - `head` (HeadOutStrategy): Removes from the head first, preserves tail messages
+  - `tail` (TailOutStrategy): Removes from the tail first, preserves head messages
+
+**Strategy Behavior Examples:**
+
+- **Middle strategy**: `[0] system, [1] synthetic 1, [2] synthetic 2, [3] synthetic 8, [4] synthetic 9, [5] synthetic 10, [6] What is LLM`
+- **Head strategy**: `[0] system, [1] synthetic 6, [2] synthetic 7, [3] synthetic 8, [4] synthetic 9, [5] synthetic 10, [6] What is LLM`
+- **Tail strategy**: `[0] system, [1] synthetic 1, [2] synthetic 2, [3] synthetic 3, [4] synthetic 4, [5] synthetic 10, [6] What is LLM`
 
 ### Switch to tiktoken counter (optional)
 
 In your code, replace:
 
 ```go
-counter := model.NewSimpleTokenCounter(maxPromptTokens)
+counter := model.NewSimpleTokenCounter(tokenLimit)
 ```
 
 with a `tiktoken` submodule counter (see `model/tiktoken`), and keep the same `WithTokenTailoring` usage.

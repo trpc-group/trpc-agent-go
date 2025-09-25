@@ -48,44 +48,54 @@ func New(modelName string, maxTokens int) (*Counter, error) {
 	return &Counter{encoding: enc, MaxTokens: maxTokens}, nil
 }
 
-// CountTokens returns the token count for messages using tiktoken-go.
+// CountTokens returns the token count for a single message using tiktoken-go.
 // It encodes Message.Content, Message.ReasoningContent, and text ContentParts.
-func (c *Counter) CountTokens(_ context.Context, messages []model.Message) (int, error) {
+func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, error) {
 	total := 0
-	for _, msg := range messages {
-		if msg.Content != "" {
-			toks, _, err := c.encoding.Encode(msg.Content)
+
+	if message.Content != "" {
+		toks, _, err := c.encoding.Encode(message.Content)
+		if err != nil {
+			return 0, fmt.Errorf("encode content failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	if message.ReasoningContent != "" {
+		toks, _, err := c.encoding.Encode(message.ReasoningContent)
+		if err != nil {
+			return 0, fmt.Errorf("encode reasoning failed: %w", err)
+		}
+		total += len(toks)
+	}
+
+	for _, part := range message.ContentParts {
+		if part.Text != nil {
+			toks, _, err := c.encoding.Encode(*part.Text)
 			if err != nil {
-				return 0, fmt.Errorf("encode content failed: %w", err)
+				return 0, fmt.Errorf("encode text part failed: %w", err)
 			}
 			total += len(toks)
-		}
-		if msg.ReasoningContent != "" {
-			toks, _, err := c.encoding.Encode(msg.ReasoningContent)
-			if err != nil {
-				return 0, fmt.Errorf("encode reasoning failed: %w", err)
-			}
-			total += len(toks)
-		}
-		for _, part := range msg.ContentParts {
-			if part.Text != nil {
-				toks, _, err := c.encoding.Encode(*part.Text)
-				if err != nil {
-					return 0, fmt.Errorf("encode text part failed: %w", err)
-				}
-				total += len(toks)
-			}
 		}
 	}
+
 	return total, nil
 }
 
-// RemainingTokens returns the remaining tokens using the internal MaxTokens.
-// It calls CountTokens and subtracts the result from MaxTokens.
-func (c *Counter) RemainingTokens(ctx context.Context, messages []model.Message) (int, error) {
-	used, err := c.CountTokens(ctx, messages)
-	if err != nil {
-		return 0, err
+// CountTokensRange returns the token count for a range of messages using tiktoken-go.
+// This is more efficient than calling CountTokens multiple times.
+func (c *Counter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
 	}
-	return c.MaxTokens - used, nil
+
+	total := 0
+	for i := start; i < end; i++ {
+		tokens, err := c.CountTokens(ctx, messages[i])
+		if err != nil {
+			return 0, fmt.Errorf("count tokens for message %d failed: %w", i, err)
+		}
+		total += tokens
+	}
+	return total, nil
 }

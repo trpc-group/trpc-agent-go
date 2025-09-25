@@ -26,13 +26,11 @@ import (
 )
 
 var (
-	flagModel            = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
-	flagMaxPromptTokens  = flag.Int("max-prompt-tokens", 512, "Max prompt tokens budget for tailoring")
-	flagCounter          = flag.String("counter", "simple", "Token counter: simple|tiktoken")
-	flagStrategy         = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
-	flagPreserveSystem   = flag.Bool("preserve-system", true, "Preserve the first system message when applicable")
-	flagPreserveLastTurn = flag.Bool("preserve-last-turn", true, "Preserve the last turn (1~2 messages)")
-	flagStreaming        = flag.Bool("streaming", true, "Stream assistant responses")
+	flagModel      = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
+	flagTokenLimit = flag.Int("token-limit", 512, "Token limit for message tailoring")
+	flagCounter    = flag.String("counter", "simple", "Token counter: simple|tiktoken")
+	flagStrategy   = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
+	flagStreaming  = flag.Bool("streaming", true, "Stream assistant responses")
 )
 
 // Interactive demo with /bulk to generate many messages and showcase
@@ -40,19 +38,17 @@ var (
 func main() {
 	flag.Parse()
 
-	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxPromptTokens)
-	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy), *flagPreserveSystem, *flagPreserveLastTurn)
+	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagTokenLimit)
+	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
 	modelInstance := openai.New(*flagModel,
-		openai.WithTokenTailoring(counter, strategy, *flagMaxPromptTokens),
+		openai.WithTokenTailoring(counter, strategy, *flagTokenLimit),
 	)
 
 	fmt.Printf("✂️  Token Tailoring Demo\n")
 	fmt.Printf("🧩 model: %s\n", *flagModel)
-	fmt.Printf("🔢 max-prompt-tokens: %d\n", *flagMaxPromptTokens)
+	fmt.Printf("🔢 token-limit: %d\n", *flagTokenLimit)
 	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
 	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
-	fmt.Printf("🛡️ preserve-system: %t\n", *flagPreserveSystem)
-	fmt.Printf("🛡️ preserve-last-turn: %t\n", *flagPreserveLastTurn)
 	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
 	fmt.Println("==================================================")
 	fmt.Println("💡 Commands:")
@@ -83,12 +79,12 @@ func main() {
 	}
 }
 
-func buildStrategy(counter model.TokenCounter, strategyName string, preserveSystem, preserveLastTurn bool) model.TailoringStrategy {
+func buildStrategy(counter model.TokenCounter, strategyName string) model.TailoringStrategy {
 	switch strategyName {
 	case "head":
-		return model.NewHeadOutStrategy(counter, preserveSystem, preserveLastTurn)
+		return model.NewHeadOutStrategy(counter)
 	case "tail":
-		return model.NewTailOutStrategy(counter, preserveSystem, preserveLastTurn)
+		return model.NewTailOutStrategy(counter)
 	default:
 		return model.NewMiddleOutStrategy(counter)
 	}
@@ -147,8 +143,8 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 	}
 
 	final := renderResponse(ch, *flagStreaming)
-	fmt.Printf("\n[tailor] maxPromptTokens=%d before=%d after=%d\n",
-		*flagMaxPromptTokens, before, len(req.Messages))
+	fmt.Printf("\n[tailor] tokenLimit=%d before=%d after=%d\n",
+		*flagTokenLimit, before, len(req.Messages))
 	// Show a concise summary of the tailored messages (index, role, truncated content)
 	fmt.Printf("[tailor] messages (after tailoring):\n%s", summarizeMessages(req.Messages, 12))
 	if !*flagStreaming && final != "" {

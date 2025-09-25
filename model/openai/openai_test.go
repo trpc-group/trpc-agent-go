@@ -844,12 +844,15 @@ func TestModel_CallbackAssignment(t *testing.T) {
 // testStubCounter implements model.TokenCounter for unit tests.
 type testStubCounter struct{}
 
-func (testStubCounter) CountTokens(ctx context.Context, messages []model.Message) (int, error) {
-	return len(messages), nil
+func (testStubCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 1, nil
 }
 
-func (testStubCounter) RemainingTokens(ctx context.Context, messages []model.Message) (int, error) {
-	return 0, nil
+func (testStubCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
 }
 
 // testStubStrategy implements model.TailoringStrategy for unit tests.
