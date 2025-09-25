@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -89,6 +90,15 @@ type Node struct {
 	// Declared destinations for dynamic routing visualization and static checks.
 	// Keys are target node IDs; values are optional labels.
 	destinations map[string]string
+
+	// It's effect just for LLM node
+	modelCallbacks *model.Callbacks
+	// just for tool node.
+	toolCallbacks *tool.Callbacks
+
+	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
+	// If set, AddLLMNode forwards it to the underlying LLM runner.
+	llmGenerationConfig *model.GenerationConfig
 }
 
 // Edge represents an edge in the graph.

@@ -162,6 +162,104 @@ schema.AddField("counter", graph.StateField{
 
 ## Usage Guide
 
+### Node I/O Conventions
+
+Nodes communicate exclusively through the shared state. Each node returns a state delta which is merged into the graph state using the schema’s reducers. Downstream nodes read whatever upstream nodes wrote.
+
+- Common built‑in keys (user‑facing)
+  - `user_input`: One‑shot input for the next LLM/Agent node. Cleared after consumption.
+  - `one_shot_messages`: Full message override for the next LLM call. Cleared after consumption.
+  - `messages`: Durable conversation history (LLM/Tools append here). Supports MessageOp patches.
+  - `last_response`: The last textual assistant response.
+  - `node_responses`: Map[nodeID]any — per‑node final textual response. Use `last_response` for the most recent.
+
+- Function node
+  - Input: the entire state
+  - Output: return a `graph.State` delta with custom keys (declare them in the schema), e.g. `{"parsed_time": "..."}`
+
+- LLM node
+  - Input priority: `one_shot_messages` → `user_input` → `messages`
+  - Output:
+    - Appends assistant message to `messages`
+    - Sets `last_response`
+    - Sets `node_responses[<llm_node_id>]`
+
+- Tools node
+  - Input: scans `messages` for the latest assistant message with `tool_calls`
+  - Output: appends tool responses to `messages`
+
+- Agent node (sub‑agent)
+  - Input: state is injected into the sub‑agent’s `Invocation.RunOptions.RuntimeState`.
+    - Model/Tool callbacks can access it via `agent.InvocationFromContext(ctx)`.
+  - Output on finish:
+    - Sets `last_response`
+    - Sets `node_responses[<agent_node_id>]`
+    - Clears `user_input`
+
+Recommended patterns
+
+- Add your own keys in the schema (e.g., `parsed_time`, `final_payload`) and write/read them in function nodes.
+- To feed structured hints into an LLM node, write `one_shot_messages` in the previous node (e.g., prepend a system message with parsed context).
+- To consume an upstream node’s text, read `last_response` immediately downstream or fetch from `node_responses[that_node_id]` later.
+
+See examples:
+
+- `examples/graph/io_conventions` — Function + LLM + Agent I/O
+- `examples/graph/io_conventions_tools` — Adds a Tools node path and shows how to capture tool JSON
+
+#### Constant references (import and keys)
+
+- Import: `import "trpc.group/trpc-go/trpc-agent-go/graph"`
+- Defined in: `graph/state.go`
+
+- User‑facing keys
+  - `user_input` → `graph.StateKeyUserInput`
+  - `one_shot_messages` → `graph.StateKeyOneShotMessages`
+  - `messages` → `graph.StateKeyMessages`
+  - `last_response` → `graph.StateKeyLastResponse`
+  - `node_responses` → `graph.StateKeyNodeResponses`
+
+- Other useful keys
+  - `session` → `graph.StateKeySession`
+  - `metadata` → `graph.StateKeyMetadata`
+  - `current_node_id` → `graph.StateKeyCurrentNodeID`
+  - `exec_context` → `graph.StateKeyExecContext`
+  - `tool_callbacks` → `graph.StateKeyToolCallbacks`
+  - `model_callbacks` → `graph.StateKeyModelCallbacks`
+  - `agent_callbacks` → `graph.StateKeyAgentCallbacks`
+  - `parent_agent` → `graph.StateKeyParentAgent`
+
+Snippet:
+
+```go
+import (
+    "context"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func myNode(ctx context.Context, state graph.State) (any, error) {
+    last, _ := state[graph.StateKeyLastResponse].(string)
+    return graph.State{"my_key": last}, nil
+}
+```
+
+#### Event metadata keys (StateDelta)
+
+- Import: `import "trpc.group/trpc-go/trpc-agent-go/graph"`
+- Defined in: `graph/events.go`
+
+- Model metadata: `_model_metadata` → `graph.MetadataKeyModel` (struct `graph.ModelExecutionMetadata`)
+- Tool metadata: `_tool_metadata` → `graph.MetadataKeyTool` (struct `graph.ToolExecutionMetadata`)
+
+Snippet:
+
+```go
+if b, ok := event.StateDelta[graph.MetadataKeyModel]; ok {
+    var md graph.ModelExecutionMetadata
+    _ = json.Unmarshal(b, &md)
+}
+```
+
 ### 1. Creating GraphAgent and Runner
 
 Users mainly use the Graph package by creating GraphAgent and then using it through Runner. This is the recommended usage pattern:

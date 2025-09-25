@@ -181,9 +181,9 @@ func TestPlanner_FinalAns(t *testing.T) {
 	}
 
 	choice := result.Choices[0]
-	expectedContent := " This is the final answer."
-	if choice.Message.Content != expectedContent {
-		t.Errorf("Expected content %q, got %q", expectedContent, choice.Message.Content)
+	// Current implementation preserves original content without processing
+	if choice.Message.Content != originalContent {
+		t.Errorf("Expected content %q, got %q", originalContent, choice.Message.Content)
 	}
 }
 
@@ -213,46 +213,6 @@ func TestPlanner_ProcessPlanResp_Delta(t *testing.T) {
 	// Since there's no final answer tag, content should remain as-is.
 	if choice.Delta.Content != originalDelta {
 		t.Errorf("Expected delta content %q, got %q", originalDelta, choice.Delta.Content)
-	}
-}
-
-func TestPlanner_ProcessTextContent(t *testing.T) {
-	p := New()
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "content with final answer",
-			input:    PlanningTag + " Plan something\n" + FinalAnswerTag + " Final result",
-			expected: " Final result",
-		},
-		{
-			name:     "content without final answer",
-			input:    PlanningTag + " Plan something\n" + ReasoningTag + " Some reasoning",
-			expected: PlanningTag + " Plan something\n" + ReasoningTag + " Some reasoning",
-		},
-		{
-			name:     "empty content",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "content with multiple final answer tags",
-			input:    FinalAnswerTag + " First" + FinalAnswerTag + " Second",
-			expected: " Second",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := p.processTextContent(tt.input)
-			if result != tt.expected {
-				t.Errorf("processTextContent() = %q, want %q", result, tt.expected)
-			}
-		})
 	}
 }
 

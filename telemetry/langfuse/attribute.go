@@ -12,8 +12,8 @@ package langfuse
 // Langfuse-Trace attributes
 const (
 	traceName      = "langfuse.trace.name"
-	traceUserID    = "user.id"
-	traceSessionID = "session.id"
+	traceUserID    = "langfuse.user.id"
+	traceSessionID = "langfuse.session.id"
 	traceTags      = "langfuse.trace.tags"
 	tracePublic    = "langfuse.trace.public"
 	traceMetadata  = "langfuse.trace.metadata"
