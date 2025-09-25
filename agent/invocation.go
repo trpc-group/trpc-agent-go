@@ -24,7 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -74,12 +73,6 @@ type Invocation struct {
 	RunOptions RunOptions
 	// TransferInfo contains information about a pending agent transfer.
 	TransferInfo *TransferInfo
-	// AgentCallbacks contains callbacks for agent operations.
-	AgentCallbacks *Callbacks
-	// ModelCallbacks contains callbacks for model operations.
-	ModelCallbacks *model.Callbacks
-	// ToolCallbacks contains callbacks for tool operations.
-	ToolCallbacks *tool.Callbacks
 
 	// StructuredOutput defines how the model should produce structured output for this invocation.
 	StructuredOutput *model.StructuredOutput
@@ -230,10 +223,14 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		opt(newInv)
 	}
 
-	if inv.Branch != "" && newInv.AgentName != "" {
+	if newInv.Branch != "" {
+		// seted by WithInvocationBranch
+	} else if inv.Branch != "" && newInv.AgentName != "" {
 		newInv.Branch = inv.Branch + BranchDelimiter + newInv.AgentName
 	} else if newInv.AgentName != "" {
 		newInv.Branch = newInv.AgentName
+	} else {
+		newInv.Branch = inv.Branch
 	}
 
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {

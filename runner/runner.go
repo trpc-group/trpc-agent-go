@@ -212,9 +212,12 @@ func (r *runner) Run(
 		}()
 
 		for agentEvent := range agentEventCh {
+			if agentEvent == nil {
+				log.Debug("agentEvent is nil.")
+				continue
+			}
 			// Append event to session if it's complete (not partial).
-			if agentEvent != nil && (len(agentEvent.StateDelta) > 0 ||
-				(agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent())) {
+			if len(agentEvent.StateDelta) > 0 || (agentEvent.Response != nil && !agentEvent.IsPartial && agentEvent.IsValidContent()) {
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}

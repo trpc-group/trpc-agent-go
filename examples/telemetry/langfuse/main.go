@@ -50,25 +50,31 @@ func main() {
 		"Create a test file in the current directory",
 		"Find information about Tesla company",
 	}
-	// Attributes represent additional key-value descriptors that can be bound to a metric observer or recorder.
-	commonAttrs := []attribute.KeyValue{
-		attribute.String("agentName", agentName),
-		attribute.String("modelName", *modelName),
-	}
-
-	ctx, span := atrace.Tracer.Start(
-		context.Background(),
-		agentName,
-		trace.WithAttributes(commonAttrs...),
-	)
-	defer span.End()
 
 	for _, msg := range userMessage {
 		func() {
-			ctx, span := atrace.Tracer.Start(ctx, "process-message")
-			span.SetAttributes(attribute.String("user-message", msg))
+			// Attributes represent additional key-value descriptors that can be bound to a metric observer or recorder.
+			commonAttrs := []attribute.KeyValue{
+				attribute.String("agentName", agentName),
+				attribute.String("modelName", *modelName),
+				attribute.String("langfuse.environment", "development"),
+				attribute.String("langfuse.session.id", "session-1"),
+				attribute.String("langfuse.user.id", "user-1"),
+				attribute.String("langfuse.trace.input", msg),
+			}
+
+			ctx, span := atrace.Tracer.Start(
+				context.Background(),
+				agentName,
+				trace.WithAttributes(commonAttrs...),
+			)
 			defer span.End()
-			err := a.ProcessMessage(ctx, msg)
+
+			result, err := a.ProcessMessage(ctx, msg)
+			if result != "" {
+				span.SetAttributes(attribute.String("langfuse.trace.output", result))
+			}
+
 			if err != nil {
 				span.SetAttributes(attribute.String("error", err.Error()))
 				log.Fatalf("Chat system failed to run: %v", err)

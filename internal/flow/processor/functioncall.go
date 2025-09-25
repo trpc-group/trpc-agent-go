@@ -74,12 +74,14 @@ type subAgentCall struct {
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
+	toolCallbacks       *tool.Callbacks
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
-func NewFunctionCallResponseProcessor(enableParallelTools bool) *FunctionCallResponseProcessor {
+func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *tool.Callbacks) *FunctionCallResponseProcessor {
 	return &FunctionCallResponseProcessor{
 		enableParallelTools: enableParallelTools,
+		toolCallbacks:       toolCallbacks,
 	}
 }
 
@@ -201,7 +203,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name),
 	)
 	defer span.End()
-	choice, err := p.executeToolCall(
+	choice, modifiedArgs, err := p.executeToolCall(
 		ctxWithInvocation, invocation, toolCall, tools, index, eventChan,
 	)
 	if err != nil {
@@ -219,7 +221,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	itelemetry.TraceToolCall(
-		span, decl, toolCall.Function.Arguments, toolEvent,
+		span, decl, modifiedArgs, toolEvent,
 	)
 	return toolEvent, nil
 }
@@ -298,7 +300,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	defer span.End()
 
 	// Execute the tool (streamable or callable) with callbacks.
-	choice, err := p.executeToolCall(
+	choice, modifiedArgs, err := p.executeToolCall(
 		ctxWithInvocation, invocation, tc, tools, index, eventChan,
 	)
 	if err != nil {
@@ -332,7 +334,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
-	itelemetry.TraceToolCall(span, decl, tc.Function.Arguments, toolCallResponseEvent)
+	itelemetry.TraceToolCall(span, decl, modifiedArgs, toolCallResponseEvent)
 	// Send result back to aggregator.
 	p.sendToolResult(
 		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
@@ -416,6 +418,18 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 }
 
 // executeToolCall executes a single tool call and returns the choice.
+// Parameters:
+//   - ctx: context for cancellation and tracing
+//   - invocation: agent invocation context containing agent name, model info, etc.
+//   - toolCall: the tool call to execute, including function name and arguments
+//   - tools: map of available tools by name
+//   - index: index of this tool call in the batch (for error reporting)
+//   - eventChan: channel for emitting events during execution
+//
+// Returns:
+//   - *model.Choice: the result choice containing tool response
+//   - []byte: the modified arguments after before-tool callbacks (for telemetry)
+//   - error: any error that occurred during execution
 func (p *FunctionCallResponseProcessor) executeToolCall(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -423,7 +437,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 	eventChan chan<- *event.Event,
-) (*model.Choice, error) {
+) (*model.Choice, []byte, error) {
 	// Check if tool exists.
 	tl, exists := tools[toolCall.Function.Name]
 	if !exists {
@@ -440,24 +454,24 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		} else {
 			log.Errorf("CallableTool %s not found (agent=%s, model=%s)",
 				toolCall.Function.Name, invocation.AgentName, invocation.Model.Info().Name)
-			return p.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), nil
+			return p.createErrorChoice(index, toolCall.ID, ErrorToolNotFound), toolCall.Function.Arguments, nil
 		}
 	}
 
 	log.Debugf("Executing tool %s with args: %s", toolCall.Function.Name, string(toolCall.Function.Arguments))
 
 	// Execute the tool with callbacks.
-	result, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
+	result, modifiedArgs, err := p.executeToolWithCallbacks(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
-			return nil, err
+			return nil, modifiedArgs, err
 		}
-		return p.createErrorChoice(index, toolCall.ID, err.Error()), nil
+		return p.createErrorChoice(index, toolCall.ID, err.Error()), modifiedArgs, nil
 	}
 	//  allow to return nil not provide function response.
 	if r, ok := tl.(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
-			return nil, nil
+			return nil, modifiedArgs, nil
 		}
 	}
 
@@ -465,7 +479,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		log.Errorf("Failed to marshal tool result for %s: %v", toolCall.Function.Name, err)
-		return p.createErrorChoice(index, toolCall.ID, ErrorMarshalResult), nil
+		return p.createErrorChoice(index, toolCall.ID, ErrorMarshalResult), modifiedArgs, nil
 	}
 
 	log.Debugf("CallableTool %s executed successfully, result: %s", toolCall.Function.Name, string(resultBytes))
@@ -477,7 +491,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			Content: string(resultBytes),
 			ToolID:  toolCall.ID,
 		},
-	}, nil
+	}, modifiedArgs, nil
 }
 
 // waitForCompletion waits for event completion if required.
@@ -536,41 +550,42 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 }
 
 // executeToolWithCallbacks executes a tool with before/after callbacks.
+// Returns (result, modifiedArguments, error).
 func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	toolCall model.ToolCall,
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
-) (any, error) {
+) (any, []byte, error) {
 	toolDeclaration := tl.Declaration()
 	// Run before tool callbacks if they exist.
-	if invocation.ToolCallbacks != nil {
-		customResult, callbackErr := invocation.ToolCallbacks.RunBeforeTool(
+	if p.toolCallbacks != nil {
+		customResult, callbackErr := p.toolCallbacks.RunBeforeTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
-			toolCall.Function.Arguments,
+			&toolCall.Function.Arguments,
 		)
 		if callbackErr != nil {
 			log.Errorf("Before tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
-			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
 		if customResult != nil {
 			// Use custom result from callback.
-			return customResult, nil
+			return customResult, toolCall.Function.Arguments, nil
 		}
 	}
 
 	// Execute the actual tool.
 	result, err := p.executeTool(ctx, invocation, toolCall, tl, eventChan)
 	if err != nil {
-		return nil, err
+		return nil, toolCall.Function.Arguments, err
 	}
 
 	// Run after tool callbacks if they exist.
-	if invocation.ToolCallbacks != nil {
-		customResult, callbackErr := invocation.ToolCallbacks.RunAfterTool(
+	if p.toolCallbacks != nil {
+		customResult, callbackErr := p.toolCallbacks.RunAfterTool(
 			ctx,
 			toolCall.Function.Name,
 			toolDeclaration,
@@ -580,13 +595,13 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		)
 		if callbackErr != nil {
 			log.Errorf("After tool callback failed for %s: %v", toolCall.Function.Name, callbackErr)
-			return nil, fmt.Errorf("tool callback error: %w", callbackErr)
+			return nil, toolCall.Function.Arguments, fmt.Errorf("tool callback error: %w", callbackErr)
 		}
 		if customResult != nil {
 			result = customResult
 		}
 	}
-	return result, nil
+	return result, toolCall.Function.Arguments, nil
 }
 
 // isStreamable returns true if the tool supports streaming and its stream
@@ -691,29 +706,6 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 		}
 	}
 	return contents, nil
-}
-
-// normalizeInnerEvent ensures invocation ID and branch are set for inner events.
-func (f *FunctionCallResponseProcessor) normalizeInnerEvent(ev *event.Event, inv *agent.Invocation) {
-	if ev.InvocationID == "" {
-		ev.InvocationID = inv.InvocationID
-	}
-	if ev.Branch == "" {
-		ev.Branch = inv.Branch
-	}
-}
-
-// shouldForwardInnerEvent suppresses forwarding of the inner agent's final full
-// content to avoid duplicate large blocks in the parent transcript. We still
-// aggregate its text from deltas for the final tool.response content.
-func (f *FunctionCallResponseProcessor) shouldForwardInnerEvent(ev *event.Event) bool {
-	if ev.Response != nil && len(ev.Response.Choices) > 0 {
-		ch := ev.Response.Choices[0]
-		if ch.Delta.Content == "" && ch.Message.Role == model.RoleAssistant && ch.Message.Content != "" && !ev.Response.IsPartial {
-			return false
-		}
-	}
-	return true
 }
 
 // appendInnerEventContent extracts textual content from an inner event and appends it.
@@ -935,18 +927,10 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 ) error {
 	// Case 1: Raw sub-agent event passthrough.
 	if ev, ok := chunk.Content.(*event.Event); ok {
-		f.normalizeInnerEvent(ev, invocation)
-		// Default forwarding rule suppresses the final full assistant message to avoid
-		// duplication, but if we have not emitted any prior deltas/content from the
-		// inner stream, forward this final message so callers still see the sub-agent output.
-		shouldForward := f.shouldForwardInnerEvent(ev)
-		if !shouldForward && contents != nil && len(*contents) == 0 {
-			shouldForward = true
-		}
-		if shouldForward {
-			if err := agent.EmitEvent(ctx, invocation, eventChan, ev); err != nil {
-				return err
-			}
+		// With random FilterKey isolation, we can safely forward all inner events
+		// since they are properly isolated and won't pollute the parent session.
+		if err := event.EmitEvent(ctx, eventChan, ev); err != nil {
+			return err
 		}
 		f.appendInnerEventContent(ev, contents)
 		return nil

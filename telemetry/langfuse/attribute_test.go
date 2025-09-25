@@ -18,8 +18,8 @@ import (
 func TestConstants(t *testing.T) {
 	// Test trace attribute constants
 	assert.Equal(t, "langfuse.trace.name", traceName)
-	assert.Equal(t, "user.id", traceUserID)
-	assert.Equal(t, "session.id", traceSessionID)
+	assert.Equal(t, "langfuse.user.id", traceUserID)
+	assert.Equal(t, "langfuse.session.id", traceSessionID)
 	assert.Equal(t, "langfuse.trace.tags", traceTags)
 	assert.Equal(t, "langfuse.trace.public", tracePublic)
 	assert.Equal(t, "langfuse.trace.metadata", traceMetadata)
@@ -106,6 +106,6 @@ func TestConstantNamingConvention(t *testing.T) {
 	}
 
 	// Test standard OpenTelemetry attributes
-	assert.Equal(t, "user.id", traceUserID)
-	assert.Equal(t, "session.id", traceSessionID)
+	assert.Equal(t, "langfuse.user.id", traceUserID)
+	assert.Equal(t, "langfuse.session.id", traceSessionID)
 }

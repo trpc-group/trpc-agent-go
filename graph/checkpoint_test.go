@@ -377,9 +377,9 @@ func TestToolEvents_And_ExecuteSingleToolCall(t *testing.T) {
 	// prepare event channel
 	ch := make(chan *event.Event, 10)
 	// emit start
-	emitToolStartEvent(ch, "inv-id", "echo", "id-1", "nodeA", time.Now(), []byte(`{"a":1}`))
+	emitToolStartEvent(context.Background(), ch, "inv-id", "echo", "id-1", "nodeA", time.Now(), []byte(`{"a":1}`))
 	// emit complete
-	emitToolCompleteEvent(toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`)})
+	emitToolCompleteEvent(context.Background(), toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`)})
 	// ensure two events were sent
 	e1 := <-ch
 	e2 := <-ch
@@ -420,9 +420,9 @@ func TestExtractToolCallbacks_NotFound(t *testing.T) {
 func TestAgentEvents_Emit(t *testing.T) {
 	ch := make(chan *event.Event, 10)
 	start := time.Now()
-	emitAgentStartEvent(ch, "inv", "nodeZ", start)
-	emitAgentCompleteEvent(ch, "inv", "nodeZ", start, time.Now())
-	emitAgentErrorEvent(ch, "inv", "nodeZ", start, time.Now(), assert.AnError)
+	emitAgentStartEvent(context.Background(), ch, "inv", "nodeZ", start)
+	emitAgentCompleteEvent(context.Background(), ch, "inv", "nodeZ", start, time.Now())
+	emitAgentErrorEvent(context.Background(), ch, "inv", "nodeZ", start, time.Now(), assert.AnError)
 	// three events
 	require.NotNil(t, <-ch)
 	require.NotNil(t, <-ch)
@@ -487,32 +487,32 @@ func TestRunTool_CallbackShortCircuitAndErrors(t *testing.T) {
 	call := model.ToolCall{ID: "id", Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)}}
 
 	// Before callback returns custom result
-	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte) (any, error) {
+	cbs := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return map[string]any{"short": true}, nil
 	})
-	res, err := runTool(ctx, call, cbs, tdecl)
+	res, _, err := runTool(ctx, call, cbs, tdecl)
 	require.NoError(t, err)
 	m, _ := res.(map[string]any)
 	require.Equal(t, true, m["short"])
 
 	// Before callback returns error
-	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte) (any, error) {
+	cbs2 := tool.NewCallbacks().RegisterBeforeTool(func(ctx context.Context, toolName string, d *tool.Declaration, args *[]byte) (any, error) {
 		return nil, assert.AnError
 	})
-	_, err = runTool(ctx, call, cbs2, tdecl)
+	_, _, err = runTool(ctx, call, cbs2, tdecl)
 	require.Error(t, err)
 
 	// After callback returns custom result
 	cbs3 := tool.NewCallbacks().RegisterAfterTool(func(ctx context.Context, toolName string, d *tool.Declaration, args []byte, result any, runErr error) (any, error) {
 		return map[string]any{"override": true}, nil
 	})
-	res, err = runTool(ctx, call, cbs3, tdecl)
+	res, _, err = runTool(ctx, call, cbs3, tdecl)
 	require.NoError(t, err)
 	m2, _ := res.(map[string]any)
 	require.Equal(t, true, m2["override"])
 
 	// Not callable tool
-	_, err = runTool(ctx, call, nil, &notCallableTool{})
+	_, _, err = runTool(ctx, call, nil, &notCallableTool{})
 	require.Error(t, err)
 }
 
@@ -552,12 +552,12 @@ func TestBuildAgentInvocation(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	exec := &ExecutionContext{InvocationID: "inv-x"}
 	st := State{StateKeyUserInput: "hello", StateKeySession: s, StateKeyExecContext: exec}
-	newInv := buildAgentInvocation(ctx, st, d, nil)
+	newInv := buildAgentInvocation(ctx, st, d)
 	require.NotNil(t, newInv)
 	require.Equal(t, "ag", newInv.AgentName)
 	require.Equal(t, "hello", newInv.Message.Content)
 
-	newInv = buildAgentInvocation(context.Background(), st, d, nil)
+	newInv = buildAgentInvocation(context.Background(), st, d)
 	require.NotNil(t, newInv)
 	require.Equal(t, "ag", newInv.AgentName)
 	require.Equal(t, "hello", newInv.Message.Content)
@@ -590,7 +590,7 @@ func TestProcessToolCalls(t *testing.T) {
 		ToolCalls:    []model.ToolCall{{ID: "id", Function: model.FunctionDefinitionParam{Name: "echo", Arguments: []byte(`{"x":1}`)}}},
 		Tools:        map[string]tool.Tool{"echo": dt},
 		InvocationID: "inv",
-		EventChan:    make(chan *event.Event, 1),
+		EventChan:    make(chan *event.Event, 10),
 		Span:         span,
 		State:        State{StateKeyCurrentNodeID: "n"},
 	})
@@ -600,8 +600,8 @@ func TestProcessToolCalls(t *testing.T) {
 }
 
 func TestEmitToolCompleteEvent_WithError(t *testing.T) {
-	ch := make(chan *event.Event, 1)
-	emitToolCompleteEvent(toolCompleteEventConfig{EventChan: ch, InvocationID: "inv", ToolName: "t", ToolID: "id", NodeID: "n", StartTime: time.Now(), Result: nil, Error: fmt.Errorf("err"), Arguments: []byte(`{}`)})
+	ch := make(chan *event.Event, 10)
+	emitToolCompleteEvent(context.Background(), toolCompleteEventConfig{EventChan: ch, InvocationID: "inv", ToolName: "t", ToolID: "id", NodeID: "n", StartTime: time.Now(), Result: nil, Error: fmt.Errorf("err"), Arguments: []byte(`{}`)})
 	e := <-ch
 	require.NotNil(t, e)
 }

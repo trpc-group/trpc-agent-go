@@ -471,11 +471,9 @@ func TestTransformRunRunner(t *testing.T) {
 				},
 			},
 			expected: map[string]string{
-				traceName:         "test-runner",
-				traceUserID:       "user123",
-				traceSessionID:    "session456",
-				traceInput:        "input data",
-				traceOutput:       "output data",
+				observationType:   "agent",
+				observationInput:  "input data",
+				observationOutput: "output data",
 				"other.attribute": "keep-this",
 			},
 		},
@@ -492,11 +490,15 @@ func TestTransformRunRunner(t *testing.T) {
 						Key:   itelemetry.KeyRunnerUserID,
 						Value: nil,
 					},
+					{
+						Key:   itelemetry.KeyRunnerInput,
+						Value: nil,
+					},
 				},
 			},
 			expected: map[string]string{
-				traceName:   "N/A",
-				traceUserID: "N/A",
+				observationType:  "agent",
+				observationInput: "N/A",
 			},
 		},
 	}
@@ -517,11 +519,8 @@ func TestTransformRunRunner(t *testing.T) {
 				assert.Equal(t, expectedValue, actualValue, "attribute %s value mismatch", key)
 			}
 
-			// Check that runner-specific attributes are removed
+			// Check that runner input/output attributes are removed (transformed)
 			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyRunnerName, attr.Key, "runner name attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyRunnerUserID, attr.Key, "runner user ID attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyRunnerSessionID, attr.Key, "runner session ID attribute should be removed")
 				assert.NotEqual(t, itelemetry.KeyRunnerInput, attr.Key, "runner input attribute should be removed")
 				assert.NotEqual(t, itelemetry.KeyRunnerOutput, attr.Key, "runner output attribute should be removed")
 			}
