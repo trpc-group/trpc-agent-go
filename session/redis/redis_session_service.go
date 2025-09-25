@@ -57,7 +57,11 @@ var luaSummariesSetIfNewer = redis.NewScript(
 		"end\n" +
 		"local map = cjson.decode(cur)\n" +
 		"local old = map[fk]\n" +
-		"if not old or old.UpdatedAt <= newSum.UpdatedAt then\n" +
+		"local old_ts = nil\n" +
+		"local new_ts = nil\n" +
+		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
+		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
+		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
 		"  map[fk] = newSum\n" +
 		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
 		"  return 1\n" +
@@ -938,19 +942,7 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 			return pickSummaryText(summaries)
 		}
 	}
-	// Legacy fallback to sess state (for compatibility during transition).
-	stateBytes, err := s.redisClient.HGet(ctx, getSessionStateKey(key), key.SessionID).Bytes()
-	if err != nil {
-		return "", false
-	}
-	sessState := &SessionState{}
-	if err := json.Unmarshal(stateBytes, sessState); err != nil {
-		return "", false
-	}
-	if sessState.Summaries == nil {
-		return "", false
-	}
-	return pickSummaryText(sessState.Summaries)
+	return "", false
 }
 
 // pickSummaryText picks a non-empty summary string with preference for the
