@@ -414,5 +414,19 @@ model := openai.New("deepseek-chat",
         // Called when each streaming response chunk is received.
         log.Printf("Received streaming chunk: ID=%s", chunk.ID)
     }),
+
+    // Set streaming completion callback function.
+    openai.WithChatStreamCompleteCallback(func(ctx context.Context,
+        req *openai.ChatCompletionNewParams,
+        acc *openai.ChatCompletionAccumulator,
+        streamErr error) {
+        // Called when streaming is completely finished (success or error).
+        if streamErr != nil {
+            log.Printf("Streaming failed: %v", streamErr)
+        } else {
+            log.Printf("Streaming completed: reason=%s", 
+                acc.Choices[0].FinishReason)
+        }
+    }),
 )
 ```

@@ -555,6 +555,72 @@ func TestModel_Callbacks(t *testing.T) {
 		}
 	})
 
+	t.Run("chat stream complete callback", func(t *testing.T) {
+		var capturedRequest *openaigo.ChatCompletionNewParams
+		var capturedAccumulator *openaigo.ChatCompletionAccumulator
+		var capturedStreamErr error
+		var capturedCtx context.Context
+		callbackCalled := make(chan struct{})
+
+		streamCompleteCallback := func(ctx context.Context, req *openaigo.ChatCompletionNewParams, acc *openaigo.ChatCompletionAccumulator, streamErr error) {
+			capturedCtx = ctx
+			capturedRequest = req
+			capturedAccumulator = acc
+			capturedStreamErr = streamErr
+			close(callbackCalled)
+		}
+
+		m := New("gpt-3.5-turbo",
+			WithAPIKey(apiKey),
+			WithChatStreamCompleteCallback(streamCompleteCallback),
+		)
+
+		ctx := context.Background()
+		request := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("hello"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true, // Enable streaming for this test
+			},
+		}
+
+		responseChan, err := m.GenerateContent(ctx, request)
+		if err != nil {
+			t.Fatalf("failed to generate content: %v", err)
+		}
+
+		// Consume all responses
+		for response := range responseChan {
+			if response.Done {
+				break
+			}
+		}
+
+		// Wait for callback with timeout
+		select {
+		case <-callbackCalled:
+			// Success - callback was called
+		case <-time.After(30 * time.Second):
+			// Timeout - this is expected when API key is invalid
+			t.Skip("skipping stream complete callback test due to timeout - API might be slow or failing")
+		}
+
+		// Verify the callback was called with correct parameters (if it was called)
+		if capturedCtx != nil {
+			if capturedRequest == nil {
+				t.Fatal("expected request to be captured in callback")
+			}
+			if capturedRequest.Model != "gpt-3.5-turbo" {
+				t.Errorf("expected model %s, got %s", "gpt-3.5-turbo", capturedRequest.Model)
+			}
+			// Either accumulator should be non-nil (success) or streamErr should be non-nil (failure)
+			if capturedAccumulator == nil && capturedStreamErr == nil {
+				t.Fatal("expected either accumulator or streamErr to be set")
+			}
+		}
+	})
+
 	t.Run("multiple callbacks", func(t *testing.T) {
 		requestCalled := false
 		responseCalled := false

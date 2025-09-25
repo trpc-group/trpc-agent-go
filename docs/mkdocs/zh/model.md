@@ -414,5 +414,19 @@ model := openai.New("deepseek-chat",
         // 收到每个流式响应块时调用
         log.Printf("收到流式块: ID=%s", chunk.ID)
     }),
+
+    // 设置流式完成回调函数
+    openai.WithChatStreamCompleteCallback(func(ctx context.Context,
+        req *openai.ChatCompletionNewParams,
+        acc *openai.ChatCompletionAccumulator,
+        streamErr error) {
+        // 流式响应完全结束时调用（成功或失败）
+        if streamErr != nil {
+            log.Printf("流式响应失败: %v", streamErr)
+        } else {
+            log.Printf("流式响应完成: 原因=%s", 
+                acc.Choices[0].FinishReason)
+        }
+    }),
 )
 ```
