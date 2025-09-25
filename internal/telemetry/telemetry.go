@@ -171,6 +171,7 @@ func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, mess
 	)
 }
 
+// TraceBeforeInvokeAgent traces the before invocation of an agent.
 func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation) {
 	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
@@ -193,6 +194,7 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation) {
 	}
 }
 
+// TraceAfterInvokeAgent traces the after invocation of an agent.
 func TraceAfterInvokeAgent(span trace.Span, rsp *model.Response) {
 	if len(rsp.Choices) > 0 {
 		if bts, err := json.Marshal(rsp.Choices[0].Message); err == nil {
