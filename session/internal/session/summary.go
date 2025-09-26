@@ -24,16 +24,20 @@ import (
 const authorSystem = "system"
 
 // computeDeltaSince returns events that occurred strictly after the given
-// time. When since is zero, all events are returned.
-func computeDeltaSince(evs []event.Event, since time.Time) []event.Event {
-	if since.IsZero() {
-		return evs
-	}
+// time and match the filterKey. When since is zero, all events are returned.
+// When filterKey is empty, all events are returned (no filtering).
+func computeDeltaSince(evs []event.Event, since time.Time, filterKey string) []event.Event {
 	out := make([]event.Event, 0, len(evs))
 	for _, e := range evs {
-		if e.Timestamp.After(since) {
-			out = append(out, e)
+		// Apply time filter
+		if !since.IsZero() && !e.Timestamp.After(since) {
+			continue
 		}
+		// Apply filterKey filter
+		if filterKey != "" && !e.Filter(filterKey) {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out
 }
@@ -68,11 +72,11 @@ func buildFilterSession(base *session.Session, filterKey string, evs []event.Eve
 	}
 }
 
-// SummarizeAndPersist performs per-filterKey delta summarization using the given
+// SummarizeSession performs per-filterKey delta summarization using the given
 // summarizer and writes results to base.Summaries.
 // - When filterKey is non-empty, summarizes only that filter's events.
 // - When filterKey is empty, summarizes all events as a single full-session summary.
-func SummarizeAndPersist(
+func SummarizeSession(
 	ctx context.Context,
 	m summary.SessionSummarizer,
 	base *session.Session,
@@ -83,50 +87,39 @@ func SummarizeAndPersist(
 		return false, nil
 	}
 
-	process := func(key string, evs []event.Event) (bool, error) {
-		if len(evs) == 0 {
-			return false, nil
+	// Get previous summary info.
+	var prevText string
+	var prevAt time.Time
+	if base.Summaries != nil {
+		if s := base.Summaries[filterKey]; s != nil {
+			prevText = s.Summary
+			prevAt = s.UpdatedAt
 		}
-		var prevText string
-		var prevAt time.Time
-		if base != nil && base.Summaries != nil {
-			if s := base.Summaries[key]; s != nil {
-				prevText = s.Summary
-				prevAt = s.UpdatedAt
-			}
-		}
-		delta := computeDeltaSince(evs, prevAt)
-		if !force && len(delta) == 0 {
-			return false, nil
-		}
-		input := prependPrevSummary(prevText, delta, time.Now())
-		tmp := buildFilterSession(base, key, input)
-		if !force && !m.ShouldSummarize(tmp) {
-			return false, nil
-		}
-		text, err := m.Summarize(ctx, tmp)
-		if err != nil || text == "" {
-			return false, nil
-		}
-		if base.Summaries == nil {
-			base.Summaries = make(map[string]*session.Summary)
-		}
-		base.Summaries[key] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
-		return true, nil
 	}
 
-	// When filterKey is empty, summarize all events as a single branch with key="".
-	var evs []event.Event
-	if filterKey != "" {
-		matched := make([]event.Event, 0, len(base.Events))
-		for _, e := range base.Events {
-			if e.Filter(filterKey) {
-				matched = append(matched, e)
-			}
-		}
-		evs = matched
-	} else {
-		evs = base.Events
+	// Compute delta events with both time and filterKey filtering in one pass.
+	delta := computeDeltaSince(base.Events, prevAt, filterKey)
+	if !force && len(delta) == 0 {
+		return false, nil
 	}
-	return process(filterKey, evs)
+
+	// Build input with previous summary prepended.
+	input := prependPrevSummary(prevText, delta, time.Now())
+	tmp := buildFilterSession(base, filterKey, input)
+	if !force && !m.ShouldSummarize(tmp) {
+		return false, nil
+	}
+
+	// Generate summary.
+	text, err := m.Summarize(ctx, tmp)
+	if err != nil || text == "" {
+		return false, nil
+	}
+
+	// Update summaries.
+	if base.Summaries == nil {
+		base.Summaries = make(map[string]*session.Summary)
+	}
+	base.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	return true, nil
 }

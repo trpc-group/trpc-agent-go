@@ -893,7 +893,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}

@@ -40,7 +40,7 @@ func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	}
 }
 
-func TestSummarizeAndPersist_FilteredBranch_RespectsDeltaAndShould(t *testing.T) {
+func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
 	base.Events = []event.Event{
@@ -50,13 +50,13 @@ func TestSummarizeAndPersist_FilteredBranch_RespectsDeltaAndShould(t *testing.T)
 
 	// allow=false and force=false should skip.
 	s := &fakeSummarizer{allow: false, out: "sum"}
-	updated, err := SummarizeAndPersist(context.Background(), s, base, "b1", false)
+	updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.False(t, updated)
 
 	// allow=true should write.
 	s.allow = true
-	updated, err = SummarizeAndPersist(context.Background(), s, base, "b1", false)
+	updated, err = SummarizeSession(context.Background(), s, base, "b1", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NotNil(t, base.Summaries)
@@ -64,13 +64,13 @@ func TestSummarizeAndPersist_FilteredBranch_RespectsDeltaAndShould(t *testing.T)
 
 	// force=true should write even when ShouldSummarize=false.
 	s.allow = false
-	updated, err = SummarizeAndPersist(context.Background(), s, base, "b1", true)
+	updated, err = SummarizeSession(context.Background(), s, base, "b1", true)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.Equal(t, "sum", base.Summaries["b1"].Summary)
 }
 
-func TestSummarizeAndPersist_FullSession_SingleWrite(t *testing.T) {
+func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
 	base.Events = []event.Event{
@@ -78,7 +78,7 @@ func TestSummarizeAndPersist_FullSession_SingleWrite(t *testing.T) {
 		makeEvent("e2", now.Add(-30*time.Second), "b2"),
 	}
 	s := &fakeSummarizer{allow: true, out: "sum"}
-	updated, err := SummarizeAndPersist(context.Background(), s, base, "", false)
+	updated, err := SummarizeSession(context.Background(), s, base, "", false)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NotNil(t, base.Summaries)

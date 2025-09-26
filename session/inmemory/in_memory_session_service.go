@@ -686,7 +686,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	app.mu.Unlock()
 
 	// Run summarization which updates storedSession.Summaries in place.
-	updated, err := sisession.SummarizeAndPersist(ctx, s.opts.summarizer, storedSession, filterKey, force)
+	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, storedSession, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
