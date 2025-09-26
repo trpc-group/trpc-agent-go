@@ -32,18 +32,18 @@ type Runner interface {
 func New(r trunner.Runner, opt ...aguirunner.Option) Runner {
 	opts := aguirunner.NewOptions(opt...)
 	run := &runner{
-		runner:         r,
-		bridgeFactory:  opts.BridgeFactory,
-		userIDResolver: opts.UserIDResolver,
+		runner:            r,
+		translatorFactory: opts.TranslatorFactory,
+		userIDResolver:    opts.UserIDResolver,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
-	runner         trunner.Runner
-	bridgeFactory  aguirunner.BridgeFactory
-	userIDResolver aguirunner.UserIDResolver
+	runner            trunner.Runner
+	translatorFactory aguirunner.TranslatorFactory
+	userIDResolver    aguirunner.UserIDResolver
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -61,31 +61,31 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 
 func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- events.Event) {
 	defer close(events)
-	bridge := r.bridgeFactory(runAgentInput)
-	events <- bridge.NewRunStartedEvent()
+	translator := r.translatorFactory(runAgentInput)
+	events <- adapter.NewRunStartedEvent(runAgentInput.ThreadID, runAgentInput.RunID)
 	if len(runAgentInput.Messages) == 0 {
-		events <- bridge.NewRunErrorEvent("no messages provided")
+		events <- adapter.NewRunErrorEvent("no messages provided", runAgentInput.RunID)
 		return
 	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
-		events <- bridge.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err))
+		events <- adapter.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err), runAgentInput.RunID)
 		return
 	}
 	userMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
 	if userMessage.Role != model.RoleUser {
-		events <- bridge.NewRunErrorEvent("last message is not a user message")
+		events <- adapter.NewRunErrorEvent("last message is not a user message", runAgentInput.RunID)
 		return
 	}
 	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
 	if err != nil {
-		events <- bridge.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err))
+		events <- adapter.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err), runAgentInput.RunID)
 		return
 	}
 	for event := range ch {
-		aguiEvents, err := bridge.Translate(event)
+		aguiEvents, err := translator.Translate(event)
 		if err != nil {
-			events <- bridge.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err))
+			events <- adapter.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err), runAgentInput.RunID)
 			return
 		}
 		for _, aguiEvent := range aguiEvents {

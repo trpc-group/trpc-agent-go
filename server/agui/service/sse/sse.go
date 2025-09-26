@@ -21,8 +21,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-const defaultPath = "/"
-
 // sse is a SSE service implementation.
 type sse struct {
 	path    string
@@ -33,20 +31,14 @@ type sse struct {
 
 // New creates a new SSE service.
 func New(runner runner.Runner, opt ...service.Option) service.Service {
-	opts := service.Options{}
-	for _, o := range opt {
-		o(&opts)
-	}
-	if opts.Path == "" {
-		opts.Path = defaultPath
-	}
+	opts := service.NewOptions(opt...)
 	s := &sse{
 		path:   opts.Path,
 		runner: runner,
 		writer: aguisse.NewSSEWriter(),
 	}
 	h := http.NewServeMux()
-	h.HandleFunc(opts.Path, s.handle)
+	h.HandleFunc(s.path, s.handle)
 	s.handler = h
 	return s
 }

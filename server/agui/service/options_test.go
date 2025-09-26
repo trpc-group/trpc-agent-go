@@ -1,19 +1,26 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestWithPath(t *testing.T) {
-	opts := &Options{}
-	WithPath("/sse")(opts)
+	// Test default path
+	opts := NewOptions()
+	assert.Equal(t, opts.Path, "/")
 
-	if opts.Path != "/sse" {
-		t.Fatalf("path mismatch: got %q", opts.Path)
-	}
-}
-
-func TestOptionsDefaultValues(t *testing.T) {
-	opts := &Options{}
-	if opts.Path != "" {
-		t.Fatalf("expected zero default path, got %q", opts.Path)
-	}
+	// Test with path
+	opts = NewOptions(WithPath("/sse"))
+	assert.Equal(t, opts.Path, "/sse")
 }

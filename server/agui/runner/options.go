@@ -13,20 +13,20 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 // Options holds the options for the runner.
 type Options struct {
-	BridgeFactory  BridgeFactory
-	UserIDResolver UserIDResolver
+	TranslatorFactory TranslatorFactory
+	UserIDResolver    UserIDResolver
 }
 
 // NewOptions creates a new options instance.
 func NewOptions(opt ...Option) *Options {
 	opts := &Options{
-		UserIDResolver: defaultUserIDResolver,
-		BridgeFactory:  defaultBridgeFactory,
+		UserIDResolver:    defaultUserIDResolver,
+		TranslatorFactory: defaultTranslatorFactory,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -47,13 +47,13 @@ func WithUserIDResolver(u UserIDResolver) Option {
 	}
 }
 
-// BridgeFactory is a function that creates a bridge for an AG-UI run.
-type BridgeFactory func(input *adapter.RunAgentInput) event.Bridge
+// TranslatorFactory is a function that creates a bridge for an AG-UI run.
+type TranslatorFactory func(input *adapter.RunAgentInput) translator.Translator
 
-// WithBridgeFactory sets the bridge factory.
-func WithBridgeFactory(factory BridgeFactory) Option {
+// WithTranslatorFactory sets the translator factory.
+func WithTranslatorFactory(factory TranslatorFactory) Option {
 	return func(o *Options) {
-		o.BridgeFactory = factory
+		o.TranslatorFactory = factory
 	}
 }
 
@@ -62,7 +62,7 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 	return "user", nil
 }
 
-// defaultBridgeFactory is the default bridge factory.
-func defaultBridgeFactory(input *adapter.RunAgentInput) event.Bridge {
-	return event.NewBridge(input.ThreadID, input.RunID)
+// defaultTranslatorFactory is the default translator factory.
+func defaultTranslatorFactory(input *adapter.RunAgentInput) translator.Translator {
+	return translator.New(input.ThreadID, input.RunID)
 }

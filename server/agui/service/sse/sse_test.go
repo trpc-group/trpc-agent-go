@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package sse
 
 import (
@@ -10,24 +19,10 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
-
-type stubRunner struct {
-	runFn     func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error)
-	calls     int
-	lastInput *adapter.RunAgentInput
-}
-
-func (s *stubRunner) Run(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
-	s.calls++
-	s.lastInput = input
-	if s.runFn != nil {
-		return s.runFn(ctx, input)
-	}
-	return nil, nil
-}
 
 func TestHandleRunnerNotConfigured(t *testing.T) {
 	srv := &sse{}
@@ -39,12 +34,8 @@ func TestHandleRunnerNotConfigured(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 status, got %d", res.StatusCode)
-	}
-	if !strings.Contains(rr.Body.String(), "runner not configured") {
-		t.Fatalf("expected runner not configured message, got %q", rr.Body.String())
-	}
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Contains(t, rr.Body.String(), "runner not configured")
 }
 
 func TestHandleInvalidJSON(t *testing.T) {
@@ -58,12 +49,8 @@ func TestHandleInvalidJSON(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 status, got %d", res.StatusCode)
-	}
-	if runner.calls != 0 {
-		t.Fatalf("runner must not be invoked on invalid payload")
-	}
+	assert.Equal(t, http.StatusBadRequest, res.StatusCode)
+	assert.Equal(t, 0, runner.calls)
 }
 
 func TestHandleRunnerError(t *testing.T) {
@@ -82,12 +69,8 @@ func TestHandleRunnerError(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("expected 500 status, got %d", res.StatusCode)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner should be invoked once")
-	}
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+	assert.Equal(t, 1, runner.calls)
 }
 
 func TestHandleSuccess(t *testing.T) {
@@ -100,9 +83,8 @@ func TestHandleSuccess(t *testing.T) {
 
 	runner := &stubRunner{
 		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
-			if input.ThreadID != "thread" || input.RunID != "run" {
-				t.Fatalf("unexpected input: %+v", input)
-			}
+			assert.Equal(t, "thread", input.ThreadID)
+			assert.Equal(t, "run", input.RunID)
 			return eventsCh, nil
 		},
 	}
@@ -117,31 +99,31 @@ func TestHandleSuccess(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 status, got %d", res.StatusCode)
-	}
-	if res.Header.Get("Content-Type") != "text/event-stream" {
-		t.Fatalf("unexpected content type: %s", res.Header.Get("Content-Type"))
-	}
-	if res.Header.Get("Cache-Control") != "no-cache" {
-		t.Fatalf("unexpected cache control header: %s", res.Header.Get("Cache-Control"))
-	}
-	if res.Header.Get("Connection") != "keep-alive" {
-		t.Fatalf("unexpected connection header: %s", res.Header.Get("Connection"))
-	}
-	if res.Header.Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatalf("unexpected CORS header: %s", res.Header.Get("Access-Control-Allow-Origin"))
-	}
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "text/event-stream", res.Header.Get("Content-Type"))
+	assert.Equal(t, "no-cache", res.Header.Get("Cache-Control"))
+	assert.Equal(t, "keep-alive", res.Header.Get("Connection"))
+	assert.Equal(t, "*", res.Header.Get("Access-Control-Allow-Origin"))
 	body := rr.Body.String()
-	if !strings.Contains(body, `"type":"RUN_STARTED"`) {
-		t.Fatalf("expected RUN_STARTED event in body, got %q", body)
-	}
-	if !strings.Contains(body, `"type":"TEXT_MESSAGE_START"`) {
-		t.Fatalf("expected TEXT_MESSAGE_START event in body, got %q", body)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner should be invoked once, got %d", runner.calls)
-	}
+	assert.Contains(t, body, `"type":"RUN_STARTED"`)
+	assert.Contains(t, body, `"type":"TEXT_MESSAGE_START"`)
+	assert.Equal(t, 1, runner.calls)
+}
+
+func TestHandleMethodNotAllowed(t *testing.T) {
+	runner := &stubRunner{}
+	srv := &sse{runner: runner, writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodGet, "/agui", nil)
+	rr := httptest.NewRecorder()
+
+	srv.handle(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	assert.Equal(t, http.StatusMethodNotAllowed, res.StatusCode)
+	assert.Equal(t, http.MethodPost, res.Header.Get("Allow"))
+	assert.Equal(t, 0, runner.calls)
 }
 
 func TestHandlerDispatchesToConfiguredPath(t *testing.T) {
@@ -158,9 +140,7 @@ func TestHandlerDispatchesToConfiguredPath(t *testing.T) {
 
 	svc := New(runner, service.WithPath("/custom"))
 	handler := svc.Handler()
-	if handler == nil {
-		t.Fatalf("Handler returned nil")
-	}
+	assert.NotNil(t, handler)
 
 	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/custom", strings.NewReader(payload))
@@ -171,12 +151,8 @@ func TestHandlerDispatchesToConfiguredPath(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 status, got %d", res.StatusCode)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner should be invoked once, got %d", runner.calls)
-	}
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, 1, runner.calls)
 }
 
 func TestNewUsesDefaultPath(t *testing.T) {
@@ -193,12 +169,10 @@ func TestNewUsesDefaultPath(t *testing.T) {
 
 	svc := New(runner)
 	handler := svc.Handler()
-	if handler == nil {
-		t.Fatalf("Handler returned nil")
-	}
+	assert.NotNil(t, handler)
 
 	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
-	req := httptest.NewRequest(http.MethodPost, defaultPath, strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/agui", strings.NewReader(payload))
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -206,12 +180,8 @@ func TestNewUsesDefaultPath(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 status, got %d", res.StatusCode)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner should be invoked once, got %d", runner.calls)
-	}
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, 1, runner.calls)
 }
 
 func TestHandleCORSPreflight(t *testing.T) {
@@ -225,16 +195,23 @@ func TestHandleCORSPreflight(t *testing.T) {
 	res := rr.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204 status, got %d", res.StatusCode)
+	assert.Equal(t, http.StatusNoContent, res.StatusCode)
+	assert.Equal(t, "*", res.Header.Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "POST", res.Header.Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "Content-Type, Authorization", res.Header.Get("Access-Control-Allow-Headers"))
+}
+
+type stubRunner struct {
+	runFn     func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error)
+	calls     int
+	lastInput *adapter.RunAgentInput
+}
+
+func (s *stubRunner) Run(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+	s.calls++
+	s.lastInput = input
+	if s.runFn != nil {
+		return s.runFn(ctx, input)
 	}
-	if res.Header.Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatalf("unexpected Access-Control-Allow-Origin: %s", res.Header.Get("Access-Control-Allow-Origin"))
-	}
-	if res.Header.Get("Access-Control-Allow-Methods") != "POST" {
-		t.Fatalf("unexpected Access-Control-Allow-Methods: %s", res.Header.Get("Access-Control-Allow-Methods"))
-	}
-	if res.Header.Get("Access-Control-Allow-Headers") != "Content-Type, Authorization" {
-		t.Fatalf("unexpected Access-Control-Allow-Headers: %s", res.Header.Get("Access-Control-Allow-Headers"))
-	}
+	return nil, nil
 }
