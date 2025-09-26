@@ -130,7 +130,12 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
 	eventChan chan<- *event.Event) error {
-	startEvent := event.New(invocation.InvocationID, invocation.AgentName)
+	invocationID, agentName := "", ""
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		agentName = invocation.AgentName
+	}
+	startEvent := event.New(invocationID, agentName)
 	startEvent.RequiresCompletion = true
 	agent.EmitEvent(ctx, invocation, eventChan, startEvent)
 
