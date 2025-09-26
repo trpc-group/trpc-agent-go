@@ -11,11 +11,13 @@
 package sse
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	runner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
@@ -55,7 +57,7 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
 	}
-	runAgentInput, err := adapter.RunAgentInputFromReader(r.Body)
+	runAgentInput, err := runAgentInputFromReader(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -74,4 +76,14 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// runAgentInputFromReader parses an AG-UI run request payload from a reader.
+func runAgentInputFromReader(r io.Reader) (*adapter.RunAgentInput, error) {
+	var input adapter.RunAgentInput
+	dec := json.NewDecoder(r)
+	if err := dec.Decode(&input); err != nil {
+		return nil, err
+	}
+	return &input, nil
 }

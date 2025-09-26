@@ -21,6 +21,6 @@ pnpm install
 pnpm dev
 ```
 
-3. Ask a question such as `Calculate 2*(10+11)` and watch the live event stream in the terminal. A full transcript example is documented in [`client/copilotkit/README.md`](client/bubblecopilotkittea/README.md).
+3. Ask a question such as `Calculate 2*(10+11)` and watch the live event stream in the terminal. A full transcript example is documented in [`client/copilotkit/README.md`](client/copilotkit/README.md).
 
 See the individual README files under `client/` and `server/` for more background and configuration options.

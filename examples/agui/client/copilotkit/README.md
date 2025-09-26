@@ -12,7 +12,6 @@ pnpm dev       # or npm run dev
 Available environment variables before `pnpm dev`:
 
 - `AG_UI_ENDPOINT`: override the AG-UI endpoint URL (defaults to  `http://127.0.0.1:8080/agui`).
-- `AG_UI_TOKEN`: optional bearer token forwarded as an `Authorization` header.
 
 Open `http://localhost:3000` and start chatting with the full-screen assistant UI. The input shows the placeholder `Calculate 2*(10+11)`, first explain the idea, then calculate, and finally give the conclusion.`—press Enter to run that scenario or type your own request. Tool calls and their results appear inline inside the chat transcript.
 

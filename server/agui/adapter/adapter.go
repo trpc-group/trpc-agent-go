@@ -11,27 +11,19 @@
 package adapter
 
 import (
-	"encoding/json"
-	"io"
-
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // RunAgentInput represents the parameters for an AG-UI run request.
 type RunAgentInput struct {
-	ThreadID       string          `json:"threadId"`
-	RunID          string          `json:"runId"`
-	Messages       []model.Message `json:"messages"`
-	State          map[string]any  `json:"state"`
-	ForwardedProps map[string]any  `json:"forwardedProps"`
-}
-
-// RunAgentInputFromReader parses an AG-UI run request payload from a reader.
-func RunAgentInputFromReader(r io.Reader) (*RunAgentInput, error) {
-	var input RunAgentInput
-	dec := json.NewDecoder(r)
-	if err := dec.Decode(&input); err != nil {
-		return nil, err
-	}
-	return &input, nil
+	// ThreadID is the ID of the conversation thread, which is the session ID.
+	ThreadID string `json:"threadId"`
+	// RunID is the ID of the current run, which is the invocation ID.
+	RunID string `json:"runId"`
+	// Messages is the list of messages in the conversation.
+	Messages []model.Message `json:"messages"`
+	// State is the session state of the agent.
+	State map[string]any `json:"state"`
+	// ForwardedProps is the custom properties forwarded to the agent.
+	ForwardedProps map[string]any `json:"forwardedProps"`
 }

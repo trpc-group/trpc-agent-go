@@ -16,7 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
 )
@@ -40,8 +40,8 @@ func New(agent agent.Agent, opt ...Option) (*Server, error) {
 	opts := newOptions(opt...)
 	aguiService := opts.service
 	if aguiService == nil {
-		runner := runner.NewRunner(agent.Info().Name, agent, runner.WithSessionService(opts.sessionService))
-		aguiRunner := aguirunner.New(runner, opts.runnerOptions...)
+		runner := runner.NewRunner(agent.Info().Name, agent, opts.runnerOptions...)
+		aguiRunner := irunner.New(runner, opts.aguiRunnerOptions...)
 		aguiService = DefaultNewService(aguiRunner, service.WithPath(opts.path))
 	}
 	return &Server{

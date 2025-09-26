@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/event"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -29,11 +29,12 @@ type Runner interface {
 }
 
 // New wraps a trpc-agent-go runner with AG-UI specific translation logic.
-func New(r trunner.Runner, opt ...Option) Runner {
-	opts := newOptions(opt...)
+func New(r trunner.Runner, opt ...aguirunner.Option) Runner {
+	opts := aguirunner.NewOptions(opt...)
 	run := &runner{
 		runner:         r,
-		userIDResolver: opts.userIDResolver,
+		bridgeFactory:  opts.BridgeFactory,
+		userIDResolver: opts.UserIDResolver,
 	}
 	return run
 }
@@ -41,7 +42,8 @@ func New(r trunner.Runner, opt ...Option) Runner {
 // runner is the default implementation of the Runner.
 type runner struct {
 	runner         trunner.Runner
-	userIDResolver UserIDResolver
+	bridgeFactory  aguirunner.BridgeFactory
+	userIDResolver aguirunner.UserIDResolver
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -59,7 +61,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 
 func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- events.Event) {
 	defer close(events)
-	bridge := event.NewBridge(runAgentInput.ThreadID, runAgentInput.RunID)
+	bridge := r.bridgeFactory(runAgentInput)
 	events <- bridge.NewRunStartedEvent()
 	if len(runAgentInput.Messages) == 0 {
 		events <- bridge.NewRunErrorEvent("no messages provided")

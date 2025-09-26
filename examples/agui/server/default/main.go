@@ -12,11 +12,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
@@ -57,7 +57,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)
 	}
-	log.Printf("AG-UI: serving agent %q on http://%s%s", agent.Info().Name, *address, *path)
+	log.Infof("AG-UI: serving agent %q on http://%s%s", agent.Info().Name, *address, *path)
 	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 		log.Fatalf("server stopped with error: %v", err)
 	}

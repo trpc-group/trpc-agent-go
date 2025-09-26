@@ -6,6 +6,7 @@
 .vscode/
 .idea/
 node_modules/
+.next/
 *.out
 *.log
 coverage.out
