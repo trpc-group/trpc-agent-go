@@ -184,21 +184,9 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				)
 				agent.InjectIntoEvent(subInv, evt) // This will set the uniqueFilterKey.
 
-				// Mark event as requiring completion notification for synchronization.
-				evt.RequiresCompletion = true
-
 				// Send the tool input event as the first event in the stream.
-
 				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
 					return
-				}
-
-				// Wait for the event to be processed and stored in session before starting sub-agent.
-				// This prevents race condition where sub-agent's subsequent LLM calls happen before tool input is stored.
-				completionID := agent.AppendEventNoticeKeyPrefix + evt.ID
-				if err := subInv.AddNoticeChannelAndWait(ctx, completionID, agent.WaitNoticeWithoutTimeout); err != nil {
-					log.Warnf("AgentTool: Failed to wait for tool input event completion: %v", err)
-					// Continue anyway - this is not a fatal error.
 				}
 			}
 

@@ -16,6 +16,8 @@ import (
 	"reflect"
 	"sync"
 
+	sdktrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -562,16 +564,22 @@ func registerTools(options *Options) []tool.Tool {
 
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
-func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s [%s]", itelemetry.SpanNamePrefixAgentRun, a.name))
-	defer span.End()
+func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invoke_agent {%s}", a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation)
+	defer func() {
+		if err != nil {
+			span.End()
+		}
+	}()
 
 	// Setup invocation
 	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
 	if a.agentCallbacks != nil {
-		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		var customResponse *model.Response
+		customResponse, err = a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -591,13 +599,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	if err != nil {
 		return nil, err
 	}
-
-	// If we have after agent callbacks, we need to wrap the event channel.
-	if a.agentCallbacks != nil {
-		return a.wrapEventChannel(ctx, invocation, flowEventChan), nil
-	}
-
-	return flowEventChan, nil
+	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
 }
 
 // setupInvocation sets up the invocation
@@ -621,14 +623,25 @@ func (a *LLMAgent) wrapEventChannel(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
+	span sdktrace.Span,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
 
 	go func() {
-		defer close(wrappedChan)
+		var fullResponse *model.Response
+		defer func() {
+			if fullResponse != nil {
+				itelemetry.TraceAfterInvokeAgent(span, fullResponse)
+			}
+			span.End()
+			close(wrappedChan)
+		}()
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullResponse = evt.Response
+			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
@@ -647,6 +660,7 @@ func (a *LLMAgent) wrapEventChannel(
 					err.Error(),
 				)
 			} else if customResponse != nil {
+				fullResponse = customResponse
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}

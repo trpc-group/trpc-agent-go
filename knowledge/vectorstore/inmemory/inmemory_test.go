@@ -201,7 +201,7 @@ func TestVectorStore_DeleteByFilter(t *testing.T) {
 	// Test delete all
 	require.NoError(t, store.Add(ctx, doc1, embedding))
 	require.NoError(t, store.Add(ctx, doc2, embedding))
-	
+
 	err = store.DeleteByFilter(ctx, vectorstore.WithDeleteAll(true))
 	require.NoError(t, err)
 
@@ -313,9 +313,9 @@ func TestVectorStore_GetMetadata(t *testing.T) {
 	metadata, err = store.GetMetadata(ctx, vectorstore.WithGetMetadataLimit(1), vectorstore.WithGetMetadataOffset(1))
 	require.NoError(t, err)
 	require.Equal(t, 1, len(metadata))
-	
+
 	// Get metadata with combined filters
-	metadata, err = store.GetMetadata(ctx, 
+	metadata, err = store.GetMetadata(ctx,
 		vectorstore.WithGetMetadataFilter(map[string]any{"type": "test"}),
 		vectorstore.WithGetMetadataLimit(10),
 		vectorstore.WithGetMetadataOffset(0))
@@ -344,7 +344,7 @@ func TestVectorStore_SearchModes(t *testing.T) {
 		},
 	}
 	doc2 := &document.Document{
-		ID:      "doc2", 
+		ID:      "doc2",
 		Content: "bonjour monde",
 		Metadata: map[string]any{
 			"lang": "fr",
@@ -358,10 +358,10 @@ func TestVectorStore_SearchModes(t *testing.T) {
 
 	// Test vector search mode
 	result, err := store.Search(ctx, &vectorstore.SearchQuery{
-		Vector:      []float64{0.9, 0.1, 0.2},
-		Limit:       5,
-		SearchMode:  vectorstore.SearchModeVector,
-		MinScore:    0.5,
+		Vector:     []float64{0.9, 0.1, 0.2},
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeVector,
+		MinScore:   0.5,
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
@@ -383,10 +383,10 @@ func TestVectorStore_SearchModes(t *testing.T) {
 
 	// Test hybrid search mode (falls back to vector search)
 	result, err = store.Search(ctx, &vectorstore.SearchQuery{
-		Vector:      []float64{0.1, 0.9, 0.2},
-		SearchMode:  vectorstore.SearchModeHybrid,
-		Limit:       5,
-		MinScore:    0.5,
+		Vector:     []float64{0.1, 0.9, 0.2},
+		SearchMode: vectorstore.SearchModeHybrid,
+		Limit:      5,
+		MinScore:   0.5,
 	})
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
@@ -395,8 +395,8 @@ func TestVectorStore_SearchModes(t *testing.T) {
 
 	// Test keyword search mode (falls back to filter search)
 	result, err = store.Search(ctx, &vectorstore.SearchQuery{
-		Query:       "bonjour",
-		SearchMode:  vectorstore.SearchModeKeyword,
+		Query:      "bonjour",
+		SearchMode: vectorstore.SearchModeKeyword,
 		Filter: &vectorstore.SearchFilter{
 			Metadata: map[string]any{"lang": "fr"},
 		},

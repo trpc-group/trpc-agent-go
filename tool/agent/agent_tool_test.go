@@ -223,7 +223,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 
 	// Expect to receive forwarded event chunks
 	var got []string
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ { // Now expecting 4 events: tool input + original 3 events
 		chunk, err := reader.Recv()
 		if err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
@@ -240,8 +240,8 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 			t.Fatalf("expected chunk content to be *event.Event, got %T", chunk.Content)
 		}
 	}
-	// We pushed 3 events; delta1, delta2, final full
-	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
+	// We now get 4 events: tool input event + original 3 events (delta1, delta2, final full)
+	if got[0] != `{"request":"hi"}` || got[1] != "hello" || got[2] != " world" || got[3] != "ignored full" {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
 	}
 
