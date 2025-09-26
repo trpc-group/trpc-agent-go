@@ -270,6 +270,11 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	return event.EmitEvent(ctx, ch, e)
 }
 
+// GetAppendEventNoticeKey get append event notice key.
+func GetAppendEventNoticeKey(eventID string) string {
+	return AppendEventNoticeKeyPrefix + eventID
+}
+
 // AddNoticeChannelAndWait add notice channel and wait it complete
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
 	ch := inv.AddNoticeChannel(ctx, key)

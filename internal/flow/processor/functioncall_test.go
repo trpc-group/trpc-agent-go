@@ -951,7 +951,6 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization)
 	require.True(t, inv.EndInvocation, "invocation should be marked to end when skipping summarization")
-	require.True(t, evt.RequiresCompletion)
 }
 
 // Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
@@ -1221,30 +1220,6 @@ func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
 		require.Equal(t, inv.InvocationID, e2.InvocationID)
 		require.Equal(t, inv.Branch, e2.Branch)
 	}
-}
-
-func TestWaitForCompletion_SignalReceived(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx := context.Background()
-	ch := make(chan string, 1)
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp", "author")
-	evt.RequiresCompletion = true
-	// send completion
-	ch <- "done-1"
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.NoError(t, err)
-}
-
-func TestWaitForCompletion_ContextCancelled(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp2", "author")
-	evt.RequiresCompletion = true
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.Error(t, err)
 }
 
 // Mock tool for transfer testing

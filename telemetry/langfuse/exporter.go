@@ -108,8 +108,7 @@ func transformSpan(span *tracepb.Span) {
 		transformCallLLM(span)
 	case itelemetry.OperationExecuteTool:
 		transformExecuteTool(span)
-	case itelemetry.OperationRunRunner:
-		transformRunRunner(span)
+	default:
 	}
 }
 
@@ -221,63 +220,6 @@ func transformExecuteTool(span *tracepb.Span) {
 			}
 			// Skip this attribute (delete it)
 		case itelemetry.KeyToolResponse:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationOutput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		default:
-			// Keep other attributes
-			newAttributes = append(newAttributes, attr)
-		}
-	}
-
-	// Replace span attributes
-	span.Attributes = newAttributes
-}
-
-// transformRunRunner transforms runner spans for Langfuse
-func transformRunRunner(span *tracepb.Span) {
-	var newAttributes []*commonpb.KeyValue
-
-	newAttributes = append(newAttributes, &commonpb.KeyValue{
-		Key: observationType,
-		Value: &commonpb.AnyValue{
-			Value: &commonpb.AnyValue_StringValue{StringValue: "agent"},
-		},
-	})
-	// Process existing attributes
-	for _, attr := range span.Attributes {
-		switch attr.Key {
-		case itelemetry.KeyRunnerInput:
-			if attr.Value != nil {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: attr.Value.GetStringValue()},
-					},
-				})
-			} else {
-				newAttributes = append(newAttributes, &commonpb.KeyValue{
-					Key: observationInput,
-					Value: &commonpb.AnyValue{
-						Value: &commonpb.AnyValue_StringValue{StringValue: "N/A"},
-					},
-				})
-			}
-			// Skip this attribute (delete it)
-		case itelemetry.KeyRunnerOutput:
 			if attr.Value != nil {
 				newAttributes = append(newAttributes, &commonpb.KeyValue{
 					Key: observationOutput,
