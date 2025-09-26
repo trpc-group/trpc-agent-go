@@ -266,7 +266,16 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 // EmitEvent inject invocation information into event and emit it to channel.
 func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	e *event.Event) error {
+	if ch == nil || e == nil {
+		return nil
+	}
 	InjectIntoEvent(inv, e)
+	agentName := ""
+	if inv != nil && inv.AgentName != "" {
+		agentName = inv.AgentName
+	}
+	log.Debugf("[agent.EmitEvent]queue monitoring:: channel capacity: %d, current length: %d, branch: %s, agent name:%s",
+		cap(ch), len(ch), e.Branch, agentName)
 	return event.EmitEvent(ctx, ch, e)
 }
 
