@@ -11,8 +11,6 @@
 package sse
 
 import (
-	"context"
-	"errors"
 	"net/http"
 
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
@@ -23,11 +21,10 @@ import (
 
 // sse is a SSE service implementation.
 type sse struct {
-	address    string
-	path       string
-	writer     *aguisse.SSEWriter
-	runner     runner.Runner
-	httpServer *http.Server
+	path    string
+	writer  *aguisse.SSEWriter
+	runner  runner.Runner
+	handler http.Handler
 }
 
 // New creates a new SSE service.
@@ -37,32 +34,19 @@ func New(runner runner.Runner, opt ...service.Option) service.Service {
 		o(&opts)
 	}
 	s := &sse{
-		address: opts.Address,
-		path:    opts.Path,
-		runner:  runner,
-		writer:  aguisse.NewSSEWriter(),
+		path:   opts.Path,
+		runner: runner,
+		writer: aguisse.NewSSEWriter(),
 	}
+	h := http.NewServeMux()
+	h.HandleFunc(opts.Path, s.handle)
+	s.handler = h
 	return s
 }
 
-// Serve starts the SSE service and listens on the address.
-func (s *sse) Serve(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc(s.path, s.handle)
-	s.httpServer = &http.Server{Addr: s.address, Handler: mux}
-	err := s.httpServer.ListenAndServe()
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
-}
-
-// Close stops the SSE service.
-func (s *sse) Close(ctx context.Context) error {
-	if s.httpServer == nil {
-		return errors.New("http server not running")
-	}
-	return s.httpServer.Shutdown(ctx)
+// Handler returns an http.Handler that exposes the AG-UI SSE endpoint.
+func (s *sse) Handler() http.Handler {
+	return s.handler
 }
 
 // handle handles an AG-UI run request.

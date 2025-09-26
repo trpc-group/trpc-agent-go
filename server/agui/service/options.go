@@ -9,21 +9,13 @@
 
 package service
 
-// Options holds the options for the SSE service.
+// Options holds the options for an AG-UI transport implementation.
 type Options struct {
-	Address string // Address is the listening address.
-	Path    string // Path is the request url path.
+	Path string // Path is the request URL path served by the handler.
 }
 
 // Option is a function that configures the options.
 type Option func(*Options)
-
-// WithAddress sets the listening address.
-func WithAddress(addr string) Option {
-	return func(s *Options) {
-		s.Address = addr
-	}
-}
 
 // WithPath sets the request path.
 func WithPath(path string) Option {

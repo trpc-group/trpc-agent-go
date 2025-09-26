@@ -13,18 +13,11 @@ import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-)
-
-const (
-	// DefaultAddress is the default listen address.
-	DefaultAddress = "0.0.0.0:8080"
-	// DefaultPath is the default HTTP path the SSE handler is mounted on.
-	DefaultPath = "/agui"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 // options holds the options for the AG-UI server.
 type options struct {
-	address        string
 	path           string
 	service        service.Service
 	sessionService session.Service
@@ -34,8 +27,7 @@ type options struct {
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
 	opts := &options{
-		address: DefaultAddress,
-		path:    DefaultPath,
+		sessionService: inmemory.NewSessionService(),
 	}
 	for _, o := range opt {
 		o(opts)
@@ -64,13 +56,6 @@ func WithSessionService(svc session.Service) Option {
 func WithRunnerOptions(runnerOpts ...aguirunner.Option) Option {
 	return func(o *options) {
 		o.runnerOptions = append(o.runnerOptions, runnerOpts...)
-	}
-}
-
-// WithAddress sets the address for service listening.
-func WithAddress(addr string) Option {
-	return func(o *options) {
-		o.address = addr
 	}
 }
 

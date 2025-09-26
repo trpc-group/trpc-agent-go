@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -52,11 +53,12 @@ func main() {
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction("You are a helpful assistant."),
 	)
-	server, err := agui.New(agent, agui.WithAddress(*address), agui.WithPath(*path))
+	server, err := agui.New(agent, agui.WithPath(*path))
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)
 	}
-	if err := server.Serve(context.Background()); err != nil {
+	log.Printf("AG-UI: serving agent %q on http://%s%s", agent.Info().Name, *address, *path)
+	if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 		log.Fatalf("server stopped with error: %v", err)
 	}
 }

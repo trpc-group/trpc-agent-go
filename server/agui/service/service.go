@@ -10,12 +10,11 @@
 // Package service defines Service interface for AG-UI services.
 package service
 
-import "context"
+import "net/http"
 
-// Service is the interface for AG-UI services.
+// Service represents the AG-UI service implementation.
+// Different transports (SSE, WebSocket, etc.) can return their own http.Handler,
+// which can be mounted to an existing HTTP router.
 type Service interface {
-	// Serve starts the service.
-	Serve(ctx context.Context) error
-	// Close stops the service.
-	Close(ctx context.Context) error
+	Handler() http.Handler
 }
