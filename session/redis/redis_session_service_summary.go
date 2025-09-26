@@ -126,7 +126,7 @@ func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
 		return "", false
 	}
 	// Prefer full-summary stored under empty filterKey.
-	if sum, ok := summaries[""]; ok && sum != nil && sum.Summary != "" {
+	if sum, ok := summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
 		return sum.Summary, true
 	}
 	for _, s := range summaries {
@@ -156,22 +156,12 @@ func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, 
 		return s.CreateSessionSummary(ctx, sess, filterKey, force)
 	}
 
-	// Verify session exists in Redis before enqueueing.
-	exists, err := s.redisClient.HExists(ctx, getSessionStateKey(key), key.SessionID).Result()
-	if err != nil {
-		return fmt.Errorf("check session existence failed: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf("session not found: %s", key.SessionID)
-	}
-
 	// Create summary job.
 	job := &summaryJob{
 		sessionKey: key,
 		filterKey:  filterKey,
 		force:      force,
 		session:    sess,
-		context:    ctx,
 	}
 
 	// Select a channel using hash distribution.
@@ -214,8 +204,16 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 		}
 	}()
 
+	// Create a fresh context with timeout for this job.
+	ctx := context.Background()
+	if s.opts.summaryJobTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)
+		defer cancel()
+	}
+
 	// Perform the actual summary generation.
-	updated, err := sisession.SummarizeSession(job.context, s.opts.summarizer, job.session, job.filterKey, job.force)
+	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
 	if err != nil {
 		log.Errorf("summary worker failed to generate summary: %v", err)
 		return
@@ -233,13 +231,13 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	}
 	sumKey := getSessionSummaryKey(job.sessionKey)
 	if _, perr := luaSummariesSetIfNewer.Run(
-		job.context, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, job.filterKey, string(payload),
+		ctx, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, job.filterKey, string(payload),
 	).Result(); perr != nil {
 		log.Errorf("summary worker failed to store summary: %v", perr)
 		return
 	}
 	if s.sessionTTL > 0 {
-		if err := s.redisClient.Expire(job.context, sumKey, s.sessionTTL).Err(); err != nil {
+		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
 			log.Errorf("summary worker failed to set summary TTL: %v", err)
 		}
 	}

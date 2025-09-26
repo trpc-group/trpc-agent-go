@@ -100,8 +100,8 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 	}
 	// Prefer structured summaries on session.
 	if sess.Summaries != nil {
-		// Prefer full-summary under empty filterKey.
-		if sum, ok := sess.Summaries[""]; ok && sum != nil && sum.Summary != "" {
+		// Prefer full-summary under the all-contents filter key.
+		if sum, ok := sess.Summaries[session.SummaryFilterKeyAllContents]; ok && sum != nil && sum.Summary != "" {
 			return sum.Summary, true
 		}
 		for _, s := range sess.Summaries {
@@ -158,7 +158,6 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 		filterKey:  filterKey,
 		force:      force,
 		session:    sess,
-		context:    ctx,
 	}
 
 	// Select a channel using hash distribution.
@@ -224,8 +223,16 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	}
 	app.mu.Unlock()
 
+	// Create a fresh context with timeout for this job.
+	ctx := context.Background()
+	if s.opts.summaryJobTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.opts.summaryJobTimeout)
+		defer cancel()
+	}
+
 	// Perform the actual summary generation.
-	updated, err := sisession.SummarizeSession(job.context, s.opts.summarizer, storedSession, job.filterKey, job.force)
+	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, storedSession, job.filterKey, job.force)
 	if err != nil {
 		log.Errorf("summary worker failed to generate summary: %v", err)
 		return

@@ -239,7 +239,6 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 		filterKey:  "blocking",
 		force:      true,
 		session:    sess,
-		context:    context.Background(),
 	}
 
 	// Send a job to fill the queue (this will block the worker)
@@ -261,4 +260,46 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	sum, ok := got.Summaries[""]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)
+}
+
+// fakeBlockingSummarizer blocks until ctx is done, then returns an error.
+type fakeBlockingSummarizer struct{}
+
+func (f *fakeBlockingSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeBlockingSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+func (f *fakeBlockingSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestMemoryService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeBlockingSummarizer{}),
+		WithSummaryJobTimeout(50*time.Millisecond),
+	)
+	defer s.Close()
+
+	// Create a session and append one event so delta is non-empty.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-timeout"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue job; summarizer will block until timeout; worker should cancel and not persist.
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Wait longer than timeout to ensure worker had time to cancel.
+	time.Sleep(150 * time.Millisecond)
+
+	// Verify no summary was created.
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	_, ok := got.Summaries[""]
+	require.False(t, ok)
 }

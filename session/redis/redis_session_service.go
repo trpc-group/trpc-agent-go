@@ -77,7 +77,6 @@ type summaryJob struct {
 	filterKey  string
 	force      bool
 	session    *session.Session
-	context    context.Context
 }
 
 // NewService creates a new redis session service.
@@ -91,6 +90,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		enableAsyncPersist: false,
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
+		summaryJobTimeout:  30 * time.Second,
 	}
 	for _, option := range options {
 		option(&opts)

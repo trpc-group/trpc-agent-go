@@ -427,3 +427,49 @@ func TestRedisService_EnqueueSummaryJob_ConcurrentJobs(t *testing.T) {
 		require.Equal(t, "concurrent-summary", sum.Summary)
 	}
 }
+
+// fakeBlockingSummarizer blocks until ctx is done, then returns an error.
+type fakeBlockingSummarizer struct{}
+
+func (f *fakeBlockingSummarizer) ShouldSummarize(sess *session.Session) bool { return true }
+func (f *fakeBlockingSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+func (f *fakeBlockingSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func TestRedisService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeBlockingSummarizer{}),
+		WithSummaryJobTimeout(50*time.Millisecond),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session and append one event so delta is non-empty.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-timeout"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue job; summarizer will block until timeout; worker should cancel and not persist.
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Wait longer than timeout to ensure worker had time to cancel.
+	time.Sleep(150 * time.Millisecond)
+
+	// Verify no summary was created in Redis.
+	client := buildRedisClient(t, redisURL)
+	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
+	require.NoError(t, err)
+	require.False(t, exists)
+}

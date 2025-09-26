@@ -30,6 +30,10 @@ var (
 	ErrSessionIDRequired = errors.New("sessionID is required")
 )
 
+// SummaryFilterKeyAllContents is the filter key representing
+// the full-session summary with no filtering applied.
+const SummaryFilterKeyAllContents = ""
+
 // Session is the interface that all sessions must implement.
 type Session struct {
 	ID      string        `json:"id"`      // ID is the session id.

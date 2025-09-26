@@ -108,7 +108,6 @@ type summaryJob struct {
 	filterKey  string
 	force      bool
 	session    *session.Session
-	context    context.Context
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -118,6 +117,7 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		cleanupInterval:   0,
 		asyncSummaryNum:   defaultAsyncSummaryNum,
 		summaryQueueSize:  defaultSummaryQueueSize,
+		summaryJobTimeout: 30 * time.Second,
 	}
 	for _, option := range options {
 		option(&opts)

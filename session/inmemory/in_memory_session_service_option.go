@@ -29,9 +29,13 @@ type serviceOpts struct {
 	// If set to 0, automatic cleanup is disabled.
 	cleanupInterval time.Duration
 	// summarizer integrates LLM summarization.
-	summarizer       summary.SessionSummarizer
-	asyncSummaryNum  int // number of worker goroutines for async summary
-	summaryQueueSize int // size of summary job queue
+	summarizer summary.SessionSummarizer
+	// asyncSummaryNum is the number of worker goroutines for async summary.
+	asyncSummaryNum int
+	// summaryQueueSize is the size of summary job queue.
+	summaryQueueSize int
+	// summaryJobTimeout is the timeout for processing a single summary job.
+	summaryJobTimeout time.Duration
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -101,5 +105,16 @@ func WithSummaryQueueSize(size int) ServiceOpt {
 			size = defaultSummaryQueueSize
 		}
 		opts.summaryQueueSize = size
+	}
+}
+
+// WithSummaryJobTimeout sets the timeout for processing a single summary job.
+// If not set, a sensible default will be applied.
+func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if timeout <= 0 {
+			return
+		}
+		opts.summaryJobTimeout = timeout
 	}
 }

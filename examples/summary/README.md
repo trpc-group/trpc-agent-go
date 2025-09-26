@@ -132,15 +132,17 @@ The session service supports asynchronous summary processing by default. The con
 //   - High traffic: 4-8 workers, 200-500 queue size
 sessService := inmemory.NewSessionService(
     inmemory.WithSummarizer(sum),
-    inmemory.WithAsyncSummaryNum(2),        // 2 async workers for concurrent summary generation
-    inmemory.WithSummaryQueueSize(100),     // Queue size 100 to buffer summary jobs during high traffic
+    inmemory.WithAsyncSummaryNum(2),                // 2 async workers for concurrent summary generation
+    inmemory.WithSummaryQueueSize(100),             // Queue size 100 to buffer summary jobs during high traffic
+    inmemory.WithSummaryJobTimeout(30*time.Second), // Per-job timeout to avoid long-running LLM calls
 )
 
 // Redis service with async config
 sessService := redis.NewService(
     redis.WithSummarizer(sum),
-    redis.WithAsyncSummaryNum(2),           // 2 async workers for concurrent summary generation
-    redis.WithSummaryQueueSize(100),        // Queue size 100 to buffer summary jobs during high traffic
+    redis.WithAsyncSummaryNum(2),                // 2 async workers for concurrent summary generation
+    redis.WithSummaryQueueSize(100),             // Queue size 100 to buffer summary jobs during high traffic
+    redis.WithSummaryJobTimeout(30*time.Second), // Per-job timeout to avoid long-running LLM calls
 )
 ```
 
@@ -148,6 +150,7 @@ sessService := redis.NewService(
 
 - **`WithAsyncSummaryNum(num int)`**: Sets the number of async summary workers. More workers can handle higher concurrency but consume more resources.
 - **`WithSummaryQueueSize(size int)`**: Sets the size of the summary job queue. Larger queues can handle more burst traffic but consume more memory.
+- **`WithSummaryJobTimeout(timeout time.Duration)`**: Sets a timeout for each async summary job to prevent worker starvation from long-running LLM calls.
 
 ### Performance Tuning
 

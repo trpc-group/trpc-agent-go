@@ -99,6 +99,8 @@ func (c *summaryChat) setup(_ context.Context) error {
 		inmemory.WithSummarizer(sum),
 		inmemory.WithAsyncSummaryNum(2),    // 2 async workers for concurrent summary generation
 		inmemory.WithSummaryQueueSize(100), // Queue size 100 to buffer summary jobs during high traffic
+		// Timeout for each summary job to avoid long-running LLM calls blocking workers.
+		inmemory.WithSummaryJobTimeout(30*time.Second),
 	)
 	c.sessionService = sessService
 
