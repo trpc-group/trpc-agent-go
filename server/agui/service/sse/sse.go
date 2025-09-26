@@ -53,6 +53,16 @@ func (s *sse) Handler() http.Handler {
 
 // handle handles an AG-UI run request.
 func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
+    if r.Method == http.MethodOptions {
+        w.Header().Set("Allow", http.MethodPost)
+        w.WriteHeader(http.StatusNoContent)
+        return
+    }
+    if r.Method != http.MethodPost {
+        w.Header().Set("Allow", http.MethodPost)
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
 	if s.runner == nil {
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return
