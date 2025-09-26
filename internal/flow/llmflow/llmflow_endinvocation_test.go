@@ -42,7 +42,7 @@ func TestPreprocess_StopsAfterEndInvocation(t *testing.T) {
 	}
 
 	f := New(reqProcs, nil, Options{})
-	inv := &agent.Invocation{InvocationID: "inv-pre", AgentName: "agent-pre"}
+	inv := agent.NewInvocation()
 
 	// Act
 	ch, err := f.Run(context.Background(), inv)
@@ -55,8 +55,8 @@ func TestPreprocess_StopsAfterEndInvocation(t *testing.T) {
 
 	// Assert
 	require.True(t, called, "subsequent processors should run after EndInvocation")
-	require.Len(t, events, 2)
-	require.Equal(t, "preprocess.end", events[0].Object)
+	require.Len(t, events, 3)
+	require.Equal(t, "preprocess.end", events[1].Object)
 }
 
 // twoChunkModel returns two streaming chunks to ensure we break after EndInvocation.

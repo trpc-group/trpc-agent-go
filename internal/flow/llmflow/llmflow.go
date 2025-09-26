@@ -13,6 +13,7 @@ package llmflow
 import (
 	"context"
 	"errors"
+	"time"
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -29,6 +30,9 @@ import (
 
 const (
 	defaultChannelBufferSize = 256
+
+	// Timeout for event completion signaling.
+	eventCompletionTimeout = 5 * time.Second
 )
 
 // Options contains configuration options for creating a Flow.
@@ -74,8 +78,8 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		defer close(eventChan)
 
 		for {
-			// Check if context is cancelled.
-			if err := agent.CheckContextCancelled(ctx); err != nil {
+			// emit start event and wait for completion notice.
+			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
 				return
 			}
 
@@ -122,6 +126,27 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	}()
 
 	return eventChan, nil
+}
+
+func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
+	eventChan chan<- *event.Event) error {
+	invocationID, agentName := "", ""
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		agentName = invocation.AgentName
+	}
+	startEvent := event.New(invocationID, agentName)
+	startEvent.RequiresCompletion = true
+	agent.EmitEvent(ctx, invocation, eventChan, startEvent)
+
+	// Wait for completion notice.
+	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
+	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
 }
 
 // runOneStep executes one step of the flow (one LLM call cycle).
