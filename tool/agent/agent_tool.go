@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -196,7 +197,14 @@ func (at *Tool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.Stre
 				// Wait for the event to be processed and stored in session before starting sub-agent.
 				// This prevents race condition where sub-agent's subsequent LLM calls happen before tool input is stored.
 				completionID := agent.AppendEventNoticeKeyPrefix + evt.ID
-				if err := subInv.AddNoticeChannelAndWait(ctx, completionID, agent.WaitNoticeWithoutTimeout); err != nil {
+
+				// Use a reasonable timeout to avoid blocking.
+				waitTimeout := agent.WaitNoticeWithoutTimeout
+				if subInv.Session != nil && len(subInv.Session.Events) == 0 {
+					waitTimeout = 5 * time.Second
+				}
+
+				if err := subInv.AddNoticeChannelAndWait(ctx, completionID, waitTimeout); err != nil {
 					log.Warnf("AgentTool: Failed to wait for tool input event completion: %v", err)
 					// Continue anyway - this is not a fatal error.
 				}
