@@ -16,7 +16,6 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
 
 // Translator translates trpc-agent-go events to AG-UI events.
@@ -47,7 +46,7 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 	}
 	rsp := event.Response
 	if rsp.Error != nil {
-		return []aguievents.Event{adapter.NewRunErrorEvent(rsp.Error.Message, t.runID)}, nil
+		return []aguievents.Event{aguievents.NewRunErrorEvent(rsp.Error.Message, aguievents.WithRunID(t.runID))}, nil
 	}
 	events := []aguievents.Event{}
 	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
@@ -72,7 +71,7 @@ func (t *translator) Translate(event *agentevent.Event) ([]aguievents.Event, err
 		events = append(events, toolResultEvents...)
 	}
 	if rsp.IsFinalResponse() {
-		events = append(events, adapter.NewRunFinishedEvent(t.threadID, t.runID))
+		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
 	}
 	return events, nil
 }

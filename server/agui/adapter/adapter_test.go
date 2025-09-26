@@ -82,20 +82,3 @@ func TestRunAgentInputJSONMarshal(t *testing.T) {
 	assert.Equal(t, "bob", props["userId"])
 	assert.ElementsMatch(t, []any{"x", "y"}, props["tags"].([]any))
 }
-
-func TestNewRunStartedEvent(t *testing.T) {
-	event := adapter.NewRunStartedEvent("thread", "run")
-	assert.Equal(t, "thread", event.ThreadID())
-	assert.Equal(t, "run", event.RunID())
-}
-
-func TestNewRunErrorEvent(t *testing.T) {
-	event := adapter.NewRunErrorEvent("error", "run")
-	assert.Equal(t, "run", event.RunID())
-}
-
-func TestNewRunFinishedEvent(t *testing.T) {
-	event := adapter.NewRunFinishedEvent("thread", "run")
-	assert.Equal(t, "thread", event.ThreadID())
-	assert.Equal(t, "run", event.RunID())
-}

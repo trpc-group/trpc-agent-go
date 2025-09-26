@@ -11,7 +11,6 @@
 package adapter
 
 import (
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -27,19 +26,4 @@ type RunAgentInput struct {
 	State map[string]any `json:"state"`
 	// ForwardedProps is the custom properties forwarded to the agent.
 	ForwardedProps map[string]any `json:"forwardedProps"`
-}
-
-// NewRunStartedEvent creates a new run started event.
-func NewRunStartedEvent(threadID, runID string) events.Event {
-	return events.NewRunStartedEvent(threadID, runID)
-}
-
-// NewRunErrorEvent creates a new run error event.
-func NewRunErrorEvent(errorMessage string, runID string) events.Event {
-	return events.NewRunErrorEvent(errorMessage, events.WithRunID(runID))
-}
-
-// NewRunFinishedEvent creates a new run finished event.
-func NewRunFinishedEvent(threadID, runID string) events.Event {
-	return events.NewRunFinishedEvent(threadID, runID)
 }

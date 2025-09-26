@@ -15,7 +15,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -25,7 +25,7 @@ import (
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
-	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan events.Event, error)
+	Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error)
 }
 
 // New wraps a trpc-agent-go runner with AG-UI specific translation logic.
@@ -47,45 +47,49 @@ type runner struct {
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
-func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan events.Event, error) {
+func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
 	if r.runner == nil {
 		return nil, errors.New("agui: runner is nil")
 	}
 	if runAgentInput == nil {
 		return nil, errors.New("agui: run input cannot be nil")
 	}
-	events := make(chan events.Event)
+	events := make(chan aguievents.Event)
 	go r.run(ctx, runAgentInput, events)
 	return events, nil
 }
 
-func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- events.Event) {
+func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- aguievents.Event) {
 	defer close(events)
 	translator := r.translatorFactory(runAgentInput)
-	events <- adapter.NewRunStartedEvent(runAgentInput.ThreadID, runAgentInput.RunID)
+	events <- aguievents.NewRunStartedEvent(runAgentInput.ThreadID, runAgentInput.RunID)
 	if len(runAgentInput.Messages) == 0 {
-		events <- adapter.NewRunErrorEvent("no messages provided", runAgentInput.RunID)
+		events <- aguievents.NewRunErrorEvent("no messages provided", aguievents.WithRunID(runAgentInput.RunID))
 		return
 	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
-		events <- adapter.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err), runAgentInput.RunID)
+		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err),
+			aguievents.WithRunID(runAgentInput.RunID))
 		return
 	}
 	userMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
 	if userMessage.Role != model.RoleUser {
-		events <- adapter.NewRunErrorEvent("last message is not a user message", runAgentInput.RunID)
+		events <- aguievents.NewRunErrorEvent("last message is not a user message",
+			aguievents.WithRunID(runAgentInput.RunID))
 		return
 	}
 	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
 	if err != nil {
-		events <- adapter.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err), runAgentInput.RunID)
+		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
+			aguievents.WithRunID(runAgentInput.RunID))
 		return
 	}
 	for event := range ch {
 		aguiEvents, err := translator.Translate(event)
 		if err != nil {
-			events <- adapter.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err), runAgentInput.RunID)
+			events <- aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
+				aguievents.WithRunID(runAgentInput.RunID))
 			return
 		}
 		for _, aguiEvent := range aguiEvents {
