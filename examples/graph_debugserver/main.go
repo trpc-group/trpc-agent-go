@@ -86,9 +86,7 @@ func main() {
 // createSimpleAgent creates a simple LLM agent for comparison with the Graph Agent.
 // This agent directly uses tool calling for mathematical calculations without workflow steps.
 func createSimpleAgent(modelName string) agent.Agent {
-	modelInstance := openai.New(modelName,
-		openai.WithBaseURL("https://api.deepseek.com/v1"),
-		openai.WithAPIKey("sk-2fb3486ea7224206a6b7d5e51ff7d189"))
+	modelInstance := openai.New(modelName)
 
 	calculatorTool := function.NewFunctionTool(
 		calculate,
@@ -118,9 +116,7 @@ func createMathWorkflowAgent(modelName string) agent.Agent {
 	schema := graph.MessagesStateSchema()
 
 	// Create model instance
-	modelInstance := openai.New(modelName,
-		openai.WithBaseURL("https://api.deepseek.com/v1"),
-		openai.WithAPIKey("sk-2fb3486ea7224206a6b7d5e51ff7d189"))
+	modelInstance := openai.New(modelName)
 
 	// Create calculator tool
 	calculatorTool := function.NewFunctionTool(
