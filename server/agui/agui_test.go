@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -36,7 +36,7 @@ func TestNewNilAgent(t *testing.T) {
 func TestNewWithProvidedService(t *testing.T) {
 	called := false
 	original := DefaultNewService
-	DefaultNewService = func(irunner.Runner, ...service.Option) service.Service {
+	DefaultNewService = func(aguirunner.Runner, ...service.Option) service.Service {
 		called = true
 		return nil
 	}
@@ -58,7 +58,7 @@ func TestNewCreatesDefaultService(t *testing.T) {
 	original := DefaultNewService
 	var capturedPath string
 	fakeHandler := http.NewServeMux()
-	DefaultNewService = func(_ irunner.Runner, opts ...service.Option) service.Service {
+	DefaultNewService = func(_ aguirunner.Runner, opts ...service.Option) service.Service {
 		var svcOpts service.Options
 		for _, opt := range opts {
 			opt(&svcOpts)
