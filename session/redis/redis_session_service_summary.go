@@ -76,15 +76,15 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	}
 	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
 	sum := sess.Summaries[filterKey]
-	payload, jerr := json.Marshal(sum)
-	if jerr != nil {
-		return fmt.Errorf("marshal summary failed: %w", jerr)
+	payload, err := json.Marshal(sum)
+	if err != nil {
+		return fmt.Errorf("marshal summary failed: %w", err)
 	}
 	sumKey := getSessionSummaryKey(key)
-	if _, perr := luaSummariesSetIfNewer.Run(
+	if _, err := luaSummariesSetIfNewer.Run(
 		ctx, s.redisClient, []string{sumKey}, key.SessionID, filterKey, string(payload),
-	).Result(); perr != nil {
-		return fmt.Errorf("store summaries (lua) failed: %w", perr)
+	).Result(); err != nil {
+		return fmt.Errorf("store summaries (lua) failed: %w", err)
 	}
 	if s.sessionTTL > 0 {
 		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
@@ -112,7 +112,7 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	// Prefer separate summaries hash.
 	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {
 		var summaries map[string]*session.Summary
-		if uerr := json.Unmarshal(bytes, &summaries); uerr == nil && len(summaries) > 0 {
+		if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {
 			return pickSummaryText(summaries)
 		}
 	}
@@ -224,16 +224,16 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 
 	// Persist to Redis.
 	sum := job.session.Summaries[job.filterKey]
-	payload, jerr := json.Marshal(sum)
-	if jerr != nil {
-		log.Errorf("summary worker failed to marshal summary: %v", jerr)
+	payload, err := json.Marshal(sum)
+	if err != nil {
+		log.Errorf("summary worker failed to marshal summary: %v", err)
 		return
 	}
 	sumKey := getSessionSummaryKey(job.sessionKey)
-	if _, perr := luaSummariesSetIfNewer.Run(
+	if _, err := luaSummariesSetIfNewer.Run(
 		ctx, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, job.filterKey, string(payload),
-	).Result(); perr != nil {
-		log.Errorf("summary worker failed to store summary: %v", perr)
+	).Result(); err != nil {
+		log.Errorf("summary worker failed to store summary: %v", err)
 		return
 	}
 	if s.sessionTTL > 0 {
