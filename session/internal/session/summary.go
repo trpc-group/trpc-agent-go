@@ -24,10 +24,12 @@ import (
 const authorSystem = "system"
 
 // computeDeltaSince returns events that occurred strictly after the given
-// time and match the filterKey. When since is zero, all events are returned.
-// When filterKey is empty, all events are returned (no filtering).
-func computeDeltaSince(evs []event.Event, since time.Time, filterKey string) []event.Event {
+// time and match the filterKey, along with the latest event timestamp among
+// the returned events. When since is zero, all events are considered. When
+// filterKey is empty, all events are considered (no filtering).
+func computeDeltaSince(evs []event.Event, since time.Time, filterKey string) ([]event.Event, time.Time) {
 	out := make([]event.Event, 0, len(evs))
+	var latest time.Time
 	for _, e := range evs {
 		// Apply time filter
 		if !since.IsZero() && !e.Timestamp.After(since) {
@@ -38,8 +40,11 @@ func computeDeltaSince(evs []event.Event, since time.Time, filterKey string) []e
 			continue
 		}
 		out = append(out, e)
+		if e.Timestamp.After(latest) {
+			latest = e.Timestamp
+		}
 	}
-	return out
+	return out, latest
 }
 
 // prependPrevSummary returns a new slice that prepends the previous summary as
@@ -98,7 +103,7 @@ func SummarizeSession(
 	}
 
 	// Compute delta events with both time and filterKey filtering in one pass.
-	delta := computeDeltaSince(base.Events, prevAt, filterKey)
+	delta, latestTs := computeDeltaSince(base.Events, prevAt, filterKey)
 	if !force && len(delta) == 0 {
 		return false, nil
 	}
@@ -116,10 +121,18 @@ func SummarizeSession(
 		return false, nil
 	}
 
-	// Update summaries.
+	// Update summaries. UpdatedAt reflects the latest event included in this
+	// summarization to avoid skipping events during future delta computations.
+	// When no new events were summarized (e.g., force==true and delta empty),
+	// keep the previous timestamp.
+	updatedAt := prevAt.UTC()
+	if len(delta) > 0 && !latestTs.IsZero() {
+		updatedAt = latestTs.UTC()
+	}
+
 	if base.Summaries == nil {
 		base.Summaries = make(map[string]*session.Summary)
 	}
-	base.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
+	base.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: updatedAt}
 	return true, nil
 }

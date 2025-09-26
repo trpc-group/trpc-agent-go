@@ -38,20 +38,14 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		// Wait a bit for async processing
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify EnqueueSummaryJob was called
-		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 2, "Should call EnqueueSummaryJob twice")
+		// Verify EnqueueSummaryJob was called once; worker cascades full-session internally.
+		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 1, "Should call EnqueueSummaryJob once")
 
-		// Check first call (filter-specific)
-		firstCall := mockSessionService.enqueueSummaryJobCalls[0]
-		assert.Equal(t, "", firstCall.filterKey, "First call should use empty FilterKey (default from mock agent)")
-		assert.False(t, firstCall.force, "First call should not force")
-		assert.NotNil(t, firstCall.sess, "First call should have session")
-
-		// Check second call (full session)
-		secondCall := mockSessionService.enqueueSummaryJobCalls[1]
-		assert.Equal(t, "", secondCall.filterKey, "Second call should use empty FilterKey for full session")
-		assert.False(t, secondCall.force, "Second call should not force")
-		assert.NotNil(t, secondCall.sess, "Second call should have session")
+		// Check the only call
+		onlyCall := mockSessionService.enqueueSummaryJobCalls[0]
+		assert.Equal(t, "", onlyCall.filterKey, "Call should use default empty FilterKey from mock agent")
+		assert.False(t, onlyCall.force, "Call should not force")
+		assert.NotNil(t, onlyCall.sess, "Call should have session")
 	})
 
 	t.Run("does not call EnqueueSummaryJob for non-qualifying events", func(t *testing.T) {
@@ -104,18 +98,11 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		// Wait a bit for async processing
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify EnqueueSummaryJob was called
-		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 2, "Should call EnqueueSummaryJob twice for state delta events")
-
-		// Check first call (filter-specific)
-		firstCall := mockSessionService.enqueueSummaryJobCalls[0]
-		assert.Equal(t, "test-filter", firstCall.filterKey, "First call should use event's FilterKey")
-		assert.False(t, firstCall.force, "First call should not force")
-
-		// Check second call (full session)
-		secondCall := mockSessionService.enqueueSummaryJobCalls[1]
-		assert.Equal(t, "", secondCall.filterKey, "Second call should use empty FilterKey for full session")
-		assert.False(t, secondCall.force, "Second call should not force")
+		// Verify EnqueueSummaryJob was called once; full-session will be cascaded by worker.
+		require.Len(t, mockSessionService.enqueueSummaryJobCalls, 1, "Should call EnqueueSummaryJob once for state delta events")
+		onlyCall := mockSessionService.enqueueSummaryJobCalls[0]
+		assert.Equal(t, "test-filter", onlyCall.filterKey, "Call should use event's FilterKey")
+		assert.False(t, onlyCall.force, "Call should not force")
 	})
 
 	t.Run("handles EnqueueSummaryJob errors gracefully", func(t *testing.T) {
@@ -143,8 +130,8 @@ func TestRunner_EnqueueSummaryJob_Calls(t *testing.T) {
 		// Wait a bit for async processing
 		time.Sleep(100 * time.Millisecond)
 
-		// Verify EnqueueSummaryJob was still called despite error
-		assert.Len(t, errorSessionService.enqueueSummaryJobCalls, 2, "Should still call EnqueueSummaryJob even when it returns error")
+		// Verify EnqueueSummaryJob was still called once despite error
+		assert.Len(t, errorSessionService.enqueueSummaryJobCalls, 1, "Should still call EnqueueSummaryJob once even when it returns error")
 	})
 }
 

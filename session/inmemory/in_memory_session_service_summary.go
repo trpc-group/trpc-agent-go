@@ -132,25 +132,8 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 		return s.CreateSessionSummary(ctx, sess, filterKey, force)
 	}
 
-	// Verify session exists in storage before enqueueing.
-	app := s.getOrCreateAppSessions(key.AppName)
-	app.mu.RLock()
-	userSessions, ok := app.sessions[key.UserID]
-	if !ok {
-		app.mu.RUnlock()
-		return fmt.Errorf("user not found: %s", key.UserID)
-	}
-	swt, ok := userSessions[key.SessionID]
-	if !ok {
-		app.mu.RUnlock()
-		return fmt.Errorf("session not found: %s", key.SessionID)
-	}
-	storedSession := getValidSession(swt)
-	if storedSession == nil {
-		app.mu.RUnlock()
-		return fmt.Errorf("session expired: %s", key.SessionID)
-	}
-	app.mu.RUnlock()
+	// Do not check storage existence before enqueueing. The worker and
+	// write path perform authoritative validation under lock.
 
 	// Create summary job.
 	job := &summaryJob{
@@ -231,7 +214,7 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 		defer cancel()
 	}
 
-	// Perform the actual summary generation.
+	// Perform the actual summary generation for the requested filterKey.
 	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, storedSession, job.filterKey, job.force)
 	if err != nil {
 		log.Errorf("summary worker failed to generate summary: %v", err)
@@ -244,5 +227,21 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	// Persist to in-memory store under lock.
 	if err := s.writeSummaryUnderLock(app, job.sessionKey, job.filterKey, storedSession.Summaries[job.filterKey].Summary); err != nil {
 		log.Errorf("summary worker failed to write summary: %v", err)
+	}
+
+	// Cascade: after a branch update, also try to update the full-session summary.
+	// Guard: skip when this job already targets the full session.
+	if job.filterKey == session.SummaryFilterKeyAllContents {
+		return
+	}
+
+	if _, err := sisession.SummarizeSession(ctx, s.opts.summarizer, storedSession, session.SummaryFilterKeyAllContents, false); err != nil {
+		log.Warnf("summary worker failed to cascade full-session summary: %v", err)
+		return
+	}
+	if sum := storedSession.Summaries[session.SummaryFilterKeyAllContents]; sum != nil {
+		if err := s.writeSummaryUnderLock(app, job.sessionKey, session.SummaryFilterKeyAllContents, sum.Summary); err != nil {
+			log.Warnf("summary worker failed to store cascaded full summary: %v", err)
+		}
 	}
 }

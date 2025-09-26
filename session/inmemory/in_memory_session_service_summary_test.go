@@ -250,14 +250,14 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	}
 
 	// Now try to enqueue another job - should fall back to sync
-	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	err = s.EnqueueSummaryJob(context.Background(), sess, "branch", false)
 	require.NoError(t, err)
 
 	// Verify summary was created immediately (sync fallback)
 	got, err := s.GetSession(context.Background(), key)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	sum, ok := got.Summaries[""]
+	sum, ok := got.Summaries["branch"]
 	require.True(t, ok)
 	require.Equal(t, "fallback-summary", sum.Summary)
 }
