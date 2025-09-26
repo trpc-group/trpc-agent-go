@@ -455,6 +455,9 @@ type ToolEventOptions struct {
 	Error        error
 	// NodeID is optional. When provided, author becomes node-scoped.
 	NodeID string
+	// IncludeResponse controls whether NewToolExecutionEvent should attach a
+	// tool.response payload in addition to metadata.
+	IncludeResponse bool
 }
 
 // ToolEventOption is a function that configures tool event options.
@@ -630,6 +633,14 @@ func WithToolEventError(err error) ToolEventOption {
 		if err != nil {
 			opts.Error = err
 		}
+	}
+}
+
+// WithToolEventIncludeResponse controls whether the resulting event should
+// embed a tool.response payload in addition to metadata.
+func WithToolEventIncludeResponse(include bool) ToolEventOption {
+	return func(opts *ToolEventOptions) {
+		opts.IncludeResponse = include
 	}
 }
 
@@ -998,10 +1009,19 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		Error:      options.Error,
 		StepNumber: options.StepNumber,
 	}
-	return NewGraphEvent(options.InvocationID,
+	graphEvent := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
+	if options.Error != "" {
+		graphEvent.Response.Object = model.ObjectTypeError
+		graphEvent.Response.Error = &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: options.Error,
+		}
+		graphEvent.Object = graphEvent.Response.Object
+	}
+	return graphEvent
 }
 
 // NewToolExecutionEvent creates a new tool execution event.
@@ -1028,10 +1048,34 @@ func NewToolExecutionEvent(opts ...ToolEventOption) *event.Event {
 		Error:        errorMsg,
 		InvocationID: options.InvocationID,
 	}
-	return NewGraphEvent(options.InvocationID,
+	evt := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeExecution,
 		WithToolMetadata(metadata))
+
+	if options.IncludeResponse {
+		toolMessage := model.NewToolMessage(options.ToolID, options.ToolName, options.Output)
+		resp := &model.Response{
+			Object:    model.ObjectTypeToolResponse,
+			Created:   options.EndTime.Unix(),
+			Choices:   []model.Choice{{Index: 0, Message: toolMessage}},
+			Timestamp: options.EndTime,
+			Done:      true,
+		}
+		if options.Error != nil {
+			resp.Error = &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: options.Error.Error(),
+			}
+		}
+		if resp.Timestamp.IsZero() {
+			resp.Timestamp = time.Now()
+			resp.Created = resp.Timestamp.Unix()
+		}
+		evt.Response = resp
+		evt.Object = resp.Object
+	}
+	return evt
 }
 
 // NewModelExecutionEvent creates a new model execution event.

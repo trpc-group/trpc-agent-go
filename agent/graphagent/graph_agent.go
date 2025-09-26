@@ -17,6 +17,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -137,7 +139,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	ga.setupInvocation(invocation)
 
 	// Prepare initial state.
-	initialState := ga.createInitialState(invocation)
+	initialState := ga.createInitialState(ctx, invocation)
 
 	// Execute the graph.
 	if ga.agentCallbacks != nil {
@@ -165,7 +167,7 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	return eventChan, nil
 }
 
-func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.State {
+func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.Invocation) graph.State {
 	var initialState graph.State
 
 	if ga.initialState != nil {
@@ -179,6 +181,23 @@ func (ga *GraphAgent) createInitialState(invocation *agent.Invocation) graph.Sta
 	if invocation.RunOptions.RuntimeState != nil {
 		for key, value := range invocation.RunOptions.RuntimeState {
 			initialState[key] = value
+		}
+	}
+
+	// Seed messages from session events so multi‑turn runs share history.
+	// This mirrors ContentRequestProcessor behavior used by non-graph flows.
+	if invocation.Session != nil {
+		// Build a temporary request to reuse the processor logic.
+		req := &model.Request{}
+		// Default processor: IncludeContentsFiltered + AddContextPrefix.
+		p := processor.NewContentRequestProcessor(
+			processor.WithIncludeContents(processor.IncludeContentsAll),
+			processor.WithPreserveSameBranch(true),
+		)
+		// We only need messages side effect; no output channel needed.
+		p.ProcessRequest(ctx, invocation, req, nil)
+		if len(req.Messages) > 0 {
+			initialState[graph.StateKeyMessages] = req.Messages
 		}
 	}
 
