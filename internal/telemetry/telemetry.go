@@ -35,12 +35,9 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
-	SpanNamePrefixAgentRun    = "agent_run"
-	SpanNameInvocation        = "invocation"
 
 	OperationExecuteTool = "execute_tool"
 	OperationCallLLM     = "call_llm"
-	OperationRunRunner   = "run_runner" // attribute of SpanNameInvocation
 	OperationInvokeAgent = "invoke_agent"
 )
 
@@ -148,26 +145,6 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String(KeyLLMRequest, "{}"),
 		attribute.String(KeyLLMResponse, "{}"),
-	)
-}
-
-// TraceRunner traces the invocation of a runner.
-func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message) {
-	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{message}}); err == nil {
-		span.SetAttributes(
-			attribute.String(KeyRunnerInput, string(bts)),
-		)
-	} else {
-		span.SetAttributes(attribute.String(KeyRunnerInput, "<not json serializable>"))
-	}
-
-	span.SetAttributes(
-		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
-		attribute.String(KeyGenAIOperationName, OperationRunRunner),
-		attribute.String(KeyRunnerName, fmt.Sprintf("[trpc-go-agent]: %s/%s", appName, invoke.AgentName)),
-		attribute.String(KeyInvocationID, invoke.InvocationID),
-		attribute.String(KeyRunnerSessionID, invoke.Session.ID),
-		attribute.String(KeyRunnerUserID, invoke.Session.UserID),
 	)
 }
 

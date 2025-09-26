@@ -167,22 +167,6 @@ func TestTransformSpan(t *testing.T) {
 			},
 			expectedAction: "transform_execute_tool",
 		},
-		{
-			name:          "run_runner operation",
-			operationName: itelemetry.OperationRunRunner,
-			inputSpan: &tracepb.Span{
-				Name: "test-span",
-				Attributes: []*commonpb.KeyValue{
-					{
-						Key: itelemetry.KeyGenAIOperationName,
-						Value: &commonpb.AnyValue{
-							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationRunRunner},
-						},
-					},
-				},
-			},
-			expectedAction: "transform_run_runner",
-		},
 	}
 
 	for _, tt := range tests {
