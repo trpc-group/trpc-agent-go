@@ -453,7 +453,7 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 		url.WithMetadataValue("tag", "wiki"),
 	)
 	urlSource2 := url.New(
-		[]string{"https://trpc-go.com"}, // contentFetchURL is configured, this url will be used to generate meta data and docID
+		[]string{"https://trpc-go.com/Byte-pair_encoding"}, // contentFetchURL is configured, this url will be used to generate meta data and docID
 		url.WithName("trpc-go"),
 		url.WithContentFetchingURL([]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"}), // real url that fetching data
 		url.WithMetadataValue("tag", "wiki"),
