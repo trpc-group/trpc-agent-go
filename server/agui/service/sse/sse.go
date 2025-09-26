@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
+const defaultPath = "/"
+
 // sse is a SSE service implementation.
 type sse struct {
 	path    string
@@ -34,6 +36,9 @@ func New(runner runner.Runner, opt ...service.Option) service.Service {
 	opts := service.Options{}
 	for _, o := range opt {
 		o(&opts)
+	}
+	if opts.Path == "" {
+		opts.Path = defaultPath
 	}
 	s := &sse{
 		path:   opts.Path,
@@ -53,16 +58,20 @@ func (s *sse) Handler() http.Handler {
 
 // handle handles an AG-UI run request.
 func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
-    if r.Method == http.MethodOptions {
-        w.Header().Set("Allow", http.MethodPost)
-        w.WriteHeader(http.StatusNoContent)
-        return
-    }
-    if r.Method != http.MethodPost {
-        w.Header().Set("Allow", http.MethodPost)
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
+		if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.runner == nil {
 		http.Error(w, "runner not configured", http.StatusInternalServerError)
 		return

@@ -15,11 +15,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-const (
-	// defaultPath is the default path for the AG-UI service.
-	defaultPath = "/"
-)
-
 // options holds the options for the AG-UI server.
 type options struct {
 	path              string
@@ -30,9 +25,7 @@ type options struct {
 
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
-	opts := &options{
-		path: defaultPath,
-	}
+	opts := &options{}
 	for _, o := range opt {
 		o(opts)
 	}

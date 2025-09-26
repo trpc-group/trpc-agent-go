@@ -20,6 +20,8 @@ type Option func(*Options)
 // WithPath sets the request path.
 func WithPath(path string) Option {
 	return func(s *Options) {
-		s.Path = path
+		if path != "" {
+			s.Path = path
+		}
 	}
 }

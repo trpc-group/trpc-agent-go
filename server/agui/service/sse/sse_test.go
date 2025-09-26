@@ -178,3 +178,63 @@ func TestHandlerDispatchesToConfiguredPath(t *testing.T) {
 		t.Fatalf("runner should be invoked once, got %d", runner.calls)
 	}
 }
+
+func TestNewUsesDefaultPath(t *testing.T) {
+	eventsCh := make(chan aguievents.Event)
+	go func() {
+		close(eventsCh)
+	}()
+
+	runner := &stubRunner{
+		runFn: func(ctx context.Context, input *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+			return eventsCh, nil
+		},
+	}
+
+	svc := New(runner)
+	handler := svc.Handler()
+	if handler == nil {
+		t.Fatalf("Handler returned nil")
+	}
+
+	payload := `{"threadId":"thread","runId":"run","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, defaultPath, strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 status, got %d", res.StatusCode)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner should be invoked once, got %d", runner.calls)
+	}
+}
+
+func TestHandleCORSPreflight(t *testing.T) {
+	srv := &sse{writer: aguisse.NewSSEWriter()}
+	req := httptest.NewRequest(http.MethodOptions, "/agui", nil)
+	req.Header.Set("Access-Control-Request-Headers", "Content-Type, Authorization")
+	rr := httptest.NewRecorder()
+
+	srv.handle(rr, req)
+
+	res := rr.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204 status, got %d", res.StatusCode)
+	}
+	if res.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("unexpected Access-Control-Allow-Origin: %s", res.Header.Get("Access-Control-Allow-Origin"))
+	}
+	if res.Header.Get("Access-Control-Allow-Methods") != "POST" {
+		t.Fatalf("unexpected Access-Control-Allow-Methods: %s", res.Header.Get("Access-Control-Allow-Methods"))
+	}
+	if res.Header.Get("Access-Control-Allow-Headers") != "Content-Type, Authorization" {
+		t.Fatalf("unexpected Access-Control-Allow-Headers: %s", res.Header.Get("Access-Control-Allow-Headers"))
+	}
+}
