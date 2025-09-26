@@ -108,9 +108,15 @@ func (s *Source) Type() string {
 // processURL downloads content from a URL and returns its documents.
 func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*document.Document, error) {
 	// Parse the URL.
-	parsedURL, err := url.Parse(fetchingURL)
+	parsedFetchingURL, err := url.Parse(fetchingURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+
+	// Parse and validate the identifier URL.
+	parsedIdentifierURL, err := url.Parse(identifierURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse identifier URL: %w", err)
 	}
 
 	// Create HTTP request with context.
@@ -135,8 +141,7 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 
 	// Determine the content type and file name.
 	contentType := resp.Header.Get("Content-Type")
-	fileName := s.getFileName(parsedURL, contentType)
-
+	fileName := s.getFileName(parsedIdentifierURL, contentType)
 	// Determine file type and get appropriate reader.
 	fileType := isource.GetFileTypeFromContentType(contentType, fileName)
 	reader, exists := s.readers[fileType]
@@ -157,10 +162,9 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 	}
 	metadata[source.MetaSource] = source.TypeURL
 	metadata[source.MetaURL] = identifierURL
-	metadata[source.MetaURLHost] = parsedURL.Host
-	metadata[source.MetaURLPath] = parsedURL.Path
-	metadata[source.MetaURLScheme] = parsedURL.Scheme
-
+	metadata[source.MetaURLHost] = parsedIdentifierURL.Host
+	metadata[source.MetaURLPath] = parsedIdentifierURL.Path
+	metadata[source.MetaURLScheme] = parsedIdentifierURL.Scheme
 	metadata[source.MetaURI] = identifierURL
 	metadata[source.MetaSourceName] = s.name
 
