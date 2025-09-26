@@ -140,7 +140,7 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	agent.EmitEvent(ctx, invocation, eventChan, startEvent)
 
 	// Wait for completion notice.
-	completionID := agent.AppendEventNoticeKeyPrefix + startEvent.ID
+	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
 	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
 	if errors.Is(err, context.Canceled) {
 		return err

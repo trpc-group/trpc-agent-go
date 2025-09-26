@@ -224,7 +224,7 @@ func (r *runner) Run(
 			}
 
 			if agentEvent.RequiresCompletion {
-				completionID := agent.AppendEventNoticeKeyPrefix + agentEvent.ID
+				completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
 				invocation.NotifyCompletion(ctx, completionID)
 			}
 
