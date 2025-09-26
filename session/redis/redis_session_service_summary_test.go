@@ -146,6 +146,46 @@ func TestRedisService_CreateSessionSummary_PersistToRedis(t *testing.T) {
 	require.True(t, ttl.Val() > 0)
 }
 
+func TestRedisService_CreateSessionSummary_UpdateAndPersist_WithFetchedSession(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session and append a valid event.
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-thin"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enable summarizer.
+	s.opts.summarizer = &fakeSummarizer{allow: true, out: "thin-sum"}
+
+	// Call CreateSessionSummary with a session that includes events (fetch first),
+	// aligning with the contract: summarization uses the passed-in session content.
+	sessWithEvents, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessWithEvents)
+	err = s.CreateSessionSummary(context.Background(), sessWithEvents, "", false)
+	require.NoError(t, err)
+
+	// Verify Redis has the summary under full-session key.
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+	sum, ok := m[""]
+	require.True(t, ok)
+	require.Equal(t, "thin-sum", sum.Summary)
+}
+
 func TestRedisService_CreateSessionSummary_SetIfNewer_NoOverride(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()

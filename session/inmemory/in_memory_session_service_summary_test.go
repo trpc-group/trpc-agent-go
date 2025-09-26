@@ -83,9 +83,11 @@ func TestMemoryService_CreateSessionSummary_UpdateAndPersist(t *testing.T) {
 
 	// Enable summarizer and create summary under filterKey "" (full-session).
 	s.opts.summarizer = &fakeSummarizer{allow: true, out: "summary-text"}
-	require.NoError(t, s.CreateSessionSummary(context.Background(), &session.Session{
-		ID: key.SessionID, AppName: key.AppName, UserID: key.UserID,
-	}, "", false))
+	// Fetch authoritative session with events and pass it explicitly.
+	sessWithEvents, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, sessWithEvents)
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sessWithEvents, "", false))
 
 	// Verify stored summary exists and GetSessionSummaryText returns it.
 	got, err := s.GetSession(context.Background(), key)

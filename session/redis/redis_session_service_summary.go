@@ -192,6 +192,12 @@ func (s *Service) startAsyncSummaryWorker() {
 		go func(summaryJobChan chan *summaryJob) {
 			for job := range summaryJobChan {
 				s.processSummaryJob(job)
+				// After branch summary, cascade a full-session summary by
+				// reusing the same processing path to keep logic unified.
+				if job.filterKey != session.SummaryFilterKeyAllContents {
+					job.filterKey = session.SummaryFilterKeyAllContents
+					s.processSummaryJob(job)
+				}
 			}
 		}(summaryJobChan)
 	}
@@ -239,31 +245,6 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	if s.sessionTTL > 0 {
 		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
 			log.Errorf("summary worker failed to set summary TTL: %v", err)
-		}
-	}
-
-	// Cascade: after a branch update, also try to update the full-session summary.
-	// Guard: skip when this job already targets the full session.
-	if job.filterKey == session.SummaryFilterKeyAllContents {
-		return
-	}
-
-	if _, err := sisession.SummarizeSession(ctx, s.opts.summarizer, job.session, session.SummaryFilterKeyAllContents, false); err != nil {
-		log.Warnf("summary worker failed to cascade full-session summary: %v", err)
-		return
-	}
-
-	// Persist full-session summary if present/updated.
-	if sum := job.session.Summaries[session.SummaryFilterKeyAllContents]; sum != nil {
-		payload, err := json.Marshal(sum)
-		if err != nil {
-			log.Warnf("summary worker failed to marshal cascaded full summary: %v", err)
-			return
-		}
-		if _, err := luaSummariesSetIfNewer.Run(
-			ctx, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, session.SummaryFilterKeyAllContents, string(payload),
-		).Result(); err != nil {
-			log.Warnf("summary worker failed to store cascaded full summary: %v", err)
 		}
 	}
 }

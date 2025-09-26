@@ -28,7 +28,7 @@ const (
 	defaultCleanupIntervalSecond = 300 // 5 min
 
 	defaultAsyncSummaryNum  = 3
-	defaultSummaryQueueSize = 500
+	defaultSummaryQueueSize = 256
 )
 
 // stateWithTTL wraps state data with expiration time.

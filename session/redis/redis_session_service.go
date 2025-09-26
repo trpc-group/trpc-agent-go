@@ -36,8 +36,8 @@ const (
 	defaultChanBufferSize    = 100
 	defaultAsyncPersisterNum = 10
 
-	defaultAsyncSummaryNum  = 5
-	defaultSummaryQueueSize = 1000
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 256
 )
 
 // SessionState is the state of a session.
