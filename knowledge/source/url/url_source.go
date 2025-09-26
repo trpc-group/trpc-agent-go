@@ -108,9 +108,9 @@ func (s *Source) Type() string {
 // processURL downloads content from a URL and returns its documents.
 func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*document.Document, error) {
 	// Parse the URL.
-	parsedFetchingURL, err := url.Parse(fetchingURL)
+	_, err := url.Parse(fetchingURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse URL: %w", err)
+		return nil, fmt.Errorf("failed to parse fetching URL: %w", err)
 	}
 
 	// Parse and validate the identifier URL.
