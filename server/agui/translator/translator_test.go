@@ -49,7 +49,7 @@ func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 		ID:     "msg-1",
 		Object: model.ObjectTypeChatCompletionChunk,
 		Choices: []model.Choice{{
-			Delta: model.Message{Role: model.RoleAssistant, Content: "Hel"},
+			Delta: model.Message{Role: model.RoleAssistant, Content: "Hello"},
 		}},
 	}
 	chunkEvents, err := translator.textMessageEvent(firstChunk)
