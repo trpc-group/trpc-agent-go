@@ -20,13 +20,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Author types for events.
@@ -190,8 +188,6 @@ func (r *runner) Run(
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	ctx = agent.NewInvocationContext(ctx, invocation)
 
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameInvocation)
-	defer span.End()
 	// Run the agent and get the event channel.
 	agentEventCh, err := r.agent.Run(ctx, invocation)
 	if err != nil {
@@ -254,8 +250,6 @@ func (r *runner) Run(
 		// Send the runner completion event to output channel.
 		agent.EmitEvent(ctx, invocation, processedEventCh, runnerCompletionEvent)
 	}()
-
-	itelemetry.TraceRunner(span, r.appName, invocation, message)
 
 	return processedEventCh, nil
 }

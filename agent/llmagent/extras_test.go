@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -133,7 +134,7 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
 
 	llm := &LLMAgent{agentCallbacks: cb}
-	wrapped := llm.wrapEventChannel(context.Background(), inv, orig)
+	wrapped := llm.wrapEventChannel(context.Background(), inv, orig, noop.Span{})
 
 	var objs []string
 	for e := range wrapped {
@@ -157,7 +158,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
-	wrapped := llm.wrapEventChannel(context.Background(), inv, orig)
+	wrapped := llm.wrapEventChannel(context.Background(), inv, orig, noop.Span{})
 
 	// Expect exactly one event propagated from original channel and no extras.
 	count := 0

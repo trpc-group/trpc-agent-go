@@ -35,12 +35,10 @@ const (
 
 	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
-	SpanNamePrefixAgentRun    = "agent_run"
-	SpanNameInvocation        = "invocation"
 
 	OperationExecuteTool = "execute_tool"
 	OperationCallLLM     = "call_llm"
-	OperationRunRunner   = "run_runner" // attribute of SpanNameInvocation
+	OperationInvokeAgent = "invoke_agent"
 )
 
 const (
@@ -75,11 +73,19 @@ var (
 	KeyToolID       = "trpc.go.agent.tool_id"
 
 	// GenAI operation attributes
-	KeyGenAIOperationName = "gen_ai.operation.name"
-	KeyGenAISystem        = "gen_ai.system"
-	KeyGenAIToolName      = "gen_ai.tool.name"
-	KeyGenAIToolDesc      = "gen_ai.tool.description"
-	KeyGenAIRequestModel  = "gen_ai.request.model"
+	KeyGenAIOperationName     = "gen_ai.operation.name"
+	KeyGenAISystem            = "gen_ai.system"
+	KeyGenAIToolName          = "gen_ai.tool.name"
+	KeyGenAIToolDesc          = "gen_ai.tool.description"
+	KeyGenAIRequestModel      = "gen_ai.request.model"
+	KeyGenAIInputMessages     = "gen_ai.input.messages"
+	KeyGenAIOutputMessages    = "gen_ai.output.messages"
+	KeyGenAIAgentName         = "gen_ai.agent.name"
+	KeyGenAIConversationID    = "gen_ai.conversation.id"
+	KeyGenAIResponseModel     = "gen_ai.response.model"
+	KeyGenAIUsageOutputTokens = "gen_ai.usage.output_tokens"
+	KeyGenAIResponseID        = "gen_ai.response.id"
+	KeyGenAIUsageInputTokens  = "gen_ai.usage.input_tokens"
 
 	// System value
 	SystemTRPCGoAgent = "trpc.go.agent"
@@ -142,24 +148,45 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
-// TraceRunner traces the invocation of a runner.
-func TraceRunner(span trace.Span, appName string, invoke *agent.Invocation, message model.Message) {
-	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{message}}); err == nil {
+// TraceBeforeInvokeAgent traces the before invocation of an agent.
+func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation) {
+	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
-			attribute.String(KeyRunnerInput, string(bts)),
+			attribute.String(KeyGenAIInputMessages, string(bts)),
 		)
 	} else {
-		span.SetAttributes(attribute.String(KeyRunnerInput, "<not json serializable>"))
+		span.SetAttributes(attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
 	}
-
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
-		attribute.String(KeyGenAIOperationName, OperationRunRunner),
-		attribute.String(KeyRunnerName, fmt.Sprintf("[trpc-go-agent]: %s/%s", appName, invoke.AgentName)),
+		attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+		attribute.String(KeyGenAIAgentName, invoke.AgentName),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
-		attribute.String(KeyRunnerSessionID, invoke.Session.ID),
-		attribute.String(KeyRunnerUserID, invoke.Session.UserID),
 	)
+	if invoke.Session != nil {
+		span.SetAttributes(
+			attribute.String(KeyRunnerUserID, invoke.Session.UserID),
+			attribute.String(KeyGenAIConversationID, invoke.Session.ID),
+		)
+	}
+}
+
+// TraceAfterInvokeAgent traces the after invocation of an agent.
+func TraceAfterInvokeAgent(span trace.Span, rsp *model.Response) {
+	if len(rsp.Choices) > 0 {
+		if bts, err := json.Marshal(rsp.Choices[0].Message); err == nil {
+			span.SetAttributes(
+				attribute.String(KeyGenAIOutputMessages, string(bts)),
+			)
+		}
+	}
+	span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
+	if rsp.Usage != nil {
+		span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
+		span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
+	}
+	span.SetAttributes(attribute.String(KeyGenAIResponseID, rsp.ID))
+
 }
 
 // TraceCallLLM traces the invocation of an LLM call.
