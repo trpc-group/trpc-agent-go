@@ -245,9 +245,10 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
 	}
 
-	// Assert the sub agent saw its own name as filter key.
-	if sa.seenFilterKey != sa.name {
-		t.Fatalf("expected sub agent filter key %q, got %q", sa.name, sa.seenFilterKey)
+	// Assert the sub agent saw a filter key starting with its own name (now includes UUID suffix).
+	expectedPrefix := sa.name + "-"
+	if !strings.HasPrefix(sa.seenFilterKey, expectedPrefix) {
+		t.Fatalf("expected sub agent filter key to start with %q, got %q", expectedPrefix, sa.seenFilterKey)
 	}
 }
 

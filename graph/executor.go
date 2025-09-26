@@ -1289,7 +1289,22 @@ func (e *Executor) executeStep(
 					results <- fmt.Errorf("task panic: %v", r)
 				}
 			}()
-			if err := e.executeSingleTask(ctx, invocation, execCtx, t, step); err != nil {
+			// create a new invocation for each task, if parent invocation is not nil.
+			taskInvocation, taskCtx := invocation, ctx
+			if invocation != nil {
+				branch := t.NodeID
+				if invocation.Branch != "" {
+					branch = invocation.Branch + agent.BranchDelimiter + t.NodeID
+				}
+				taskInvocation = invocation.Clone(
+					agent.WithInvocationAgent(invocation.Agent),
+					agent.WithInvocationBranch(branch),
+				)
+				// set new context for each task.
+				taskCtx = agent.NewInvocationContext(ctx, taskInvocation)
+			}
+
+			if err := e.executeSingleTask(taskCtx, taskInvocation, execCtx, t, step); err != nil {
 				results <- err
 			}
 		}(t)
@@ -1769,34 +1784,40 @@ func (e *Executor) emitNodeErrorEvent(
 // handleNodeResult handles the result from node execution.
 func (e *Executor) handleNodeResult(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, t *Task, result any) (bool, error) {
-	if result == nil {
-		return false, nil
-	}
-	// Handle node result by concrete type.
+	// Even if result is nil, static edge writes should still occur so that
+	// downstream nodes can be triggered. Only skip static writes when we
+	// have explicit routing (Command with GoTo) or fan-out ([]*Command).
+
 	routed := false
-	switch v := result.(type) {
-	case State: // State update.
-		e.updateStateFromResult(execCtx, v)
-	case *Command: // Single command.
-		if v != nil {
-			if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
-				return false, err
+
+	if result != nil {
+		// Handle node result by concrete type.
+		switch v := result.(type) {
+		case State: // State update.
+			e.updateStateFromResult(execCtx, v)
+		case *Command: // Single command.
+			if v != nil {
+				if err := e.handleCommandResult(ctx, invocation, execCtx, v); err != nil {
+					return false, err
+				}
+				// If the command explicitly routes via GoTo, avoid also writing to
+				// channels from static edges for this task to prevent double-triggering
+				// the downstream node (once via GoTo, once via edge writes).
+				if v.GoTo != "" {
+					routed = true
+				}
 			}
-			// If the command explicitly routes via GoTo, avoid also writing to
-			// channels from static edges for this task to prevent double-triggering
-			// the downstream node (once via GoTo, once via edge writes).
-			if v.GoTo != "" {
-				routed = true
-			}
+		case []*Command: // Fan-out commands.
+			// Fan-out: enqueue tasks with overlays.
+			routed = true
+			e.enqueueCommands(execCtx, t, v)
+		default:
 		}
-	case []*Command: // Fan-out commands.
-		// Fan-out: enqueue tasks with overlays.
-		routed = true
-		e.enqueueCommands(execCtx, t, v)
-	default:
 	}
 
-	// Process channel writes, unless this is a fan-out case to avoid double trigger.
+	// Process channel writes when not explicitly routed. This ensures that
+	// nodes with nil results (e.g., pure routing/start nodes) still trigger
+	// their outgoing static edges.
 	if !routed && len(t.Writes) > 0 {
 		e.processChannelWrites(ctx, invocation, execCtx, t.TaskID, t.Writes)
 	}
