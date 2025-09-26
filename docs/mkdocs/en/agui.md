@@ -1,12 +1,12 @@
-# AG-UI 使用指南
+# AG-UI Guide
 
-AG-UI（Agent-User Interaction）协议由开源社区 [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) 维护，旨在让不同语言、不同框架、不同执行环境的智能体，都能够通过统一的事件流把一次执行过程中产生的内容传递给用户界面，允许松散的事件格式匹配，支持 SSE 和 WebSocket 等多种通信协议。
+The AG-UI (Agent-User Interaction) protocol is maintained by the open-source community at [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui). It enables agents implemented in different languages, frameworks, and execution environments to deliver the outputs generated during a run to user interfaces through a unified event stream. The protocol tolerates loosely-matched event formats and supports multiple transports including SSE and WebSocket.
 
-`trpc-agent-go` 接入了 AG-UI 协议，并默认提供了 SSE 服务端实现。
+`trpc-agent-go` comes with AG-UI support built in and provides an SSE server implementation by default.
 
-## 快速上手
+## Getting Started
 
-假设你已经实现了一个 Agent，可以如下所示接入 AG-UI 协议并启动服务：
+If you already have an agent, you can expose it via AG-UI and start an HTTP service as follows:
 
 ```go
 import (
@@ -15,40 +15,40 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
 )
 
-// 创建 Agent
+// Create your agent.
 agent := newAgent()
-// 创建 AG-UI 服务，指定 HTTP 路由
+// Create the AG-UI server and mount it onto an HTTP route.
 server, err := agui.New(agent, agui.WithPath("/agui"))
 if err != nil {
     log.Fatalf("create agui server failed: %v", err)
 }
-// 启动 HTTP 服务
+// Start the HTTP server.
 if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
     log.Fatalf("server stopped with error: %v", err)
 }
 ```
 
-完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
+See the full example at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
-## 进阶用法
+## Advanced Usage
 
-### 自定义传输层（`service.Service`）
+### Custom transport (`service.Service`)
 
-AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默认通信协议，如果希望改用 WebSocket 等其他协议，可以实现 `service.Service` 接口：
+The AG-UI protocol does not mandate a specific transport. This framework uses SSE as the default. If you want to switch to WebSocket or other protocols, implement the `service.Service` interface yourself:
 
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/server/agui"
 
 type wsService struct{}
 
-func (s *wsService) Handler() http.Handler { /* 注册 WebSocket 并写入事件 */ }
+func (s *wsService) Handler() http.Handler { /* register WebSocket and stream events */ }
 
 server, _ := agui.New(agent, agui.WithService(&wsService{}))
 ```
 
-### 自定义 Translator
+### Custom translator
 
-默认的 `translator.New` 会把内部事件翻译成协议里定义的标准事件集。若想在保留默认行为的基础上追加自定义信息，可以实现 `translator.Translator` 接口，并借助 AG-UI 的 `Custom` 事件类型携带扩展数据：
+The default `translator.New` converts internal events into the canonical AG-UI events. To augment the stream while keeping the default behaviour, implement the `translator.Translator` interface and use AG-UI `Custom` events to carry extra information:
 
 ```go
 import (
@@ -92,9 +92,9 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
 server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
 
-### 自定义 `UserIDResolver`
+### Custom `UserIDResolver`
 
-默认所有请求都会归到固定的 `"user"` 会话，可以通过自定义 `UserIDResolver` 从 `RunAgentInput` 中提取 `UserID`：
+By default every request maps to the fixed session `"user"`. Override `UserIDResolver` to derive the user ID from `RunAgentInput`:
 
 ```go
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
