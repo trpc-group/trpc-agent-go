@@ -47,7 +47,7 @@ func WithUserIDResolver(u UserIDResolver) Option {
 	}
 }
 
-// TranslatorFactory is a function that creates a bridge for an AG-UI run.
+// TranslatorFactory is a function that creates a translator for an AG-UI run.
 type TranslatorFactory func(input *adapter.RunAgentInput) translator.Translator
 
 // WithTranslatorFactory sets the translator factory.
