@@ -1019,6 +1019,7 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 			Type:    model.ErrorTypeFlowError,
 			Message: options.Error,
 		}
+		graphEvent.Object = graphEvent.Response.Object
 	}
 	return graphEvent
 }
@@ -1072,6 +1073,7 @@ func NewToolExecutionEvent(opts ...ToolEventOption) *event.Event {
 			resp.Created = resp.Timestamp.Unix()
 		}
 		evt.Response = resp
+		evt.Object = resp.Object
 	}
 	return evt
 }
