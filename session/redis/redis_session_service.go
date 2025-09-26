@@ -13,7 +13,6 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -26,7 +25,6 @@ import (
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 )
 
@@ -37,36 +35,9 @@ const (
 	defaultTimeout           = 2 * time.Second
 	defaultChanBufferSize    = 100
 	defaultAsyncPersisterNum = 10
-)
 
-// luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
-// JSON map only if the incoming UpdatedAt is newer-or-equal.
-// KEYS[1] = sesssum:{app}:{user}
-// ARGV[1] = sessionID
-// ARGV[2] = filterKey
-// ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
-var luaSummariesSetIfNewer = redis.NewScript(
-	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
-		"local fk = ARGV[2]\n" +
-		"local newSum = cjson.decode(ARGV[3])\n" +
-		"if not cur or cur == '' then\n" +
-		"  local m = {}\n" +
-		"  m[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"local map = cjson.decode(cur)\n" +
-		"local old = map[fk]\n" +
-		"local old_ts = nil\n" +
-		"local new_ts = nil\n" +
-		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
-		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
-		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
-		"  map[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"return 0\n",
+	defaultAsyncSummaryNum  = 5
+	defaultSummaryQueueSize = 1000
 )
 
 // SessionState is the state of a session.
@@ -85,17 +56,28 @@ type SessionState struct {
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
 type Service struct {
-	opts           ServiceOpts
-	redisClient    redis.UniversalClient
-	sessionTTL     time.Duration            // TTL for session state and event list
-	appStateTTL    time.Duration            // TTL for app state
-	userStateTTL   time.Duration            // TTL for user state
-	eventPairChans []chan *sessionEventPair // channel for session events to persistence
-	once           sync.Once
+	opts            ServiceOpts
+	redisClient     redis.UniversalClient
+	sessionTTL      time.Duration            // TTL for session state and event list
+	appStateTTL     time.Duration            // TTL for app state
+	userStateTTL    time.Duration            // TTL for user state
+	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
+	once            sync.Once
 }
+
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+}
+
+// summaryJob represents a summary job to be processed asynchronously.
+type summaryJob struct {
+	sessionKey session.Key
+	filterKey  string
+	force      bool
+	session    *session.Session
+	context    context.Context
 }
 
 // NewService creates a new redis session service.
@@ -107,6 +89,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL:       0,
 		asyncPersisterNum:  defaultAsyncPersisterNum,
 		enableAsyncPersist: false,
+		asyncSummaryNum:    defaultAsyncSummaryNum,
+		summaryQueueSize:   defaultSummaryQueueSize,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -136,6 +120,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if opts.enableAsyncPersist {
 			s.startAsyncPersistWorker()
 		}
+		// Always start async summary workers by default.
+		s.startAsyncSummaryWorker()
 		return s, nil
 	}
 
@@ -157,6 +143,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
 	}
+	// Always start async summary workers by default.
+	s.startAsyncSummaryWorker()
 	return s, nil
 }
 
@@ -476,6 +464,10 @@ func (s *Service) Close() error {
 		}
 
 		for _, ch := range s.eventPairChans {
+			close(ch)
+		}
+
+		for _, ch := range s.summaryJobChans {
 			close(ch)
 		}
 	})
@@ -876,89 +868,4 @@ func applyOptions(opts ...session.Option) *session.Options {
 		o(opt)
 	}
 	return opt
-}
-
-// CreateSessionSummary generates a summary for the session (async-ready).
-// It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
-func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
-		return nil
-	}
-
-	if sess == nil {
-		return errors.New("nil session")
-	}
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
-	if err := key.CheckSessionKey(); err != nil {
-		return fmt.Errorf("check session key failed: %w", err)
-	}
-
-	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
-	if err != nil {
-		return fmt.Errorf("summarize and persist failed: %w", err)
-	}
-	if !updated {
-		return nil
-	}
-	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
-	sum := sess.Summaries[filterKey]
-	payload, jerr := json.Marshal(sum)
-	if jerr != nil {
-		return fmt.Errorf("marshal summary failed: %w", jerr)
-	}
-	sumKey := getSessionSummaryKey(key)
-	if _, perr := luaSummariesSetIfNewer.Run(
-		ctx, s.redisClient, []string{sumKey}, key.SessionID, filterKey, string(payload),
-	).Result(); perr != nil {
-		return fmt.Errorf("store summaries (lua) failed: %w", perr)
-	}
-	if s.sessionTTL > 0 {
-		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
-			return fmt.Errorf("expire summaries failed: %w", err)
-		}
-	}
-	return nil
-}
-
-// GetSessionSummaryText returns the latest summary text from the session state if present.
-func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
-	if sess == nil {
-		return "", false
-	}
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
-	if err := key.CheckSessionKey(); err != nil {
-		return "", false
-	}
-	// Prefer local in-memory session summaries when available.
-	if len(sess.Summaries) > 0 {
-		if text, ok := pickSummaryText(sess.Summaries); ok {
-			return text, true
-		}
-	}
-	// Prefer separate summaries hash.
-	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {
-		var summaries map[string]*session.Summary
-		if uerr := json.Unmarshal(bytes, &summaries); uerr == nil && len(summaries) > 0 {
-			return pickSummaryText(summaries)
-		}
-	}
-	return "", false
-}
-
-// pickSummaryText picks a non-empty summary string with preference for the
-// all-contents key "" (empty filterKey). No special handling for "root".
-func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
-	if summaries == nil {
-		return "", false
-	}
-	// Prefer full-summary stored under empty filterKey.
-	if sum, ok := summaries[""]; ok && sum != nil && sum.Summary != "" {
-		return sum.Summary, true
-	}
-	for _, s := range summaries {
-		if s != nil && s.Summary != "" {
-			return s.Summary, true
-		}
-	}
-	return "", false
 }

@@ -12,6 +12,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -192,4 +193,237 @@ func TestRedisService_CreateSessionSummary_SetIfNewer_NoOverride(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "keep-me", sum.Summary)
 	require.True(t, sum.UpdatedAt.Equal(future))
+}
+
+func TestRedisService_EnqueueSummaryJob_AsyncEnabled(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async summary enabled
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "async-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue summary job
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify summary was created in Redis
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+	sum, ok := m[""]
+	require.True(t, ok)
+	require.Equal(t, "async-summary", sum.Summary)
+}
+
+func TestRedisService_EnqueueSummaryJob_AsyncDisabled_FallbackToSync(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async summary disabled
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "sync-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue summary job (should fall back to sync)
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify summary was created immediately in Redis (sync processing)
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+	sum, ok := m[""]
+	require.True(t, ok)
+	require.Equal(t, "sync-summary", sum.Summary)
+}
+
+func TestRedisService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async summary enabled but no summarizer
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		// No summarizer set
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Enqueue summary job should return immediately
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify no summary was created in Redis
+	client := buildRedisClient(t, redisURL)
+	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+func TestRedisService_EnqueueSummaryJob_InvalidSession_Error(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Test with nil session
+	err = s.EnqueueSummaryJob(context.Background(), nil, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil session")
+
+	// Test with invalid session key
+	invalidSess := &session.Session{ID: "", AppName: "app", UserID: "user"}
+	err = s.EnqueueSummaryJob(context.Background(), invalidSess, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "check session key failed")
+}
+
+func TestRedisService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with very small queue size
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1), // Very small queue
+		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Fill up the queue by sending multiple jobs
+	// Since queue size is 1, sending 2 jobs should fill it
+	for i := 0; i < 2; i++ {
+		err = s.EnqueueSummaryJob(context.Background(), sess, fmt.Sprintf("blocking-%d", i), false)
+		require.NoError(t, err)
+	}
+
+	// Now try to enqueue another job - should fall back to sync
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify summary was created immediately in Redis (sync fallback)
+	client := buildRedisClient(t, redisURL)
+	raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	var m map[string]*session.Summary
+	require.NoError(t, json.Unmarshal(raw, &m))
+	sum, ok := m[""]
+	require.True(t, ok)
+	require.Equal(t, "fallback-summary", sum.Summary)
+}
+
+func TestRedisService_EnqueueSummaryJob_ConcurrentJobs(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async summary enabled
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(3),
+		WithSummaryQueueSize(100),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "concurrent-summary"}),
+	)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Create multiple sessions
+	keys := []session.Key{
+		{AppName: "app", UserID: "user1", SessionID: "sid1"},
+		{AppName: "app", UserID: "user2", SessionID: "sid2"},
+		{AppName: "app", UserID: "user3", SessionID: "sid3"},
+	}
+
+	// Create sessions and append events
+	for i, key := range keys {
+		sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+		require.NoError(t, err)
+
+		e := event.New("inv", "author")
+		e.Timestamp = time.Now()
+		e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: fmt.Sprintf("hello%d", i)}}}}
+		require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+		// Enqueue summary job
+		err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+		require.NoError(t, err)
+	}
+
+	// Wait for async processing
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify all summaries were created
+	client := buildRedisClient(t, redisURL)
+	for _, key := range keys {
+		raw, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+		require.NoError(t, err)
+		var m map[string]*session.Summary
+		require.NoError(t, json.Unmarshal(raw, &m))
+		sum, ok := m[""]
+		require.True(t, ok)
+		require.Equal(t, "concurrent-summary", sum.Summary)
+	}
 }

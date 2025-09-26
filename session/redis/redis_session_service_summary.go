@@ -1,0 +1,246 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package redis
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/redis/go-redis/v9"
+	"github.com/spaolacci/murmur3"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
+)
+
+// luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
+// JSON map only if the incoming UpdatedAt is newer-or-equal.
+// KEYS[1] = sesssum:{app}:{user}
+// ARGV[1] = sessionID
+// ARGV[2] = filterKey
+// ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
+var luaSummariesSetIfNewer = redis.NewScript(
+	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
+		"local fk = ARGV[2]\n" +
+		"local newSum = cjson.decode(ARGV[3])\n" +
+		"if not cur or cur == '' then\n" +
+		"  local m = {}\n" +
+		"  m[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"local map = cjson.decode(cur)\n" +
+		"local old = map[fk]\n" +
+		"local old_ts = nil\n" +
+		"local new_ts = nil\n" +
+		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
+		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
+		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
+		"  map[fk] = newSum\n" +
+		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
+		"  return 1\n" +
+		"end\n" +
+		"return 0\n",
+)
+
+// CreateSessionSummary generates a summary for the session (async-ready).
+// It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
+func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	if s.opts.summarizer == nil {
+		return nil
+	}
+
+	if sess == nil {
+		return errors.New("nil session")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("check session key failed: %w", err)
+	}
+
+	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	if err != nil {
+		return fmt.Errorf("summarize and persist failed: %w", err)
+	}
+	if !updated {
+		return nil
+	}
+	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
+	sum := sess.Summaries[filterKey]
+	payload, jerr := json.Marshal(sum)
+	if jerr != nil {
+		return fmt.Errorf("marshal summary failed: %w", jerr)
+	}
+	sumKey := getSessionSummaryKey(key)
+	if _, perr := luaSummariesSetIfNewer.Run(
+		ctx, s.redisClient, []string{sumKey}, key.SessionID, filterKey, string(payload),
+	).Result(); perr != nil {
+		return fmt.Errorf("store summaries (lua) failed: %w", perr)
+	}
+	if s.sessionTTL > 0 {
+		if err := s.redisClient.Expire(ctx, sumKey, s.sessionTTL).Err(); err != nil {
+			return fmt.Errorf("expire summaries failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// GetSessionSummaryText returns the latest summary text from the session state if present.
+func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return "", false
+	}
+	// Prefer local in-memory session summaries when available.
+	if len(sess.Summaries) > 0 {
+		if text, ok := pickSummaryText(sess.Summaries); ok {
+			return text, true
+		}
+	}
+	// Prefer separate summaries hash.
+	if bytes, err := s.redisClient.HGet(ctx, getSessionSummaryKey(key), key.SessionID).Bytes(); err == nil && len(bytes) > 0 {
+		var summaries map[string]*session.Summary
+		if uerr := json.Unmarshal(bytes, &summaries); uerr == nil && len(summaries) > 0 {
+			return pickSummaryText(summaries)
+		}
+	}
+	return "", false
+}
+
+// pickSummaryText picks a non-empty summary string with preference for the
+// all-contents key "" (empty filterKey). No special handling for "root".
+func pickSummaryText(summaries map[string]*session.Summary) (string, bool) {
+	if summaries == nil {
+		return "", false
+	}
+	// Prefer full-summary stored under empty filterKey.
+	if sum, ok := summaries[""]; ok && sum != nil && sum.Summary != "" {
+		return sum.Summary, true
+	}
+	for _, s := range summaries {
+		if s != nil && s.Summary != "" {
+			return s.Summary, true
+		}
+	}
+	return "", false
+}
+
+// EnqueueSummaryJob enqueues a summary job for asynchronous processing.
+func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	if s.opts.summarizer == nil {
+		return nil
+	}
+
+	if sess == nil {
+		return errors.New("nil session")
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("check session key failed: %w", err)
+	}
+
+	// If async workers are not initialized, fall back to synchronous processing.
+	if len(s.summaryJobChans) == 0 {
+		return s.CreateSessionSummary(ctx, sess, filterKey, force)
+	}
+
+	// Verify session exists in Redis before enqueueing.
+	exists, err := s.redisClient.HExists(ctx, getSessionStateKey(key), key.SessionID).Result()
+	if err != nil {
+		return fmt.Errorf("check session existence failed: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("session not found: %s", key.SessionID)
+	}
+
+	// Create summary job.
+	job := &summaryJob{
+		sessionKey: key,
+		filterKey:  filterKey,
+		force:      force,
+		session:    sess,
+		context:    ctx,
+	}
+
+	// Select a channel using hash distribution.
+	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+
+	select {
+	case s.summaryJobChans[index] <- job:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// Queue is full, fall back to synchronous processing.
+		log.Warnf("summary job queue is full, falling back to synchronous processing")
+		return s.CreateSessionSummary(ctx, sess, filterKey, force)
+	}
+}
+
+func (s *Service) startAsyncSummaryWorker() {
+	summaryNum := s.opts.asyncSummaryNum
+	// Init summary job chan.
+	s.summaryJobChans = make([]chan *summaryJob, summaryNum)
+	for i := 0; i < summaryNum; i++ {
+		s.summaryJobChans[i] = make(chan *summaryJob, s.opts.summaryQueueSize)
+	}
+
+	for _, summaryJobChan := range s.summaryJobChans {
+		go func(summaryJobChan chan *summaryJob) {
+			for job := range summaryJobChan {
+				s.processSummaryJob(job)
+			}
+		}(summaryJobChan)
+	}
+}
+
+func (s *Service) processSummaryJob(job *summaryJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorf("panic in summary worker: %v", r)
+		}
+	}()
+
+	// Perform the actual summary generation.
+	updated, err := sisession.SummarizeSession(job.context, s.opts.summarizer, job.session, job.filterKey, job.force)
+	if err != nil {
+		log.Errorf("summary worker failed to generate summary: %v", err)
+		return
+	}
+	if !updated {
+		return
+	}
+
+	// Persist to Redis.
+	sum := job.session.Summaries[job.filterKey]
+	payload, jerr := json.Marshal(sum)
+	if jerr != nil {
+		log.Errorf("summary worker failed to marshal summary: %v", jerr)
+		return
+	}
+	sumKey := getSessionSummaryKey(job.sessionKey)
+	if _, perr := luaSummariesSetIfNewer.Run(
+		job.context, s.redisClient, []string{sumKey}, job.sessionKey.SessionID, job.filterKey, string(payload),
+	).Result(); perr != nil {
+		log.Errorf("summary worker failed to store summary: %v", perr)
+		return
+	}
+	if s.sessionTTL > 0 {
+		if err := s.redisClient.Expire(job.context, sumKey, s.sessionTTL).Err(); err != nil {
+			log.Errorf("summary worker failed to set summary TTL: %v", err)
+		}
+	}
+}

@@ -27,7 +27,9 @@ type ServiceOpts struct {
 	enableAsyncPersist bool
 	asyncPersisterNum  int // number of worker goroutines for async persistence
 	// summarizer integrates LLM summarization.
-	summarizer summary.SessionSummarizer
+	summarizer       summary.SessionSummarizer
+	asyncSummaryNum  int // number of worker goroutines for async summary
+	summaryQueueSize int // size of summary job queue
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -110,5 +112,25 @@ func WithAsyncPersisterNum(num int) ServiceOpt {
 func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.summarizer = s
+	}
+}
+
+// WithAsyncSummaryNum sets the number of workers for async summary processing.
+func WithAsyncSummaryNum(num int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if num < 1 {
+			num = defaultAsyncSummaryNum
+		}
+		opts.asyncSummaryNum = num
+	}
+}
+
+// WithSummaryQueueSize sets the size of the summary job queue.
+func WithSummaryQueueSize(size int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if size < 1 {
+			size = defaultSummaryQueueSize
+		}
+		opts.summaryQueueSize = size
 	}
 }

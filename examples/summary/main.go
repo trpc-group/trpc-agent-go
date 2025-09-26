@@ -74,17 +74,31 @@ func (c *summaryChat) setup(_ context.Context) error {
 	// Model used for both chat and summarization.
 	llm := openai.New(c.modelName)
 
-	// Summarizer.
+	// Summarizer with customizable prompt.
+	// You can customize the summary prompt using WithPrompt().
+	// Available placeholder:
+	//   - {conversation_text}: The conversation content to be summarized
 	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryChars(*flagMaxChars),
 		summary.WithChecksAny(
 			summary.CheckEventThreshold(*flagEvents),
 			summary.CheckTokenThreshold(*flagTokens),
 			summary.CheckTimeThreshold(time.Duration(*flagTimeSec)*time.Second),
 		),
+		// For example:
+		// summary.WithPrompt("Summarize this conversation focusing on key decisions: {conversation_text}"),
 	)
-	// In-memory session service with summarizer.
+	// In-memory session service with summarizer and async config.
+	// Async summary processing is enabled by default with the following configuration:
+	// - 2 async workers: handles concurrent summary generation without blocking
+	// - 100 queue size: buffers summary jobs during high traffic
+	// You can adjust these values based on your workload:
+	//   - Low traffic: 1-2 workers, 50-100 queue size
+	//   - Medium traffic: 2-4 workers, 100-200 queue size
+	//   - High traffic: 4-8 workers, 200-500 queue size
 	sessService := inmemory.NewSessionService(
 		inmemory.WithSummarizer(sum),
+		inmemory.WithAsyncSummaryNum(2),    // 2 async workers for concurrent summary generation
+		inmemory.WithSummaryQueueSize(100), // Queue size 100 to buffer summary jobs during high traffic
 	)
 	c.sessionService = sessService
 

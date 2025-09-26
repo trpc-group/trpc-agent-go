@@ -99,3 +99,166 @@ func TestMemoryService_CreateSessionSummary_UpdateAndPersist(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "summary-text", text)
 }
+
+func TestMemoryService_EnqueueSummaryJob_AsyncEnabled(t *testing.T) {
+	// Create service with async summary enabled
+	s := NewSessionService(
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "async-summary"}),
+	)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue summary job
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify summary was created
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "async-summary", sum.Summary)
+}
+
+func TestMemoryService_EnqueueSummaryJob_AsyncEnabled_Default(t *testing.T) {
+	// Create service with async summary enabled by default
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "async-summary"}),
+	)
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Enqueue summary job (should use async processing)
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Wait a bit for async processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify summary was created (async processing)
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "async-summary", sum.Summary)
+}
+
+func TestMemoryService_EnqueueSummaryJob_NoSummarizer_NoOp(t *testing.T) {
+	// Create service with async summary enabled but no summarizer
+	s := NewSessionService(
+		WithAsyncSummaryNum(2),
+		WithSummaryQueueSize(10),
+		// No summarizer set
+	)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Enqueue summary job should return immediately
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify no summary was created
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	_, ok := got.Summaries[""]
+	require.False(t, ok)
+}
+
+func TestMemoryService_EnqueueSummaryJob_InvalidSession_Error(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "test-summary"}),
+	)
+	defer s.Close()
+
+	// Test with nil session
+	err := s.EnqueueSummaryJob(context.Background(), nil, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil session")
+
+	// Test with invalid session key
+	invalidSess := &session.Session{ID: "", AppName: "app", UserID: "user"}
+	err = s.EnqueueSummaryJob(context.Background(), invalidSess, "", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "check session key failed")
+}
+
+func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) {
+	// Create service with very small queue size
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1), // Very small queue
+		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
+	)
+	defer s.Close()
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Fill up the queue with a blocking job
+	blockingJob := &summaryJob{
+		sessionKey: key,
+		filterKey:  "blocking",
+		force:      true,
+		session:    sess,
+		context:    context.Background(),
+	}
+
+	// Send a job to fill the queue (this will block the worker)
+	select {
+	case s.summaryJobChans[0] <- blockingJob:
+		// Queue is now full
+	default:
+		// Queue was already full
+	}
+
+	// Now try to enqueue another job - should fall back to sync
+	err = s.EnqueueSummaryJob(context.Background(), sess, "", false)
+	require.NoError(t, err)
+
+	// Verify summary was created immediately (sync fallback)
+	got, err := s.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	sum, ok := got.Summaries[""]
+	require.True(t, ok)
+	require.Equal(t, "fallback-summary", sum.Summary)
+}

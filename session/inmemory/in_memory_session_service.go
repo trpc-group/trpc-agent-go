@@ -12,7 +12,6 @@ package inmemory
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,12 +21,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	isession "trpc.group/trpc-go/trpc-agent-go/internal/session"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 const (
 	defaultSessionEventLimit     = 1000
 	defaultCleanupIntervalSecond = 300 // 5 min
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 500
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -92,12 +93,22 @@ func newAppSessions() *appSessions {
 
 // SessionService provides an in-memory implementation of SessionService.
 type SessionService struct {
-	mu            sync.RWMutex
-	apps          map[string]*appSessions
-	opts          serviceOpts
-	cleanupTicker *time.Ticker
-	cleanupDone   chan struct{}
-	cleanupOnce   sync.Once
+	mu              sync.RWMutex
+	apps            map[string]*appSessions
+	opts            serviceOpts
+	cleanupTicker   *time.Ticker
+	cleanupDone     chan struct{}
+	cleanupOnce     sync.Once
+	summaryJobChans []chan *summaryJob // channel for summary jobs to processing
+}
+
+// summaryJob represents a summary job to be processed asynchronously
+type summaryJob struct {
+	sessionKey session.Key
+	filterKey  string
+	force      bool
+	session    *session.Session
+	context    context.Context
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -105,6 +116,8 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	opts := serviceOpts{
 		sessionEventLimit: defaultSessionEventLimit,
 		cleanupInterval:   0,
+		asyncSummaryNum:   defaultAsyncSummaryNum,
+		summaryQueueSize:  defaultSummaryQueueSize,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -127,6 +140,10 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	if opts.cleanupInterval > 0 {
 		s.startCleanupRoutine()
 	}
+
+	// Always start async summary workers by default
+	s.startAsyncSummaryWorker()
+
 	return s
 }
 
@@ -649,98 +666,6 @@ func (s *SessionService) stopCleanupRoutine() {
 func (s *SessionService) Close() error {
 	s.stopCleanupRoutine()
 	return nil
-}
-
-// CreateSessionSummary generates a summary for the session and stores it on the session object.
-// This implementation preserves original events and updates session.Summaries only.
-func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
-		return nil
-	}
-
-	if sess == nil {
-		return errors.New("nil session")
-	}
-	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
-	if err := key.CheckSessionKey(); err != nil {
-		return fmt.Errorf("check session key failed: %w", err)
-	}
-
-	app := s.getOrCreateAppSessions(key.AppName)
-	app.mu.Lock()
-	userSessions, ok := app.sessions[key.UserID]
-	if !ok {
-		app.mu.Unlock()
-		return fmt.Errorf("user not found: %s", key.UserID)
-	}
-	swt, ok := userSessions[key.SessionID]
-	if !ok {
-		app.mu.Unlock()
-		return fmt.Errorf("session not found: %s", key.SessionID)
-	}
-	storedSession := getValidSession(swt)
-	if storedSession == nil {
-		app.mu.Unlock()
-		return fmt.Errorf("session expired: %s", key.SessionID)
-	}
-	app.mu.Unlock()
-
-	// Run summarization which updates storedSession.Summaries in place.
-	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, storedSession, filterKey, force)
-	if err != nil {
-		return fmt.Errorf("summarize and persist failed: %w", err)
-	}
-	if !updated {
-		return nil
-	}
-	// Persist to in-memory store under lock.
-	if err := s.writeSummaryUnderLock(app, key, filterKey, storedSession.Summaries[filterKey].Summary); err != nil {
-		return fmt.Errorf("write summary under lock failed: %w", err)
-	}
-	return nil
-}
-
-// writeSummaryUnderLock writes a summary for a filterKey under app lock and refreshes TTL.
-// When filterKey is "", it represents the full-session summary.
-func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key, filterKey string, text string) error {
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	swt, ok := app.sessions[key.UserID][key.SessionID]
-	if !ok {
-		return fmt.Errorf("session not found: %s", key.SessionID)
-	}
-	cur := getValidSession(swt)
-	if cur == nil {
-		return fmt.Errorf("session expired: %s", key.SessionID)
-	}
-	if cur.Summaries == nil {
-		cur.Summaries = make(map[string]*session.Summary)
-	}
-	cur.Summaries[filterKey] = &session.Summary{Summary: text, UpdatedAt: time.Now().UTC()}
-	cur.UpdatedAt = time.Now()
-	swt.session = cur
-	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
-	return nil
-}
-
-// GetSessionSummaryText returns previously stored summary from session summaries if present.
-func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
-	if sess == nil {
-		return "", false
-	}
-	// Prefer structured summaries on session.
-	if sess.Summaries != nil {
-		// Prefer full-summary under empty filterKey.
-		if sum, ok := sess.Summaries[""]; ok && sum != nil && sum.Summary != "" {
-			return sum.Summary, true
-		}
-		for _, s := range sess.Summaries {
-			if s != nil && s.Summary != "" {
-				return s.Summary, true
-			}
-		}
-	}
-	return "", false
 }
 
 // updateStoredSession updates the stored session with the given event.

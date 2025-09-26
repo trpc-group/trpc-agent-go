@@ -163,6 +163,10 @@ func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *ses
 	return nil
 }
 
+func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
 func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
 	return "", false
 }

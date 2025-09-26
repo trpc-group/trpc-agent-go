@@ -223,22 +223,20 @@ func (r *runner) Run(
 				}
 
 				// Trigger summarization immediately after appending a qualifying event.
-				// Run asynchronously so it never blocks event emission.
-				go func(sessCopy *session.Session, filterKey string) {
-					// Prefer filter-specific summarization to avoid scanning all filters.
-					if err := r.sessionService.CreateSessionSummary(
-						context.Background(), sessCopy, filterKey, false,
-					); err != nil {
-						log.Debugf("Auto summarize after append skipped or failed: %v.", err)
-					}
-					// Additionally, generate a full-session summary (filterKey="") for
-					// IncludeContentsAll consumers. This is also best-effort and non-blocking.
-					if err := r.sessionService.CreateSessionSummary(
-						context.Background(), sessCopy, "", false,
-					); err != nil {
-						log.Debugf("Auto full summarize skipped or failed: %v.", err)
-					}
-				}(sess, agentEvent.FilterKey)
+				// Use EnqueueSummaryJob for true asynchronous processing.
+				// Prefer filter-specific summarization to avoid scanning all filters.
+				if err := r.sessionService.EnqueueSummaryJob(
+					context.Background(), sess, agentEvent.FilterKey, false,
+				); err != nil {
+					log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+				}
+				// Additionally, generate a full-session summary (filterKey="") for
+				// IncludeContentsAll consumers. This is also best-effort and non-blocking.
+				if err := r.sessionService.EnqueueSummaryJob(
+					context.Background(), sess, "", false,
+				); err != nil {
+					log.Debugf("Auto full summarize skipped or failed: %v.", err)
+				}
 			}
 
 			if agentEvent.RequiresCompletion {

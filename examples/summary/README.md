@@ -68,6 +68,7 @@ TokenThreshold: 0
 TimeThreshold: 0s
 MaxChars: 0
 Streaming: true
+AddSummary: true
 ==================================================
 ✅ Summary chat ready! Session: summary-session-1757649727
 
@@ -110,11 +111,70 @@ User → Runner → Agent(Model) → Session Service → SessionSummarizer
 ```
 
 - The `Runner` orchestrates the conversation and writes events.
-- The `Runner` automatically triggers summarization asynchronously immediately after each qualifying event is appended via `CreateSessionSummary`.
+- The `Runner` automatically triggers summarization asynchronously immediately after each qualifying event is appended via `EnqueueSummaryJob`.
 - The `SessionSummarizer` generates summaries using the configured LLM model.
 - The `session.Service` stores summary text in its backend storage (in-memory or Redis).
 - Summary injection happens automatically in the `ContentRequestProcessor` for subsequent turns.
-- You can control summary injection with `-addSummary`.
+- You can control summary injection with `-add-summary`.
+
+## Async Summary Configuration
+
+The session service supports asynchronous summary processing by default. The configuration is set in the code with detailed comments:
+
+```go
+// In-memory session service with summarizer and async config.
+// Async summary processing is enabled by default with the following configuration:
+// - 2 async workers: handles concurrent summary generation without blocking
+// - 100 queue size: buffers summary jobs during high traffic
+// You can adjust these values based on your workload:
+//   - Low traffic: 1-2 workers, 50-100 queue size
+//   - Medium traffic: 2-4 workers, 100-200 queue size
+//   - High traffic: 4-8 workers, 200-500 queue size
+sessService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(sum),
+    inmemory.WithAsyncSummaryNum(2),        // 2 async workers for concurrent summary generation
+    inmemory.WithSummaryQueueSize(100),     // Queue size 100 to buffer summary jobs during high traffic
+)
+
+// Redis service with async config
+sessService := redis.NewService(
+    redis.WithSummarizer(sum),
+    redis.WithAsyncSummaryNum(2),           // 2 async workers for concurrent summary generation
+    redis.WithSummaryQueueSize(100),        // Queue size 100 to buffer summary jobs during high traffic
+)
+```
+
+### Async Configuration Options
+
+- **`WithAsyncSummaryNum(num int)`**: Sets the number of async summary workers. More workers can handle higher concurrency but consume more resources.
+- **`WithSummaryQueueSize(size int)`**: Sets the size of the summary job queue. Larger queues can handle more burst traffic but consume more memory.
+
+### Performance Tuning
+
+- **Low traffic**: Use 1-2 workers with queue size 50-100
+- **Medium traffic**: Use 2-4 workers with queue size 100-200
+- **High traffic**: Use 4-8 workers with queue size 200-500
+
+## Prompt Customization
+
+You can customize the summary prompt to control how conversations are summarized. The prompt supports one placeholder that will be replaced with actual values during summary generation:
+
+### Available Placeholder
+
+- **`{conversation_text}`**: The conversation content to be summarized
+
+### Example Usage
+
+```go
+// Custom prompt focusing on key decisions
+summary.WithPrompt("Summarize this conversation focusing on key decisions: {conversation_text}")
+
+// Custom prompt for technical discussions
+summary.WithPrompt("Extract technical insights from this conversation: {conversation_text}")
+
+// Custom prompt for concise summaries
+summary.WithPrompt("Provide a brief summary of this conversation: {conversation_text}")
+```
 
 ## Summary Options
 
@@ -124,7 +184,7 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 - **`WithMaxSummaryChars(maxChars int)`**: Sets the maximum character count (runes) for generated summaries. When set to 0 (default), no truncation is applied.
 
-- **`WithPrompt(prompt string)`**: Sets a custom prompt for summarization. The prompt must include the placeholder `{conversation_text}`, which will be replaced with the extracted conversation when generating the summary.
+- **`WithPrompt(prompt string)`**: Customizes the prompt template used for summary generation. The prompt must include the `{conversation_text}` placeholder. See the [Prompt Customization](#prompt-customization) section for details and examples.
 
 ### Trigger Options
 
@@ -172,7 +232,7 @@ sum := summary.NewSummarizer(model,
 - Do not insert summary as an event. Summary is stored separately.
 - Session service handles incremental processing for summarization automatically.
 - Default trigger uses an event-count threshold aligned with Python (`>` semantics).
-- Summary generation is asynchronous by default (non-blocking).
+- Summary generation is asynchronous by default (non-blocking) with configurable worker pools.
 - Summary injection into LLM prompts is automatic and implicit.
 
 ## Files

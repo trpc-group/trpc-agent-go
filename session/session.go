@@ -117,6 +117,13 @@ type Service interface {
 	// flow where possible. Implementations may group deltas by branch internally.
 	CreateSessionSummary(ctx context.Context, sess *Session, filterKey string, force bool) error
 
+	// EnqueueSummaryJob enqueues a summary job for asynchronous processing.
+	// This method provides a non-blocking way to trigger summary generation.
+	// When async processing is enabled, the job will be processed by background workers.
+	// When async processing is disabled or unavailable, it falls back to synchronous processing.
+	// The method validates session parameters before enqueueing and returns appropriate errors.
+	EnqueueSummaryJob(ctx context.Context, sess *Session, filterKey string, force bool) error
+
 	// GetSessionSummaryText returns the latest summary text for the session if any.
 	// The boolean indicates whether a summary exists.
 	GetSessionSummaryText(ctx context.Context, sess *Session) (string, bool)
