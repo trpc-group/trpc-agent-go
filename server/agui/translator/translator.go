@@ -125,14 +125,22 @@ func (t *translator) textMessageEvent(rsp *model.Response) ([]aguievents.Event, 
 // toolCallEvent translates a tool call trpc-agent-go event to AG-UI events.
 func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, error) {
 	var events []aguievents.Event
-	toolCall := rsp.Choices[0].Message.ToolCalls[0]
-	// Tool call start event.
-	var startOpt []aguievents.ToolCallStartOption
-	startOpt = append(startOpt, aguievents.WithParentMessageID(rsp.ID))
-	events = append(events, aguievents.NewToolCallStartEvent(toolCall.ID, toolCall.Function.Name, startOpt...))
-	// Tool call arguments event.
-	toolCallArguments := formatToolCallArguments(toolCall.Function.Arguments)
-	events = append(events, aguievents.NewToolCallArgsEvent(toolCall.ID, toolCallArguments))
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return events, nil
+	}
+	for _, choice := range rsp.Choices {
+		for _, toolCall := range choice.Message.ToolCalls {
+			// Tool Call Start Event.
+			startOpt := []aguievents.ToolCallStartOption{aguievents.WithParentMessageID(rsp.ID)}
+			toolCallStartEvent := aguievents.NewToolCallStartEvent(toolCall.ID, toolCall.Function.Name, startOpt...)
+			events = append(events, toolCallStartEvent)
+			// Tool Call Arguments Event.
+			toolCallArguments := formatToolCallArguments(toolCall.Function.Arguments)
+			if toolCallArguments != "" {
+				events = append(events, aguievents.NewToolCallArgsEvent(toolCall.ID, toolCallArguments))
+			}
+		}
+	}
 	t.lastMessageID = rsp.ID
 	return events, nil
 }
