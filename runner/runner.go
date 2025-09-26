@@ -150,7 +150,7 @@ func (r *runner) Run(
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
 	// and tool calls build on the same canonical transcript.
-	if len(ro.Messages) > 0 && (invocation.Session == nil || len(invocation.Session.Events) == 0) {
+	if len(ro.Messages) > 0 && (invocation.Session == nil || len(invocation.Session.GetEvents()) == 0) {
 		for _, msg := range ro.Messages {
 			author := r.agent.Info().Name
 			if msg.Role == model.RoleUser {

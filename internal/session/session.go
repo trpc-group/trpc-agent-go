@@ -57,10 +57,12 @@ func UpdateUserSession(sess *session.Session, event *event.Event, opts ...sessio
 		return
 	}
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *event)
 
 		// Apply filtering options
 		ApplyEventFiltering(sess, opts...)
+		sess.EventMu.Unlock()
 		// Ensure events start with RoleUser after filtering
 		EnsureEventStartWithUser(sess)
 	}
@@ -97,7 +99,7 @@ func ApplyEventFiltering(sess *session.Session, opts ...session.Option) {
 			sess.Events = sess.Events[startIndex:]
 		} else {
 			// No events after the specified time, clear all events
-			sess.Events = nil
+			sess.Events = []event.Event{}
 		}
 	}
 }
