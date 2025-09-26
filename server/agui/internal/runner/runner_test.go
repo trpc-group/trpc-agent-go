@@ -21,6 +21,7 @@ import (
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	aguitranslator "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
@@ -59,7 +60,7 @@ func TestRunNoMessages(t *testing.T) {
 	r := &runner{
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
-		userIDResolver:    NewOptions().UserIDResolver,
+		userIDResolver:    aguirunner.NewOptions().UserIDResolver,
 	}
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"}
@@ -105,7 +106,7 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	r := &runner{
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
-		userIDResolver:    NewOptions().UserIDResolver,
+		userIDResolver:    aguirunner.NewOptions().UserIDResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -133,7 +134,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	r := &runner{
 		runner:            underlying,
 		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
-		userIDResolver:    NewOptions().UserIDResolver,
+		userIDResolver:    aguirunner.NewOptions().UserIDResolver,
 	}
 
 	input := &adapter.RunAgentInput{
@@ -166,7 +167,7 @@ func TestRunTranslateError(t *testing.T) {
 		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator {
 			return fakeTrans
 		},
-		userIDResolver: NewOptions().UserIDResolver,
+		userIDResolver: aguirunner.NewOptions().UserIDResolver,
 	}
 	input := &adapter.RunAgentInput{
 		ThreadID: "thread",
