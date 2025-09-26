@@ -154,6 +154,68 @@ func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 	}
 }
 
+func TestContentRequestProcessor_RearrangeAsyncFuncRespHist_DeduplicatesMergedResponses(t *testing.T) {
+	processor := NewContentRequestProcessor()
+
+	toolCallEvent := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:       "call_0",
+								Function: model.FunctionDefinitionParam{Name: "calculator"},
+							},
+							{
+								ID:       "call_1",
+								Function: model.FunctionDefinitionParam{Name: "calculator"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	mergedToolResponse := event.Event{
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call_0",
+						Content: "result 0",
+					},
+				},
+				{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call_1",
+						Content: "result 1",
+					},
+				},
+			},
+		},
+	}
+
+	result := processor.rearrangeAsyncFuncRespHist([]event.Event{toolCallEvent, mergedToolResponse})
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 events (tool call + single response), got %d", len(result))
+	}
+
+	toolResultEvent := result[1]
+	resultIDs := toolResultEvent.GetToolResultIDs()
+	assert.ElementsMatch(t, []string{"call_0", "call_1"}, resultIDs,
+		"tool result IDs should match the original tool calls once each")
+	assert.Len(t, toolResultEvent.Response.Choices, 2,
+		"tool response event should contain one choice per tool ID without duplication")
+}
+
 func TestContentRequestProcessor_ToolResponses(t *testing.T) {
 	tests := []struct {
 		name           string

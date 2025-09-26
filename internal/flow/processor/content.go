@@ -358,6 +358,21 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 					responseEventIndices = append(responseEventIndices, idx)
 				}
 			}
+			// When tools run in parallel they commonly return all results inside one response event.
+			// If we pushed the same event once per tool ID, the LLM would see duplicated tool
+			// messages and reject the request. Keep only the first occurrence of each event index
+			// while preserving their original order.
+			seenIdx := make(map[int]struct{}, len(functionCallIDs))
+			uniqueIndices := responseEventIndices[:0]
+			// Reuse the existing slice to deduplicate in place and maintain the original order.
+			for _, idx := range responseEventIndices {
+				if _, seen := seenIdx[idx]; seen {
+					continue
+				}
+				seenIdx[idx] = struct{}{}
+				uniqueIndices = append(uniqueIndices, idx)
+			}
+			responseEventIndices = uniqueIndices
 
 			resultEvents = append(resultEvents, evt)
 
