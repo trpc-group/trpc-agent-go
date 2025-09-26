@@ -951,7 +951,6 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization)
 	require.True(t, inv.EndInvocation, "invocation should be marked to end when skipping summarization")
-	require.True(t, evt.RequiresCompletion)
 }
 
 // Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
