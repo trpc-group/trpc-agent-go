@@ -403,13 +403,28 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithTokenTailoring enables automatic token tailoring inside the OpenAI model.
-// It will reduce request messages before sending when they exceed maxTokens.
-func WithTokenTailoring(counter model.TokenCounter, strategy model.TailoringStrategy, maxTokens int) Option {
+// WithTokenLimit sets only the token limit for prompt tailoring.
+// When limit > 0, tailoring is enabled. The counter/strategy will be lazily
+// defaulted to SimpleTokenCounter(limit) and MiddleOutStrategy if not provided.
+func WithTokenLimit(limit int) Option {
+	return func(opts *options) {
+		opts.MaxTokens = limit
+	}
+}
+
+// WithTokenCounter sets the TokenCounter used for token tailoring.
+// If not provided and token limit is enabled, a SimpleTokenCounter will be used.
+func WithTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *options) {
 		opts.TokenCounter = counter
+	}
+}
+
+// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
+// If not provided and token limit is enabled, a MiddleOutStrategy will be used.
+func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
+	return func(opts *options) {
 		opts.TailoringStrategy = strategy
-		opts.MaxTokens = maxTokens
 	}
 }
 
@@ -441,6 +456,17 @@ func New(name string, opts ...Option) *Model {
 	batchCompletionWindow := o.BatchCompletionWindow
 	if batchCompletionWindow == "" {
 		batchCompletionWindow = defaultBatchCompletionWindow
+	}
+
+	// Provide defaults at construction time when token tailoring is enabled.
+	// These are best-effort defaults; user-provided counter/strategy always take priority.
+	if o.MaxTokens > 0 {
+		if o.TokenCounter == nil {
+			o.TokenCounter = model.NewSimpleTokenCounter(o.MaxTokens)
+		}
+		if o.TailoringStrategy == nil {
+			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
+		}
 	}
 
 	return &Model{
@@ -507,6 +533,17 @@ func (m *Model) GenerateContent(
 
 // applyTokenTailoring performs best-effort token tailoring if configured.
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Lazy default injection: if token limit is enabled but counter/strategy
+	// are not set, provide sensible defaults.
+	if m.maxTokens > 0 {
+		if m.tokenCounter == nil {
+			m.tokenCounter = model.NewSimpleTokenCounter(m.maxTokens)
+		}
+		if m.tailoringStrategy == nil {
+			m.tailoringStrategy = model.NewMiddleOutStrategy(m.tokenCounter)
+		}
+	}
+
 	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxTokens <= 0 {
 		return
 	}

@@ -41,7 +41,12 @@ func main() {
 	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagTokenLimit)
 	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
 	modelInstance := openai.New(*flagModel,
-		openai.WithTokenTailoring(counter, strategy, *flagTokenLimit),
+		openai.WithTokenLimit(*flagTokenLimit),
+		// The following two options are OPTIONAL. If omitted:
+		//   - counter defaults to SimpleTokenCounter(token-limit).
+		//   - strategy defaults to MiddleOutStrategy(counter).
+		openai.WithTokenCounter(counter),
+		openai.WithTailoringStrategy(strategy),
 	)
 
 	fmt.Printf("✂️  Token Tailoring Demo\n")

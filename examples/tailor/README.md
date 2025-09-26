@@ -1,6 +1,6 @@
 # Token Tailoring Example
 
-This example demonstrates interactive token tailoring using `openai.WithTokenTailoring` and the built-in strategies in `model/token_tailor.go`.
+This example demonstrates interactive token tailoring using `openai.WithTokenLimit` (plus optional overrides) and the built-in strategies in `model/token_tailor.go`.
 
 ## What it shows
 
@@ -107,7 +107,25 @@ In your code, replace:
 counter := model.NewSimpleTokenCounter(tokenLimit)
 ```
 
-with a `tiktoken` submodule counter (see `model/tiktoken`), and keep the same `WithTokenTailoring` usage.
+with a `tiktoken` submodule counter (see `model/tiktoken`).
+
+Minimal setup requires only the token limit:
+
+```go
+m := openai.New("model-name",
+    openai.WithTokenLimit(512),
+)
+```
+
+Optionally override counter and/or strategy (if omitted, they default to SimpleTokenCounter and MiddleOutStrategy respectively):
+
+```go
+m := openai.New("model-name",
+    openai.WithTokenLimit(512),
+    openai.WithTokenCounter(tkCounter),              // optional
+    openai.WithTailoringStrategy(customStrategy),    // optional
+)
+```
 
 ## Commands
 
