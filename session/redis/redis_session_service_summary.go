@@ -19,7 +19,7 @@ import (
 	"github.com/spaolacci/murmur3"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sisession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
+	isession "trpc.group/trpc-go/trpc-agent-go/session/internal/session"
 )
 
 // luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
@@ -67,7 +67,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -241,7 +241,7 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	}
 
 	// Perform the actual summary generation for the requested filterKey.
-	updated, err := sisession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
+	updated, err := isession.SummarizeSession(ctx, s.opts.summarizer, job.session, job.filterKey, job.force)
 	if err != nil {
 		log.Errorf("summary worker failed to generate summary: %v", err)
 		return
