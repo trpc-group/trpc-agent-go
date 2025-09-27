@@ -10,6 +10,7 @@
 package processor
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -856,4 +857,271 @@ func TestSession_SummariesConcurrentAccess(t *testing.T) {
 	finalSummary := sess.Summaries["test-key"]
 	sess.SummariesMu.RUnlock()
 	assert.NotNil(t, finalSummary, "Final summary should exist")
+}
+
+func TestContentRequestProcessor_WithMaxHistoryRuns_Option(t *testing.T) {
+	p := NewContentRequestProcessor(WithMaxHistoryRuns(5))
+	assert.Equal(t, 5, p.MaxHistoryRuns)
+}
+
+func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		processor       *ContentRequestProcessor
+		session         *session.Session
+		expectedCount   int
+		expectedContent []string
+	}{
+		{
+			name:            "nil session",
+			processor:       NewContentRequestProcessor(WithMaxHistoryRuns(3)),
+			session:         nil,
+			expectedCount:   0,
+			expectedContent: []string{},
+		},
+		{
+			name:      "no MaxHistoryRuns limit",
+			processor: NewContentRequestProcessor(WithMaxHistoryRuns(0)),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount:   3,
+			expectedContent: []string{"message1", "message2", "message3"},
+		},
+		{
+			name:      "with MaxHistoryRuns limit",
+			processor: NewContentRequestProcessor(WithMaxHistoryRuns(2)),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount:   2,
+			expectedContent: []string{"message2", "message3"},
+		},
+		{
+			name:      "MaxHistoryRuns greater than total messages",
+			processor: NewContentRequestProcessor(WithMaxHistoryRuns(5)),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+				},
+			},
+			expectedCount:   2,
+			expectedContent: []string{"message1", "message2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			messages := tt.processor.getFilterHistoryMessages(inv)
+
+			assert.Equal(t, tt.expectedCount, len(messages))
+			for i, expectedContent := range tt.expectedContent {
+				assert.Equal(t, expectedContent, messages[i].Content)
+			}
+		})
+	}
+}
+
+func TestContentRequestProcessor_ProcessRequest_WithMaxHistoryRuns(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name          string
+		processor     *ContentRequestProcessor
+		session       *session.Session
+		expectedCount int
+	}{
+		{
+			name: "AddSessionSummary true - uses incremental messages",
+			processor: NewContentRequestProcessor(
+				WithAddSessionSummary(true),
+				WithMaxHistoryRuns(2),
+			),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 3, // All events included (incremental logic)
+		},
+		{
+			name: "AddSessionSummary false - uses history messages with limit",
+			processor: NewContentRequestProcessor(
+				WithAddSessionSummary(false),
+				WithMaxHistoryRuns(2),
+			),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 2, // Limited by MaxHistoryRuns
+		},
+		{
+			name: "AddSessionSummary false - no MaxHistoryRuns limit",
+			processor: NewContentRequestProcessor(
+				WithAddSessionSummary(false),
+				WithMaxHistoryRuns(0),
+			),
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 3, // All events included (no limit)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{},
+			}
+
+			tt.processor.ProcessRequest(context.Background(), inv, req, nil)
+
+			// Count non-system messages (excluding summary if any)
+			var messageCount int
+			for _, msg := range req.Messages {
+				if msg.Role != model.RoleSystem {
+					messageCount++
+				}
+			}
+
+			assert.Equal(t, tt.expectedCount, messageCount)
+		})
+	}
+}
+
+// Helper function to create test events
+func createTestEvent(author, content string, timestamp time.Time) event.Event {
+	return event.Event{
+		Author:    author,
+		Timestamp: timestamp,
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: content,
+					},
+				},
+			},
+		},
+	}
+}
+
+// TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary tests the interaction
+// between MaxHistoryRuns and AddSessionSummary settings.
+func TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name              string
+		addSessionSummary bool
+		maxHistoryRuns    int
+		session           *session.Session
+		expectedCount     int
+		description       string
+	}{
+		{
+			name:              "AddSessionSummary=true ignores MaxHistoryRuns",
+			addSessionSummary: true,
+			maxHistoryRuns:    2, // Should be ignored
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 3, // All events included (incremental logic)
+			description:   "When AddSessionSummary=true, MaxHistoryRuns should be ignored and all events included",
+		},
+		{
+			name:              "AddSessionSummary=false with MaxHistoryRuns=0 includes all",
+			addSessionSummary: false,
+			maxHistoryRuns:    0,
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 3, // All events included (no limit)
+			description:   "When AddSessionSummary=false and MaxHistoryRuns=0, all events should be included",
+		},
+		{
+			name:              "AddSessionSummary=false with MaxHistoryRuns=2 limits to 2",
+			addSessionSummary: false,
+			maxHistoryRuns:    2,
+			session: &session.Session{
+				Events: []event.Event{
+					createTestEvent("user", "message1", baseTime.Add(-2*time.Hour)),
+					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
+					createTestEvent("user", "message3", baseTime),
+				},
+			},
+			expectedCount: 2, // Limited to last 2 messages
+			description:   "When AddSessionSummary=false and MaxHistoryRuns=2, only last 2 messages should be included",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			processor := NewContentRequestProcessor(
+				WithAddSessionSummary(tt.addSessionSummary),
+				WithMaxHistoryRuns(tt.maxHistoryRuns),
+			)
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{},
+			}
+
+			processor.ProcessRequest(context.Background(), inv, req, nil)
+
+			// Count non-system messages (excluding summary if any)
+			var messageCount int
+			for _, msg := range req.Messages {
+				if msg.Role != model.RoleSystem {
+					messageCount++
+				}
+			}
+
+			assert.Equal(t, tt.expectedCount, messageCount, tt.description)
+		})
+	}
 }

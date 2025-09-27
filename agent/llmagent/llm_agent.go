@@ -256,6 +256,14 @@ func WithAddSessionSummary(addSummary bool) Option {
 	}
 }
 
+// WithMaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+// When 0 (default), no limit is applied.
+func WithMaxHistoryRuns(maxRuns int) Option {
+	return func(opts *Options) {
+		opts.MaxHistoryRuns = maxRuns
+	}
+}
+
 // WithKnowledgeFilter sets the knowledge filter for the knowledge base.
 func WithKnowledgeFilter(filter map[string]interface{}) Option {
 	return func(opts *Options) {
@@ -346,6 +354,10 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
+
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
 
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
@@ -522,6 +534,7 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
+		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 

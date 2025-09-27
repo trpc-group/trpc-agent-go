@@ -37,6 +37,7 @@ var (
 	flagTimeSec  = flag.Int("time-sec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
 	flagMaxChars = flag.Int("max-chars", 0, "Max summary characters (runes) (0=unlimited)")
 	flagAddSum   = flag.Bool("add-summary", true, "Prepend latest branch summary as system message for LLM input")
+	flagMaxHist  = flag.Int("max-history", 0, "Max history messages when add-summary=false (0=unlimited)")
 )
 
 func main() {
@@ -110,6 +111,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 		llmagent.WithModel(llm),
 		llmagent.WithGenerationConfig(model.GenerationConfig{Stream: *streaming, MaxTokens: intPtr(4000)}),
 		llmagent.WithAddSessionSummary(*flagAddSum),
+		llmagent.WithMaxHistoryRuns(*flagMaxHist),
 	)
 	c.app = "summary-demo-app"
 	c.runner = runner.NewRunner(c.app, ag, runner.WithSessionService(sessService))
@@ -127,6 +129,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("MaxChars: %d\n", *flagMaxChars)
 	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Printf("AddSummary: %v\n", *flagAddSum)
+	fmt.Printf("MaxHistory: %d\n", *flagMaxHist)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Printf("✅ Summary chat ready! Session: %s\n\n", c.sessionID)
 

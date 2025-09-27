@@ -43,6 +43,9 @@ type ContentRequestProcessor struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message to the request if available.
 	AddSessionSummary bool
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -67,6 +70,14 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 func WithAddSessionSummary(add bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddSessionSummary = add
+	}
+}
+
+// WithMaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+// When 0 (default), no limit is applied.
+func WithMaxHistoryRuns(maxRuns int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.MaxHistoryRuns = maxRuns
 	}
 }
 
@@ -113,10 +124,19 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 	}
 
-	// 2) Append per-filter incremental messages from session events when allowed.
+	// 2) Append per-filter messages from session events when allowed.
 	var addedFromSession int
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
-		messages := p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
+		var messages []model.Message
+
+		if p.AddSessionSummary {
+			// Use incremental messages logic (preserves context integrity).
+			messages = p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
+		} else {
+			// Use history messages logic (may be truncated by MaxHistoryRuns).
+			messages = p.getFilterHistoryMessages(invocation)
+		}
+
 		req.Messages = append(req.Messages, messages...)
 		addedFromSession = len(messages)
 	}
@@ -217,6 +237,26 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 	// Note: We preserve all incremental messages to maintain context integrity.
 	// MaxHistoryRuns is not applied to incremental messages as they represent
 	// a complete work unit that should not be truncated.
+	return msgs
+}
+
+// getFilterHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
+// This method is used when AddSessionSummary is false to get recent history messages.
+func (p *ContentRequestProcessor) getFilterHistoryMessages(inv *agent.Invocation) []model.Message {
+	if inv.Session == nil {
+		return nil
+	}
+
+	filter := inv.GetEventFilterKey()
+	evs := p.eventsInFilter(inv.Session.Events, filter)
+	msgs := p.convertEventsToMessages(evs, inv.AgentName)
+
+	// Apply MaxHistoryRuns limit if set.
+	if p.MaxHistoryRuns > 0 && len(msgs) > p.MaxHistoryRuns {
+		startIdx := len(msgs) - p.MaxHistoryRuns
+		msgs = msgs[startIdx:]
+	}
+
 	return msgs
 }
 

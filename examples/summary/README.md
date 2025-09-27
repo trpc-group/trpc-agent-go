@@ -48,6 +48,7 @@ Command-line flags:
 - `-time-sec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
 - `-max-chars`: Max summary characters (runes) (0=unlimited). Default: `0`.
 - `-add-summary`: Prepend latest filter summary as system message. Default: `true`.
+- `-max-history`: Max history messages when add-summary=false (0=unlimited). Default: `0`.
 
 ## Interaction
 
@@ -69,6 +70,7 @@ TimeThreshold: 0s
 MaxChars: 0
 Streaming: true
 AddSummary: true
+MaxHistory: 0
 ==================================================
 ✅ Summary chat ready! Session: summary-session-1757649727
 
