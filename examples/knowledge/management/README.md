@@ -331,11 +331,28 @@ Source: GolangDocSource
 
 ### Default Sources
 
-The application automatically loads these default sources from the `data/` directory:
-- `golang.md`: Go programming language documentation
-- `llm.md`: Large language model concepts and terminology
+The application automatically loads these default sources:
 
-The system supports any text-based formats including:
-- Markdown (.md)
-- Text files (.txt) 
-- Other text-based formats with proper parsing
+#### File Sources (from `../exampledata/file/` directory):
+- **LLMDocSource** (`llm.md`): Large language model concepts and terminology
+  - Metadata: `tag: "llm"`
+- **GolangDocSource** (`golang.md`): Go programming language documentation  
+  - Metadata: `tag: "golang"`
+
+#### URL Sources:
+- **Byte-pair** (urlSource1): Wikipedia article on Byte-pair encoding
+  - URL: `https://en.wikipedia.org/wiki/Byte-pair_encoding`
+  - Metadata: `tag: "wiki"`
+  - Note: Direct URL fetching - same URL used for both content fetching and document ID generation
+
+- **trpc-go** (urlSource2): Demonstrates URL source with separate fetch and identifier URLs
+  - Identifier URL: `https://trpc-go.com/Byte-pair_encoding` (used for metadata and document ID)
+  - Content Fetch URL: `https://en.wikipedia.org/wiki/Byte-pair_encoding` (actual content source)
+  - Metadata: `tag: "wiki"`
+  - Note: This example shows how to use `WithContentFetchingURL()` to specify different URLs for content fetching vs. document identification
+  
+  **Notice**: When using `WithContentFetchingURL()`, the identifier URL should maintain the same path structure as the fetch URL:
+  - ✅ **Correct**: If fetch URL is `http://example.com/hello.md`, identifier URL should be `http://trpc-go.com/hello.md`
+  - ❌ **Incorrect**: Using `http://trpc-go.com` as identifier URL loses the document path information
+  - This ensures proper document identification and metadata consistency
+

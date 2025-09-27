@@ -27,6 +27,7 @@ import (
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 
 	// Source.
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -446,14 +447,24 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 		file.WithName("GolangDocSource"),
 		file.WithMetadata(map[string]interface{}{"tag": "golang"}),
 	)
+	urlSource1 := url.New(
+		[]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},
+		url.WithName("Byte-pair"),
+		url.WithMetadataValue("tag", "wiki"),
+	)
+	urlSource2 := url.New(
+		[]string{"https://trpc-go.com/Byte-pair_encoding"}, // contentFetchURL is configured, this url will be used to generate meta data and docID
+		url.WithName("trpc-go"),
+		url.WithContentFetchingURL([]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"}), // real url that fetching data
+		url.WithMetadataValue("tag", "wiki"),
+	)
 
-	chat.source = []source.Source{fileSource1, fileSource2}
-
+	chat.source = []source.Source{fileSource1, fileSource2, urlSource1, urlSource2}
 	// Create knowledge base
 	chat.knowledge = knowledge.New(
 		knowledge.WithEmbedder(embedder),
 		knowledge.WithVectorStore(vs),
-		knowledge.WithSources([]source.Source{fileSource1, fileSource2}),
+		knowledge.WithSources([]source.Source{fileSource1, fileSource2, urlSource1, urlSource2}),
 		knowledge.WithEnableSourceSync(*sourceSync),
 	)
 

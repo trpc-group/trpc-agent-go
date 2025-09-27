@@ -348,6 +348,17 @@ urlSrc := urlsource.New(
     urlsource.WithName("Web Content"),
 )
 
+// URL source advanced configuration: Separate content fetching and document identification
+urlSrcAlias := urlsource.New(
+    []string{"https://trpc-go.com/docs/api.md"},     // Identifier URL (for document ID and metadata)
+    urlsource.WithContentFetchingURL([]string{"https://github.com/trpc-group/trpc-go/raw/main/docs/api.md"}), // Actual content fetching URL
+    urlsource.WithName("TRPC API Docs"),
+    urlsource.WithMetadataValue("source", "github"),
+)
+// Note: When using WithContentFetchingURL, the identifier URL should preserve the file information from the content fetching URL, for example:
+// Correct: Identifier URL is https://trpc-go.com/docs/api.md, fetch URL is https://github.com/.../docs/api.md
+// Incorrect: Identifier URL is https://trpc-go.com, which loses document path information
+
 // Auto source: Intelligent type recognition, automatically select processor.
 autoSrc := autosource.New(
     []string{

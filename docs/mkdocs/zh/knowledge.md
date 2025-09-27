@@ -346,6 +346,17 @@ urlSrc := urlsource.New(
     urlsource.WithName("Web Content"),
 )
 
+// URL 源高级配置：分离内容获取和文档标识
+urlSrcAlias := urlsource.New(
+    []string{"https://trpc-go.com/docs/api.md"},     // 标识符 URL（用于文档 ID 和元数据）
+    urlsource.WithContentFetchingURL([]string{"https://github.com/trpc-group/trpc-go/raw/main/docs/api.md"}), // 实际内容获取 URL
+    urlsource.WithName("TRPC API Docs"),
+    urlsource.WithMetadataValue("source", "github"),
+)
+// 注意：使用 WithContentFetchingURL 时，标识符 URL 应保留获取内容的URL的文件信息，比如
+// 正确：标识符 URL 为 https://trpc-go.com/docs/api.md，获取 URL 为 https://github.com/.../docs/api.md
+// 错误：标识符 URL 为 https://trpc-go.com，会丢失文档路径信息
+
 // 自动源：智能识别类型，自动选择处理器
 autoSrc := autosource.New(
     []string{
