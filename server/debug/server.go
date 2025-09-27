@@ -560,8 +560,9 @@ func (s *Server) handleRunSSE(w http.ResponseWriter, r *http.Request) {
 // convertSessionToADKFormat converts an internal session object to the
 // flattened structure the ADK Web UI expects.
 func convertSessionToADKFormat(s *session.Session) schema.ADKSession {
-	adkEvents := make([]map[string]interface{}, 0, len(s.Events))
-	for _, e := range s.Events {
+	events := s.GetEvents()
+	adkEvents := make([]map[string]interface{}, 0, len(events))
+	for _, e := range events {
 		// Create a local copy to avoid implicit memory aliasing.
 		e := e
 		if ev := convertEventToADKFormat(&e, false); ev != nil {

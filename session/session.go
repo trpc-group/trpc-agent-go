@@ -13,6 +13,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -39,6 +40,15 @@ type Session struct {
 	Events    []event.Event `json:"events"`    // session events
 	UpdatedAt time.Time     `json:"updatedAt"` // last update time
 	CreatedAt time.Time     `json:"createdAt"` // creation time
+	EventMu   sync.RWMutex
+}
+
+// GetEvents returns the session events.
+func (sess *Session) GetEvents() []event.Event {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return sess.Events
 }
 
 // Options is the options for getting a session.

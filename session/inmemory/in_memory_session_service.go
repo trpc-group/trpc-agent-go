@@ -651,12 +651,14 @@ func (s *SessionService) Close() error {
 
 // updateStoredSession updates the stored session with the given event.
 func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
+	sess.EventMu.Lock()
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
 		sess.Events = append(sess.Events, *e)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			sess.Events = sess.Events[len(sess.Events)-s.opts.sessionEventLimit:]
 		}
 	}
+	sess.EventMu.Unlock()
 	sess.UpdatedAt = time.Now()
 	// merge event state delta to session state
 	isession.ApplyEventStateDelta(sess, e)
@@ -664,12 +666,13 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 
 // copySession creates a  copy of a session.
 func copySession(sess *session.Session) *session.Session {
+	events := sess.GetEvents()
 	copiedSess := &session.Session{
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
 		State:     make(session.StateMap), // Create new state to avoid reference sharing
-		Events:    make([]event.Event, len(sess.Events)),
+		Events:    make([]event.Event, len(events)),
 		UpdatedAt: sess.UpdatedAt,
 		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
 	}
@@ -682,7 +685,7 @@ func copySession(sess *session.Session) *session.Session {
 			copiedSess.State[k] = copiedValue
 		}
 	}
-	copy(copiedSess.Events, sess.Events)
+	copy(copiedSess.Events, events)
 	return copiedSess
 }
 
