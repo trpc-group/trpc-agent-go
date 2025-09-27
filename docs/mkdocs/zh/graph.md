@@ -28,9 +28,9 @@ GraphAgent 实现了 `agent.Agent` 接口，可以：
 
 - **作为独立 Agent**：通过 Runner 直接执行
 - **作为 SubAgent**：被其他 Agent（如 LLMAgent）作为子 Agent 使用
-- **不支持 SubAgent**：GraphAgent 本身不支持子 Agent，专注于工作流执行
+- **挂载 SubAgent**：通过 `graphagent.WithSubAgents` 配置子 Agent，并在图中使用 `AddAgentNode` 委托执行
 
-这种设计使得 GraphAgent 可以灵活地集成到复杂的多 Agent 系统中。
+这种设计使得 GraphAgent 既能接入其他 Agent，也能在自身工作流中灵活调度子 Agent。
 
 ### 主要特性
 
@@ -38,6 +38,7 @@ GraphAgent 实现了 `agent.Agent` 接口，可以：
 - **条件路由**：基于状态动态选择执行路径
 - **LLM 节点集成**：内置对大型语言模型的支持
 - **工具节点**：支持函数调用和外部工具集成
+- **Agent 节点**：通过子 Agent 将其他 Agent 融入图中
 - **流式执行**：支持实时事件流和进度跟踪
 - **并发安全**：线程安全的图执行
 - **基于检查点的时间旅行**：浏览执行历史并恢复之前的状态
@@ -500,20 +501,39 @@ GraphAgent 支持多种配置选项：
 
 ```go
 // 创建 GraphAgent 时可以使用多种选项
-graphAgent, err := graphagent.New("workflow-name", compiledGraph,
+graphAgent, err := graphagent.New(
+    "workflow-name",
+    compiledGraph,
     graphagent.WithDescription("工作流描述"),
     graphagent.WithInitialState(graph.State{
         "initial_data": "初始数据",
     }),
-    graphagent.WithChannelBufferSize(1024),
-    graphagent.WithModelCallbacks(&model.Callbacks{
-        // 模型回调配置
-    }),
-    graphagent.WithToolCallbacks(&tool.Callbacks{
-        // 工具回调配置
+    graphagent.WithChannelBufferSize(1024),           // 调整事件通道缓冲区
+    graphagent.WithCheckpointSaver(memorySaver),      // 使用持久化检查点
+    graphagent.WithSubAgents([]agent.Agent{subAgent}), // 配置子 Agent
+    graphagent.WithAgentCallbacks(&agent.Callbacks{
+        // Agent 级回调配置
     }),
 )
 ```
+
+> 模型/工具回调需要在节点级配置，例如 `AddLLMNode(..., graph.WithModelCallbacks(...))`
+> 或 `AddToolsNode(..., graph.WithToolCallbacks(...))`。
+
+配置了子 Agent 后，可以在图中使用 Agent 节点委托执行：
+
+```go
+// 假设 subAgent.Info().Name == "assistant"
+stateGraph.AddAgentNode("assistant",
+    graph.WithName("子 Agent 调度"),
+    graph.WithDescription("调用预先注册的 assistant Agent"),
+)
+
+// 执行时 GraphAgent 会在自身的 SubAgents 中查找同名 Agent 并发起调用
+```
+
+> Agent 节点会以节点 ID 作为查找键，因此需确保 `AddAgentNode("assistant")`
+> 与 `subAgent.Info().Name == "assistant"` 一致。
 
 ### 4. 条件路由
 
@@ -1742,9 +1762,9 @@ func main() {
 **关键特点**：
 
 - GraphAgent 实现了 `agent.Agent` 接口，可以被其他 Agent 作为子 Agent 使用
-- 协调器 Agent 可以通过 `transfer_to_agent` 工具委托任务给 GraphAgent
-- GraphAgent 专注于工作流执行，不支持自己的子 Agent
-- 这种设计实现了复杂工作流与多 Agent 系统的无缝集成
+- 协调器 Agent 可以通过 `transfer_to_agent` 工具或自定义逻辑委托任务给 GraphAgent
+- GraphAgent 自身也可以通过 `graphagent.WithSubAgents` + `AddAgentNode` 在图内调度其他 Agent
+- 这种设计实现了复杂工作流与多 Agent 系统的双向集成
 
 ## 语义与边界：节点级恢复与副作用幂等
 
@@ -1799,8 +1819,8 @@ Graph 包提供了一个强大而灵活的工作流编排系统，特别适合�
 
 - GraphAgent 实现了 `agent.Agent` 接口
 - 可以作为其他 Agent 的子 Agent 使用
+- 也可以通过 `graphagent.WithSubAgents` 与 `AddAgentNode` 调度其他 Agent
 - 支持复杂的多 Agent 协作场景
-- 专注于工作流执行，不支持自己的子 Agent
 
 **最佳实践**：
 
