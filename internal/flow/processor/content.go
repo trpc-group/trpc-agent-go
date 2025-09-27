@@ -103,17 +103,20 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// 1) Prepend session summary as a system message if enabled and available.
+	// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
+	var summaryUpdatedAt time.Time
 	if p.AddSessionSummary && invocation.Session != nil {
-		if msg := p.getSessionSummaryMessage(invocation); msg != nil {
+		if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
 			// Prepend to the front of messages.
 			req.Messages = append([]model.Message{*msg}, req.Messages...)
+			summaryUpdatedAt = updatedAt
 		}
 	}
 
 	// 2) Append per-filter incremental messages from session events when allowed.
 	var addedFromSession int
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
-		messages := p.getFilterIncrementalMessages(invocation)
+		messages := p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
 		req.Messages = append(req.Messages, messages...)
 		addedFromSession = len(messages)
 	}
@@ -149,10 +152,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
-// system message if available and non-empty.
-func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) *model.Message {
+// system message if available and non-empty, along with its UpdatedAt timestamp.
+func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) (*model.Message, time.Time) {
 	if inv.Session == nil || inv.Session.Summaries == nil {
-		return nil
+		return nil, time.Time{}
 	}
 	filter := inv.GetEventFilterKey()
 	// For IncludeContentsAll, prefer the full-session summary under empty filter key.
@@ -161,19 +164,28 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	}
 	sum := inv.Session.Summaries[filter]
 	if sum == nil || sum.Summary == "" {
-		return nil
+		return nil, time.Time{}
 	}
-	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}
+	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}, sum.UpdatedAt
 }
 
-// getFilterIncrementalMessages converts per-filter incremental events into messages.
-func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invocation) []model.Message {
+// getFilterIncrementalMessages converts per-filter incremental events into messages,
+// using the provided summaryUpdatedAt to ensure consistency with the summary message.
+func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invocation, summaryUpdatedAt time.Time) []model.Message {
 	filter := inv.GetEventFilterKey()
 	var evs []event.Event
 	if inv.Session != nil {
 		if inv.Session.Summaries != nil {
-			if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
-				evs = p.eventsSince(inv.Session.Events, sum.UpdatedAt, filter)
+			// Use the provided summaryUpdatedAt if available, otherwise fall back to reading from session.
+			var updatedAt time.Time
+			if !summaryUpdatedAt.IsZero() {
+				updatedAt = summaryUpdatedAt
+			} else if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
+				updatedAt = sum.UpdatedAt
+			}
+
+			if !updatedAt.IsZero() {
+				evs = p.eventsSince(inv.Session.Events, updatedAt, filter)
 			} else {
 				evs = p.eventsInFilter(inv.Session.Events, filter)
 			}

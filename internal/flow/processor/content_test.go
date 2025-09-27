@@ -11,11 +11,14 @@ package processor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
@@ -324,4 +327,268 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	assert.True(t, p.AddSessionSummary)
+}
+
+func TestContentRequestProcessor_getSessionSummaryMessageWithTime(t *testing.T) {
+	tests := []struct {
+		name            string
+		session         *session.Session
+		includeContents string
+		expectedMsg     *model.Message
+		expectedTime    time.Time
+	}{
+		{
+			name:            "nil session",
+			session:         nil,
+			includeContents: IncludeContentsFiltered,
+			expectedMsg:     nil,
+			expectedTime:    time.Time{},
+		},
+		{
+			name:            "nil summaries",
+			session:         &session.Session{},
+			includeContents: IncludeContentsFiltered,
+			expectedMsg:     nil,
+			expectedTime:    time.Time{},
+		},
+		{
+			name: "empty summary",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"test-filter": {
+						Summary:   "",
+						UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+			includeContents: IncludeContentsFiltered,
+			expectedMsg:     nil,
+			expectedTime:    time.Time{},
+		},
+		{
+			name: "valid summary with filtered content",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"test-filter": {
+						Summary:   "Test summary content",
+						UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+			includeContents: IncludeContentsFiltered,
+			expectedMsg: &model.Message{
+				Role:    model.RoleSystem,
+				Content: "Test summary content",
+			},
+			expectedTime: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "valid summary with all content",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"": {
+						Summary:   "Full session summary",
+						UpdatedAt: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
+					},
+					"test-filter": {
+						Summary:   "Filtered summary",
+						UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+					},
+				},
+			},
+			includeContents: IncludeContentsAll,
+			expectedMsg: &model.Message{
+				Role:    model.RoleSystem,
+				Content: "Full session summary",
+			},
+			expectedTime: time.Date(2023, 1, 1, 13, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor(WithIncludeContents(tt.includeContents))
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			msg, updatedAt := p.getSessionSummaryMessage(inv)
+
+			if tt.expectedMsg == nil {
+				assert.Nil(t, msg)
+			} else {
+				assert.NotNil(t, msg)
+				assert.Equal(t, tt.expectedMsg.Role, msg.Role)
+				assert.Equal(t, tt.expectedMsg.Content, msg.Content)
+			}
+			assert.Equal(t, tt.expectedTime, updatedAt)
+		})
+	}
+}
+
+func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		session          *session.Session
+		summaryUpdatedAt time.Time
+		expectedCount    int
+		expectedContent  []string
+	}{
+		{
+			name:             "nil session",
+			session:          nil,
+			summaryUpdatedAt: baseTime,
+			expectedCount:    0,
+			expectedContent:  []string{},
+		},
+		{
+			name: "no summaries, include all events",
+			session: &session.Session{
+				Events: []event.Event{
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(-1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "old message",
+									},
+								},
+							},
+						},
+					},
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "new message",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			summaryUpdatedAt: time.Time{},
+			expectedCount:    2,
+			expectedContent:  []string{"old message", "new message"},
+		},
+		{
+			name: "with summary, include events after summary time",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"test-filter": {
+						Summary:   "Test summary",
+						UpdatedAt: baseTime.Add(-2 * time.Hour), // Older than baseTime
+					},
+				},
+				Events: []event.Event{
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(-1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "before summary",
+									},
+								},
+							},
+						},
+					},
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "after summary",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			summaryUpdatedAt: baseTime,
+			expectedCount:    1,
+			expectedContent:  []string{"after summary"},
+		},
+		{
+			name: "use provided summaryUpdatedAt over session summary",
+			session: &session.Session{
+				Summaries: map[string]*session.Summary{
+					"test-filter": {
+						Summary:   "Session summary",
+						UpdatedAt: baseTime.Add(-2 * time.Hour), // Older than provided time
+					},
+				},
+				Events: []event.Event{
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(-1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "between times",
+									},
+								},
+							},
+						},
+					},
+					{
+						Author:    "user",
+						Timestamp: baseTime.Add(1 * time.Hour),
+						Response: &model.Response{
+							Choices: []model.Choice{
+								{
+									Message: model.Message{
+										Role:    model.RoleUser,
+										Content: "after provided time",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			summaryUpdatedAt: baseTime,
+			expectedCount:    1,
+			expectedContent:  []string{"after provided time"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewContentRequestProcessor()
+
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(tt.session),
+				agent.WithInvocationEventFilterKey("test-filter"),
+			)
+
+			messages := p.getFilterIncrementalMessages(inv, tt.summaryUpdatedAt)
+
+			assert.Len(t, messages, tt.expectedCount)
+
+			for i, expectedContent := range tt.expectedContent {
+				assert.Equal(t, expectedContent, messages[i].Content)
+			}
+		})
+	}
 }
