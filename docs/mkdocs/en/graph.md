@@ -28,9 +28,9 @@ GraphAgent implements the `agent.Agent` interface and can:
 
 - **Act as Independent Agent**: Execute directly through Runner
 - **Act as SubAgent**: Be used as a sub-agent by other Agents (such as LLMAgent)
-- **No SubAgent Support**: GraphAgent itself does not support sub-agents, focusing on workflow execution
+- **Host SubAgents**: Register child agents via `graphagent.WithSubAgents` and invoke them through `AddAgentNode`
 
-This design allows GraphAgent to flexibly integrate into complex multi-Agent systems.
+This design lets GraphAgent plug into other agents while orchestrating its own specialized sub-agents.
 
 ### Key Features
 
@@ -38,6 +38,7 @@ This design allows GraphAgent to flexibly integrate into complex multi-Agent sys
 - **Conditional routing**: Dynamically select execution paths based on state
 - **LLM node integration**: Built-in support for large language models
 - **Tool nodes**: Support function calls and external tool integration
+- **Agent nodes**: Delegate parts of the workflow to registered sub-agents
 - **Streaming execution**: Support real-time event streams and progress tracking
 - **Concurrency safety**: Thread-safe graph execution
 - **Checkpoint-based Time Travel**: Navigate through execution history and restore previous states
@@ -452,20 +453,39 @@ GraphAgent supports various configuration options:
 
 ```go
 // Multiple options can be used when creating GraphAgent.
-graphAgent, err := graphagent.New("workflow-name", compiledGraph,
+graphAgent, err := graphagent.New(
+    "workflow-name",
+    compiledGraph,
     graphagent.WithDescription("Workflow description"),
     graphagent.WithInitialState(graph.State{
         "initial_data": "Initial data",
     }),
-    graphagent.WithChannelBufferSize(1024),
-    graphagent.WithModelCallbacks(&model.Callbacks{
-        // Model callback configuration.
-    }),
-    graphagent.WithToolCallbacks(&tool.Callbacks{
-        // Tool callback configuration.
+    graphagent.WithChannelBufferSize(1024),            // Tune event buffer size
+    graphagent.WithCheckpointSaver(memorySaver),       // Persist checkpoints if needed
+    graphagent.WithSubAgents([]agent.Agent{subAgent}), // Register sub-agents by name
+    graphagent.WithAgentCallbacks(&agent.Callbacks{
+        // Agent-level callbacks.
     }),
 )
 ```
+
+> Model/tool callbacks are configured per node, e.g. `AddLLMNode(..., graph.WithModelCallbacks(...))`
+> or `AddToolsNode(..., graph.WithToolCallbacks(...))`.
+
+Once sub-agents are registered you can delegate within the graph via agent nodes:
+
+```go
+// Assume subAgent.Info().Name == "assistant"
+stateGraph.AddAgentNode("assistant",
+    graph.WithName("Delegate to assistant agent"),
+    graph.WithDescription("Invoke the pre-registered assistant agent"),
+)
+
+// During execution the GraphAgent looks up a sub-agent with the same name and runs it
+```
+
+> The agent node uses its ID for the lookup, so keep `AddAgentNode("assistant")`
+> aligned with `subAgent.Info().Name == "assistant"`.
 
 ### 4. Conditional Routing
 
@@ -1688,9 +1708,9 @@ func main() {
 **Key Features**:
 
 - GraphAgent implements the `agent.Agent` interface and can be used as a sub-agent by other Agents
-- Coordinator Agents can delegate tasks to GraphAgent through the `transfer_to_agent` tool
-- GraphAgent focuses on workflow execution and does not support its own sub-agents
-- This design enables seamless integration of complex workflows with multi-Agent systems
+- Coordinator Agents can delegate tasks to GraphAgent through the `transfer_to_agent` tool or custom logic
+- GraphAgent can in turn delegate to registered sub-agents through `graphagent.WithSubAgents` + `AddAgentNode`
+- This design enables seamless, bi-directional integration between complex workflows and multi-Agent systems
 
 ## Troubleshooting
 
@@ -1730,8 +1750,8 @@ The Graph package provides a powerful and flexible workflow orchestration system
 
 - GraphAgent implements the `agent.Agent` interface
 - Can be used as a sub-agent of other Agents
+- Can also orchestrate other agents via `graphagent.WithSubAgents` and `AddAgentNode`
 - Supports complex multi-Agent collaboration scenarios
-- Focuses on workflow execution, does not support its own sub-agents
 
 **Best Practices**:
 
