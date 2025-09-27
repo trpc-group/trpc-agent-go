@@ -705,6 +705,7 @@ func copySession(sess *session.Session) *session.Session {
 	// Copy events.
 	copy(copiedSess.Events, sess.Events)
 	// Copy summaries.
+	sess.SummariesMu.RLock()
 	if sess.Summaries != nil {
 		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
 		for b, sum := range sess.Summaries {
@@ -716,6 +717,7 @@ func copySession(sess *session.Session) *session.Session {
 			copiedSess.Summaries[b] = &copied
 		}
 	}
+	sess.SummariesMu.RUnlock()
 	return copiedSess
 }
 

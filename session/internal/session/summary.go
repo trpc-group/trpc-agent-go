@@ -130,6 +130,10 @@ func SummarizeSession(
 		updatedAt = latestTs.UTC()
 	}
 
+	// Acquire write lock to protect Summaries access.
+	base.SummariesMu.Lock()
+	defer base.SummariesMu.Unlock()
+
 	if base.Summaries == nil {
 		base.Summaries = make(map[string]*session.Summary)
 	}

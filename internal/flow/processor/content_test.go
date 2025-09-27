@@ -10,6 +10,7 @@
 package processor
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -591,4 +592,268 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 			}
 		})
 	}
+}
+
+func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
+	// Test concurrent access to Summaries field to ensure thread safety.
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Create a session with initial summaries.
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-filter": {
+				Summary:   "Initial summary",
+				UpdatedAt: baseTime,
+			},
+		},
+	}
+
+	// Create processor.
+	p := NewContentRequestProcessor()
+
+	// Test basic functionality first
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	// Test single read
+	msg, updatedAt := p.getSessionSummaryMessage(inv)
+	assert.NotNil(t, msg, "Should get summary message")
+	assert.Equal(t, "Initial summary", msg.Content)
+	assert.Equal(t, baseTime, updatedAt)
+
+	// Test single write
+	sess.SummariesMu.Lock()
+	sess.Summaries["test-filter"] = &session.Summary{
+		Summary:   "Updated summary",
+		UpdatedAt: baseTime.Add(time.Second),
+	}
+	sess.SummariesMu.Unlock()
+
+	// Test read after write
+	msg, updatedAt = p.getSessionSummaryMessage(inv)
+	assert.NotNil(t, msg, "Should get updated summary message")
+	assert.Equal(t, "Updated summary", msg.Content)
+	assert.Equal(t, baseTime.Add(time.Second), updatedAt)
+
+	// Test with minimal concurrency (2 goroutines only)
+	var wg sync.WaitGroup
+	results := make(chan bool, 4)
+
+	// 2 readers
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			msg, _ := p.getSessionSummaryMessage(inv)
+			results <- msg != nil
+		}()
+	}
+
+	// 2 writers
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sess.SummariesMu.Lock()
+			sess.Summaries["test-filter"] = &session.Summary{
+				Summary:   "Concurrent summary",
+				UpdatedAt: baseTime.Add(time.Duration(i) * time.Second),
+			}
+			sess.SummariesMu.Unlock()
+			results <- true
+		}(i)
+	}
+
+	// Wait with timeout
+	done := make(chan bool)
+	go func() {
+		wg.Wait()
+		close(results)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Test completed successfully
+	case <-time.After(5 * time.Second):
+		t.Fatal("Test timed out - possible deadlock")
+	}
+
+	// Check results
+	successCount := 0
+	for result := range results {
+		if result {
+			successCount++
+		}
+	}
+
+	assert.Equal(t, 4, successCount, "All operations should succeed")
+}
+
+func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.T) {
+	// Test concurrent access to getFilterIncrementalMessages.
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Create a session with summaries and events.
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-filter": {
+				Summary:   "Test summary",
+				UpdatedAt: baseTime,
+			},
+		},
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: baseTime.Add(1 * time.Hour),
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role:    model.RoleUser,
+								Content: "test message",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Create processor.
+	p := NewContentRequestProcessor()
+
+	// Test basic functionality first
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	// Test single call
+	messages := p.getFilterIncrementalMessages(inv, time.Time{})
+	assert.Len(t, messages, 1, "Should get one message")
+	assert.Equal(t, "test message", messages[0].Content)
+
+	// Test with minimal concurrency (2 goroutines only)
+	var wg sync.WaitGroup
+	results := make(chan int, 4)
+
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			messages := p.getFilterIncrementalMessages(inv, time.Time{})
+			results <- len(messages)
+		}()
+	}
+
+	// Wait with timeout
+	done := make(chan bool)
+	go func() {
+		wg.Wait()
+		close(results)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Test completed successfully
+	case <-time.After(5 * time.Second):
+		t.Fatal("Test timed out - possible deadlock")
+	}
+
+	// Check results
+	totalMessages := 0
+	for count := range results {
+		totalMessages++
+		assert.Equal(t, 1, count, "Each call should return 1 message")
+	}
+
+	assert.Equal(t, 2, totalMessages, "Should have 2 calls")
+}
+
+func TestSession_SummariesConcurrentAccess(t *testing.T) {
+	// Test direct concurrent access to Session.Summaries.
+	sess := &session.Session{
+		Summaries: make(map[string]*session.Summary),
+	}
+
+	// Test basic functionality first
+	sess.SummariesMu.Lock()
+	sess.Summaries["test-key"] = &session.Summary{
+		Summary:   "Test summary",
+		UpdatedAt: time.Now(),
+	}
+	sess.SummariesMu.Unlock()
+
+	// Test read
+	sess.SummariesMu.RLock()
+	summary := sess.Summaries["test-key"]
+	sess.SummariesMu.RUnlock()
+	assert.NotNil(t, summary, "Should get summary")
+	assert.Equal(t, "Test summary", summary.Summary)
+
+	// Test with minimal concurrency (2 goroutines only)
+	var wg sync.WaitGroup
+	results := make(chan bool, 4)
+
+	// 2 readers
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sess.SummariesMu.RLock()
+			summary := sess.Summaries["test-key"]
+			sess.SummariesMu.RUnlock()
+			results <- summary != nil
+		}()
+	}
+
+	// 2 writers
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sess.SummariesMu.Lock()
+			sess.Summaries["test-key"] = &session.Summary{
+				Summary:   "Concurrent summary",
+				UpdatedAt: time.Now(),
+			}
+			sess.SummariesMu.Unlock()
+			results <- true
+		}(i)
+	}
+
+	// Wait with timeout
+	done := make(chan bool)
+	go func() {
+		wg.Wait()
+		close(results)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Test completed successfully
+	case <-time.After(5 * time.Second):
+		t.Fatal("Test timed out - possible deadlock")
+	}
+
+	// Check results
+	successCount := 0
+	for result := range results {
+		if result {
+			successCount++
+		}
+	}
+
+	assert.Equal(t, 4, successCount, "All operations should succeed")
+
+	// Verify final state is consistent.
+	sess.SummariesMu.RLock()
+	finalSummary := sess.Summaries["test-key"]
+	sess.SummariesMu.RUnlock()
+	assert.NotNil(t, finalSummary, "Final summary should exist")
 }

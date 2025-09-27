@@ -66,6 +66,10 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 	if cur == nil {
 		return fmt.Errorf("session expired: %s", key.SessionID)
 	}
+	// Acquire write lock to protect Summaries access.
+	cur.SummariesMu.Lock()
+	defer cur.SummariesMu.Unlock()
+
 	if cur.Summaries == nil {
 		cur.Summaries = make(map[string]*session.Summary)
 	}

@@ -75,7 +75,9 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 	// Persist only the updated filterKey summary with atomic set-if-newer to avoid late-write override.
+	sess.SummariesMu.RLock()
 	sum := sess.Summaries[filterKey]
+	sess.SummariesMu.RUnlock()
 	payload, err := json.Marshal(sum)
 	if err != nil {
 		return fmt.Errorf("marshal summary failed: %w", err)
@@ -249,7 +251,9 @@ func (s *Service) processSummaryJob(job *summaryJob) {
 	}
 
 	// Persist to Redis.
+	job.session.SummariesMu.RLock()
 	sum := job.session.Summaries[job.filterKey]
+	job.session.SummariesMu.RUnlock()
 	payload, err := json.Marshal(sum)
 	if err != nil {
 		log.Errorf("summary worker failed to marshal summary: %v", err)

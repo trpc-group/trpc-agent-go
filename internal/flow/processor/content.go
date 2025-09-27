@@ -154,7 +154,15 @@ func (p *ContentRequestProcessor) ProcessRequest(
 // getSessionSummaryMessage returns the current-branch session summary as a
 // system message if available and non-empty, along with its UpdatedAt timestamp.
 func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) (*model.Message, time.Time) {
-	if inv.Session == nil || inv.Session.Summaries == nil {
+	if inv.Session == nil {
+		return nil, time.Time{}
+	}
+
+	// Acquire read lock to protect Summaries access.
+	inv.Session.SummariesMu.RLock()
+	defer inv.Session.SummariesMu.RUnlock()
+
+	if inv.Session.Summaries == nil {
 		return nil, time.Time{}
 	}
 	filter := inv.GetEventFilterKey()
@@ -175,13 +183,24 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 	filter := inv.GetEventFilterKey()
 	var evs []event.Event
 	if inv.Session != nil {
-		if inv.Session.Summaries != nil {
+		// Acquire read lock to protect Summaries access.
+		inv.Session.SummariesMu.RLock()
+		hasSummaries := inv.Session.Summaries != nil
+		var sessionUpdatedAt time.Time
+		if hasSummaries {
+			if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
+				sessionUpdatedAt = sum.UpdatedAt
+			}
+		}
+		inv.Session.SummariesMu.RUnlock()
+
+		if hasSummaries {
 			// Use the provided summaryUpdatedAt if available, otherwise fall back to reading from session.
 			var updatedAt time.Time
 			if !summaryUpdatedAt.IsZero() {
 				updatedAt = summaryUpdatedAt
-			} else if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
-				updatedAt = sum.UpdatedAt
+			} else if !sessionUpdatedAt.IsZero() {
+				updatedAt = sessionUpdatedAt
 			}
 
 			if !updatedAt.IsZero() {

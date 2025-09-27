@@ -13,6 +13,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -42,9 +43,10 @@ type Session struct {
 	State   StateMap      `json:"state"`   // State is the session state with delta support.
 	Events  []event.Event `json:"events"`  // Events is the session events.
 	// Summaries holds filter-aware summaries. The key is the event filter key.
-	Summaries map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
-	UpdatedAt time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
-	CreatedAt time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
+	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
+	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
+	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
+	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 }
 
 // Summary represents a concise, structured summary of a conversation branch.
