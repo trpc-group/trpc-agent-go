@@ -217,6 +217,17 @@ func (r *runner) Run(
 				if err := r.sessionService.AppendEvent(ctx, sess, agentEvent); err != nil {
 					log.Errorf("Failed to append event to session: %v", err)
 				}
+
+				// Trigger summarization immediately after appending a qualifying event.
+				// Use EnqueueSummaryJob for true asynchronous processing.
+				// Prefer filter-specific summarization to avoid scanning all filters.
+				if err := r.sessionService.EnqueueSummaryJob(
+					context.Background(), sess, agentEvent.FilterKey, false,
+				); err != nil {
+					log.Debugf("Auto summarize after append skipped or failed: %v.", err)
+				}
+				// Do not enqueue full-session summary here. The worker will cascade
+				// a full-session summarization after a branch update when appropriate.
 			}
 
 			if agentEvent.RequiresCompletion {

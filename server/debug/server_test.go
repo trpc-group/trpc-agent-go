@@ -343,3 +343,16 @@ func (m *mockSessionService) AppendEvent(ctx context.Context, session *session.S
 func (m *mockSessionService) Close() error {
 	return nil
 }
+
+// Implement new session.Service summary methods.
+func (m *mockSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
+func (m *mockSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	return nil
+}
+
+func (m *mockSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session) (string, bool) {
+	return "", false
+}

@@ -26,6 +26,9 @@ import (
 const (
 	defaultSessionEventLimit     = 1000
 	defaultCleanupIntervalSecond = 300 // 5 min
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 256
 )
 
 // stateWithTTL wraps state data with expiration time.
@@ -90,12 +93,21 @@ func newAppSessions() *appSessions {
 
 // SessionService provides an in-memory implementation of SessionService.
 type SessionService struct {
-	mu            sync.RWMutex
-	apps          map[string]*appSessions
-	opts          serviceOpts
-	cleanupTicker *time.Ticker
-	cleanupDone   chan struct{}
-	cleanupOnce   sync.Once
+	mu              sync.RWMutex
+	apps            map[string]*appSessions
+	opts            serviceOpts
+	cleanupTicker   *time.Ticker
+	cleanupDone     chan struct{}
+	cleanupOnce     sync.Once
+	summaryJobChans []chan *summaryJob // channel for summary jobs to processing
+}
+
+// summaryJob represents a summary job to be processed asynchronously
+type summaryJob struct {
+	sessionKey session.Key
+	filterKey  string
+	force      bool
+	session    *session.Session
 }
 
 // NewSessionService creates a new in-memory session service.
@@ -103,6 +115,9 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	opts := serviceOpts{
 		sessionEventLimit: defaultSessionEventLimit,
 		cleanupInterval:   0,
+		asyncSummaryNum:   defaultAsyncSummaryNum,
+		summaryQueueSize:  defaultSummaryQueueSize,
+		summaryJobTimeout: 30 * time.Second,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -125,6 +140,10 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	if opts.cleanupInterval > 0 {
 		s.startCleanupRoutine()
 	}
+
+	// Always start async summary workers by default
+	s.startAsyncSummaryWorker()
+
 	return s
 }
 
@@ -646,6 +665,7 @@ func (s *SessionService) stopCleanupRoutine() {
 // Close closes the service.
 func (s *SessionService) Close() error {
 	s.stopCleanupRoutine()
+	s.stopAsyncSummaryWorker()
 	return nil
 }
 
@@ -658,7 +678,7 @@ func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Eve
 		}
 	}
 	sess.UpdatedAt = time.Now()
-	// merge event state delta to session state
+	// Merge event state delta to session state.
 	isession.ApplyEventStateDelta(sess, e)
 }
 
@@ -668,13 +688,13 @@ func copySession(sess *session.Session) *session.Session {
 		ID:        sess.ID,
 		AppName:   sess.AppName,
 		UserID:    sess.UserID,
-		State:     make(session.StateMap), // Create new state to avoid reference sharing
+		State:     make(session.StateMap), // Create new state to avoid reference sharing.
 		Events:    make([]event.Event, len(sess.Events)),
 		UpdatedAt: sess.UpdatedAt,
-		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field
+		CreatedAt: sess.CreatedAt, // Add missing CreatedAt field.
 	}
 
-	// copy state
+	// Copy state.
 	if sess.State != nil {
 		for k, v := range sess.State {
 			copiedValue := make([]byte, len(v))
@@ -682,7 +702,22 @@ func copySession(sess *session.Session) *session.Session {
 			copiedSess.State[k] = copiedValue
 		}
 	}
+	// Copy events.
 	copy(copiedSess.Events, sess.Events)
+	// Copy summaries.
+	sess.SummariesMu.RLock()
+	if sess.Summaries != nil {
+		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
+		for b, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			// Shallow copy is fine since Summary is immutable after write.
+			copied := *sum
+			copiedSess.Summaries[b] = &copied
+		}
+	}
+	sess.SummariesMu.RUnlock()
 	return copiedSess
 }
 
