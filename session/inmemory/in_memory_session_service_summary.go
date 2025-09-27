@@ -126,19 +126,39 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 		session:    sess,
 	}
 
+	// Try to enqueue the job asynchronously.
+	if s.tryEnqueueJob(ctx, job) {
+		return nil // Successfully enqueued.
+	}
+
+	// If async enqueue failed, fall back to synchronous processing.
+	return s.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+// tryEnqueueJob attempts to enqueue a summary job to the appropriate channel.
+// Returns true if successful, false if the job should be processed synchronously.
+func (s *SessionService) tryEnqueueJob(ctx context.Context, job *summaryJob) bool {
 	// Select a channel using hash distribution.
-	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+	keyStr := fmt.Sprintf("%s:%s:%s", job.sessionKey.AppName, job.sessionKey.UserID, job.sessionKey.SessionID)
 	index := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+
+	// Use a defer-recover pattern to handle potential panic from sending to closed channel.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Warnf("summary job channel may be closed, falling back to synchronous processing: %v", r)
+		}
+	}()
 
 	select {
 	case s.summaryJobChans[index] <- job:
-		return nil
+		return true // Successfully enqueued.
 	case <-ctx.Done():
-		return ctx.Err()
+		log.Debugf("summary job channel context cancelled, falling back to synchronous processing, error: %v", ctx.Err())
+		return false // Context cancelled.
 	default:
 		// Queue is full, fall back to synchronous processing.
 		log.Warnf("summary job queue is full, falling back to synchronous processing")
-		return s.CreateSessionSummary(ctx, sess, filterKey, force)
+		return false
 	}
 }
 
@@ -198,4 +218,12 @@ func (s *SessionService) processSummaryJob(job *summaryJob) {
 	if err := s.writeSummaryUnderLock(app, job.sessionKey, job.filterKey, job.session.Summaries[job.filterKey].Summary); err != nil {
 		log.Errorf("summary worker failed to write summary: %v", err)
 	}
+}
+
+// stopAsyncSummaryWorker stops all async summary workers and closes their channels.
+func (s *SessionService) stopAsyncSummaryWorker() {
+	for _, ch := range s.summaryJobChans {
+		close(ch)
+	}
+	s.summaryJobChans = nil
 }

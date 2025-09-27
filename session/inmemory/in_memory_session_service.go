@@ -665,6 +665,7 @@ func (s *SessionService) stopCleanupRoutine() {
 // Close closes the service.
 func (s *SessionService) Close() error {
 	s.stopCleanupRoutine()
+	s.stopAsyncSummaryWorker()
 	return nil
 }
 

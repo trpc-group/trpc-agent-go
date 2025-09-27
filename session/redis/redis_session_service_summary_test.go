@@ -513,3 +513,116 @@ func TestRedisService_SummaryJobTimeout_CancelsSummarizer(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 }
+
+func TestRedisService_EnqueueSummaryJob_ChannelClosed_PanicRecovery(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with async summary enabled
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "panic-recovery-summary"}),
+	)
+	require.NoError(t, err)
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Manually close the channel to simulate channel closure
+	// This will cause a panic when trying to send to the closed channel
+	close(s.summaryJobChans[0])
+
+	// Enqueue summary job should handle the panic and fall back to sync processing
+	err = s.EnqueueSummaryJob(context.Background(), sess, "panic-test", false)
+	require.NoError(t, err)
+
+	// Verify summary was created through sync fallback
+	client := buildRedisClient(t, redisURL)
+	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	// Verify the summary content
+	bytes, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	require.NotEmpty(t, bytes)
+
+	var summaries map[string]*session.Summary
+	err = json.Unmarshal(bytes, &summaries)
+	require.NoError(t, err)
+	require.NotNil(t, summaries)
+
+	sum, ok := summaries["panic-test"]
+	require.True(t, ok)
+	require.Equal(t, "panic-recovery-summary", sum.Summary)
+
+	// Don't call s.Close() since we manually closed the channel
+	// This simulates a scenario where the service is being shut down
+}
+
+func TestRedisService_EnqueueSummaryJob_ChannelClosed_AllChannelsClosed(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// Create service with multiple async workers
+	s, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithAsyncSummaryNum(3),
+		WithSummaryQueueSize(1),
+		WithSummarizer(&fakeSummarizer{allow: true, out: "all-channels-closed-summary"}),
+	)
+	require.NoError(t, err)
+
+	// Create a session first
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	// Append an event to make delta non-empty
+	e := event.New("inv", "author")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	// Close all channels to simulate service shutdown scenario
+	for _, ch := range s.summaryJobChans {
+		close(ch)
+	}
+
+	// Enqueue summary job should handle the panic and fall back to sync processing
+	err = s.EnqueueSummaryJob(context.Background(), sess, "all-closed-test", false)
+	require.NoError(t, err)
+
+	// Verify summary was created through sync fallback
+	client := buildRedisClient(t, redisURL)
+	exists, err := client.HExists(context.Background(), getSessionSummaryKey(key), key.SessionID).Result()
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	// Verify the summary content
+	bytes, err := client.HGet(context.Background(), getSessionSummaryKey(key), key.SessionID).Bytes()
+	require.NoError(t, err)
+	require.NotEmpty(t, bytes)
+
+	var summaries map[string]*session.Summary
+	err = json.Unmarshal(bytes, &summaries)
+	require.NoError(t, err)
+	require.NotNil(t, summaries)
+
+	sum, ok := summaries["all-closed-test"]
+	require.True(t, ok)
+	require.Equal(t, "all-channels-closed-summary", sum.Summary)
+
+	// Don't call s.Close() since we manually closed the channels
+	// This simulates a scenario where the service is being shut down
+}
