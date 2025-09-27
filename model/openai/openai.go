@@ -192,6 +192,9 @@ type Model struct {
 	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
 	batchMetadata              map[string]string
 	batchBaseURL               string
+	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
+	maxTokens                  int                     // Max tokens for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -253,6 +256,12 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// TokenCounter count tokens for token tailoring.
+	TokenCounter model.TokenCounter
+	// TailoringStrategy defines the strategy for token tailoring.
+	TailoringStrategy model.TailoringStrategy
+	// MaxTokens is the max tokens for token tailoring.
+	MaxTokens int
 }
 
 // Option is a function that configures an OpenAI model.
@@ -394,6 +403,31 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
+// WithTokenLimit sets only the token limit for prompt tailoring.
+// When limit > 0, tailoring is enabled. The counter/strategy will be lazily
+// defaulted to SimpleTokenCounter(limit) and MiddleOutStrategy if not provided.
+func WithTokenLimit(limit int) Option {
+	return func(opts *options) {
+		opts.MaxTokens = limit
+	}
+}
+
+// WithTokenCounter sets the TokenCounter used for token tailoring.
+// If not provided and token limit is enabled, a SimpleTokenCounter will be used.
+func WithTokenCounter(counter model.TokenCounter) Option {
+	return func(opts *options) {
+		opts.TokenCounter = counter
+	}
+}
+
+// WithTailoringStrategy sets the TailoringStrategy used for token tailoring.
+// If not provided and token limit is enabled, a MiddleOutStrategy will be used.
+func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
+	return func(opts *options) {
+		opts.TailoringStrategy = strategy
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -424,6 +458,17 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow = defaultBatchCompletionWindow
 	}
 
+	// Provide defaults at construction time when token tailoring is enabled.
+	// These are best-effort defaults; user-provided counter/strategy always take priority.
+	if o.MaxTokens > 0 {
+		if o.TokenCounter == nil {
+			o.TokenCounter = model.NewSimpleTokenCounter(o.MaxTokens)
+		}
+		if o.TailoringStrategy == nil {
+			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
+		}
+	}
+
 	return &Model{
 		client:                     client,
 		name:                       name,
@@ -440,6 +485,9 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow:      batchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
+		tokenCounter:               o.TokenCounter,
+		tailoringStrategy:          o.TailoringStrategy,
+		maxTokens:                  o.MaxTokens,
 	}
 }
 
@@ -459,9 +507,58 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
+	// Apply token tailoring if configured.
+	m.applyTokenTailoring(ctx, request)
+
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 
-	// Convert our request format to OpenAI format.
+	chatRequest, opts := m.buildChatRequest(request)
+
+	go func() {
+		defer close(responseChan)
+
+		if m.chatRequestCallback != nil {
+			m.chatRequestCallback(ctx, &chatRequest)
+		}
+
+		if request.Stream {
+			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		} else {
+			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
+		}
+	}()
+
+	return responseChan, nil
+}
+
+// applyTokenTailoring performs best-effort token tailoring if configured.
+func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
+	// Lazy default injection: if token limit is enabled but counter/strategy
+	// are not set, provide sensible defaults.
+	if m.maxTokens > 0 {
+		if m.tokenCounter == nil {
+			m.tokenCounter = model.NewSimpleTokenCounter(m.maxTokens)
+		}
+		if m.tailoringStrategy == nil {
+			m.tailoringStrategy = model.NewMiddleOutStrategy(m.tokenCounter)
+		}
+	}
+
+	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxTokens <= 0 {
+		return
+	}
+	if len(request.Messages) == 0 {
+		return
+	}
+	if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxTokens); err != nil {
+		log.Warn("token tailoring failed in openai.Model", err)
+	} else {
+		request.Messages = tailored
+	}
+}
+
+// buildChatRequest converts our Request to OpenAI request params and options.
+func (m *Model) buildChatRequest(request *model.Request) (openai.ChatCompletionNewParams, []openaiopt.RequestOption) {
 	chatRequest := openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
@@ -530,22 +627,7 @@ func (m *Model) GenerateContent(
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-
-	go func() {
-		defer close(responseChan)
-
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, &chatRequest)
-		}
-
-		if request.Stream {
-			m.handleStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		} else {
-			m.handleNonStreamingResponse(ctx, chatRequest, responseChan, opts...)
-		}
-	}()
-
-	return responseChan, nil
+	return chatRequest, opts
 }
 
 // convertMessages converts our Message format to OpenAI's format.

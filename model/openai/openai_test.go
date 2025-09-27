@@ -907,6 +907,69 @@ func TestModel_CallbackAssignment(t *testing.T) {
 	})
 }
 
+// testStubCounter implements model.TokenCounter for unit tests.
+type testStubCounter struct{}
+
+func (testStubCounter) CountTokens(ctx context.Context, message model.Message) (int, error) {
+	return 1, nil
+}
+
+func (testStubCounter) CountTokensRange(ctx context.Context, messages []model.Message, start, end int) (int, error) {
+	if start < 0 || end > len(messages) || start >= end {
+		return 0, fmt.Errorf("invalid range: start=%d, end=%d, len=%d", start, end, len(messages))
+	}
+	return end - start, nil
+}
+
+// testStubStrategy implements model.TailoringStrategy for unit tests.
+type testStubStrategy struct{}
+
+func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	if len(messages) <= 1 {
+		return messages, nil
+	}
+	// Drop the second message to make tailoring observable.
+	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+// TestWithTokenTailoring ensures messages are tailored before request is built.
+func TestWithTokenTailoring(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("test-model",
+		WithTokenLimit(100),
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
+	if got := len(captured.Messages); got != 1 {
+		t.Fatalf("expected 1 message after tailoring, got %d", got)
+	}
+}
+
 // TestModel_CallbackSignature tests that the callback function signatures
 // match the expected types from the diff.
 func TestModel_CallbackSignature(t *testing.T) {
