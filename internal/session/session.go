@@ -62,9 +62,9 @@ func UpdateUserSession(sess *session.Session, event *event.Event, opts ...sessio
 
 		// Apply filtering options
 		ApplyEventFiltering(sess, opts...)
-		sess.EventMu.Unlock()
 		// Ensure events start with RoleUser after filtering
 		EnsureEventStartWithUser(sess)
+		sess.EventMu.Unlock()
 	}
 
 	sess.UpdatedAt = time.Now()
