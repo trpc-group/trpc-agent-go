@@ -2,11 +2,11 @@
 
 The AG-UI (Agent-User Interaction) protocol is maintained by the open-source community at [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui). It enables agents implemented in different languages, frameworks, and execution environments to deliver the outputs generated during a run to user interfaces through a unified event stream. The protocol tolerates loosely-matched event formats and supports multiple transports including SSE and WebSocket.
 
-`tRPC-Agent-Go` integrates with the AG-UI protocol and provides an SSE server implementation by default. It also supports switching to other communication protocols such as WebSocket through custom `service.Service`, as well as custom extended event translation logic.
+`tRPC-Agent-Go` integrates with the AG-UI protocol, providing an SSE server implementation out of the box. It also lets you swap in other transports (e.g. WebSocket) by supplying a custom `service.Service`, and plug in bespoke event translators when you need to enrich AG-UI events.
 
 ## Getting Started
 
-If you already have an agent, you can expose it via AG-UI and start an HTTP service as follows:
+Assuming you have implemented an Agent, you can integrate with the AG-UI protocol and start the service as follows:
 
 ```go
 import (
@@ -30,9 +30,7 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 See the full example at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
-On the client side you can pair this with frameworks such as [CopilotKit](https://github.com/CopilotKit/CopilotKit), which provides React/Next.js components and built-in SSE subscriptions for AG-UI streams.
-
-[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) uses CopilotKit to build a Web UI interface and communicate with the Agent through the AG-UI protocol. The effect is shown in the figure below.
+On the client side you can pair this with frameworks such as [CopilotKit](https://github.com/CopilotKit/CopilotKit), which provides React/Next.js components and built-in SSE subscriptions for AG-UI streams. [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) uses CopilotKit to build a Web UI interface and communicate with the Agent through the AG-UI protocol. The effect is shown in the figure below.
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -68,7 +66,7 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 ## Advanced Usage
 
-### Custom transport (`service.Service`)
+### Custom communication protocols
 
 The AG-UI protocol does not mandate a specific transport. This framework uses SSE as the default. If you want to switch to WebSocket or other protocols, implement the `service.Service` interface yourself:
 
@@ -130,7 +128,7 @@ server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslato
 
 ### Custom `UserIDResolver`
 
-By default every request maps to the fixed session `"user"`. Override `UserIDResolver` to derive the user ID from `RunAgentInput`:
+By default every request maps to the fixed userID `"user"`. Override `UserIDResolver` to derive the user ID from `RunAgentInput`:
 
 ```go
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {

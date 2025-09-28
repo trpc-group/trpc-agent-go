@@ -1,12 +1,12 @@
 # AG-UI 使用指南
 
-AG-UI（Agent-User Interaction）协议由开源社区 [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) 维护，旨在让不同语言、不同框架、不同执行环境的智能体，都能够通过统一的事件流把一次执行过程中产生的内容传递给用户界面，允许松散的事件格式匹配，支持 SSE 和 WebSocket 等多种通信协议。
+AG-UI（Agent-User Interaction）协议由开源社区 [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) 维护，旨在让不同语言、不同框架、不同执行环境的 Agent，都能够通过统一的事件流把执行过程中产生的内容传递给用户界面，允许松散的事件格式匹配，支持 SSE 和 WebSocket 等多种通信协议。
 
-`tRPC-Agent-Go` 接入了 AG-UI 协议，默认提供 SSE 服务端实现，同时也支持通过自定义 `service.Service` 切换到 WebSocket 等其他通信协议，以及自定义扩展事件翻译逻辑。
+`tRPC-Agent-Go` 接入了 AG-UI 协议，默认提供 SSE 服务端实现，也支持通过自定义 `service.Service` 切换到 WebSocket 等通信协议，并扩展事件翻译逻辑。
 
 ## 快速上手
 
-假设你已经实现了一个 Agent，可以如下所示接入 AG-UI 协议并启动服务：
+假设你已实现一个 Agent，可以按如下方式接入 AG-UI 协议并启动服务：
 
 ```go
 import (
@@ -30,9 +30,7 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
 
-在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。
-
-[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
+在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
@@ -68,7 +66,7 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 ## 进阶用法
 
-### 自定义传输层（`service.Service`）
+### 自定义通信协议
 
 AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默认通信协议，如果希望改用 WebSocket 等其他协议，可以实现 `service.Service` 接口：
 
@@ -130,7 +128,7 @@ server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslato
 
 ### 自定义 `UserIDResolver`
 
-默认所有请求都会归到固定的 `"user"` 会话，可以通过自定义 `UserIDResolver` 从 `RunAgentInput` 中提取 `UserID`：
+默认所有请求都会归到固定的 `"user"` 用户 ID，可以通过自定义 `UserIDResolver` 从 `RunAgentInput` 中提取 `UserID`：
 
 ```go
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
