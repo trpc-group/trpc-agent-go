@@ -1010,6 +1010,7 @@ func main() {
     - `GET /debug/trace/session/{session_id}`：按 Session 查询 Trace 列表。
   - 特性：内置 CORS、会话存储可插拔（默认 In-Memory）、与
     `runner.Runner` 打通、可观测埋点（导出关键 Span）。
+  - 适用说明：面向 ADK Web 的调试场景。内部由 Agent 构造 runner，并在会话接口与 runner 之间强制使用同一个 `session.Service`。不建议直接用于生产。
 - **A2A Server**：`server/a2a`。
   - 面向 A2A 协议的服务封装，内建 `AuthProvider` 与任务编排，适合
     平台到 Agent 的集成场景。
@@ -1040,6 +1041,7 @@ func main() {
   - 非流式端点需按 UI 期望聚合最终消息与工具响应。
 - **会话存储**：
   - 通过 `runner.WithSessionService` 注入具体实现，复用 `session` 模块。
+  - 对于 `server/debug`，通过 `debug.WithSessionService(...)` 设置单一会话后端；为保证一致性，会覆盖 runner 侧传入的会话后端。
 - **可观测**：
   - 复用 `telemetry/trace` 与 `telemetry/metric`。`server/debug` 已演示
     如何导出关键 Span 与事件属性，便于 UI 侧调试与定位。
