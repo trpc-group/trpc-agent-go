@@ -36,6 +36,36 @@ On the client side you can pair this with frameworks such as [CopilotKit](https:
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## Runner Integration
+
+You can inject `runner.Option` through `agui.WithRunnerOptions` to set components such as Session/Memory. Take Session as an example:
+
+```go
+import (
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    agui "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    runner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+// Create Agent.
+agent := newAgent()
+// Create Session Service.
+sessionService := sessioninmemory.NewSessionService()
+// Create AG-UI Server.
+server, err := agui.New(
+    agent,
+    agui.WithPath("/agui"), // Mount onto an HTTP route.
+    agui.WithRunnerOptions(runner.WithSessionService(sessionService)), // Injecting Session Service.
+)
+if err != nil {
+    log.Fatalf("create agui server failed: %v", err)
+}
+// Start the HTTP server.
+if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
+    log.Fatalf("server stopped with error: %v", err)
+}
+```
+
 ## Advanced Usage
 
 ### Custom transport (`service.Service`)

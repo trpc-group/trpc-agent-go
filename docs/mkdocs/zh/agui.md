@@ -36,6 +36,36 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## 与 Runner 结合
+
+可以通过 `agui.WithRunnerOptions` 注入 `runner.Option`，设置 Session/Memory 等组件，以 Session 为例：
+
+```go
+import (
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    agui "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    runner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+// 创建 Agent
+agent := newAgent()
+// 创建 Session Service
+sessionService := sessioninmemory.NewSessionService()
+// 创建 AG-UI 服务
+server, err := agui.New(
+    agent,
+    agui.WithPath("/agui"), // 指定 HTTP 路由
+    agui.WithRunnerOptions(runner.WithSessionService(sessionService)), // 注入 Session Service
+)
+if err != nil {
+    log.Fatalf("create agui server failed: %v", err)
+}
+// 启动 HTTP 服务
+if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
+    log.Fatalf("server stopped with error: %v", err)
+}
+```
+
 ## 进阶用法
 
 ### 自定义传输层（`service.Service`）
