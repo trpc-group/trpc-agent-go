@@ -36,6 +36,7 @@ func main() {
 	// Parse command line flags.
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	debug := flag.Bool("debug", false, "Enable debug logging and verbose event traces")
+	endInvocation := flag.Bool("end-invocation", false, "Enable end parent invocation after transfer")
 	flag.Parse()
 
 	fmt.Printf("🔄 Agent Transfer Demo\n")
@@ -53,8 +54,9 @@ func main() {
 
 	// Create and run the chat.
 	chat := &transferChat{
-		modelName: *modelName,
-		debug:     *debug,
+		modelName:                  *modelName,
+		debug:                      *debug,
+		endInvocationAfterTransfer: *endInvocation,
 	}
 
 	if err := chat.run(); err != nil {
@@ -64,11 +66,12 @@ func main() {
 
 // transferChat manages the conversation with agent transfer functionality.
 type transferChat struct {
-	modelName string
-	runner    runner.Runner
-	userID    string
-	sessionID string
-	debug     bool
+	modelName                  string
+	runner                     runner.Runner
+	userID                     string
+	sessionID                  string
+	debug                      bool
+	endInvocationAfterTransfer bool
 }
 
 // run starts the interactive chat session.
@@ -142,6 +145,7 @@ When a user asks a question:
 Always explain why you're transferring to a specific agent.`),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithSubAgents(subAgents),
+		llmagent.WithEndInvocationAfterTransfer(c.endInvocationAfterTransfer),
 	)
 }
 

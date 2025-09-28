@@ -46,6 +46,11 @@ type ContentRequestProcessor struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// PreserveSameBranch keeps events authored within the same invocation branch in
+	// their original roles instead of re-labeling them as user context. This
+	// allows graph executions to retain authentic assistant/tool transcripts
+	// while still enabling cross-agent contextualization when branches differ.
+	PreserveSameBranch bool
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -78,6 +83,16 @@ func WithAddSessionSummary(add bool) ContentOption {
 func WithMaxHistoryRuns(maxRuns int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.MaxHistoryRuns = maxRuns
+	}
+}
+
+// WithPreserveSameBranch toggles preserving original roles for events emitted
+// from the same invocation branch. When enabled, messages that originate from
+// nodes in the current agent/graph execution keep their assistant/tool roles
+// instead of being rewritten as user context.
+func WithPreserveSameBranch(preserve bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreserveSameBranch = preserve
 	}
 }
 
@@ -214,7 +229,7 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 	// Reserve all incremental messages to maintain context integrity.
 	// MaxHistoryRuns is not applied to incremental messages as they represent
 	// a complete work unit that should not be truncated.
-	return p.convertEventsToMessages(evs, inv.AgentName)
+	return p.convertEventsToMessages(evs, inv.AgentName, inv.Branch)
 }
 
 // getFilterHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
@@ -226,7 +241,7 @@ func (p *ContentRequestProcessor) getFilterHistoryMessages(inv *agent.Invocation
 
 	filter := inv.GetEventFilterKey()
 	evs := p.eventsInFilter(inv.Session.Events, filter)
-	msgs := p.convertEventsToMessages(evs, inv.AgentName)
+	msgs := p.convertEventsToMessages(evs, inv.AgentName, inv.Branch)
 
 	// Apply MaxHistoryRuns limit if set.
 	if p.MaxHistoryRuns > 0 && len(msgs) > p.MaxHistoryRuns {
@@ -275,6 +290,7 @@ func (p *ContentRequestProcessor) eventsInFilter(
 func (p *ContentRequestProcessor) convertEventsToMessages(
 	events []event.Event,
 	agentName string,
+	branch string,
 ) []model.Message {
 	// Rearrange events for function call/response consistency.
 	resultEvents := p.rearrangeLatestFuncResp(events)
@@ -285,7 +301,7 @@ func (p *ContentRequestProcessor) convertEventsToMessages(
 	for _, evt := range resultEvents {
 		// Convert foreign events or keep as-is.
 		ev := evt
-		if p.isOtherAgentReply(agentName, &ev) {
+		if p.isOtherAgentReply(agentName, branch, &ev) {
 			ev = p.convertForeignEvent(&ev)
 		}
 		if len(ev.Choices) > 0 {
@@ -300,12 +316,21 @@ func (p *ContentRequestProcessor) convertEventsToMessages(
 // isOtherAgentReply checks whether the event is a reply from another agent.
 func (p *ContentRequestProcessor) isOtherAgentReply(
 	currentAgentName string,
+	currentBranch string,
 	evt *event.Event,
 ) bool {
-	return currentAgentName != "" &&
-		evt.Author != currentAgentName &&
-		evt.Author != "user" &&
-		evt.Author != ""
+	if evt == nil || currentAgentName == "" {
+		return false
+	}
+	if evt.Author == "" || evt.Author == "user" || evt.Author == currentAgentName {
+		return false
+	}
+	if p.PreserveSameBranch && currentBranch != "" && evt.Branch != "" {
+		if evt.Branch == currentBranch || strings.HasPrefix(evt.Branch, currentBranch+agent.BranchDelimiter) {
+			return false
+		}
+	}
+	return true
 }
 
 // convertForeignEvent converts an event authored by another agent as a user-content event.
@@ -479,6 +504,21 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 					responseEventIndices = append(responseEventIndices, idx)
 				}
 			}
+			// When tools run in parallel they commonly return all results inside one response event.
+			// If we pushed the same event once per tool ID, the LLM would see duplicated tool
+			// messages and reject the request. Keep only the first occurrence of each event index
+			// while preserving their original order.
+			seenIdx := make(map[int]struct{}, len(functionCallIDs))
+			uniqueIndices := responseEventIndices[:0]
+			// Reuse the existing slice to deduplicate in place and maintain the original order.
+			for _, idx := range responseEventIndices {
+				if _, seen := seenIdx[idx]; seen {
+					continue
+				}
+				seenIdx[idx] = struct{}{}
+				uniqueIndices = append(uniqueIndices, idx)
+			}
+			responseEventIndices = uniqueIndices
 
 			resultEvents = append(resultEvents, evt)
 

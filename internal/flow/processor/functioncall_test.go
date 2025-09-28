@@ -951,7 +951,6 @@ func TestHandleFunctionCalls_SkipSummarizationSequential_SetsEndInvocation(t *te
 	require.NotNil(t, evt.Actions)
 	require.True(t, evt.Actions.SkipSummarization)
 	require.True(t, inv.EndInvocation, "invocation should be marked to end when skipping summarization")
-	require.True(t, evt.RequiresCompletion)
 }
 
 // Verify SkipSummarization propagation in the no-child-events path (e.g., long-running returns nil).
@@ -1029,9 +1028,10 @@ func (s *finalOnlyInnerEventStreamTool) StreamableCall(ctx context.Context, _ []
 	go func() {
 		defer st.Writer.Close()
 		// Final full assistant message only, no deltas prior.
-		inner := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
+		inner := event.New("inv-final", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{
 			Message: model.Message{Role: model.RoleAssistant, Content: "final"},
 		}}}))
+		inner.Branch = "br"
 		st.Writer.Send(tool.StreamChunk{Content: inner}, nil)
 	}()
 	return st.Reader, nil
@@ -1188,10 +1188,12 @@ func (s *innerEventStreamTool) StreamableCall(ctx context.Context, _ []byte) (*t
 	go func() {
 		defer st.Writer.Close()
 		// delta chunk
-		ev1 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Delta: model.Message{Content: "abc"}}}}))
+		ev1.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev1}, nil)
 		// final full assistant message
-		ev2 := event.New("", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2 := event.New("inv-fwd", "child", event.WithResponse(&model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "def"}}}}))
+		ev2.Branch = "b"
 		st.Writer.Send(tool.StreamChunk{Content: ev2}, nil)
 	}()
 	return st.Reader, nil
@@ -1218,30 +1220,6 @@ func TestExecuteStreamableTool_ForwardsInnerEvents(t *testing.T) {
 		require.Equal(t, inv.InvocationID, e2.InvocationID)
 		require.Equal(t, inv.Branch, e2.Branch)
 	}
-}
-
-func TestWaitForCompletion_SignalReceived(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx := context.Background()
-	ch := make(chan string, 1)
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp", "author")
-	evt.RequiresCompletion = true
-	// send completion
-	ch <- "done-1"
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.NoError(t, err)
-}
-
-func TestWaitForCompletion_ContextCancelled(t *testing.T) {
-	f := NewFunctionCallResponseProcessor(false, nil)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	inv := agent.NewInvocation()
-	evt := event.New("inv-comp2", "author")
-	evt.RequiresCompletion = true
-	err := f.waitForCompletion(ctx, inv, evt)
-	require.Error(t, err)
 }
 
 // Mock tool for transfer testing

@@ -177,20 +177,21 @@ type HTTPClientOptions struct {
 
 // Model implements the model.Model interface for OpenAI API.
 type Model struct {
-	client                openai.Client
-	name                  string
-	baseURL               string
-	apiKey                string
-	channelBufferSize     int
-	chatRequestCallback   ChatRequestCallbackFunc
-	chatResponseCallback  ChatResponseCallbackFunc
-	chatChunkCallback     ChatChunkCallbackFunc
-	extraFields           map[string]any
-	variant               Variant
-	variantConfig         variantConfig
-	batchCompletionWindow openai.BatchNewParamsCompletionWindow
-	batchMetadata         map[string]string
-	batchBaseURL          string
+	client                     openai.Client
+	name                       string
+	baseURL                    string
+	apiKey                     string
+	channelBufferSize          int
+	chatRequestCallback        ChatRequestCallbackFunc
+	chatResponseCallback       ChatResponseCallbackFunc
+	chatChunkCallback          ChatChunkCallbackFunc
+	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	extraFields                map[string]any
+	variant                    Variant
+	variantConfig              variantConfig
+	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
+	batchMetadata              map[string]string
+	batchBaseURL               string
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -213,6 +214,15 @@ type ChatChunkCallbackFunc func(
 	chatChunk *openai.ChatCompletionChunk,
 )
 
+// ChatStreamCompleteCallbackFunc is the function type for the chat stream completion callback.
+// This callback is invoked when streaming is completely finished (success or error).
+type ChatStreamCompleteCallbackFunc func(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	accumulator *openai.ChatCompletionAccumulator, // nil if streamErr is not nil
+	streamErr error, // nil if streaming completed successfully
+)
+
 // options contains configuration options for creating a Model.
 type options struct {
 	// API key for the OpenAI client.
@@ -229,6 +239,8 @@ type options struct {
 	ChatResponseCallback ChatResponseCallbackFunc
 	// Callback for the chat chunk.
 	ChatChunkCallback ChatChunkCallbackFunc
+	// Callback for the chat stream completion.
+	ChatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	// Options for the OpenAI client.
 	OpenAIOptions []openaiopt.RequestOption
 	// Extra fields to be added to the HTTP request body.
@@ -290,6 +302,14 @@ func WithChatResponseCallback(fn ChatResponseCallbackFunc) Option {
 func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatChunkCallback = fn
+	}
+}
+
+// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+// Called for both successful and failed streaming completions.
+func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatStreamCompleteCallback = fn
 	}
 }
 
@@ -405,20 +425,21 @@ func New(name string, opts ...Option) *Model {
 	}
 
 	return &Model{
-		client:                client,
-		name:                  name,
-		baseURL:               o.BaseURL,
-		apiKey:                o.APIKey,
-		channelBufferSize:     o.ChannelBufferSize,
-		chatRequestCallback:   o.ChatRequestCallback,
-		chatResponseCallback:  o.ChatResponseCallback,
-		chatChunkCallback:     o.ChatChunkCallback,
-		extraFields:           o.ExtraFields,
-		variant:               o.Variant,
-		variantConfig:         variantConfigs[o.Variant],
-		batchCompletionWindow: batchCompletionWindow,
-		batchMetadata:         o.BatchMetadata,
-		batchBaseURL:          o.BatchBaseURL,
+		client:                     client,
+		name:                       name,
+		baseURL:                    o.BaseURL,
+		apiKey:                     o.APIKey,
+		channelBufferSize:          o.ChannelBufferSize,
+		chatRequestCallback:        o.ChatRequestCallback,
+		chatResponseCallback:       o.ChatResponseCallback,
+		chatChunkCallback:          o.ChatChunkCallback,
+		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		extraFields:                o.ExtraFields,
+		variant:                    o.Variant,
+		variantConfig:              variantConfigs[o.Variant],
+		batchCompletionWindow:      batchCompletionWindow,
+		batchMetadata:              o.BatchMetadata,
+		batchBaseURL:               o.BatchBaseURL,
 	}
 }
 
@@ -845,6 +866,15 @@ func (m *Model) handleStreamingResponse(
 
 	// Send final response with usage information if available.
 	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
+
+	// Call the stream complete callback after final response is sent
+	if m.chatStreamCompleteCallback != nil {
+		var callbackAcc *openai.ChatCompletionAccumulator
+		if stream.Err() == nil {
+			callbackAcc = &acc
+		}
+		m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, stream.Err())
+	}
 }
 
 // updateToolCallIndexMapping updates the tool call index mapping.

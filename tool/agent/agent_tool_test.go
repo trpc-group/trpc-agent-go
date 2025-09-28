@@ -223,7 +223,7 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 
 	// Expect to receive forwarded event chunks
 	var got []string
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ { // Now expecting 4 events: tool input + original 3 events
 		chunk, err := reader.Recv()
 		if err != nil {
 			t.Fatalf("unexpected stream error: %v", err)
@@ -240,14 +240,15 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 			t.Fatalf("expected chunk content to be *event.Event, got %T", chunk.Content)
 		}
 	}
-	// We pushed 3 events; delta1, delta2, final full
-	if got[0] != "hello" || got[1] != " world" || got[2] != "ignored full" {
+	// We now get 4 events: tool input event + original 3 events (delta1, delta2, final full)
+	if got[0] != `{"request":"hi"}` || got[1] != "hello" || got[2] != " world" || got[3] != "ignored full" {
 		t.Fatalf("unexpected forwarded contents: %#v", got)
 	}
 
-	// Assert the sub agent saw its own name as filter key.
-	if sa.seenFilterKey != sa.name {
-		t.Fatalf("expected sub agent filter key %q, got %q", sa.name, sa.seenFilterKey)
+	// Assert the sub agent saw a filter key starting with its own name (now includes UUID suffix).
+	expectedPrefix := sa.name + "-"
+	if !strings.HasPrefix(sa.seenFilterKey, expectedPrefix) {
+		t.Fatalf("expected sub agent filter key to start with %q, got %q", expectedPrefix, sa.seenFilterKey)
 	}
 }
 

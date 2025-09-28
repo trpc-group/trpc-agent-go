@@ -105,11 +105,15 @@ func TestNewNodeEvents(t *testing.T) {
 		WithNodeEventEndTime(end),
 		WithNodeEventError("boom"),
 	)
-	require.Equal(t, ObjectTypeGraphNodeError, e3.Object)
+	require.Equal(t, model.ObjectTypeError, e3.Object)
 	var meta3 NodeExecutionMetadata
 	require.NoError(t, json.Unmarshal(e3.StateDelta[MetadataKeyNode], &meta3))
 	require.Equal(t, ExecutionPhaseError, meta3.Phase)
 	require.Equal(t, "boom", meta3.Error)
+	require.NotNil(t, e3.Response)
+	require.NotNil(t, e3.Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, e3.Response.Error.Type)
+	require.Equal(t, "boom", e3.Response.Error.Message)
 }
 
 func TestNewToolAndModelEvents(t *testing.T) {
@@ -128,8 +132,9 @@ func TestNewToolAndModelEvents(t *testing.T) {
 		WithToolEventInput("in"),
 		WithToolEventOutput("out"),
 		WithToolEventError(toolErr),
+		WithToolEventIncludeResponse(true),
 	)
-	require.Equal(t, ObjectTypeGraphNodeExecution, te.Object)
+	require.Equal(t, model.ObjectTypeToolResponse, te.Object)
 	var tmeta ToolExecutionMetadata
 	require.NoError(t, json.Unmarshal(te.StateDelta[MetadataKeyTool], &tmeta))
 	require.Equal(t, "fetch", tmeta.ToolName)
@@ -138,6 +143,17 @@ func TestNewToolAndModelEvents(t *testing.T) {
 	require.Equal(t, "out", tmeta.Output)
 	require.Equal(t, "in", tmeta.Input)
 	require.Equal(t, "tool failed", tmeta.Error)
+	require.NotNil(t, te.Response)
+	require.Equal(t, model.ObjectTypeToolResponse, te.Response.Object)
+	require.True(t, te.Response.Done)
+	require.Len(t, te.Response.Choices, 1)
+	require.Equal(t, model.RoleTool, te.Response.Choices[0].Message.Role)
+	require.Equal(t, "t-1", te.Response.Choices[0].Message.ToolID)
+	require.Equal(t, "fetch", te.Response.Choices[0].Message.ToolName)
+	require.Equal(t, "out", te.Response.Choices[0].Message.Content)
+	require.NotNil(t, te.Response.Error)
+	require.Equal(t, "tool failed", te.Response.Error.Message)
+	require.Equal(t, model.ErrorTypeFlowError, te.Response.Error.Type)
 	require.GreaterOrEqual(t, tmeta.Duration, time.Duration(0))
 
 	me := NewModelExecutionEvent(

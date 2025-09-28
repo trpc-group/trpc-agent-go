@@ -17,12 +17,14 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -467,8 +469,9 @@ func (r *llmRunner) executeOneShotStage(
 	oneShotMsgs []model.Message,
 	span oteltrace.Span,
 ) (any, error) {
-	used := ensureSystemHead(oneShotMsgs, r.instruction)
-	result, err := r.executeModel(ctx, state, used, span)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(oneShotMsgs, instr)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -499,7 +502,8 @@ func (r *llmRunner) executeUserInputStage(
 			history = msgs
 		}
 	}
-	used := ensureSystemHead(history, r.instruction)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(history, instr)
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
@@ -510,7 +514,7 @@ func (r *llmRunner) executeUserInputStage(
 		used = append(used, model.NewUserMessage(userInput))
 		ops = append(ops, AppendMessages{Items: []model.Message{model.NewUserMessage(userInput)}})
 	}
-	result, err := r.executeModel(ctx, state, used, span)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -535,8 +539,9 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 			history = msgs
 		}
 	}
-	used := ensureSystemHead(history, r.instruction)
-	result, err := r.executeModel(ctx, state, used, span)
+	instr := r.processInstruction(state)
+	used := ensureSystemHead(history, instr)
+	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
 	}
@@ -558,6 +563,7 @@ func (r *llmRunner) executeModel(
 	state State,
 	messages []model.Message,
 	span oteltrace.Span,
+	instructionUsed string,
 ) (any, error) {
 	request := &model.Request{
 		Messages:         messages,
@@ -574,10 +580,10 @@ func (r *llmRunner) executeModel(
 	}
 	// Build model input metadata from the original state and instruction
 	// so events accurately reflect both instruction and user input.
-	modelInput := extractModelInput(state, r.instruction)
+	modelInput := extractModelInput(state, instructionUsed)
 	startTime := time.Now()
 	modelName := getModelName(r.llmModel)
-	emitModelStartEvent(eventChan, invocationID, modelName, nodeID, modelInput, startTime)
+	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
 	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
 		ModelCallbacks: modelCallbacks,
 		LLMModel:       r.llmModel,
@@ -595,8 +601,29 @@ func (r *llmRunner) executeModel(
 			modelOutput = finalResponse.Choices[0].Message.Content
 		}
 	}
-	emitModelCompleteEvent(eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
+	emitModelCompleteEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, modelOutput, startTime, endTime, err)
 	return result, err
+}
+
+// processInstruction resolves placeholder variables in the instruction using
+// the session state present in the graph state (if any). It supports keys like
+// {user:...}, {app:...}, and optional suffix {?} consistent with llmagent.
+func (r *llmRunner) processInstruction(state State) string {
+	instr := r.instruction
+	if instr == "" {
+		return instr
+	}
+	// Extract session from graph state.
+	if sessVal, ok := state[StateKeySession]; ok {
+		if sess, ok := sessVal.(*session.Session); ok && sess != nil {
+			// Build a minimal invocation carrying only the session for injection.
+			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+			if injected, err := stateinject.InjectSessionState(instr, inv); err == nil {
+				return injected
+			}
+		}
+	}
+	return instr
 }
 
 // extractAssistantMessage extracts the assistant message from model result.
@@ -685,10 +712,8 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 
 		// Trace the LLM call using the telemetry package.
 		itelemetry.TraceCallLLM(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
-		select {
-		case config.EventChan <- llmEvent:
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
+			return err
 		}
 	}
 	if config.Response.Error != nil {
@@ -820,7 +845,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 
 		// Emit agent execution start event.
 		startTime := time.Now()
-		emitAgentStartEvent(eventChan, invocationID, nodeID, startTime)
+		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
 
 		// Execute the target agent.
 		// Important: wrap the context with the sub-invocation so downstream
@@ -830,7 +855,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		if err != nil {
 			// Emit agent execution error event.
 			endTime := time.Now()
-			emitAgentErrorEvent(eventChan, invocationID, nodeID, startTime, endTime, err)
+			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
 			span.SetAttributes(attribute.String("trpc.go.agent.error", err.Error()))
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
@@ -847,10 +872,8 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 				}
 			}
 			// Forward the event to the parent event channel.
-			select {
-			case eventChan <- agentEvent:
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
+				return nil, err
 			}
 
 			// Track the last response for state update.
@@ -861,7 +884,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 		// Emit agent execution complete event.
 		endTime := time.Now()
-		emitAgentCompleteEvent(eventChan, invocationID, nodeID, startTime, endTime)
+		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with the agent's response.
 		stateUpdate := State{}
 		stateUpdate[StateKeyLastResponse] = lastResponse
@@ -947,6 +970,7 @@ func getModelName(llmModel model.Model) string {
 
 // emitModelStartEvent emits a model execution start event.
 func emitModelStartEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, modelName, nodeID, modelInput string,
 	startTime time.Time,
@@ -963,15 +987,13 @@ func emitModelStartEvent(
 		WithModelEventStartTime(startTime),
 		WithModelEventInput(modelInput),
 	)
-
-	select {
-	case eventChan <- modelStartEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, modelStartEvent)
 }
 
 // emitModelCompleteEvent emits a model execution complete event.
 func emitModelCompleteEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, modelName, nodeID, modelInput, modelOutput string,
 	startTime, endTime time.Time,
@@ -993,10 +1015,8 @@ func emitModelCompleteEvent(
 		WithModelEventError(err),
 	)
 
-	select {
-	case eventChan <- modelCompleteEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, modelCompleteEvent)
 }
 
 // modelExecutionConfig contains configuration for model execution with events.
@@ -1164,11 +1184,11 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
-		config.EventChan, config.InvocationID, name, id, nodeID,
+		ctx, config.EventChan, config.InvocationID, name, id, nodeID,
 		startTime, modifiedArgs,
 	)
 	// Emit tool execution complete event.
-	event := emitToolCompleteEvent(toolCompleteEventConfig{
+	event := emitToolCompleteEvent(ctx, toolCompleteEventConfig{
 		EventChan:    config.EventChan,
 		InvocationID: config.InvocationID,
 		ToolName:     name,
@@ -1199,6 +1219,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 // emitToolStartEvent emits a tool execution start event.
 func emitToolStartEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, toolName, toolID, nodeID string,
 	startTime time.Time,
@@ -1218,10 +1239,8 @@ func emitToolStartEvent(
 		WithToolEventInput(string(arguments)),
 	)
 
-	select {
-	case eventChan <- toolStartEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, toolStartEvent)
 }
 
 // toolCompleteEventConfig contains configuration for tool complete events.
@@ -1238,7 +1257,7 @@ type toolCompleteEventConfig struct {
 }
 
 // emitToolCompleteEvent emits a tool execution complete event.
-func emitToolCompleteEvent(config toolCompleteEventConfig) *event.Event {
+func emitToolCompleteEvent(ctx context.Context, config toolCompleteEventConfig) *event.Event {
 	if config.EventChan == nil {
 		return nil
 	}
@@ -1262,12 +1281,10 @@ func emitToolCompleteEvent(config toolCompleteEventConfig) *event.Event {
 		WithToolEventInput(string(config.Arguments)),
 		WithToolEventOutput(outputStr),
 		WithToolEventError(config.Error),
+		WithToolEventIncludeResponse(true),
 	)
-
-	select {
-	case config.EventChan <- toolCompleteEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
 	return toolCompleteEvent
 }
 
@@ -1329,10 +1346,12 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 
 	// clone a new Invocation from parent.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
+		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + targetAgent.Info().Name + uuid.NewString()
 		invocation := parentInvocation.Clone(
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
+			agent.WithInvocationEventFilterKey(filterKey),
 		)
 		return invocation
 	}
@@ -1342,12 +1361,14 @@ func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Ag
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+uuid.NewString()),
 	)
 	return invocation
 }
 
 // emitAgentStartEvent emits an agent execution start event.
 func emitAgentStartEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, nodeID string,
 	startTime time.Time,
@@ -1362,15 +1383,13 @@ func emitAgentStartEvent(
 		WithNodeEventNodeType(NodeTypeAgent),
 		WithNodeEventStartTime(startTime),
 	)
-
-	select {
-	case eventChan <- agentStartEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, agentStartEvent)
 }
 
 // emitAgentCompleteEvent emits an agent execution complete event.
 func emitAgentCompleteEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, nodeID string,
 	startTime, endTime time.Time,
@@ -1387,14 +1406,13 @@ func emitAgentCompleteEvent(
 		WithNodeEventEndTime(endTime),
 	)
 
-	select {
-	case eventChan <- agentCompleteEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, agentCompleteEvent)
 }
 
 // emitAgentErrorEvent emits an agent execution error event.
 func emitAgentErrorEvent(
+	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocationID, nodeID string,
 	startTime, endTime time.Time,
@@ -1413,10 +1431,8 @@ func emitAgentErrorEvent(
 		WithNodeEventError(err.Error()),
 	)
 
-	select {
-	case eventChan <- agentErrorEvent:
-	default:
-	}
+	invocation, _ := agent.InvocationFromContext(ctx)
+	agent.EmitEvent(ctx, invocation, eventChan, agentErrorEvent)
 }
 
 // findSubAgentByName looks up a sub-agent by name from the parent agent.

@@ -16,6 +16,8 @@ import (
 	"reflect"
 	"sync"
 
+	sdktrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -285,6 +287,13 @@ func WithEnableKnowledgeAgenticFilter(agenticFilter bool) Option {
 	}
 }
 
+// WithEndInvocationAfterTransfer sets whether end invocation after transfer.
+func WithEndInvocationAfterTransfer(end bool) Option {
+	return func(opts *Options) {
+		opts.EndInvocationAfterTransfer = end
+	}
+}
+
 // Options contains configuration options for creating an LLMAgent.
 type Options struct {
 	// Name is the name of the agent.
@@ -363,6 +372,10 @@ type Options struct {
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
 	StructuredOutputType reflect.Type
+	// EndInvocationAfterTransfer controls whether to end the current agent invocation after transfer.
+	// If true, the current agent will end the invocation after transfer, else the current agent will continue to run
+	// when the transfer is complete. Defaults to true.
+	EndInvocationAfterTransfer bool
 }
 
 // LLMAgent is an agent that uses an LLM to generate responses.
@@ -389,7 +402,10 @@ type LLMAgent struct {
 
 // New creates a new LLMAgent with the given options.
 func New(name string, opts ...Option) *LLMAgent {
-	var options Options = Options{ChannelBufferSize: defaultChannelBufferSize}
+	var options Options = Options{
+		ChannelBufferSize:          defaultChannelBufferSize,
+		EndInvocationAfterTransfer: true,
+	}
 
 	// Apply function options.
 	for _, opt := range opts {
@@ -421,7 +437,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Add transfer response processor if sub-agents are configured.
 	if len(options.SubAgents) > 0 {
-		transferResponseProcessor := processor.NewTransferResponseProcessor()
+		transferResponseProcessor := processor.NewTransferResponseProcessor(options.EndInvocationAfterTransfer)
 		responseProcessors = append(responseProcessors, transferResponseProcessor)
 	}
 
@@ -574,16 +590,22 @@ func registerTools(options *Options) []tool.Tool {
 
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
-func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s [%s]", itelemetry.SpanNamePrefixAgentRun, a.name))
-	defer span.End()
+func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invoke_agent {%s}", a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation)
+	defer func() {
+		if err != nil {
+			span.End()
+		}
+	}()
 
 	// Setup invocation
 	a.setupInvocation(invocation)
 
 	// Run before agent callbacks if they exist.
 	if a.agentCallbacks != nil {
-		customResponse, err := a.agentCallbacks.RunBeforeAgent(ctx, invocation)
+		var customResponse *model.Response
+		customResponse, err = a.agentCallbacks.RunBeforeAgent(ctx, invocation)
 		if err != nil {
 			return nil, fmt.Errorf("before agent callback failed: %w", err)
 		}
@@ -603,13 +625,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 	if err != nil {
 		return nil, err
 	}
-
-	// If we have after agent callbacks, we need to wrap the event channel.
-	if a.agentCallbacks != nil {
-		return a.wrapEventChannel(ctx, invocation, flowEventChan), nil
-	}
-
-	return flowEventChan, nil
+	return a.wrapEventChannel(ctx, invocation, flowEventChan, span), nil
 }
 
 // setupInvocation sets up the invocation
@@ -633,14 +649,25 @@ func (a *LLMAgent) wrapEventChannel(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
+	span sdktrace.Span,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
 
 	go func() {
-		defer close(wrappedChan)
+		var fullResponse *model.Response
+		defer func() {
+			if fullResponse != nil {
+				itelemetry.TraceAfterInvokeAgent(span, fullResponse)
+			}
+			span.End()
+			close(wrappedChan)
+		}()
 
 		// Forward all events from the original channel
 		for evt := range originalChan {
+			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+				fullResponse = evt.Response
+			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
@@ -659,6 +686,7 @@ func (a *LLMAgent) wrapEventChannel(
 					err.Error(),
 				)
 			} else if customResponse != nil {
+				fullResponse = customResponse
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
