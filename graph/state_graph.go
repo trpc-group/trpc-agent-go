@@ -1281,6 +1281,7 @@ func emitToolCompleteEvent(ctx context.Context, config toolCompleteEventConfig) 
 		WithToolEventInput(string(config.Arguments)),
 		WithToolEventOutput(outputStr),
 		WithToolEventError(config.Error),
+		WithToolEventIncludeResponse(true),
 	)
 	invocation, _ := agent.InvocationFromContext(ctx)
 	agent.EmitEvent(ctx, invocation, config.EventChan, toolCompleteEvent)
