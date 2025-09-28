@@ -270,8 +270,8 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 		return nil
 	}
 	InjectIntoEvent(inv, e)
-	var agentName string
-	var requestID string
+	var agentName, requestID string
+	// var requestID string
 	if inv != nil && inv.AgentName != "" {
 		agentName = inv.AgentName
 		requestID = inv.RunOptions.RequestID
