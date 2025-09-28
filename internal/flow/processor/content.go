@@ -39,6 +39,11 @@ type ContentRequestProcessor struct {
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
+	// PreserveSameBranch keeps events authored within the same invocation branch in
+	// their original roles instead of re-labeling them as user context. This
+	// allows graph executions to retain authentic assistant/tool transcripts
+	// while still enabling cross-agent contextualization when branches differ.
+	PreserveSameBranch bool
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -55,6 +60,16 @@ func WithIncludeContents(includeContents string) ContentOption {
 func WithAddContextPrefix(addPrefix bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddContextPrefix = addPrefix
+	}
+}
+
+// WithPreserveSameBranch toggles preserving original roles for events emitted
+// from the same invocation branch. When enabled, messages that originate from
+// nodes in the current agent/graph execution keep their assistant/tool roles
+// instead of being rewritten as user context.
+func WithPreserveSameBranch(preserve bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreserveSameBranch = preserve
 	}
 }
 
@@ -97,6 +112,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			invocation.GetEventFilterKey(), // Current branch for filtering
 			invocation.Session.Events,
 			invocation.AgentName, // Current agent name for filtering
+			invocation.Branch,
 		)
 		req.Messages = append(req.Messages, sessionMessages...)
 		addedFromSession = len(sessionMessages)
@@ -130,6 +146,7 @@ func (p *ContentRequestProcessor) getContents(
 	filterKey string,
 	events []event.Event,
 	agentName string,
+	branch string,
 ) []model.Message {
 	var filteredEvents []event.Event
 
@@ -153,7 +170,7 @@ func (p *ContentRequestProcessor) getContents(
 		}
 
 		// Convert foreign events or keep as-is.
-		if p.isOtherAgentReply(agentName, &evt) {
+		if p.isOtherAgentReply(agentName, branch, &evt) {
 			filteredEvents = append(filteredEvents, p.convertForeignEvent(&evt))
 		} else {
 			filteredEvents = append(filteredEvents, evt)
@@ -183,12 +200,21 @@ func (p *ContentRequestProcessor) getContents(
 // isOtherAgentReply checks whether the event is a reply from another agent.
 func (p *ContentRequestProcessor) isOtherAgentReply(
 	currentAgentName string,
+	currentBranch string,
 	evt *event.Event,
 ) bool {
-	return currentAgentName != "" &&
-		evt.Author != currentAgentName &&
-		evt.Author != "user" &&
-		evt.Author != ""
+	if evt == nil || currentAgentName == "" {
+		return false
+	}
+	if evt.Author == "" || evt.Author == "user" || evt.Author == currentAgentName {
+		return false
+	}
+	if p.PreserveSameBranch && currentBranch != "" && evt.Branch != "" {
+		if evt.Branch == currentBranch || strings.HasPrefix(evt.Branch, currentBranch+agent.BranchDelimiter) {
+			return false
+		}
+	}
+	return true
 }
 
 // convertForeignEvent converts an event authored by another agent as a user-content event.
