@@ -2496,7 +2496,18 @@
 <span class="normal"><a href="#__codelineno-7-55">55</a></span>
 <span class="normal"><a href="#__codelineno-7-56">56</a></span>
 <span class="normal"><a href="#__codelineno-7-57">57</a></span>
-<span class="normal"><a href="#__codelineno-7-58">58</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-7-58">58</a></span>
+<span class="normal"><a href="#__codelineno-7-59">59</a></span>
+<span class="normal"><a href="#__codelineno-7-60">60</a></span>
+<span class="normal"><a href="#__codelineno-7-61">61</a></span>
+<span class="normal"><a href="#__codelineno-7-62">62</a></span>
+<span class="normal"><a href="#__codelineno-7-63">63</a></span>
+<span class="normal"><a href="#__codelineno-7-64">64</a></span>
+<span class="normal"><a href="#__codelineno-7-65">65</a></span>
+<span class="normal"><a href="#__codelineno-7-66">66</a></span>
+<span class="normal"><a href="#__codelineno-7-67">67</a></span>
+<span class="normal"><a href="#__codelineno-7-68">68</a></span>
+<span class="normal"><a href="#__codelineno-7-69">69</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">dirsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir&quot;</span>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
@@ -2531,29 +2542,40 @@
 </span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Web Content&quot;</span><span class="p">),</span>
 </span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="p">)</span>
 </span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a>
-</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="c1">// Auto source: Intelligent type recognition, automatically select processor.</span>
-</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">        </span><span class="s">&quot;Cloud computing provides on-demand access to computing resources.&quot;</span><span class="p">,</span>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="w">        </span><span class="s">&quot;https://docs.example.com/api&quot;</span><span class="p">,</span>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="w">        </span><span class="s">&quot;./config.yaml&quot;</span><span class="p">,</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Mixed Sources&quot;</span><span class="p">),</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithFallbackChunkSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="p">)</span>
+</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="c1">// URL source advanced configuration: Separate content fetching and document identification</span>
+</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="nx">urlSrcAlias</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://trpc-go.com/docs/api.md&quot;</span><span class="p">},</span><span class="w">     </span><span class="c1">// Identifier URL (for document ID and metadata)</span>
+</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithContentFetchingURL</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;https://github.com/trpc-group/trpc-go/raw/main/docs/api.md&quot;</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Actual content fetching URL</span>
+</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;TRPC API Docs&quot;</span><span class="p">),</span>
+</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="w">    </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithMetadataValue</span><span class="p">(</span><span class="s">&quot;source&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;github&quot;</span><span class="p">),</span>
+</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="p">)</span>
+</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="c1">// Note: When using WithContentFetchingURL, the identifier URL should preserve the file information from the content fetching URL, for example:</span>
+</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="c1">// Correct: Identifier URL is https://trpc-go.com/docs/api.md, fetch URL is https://github.com/.../docs/api.md</span>
+</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="c1">// Incorrect: Identifier URL is https://trpc-go.com, which loses document path information</span>
 </span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a>
-</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="c1">// Combine usage.</span>
-</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="nx">sources</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">fileSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">dirSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">urlSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">autoSrc</span><span class="p">}</span>
-</span><span id="__span-7-49"><a id="__codelineno-7-49" name="__codelineno-7-49"></a>
-</span><span id="__span-7-50"><a id="__codelineno-7-50" name="__codelineno-7-50"></a><span class="c1">// Pass to Knowledge.</span>
-</span><span id="__span-7-51"><a id="__codelineno-7-51" name="__codelineno-7-51"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
-</span><span id="__span-7-53"><a id="__codelineno-7-53" name="__codelineno-7-53"></a><span class="p">)</span>
-</span><span id="__span-7-54"><a id="__codelineno-7-54" name="__codelineno-7-54"></a>
-</span><span id="__span-7-55"><a id="__codelineno-7-55" name="__codelineno-7-55"></a><span class="c1">// Load all sources.</span>
-</span><span id="__span-7-56"><a id="__codelineno-7-56" name="__codelineno-7-56"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-57"><a id="__codelineno-7-57" name="__codelineno-7-57"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-7-58"><a id="__codelineno-7-58" name="__codelineno-7-58"></a><span class="p">}</span>
+</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a><span class="c1">// Auto source: Intelligent type recognition, automatically select processor.</span>
+</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="nx">autoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-49"><a id="__codelineno-7-49" name="__codelineno-7-49"></a><span class="w">    </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-7-50"><a id="__codelineno-7-50" name="__codelineno-7-50"></a><span class="w">        </span><span class="s">&quot;Cloud computing provides on-demand access to computing resources.&quot;</span><span class="p">,</span>
+</span><span id="__span-7-51"><a id="__codelineno-7-51" name="__codelineno-7-51"></a><span class="w">        </span><span class="s">&quot;https://docs.example.com/api&quot;</span><span class="p">,</span>
+</span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a><span class="w">        </span><span class="s">&quot;./config.yaml&quot;</span><span class="p">,</span>
+</span><span id="__span-7-53"><a id="__codelineno-7-53" name="__codelineno-7-53"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-7-54"><a id="__codelineno-7-54" name="__codelineno-7-54"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Mixed Sources&quot;</span><span class="p">),</span>
+</span><span id="__span-7-55"><a id="__codelineno-7-55" name="__codelineno-7-55"></a><span class="w">    </span><span class="nx">autosource</span><span class="p">.</span><span class="nx">WithFallbackChunkSize</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
+</span><span id="__span-7-56"><a id="__codelineno-7-56" name="__codelineno-7-56"></a><span class="p">)</span>
+</span><span id="__span-7-57"><a id="__codelineno-7-57" name="__codelineno-7-57"></a>
+</span><span id="__span-7-58"><a id="__codelineno-7-58" name="__codelineno-7-58"></a><span class="c1">// Combine usage.</span>
+</span><span id="__span-7-59"><a id="__codelineno-7-59" name="__codelineno-7-59"></a><span class="nx">sources</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">fileSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">dirSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">urlSrc</span><span class="p">,</span><span class="w"> </span><span class="nx">autoSrc</span><span class="p">}</span>
+</span><span id="__span-7-60"><a id="__codelineno-7-60" name="__codelineno-7-60"></a>
+</span><span id="__span-7-61"><a id="__codelineno-7-61" name="__codelineno-7-61"></a><span class="c1">// Pass to Knowledge.</span>
+</span><span id="__span-7-62"><a id="__codelineno-7-62" name="__codelineno-7-62"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-63"><a id="__codelineno-7-63" name="__codelineno-7-63"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
+</span><span id="__span-7-64"><a id="__codelineno-7-64" name="__codelineno-7-64"></a><span class="p">)</span>
+</span><span id="__span-7-65"><a id="__codelineno-7-65" name="__codelineno-7-65"></a>
+</span><span id="__span-7-66"><a id="__codelineno-7-66" name="__codelineno-7-66"></a><span class="c1">// Load all sources.</span>
+</span><span id="__span-7-67"><a id="__codelineno-7-67" name="__codelineno-7-67"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-68"><a id="__codelineno-7-68" name="__codelineno-7-68"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-7-69"><a id="__codelineno-7-69" name="__codelineno-7-69"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="batch-document-processing-and-concurrency">Batch Document Processing and Concurrency</h3>
 <p>Knowledge supports batch document processing and concurrent loading, which can significantly improve processing performance for large amounts of documents:</p>
@@ -3757,7 +3779,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 17, 2025 06:14:11 UTC">2025-09-17 06:14:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 28, 2025 03:45:31 UTC">2025-09-28 03:45:31</span>
   </span>
 
     
