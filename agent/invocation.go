@@ -271,11 +271,13 @@ func EmitEvent(ctx context.Context, inv *Invocation, ch chan<- *event.Event,
 	}
 	InjectIntoEvent(inv, e)
 	var agentName string
+	var requestID string
 	if inv != nil && inv.AgentName != "" {
 		agentName = inv.AgentName
+		requestID = inv.RunOptions.RequestID
 	}
-	log.Debugf("[agent.EmitEvent]queue monitoring:: channel capacity: %d, current length: %d, branch: %s, agent name:%s",
-		cap(ch), len(ch), e.Branch, agentName)
+	log.Debugf("[agent.EmitEvent]queue monitoring:RequestID: %s channel capacity: %d, current length: %d, branch: %s, agent name:%s",
+		requestID, cap(ch), len(ch), e.Branch, agentName)
 	return event.EmitEvent(ctx, ch, e)
 }
 
