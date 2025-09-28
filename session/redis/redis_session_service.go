@@ -567,17 +567,10 @@ func (s *Service) getSession(
 		CreatedAt: sessState.CreatedAt,
 	}
 
-	// Decide whether to attach summaries.
-	// If events are truly absent (not just filtered by limit/afterTime), we soft-drop summaries
-	// to keep semantics consistent: no events -> no summaries.
-	attachSummaries := true
-	if len(sess.Events) == 0 {
-		// Double-check by querying the total event count without windowing.
-		if cnt, err := s.redisClient.ZCard(ctx, getEventKey(key)).Result(); err == nil && cnt == 0 {
-			attachSummaries = false
-		}
-	}
-	if attachSummaries {
+	// Attach summaries only if there are events to summarize.
+	// Since summaries are generated based on the filtered events (sess.Events),
+	// we only need to check if sess.Events is non-empty.
+	if len(sess.Events) > 0 {
 		if bytes, err := summariesCmd.Bytes(); err == nil && len(bytes) > 0 {
 			var summaries map[string]*session.Summary
 			if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {

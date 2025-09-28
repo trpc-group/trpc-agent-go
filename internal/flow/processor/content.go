@@ -203,14 +203,9 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 	filter := inv.GetEventFilterKey()
 	var evs []event.Event
 	if inv.Session != nil {
-		// Acquire read lock to protect Summaries access.
-		inv.Session.SummariesMu.RLock()
-		hasSummaries := inv.Session.Summaries != nil
-		inv.Session.SummariesMu.RUnlock()
-
-		// Use incremental events only if summaries exist and summaryUpdatedAt is provided.
+		// Use incremental events only if summaryUpdatedAt is provided.
 		// Otherwise, get all events for this filter.
-		if hasSummaries && !summaryUpdatedAt.IsZero() {
+		if !summaryUpdatedAt.IsZero() {
 			evs = p.eventsSince(inv.Session.Events, summaryUpdatedAt, filter)
 		} else {
 			evs = p.eventsInFilter(inv.Session.Events, filter)
