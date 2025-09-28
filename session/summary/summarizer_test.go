@@ -80,22 +80,24 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 		}
 	})
 
-	t.Run("truncation when max length set", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(10))
-		sess := &session.Session{ID: "truncate", Events: []event.Event{
+	t.Run("length limit when max length set", func(t *testing.T) {
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(10))
+		sess := &session.Session{ID: "limit", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "abcdefghijklmno"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "recent"}}}}, Timestamp: time.Now()},
 		}}
 		originalEventCount := len(sess.Events)
 		text, err := s.Summarize(context.Background(), sess)
 		require.NoError(t, err)
-		assert.LessOrEqual(t, len(text), 13) // 10 + "..."
+		// With the new prompt-based approach, we can't guarantee exact length
+		// as the model controls the output. We just verify it generates some text.
+		assert.NotEmpty(t, text)
 		// Events should remain unchanged.
 		assert.Equal(t, originalEventCount, len(sess.Events), "events should remain unchanged.")
 	})
 
 	t.Run("no truncation when max length is zero", func(t *testing.T) {
-		s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(0))
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(0))
 		long := strings.Repeat("abc", 200)
 		sess := &session.Session{ID: "no-trunc", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: long}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
@@ -146,11 +148,85 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 }
 
 func TestSessionSummarizer_Metadata(t *testing.T) {
-	s := NewSummarizer(&fakeModel{}, WithMaxSummaryChars(0))
+	s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(0))
 	md := s.Metadata()
 	assert.Equal(t, "fake", md[metadataKeyModelName])
-	assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
+	assert.Equal(t, 0, md[metadataKeyMaxSummaryWords])
 	assert.Equal(t, 0, md[metadataKeyCheckFunctions])
+}
+
+func TestSessionSummarizer_PlaceholderReplacement(t *testing.T) {
+	t.Run("max_summary_words placeholder replacement", func(t *testing.T) {
+		// Test with custom prompt containing the placeholder
+		customPrompt := "Please summarize the conversation within {max_summary_words} words: {conversation_text}"
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(100), WithPrompt(customPrompt))
+
+		sess := &session.Session{ID: "test", Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "Hello world"}}}}, Timestamp: time.Now()},
+		}}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify that the placeholder was replaced with the actual number
+		// The fakeModel should have received a prompt with "100" instead of "{max_summary_words}"
+		assert.Contains(t, text, "100") // fakeModel returns the prompt as the summary
+		// Note: Custom prompts only replace with the number, not the full instruction
+	})
+
+	t.Run("placeholder removal when no length limit", func(t *testing.T) {
+		// Test with custom prompt containing the placeholder but no length limit
+		customPrompt := "Please summarize the conversation within {max_summary_words} words: {conversation_text}"
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(0), WithPrompt(customPrompt))
+
+		sess := &session.Session{ID: "test", Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "Hello world"}}}}, Timestamp: time.Now()},
+		}}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify that the placeholder was removed (empty string replacement)
+		// The fakeModel should have received a prompt without the placeholder
+		assert.NotContains(t, text, "{max_summary_words}")
+	})
+
+	t.Run("default prompt with length limit", func(t *testing.T) {
+		// Test with default prompt and length limit
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(50))
+
+		sess := &session.Session{ID: "test", Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "Hello world"}}}}, Timestamp: time.Now()},
+		}}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify that the default prompt includes length instruction
+		assert.Contains(t, text, "50")
+		assert.Contains(t, text, "Please keep the summary within")
+		assert.NotContains(t, text, "{max_summary_words}")
+	})
+
+	t.Run("default prompt without length limit", func(t *testing.T) {
+		// Test with default prompt and no length limit
+		s := NewSummarizer(&fakeModel{}, WithMaxSummaryWords(0))
+
+		sess := &session.Session{ID: "test", Events: []event.Event{
+			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "Hello world"}}}}, Timestamp: time.Now()},
+		}}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotEmpty(t, text)
+
+		// Verify that the default prompt doesn't include length instruction
+		assert.NotContains(t, text, "Please keep the summary within")
+		assert.NotContains(t, text, "{max_summary_words}")
+	})
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.

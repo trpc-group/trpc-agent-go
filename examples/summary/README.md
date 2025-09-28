@@ -46,7 +46,7 @@ Command-line flags:
 - `-events`: Event count threshold to trigger summarization. Default: `1`.
 - `-tokens`: Token-count threshold to trigger summarization (0=disabled). Default: `0`.
 - `-time-sec`: Time threshold in seconds to trigger summarization (0=disabled). Default: `0`.
-- `-max-chars`: Max summary characters (runes) (0=unlimited). Default: `0`.
+- `-max-words`: Max summary words (0=unlimited). Default: `0`.
 - `-add-summary`: Prepend latest filter summary as system message. Default: `true`.
 - `-max-history`: Max history messages when add-summary=false (0=unlimited). Default: `0`.
 
@@ -67,7 +67,7 @@ Service: inmemory
 EventThreshold: 1
 TokenThreshold: 0
 TimeThreshold: 0s
-MaxChars: 0
+MaxWords: 0
 Streaming: true
 AddSummary: true
 MaxHistory: 0
@@ -162,11 +162,12 @@ sessService := redis.NewService(
 
 ## Prompt Customization
 
-You can customize the summary prompt to control how conversations are summarized. The prompt supports one placeholder that will be replaced with actual values during summary generation:
+You can customize the summary prompt to control how conversations are summarized. The prompt supports placeholders that will be replaced with actual values during summary generation:
 
-### Available Placeholder
+### Available Placeholders
 
 - **`{conversation_text}`**: The conversation content to be summarized
+- **`{max_summary_words}`**: The maximum word count for the summary (only included when `WithMaxSummaryWords` is set). In the default prompt, this placeholder is replaced with a natural instruction like "Please keep the summary within 100 words." In custom prompts, it's replaced with just the number, allowing you to control the wording in your preferred language.
 
 ### Example Usage
 
@@ -179,6 +180,15 @@ summary.WithPrompt("Extract technical insights from this conversation: {conversa
 
 // Custom prompt for concise summaries
 summary.WithPrompt("Provide a brief summary of this conversation: {conversation_text}")
+
+// Custom prompt with length limit (English)
+summary.WithPrompt("Summarize this conversation in no more than {max_summary_words} words: {conversation_text}")
+
+// Custom prompt with length limit (Chinese)
+summary.WithPrompt("请将以下对话总结为不超过{max_summary_words}个字的摘要：{conversation_text}")
+
+// Custom prompt with length limit (mixed language)
+summary.WithPrompt("请总结以下对话，控制在{max_summary_words}字以内：{conversation_text}")
 ```
 
 ## Summary Options
@@ -187,7 +197,7 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 ### Basic Options
 
-- **`WithMaxSummaryChars(maxChars int)`**: Sets the maximum character count (runes) for generated summaries. When set to 0 (default), no truncation is applied.
+- **`WithMaxSummaryWords(maxWords int)`**: Sets the maximum word count for generated summaries. When set to 0 (default), no word limit is applied. The word limit is included in the prompt to guide the model's generation rather than truncating the output.
 
 - **`WithPrompt(prompt string)`**: Customizes the prompt template used for summary generation. The prompt must include the `{conversation_text}` placeholder. See the [Prompt Customization](#prompt-customization) section for details and examples.
 
@@ -210,13 +220,13 @@ The `SessionSummarizer` supports various configuration options to customize summ
 ```go
 // Basic configuration
 sum := summary.NewSummarizer(model,
-    summary.WithMaxSummaryChars(500),
+    summary.WithMaxSummaryWords(500),
     summary.WithEventThreshold(10),
 )
 
 // Complex trigger configuration
 sum := summary.NewSummarizer(model,
-    summary.WithMaxSummaryChars(1000),
+    summary.WithMaxSummaryWords(1000),
     summary.WithChecksAny(
         summary.CheckEventThreshold(5),
         summary.CheckTokenThreshold(1000),

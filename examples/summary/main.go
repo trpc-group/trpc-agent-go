@@ -35,7 +35,7 @@ var (
 	flagEvents   = flag.Int("events", 1, "Event count threshold to trigger summarization")
 	flagTokens   = flag.Int("tokens", 0, "Token-count threshold to trigger summarization (0=disabled)")
 	flagTimeSec  = flag.Int("time-sec", 0, "Time threshold in seconds to trigger summarization (0=disabled)")
-	flagMaxChars = flag.Int("max-chars", 0, "Max summary characters (runes) (0=unlimited)")
+	flagMaxWords = flag.Int("max-words", 0, "Max summary words (0=unlimited)")
 	flagAddSum   = flag.Bool("add-summary", true, "Prepend latest branch summary as system message for LLM input")
 	flagMaxHist  = flag.Int("max-history", 0, "Max history messages when add-summary=false (0=unlimited)")
 )
@@ -77,9 +77,10 @@ func (c *summaryChat) setup(_ context.Context) error {
 
 	// Summarizer with customizable prompt.
 	// You can customize the summary prompt using WithPrompt().
-	// Available placeholder:
+	// Available placeholders:
 	//   - {conversation_text}: The conversation content to be summarized
-	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryChars(*flagMaxChars),
+	//   - {max_summary_words}: The maximum word count for the summary (only included when max-words > 0)
+	sum := summary.NewSummarizer(llm, summary.WithMaxSummaryWords(*flagMaxWords),
 		summary.WithChecksAny(
 			summary.CheckEventThreshold(*flagEvents),
 			summary.CheckTokenThreshold(*flagTokens),
@@ -126,7 +127,7 @@ func (c *summaryChat) setup(_ context.Context) error {
 	fmt.Printf("EventThreshold: %d\n", *flagEvents)
 	fmt.Printf("TokenThreshold: %d\n", *flagTokens)
 	fmt.Printf("TimeThreshold: %ds\n", *flagTimeSec)
-	fmt.Printf("MaxChars: %d\n", *flagMaxChars)
+	fmt.Printf("MaxWords: %d\n", *flagMaxWords)
 	fmt.Printf("Streaming: %v\n", *streaming)
 	fmt.Printf("AddSummary: %v\n", *flagAddSum)
 	fmt.Printf("MaxHistory: %d\n", *flagMaxHist)

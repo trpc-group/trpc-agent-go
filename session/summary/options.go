@@ -26,12 +26,13 @@ func WithPrompt(prompt string) Option {
 	}
 }
 
-// WithMaxSummaryChars sets the maximum character count (runes) for summaries.
-// A value <= 0 means no truncation.
-func WithMaxSummaryChars(maxChars int) Option {
+// WithMaxSummaryWords sets the maximum word count for summaries.
+// A value <= 0 means no word limit. The word limit will be included in the
+// prompt to guide the model's generation rather than truncating the output.
+func WithMaxSummaryWords(maxWords int) Option {
 	return func(s *sessionSummarizer) {
-		if maxChars > 0 {
-			s.maxSummaryChars = maxChars
+		if maxWords > 0 {
+			s.maxSummaryWords = maxWords
 		}
 	}
 }

@@ -23,8 +23,8 @@ import (
 const (
 	// metadataKeyModelName is the key for model name in metadata.
 	metadataKeyModelName = "model_name"
-	// metadataKeyMaxSummaryLength is the key for max summary length in metadata.
-	metadataKeyMaxSummaryLength = "max_summary_length"
+	// metadataKeyMaxSummaryWords is the key for max summary words in metadata.
+	metadataKeyMaxSummaryWords = "max_summary_words"
 	// metadataKeyModelAvailable is the key for model availability in metadata.
 	metadataKeyModelAvailable = "model_available"
 	// metadataKeyCheckFunctions is the key for check functions count in metadata.
@@ -34,15 +34,8 @@ const (
 const (
 	// conversationTextPlaceholder is the placeholder for conversation text.
 	conversationTextPlaceholder = "{conversation_text}"
-	// default summarizer prompt is the default prompt for summarization.
-	defaultSummarizerPrompt = "Analyze the following conversation between a user and an " +
-		"assistant, and provide a concise summary focusing on important " +
-		"information that would be helpful for future interactions. Keep the " +
-		"summary concise and to the point. Only include relevant information. " +
-		"Do not make anything up.\n\n" +
-		"<conversation>\n" + conversationTextPlaceholder + "\n" +
-		"</conversation>\n\n" +
-		"Summary:"
+	// maxSummaryWordsPlaceholder is the placeholder for max summary words.
+	maxSummaryWordsPlaceholder = "{max_summary_words}"
 
 	// authorUser is the user author.
 	authorUser = "user"
@@ -50,25 +43,49 @@ const (
 	authorUnknown = "unknown"
 )
 
+// getDefaultSummarizerPrompt returns the default prompt for summarization.
+// If maxWords > 0, includes word count instruction placeholder; otherwise, omits it.
+func getDefaultSummarizerPrompt(maxWords int) string {
+	basePrompt := "Analyze the following conversation between a user and an " +
+		"assistant, and provide a concise summary focusing on important " +
+		"information that would be helpful for future interactions. Keep the " +
+		"summary concise and to the point. Only include relevant information. " +
+		"Do not make anything up."
+
+	if maxWords > 0 {
+		basePrompt += " Please keep the summary within " + maxSummaryWordsPlaceholder + " words."
+	}
+
+	return basePrompt + "\n\n" +
+		"<conversation>\n" + conversationTextPlaceholder + "\n" +
+		"</conversation>\n\n" +
+		"Summary:"
+}
+
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
 	model           model.Model
 	prompt          string
 	checks          []Checker
-	maxSummaryChars int
+	maxSummaryWords int
 }
 
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:          defaultSummarizerPrompt,
+		prompt:          "",          // Will be set after processing options.
 		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryChars: 0,           // 0 means no truncation by characters.
+		maxSummaryWords: 0,           // 0 means no word limit.
 	}
 	s.model = m
 
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	// Set default prompt if none was provided
+	if s.prompt == "" {
+		s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
 	}
 
 	return s
@@ -114,14 +131,6 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("failed to generate summary for session %s (input_chars=%d)", sess.ID, len(conversationText))
 	}
 
-	// Truncate by characters (runes) if configured (> 0).
-	if s.maxSummaryChars > 0 {
-		runes := []rune(summaryText)
-		if len(runes) > s.maxSummaryChars {
-			runes = runes[:s.maxSummaryChars]
-			summaryText = string(runes) + "..."
-		}
-	}
 	return summaryText, nil
 }
 
@@ -134,10 +143,10 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:        modelName,
-		metadataKeyMaxSummaryLength: s.maxSummaryChars,
-		metadataKeyModelAvailable:   modelAvailable,
-		metadataKeyCheckFunctions:   len(s.checks),
+		metadataKeyModelName:       modelName,
+		metadataKeyMaxSummaryWords: s.maxSummaryWords,
+		metadataKeyModelAvailable:  modelAvailable,
+		metadataKeyCheckFunctions:  len(s.checks),
 	}
 }
 
@@ -172,6 +181,15 @@ func (s *sessionSummarizer) generateSummary(ctx context.Context, conversationTex
 
 	// Create summarization prompt.
 	prompt := strings.Replace(s.prompt, conversationTextPlaceholder, conversationText, 1)
+
+	// Replace max summary words placeholder if it exists.
+	if s.maxSummaryWords > 0 {
+		// Replace with the actual number
+		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, fmt.Sprintf("%d", s.maxSummaryWords), 1)
+	} else {
+		// Remove the placeholder if no word limit is set.
+		prompt = strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+	}
 
 	// Create LLM request.
 	request := &model.Request{

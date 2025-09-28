@@ -82,11 +82,11 @@ func TestOptions(t *testing.T) {
 		assert.True(t, s.ShouldSummarize(sess))
 	})
 
-	t.Run("WithMaxSummaryChars_MetadataAndTruncation", func(t *testing.T) {
-		// Set a small max length and ensure metadata reflects it and output is truncated.
-		s := NewSummarizer(&testModel{}, WithMaxSummaryChars(50))
+	t.Run("WithMaxSummaryWords_MetadataAndLengthLimit", func(t *testing.T) {
+		// Set a small max length and ensure metadata reflects it and length is limited in prompt.
+		s := NewSummarizer(&testModel{}, WithMaxSummaryWords(50))
 		md := s.Metadata()
-		assert.Equal(t, 50, md[metadataKeyMaxSummaryLength])
+		assert.Equal(t, 50, md[metadataKeyMaxSummaryWords])
 
 		sess := &session.Session{ID: "sess-ml", Events: []event.Event{
 			{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}, Timestamp: time.Now().Add(-2 * time.Second)},
@@ -95,17 +95,19 @@ func TestOptions(t *testing.T) {
 		originalEventCount := len(sess.Events)
 		text, err := s.Summarize(context.Background(), sess)
 		assert.NoError(t, err)
-		assert.LessOrEqual(t, len(text), 50)
+		// Note: With the new prompt-based approach, we can't guarantee exact length
+		// as the model controls the output. We just verify it generates some text.
+		assert.NotEmpty(t, text)
 		// Events should remain unchanged.
 		assert.Equal(t, originalEventCount, len(sess.Events), "events should remain unchanged.")
 	})
 
-	t.Run("WithMaxSummaryChars_IgnoresNonPositive", func(t *testing.T) {
+	t.Run("WithMaxSummaryWords_IgnoresNonPositive", func(t *testing.T) {
 		// Non-positive should be ignored, default remains in metadata.
-		s := NewSummarizer(&testModel{}, WithMaxSummaryChars(0))
+		s := NewSummarizer(&testModel{}, WithMaxSummaryWords(0))
 		md := s.Metadata()
 		// Default is 0 (no truncation).
-		assert.Equal(t, 0, md[metadataKeyMaxSummaryLength])
+		assert.Equal(t, 0, md[metadataKeyMaxSummaryWords])
 	})
 }
 
