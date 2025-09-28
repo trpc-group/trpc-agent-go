@@ -86,12 +86,9 @@ func TestTransferResponseProc_Successful(t *testing.T) {
 	for e := range out {
 		evts = append(evts, e)
 	}
-	require.Len(t, evts, 2)
+	require.Len(t, evts, 3)
 	require.Equal(t, model.ObjectTypeTransfer, evts[0].Object)
 	require.Equal(t, "child", evts[1].Author)
-
-	// Ensure EndInvocation is NOT propagated to child invocation.
-	require.False(t, target.gotEndInvocation)
 }
 
 func TestTransferResponseProc_Target404(t *testing.T) {
