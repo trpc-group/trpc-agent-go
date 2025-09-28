@@ -48,7 +48,9 @@ func (sess *Session) GetEvents() []event.Event {
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
 
-	return sess.Events
+	eventsCopy := make([]event.Event, len(sess.Events))
+	copy(eventsCopy, sess.Events)
+	return eventsCopy
 }
 
 // Options is the options for getting a session.
