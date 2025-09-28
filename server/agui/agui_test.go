@@ -18,11 +18,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	runnerpkg "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -48,8 +47,8 @@ func TestNewWithProvidedService(t *testing.T) {
 	r := &stubRunner{}
 
 	srv, err := New(r, WithService(fakeSvc), WithPath("/custom"))
-	require.NoError(t, err)
-	require.NotNil(t, srv)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
 	assert.False(t, called)
 	assert.Same(t, fakeSvc, srv.service)
 	assert.Equal(t, "/custom", srv.path)
@@ -73,8 +72,8 @@ func TestNewCreatesDefaultService(t *testing.T) {
 
 	r := &stubRunner{}
 	srv, err := New(r, WithPath("/agui/custom"))
-	require.NoError(t, err)
-	require.NotNil(t, srv)
+	assert.NoError(t, err)
+	assert.NotNil(t, srv)
 	assert.Equal(t, "/agui/custom", srv.path)
 	assert.Equal(t, "/agui/custom", capturedPath)
 	assert.Same(t, r, srv.runner)
@@ -83,25 +82,25 @@ func TestNewCreatesDefaultService(t *testing.T) {
 
 func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	agent := &mockAgent{info: agent.Info{Name: "demo"}}
-	r := runnerpkg.NewRunner(agent.Info().Name, agent)
+	r := runner.NewRunner(agent.Info().Name, agent)
 	srv, err := New(r, WithPath("/agui"))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	payload := `{"threadId":"thread-1","runId":"run-42","messages":[{"role":"user","content":"hi there"}]}`
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/agui", strings.NewReader(payload))
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	bodyStr := string(body)
 
 	assert.Contains(t, bodyStr, `"type":"RUN_STARTED"`)
@@ -111,7 +110,7 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.Contains(t, bodyStr, `"type":"RUN_FINISHED"`)
 
 	assert.Equal(t, 1, agent.runCalls)
-	require.NotNil(t, agent.lastInvocation)
+	assert.NotNil(t, agent.lastInvocation)
 	assert.Equal(t, "hi there", agent.lastInvocation.Message.Content)
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
 }
