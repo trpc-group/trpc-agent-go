@@ -26,11 +26,11 @@ import (
 )
 
 var (
-	flagModel      = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
-	flagTokenLimit = flag.Int("token-limit", 512, "Token limit for message tailoring")
-	flagCounter    = flag.String("counter", "simple", "Token counter: simple|tiktoken")
-	flagStrategy   = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
-	flagStreaming  = flag.Bool("streaming", true, "Stream assistant responses")
+	flagModel          = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
+	flagMaxInputTokens = flag.Int("max-input-tokens", 512, "Max input tokens for message tailoring")
+	flagCounter        = flag.String("counter", "simple", "Token counter: simple|tiktoken")
+	flagStrategy       = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
+	flagStreaming      = flag.Bool("streaming", true, "Stream assistant responses")
 )
 
 // Interactive demo with /bulk to generate many messages and showcase
@@ -38,12 +38,12 @@ var (
 func main() {
 	flag.Parse()
 
-	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagTokenLimit)
+	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
 	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
 	modelInstance := openai.New(*flagModel,
-		openai.WithTokenLimit(*flagTokenLimit),
+		openai.WithMaxInputTokens(*flagMaxInputTokens),
 		// The following two options are OPTIONAL. If omitted:
-		//   - counter defaults to SimpleTokenCounter(token-limit).
+		//   - counter defaults to SimpleTokenCounter(max-input-tokens).
 		//   - strategy defaults to MiddleOutStrategy(counter).
 		openai.WithTokenCounter(counter),
 		openai.WithTailoringStrategy(strategy),
@@ -51,7 +51,7 @@ func main() {
 
 	fmt.Printf("✂️  Token Tailoring Demo\n")
 	fmt.Printf("🧩 model: %s\n", *flagModel)
-	fmt.Printf("🔢 token-limit: %d\n", *flagTokenLimit)
+	fmt.Printf("🔢 max-input-tokens: %d\n", *flagMaxInputTokens)
 	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
 	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
 	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
@@ -95,16 +95,16 @@ func buildStrategy(counter model.TokenCounter, strategyName string) model.Tailor
 	}
 }
 
-func buildCounter(name string, modelName string, maxPromptTokens int) model.TokenCounter {
+func buildCounter(name string, modelName string, maxInputTokens int) model.TokenCounter {
 	switch name {
 	case "tiktoken":
-		if c, err := tiktoken.New(modelName, maxPromptTokens); err == nil {
+		if c, err := tiktoken.New(modelName, maxInputTokens); err == nil {
 			return c
 		} else {
 			log.Warn("tiktoken counter init failed, falling back to simple", err)
 		}
 	}
-	return model.NewSimpleTokenCounter(maxPromptTokens)
+	return model.NewSimpleTokenCounter(maxInputTokens)
 }
 
 func handleCommand(messages *[]model.Message, line string) bool {
@@ -148,8 +148,8 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 	}
 
 	final := renderResponse(ch, *flagStreaming)
-	fmt.Printf("\n[tailor] tokenLimit=%d before=%d after=%d\n",
-		*flagTokenLimit, before, len(req.Messages))
+	fmt.Printf("\n[tailor] maxInputTokens=%d before=%d after=%d\n",
+		*flagMaxInputTokens, before, len(req.Messages))
 	// Show a concise summary of the tailored messages (index, role, truncated content)
 	fmt.Printf("[tailor] messages (after tailoring):\n%s", summarizeMessages(req.Messages, 12))
 	if !*flagStreaming && final != "" {

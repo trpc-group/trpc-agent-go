@@ -937,7 +937,7 @@ func TestWithTokenTailoring(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
 	var captured *openaigo.ChatCompletionNewParams
 	m := New("test-model",
-		WithTokenLimit(100),
+		WithMaxInputTokens(100),
 		WithTokenCounter(testStubCounter{}),
 		WithTailoringStrategy(testStubStrategy{}),
 		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {

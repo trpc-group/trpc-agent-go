@@ -1,6 +1,6 @@
 # Token Tailoring Example
 
-This example demonstrates interactive token tailoring using `openai.WithTokenLimit` (plus optional overrides) and the built-in strategies in `model/token_tailor.go`.
+This example demonstrates interactive token tailoring using `openai.WithMaxInputTokens` (plus optional overrides) and the built-in strategies in `model/token_tailor.go`.
 
 ## What it shows
 
@@ -22,7 +22,7 @@ cd examples/tailor
 # Basic run with flags (defaults shown):
 go run . \
   -model deepseek-chat \
-  -token-limit 512 \
+  -max-input-tokens 512 \
   -counter tiktoken \  # or: simple
   -strategy middle \
   -streaming=true
@@ -40,7 +40,7 @@ You should see lines like (banner + tailoring stats + message summary):
 ```
 ✂️  Token Tailoring Demo
 🧩 model: deepseek-chat
-🔢 token-limit: 512
+🔢 max-input-tokens: 512
 🧮 counter: tiktoken
 🎛️ strategy: middle
 📡 streaming: true
@@ -55,7 +55,7 @@ Added 10 messages. Total=11
 👤 You: What is LLM
 🤖 Assistant: An LLM (Large Language Model) is a type of artificial intelligence model designed to understand, generate, and work with human language...
 
-[tailor] tokenLimit=512 before=12 after=7
+[tailor] maxInputTokens=512 before=12 after=7
 [tailor] messages (after tailoring):
 [0] system: You are a helpful assistant.
 [1] user: synthetic 1: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...
@@ -71,7 +71,7 @@ Added 10 messages. Total=11
 The output shows:
 
 - Interactive conversation with the AI assistant
-- Token tailoring statistics: `[tailor] tokenLimit=512 before=12 after=7`
+- Token tailoring statistics: `[tailor] maxInputTokens=512 before=12 after=7`
 - The tailored messages that were sent to the model (index, role, truncated content)
 - Different strategies produce different message selections (middle strategy preserves head and tail messages)
 
@@ -104,7 +104,7 @@ This ensures optimal user experience without manual configuration.
 In your code, replace:
 
 ```go
-counter := model.NewSimpleTokenCounter(tokenLimit)
+counter := model.NewSimpleTokenCounter(inputTokenLimit)
 ```
 
 with a `tiktoken` submodule counter (see `model/tiktoken`).
@@ -113,7 +113,7 @@ Minimal setup requires only the token limit:
 
 ```go
 m := openai.New("model-name",
-    openai.WithTokenLimit(512),
+    openai.WithMaxInputTokens(512),
 )
 ```
 
@@ -121,7 +121,7 @@ Optionally override counter and/or strategy (if omitted, they default to SimpleT
 
 ```go
 m := openai.New("model-name",
-    openai.WithTokenLimit(512),
+    openai.WithMaxInputTokens(512),
     openai.WithTokenCounter(tkCounter),              // optional
     openai.WithTailoringStrategy(customStrategy),    // optional
 )

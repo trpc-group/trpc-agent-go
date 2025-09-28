@@ -194,7 +194,7 @@ type Model struct {
 	batchBaseURL               string
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
-	maxTokens                  int                     // Max tokens for token tailoring.
+	maxInputTokens             int                     // Max input tokens for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -260,8 +260,8 @@ type options struct {
 	TokenCounter model.TokenCounter
 	// TailoringStrategy defines the strategy for token tailoring.
 	TailoringStrategy model.TailoringStrategy
-	// MaxTokens is the max tokens for token tailoring.
-	MaxTokens int
+	// MaxInputTokens is the max input tokens for token tailoring.
+	MaxInputTokens int
 }
 
 // Option is a function that configures an OpenAI model.
@@ -403,12 +403,12 @@ func WithBatchBaseURL(url string) Option {
 	}
 }
 
-// WithTokenLimit sets only the token limit for prompt tailoring.
+// WithMaxInputTokens sets only the input token limit for prompt tailoring.
 // When limit > 0, tailoring is enabled. The counter/strategy will be lazily
 // defaulted to SimpleTokenCounter(limit) and MiddleOutStrategy if not provided.
-func WithTokenLimit(limit int) Option {
+func WithMaxInputTokens(limit int) Option {
 	return func(opts *options) {
-		opts.MaxTokens = limit
+		opts.MaxInputTokens = limit
 	}
 }
 
@@ -460,9 +460,9 @@ func New(name string, opts ...Option) *Model {
 
 	// Provide defaults at construction time when token tailoring is enabled.
 	// These are best-effort defaults; user-provided counter/strategy always take priority.
-	if o.MaxTokens > 0 {
+	if o.MaxInputTokens > 0 {
 		if o.TokenCounter == nil {
-			o.TokenCounter = model.NewSimpleTokenCounter(o.MaxTokens)
+			o.TokenCounter = model.NewSimpleTokenCounter(o.MaxInputTokens)
 		}
 		if o.TailoringStrategy == nil {
 			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
@@ -487,7 +487,7 @@ func New(name string, opts ...Option) *Model {
 		batchBaseURL:               o.BatchBaseURL,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
-		maxTokens:                  o.MaxTokens,
+		maxInputTokens:             o.MaxInputTokens,
 	}
 }
 
@@ -535,22 +535,22 @@ func (m *Model) GenerateContent(
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
 	// Lazy default injection: if token limit is enabled but counter/strategy
 	// are not set, provide sensible defaults.
-	if m.maxTokens > 0 {
+	if m.maxInputTokens > 0 {
 		if m.tokenCounter == nil {
-			m.tokenCounter = model.NewSimpleTokenCounter(m.maxTokens)
+			m.tokenCounter = model.NewSimpleTokenCounter(m.maxInputTokens)
 		}
 		if m.tailoringStrategy == nil {
 			m.tailoringStrategy = model.NewMiddleOutStrategy(m.tokenCounter)
 		}
 	}
 
-	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxTokens <= 0 {
+	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxInputTokens <= 0 {
 		return
 	}
 	if len(request.Messages) == 0 {
 		return
 	}
-	if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxTokens); err != nil {
+	if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxInputTokens); err != nil {
 		log.Warn("token tailoring failed in openai.Model", err)
 	} else {
 		request.Messages = tailored
