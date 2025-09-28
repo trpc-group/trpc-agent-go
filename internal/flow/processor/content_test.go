@@ -959,8 +959,14 @@ func TestContentRequestProcessor_ProcessRequest_WithMaxHistoryRuns(t *testing.T)
 					createTestEvent("user", "message2", baseTime.Add(-1*time.Hour)),
 					createTestEvent("user", "message3", baseTime),
 				},
+				Summaries: map[string]*session.Summary{
+					"test-filter": {
+						Summary:   "Test summary",
+						UpdatedAt: baseTime.Add(-3 * time.Hour), // Earlier than all events
+					},
+				},
 			},
-			expectedCount: 3, // All events included (incremental logic)
+			expectedCount: 4, // Summary message + 3 events (incremental logic)
 		},
 		{
 			name: "AddSessionSummary false - uses history messages with limit",
@@ -1007,13 +1013,8 @@ func TestContentRequestProcessor_ProcessRequest_WithMaxHistoryRuns(t *testing.T)
 
 			tt.processor.ProcessRequest(context.Background(), inv, req, nil)
 
-			// Count non-system messages (excluding summary if any)
-			var messageCount int
-			for _, msg := range req.Messages {
-				if msg.Role != model.RoleSystem {
-					messageCount++
-				}
-			}
+			// Count all messages (including summary if any)
+			messageCount := len(req.Messages)
 
 			assert.Equal(t, tt.expectedCount, messageCount)
 		})
@@ -1025,6 +1026,7 @@ func createTestEvent(author, content string, timestamp time.Time) event.Event {
 	return event.Event{
 		Author:    author,
 		Timestamp: timestamp,
+		FilterKey: "test-filter", // Set filter key to match test expectations
 		Response: &model.Response{
 			Choices: []model.Choice{
 				{

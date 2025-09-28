@@ -206,38 +206,20 @@ func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invoca
 		// Acquire read lock to protect Summaries access.
 		inv.Session.SummariesMu.RLock()
 		hasSummaries := inv.Session.Summaries != nil
-		var sessionUpdatedAt time.Time
-		if hasSummaries {
-			if sum := inv.Session.Summaries[filter]; sum != nil && sum.Summary != "" {
-				sessionUpdatedAt = sum.UpdatedAt
-			}
-		}
 		inv.Session.SummariesMu.RUnlock()
 
-		if hasSummaries {
-			// Use the provided summaryUpdatedAt if available, otherwise fall back to reading from session.
-			var updatedAt time.Time
-			if !summaryUpdatedAt.IsZero() {
-				updatedAt = summaryUpdatedAt
-			} else if !sessionUpdatedAt.IsZero() {
-				updatedAt = sessionUpdatedAt
-			}
-
-			if !updatedAt.IsZero() {
-				evs = p.eventsSince(inv.Session.Events, updatedAt, filter)
-			} else {
-				evs = p.eventsInFilter(inv.Session.Events, filter)
-			}
+		// Use incremental events only if summaries exist and summaryUpdatedAt is provided.
+		// Otherwise, get all events for this filter.
+		if hasSummaries && !summaryUpdatedAt.IsZero() {
+			evs = p.eventsSince(inv.Session.Events, summaryUpdatedAt, filter)
 		} else {
-			// No summaries yet; include all events for this filter.
 			evs = p.eventsInFilter(inv.Session.Events, filter)
 		}
 	}
-	msgs := p.convertEventsToMessages(evs, inv.AgentName)
-	// Note: We preserve all incremental messages to maintain context integrity.
+	// Reserve all incremental messages to maintain context integrity.
 	// MaxHistoryRuns is not applied to incremental messages as they represent
 	// a complete work unit that should not be truncated.
-	return msgs
+	return p.convertEventsToMessages(evs, inv.AgentName)
 }
 
 // getFilterHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
