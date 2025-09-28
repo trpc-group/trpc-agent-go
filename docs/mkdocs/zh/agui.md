@@ -12,13 +12,16 @@ AG-UI（Agent-User Interaction）协议由开源社区 [AG-UI Protocol](https://
 import (
     "net/http"
 
+    "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
 )
 
 // 创建 Agent
 agent := newAgent()
+// 创建 Runner
+runner := runner.NewRunner(agent.Info().Name, agent)
 // 创建 AG-UI 服务，指定 HTTP 路由
-server, err := agui.New(agent, agui.WithPath("/agui"))
+server, err := agui.New(runner, agui.WithPath("/agui"))
 if err != nil {
     log.Fatalf("create agui server failed: %v", err)
 }
@@ -30,39 +33,11 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
 
+Runner 全面的使用方法参见 [runner](./runner.md)。
+
 在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
-
-## 与 Runner 结合
-
-可以通过 `agui.WithRunnerOptions` 注入 `runner.Option`，设置 Session/Memory 等组件，以 Session 为例：
-
-```go
-import (
-    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-    agui "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    runner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-)
-
-// 创建 Agent
-agent := newAgent()
-// 创建 Session Service
-sessionService := sessioninmemory.NewSessionService()
-// 创建 AG-UI 服务
-server, err := agui.New(
-    agent,
-    agui.WithPath("/agui"), // 指定 HTTP 路由
-    agui.WithRunnerOptions(runner.WithSessionService(sessionService)), // 注入 Session Service
-)
-if err != nil {
-    log.Fatalf("create agui server failed: %v", err)
-}
-// 启动 HTTP 服务
-if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
-    log.Fatalf("server stopped with error: %v", err)
-}
-```
 
 ## 进阶用法
 
@@ -71,13 +46,17 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默认通信协议，如果希望改用 WebSocket 等其他协议，可以实现 `service.Service` 接口：
 
 ```go
-import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+import (
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
 
 type wsService struct{}
 
 func (s *wsService) Handler() http.Handler { /* 注册 WebSocket 并写入事件 */ }
 
-server, _ := agui.New(agent, agui.WithService(&wsService{}))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithService(&wsService{}))
 ```
 
 ### 自定义 Translator
@@ -87,7 +66,7 @@ server, _ := agui.New(agent, agui.WithService(&wsService{}))
 ```go
 import (
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-    agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -98,24 +77,24 @@ type customTranslator struct {
     inner translator.Translator
 }
 
-func (t *customTranslator) Translate(evt *agentevent.Event) ([]aguievents.Event, error) {
-    out, err := t.inner.Translate(evt)
+func (t *customTranslator) Translate(event *event.Event) ([]aguievents.Event, error) {
+    out, err := t.inner.Translate(event)
     if err != nil {
         return nil, err
     }
-    if payload := buildCustomPayload(evt); payload != nil {
+    if payload := buildCustomPayload(event); payload != nil {
         out = append(out, aguievents.NewCustomEvent("trace.metadata", aguievents.WithValue(payload)))
     }
     return out, nil
 }
 
-func buildCustomPayload(evt *agentevent.Event) map[string]any {
-    if evt == nil || evt.Response == nil {
+func buildCustomPayload(event *event.Event) map[string]any {
+    if event == nil || event.Response == nil {
         return nil
     }
     return map[string]any{
-        "object":    evt.Response.Object,
-        "timestamp": evt.Response.Timestamp,
+        "object":    event.Response.Object,
+        "timestamp": event.Response.Timestamp,
     }
 }
 
@@ -123,7 +102,8 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
     return &customTranslator{inner: translator.New(input.ThreadID, input.RunID)}
 }
 
-server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
 
 ### 自定义 `UserIDResolver`
@@ -131,6 +111,13 @@ server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslato
 默认所有请求都会归到固定的 `"user"` 用户 ID，可以通过自定义 `UserIDResolver` 从 `RunAgentInput` 中提取 `UserID`：
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
     if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
         return user, nil
@@ -138,5 +125,6 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
     return "anonymous", nil
 }
 
-server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```

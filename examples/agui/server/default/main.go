@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -53,7 +54,8 @@ func main() {
 		llmagent.WithGenerationConfig(generationConfig),
 		llmagent.WithInstruction("You are a helpful assistant."),
 	)
-	server, err := agui.New(agent, agui.WithPath(*path))
+	runner := runner.NewRunner(agent.Info().Name, agent)
+	server, err := agui.New(runner, agui.WithPath(*path))
 	if err != nil {
 		log.Fatalf("failed to create AG-UI server: %v", err)
 	}

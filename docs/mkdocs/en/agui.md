@@ -1,93 +1,73 @@
 # AG-UI Guide
 
-The AG-UI (Agent-User Interaction) protocol is maintained by the open-source community at [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui). It enables agents implemented in different languages, frameworks, and execution environments to deliver the outputs generated during a run to user interfaces through a unified event stream. The protocol tolerates loosely-matched event formats and supports multiple transports including SSE and WebSocket.
+The AG-UI (Agent-User Interaction) protocol is maintained by the open-source [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) project. It enables agents built in different languages, frameworks, and execution environments to deliver their runtime outputs to user interfaces through a unified event stream. The protocol tolerates loosely matched payloads and supports transports such as SSE and WebSocket.
 
-`tRPC-Agent-Go` integrates with the AG-UI protocol, providing an SSE server implementation out of the box. It also lets you swap in other transports (e.g. WebSocket) by supplying a custom `service.Service`, and plug in bespoke event translators when you need to enrich AG-UI events.
+`tRPC-Agent-Go` ships with native AG-UI integration. It provides an SSE server implementation by default, while also allowing you to swap in a custom `service.Service` to use transports like WebSocket and to extend the event translation logic.
 
 ## Getting Started
 
-Assuming you have implemented an Agent, you can integrate with the AG-UI protocol and start the service as follows:
+Assuming you already have an agent, you can expose it via the AG-UI protocol with just a few lines of code:
 
 ```go
 import (
     "net/http"
 
+    "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
 )
 
-// Create your agent.
+// Create the agent.
 agent := newAgent()
-// Create the AG-UI server and mount it onto an HTTP route.
-server, err := agui.New(agent, agui.WithPath("/agui"))
+// Build the Runner that will execute the agent.
+runner := runner.NewRunner(agent.Info().Name, agent)
+// Create the AG-UI server and mount it on an HTTP route.
+server, err := agui.New(runner, agui.WithPath("/agui"))
 if err != nil {
     log.Fatalf("create agui server failed: %v", err)
 }
-// Start the HTTP server.
+// Start the HTTP listener.
 if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
     log.Fatalf("server stopped with error: %v", err)
 }
 ```
 
-See the full example at [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
+A complete version of this example lives in [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
-On the client side you can pair this with frameworks such as [CopilotKit](https://github.com/CopilotKit/CopilotKit), which provides React/Next.js components and built-in SSE subscriptions for AG-UI streams. [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) uses CopilotKit to build a Web UI interface and communicate with the Agent through the AG-UI protocol. The effect is shown in the figure below.
+For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
+
+On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. The sample at [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) builds a web UI that communicates with the agent through AG-UI, as shown below.
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
-## Runner Integration
+## Advanced Usage
 
-You can inject `runner.Option` through `agui.WithRunnerOptions` to set components such as Session/Memory. Take Session as an example:
+### Custom transport
+
+The AG-UI specification does not enforce a transport. The framework uses SSE by default, but you can implement the `service.Service` interface to switch to WebSocket or any other transport:
 
 ```go
 import (
-    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-    agui "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    runner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
 )
-
-// Create Agent.
-agent := newAgent()
-// Create Session Service.
-sessionService := sessioninmemory.NewSessionService()
-// Create AG-UI Server.
-server, err := agui.New(
-    agent,
-    agui.WithPath("/agui"), // Mount onto an HTTP route.
-    agui.WithRunnerOptions(runner.WithSessionService(sessionService)), // Injecting Session Service.
-)
-if err != nil {
-    log.Fatalf("create agui server failed: %v", err)
-}
-// Start the HTTP server.
-if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
-    log.Fatalf("server stopped with error: %v", err)
-}
-```
-
-## Advanced Usage
-
-### Custom communication protocols
-
-The AG-UI protocol does not mandate a specific transport. This framework uses SSE as the default. If you want to switch to WebSocket or other protocols, implement the `service.Service` interface yourself:
-
-```go
-import "trpc.group/trpc-go/trpc-agent-go/server/agui"
 
 type wsService struct{}
 
-func (s *wsService) Handler() http.Handler { /* register WebSocket and stream events */ }
+func (s *wsService) Handler() http.Handler { /* Register WebSocket and stream events. */ }
 
-server, _ := agui.New(agent, agui.WithService(&wsService{}))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithService(&wsService{}))
 ```
 
 ### Custom translator
 
-The default `translator.New` converts internal events into the canonical AG-UI events. To augment the stream while keeping the default behaviour, implement the `translator.Translator` interface and use AG-UI `Custom` events to carry extra information:
+`translator.New` converts internal events into the standard AG-UI events. To enrich the stream while keeping the default behaviour, implement `translator.Translator` and use the AG-UI `Custom` event type to carry extra data:
 
 ```go
 import (
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
     agentevent "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -123,14 +103,22 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
     return &customTranslator{inner: translator.New(input.ThreadID, input.RunID)}
 }
 
-server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
 
 ### Custom `UserIDResolver`
 
-By default every request maps to the fixed userID `"user"`. Override `UserIDResolver` to derive the user ID from `RunAgentInput`:
+By default every request maps to the fixed user ID `"user"`. Implement a custom `UserIDResolver` if you need to derive the user from the `RunAgentInput`:
 
 ```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
 resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
     if user, ok := input.ForwardedProps["userId"].(string); ok && user != "" {
         return user, nil
@@ -138,5 +126,6 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
     return "anonymous", nil
 }
 
-server, _ := agui.New(agent, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```

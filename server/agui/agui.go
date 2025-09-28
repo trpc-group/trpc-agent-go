@@ -14,7 +14,6 @@ import (
 	"errors"
 	"net/http"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
@@ -27,26 +26,25 @@ var DefaultNewService = sse.New
 // Server provides AG-UI server.
 type Server struct {
 	path    string
-	agent   agent.Agent
+	runner  runner.Runner
 	service service.Service
 	handler http.Handler
 }
 
 // New creates a AG-UI server instance.
-func New(agent agent.Agent, opt ...Option) (*Server, error) {
-	if agent == nil {
-		return nil, errors.New("agui: agent must not be nil")
+func New(runner runner.Runner, opt ...Option) (*Server, error) {
+	if runner == nil {
+		return nil, errors.New("agui: runner must not be nil")
 	}
 	opts := newOptions(opt...)
 	aguiService := opts.service
 	if aguiService == nil {
-		runner := runner.NewRunner(agent.Info().Name, agent, opts.runnerOptions...)
 		aguiRunner := irunner.New(runner, opts.aguiRunnerOptions...)
 		aguiService = DefaultNewService(aguiRunner, service.WithPath(opts.path))
 	}
 	return &Server{
 		path:    opts.path,
-		agent:   agent,
+		runner:  runner,
 		service: aguiService,
 		handler: aguiService.Handler(),
 	}, nil

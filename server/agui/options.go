@@ -10,7 +10,6 @@
 package agui
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/runner"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
@@ -19,7 +18,6 @@ import (
 type options struct {
 	path              string
 	service           service.Service
-	runnerOptions     []runner.Option
 	aguiRunnerOptions []aguirunner.Option
 }
 
@@ -46,13 +44,6 @@ func WithPath(path string) Option {
 func WithService(s service.Service) Option {
 	return func(o *options) {
 		o.service = s
-	}
-}
-
-// WithRunnerOptions sets the runner options.
-func WithRunnerOptions(runnerOpts ...runner.Option) Option {
-	return func(o *options) {
-		o.runnerOptions = append(o.runnerOptions, runnerOpts...)
 	}
 }
 
