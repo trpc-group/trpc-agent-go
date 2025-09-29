@@ -134,7 +134,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		var messages []model.Message
 		if p.AddSessionSummary {
 			var summaryUpdatedAt time.Time
-			// Get session summary message if available
+			// Prepend session summary as a system message if enabled and available.
+			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
 			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
 				// Prepend to the front of messages.
 				req.Messages = append([]model.Message{*msg}, req.Messages...)
