@@ -254,7 +254,7 @@ func (e *Executor) executeGraph(
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
-			ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx,
+			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
 		); err != nil {
 			log.Debugf("Failed to create initial checkpoint: %v", err)
 		}
@@ -502,7 +502,7 @@ func (e *Executor) runBspLoop(
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.Debugf("Creating checkpoint at step %d", step)
 			if err := e.createCheckpointAndSave(
-				ctx, checkpointConfig, execCtx.State, CheckpointSourceLoop, step, execCtx,
+				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
 			); err != nil {
 				log.Debugf("Failed to create checkpoint at step %d: %v", step, err)
 			}
@@ -620,7 +620,6 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
 	config *map[string]any,
-	state State,
 	source string,
 	step int,
 	execCtx *ExecutionContext,
@@ -630,9 +629,7 @@ func (e *Executor) createCheckpointAndSave(
 		return nil
 	}
 
-	// Creating checkpoint from state.
-
-	// IMPORTANT: Use the current state from execCtx which has all node updates,
+	// Use the current state from execCtx which has all node updates,
 	// not the state parameter which may be stale.
 	stateCopy := make(State)
 	execCtx.stateMutex.RLock()
@@ -691,10 +688,10 @@ func (e *Executor) createCheckpointAndSave(
 			checkpoint.NextNodes = []string{entryPoint}
 			log.Debugf("Initial checkpoint - setting NextNodes to entry point: %v", checkpoint.NextNodes)
 		}
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	} else {
 		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	}
 
 	// Use PutFull for atomic storage.
@@ -2064,7 +2061,7 @@ func (e *Executor) handleInterrupt(
 			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
 		}
 		checkpoint.NextNodes = nextNodes
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 
 		// Store the interrupt checkpoint using PutFull for consistency
 		// Use a new context to ensure checkpoint saves even if main context is canceled.
@@ -2180,7 +2177,7 @@ func (e *Executor) getNextNodes(state State) []string {
 }
 
 // getNextChannels determines which channels should be triggered next.
-func (e *Executor) getNextChannels(state State) []string {
+func (e *Executor) getNextChannels() []string {
 	var nextChannels []string
 
 	// Get all channels that are available
