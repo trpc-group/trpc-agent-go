@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -43,6 +44,90 @@ func TestLLMAgent_SubAgents(t *testing.T) {
 	if agt.FindSubAgent("notfound") != nil {
 		t.Errorf("FindSubAgent should return nil for missing")
 	}
+}
+
+// Test that buildRequestProcessors wires AddSessionSummary into
+// ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
+	// true case - test that WithAddSessionSummary(true) is properly wired.
+	optsTrue := &Options{}
+	WithAddSessionSummary(true)(optsTrue)
+	procs := buildRequestProcessors("test-agent", optsTrue)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.AddSessionSummary)
+
+	// false case - test that WithAddSessionSummary(false) is properly wired.
+	optsFalse := &Options{}
+	WithAddSessionSummary(false)(optsFalse)
+	procs = buildRequestProcessors("test-agent", optsFalse)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.False(t, crp.AddSessionSummary)
+}
+
+// Test that buildRequestProcessors wires MaxHistoryRuns into
+// ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
+	// Test with MaxHistoryRuns set - test that WithMaxHistoryRuns(10) is properly wired.
+	optsWithMax := &Options{}
+	WithMaxHistoryRuns(10)(optsWithMax)
+	procs := buildRequestProcessors("test-agent", optsWithMax)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.Equal(t, 10, crp.MaxHistoryRuns)
+
+	// Test with default value (0) - test that WithMaxHistoryRuns(0) is properly wired.
+	optsDefault := &Options{}
+	WithMaxHistoryRuns(0)(optsDefault)
+	procs = buildRequestProcessors("test-agent", optsDefault)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.Equal(t, 0, crp.MaxHistoryRuns)
+}
+
+// Test that WithAddSessionSummary option sets the AddSessionSummary field correctly.
+func TestWithAddSessionSummary_Option(t *testing.T) {
+	opts := &Options{}
+	WithAddSessionSummary(true)(opts)
+	require.True(t, opts.AddSessionSummary)
+
+	// Test with false value
+	opts = &Options{}
+	WithAddSessionSummary(false)(opts)
+	require.False(t, opts.AddSessionSummary)
+}
+
+// Test that WithMaxHistoryRuns option sets the MaxHistoryRuns field correctly.
+func TestWithMaxHistoryRuns_Option(t *testing.T) {
+	opts := &Options{}
+	WithMaxHistoryRuns(5)(opts)
+	require.Equal(t, 5, opts.MaxHistoryRuns)
+
+	// Test with zero value
+	opts = &Options{}
+	WithMaxHistoryRuns(0)(opts)
+	require.Equal(t, 0, opts.MaxHistoryRuns)
 }
 
 func TestLLMAgent_Run_BeforeAgentShort(t *testing.T) {

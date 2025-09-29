@@ -250,6 +250,22 @@ func WithAddContextPrefix(addPrefix bool) Option {
 	}
 }
 
+// WithAddSessionSummary controls whether to prepend the current-branch summary
+// as a system message in the request context when available.
+func WithAddSessionSummary(addSummary bool) Option {
+	return func(opts *Options) {
+		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithMaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+// When 0 (default), no limit is applied.
+func WithMaxHistoryRuns(maxRuns int) Option {
+	return func(opts *Options) {
+		opts.MaxHistoryRuns = maxRuns
+	}
+}
+
 // WithKnowledgeFilter sets the knowledge filter for the knowledge base.
 func WithKnowledgeFilter(filter map[string]interface{}) Option {
 	return func(opts *Options) {
@@ -343,6 +359,14 @@ type Options struct {
 	// AddContextPrefix controls whether to add "For context:" prefix when converting foreign events.
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
+
+	// AddSessionSummary controls whether to prepend the current branch summary
+	// as a system message when available (default: false).
+	AddSessionSummary bool
+
+	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
+	// When 0 (default), no limit is applied.
+	MaxHistoryRuns int
 
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
@@ -525,6 +549,8 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	// 6. Content processor - handles messages from invocation.
 	contentProcessor := processor.NewContentRequestProcessor(
 		processor.WithAddContextPrefix(options.AddContextPrefix),
+		processor.WithAddSessionSummary(options.AddSessionSummary),
+		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 	)
 	requestProcessors = append(requestProcessors, contentProcessor)
 

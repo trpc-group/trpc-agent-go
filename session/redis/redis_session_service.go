@@ -35,14 +35,18 @@ const (
 	defaultTimeout           = 2 * time.Second
 	defaultChanBufferSize    = 100
 	defaultAsyncPersisterNum = 10
+
+	defaultAsyncSummaryNum  = 3
+	defaultSummaryQueueSize = 256
 )
 
 // SessionState is the state of a session.
 type SessionState struct {
-	ID        string           `json:"id"`
-	State     session.StateMap `json:"state"`
-	CreatedAt time.Time        `json:"createdAt"`
-	UpdatedAt time.Time        `json:"updatedAt"`
+	ID        string                      `json:"id"`
+	State     session.StateMap            `json:"state"`
+	CreatedAt time.Time                   `json:"createdAt"`
+	UpdatedAt time.Time                   `json:"updatedAt"`
+	Summaries map[string]*session.Summary `json:"summaries,omitempty"`
 }
 
 // Service is the redis session service.
@@ -52,17 +56,27 @@ type SessionState struct {
 // SessionState: appName + userId -> hash [sessionId -> SessionState(json)]
 // Event: appName + userId + sessionId -> sorted set [value: Event(json) score: timestamp]
 type Service struct {
-	opts           ServiceOpts
-	redisClient    redis.UniversalClient
-	sessionTTL     time.Duration            // TTL for session state and event list
-	appStateTTL    time.Duration            // TTL for app state
-	userStateTTL   time.Duration            // TTL for user state
-	eventPairChans []chan *sessionEventPair // channel for session events to persistence
-	once           sync.Once
+	opts            ServiceOpts
+	redisClient     redis.UniversalClient
+	sessionTTL      time.Duration            // TTL for session state and event list
+	appStateTTL     time.Duration            // TTL for app state
+	userStateTTL    time.Duration            // TTL for user state
+	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	summaryJobChans []chan *summaryJob       // channel for summary jobs to processing
+	once            sync.Once
 }
+
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+}
+
+// summaryJob represents a summary job to be processed asynchronously.
+type summaryJob struct {
+	sessionKey session.Key
+	filterKey  string
+	force      bool
+	session    *session.Session
 }
 
 // NewService creates a new redis session service.
@@ -74,6 +88,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		userStateTTL:       0,
 		asyncPersisterNum:  defaultAsyncPersisterNum,
 		enableAsyncPersist: false,
+		asyncSummaryNum:    defaultAsyncSummaryNum,
+		summaryQueueSize:   defaultSummaryQueueSize,
+		summaryJobTimeout:  30 * time.Second,
 	}
 	for _, option := range options {
 		option(&opts)
@@ -103,6 +120,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if opts.enableAsyncPersist {
 			s.startAsyncPersistWorker()
 		}
+		// Always start async summary workers by default.
+		s.startAsyncSummaryWorker()
 		return s, nil
 	}
 
@@ -124,6 +143,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
 	}
+	// Always start async summary workers by default.
+	s.startAsyncSummaryWorker()
 	return s, nil
 }
 
@@ -445,6 +466,10 @@ func (s *Service) Close() error {
 		for _, ch := range s.eventPairChans {
 			close(ch)
 		}
+
+		for _, ch := range s.summaryJobChans {
+			close(ch)
+		}
 	})
 
 	return nil
@@ -466,6 +491,10 @@ func getSessionStateKey(key session.Key) string {
 	return fmt.Sprintf("sess:{%s}:%s", key.AppName, key.UserID)
 }
 
+func getSessionSummaryKey(key session.Key) string {
+	return fmt.Sprintf("sesssum:{%s}:%s", key.AppName, key.UserID)
+}
+
 func (s *Service) getSession(
 	ctx context.Context,
 	key session.Key,
@@ -475,15 +504,19 @@ func (s *Service) getSession(
 	sessKey := getSessionStateKey(key)
 	userStateKey := getUserStateKey(key)
 	appStateKey := getAppStateKey(key.AppName)
+	sessSummaryKey := getSessionSummaryKey(key)
 	pipe := s.redisClient.Pipeline()
 	userStateCmd := pipe.HGetAll(ctx, userStateKey)
 	appStateCmd := pipe.HGetAll(ctx, appStateKey)
 
 	sessCmd := pipe.HGet(ctx, sessKey, key.SessionID)
+	// Read summaries from separate hash in the same pipeline.
+	summariesCmd := pipe.HGet(ctx, sessSummaryKey, key.SessionID)
 	// Add TTL refresh commands to the same pipeline if configured
 	if s.sessionTTL > 0 {
 		pipe.Expire(ctx, sessKey, s.sessionTTL)
 		pipe.Expire(ctx, getEventKey(key), s.sessionTTL)
+		pipe.Expire(ctx, sessSummaryKey, s.sessionTTL)
 	}
 	if s.appStateTTL > 0 {
 		pipe.Expire(ctx, appStateKey, s.appStateTTL)
@@ -532,6 +565,18 @@ func (s *Service) getSession(
 		Events:    events[0],
 		UpdatedAt: sessState.UpdatedAt,
 		CreatedAt: sessState.CreatedAt,
+	}
+
+	// Attach summaries only if there are events to summarize.
+	// Since summaries are generated based on the filtered events (sess.Events),
+	// we only need to check if sess.Events is non-empty.
+	if len(sess.Events) > 0 {
+		if bytes, err := summariesCmd.Bytes(); err == nil && len(bytes) > 0 {
+			var summaries map[string]*session.Summary
+			if err := json.Unmarshal(bytes, &summaries); err == nil && len(summaries) > 0 {
+				sess.Summaries = summaries
+			}
+		}
 	}
 
 	// filter events to ensure they start with RoleUser
@@ -782,6 +827,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
 	txPipe := s.redisClient.TxPipeline()
 	txPipe.HDel(ctx, getSessionStateKey(key), key.SessionID)
+	txPipe.HDel(ctx, getSessionSummaryKey(key), key.SessionID)
 	txPipe.Del(ctx, getEventKey(key))
 	if _, err := txPipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("redis session service delete session state failed: %w", err)
