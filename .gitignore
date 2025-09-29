@@ -5,6 +5,8 @@
 
 .vscode/
 .idea/
+node_modules/
+.next/
 *.out
 *.log
 coverage.out
@@ -24,3 +26,4 @@ CLAUDE.md
 *test*.py
 *.db
 .codex
+pnpm-lock.yaml
