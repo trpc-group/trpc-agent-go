@@ -1002,6 +1002,7 @@ Contribution directions:
     - `GET /debug/trace/{event_id}`: Query Trace attributes by event.
     - `GET /debug/trace/session/{session_id}`: Query Trace list by Session.
   - Features: Built-in CORS, pluggable session storage (default In-Memory), integrated with `runner.Runner`, observability instrumentation (exports key Spans).
+  - Scope note: Designed for debugging with ADK Web. It constructs runners internally from Agents and enforces a single `session.Service` across its session APIs and runners. Not recommended for production.
 - **A2A Server**: `server/a2a`.
   - Service encapsulation for A2A protocol, built-in `AuthProvider` and task orchestration, suitable for platform-to-Agent integration scenarios.
 
@@ -1029,6 +1030,7 @@ Contribution directions:
   - Non-streaming endpoints need to aggregate final messages and tool responses according to UI expectations.
 - **Session Storage**:
   - Inject specific implementation through `runner.WithSessionService`, reuse `session` module.
+  - For `server/debug`, set a single backend via `debug.WithSessionService(...)`; it overrides any runner‑level session service to ensure consistency.
 - **Observability**:
   - Reuse `telemetry/trace` and `telemetry/metric`. `server/debug` already demonstrates how to export key Spans and event attributes for UI-side debugging and positioning.
 - **Authentication and Security**:

@@ -14,6 +14,16 @@ Debug Server 是 trpc-agent-go 框架提供的一个调试工具。
 - **会话管理**：支持创建和管理多个对话会话
 - **工具验证**：可以直观地测试和验证 Agent 的各种工具功能
 
+## 设计说明与适用范围
+
+- 目标定位：用于配合 ADK Web 进行快速可视化调试，不推荐直接用于生产环境。
+- Runner 构造：Debug Server 接收 `Agent`，并根据前端请求的应用名在服务端延迟创建 `runner.Runner`；不支持让用户在此处手动传入 `Runner` 实例。
+- 单一会话后端：由于 Debug Server 自身提供会话 REST（list/create/get），要求使用同一个 `session.Service` 作为全局后端，并在内部创建的所有 runner 之间共享。
+  - 通过 `debug.WithSessionService(...)` 配置（默认内存实现）。
+  - 为保持一致性，Debug Server 会在创建 runner 时强制注入同一会话后端（追加 `runner.WithSessionService(s.sessionSvc)`），覆盖你通过 `WithRunnerOptions` 传入的会话后端。
+  - 此处不支持按 app/runner 的多会话后端。
+- 生产建议：面向生产（如 AG‑UI）建议自建接受预配置 `runner.Runner` 的服务，或按需使用 `server/a2a`，以便完整控制会话/记忆/工件、鉴权与扩展能力。
+
 ## 架构图
 
 ```
