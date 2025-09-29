@@ -44,7 +44,7 @@ func main() {
 
 	fmt.Printf("🚀 Agent Tool Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Available tools: current_time, agent_tool\n")
+	fmt.Printf("Available tools: current_time, math-specialist(agent_tool)\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
@@ -113,6 +113,16 @@ func (c *agentToolChat) setup(_ context.Context) error {
 			Stream:      true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
+		llmagent.WithInputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"request": map[string]any{
+					"type":        "string",
+					"description": "The mathematical problem or question to solve",
+				},
+			},
+			"required": []any{"request"},
+		}),
 	)
 
 	// Create tools.
@@ -240,81 +250,7 @@ func (c *agentToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	)
 
 	for ev := range eventChan {
-		// Errors
-		if ev.Error != nil {
-			fmt.Printf("\n❌ Error: %s\n", ev.Error.Message)
-			continue
-		}
-
-		// Show tool calls (assistant tool_calls)
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			ch := ev.Response.Choices[0]
-			if len(ch.Message.ToolCalls) > 0 {
-				if assistantStarted {
-					fmt.Printf("\n")
-				}
-				if c.showTool {
-					fmt.Printf("🔧 Tools: ")
-					for i, tc := range ch.Message.ToolCalls {
-						if i > 0 {
-							fmt.Print(", ")
-						}
-						if len(tc.Function.Arguments) > 0 {
-							fmt.Printf("%s(%s)", tc.Function.Name, string(tc.Function.Arguments))
-						} else {
-							fmt.Printf("%s", tc.Function.Name)
-						}
-					}
-					fmt.Printf("\n")
-				}
-				continue
-			}
-		}
-
-		// Forwarded inner agent deltas (from AgentTool streaming)
-		if c.showInner && ev.Author != c.agentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
-			ch := ev.Response.Choices[0]
-			if ch.Delta.Content != "" {
-				if c.debugAuthors {
-					fmt.Printf("[%s] ", ev.Author)
-				}
-				fmt.Print(ch.Delta.Content)
-			}
-			continue
-		}
-
-		// Outer assistant streaming
-		if ev.Author == c.agentName && ev.Response != nil && len(ev.Response.Choices) > 0 {
-			ch := ev.Response.Choices[0]
-			if ch.Delta.Content != "" {
-				if c.debugAuthors && !assistantStarted {
-					fmt.Printf("[%s] ", ev.Author)
-				}
-				assistantStarted = true
-				fmt.Print(ch.Delta.Content)
-				fullContent.WriteString(ch.Delta.Content)
-				continue
-			}
-		}
-
-		// Tool response events
-		if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse && len(ev.Response.Choices) > 0 {
-			// The final (non-partial) tool.response includes the merged content for history.
-			// To avoid duplication, don’t print aggregated content unless showTool is requested.
-			if c.showTool {
-				ch := ev.Response.Choices[0]
-				if ch.Delta.Content != "" {
-					// Partial tool delta
-					fmt.Printf("\n🛠️  tool> %s", ch.Delta.Content)
-				} else if ch.Message.Content != "" {
-					fmt.Printf("\n🛠️  tool (final)> %s\n", ch.Message.Content)
-				} else {
-					fmt.Printf("\n🛠️  tool> (completed)\n")
-				}
-			} else {
-				// Minimal marker when not showing tool details
-				fmt.Printf("\n✅ Tool completed\n")
-			}
+		if c.handleEvent(ev, &assistantStarted, &fullContent) {
 			continue
 		}
 	}
@@ -323,110 +259,132 @@ func (c *agentToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 	return nil
 }
 
+// handleEvent processes a single event and returns true if the event was handled.
+func (c *agentToolChat) handleEvent(ev *event.Event, assistantStarted *bool, fullContent *strings.Builder) bool {
+	// Handle errors
+	if ev.Error != nil {
+		fmt.Printf("\n❌ Error: %s\n", ev.Error.Message)
+		return true
+	}
+
+	// Handle tool calls
+	if c.handleToolCalls(ev, assistantStarted) {
+		return true
+	}
+
+	// Handle inner agent streaming
+	if c.handleInnerAgentStreaming(ev) {
+		return true
+	}
+
+	// Handle outer assistant streaming
+	if c.handleAssistantStreaming(ev, assistantStarted, fullContent) {
+		return true
+	}
+
+	// Handle tool responses
+	if c.handleToolResponses(ev) {
+		return true
+	}
+
+	return false
+}
+
+// handleToolCalls processes tool call events.
+func (c *agentToolChat) handleToolCalls(ev *event.Event, assistantStarted *bool) bool {
+	if ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return false
+	}
+
+	ch := ev.Response.Choices[0]
+	if len(ch.Message.ToolCalls) == 0 {
+		return false
+	}
+
+	if *assistantStarted {
+		fmt.Printf("\n")
+	}
+	fmt.Printf("🔧 Tool calls initiated:\n")
+	for _, tc := range ch.Message.ToolCalls {
+		fmt.Printf("   • %s (ID: %s)\n", tc.Function.Name, tc.ID)
+		if len(tc.Function.Arguments) > 0 {
+			fmt.Printf("     Args: %s\n", string(tc.Function.Arguments))
+		}
+	}
+	fmt.Printf("\n🔄 Executing tools...\n")
+	return true
+}
+
+// handleInnerAgentStreaming processes inner agent streaming events.
+func (c *agentToolChat) handleInnerAgentStreaming(ev *event.Event) bool {
+	if !c.showInner || ev.Author == c.agentName || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return false
+	}
+
+	ch := ev.Response.Choices[0]
+	if ch.Delta.Content == "" {
+		return false
+	}
+
+	if c.debugAuthors {
+		fmt.Printf("[%s] ", ev.Author)
+	}
+	fmt.Print(ch.Delta.Content)
+	return true
+}
+
+// handleAssistantStreaming processes outer assistant streaming events.
+func (c *agentToolChat) handleAssistantStreaming(ev *event.Event, assistantStarted *bool, fullContent *strings.Builder) bool {
+	if ev.Author != c.agentName || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return false
+	}
+
+	ch := ev.Response.Choices[0]
+	if ch.Delta.Content == "" {
+		return false
+	}
+
+	if c.debugAuthors && !*assistantStarted {
+		fmt.Printf("[%s] ", ev.Author)
+	}
+	*assistantStarted = true
+	fmt.Print(ch.Delta.Content)
+	fullContent.WriteString(ch.Delta.Content)
+	return true
+}
+
+// handleToolResponses processes tool response events.
+func (c *agentToolChat) handleToolResponses(ev *event.Event) bool {
+	if ev.Response == nil || ev.Object != model.ObjectTypeToolResponse || len(ev.Response.Choices) == 0 {
+		return false
+	}
+
+	ch := ev.Response.Choices[0]
+	if ch.Delta.Content != "" {
+		// Partial tool delta - only show if not already shown via inner streaming
+		if c.showTool && !c.showInner {
+			fmt.Printf("\n🛠️  tool> %s", ch.Delta.Content)
+		}
+		return true
+	}
+
+	if ch.Message.Content != "" {
+		// Final tool message - show detailed response
+		if c.showTool {
+			fmt.Printf("\n✅ Tool response (ID: %s): %s\n", ch.Message.ToolID, strings.TrimSpace(ch.Message.Content))
+		} else {
+			fmt.Printf("\n✅ Tool execution completed.\n")
+		}
+		return true
+	}
+
+	// Tool execution completed
+	fmt.Printf("\n✅ Tool execution completed.\n")
+	return true
+}
+
 // startNewSession creates a new session.
 func (c *agentToolChat) startNewSession() {
 	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
 	fmt.Printf("🔄 New session started: %s\n\n", c.sessionID)
-}
-
-// calculate performs basic mathematical calculations.
-func (c *agentToolChat) calculate(_ context.Context, args calculatorArgs) (calculatorResult, error) {
-	var result float64
-	switch args.Operation {
-	case "add":
-		result = args.A + args.B
-	case "subtract":
-		result = args.A - args.B
-	case "multiply":
-		result = args.A * args.B
-	case "divide":
-		if args.B == 0 {
-			return calculatorResult{
-				Operation: args.Operation,
-				A:         args.A,
-				B:         args.B,
-				Result:    0,
-				Error:     "Division by zero",
-			}, fmt.Errorf("division by zero")
-		}
-		result = args.A / args.B
-	default:
-		return calculatorResult{
-			Operation: args.Operation,
-			A:         args.A,
-			B:         args.B,
-			Result:    0,
-			Error:     "Unknown operation",
-		}, fmt.Errorf("unknown operation")
-	}
-
-	return calculatorResult{
-		Operation: args.Operation,
-		A:         args.A,
-		B:         args.B,
-		Result:    result,
-	}, nil
-}
-
-// getCurrentTime returns the current time for a specific timezone.
-func (c *agentToolChat) getCurrentTime(ctx context.Context, args timeArgs) (timeResult, error) {
-	loc := time.Local
-	if args.Timezone != "" {
-		switch strings.ToUpper(args.Timezone) {
-		case "UTC":
-			loc = time.UTC
-		case "EST":
-			loc = time.FixedZone("EST", -5*3600)
-		case "PST":
-			loc = time.FixedZone("PST", -8*3600)
-		case "CST":
-			loc = time.FixedZone("CST", -6*3600)
-		}
-	}
-
-	now := time.Now().In(loc)
-	return timeResult{
-		Timezone: args.Timezone,
-		Time:     now.Format("15:04:05"),
-		Date:     now.Format("2006-01-02"),
-		Weekday:  now.Format("Monday"),
-	}, nil
-}
-
-// calculatorArgs defines the input arguments for the calculator tool.
-type calculatorArgs struct {
-	Operation string  `json:"operation" description:"The operation: add, subtract, multiply, divide"`
-	A         float64 `json:"a" description:"First number"`
-	B         float64 `json:"b" description:"Second number"`
-}
-
-// calculatorResult defines the output result for the calculator tool.
-type calculatorResult struct {
-	Operation string  `json:"operation"`
-	A         float64 `json:"a"`
-	B         float64 `json:"b"`
-	Result    float64 `json:"result"`
-	Error     string  `json:"error,omitempty"`
-}
-
-// timeArgs defines the input arguments for the time tool.
-type timeArgs struct {
-	Timezone string `json:"timezone" description:"Timezone (UTC, EST, PST, CST) or leave empty for local"`
-}
-
-// timeResult defines the output result for the time tool.
-type timeResult struct {
-	Timezone string `json:"timezone"`
-	Time     string `json:"time"`
-	Date     string `json:"date"`
-	Weekday  string `json:"weekday"`
-}
-
-// Helper functions for creating pointers.
-func intPtr(i int) *int {
-	return &i
-}
-
-func floatPtr(f float64) *float64 {
-	return &f
 }
