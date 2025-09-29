@@ -129,22 +129,17 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 1) Prepend session summary as a system message if enabled and available.
-	// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
-	var summaryUpdatedAt time.Time
-	if p.AddSessionSummary && invocation.Session != nil {
-		if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-			// Prepend to the front of messages.
-			req.Messages = append([]model.Message{*msg}, req.Messages...)
-			summaryUpdatedAt = updatedAt
-		}
-	}
-
 	// 2) Append per-filter messages from session events when allowed.
-	var addedFromSession int
-	var messages []model.Message
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
+		var messages []model.Message
 		if p.AddSessionSummary {
+			var summaryUpdatedAt time.Time
+			// Get session summary message if available
+			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
+				// Prepend to the front of messages.
+				req.Messages = append([]model.Message{*msg}, req.Messages...)
+				summaryUpdatedAt = updatedAt
+			}
 			// Use incremental messages logic (preserves context integrity).
 			messages = p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
 		} else {
@@ -153,29 +148,19 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		}
 
 		req.Messages = append(req.Messages, messages...)
-		addedFromSession = len(messages)
 	}
 
 	// 3) Include the current invocation message if:
-	// 1. It has content, AND
-	// 2. There's no session OR the session has no events
+	// 1. It has content and there's no session
 	// This prevents duplication when using Runner (which adds user message to session)
 	// while ensuring standalone usage works (where invocation.Message is the source)
 	// Additionally, when the session exists but has no messages for the
 	// current branch (e.g. sub agent first turn), include the invocation
 	// message so the sub agent receives the tool arguments as a user input.
-	if invocation.Message.Content != "" &&
-		(invocation.Session == nil || len(messages) == 0 || addedFromSession == 0) {
+	if invocation.Message.Content != "" && (invocation.Session == nil || len(req.Messages) == 0) {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
-	}
-
-	// 4) Safety fallback: if messages are still empty, include the current
-	// invocation message when non-empty to avoid empty model input.
-	if len(req.Messages) == 0 && invocation.Message.Content != "" {
-		req.Messages = append(req.Messages, invocation.Message)
-		log.Debugf("Content request processor: fallback added invocation message to avoid empty input.")
 	}
 
 	// Send a preprocessing event.
