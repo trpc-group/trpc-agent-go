@@ -12,6 +12,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -132,6 +133,10 @@ func (r *runner) Run(
 		}
 	}
 
+	if sess == nil {
+		return nil, fmt.Errorf("Session initialization failed.")
+	}
+
 	// Create invocation.
 	ro := agent.RunOptions{RequestID: uuid.NewString()}
 	for _, opt := range runOpts {
@@ -150,7 +155,7 @@ func (r *runner) Run(
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
 	// and tool calls build on the same canonical transcript.
-	if len(ro.Messages) > 0 && (invocation.Session == nil || len(invocation.Session.Events) == 0) {
+	if len(ro.Messages) > 0 && sess.GetEventCount() == 0 {
 		for _, msg := range ro.Messages {
 			author := r.agent.Info().Name
 			if msg.Role == model.RoleUser {
