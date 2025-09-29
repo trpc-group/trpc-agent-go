@@ -60,6 +60,14 @@ func (sess *Session) GetEvents() []event.Event {
 	return eventsCopy
 }
 
+// GetEventCount returns the session event count.
+func (sess *Session) GetEventCount() int {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return len(sess.Events)
+}
+
 // Summary represents a concise, structured summary of a conversation branch.
 // It is stored on the session object rather than in the StateMap.
 type Summary struct {
