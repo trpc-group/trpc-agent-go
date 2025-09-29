@@ -39,6 +39,16 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## 依赖说明
+
+由于 AG-UI 官方仓库尚未合并 Golang SDK 的 PR，我们已经 fork 并修复了相关 BUG。使用时，需要在 go.mod 中添加以下 replace 语句：
+
+```go
+replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
+```
+
+完成后，执行 `go mod tidy` 以更新依赖。
+
 ## 进阶用法
 
 ### 自定义通信协议
