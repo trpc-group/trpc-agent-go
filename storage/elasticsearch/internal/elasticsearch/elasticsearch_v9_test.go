@@ -134,7 +134,7 @@ func TestClientV9_Count(t *testing.T) {
 			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
 			return resp
 		}
-		
+
 		// POST /{index}/_count
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_count") {
 			return ok(http.StatusOK, `{"count":3}`)
@@ -159,7 +159,7 @@ func TestClientV9_DeleteByQuery(t *testing.T) {
 			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
 			return resp
 		}
-		
+
 		// POST /{index}/_delete_by_query
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_delete_by_query") {
 			return ok(http.StatusOK, `{"deleted":2}`)
@@ -183,7 +183,7 @@ func TestClientV9_Refresh(t *testing.T) {
 			resp.Header.Set("X-Elastic-Product", "Elasticsearch")
 			return resp
 		}
-		
+
 		// POST /{index}/_refresh
 		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "_refresh") {
 			return ok(http.StatusOK, `{}`)

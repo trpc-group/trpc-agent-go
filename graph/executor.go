@@ -143,10 +143,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	nodeTimeout := options.NodeTimeout
 	if nodeTimeout == 0 && options.StepTimeout > 0 {
 		// Only derive from step timeout if step timeout is explicitly set.
-		nodeTimeout = options.StepTimeout / 2
-		if nodeTimeout < time.Second {
-			nodeTimeout = time.Second
-		}
+		nodeTimeout = max(options.StepTimeout/2, time.Second)
 	}
 
 	executor := &Executor{
@@ -182,168 +179,6 @@ type Step struct {
 	Tasks           []*Task         // Tasks is the tasks of the step.
 	State           State           // State is the state of the step.
 	UpdatedChannels map[string]bool // UpdatedChannels is the updated channels of the step.
-}
-
-// deepCopyAny performs a deep copy of common JSON-serializable Go types to
-// avoid sharing mutable references (maps/slices) across goroutines.
-func deepCopyAny(value any) any {
-	// Use a visited set keyed by underlying pointer to break reference cycles
-	// across pointers, maps, and slices. The values are the already-created
-	// copies to return when revisiting the same reference.
-	visited := make(map[uintptr]any)
-
-	var copyRecursive func(reflect.Value) any
-	copyRecursive = func(rv reflect.Value) any {
-		if !rv.IsValid() {
-			return nil
-		}
-
-		switch rv.Kind() {
-		case reflect.Interface:
-			if rv.IsNil() {
-				return nil
-			}
-			return copyRecursive(rv.Elem())
-
-		case reflect.Ptr:
-			if rv.IsNil() {
-				return nil
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			elem := rv.Elem()
-			newPtr := reflect.New(elem.Type())
-			// Cache before descending to handle self-referential structures.
-			visited[ptr] = newPtr.Interface()
-			newPtr.Elem().Set(reflect.ValueOf(copyRecursive(elem)))
-			return newPtr.Interface()
-
-		case reflect.Map:
-			if rv.IsNil() {
-				return reflect.Zero(rv.Type()).Interface()
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			newMap := reflect.MakeMapWithSize(rv.Type(), rv.Len())
-			visited[ptr] = newMap.Interface()
-			for _, mk := range rv.MapKeys() {
-				mv := rv.MapIndex(mk)
-				newMap.SetMapIndex(mk, reflect.ValueOf(copyRecursive(mv)))
-			}
-			return newMap.Interface()
-
-		case reflect.Slice:
-			if rv.IsNil() {
-				return reflect.Zero(rv.Type()).Interface()
-			}
-			ptr := rv.Pointer()
-			if cached, ok := visited[ptr]; ok {
-				return cached
-			}
-			l := rv.Len()
-			newSlice := reflect.MakeSlice(rv.Type(), l, l)
-			visited[ptr] = newSlice.Interface()
-			for i := 0; i < l; i++ {
-				newSlice.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
-			}
-			return newSlice.Interface()
-
-		case reflect.Array:
-			l := rv.Len()
-			newArr := reflect.New(rv.Type()).Elem()
-			for i := 0; i < l; i++ {
-				newArr.Index(i).Set(reflect.ValueOf(copyRecursive(rv.Index(i))))
-			}
-			return newArr.Interface()
-
-		case reflect.Struct:
-			// Create a new struct and copy only exported fields to avoid
-			// touching unexported sync primitives, etc.
-			newStruct := reflect.New(rv.Type()).Elem()
-			for i := 0; i < rv.NumField(); i++ {
-				ft := rv.Type().Field(i)
-				if ft.PkgPath != "" { // unexported
-					continue
-				}
-				dstField := newStruct.Field(i)
-				if !dstField.CanSet() {
-					continue
-				}
-				srcField := rv.Field(i)
-				copied := copyRecursive(srcField)
-				// If copied is nil, Set with a typed zero value to avoid
-				// "reflect: call of reflect.Value.Set on zero Value".
-				if copied == nil {
-					dstField.Set(reflect.Zero(dstField.Type()))
-					continue
-				}
-				srcVal := reflect.ValueOf(copied)
-				// Align types as needed.
-				if srcVal.Type().AssignableTo(dstField.Type()) {
-					dstField.Set(srcVal)
-				} else if srcVal.Type().ConvertibleTo(dstField.Type()) {
-					dstField.Set(srcVal.Convert(dstField.Type()))
-				} else {
-					// Fallback: set zero value if types are incompatible.
-					dstField.Set(reflect.Zero(dstField.Type()))
-				}
-			}
-			return newStruct.Interface()
-
-		case reflect.Func, reflect.Chan, reflect.UnsafePointer:
-			// Not safely copyable/serializable; return zero value.
-			return reflect.Zero(rv.Type()).Interface()
-
-		default:
-			// Scalars and other immutable kinds – return as-is.
-			return rv.Interface()
-		}
-	}
-
-	// Fast-path for common JSON-compatible types without reflection.
-	switch v := value.(type) {
-	case map[string]any:
-		copied := make(map[string]any, len(v))
-		for k, vv := range v {
-			copied[k] = deepCopyAny(vv)
-		}
-		return copied
-	case []any:
-		copied := make([]any, len(v))
-		for i := range v {
-			copied[i] = deepCopyAny(v[i])
-		}
-		return copied
-	case []string:
-		copied := make([]string, len(v))
-		copy(copied, v)
-		return copied
-	case []int:
-		copied := make([]int, len(v))
-		copy(copied, v)
-		return copied
-	case []float64:
-		copied := make([]float64, len(v))
-		copy(copied, v)
-		return copied
-	case time.Time:
-		return v
-	}
-
-	return copyRecursive(reflect.ValueOf(value))
-}
-
-// deepCopyState clones the State, recursively copying nested maps/slices.
-func deepCopyState(s State) State {
-	out := make(State, len(s))
-	for k, v := range s {
-		out[k] = deepCopyAny(v)
-	}
-	return out
 }
 
 // Execute executes the graph with the given initial state using Pregel-style BSP execution.
@@ -419,7 +254,7 @@ func (e *Executor) executeGraph(
 
 	if e.checkpointSaver != nil && !resumed {
 		if err := e.createCheckpointAndSave(
-			ctx, &checkpointConfig, execCtx.State, CheckpointSourceInput, -1, execCtx,
+			ctx, &checkpointConfig, CheckpointSourceInput, -1, execCtx,
 		); err != nil {
 			log.Debugf("Failed to create initial checkpoint: %v", err)
 		}
@@ -667,7 +502,7 @@ func (e *Executor) runBspLoop(
 		if e.checkpointSaver != nil && *checkpointConfig != nil {
 			log.Debugf("Creating checkpoint at step %d", step)
 			if err := e.createCheckpointAndSave(
-				ctx, checkpointConfig, execCtx.State, CheckpointSourceLoop, step, execCtx,
+				ctx, checkpointConfig, CheckpointSourceLoop, step, execCtx,
 			); err != nil {
 				log.Debugf("Failed to create checkpoint at step %d: %v", step, err)
 			}
@@ -785,7 +620,6 @@ func (e *Executor) createCheckpoint(ctx context.Context, config map[string]any, 
 func (e *Executor) createCheckpointAndSave(
 	ctx context.Context,
 	config *map[string]any,
-	state State,
 	source string,
 	step int,
 	execCtx *ExecutionContext,
@@ -795,9 +629,7 @@ func (e *Executor) createCheckpointAndSave(
 		return nil
 	}
 
-	// Creating checkpoint from state.
-
-	// IMPORTANT: Use the current state from execCtx which has all node updates,
+	// Use the current state from execCtx which has all node updates,
 	// not the state parameter which may be stale.
 	stateCopy := make(State)
 	execCtx.stateMutex.RLock()
@@ -856,10 +688,10 @@ func (e *Executor) createCheckpointAndSave(
 			checkpoint.NextNodes = []string{entryPoint}
 			log.Debugf("Initial checkpoint - setting NextNodes to entry point: %v", checkpoint.NextNodes)
 		}
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	} else {
 		checkpoint.NextNodes = e.getNextNodes(execCtx.State)
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 	}
 
 	// Use PutFull for atomic storage.
@@ -2229,7 +2061,7 @@ func (e *Executor) handleInterrupt(
 			nextNodes = append([]string{interrupt.NodeID}, nextNodes...)
 		}
 		checkpoint.NextNodes = nextNodes
-		checkpoint.NextChannels = e.getNextChannels(execCtx.State)
+		checkpoint.NextChannels = e.getNextChannels()
 
 		// Store the interrupt checkpoint using PutFull for consistency
 		// Use a new context to ensure checkpoint saves even if main context is canceled.
@@ -2345,7 +2177,7 @@ func (e *Executor) getNextNodes(state State) []string {
 }
 
 // getNextChannels determines which channels should be triggered next.
-func (e *Executor) getNextChannels(state State) []string {
+func (e *Executor) getNextChannels() []string {
 	var nextChannels []string
 
 	// Get all channels that are available

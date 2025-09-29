@@ -83,9 +83,9 @@ var (
 	KeyGenAIAgentName         = "gen_ai.agent.name"
 	KeyGenAIConversationID    = "gen_ai.conversation.id"
 	KeyGenAIResponseModel     = "gen_ai.response.model"
-	KeyGenAIUsageOutputTokens = "gen_ai.usage.output_tokens"
+	KeyGenAIUsageOutputTokens = "gen_ai.usage.output_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	KeyGenAIResponseID        = "gen_ai.response.id"
-	KeyGenAIUsageInputTokens  = "gen_ai.usage.input_tokens"
+	KeyGenAIUsageInputTokens  = "gen_ai.usage.input_tokens" // #nosec G101 - this is a metric key name, not a credential.
 
 	// System value
 	SystemTRPCGoAgent = "trpc.go.agent"

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -235,7 +236,7 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hello"}}}}
 	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
-	// Fill up the queue with a blocking job
+	// Fill up the target worker queue with a blocking job
 	blockingJob := &summaryJob{
 		sessionKey: key,
 		filterKey:  "blocking",
@@ -243,9 +244,13 @@ func TestMemoryService_EnqueueSummaryJob_QueueFull_FallbackToSync(t *testing.T) 
 		session:    sess,
 	}
 
-	// Send a job to fill the queue (this will block the worker)
+	// Choose the same worker index as tryEnqueueJob would select.
+	keyStr := key.AppName + ":" + key.UserID + ":" + key.SessionID
+	idx := int(murmur3.Sum32([]byte(keyStr))) % len(s.summaryJobChans)
+
+	// Send a job to fill that queue (this will block the worker)
 	select {
-	case s.summaryJobChans[0] <- blockingJob:
+	case s.summaryJobChans[idx] <- blockingJob:
 		// Queue is now full
 	default:
 		// Queue was already full
