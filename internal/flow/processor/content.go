@@ -130,7 +130,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// 2) Append per-filter messages from session events when allowed.
-	var needToAddInvocationMessage bool
+	needToAddInvocationMessage := true
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		var messages []model.Message
 		if p.AddSessionSummary {
