@@ -379,10 +379,11 @@ func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
 			},
 		},
 	}
+	sess := &session.Session{Events: events}
 
 	// Current branch main/feature should include events whose branch is
 	// prefix of the current, i.e. "main" only.
-	filtered := p.eventsInFilter(events, "main/feature")
+	filtered := p.eventsInFilter(sess, "main/feature")
 	msgs := p.convertEventsToMessages(filtered, "agent-a", "")
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, "kept", msgs[0].Content)

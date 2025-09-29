@@ -27,10 +27,12 @@ const authorSystem = "system"
 // time and match the filterKey, along with the latest event timestamp among
 // the returned events. When since is zero, all events are considered. When
 // filterKey is empty, all events are considered (no filtering).
-func computeDeltaSince(evs []event.Event, since time.Time, filterKey string) ([]event.Event, time.Time) {
-	out := make([]event.Event, 0, len(evs))
+func computeDeltaSince(sess *session.Session, since time.Time, filterKey string) ([]event.Event, time.Time) {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	out := make([]event.Event, 0, len(sess.Events))
 	var latest time.Time
-	for _, e := range evs {
+	for _, e := range sess.Events {
 		// Apply time filter
 		if !since.IsZero() && !e.Timestamp.After(since) {
 			continue
@@ -103,7 +105,7 @@ func SummarizeSession(
 	}
 
 	// Compute delta events with both time and filterKey filtering in one pass.
-	delta, latestTs := computeDeltaSince(base.Events, prevAt, filterKey)
+	delta, latestTs := computeDeltaSince(base, prevAt, filterKey)
 	if !force && len(delta) == 0 {
 		return false, nil
 	}

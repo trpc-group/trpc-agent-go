@@ -204,7 +204,7 @@ func TestApplyEventFiltering(t *testing.T) {
 				*createTestEvent(model.RoleAssistant, "old msg 2", baseTime.Add(time.Minute), nil),
 			}, nil),
 			options:        []session.Option{session.WithEventTime(baseTime.Add(10 * time.Minute))},
-			expectedEvents: nil,
+			expectedEvents: []event.Event{},
 			description:    "Should clear all events when none match time filter",
 		},
 		{

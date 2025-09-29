@@ -42,11 +42,30 @@ type Session struct {
 	UserID  string        `json:"userID"`  // UserID is the user id.
 	State   StateMap      `json:"state"`   // State is the session state with delta support.
 	Events  []event.Event `json:"events"`  // Events is the session events.
+	EventMu sync.RWMutex  `json:"-"`
 	// Summaries holds filter-aware summaries. The key is the event filter key.
 	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
 	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
 	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
+}
+
+// GetEvents returns the session events.
+func (sess *Session) GetEvents() []event.Event {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	eventsCopy := make([]event.Event, len(sess.Events))
+	copy(eventsCopy, sess.Events)
+	return eventsCopy
+}
+
+// GetEventCount returns the session event count.
+func (sess *Session) GetEventCount() int {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return len(sess.Events)
 }
 
 // Summary represents a concise, structured summary of a conversation branch.
