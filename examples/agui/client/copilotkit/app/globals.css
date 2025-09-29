@@ -1,0 +1,197 @@
+/*
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+*/
+
+:root {
+  color-scheme: dark;
+  --copilot-kit-background-color: #141414;
+  --copilot-kit-primary-color: #024a76;
+  --copilot-kit-contrast-color: #ffffff;
+  --copilot-kit-secondary-contrast-color: #ffffff;
+  --copilot-kit-separator-color: rgba(255, 255, 255, 0.12);
+}
+
+html,
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #141414;
+  color: #ffffff;
+  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
+}
+
+main.agui-chat {
+  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.agui-chat__panel {
+  flex: 1;
+  margin: 0;
+  background: #141414;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 100vh;
+}
+
+.copilotKitChat,
+.copilotKitMessages,
+.copilotKitMessagesContainer,
+.copilotKitMessagesFooter {
+  background: #141414 !important;
+}
+
+.tool-message {
+  margin: 0.75rem 0 0.75rem 1.5rem;
+  padding: 0.75rem 0.95rem;
+  border-radius: 12px;
+  background: #303030;
+  border-left: 3px solid #4c6f8e;
+  color: #ffffff;
+  font-size: 0.95rem;
+  display: inline-block;
+  max-width: min(680px, 80%);
+  width: fit-content;
+}
+
+.tool-message__label {
+  display: block;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: rgba(129, 212, 250, 0.9);
+  margin-bottom: 0.5rem;
+}
+
+.tool-message__body {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: #bae6fd;
+  background: transparent;
+}
+
+@media (max-width: 768px) {
+  .agui-chat__panel {
+    border-radius: 0;
+    border-width: 0;
+  }
+
+  .tool-message {
+    margin: 0.75rem 0;
+    max-width: 100%;
+  }
+}
+
+
+.copilotKitMessage {
+  color: #ffffff;
+  padding: 0.9rem 1.1rem;
+  border-radius: 18px;
+  max-width: min(720px, 85%);
+  line-height: 1.6;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+}
+
+.agui-chat .copilotKitMessage.copilotKitUserMessage {
+  background: #024a76;
+  margin-left: auto;
+  margin-right: 1.5rem;
+  color: #ffffff;
+}
+
+.agui-chat .copilotKitMessage.copilotKitAssistantMessage {
+  background: #303030;
+  margin-right: auto;
+  margin-left: 1.5rem;
+  padding: 1rem 1.2rem;
+  max-width: min(760px, 90%);
+  color: #ffffff;
+}
+
+.agui-chat .copilotKitMessage.copilotKitAssistantMessage * {
+  color: inherit;
+}
+
+.agui-chat .copilotKitMessageControls {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.agui-chat .copilotKitMessageControlButton {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 999px;
+  color: #ffffff;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agui-chat .copilotKitMessageControlButton:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.copilotKitInputContainer {
+  background: #141414;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1rem 1.5rem;
+  display: flex;
+  justify-content: center;
+}
+
+.copilotKitInput {
+  background: #1d1d1d;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  align-items: stretch;
+  gap: 0.75rem;
+  width: min(720px, 95%);
+  box-sizing: border-box;
+}
+
+.copilotKitInput textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  font-family: inherit;
+  padding: 0.35rem 0.1rem;
+  align-self: stretch;
+  min-height: 1.8rem;
+}
+
+.copilotKitInput textarea::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.tool-message__label {
+  color: #ffffff;
+}
+
+.tool-message__body {
+  color: #ffffff;
+}

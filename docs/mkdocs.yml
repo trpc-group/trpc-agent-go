@@ -24,6 +24,7 @@ nav:
       - Planner: planner.md
       - Event: event.md
   - Debug: debugserver.md
+  - AG-UI: agui.md
   - Observability: observability.md
   - A2A: a2a.md
   - Ecosystem: ecosystem.md
@@ -61,6 +62,7 @@ plugins:
                 - Graph: graph.md
                 - Event: event.md
             - 调试: debugserver.md
+            - AG-UI: agui.md
             - 可观测: observability.md
             - A2A: a2a.md
             - 生态: ecosystem.md
