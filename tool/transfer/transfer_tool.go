@@ -27,8 +27,6 @@ const (
 	FieldAgentName = "agent_name"
 	// FieldMessage is the name of the message field.
 	FieldMessage = "message"
-	// FieldEndInvocation is the name of the end_invocation field.
-	FieldEndInvocation = "end_invocation"
 )
 
 // Request represents the request structure for transfer_to_agent tool.
@@ -37,8 +35,6 @@ type Request struct {
 	AgentName string `json:"agent_name" jsonschema:"description=Name of the agent to transfer control to"`
 	// Message is the message to send to the target agent (optional).
 	Message string `json:"message,omitempty" jsonschema:"description=Optional message to pass to the target agent"`
-	// EndInvocation indicates whether to end the current invocation after transfer.
-	EndInvocation bool `json:"end_invocation,omitempty" jsonschema:"description=Whether to end current invocation after transfer (default: true)"`
 }
 
 // Response represents the response from transfer_to_agent tool.
@@ -103,10 +99,6 @@ func (t *Tool) Declaration() *tool.Declaration {
 				Type:        "string",
 				Description: "Optional message to pass to the target agent",
 			},
-			FieldEndInvocation: {
-				Type:        "boolean",
-				Description: "Whether to end current invocation after transfer (default: true)",
-			},
 		},
 		Required: []string{FieldAgentName},
 	}
@@ -157,7 +149,6 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	invocation.TransferInfo = &agent.TransferInfo{
 		TargetAgentName: targetAgentInfo.Name,
 		Message:         req.Message,
-		EndInvocation:   req.EndInvocation,
 	}
 
 	return Response{
