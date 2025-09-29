@@ -196,7 +196,7 @@ func (r *runner) Run(
 	}
 
 	// Create a new channel for processed events.
-	processedEventCh := make(chan *event.Event)
+	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {

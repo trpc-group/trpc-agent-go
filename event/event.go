@@ -231,6 +231,9 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		return nil
 	}
 
+	log.Debugf("[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
+		e.RequestID, cap(ch), len(ch), e.Branch)
+
 	if timeout == EmitWithoutTimeout {
 		select {
 		case ch <- e:
