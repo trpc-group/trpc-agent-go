@@ -154,14 +154,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		req.Messages = append(req.Messages, messages...)
 	}
 
-	// 3) Include the current invocation message if:
-	// 1. It has content and there's no session
-	// This prevents duplication when using Runner (which adds user message to session)
-	// while ensuring standalone usage works (where invocation.Message is the source)
-	// Additionally, when the session exists but has no messages for the
-	// current branch (e.g. sub agent first turn), include the invocation
-	// message so the sub agent receives the tool arguments as a user input.
-	if invocation.Message.Content != "" && (invocation.Session == nil || needToAddInvocationMessage) {
+	if invocation.Message.Content != "" && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
