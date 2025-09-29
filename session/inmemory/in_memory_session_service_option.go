@@ -9,7 +9,11 @@
 
 package inmemory
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
 
 // serviceOpts is the options for session service.
 type serviceOpts struct {
@@ -24,6 +28,14 @@ type serviceOpts struct {
 	// cleanupInterval is the interval for automatic cleanup of expired data.
 	// If set to 0, automatic cleanup is disabled.
 	cleanupInterval time.Duration
+	// summarizer integrates LLM summarization.
+	summarizer summary.SessionSummarizer
+	// asyncSummaryNum is the number of worker goroutines for async summary.
+	asyncSummaryNum int
+	// summaryQueueSize is the size of summary job queue.
+	summaryQueueSize int
+	// summaryJobTimeout is the timeout for processing a single summary job.
+	summaryJobTimeout time.Duration
 }
 
 // ServiceOpt is the option for the in-memory session service.
@@ -66,5 +78,43 @@ func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.cleanupInterval = interval
+	}
+}
+
+// WithSummarizer injects a summarizer for LLM-based summaries.
+func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.summarizer = s
+	}
+}
+
+// WithAsyncSummaryNum sets the number of workers for async summary processing.
+func WithAsyncSummaryNum(num int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if num < 1 {
+			num = defaultAsyncSummaryNum
+		}
+		opts.asyncSummaryNum = num
+	}
+}
+
+// WithSummaryQueueSize sets the size of the summary job queue.
+func WithSummaryQueueSize(size int) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if size < 1 {
+			size = defaultSummaryQueueSize
+		}
+		opts.summaryQueueSize = size
+	}
+}
+
+// WithSummaryJobTimeout sets the timeout for processing a single summary job.
+// If not set, a sensible default will be applied.
+func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if timeout <= 0 {
+			return
+		}
+		opts.summaryJobTimeout = timeout
 	}
 }
