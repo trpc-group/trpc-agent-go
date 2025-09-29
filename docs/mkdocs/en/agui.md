@@ -39,6 +39,16 @@ On the client side you can pair the server with frameworks that understand the A
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
+## Dependency Explanation
+
+Since the official AG-UI repository has not yet merged the Golang SDK PR, we have forked and fixed the related bugs. To use it, add the following replace directive in your go.mod:
+
+```go
+replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
+```
+
+After that, run go mod tidy to update the dependencies.
+
 ## Advanced Usage
 
 ### Custom transport
