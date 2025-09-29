@@ -2,11 +2,11 @@ module trpc.group/trpc-go/trpc-agent-go/examples/agui
 
 go 1.24.4
 
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20250919021155-c1b3471899c8
-
-replace trpc.group/trpc-go/trpc-agent-go => ../../
-
-replace trpc.group/trpc-go/trpc-agent-go/server/agui => ../../server/agui
+replace (
+	github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20250919021155-c1b3471899c8
+	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/server/agui => ../../server/agui
+)
 
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-00010101000000-000000000000
