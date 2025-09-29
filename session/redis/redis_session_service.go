@@ -847,6 +847,8 @@ func (s *Service) startAsyncPersistWorker() {
 		go func(eventPairChan chan *sessionEventPair) {
 			for eventPair := range eventPairChan {
 				ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+				log.Debugf("Session persistence queue monitoring: channel capacity: %d, current length: %d, session key:%s",
+					cap(eventPairChan), len(eventPairChan), getSessionStateKey(eventPair.key))
 				if err := s.addEvent(ctx, eventPair.key, eventPair.event); err != nil {
 					log.Errorf("redis session service persistence event failed: %w", err)
 				}
