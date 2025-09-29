@@ -46,8 +46,6 @@ type TransferInfo struct {
 	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
-	// EndInvocation indicates whether to end the current invocation after transfer.
-	EndInvocation bool
 }
 
 // Invocation represents the context for a flow execution.
