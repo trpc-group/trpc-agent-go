@@ -130,6 +130,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// 2) Append per-filter messages from session events when allowed.
+	var needToAddInvocationMessage bool
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		var messages []model.Message
 		if p.AddSessionSummary {
@@ -143,9 +144,11 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			}
 			// Use incremental messages logic (preserves context integrity).
 			messages = p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
+			needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
 		} else {
 			// Use history messages logic (may be truncated by MaxHistoryRuns).
 			messages = p.getFilterHistoryMessages(invocation)
+			needToAddInvocationMessage = len(messages) == 0
 		}
 
 		req.Messages = append(req.Messages, messages...)
@@ -158,7 +161,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	// Additionally, when the session exists but has no messages for the
 	// current branch (e.g. sub agent first turn), include the invocation
 	// message so the sub agent receives the tool arguments as a user input.
-	if invocation.Message.Content != "" && (invocation.Session == nil || len(req.Messages) == 0) {
+	if invocation.Message.Content != "" && (invocation.Session == nil || needToAddInvocationMessage) {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
