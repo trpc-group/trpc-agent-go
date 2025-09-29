@@ -963,6 +963,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#design-and-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design and Scope
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#architecture-diagram" class="md-nav__link">
     <span class="md-ellipsis">
       Architecture Diagram
@@ -1130,6 +1139,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#design-and-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design and Scope
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#architecture-diagram" class="md-nav__link">
     <span class="md-ellipsis">
       Architecture Diagram
@@ -1200,6 +1218,18 @@ It can be combined with <a href="https://github.com/google/adk-web">ADK Web UI</
 <li><strong>Streaming Response</strong>: Supports Server-Sent Events (SSE) streaming response</li>
 <li><strong>Session Management</strong>: Supports creating and managing multiple conversation sessions</li>
 <li><strong>Tool Validation</strong>: Can intuitively test and verify various tool functions of Agents</li>
+</ul>
+<h2 id="design-and-scope">Design and Scope</h2>
+<ul>
+<li>Purpose: Built for quick, visual debugging with ADK Web. It is not intended for production use.</li>
+<li>Runner construction: Debug Server accepts <code>Agent</code>s and lazily creates <code>runner.Runner</code> internally based on the app name requested by the UI; it does not accept user‑supplied <code>Runner</code> instances.</li>
+<li>Single session backend: Because Debug Server exposes session REST APIs (list/create/get), it requires a single <code>session.Service</code> shared by all operations and all internally created runners.<ul>
+<li>Configure via <code>debug.WithSessionService(...)</code> (defaults to in‑memory).</li>
+<li>For consistency, Debug Server enforces the same <code>session.Service</code> for each created runner (it appends <code>runner.WithSessionService(s.sessionSvc)</code>), which overrides any session service you pass via <code>WithRunnerOptions</code>.</li>
+<li>Per‑app/per‑runner session backends are not supported here.</li>
+</ul>
+</li>
+<li>Production guidance: For production frontends (e.g., AG‑UI), build a server that accepts your own preconfigured <code>runner.Runner</code>(s) or use <code>server/a2a</code> when appropriate, so you fully control session/memory/artifact backends, auth, and scaling.</li>
 </ul>
 <h2 id="architecture-diagram">Architecture Diagram</h2>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
@@ -1313,7 +1343,7 @@ For example, the following shows debugging an agent with calculator functionalit
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 10, 2025 07:34:13 UTC">2025-09-10 07:34:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="September 29, 2025 12:34:50 UTC">2025-09-29 12:34:50</span>
   </span>
 
     
