@@ -14,12 +14,27 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
+
+// sessionReconnectErrorPatterns defines error patterns that trigger session reconnection.
+// Conservative approach: only reconnect for clear connection/session failures.
+// Configuration errors (DNS) and potential performance issues (timeout) are excluded.
+var sessionReconnectErrorPatterns = []string{
+	"session_expired:",    // Explicit session expiration from transport layer
+	"transport is closed", // Transport layer closed
+	"connection refused",  // Server not reachable (possibly restarting)
+	"connection reset",    // Connection reset by peer
+	"EOF",                 // End of file (stream closed)
+	"broken pipe",         // Broken connection
+	"HTTP 404",            // Session not found on server
+	"session not found",   // Explicit session not found error
+}
 
 // ToolSet implements the ToolSet interface for MCP tools.
 type ToolSet struct {
@@ -48,7 +63,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	}
 
 	// Create session manager
-	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions)
+	sessionManager := newMCPSessionManager(cfg.connectionConfig, cfg.mcpOptions, cfg.sessionReconnectConfig)
 
 	toolSet := &ToolSet{
 		config:         cfg,
@@ -163,19 +178,22 @@ func (ts *ToolSet) listTools(ctx context.Context) error {
 
 // mcpSessionManager manages the MCP client connection and session.
 type mcpSessionManager struct {
-	config      ConnectionConfig
-	mcpOptions  []mcp.ClientOption // MCP client options
-	client      mcp.Connector
-	mu          sync.RWMutex
-	connected   bool
-	initialized bool
+	config                 ConnectionConfig
+	mcpOptions             []mcp.ClientOption      // MCP client options
+	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration
+	client                 mcp.Connector
+	mu                     sync.RWMutex
+	connected              bool
+	initialized            bool
+	reconnectAttempts      int // Current number of reconnection attempts in this session lifecycle
 }
 
 // newMCPSessionManager creates a new MCP session manager.
-func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption) *mcpSessionManager {
+func newMCPSessionManager(config ConnectionConfig, mcpOptions []mcp.ClientOption, sessionReconnectConfig *SessionReconnectConfig) *mcpSessionManager {
 	manager := &mcpSessionManager{
-		config:     config,
-		mcpOptions: mcpOptions,
+		config:                 config,
+		mcpOptions:             mcpOptions,
+		sessionReconnectConfig: sessionReconnectConfig,
 	}
 
 	return manager
@@ -318,54 +336,70 @@ func (m *mcpSessionManager) initialize(ctx context.Context) error {
 
 // listTools retrieves the list of available tools from the MCP server.
 func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	var result []mcp.Tool
 
-	if !m.connected || !m.initialized {
-		return nil, fmt.Errorf("MCP session not connected or initialized")
-	}
+	// Execute with session reconnection support
+	operationErr := m.executeWithSessionReconnect(ctx, func() error {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
 
-	log.Debug("Listing tools from MCP server")
+		if !m.connected || !m.initialized {
+			return fmt.Errorf("MCP session not connected or initialized")
+		}
 
-	listCtx, cancel := m.createTimeoutContext(ctx, "listTools")
-	defer cancel()
-	listReq := &mcp.ListToolsRequest{}
-	listResp, err := m.client.ListTools(listCtx, listReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tools: %w", err)
-	}
+		log.Debug("Listing tools from MCP server")
 
-	log.Debug("Listed tools from MCP server", "count", len(listResp.Tools))
-	return listResp.Tools, nil
+		listCtx, cancel := m.createTimeoutContext(ctx, "listTools")
+		defer cancel()
+		listReq := &mcp.ListToolsRequest{}
+		listResp, listErr := m.client.ListTools(listCtx, listReq)
+		if listErr != nil {
+			return fmt.Errorf("failed to list tools: %w", listErr)
+		}
+
+		log.Debug("Listed tools from MCP server", "count", len(listResp.Tools))
+		result = listResp.Tools
+		return nil
+	})
+
+	return result, operationErr
 }
 
 // callTool executes a tool call on the MCP server.
 func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments map[string]any) ([]mcp.Content, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	var result []mcp.Content
 
-	if !m.connected || !m.initialized {
-		return nil, fmt.Errorf("MCP session not connected or initialized")
-	}
+	// Execute with session reconnection support
+	operationErr := m.executeWithSessionReconnect(ctx, func() error {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
 
-	log.Debug("Calling tool", "name", name, "arguments", arguments)
+		if !m.connected || !m.initialized {
+			return fmt.Errorf("MCP session not connected or initialized")
+		}
 
-	toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
-	defer cancel()
-	callReq := &mcp.CallToolRequest{}
-	callReq.Params.Name = name
-	callReq.Params.Arguments = arguments
+		log.Debug("Calling tool", "name", name, "arguments", arguments)
 
-	callResp, err := m.client.CallTool(toolCtx, callReq)
-	if err != nil {
-		// Enhanced error with parameter information.
-		enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, err)
-		log.Error("Tool call failed", "name", name, "error", err)
-		return nil, enhancedErr
-	}
+		toolCtx, cancel := m.createTimeoutContext(ctx, "callTool")
+		defer cancel()
+		callReq := &mcp.CallToolRequest{}
+		callReq.Params.Name = name
+		callReq.Params.Arguments = arguments
 
-	log.Debug("Tool call completed", "name", name, "content_count", len(callResp.Content))
-	return callResp.Content, nil
+		callResp, callErr := m.client.CallTool(toolCtx, callReq)
+		if callErr != nil {
+			// Enhanced error with parameter information.
+			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)
+			log.Error("Tool call failed", "name", name, "error", callErr)
+			return enhancedErr
+		}
+
+		log.Debug("Tool call completed", "name", name, "content_count", len(callResp.Content))
+		result = callResp.Content
+		return nil
+	})
+
+	return result, operationErr
 }
 
 // extractErrorFromContent extracts error information from MCP content.
@@ -423,4 +457,119 @@ func (m *mcpSessionManager) isConnected() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.connected && m.initialized
+}
+
+// executeWithSessionReconnect executes an operation with automatic session reconnection support.
+// If the operation fails with a session-expired error and session reconnection is enabled,
+// it will attempt to recreate the session and retry the operation once.
+func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, operation func() error) error {
+	// Execute the operation
+	err := operation()
+	if err == nil {
+		return nil
+	}
+
+	// Check if session reconnection should be attempted
+	if !m.shouldAttemptSessionReconnect(err) {
+		return err
+	}
+
+	// Check if max reconnection attempts exceeded
+	m.mu.Lock()
+	currentAttempts := m.reconnectAttempts
+	maxAttempts := m.sessionReconnectConfig.MaxReconnectAttempts
+	m.mu.Unlock()
+
+	if currentAttempts >= maxAttempts {
+		log.Warn("Max session reconnect attempts reached, giving up",
+			"attempts", currentAttempts,
+			"max_attempts", maxAttempts)
+		return err
+	}
+
+	m.mu.Lock()
+	m.reconnectAttempts++
+	m.mu.Unlock()
+
+	log.Debug("Session expired error detected, attempting session reconnection",
+		"attempt", m.reconnectAttempts,
+		"max_attempts", maxAttempts)
+
+	// Attempt session reconnection
+	if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
+		log.Error("Session reconnection failed", "reconnect_error", reconnectErr, "original_error", err)
+		return err // Return original error if reconnection fails
+	}
+
+	log.Debug("Session reconnection successful, retrying operation")
+
+	// Retry the operation after successful reconnection
+	return operation()
+}
+
+// shouldAttemptSessionReconnect determines if session reconnection should be attempted
+// based on the error type and configuration.
+func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
+	// Check if session reconnection is enabled
+	if m.sessionReconnectConfig == nil || !m.sessionReconnectConfig.EnableAutoReconnect {
+		return false
+	}
+
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// Check for connection/session errors that indicate reconnection should be attempted.
+	for _, pattern := range sessionReconnectErrorPatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// recreateSession recreates the MCP session by closing the old connection,
+// creating a new client, and re-initializing the session.
+func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	log.Debug("Recreating MCP session")
+
+	// Close existing client if any
+	if m.client != nil {
+		if closeErr := m.client.Close(); closeErr != nil {
+			log.Warn("Failed to close old client during session recreation", "error", closeErr)
+		}
+		m.client = nil
+	}
+
+	// Reset connection state
+	m.connected = false
+	m.initialized = false
+
+	// Create new client
+	client, err := m.createClient()
+	if err != nil {
+		return fmt.Errorf("failed to create new MCP client during session recreation: %w", err)
+	}
+
+	m.client = client
+	m.connected = true
+
+	// Re-initialize the session
+	if err := m.initialize(ctx); err != nil {
+		m.connected = false
+		if closeErr := client.Close(); closeErr != nil {
+			log.Error("Failed to close client after re-initialization failure", "close_error", closeErr, "init_error", err)
+		}
+		m.client = nil
+		return fmt.Errorf("failed to re-initialize MCP session: %w", err)
+	}
+
+	log.Debug("MCP session recreation completed successfully")
+	return nil
 }
