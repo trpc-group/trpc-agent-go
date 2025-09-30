@@ -38,7 +38,7 @@ const (
 type Source struct {
 	inputs       []string
 	name         string
-	metadata     map[string]interface{}
+	metadata     map[string]any
 	textReader   reader.Reader
 	chunkSize    int
 	chunkOverlap int
@@ -49,7 +49,7 @@ func New(inputs []string, opts ...Option) *Source {
 	sourceObj := &Source{
 		inputs:       inputs,
 		name:         defaultAutoSourceName,
-		metadata:     make(map[string]interface{}),
+		metadata:     make(map[string]any),
 		chunkSize:    0,
 		chunkOverlap: 0,
 	}
@@ -199,7 +199,7 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
@@ -211,7 +211,7 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 	// Add metadata for each document
 	for _, doc := range docs {
 		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]interface{})
+			doc.Metadata = make(map[string]any)
 		}
 		for k, v := range metadata {
 			doc.Metadata[k] = v
@@ -222,16 +222,16 @@ func (s *Source) processAsText(input string) ([]*document.Document, error) {
 }
 
 // SetMetadata sets metadata for this source.
-func (s *Source) SetMetadata(key string, value interface{}) {
+func (s *Source) SetMetadata(key string, value any) {
 	if s.metadata == nil {
-		s.metadata = make(map[string]interface{})
+		s.metadata = make(map[string]any)
 	}
 	s.metadata[key] = value
 }
 
 // GetMetadata returns the metadata associated with this source.
-func (s *Source) GetMetadata() map[string]interface{} {
-	result := make(map[string]interface{})
+func (s *Source) GetMetadata() map[string]any {
+	result := make(map[string]any)
 	for k, v := range s.metadata {
 		result[k] = v
 	}

@@ -138,7 +138,7 @@ func transformCallLLM(span *tracepb.Span) {
 				})
 
 				// Extract generation_config if exists
-				var req map[string]interface{}
+				var req map[string]any
 				if err := json.Unmarshal([]byte(request), &req); err == nil {
 					if genConfig, exists := req["generation_config"]; exists {
 						if jsonConfig, err := json.Marshal(genConfig); err == nil {
@@ -282,7 +282,7 @@ func (e *exporter) Start(ctx context.Context) error {
 }
 
 // MarshalLog is the marshaling function used by the logging system to represent this exporter.
-func (e *exporter) MarshalLog() interface{} {
+func (e *exporter) MarshalLog() any {
 	return struct {
 		Type   string
 		Client otlptrace.Client

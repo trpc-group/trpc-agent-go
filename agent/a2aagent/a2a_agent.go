@@ -187,7 +187,7 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 
 	if len(r.transferStateKey) > 0 {
 		if message.Metadata == nil {
-			message.Metadata = make(map[string]interface{})
+			message.Metadata = make(map[string]any)
 		}
 		for _, key := range r.transferStateKey {
 			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {

@@ -103,7 +103,7 @@ func (f *FixedSizeChunking) applyOverlap(chunks []*document.Document) []*documen
 		overlapText := encoding.SafeOverlap(prevText, f.overlap)
 
 		// Create new metadata for overlapped chunk.
-		metadata := make(map[string]interface{})
+		metadata := make(map[string]any)
 		for k, v := range chunks[i].Metadata {
 			metadata[k] = v
 		}

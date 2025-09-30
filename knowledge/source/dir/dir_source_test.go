@@ -151,7 +151,7 @@ func TestReadDocuments_Basic(t *testing.T) {
 // TestNameAndMetadata verifies functional options related to name and metadata.
 func TestNameAndMetadata(t *testing.T) {
 	const customName = "my-dir-src"
-	meta := map[string]interface{}{"k": "v"}
+	meta := map[string]any{"k": "v"}
 	src := New([]string{"dummy"}, WithName(customName), WithMetadata(meta))
 
 	if src.Name() != customName {
@@ -230,7 +230,7 @@ func TestSetMetadata(t *testing.T) {
 func TestSetMetadataMultiple(t *testing.T) {
 	src := New([]string{"dummy"})
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"key1": "value1",
 		"key2": "value2",
 		"key3": 123,

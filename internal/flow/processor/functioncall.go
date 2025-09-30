@@ -873,8 +873,8 @@ func convertToolArguments(originalName string, originalArgs []byte, targetName s
 	}
 
 	req := &transfer.Request{
-		AgentName:     originalName,
-		Message:       message,
+		AgentName: originalName,
+		Message:   message,
 	}
 
 	b, err := json.Marshal(req)
