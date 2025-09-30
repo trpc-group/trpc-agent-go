@@ -76,7 +76,7 @@ type options struct {
 	filterFields  []string
 	filterIndexes []tcvectordb.FilterIndex
 
-	docBuilderFunc DocBuilderFunc
+	docBuilder DocBuilderFunc
 }
 
 var defaultOptions = options{
@@ -90,7 +90,7 @@ var defaultOptions = options{
 	textWeight:     0.3,
 	language:       "en",
 	filterFields:   []string{source.MetaURI, source.MetaSourceName, fieldCreatedAt},
-	docBuilderFunc: defaultDocBuilder,
+	docBuilder:     defaultDocBuilder,
 	filterIndexes: []tcvectordb.FilterIndex{
 		{
 			FieldName: source.MetaURI,
@@ -223,5 +223,12 @@ func WithFilterIndexFields(fields []string) Option {
 				FieldType: tcvectordb.String,
 			})
 		}
+	}
+}
+
+// WithDocBuilder sets the document builder function.
+func WithDocBuilder(builder DocBuilderFunc) Option {
+	return func(o *options) {
+		o.docBuilder = builder
 	}
 }

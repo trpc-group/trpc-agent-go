@@ -318,7 +318,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	tcDoc := result.Documents[0]
-	doc, embedding, err := vs.option.docBuilderFunc(tcDoc)
+	doc, embedding, err := vs.option.docBuilder(tcDoc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcvectordb covert to document: %w", err)
 	}
@@ -791,7 +791,7 @@ func (vs *VectorStore) convertSearchResult(
 
 	for _, tcDoc := range searchResult.Documents[0] {
 		log.Debugf("tcvectordb search result: score %v id %v searchMode %v", tcDoc.Score, tcDoc.Id, searchMode)
-		doc, _, err := vs.option.docBuilderFunc(tcDoc)
+		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
 		}
@@ -811,7 +811,7 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	}
 
 	for _, tcDoc := range queryResult.Documents {
-		doc, _, err := vs.option.docBuilderFunc(tcDoc)
+		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
 		}
