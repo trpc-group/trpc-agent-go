@@ -12,4 +12,6 @@
 package prompt
 
 // Prompt is the interface that all prompts must implement.
-type Prompt any
+type Prompt interface {
+	// TODO: Implement prompt.
+}
