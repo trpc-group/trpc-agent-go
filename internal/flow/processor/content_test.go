@@ -269,126 +269,6 @@ func TestContentRequestProcessor_ToolResponses(t *testing.T) {
 	}
 }
 
-// Tests for getContents (aka generate content pipeline).
-func TestContentRequestProcessor_getContents_Basic(t *testing.T) {
-	p := NewContentRequestProcessor()
-
-	events := []event.Event{
-		{
-			Author: "user",
-			Response: &model.Response{
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "hello world",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	msgs := p.convertEventsToMessages(events, "agent-a", "")
-	assert.Len(t, msgs, 1)
-	assert.Equal(t, model.RoleUser, msgs[0].Role)
-	assert.Equal(t, "hello world", msgs[0].Content)
-}
-
-func TestContentRequestProcessor_getContents_ForeignAgentConvert(t *testing.T) {
-	tests := []struct {
-		name      string
-		addPrefix bool
-		wantSub   string
-	}{
-		{
-			name:      "with prefix",
-			addPrefix: true,
-			wantSub:   "For context:",
-		},
-		{
-			name:      "no prefix",
-			addPrefix: false,
-			wantSub:   "foreign reply",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := NewContentRequestProcessor(
-				WithAddContextPrefix(tt.addPrefix),
-			)
-
-			// Event authored by another agent should be converted to
-			// user message content.
-			events := []event.Event{
-				{
-					Author: "agent-b",
-					Response: &model.Response{
-						Choices: []model.Choice{
-							{
-								Message: model.Message{
-									Role:    model.RoleAssistant,
-									Content: "foreign reply",
-								},
-							},
-						},
-					},
-				},
-			}
-
-			msgs := p.convertEventsToMessages(events, "agent-a", "")
-			assert.Len(t, msgs, 1)
-			assert.Equal(t, model.RoleUser, msgs[0].Role)
-			assert.NotEmpty(t, msgs[0].Content)
-			assert.Contains(t, msgs[0].Content, tt.wantSub)
-		})
-	}
-}
-
-func TestContentRequestProcessor_getContents_BranchFilter(t *testing.T) {
-	p := NewContentRequestProcessor()
-
-	events := []event.Event{
-		{
-			Author: "user",
-			Branch: "main",
-			Response: &model.Response{
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "kept",
-						},
-					},
-				},
-			},
-		},
-		{
-			Author: "user",
-			Branch: "dev",
-			Response: &model.Response{
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							Role:    model.RoleUser,
-							Content: "filtered",
-						},
-					},
-				},
-			},
-		},
-	}
-	sess := &session.Session{Events: events}
-
-	// Current branch main/feature should include events whose branch is
-	// prefix of the current, i.e. "main" only.
-	filtered := p.eventsInFilter(sess, "main/feature")
-	msgs := p.convertEventsToMessages(filtered, "agent-a", "")
-	assert.Len(t, msgs, 1)
-	assert.Equal(t, "kept", msgs[0].Content)
-}
-
 func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	assert.True(t, p.AddSessionSummary)
@@ -647,7 +527,7 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := p.getFilterIncrementalMessages(inv, tt.summaryUpdatedAt)
+			messages := p.getHistoryMessages(inv, tt.summaryUpdatedAt)
 
 			assert.Len(t, messages, tt.expectedCount)
 
@@ -796,7 +676,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 	)
 
 	// Test single call
-	messages := p.getFilterIncrementalMessages(inv, time.Time{})
+	messages := p.getHistoryMessages(inv, time.Time{})
 	assert.Len(t, messages, 1, "Should get one message")
 	assert.Equal(t, "test message", messages[0].Content)
 
@@ -808,7 +688,7 @@ func TestContentRequestProcessor_ConcurrentFilterIncrementalMessages(t *testing.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			messages := p.getFilterIncrementalMessages(inv, time.Time{})
+			messages := p.getHistoryMessages(inv, time.Time{})
 			results <- len(messages)
 		}()
 	}
@@ -991,7 +871,7 @@ func TestContentRequestProcessor_getFilterHistoryMessages(t *testing.T) {
 				agent.WithInvocationEventFilterKey("test-filter"),
 			)
 
-			messages := tt.processor.getFilterHistoryMessages(inv)
+			messages := tt.processor.getHistoryMessages(inv, time.Time{})
 
 			assert.Equal(t, tt.expectedCount, len(messages))
 			for i, expectedContent := range tt.expectedContent {
