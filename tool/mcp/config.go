@@ -37,6 +37,15 @@ const (
 )
 
 // Default configurations.
+const (
+	// defaultMaxReconnectAttempts is the default maximum number of session reconnection attempts.
+	defaultMaxReconnectAttempts = 3
+	// minReconnectAttempts is the minimum allowed reconnection attempts.
+	minReconnectAttempts = 1
+	// maxReconnectAttemptsLimit is the maximum allowed reconnection attempts.
+	maxReconnectAttemptsLimit = 10
+)
+
 var (
 	defaultClientInfo = mcp.Implementation{
 		Name:    "trpc-agent-go",
@@ -69,6 +78,10 @@ type SessionReconnectConfig struct {
 	// EnableAutoReconnect enables automatic session reconnection when session expires.
 	// Default: false
 	EnableAutoReconnect bool `json:"enable_auto_reconnect"`
+	// MaxReconnectAttempts specifies the maximum number of reconnection attempts
+	// within the session lifecycle to prevent infinite reconnection loops.
+	// Valid range: 1-10, default: 3
+	MaxReconnectAttempts int `json:"max_reconnect_attempts"`
 }
 
 // toolSetConfig holds internal configuration for ToolSet.
@@ -97,14 +110,40 @@ func WithMCPOptions(options ...mcp.ClientOption) ToolSetOption {
 	}
 }
 
-// WithSessionReconnect enables automatic session reconnection.
+// WithSessionReconnect enables automatic session reconnection with specified max attempts.
+// maxAttempts: maximum number of reconnection attempts (valid range: 1-10, recommended: 3)
 // When enabled, the session manager will automatically attempt to recreate
 // the MCP session when it receives session-expired errors from the transport layer.
-func WithSessionReconnect() ToolSetOption {
+func WithSessionReconnect(maxAttempts int) ToolSetOption {
 	return func(c *toolSetConfig) {
-		c.sessionReconnectConfig = &SessionReconnectConfig{
-			EnableAutoReconnect: true,
+		// Clamp to valid range
+		if maxAttempts < minReconnectAttempts {
+			maxAttempts = minReconnectAttempts
 		}
+		if maxAttempts > maxReconnectAttemptsLimit {
+			maxAttempts = maxReconnectAttemptsLimit
+		}
+		c.sessionReconnectConfig = &SessionReconnectConfig{
+			EnableAutoReconnect:  true,
+			MaxReconnectAttempts: maxAttempts,
+		}
+	}
+}
+
+// WithSessionReconnectConfig enables automatic session reconnection with custom configuration.
+// This provides full control over reconnection behavior for advanced use cases.
+func WithSessionReconnectConfig(config SessionReconnectConfig) ToolSetOption {
+	return func(c *toolSetConfig) {
+		// Always enable auto reconnect when using this option
+		config.EnableAutoReconnect = true
+		// Clamp to valid range
+		if config.MaxReconnectAttempts < minReconnectAttempts {
+			config.MaxReconnectAttempts = minReconnectAttempts
+		}
+		if config.MaxReconnectAttempts > maxReconnectAttemptsLimit {
+			config.MaxReconnectAttempts = maxReconnectAttemptsLimit
+		}
+		c.sessionReconnectConfig = &config
 	}
 }
 

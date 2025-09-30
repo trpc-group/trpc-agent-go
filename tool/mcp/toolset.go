@@ -22,6 +22,20 @@ import (
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
+// sessionReconnectErrorPatterns defines error patterns that trigger session reconnection.
+// Conservative approach: only reconnect for clear connection/session failures.
+// Configuration errors (DNS) and potential performance issues (timeout) are excluded.
+var sessionReconnectErrorPatterns = []string{
+	"session_expired:",    // Explicit session expiration from transport layer
+	"transport is closed", // Transport layer closed
+	"connection refused",  // Server not reachable (possibly restarting)
+	"connection reset",    // Connection reset by peer
+	"EOF",                 // End of file (stream closed)
+	"broken pipe",         // Broken connection
+	"HTTP 404",            // Session not found on server
+	"session not found",   // Explicit session not found error
+}
+
 // ToolSet implements the ToolSet interface for MCP tools.
 type ToolSet struct {
 	config         toolSetConfig
@@ -171,6 +185,7 @@ type mcpSessionManager struct {
 	mu                     sync.RWMutex
 	connected              bool
 	initialized            bool
+	reconnectAttempts      int // Current number of reconnection attempts in this session lifecycle
 }
 
 // newMCPSessionManager creates a new MCP session manager.
@@ -459,7 +474,26 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 		return err
 	}
 
-	log.Debug("Session expired error detected, attempting session reconnection")
+	// Check if max reconnection attempts exceeded
+	m.mu.Lock()
+	currentAttempts := m.reconnectAttempts
+	maxAttempts := m.sessionReconnectConfig.MaxReconnectAttempts
+	m.mu.Unlock()
+
+	if currentAttempts >= maxAttempts {
+		log.Warn("Max session reconnect attempts reached, giving up",
+			"attempts", currentAttempts,
+			"max_attempts", maxAttempts)
+		return err
+	}
+
+	m.mu.Lock()
+	m.reconnectAttempts++
+	m.mu.Unlock()
+
+	log.Debug("Session expired error detected, attempting session reconnection",
+		"attempt", m.reconnectAttempts,
+		"max_attempts", maxAttempts)
 
 	// Attempt session reconnection
 	if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
@@ -481,9 +515,17 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 		return false
 	}
 
-	// Check if this is a session-expired error from the transport layer
-	if err != nil && strings.Contains(err.Error(), "session_expired:") {
-		return true
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// Check for connection/session errors that indicate reconnection should be attempted.
+	for _, pattern := range sessionReconnectErrorPatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
 	}
 
 	return false
