@@ -161,7 +161,7 @@ func processStreamingResponse(ctx context.Context, r runner.Runner, message mode
 
 		// Check if this is the final e.
 		// Don't break on tool response events (Done=true but not final assistant response).
-		if e.Done && !isToolEvent(e) {
+		if e.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
@@ -257,26 +257,6 @@ func processStreamingContent(e *event.Event, toolCallsDetected bool, assistantSt
 	return fullContent, assistantStarted
 }
 
-func isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	// Check if this is a tool response by examining choices.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
-}
 func intPtr(i int) *int {
 	return &i
 }

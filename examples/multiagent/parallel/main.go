@@ -273,7 +273,7 @@ func (c *parallelChat) handleParallelEvents(eventChan <-chan *event.Event) error
 
 		// Handle different event types.
 		switch {
-		case c.isToolEvent(event):
+		case event.IsToolResultResponse():
 			fmt.Printf("%s [%s] 🔧 Using tool...\n", agentIcon, event.Author)
 
 		case len(event.Choices) > 0:
@@ -292,17 +292,6 @@ func (c *parallelChat) handleParallelEvents(eventChan <-chan *event.Event) error
 	}
 
 	return nil
-}
-
-// isToolEvent checks if an event represents a tool invocation.
-func (c *parallelChat) isToolEvent(event *event.Event) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }
 
 // Helper functions.

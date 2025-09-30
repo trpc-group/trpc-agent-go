@@ -313,35 +313,13 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 
 		// Check if this is the final event.
 		// Don't break on tool response events (Done=true but not final assistant response).
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
 	}
 
 	return nil
-}
-
-// isToolEvent checks if an event is a tool response (not a final response).
-func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-
-	// Check if this is a tool response by examining choices.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 // CallableTool implementations.

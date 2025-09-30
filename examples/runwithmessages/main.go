@@ -203,8 +203,7 @@ func main() {
 					fmt.Print(s)
 				}
 			}
-			// Final non-tool response marks end-of-turn.
-			if e.Done && !isToolEvent(e) {
+			if e.IsFinalResponse() {
 				fmt.Println()
 				break
 			}
@@ -215,34 +214,4 @@ func main() {
 			history = append(history, model.NewAssistantMessage(full))
 		}
 	}
-}
-
-// isToolEvent returns true if an event is for tool calls/responses.
-func isToolEvent(e *event.Event) bool { // reuse minimal checks from other examples
-	if e == nil || e.Response == nil {
-		// Check for outgoing tool calls in choices (streaming of toolcalls)
-		if len(e.Choices) > 0 && len(e.Choices[0].Message.ToolCalls) > 0 {
-			return true
-		}
-		if len(e.Choices) > 0 && e.Choices[0].Message.ToolID != "" {
-			return true
-		}
-		return false
-	}
-	// Check tool role replies.
-	if len(e.Response.Choices) > 0 {
-		for _, c := range e.Response.Choices {
-			if c.Message.Role == model.RoleTool {
-				return true
-			}
-		}
-	}
-	// Also check streaming-side message.
-	if len(e.Choices) > 0 && len(e.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(e.Choices) > 0 && e.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }

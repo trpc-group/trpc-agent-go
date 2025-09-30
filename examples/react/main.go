@@ -248,29 +248,13 @@ func (c *reactPlanningChat) processStreamingResponse(eventChan <-chan *event.Eve
 		}
 
 		// Handle tool responses.
-		if c.isToolEvent(event) {
+		if event.IsToolResultResponse() {
 			fmt.Printf("   ✅ Tool completed\n")
 		}
 	}
 
 	fmt.Println() // End the response
 	return nil
-}
-
-// isToolEvent checks if an event is a tool response.
-func (c *reactPlanningChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-
-	// Check for tool response indicators.
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-	}
-
-	return false
 }
 
 // Tool implementations for demonstration.
