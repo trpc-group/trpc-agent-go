@@ -79,7 +79,7 @@ func (p *OutputResponseProcessor) extractFinalContent(rsp *model.Response) (stri
 func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 	ctx context.Context, invocation *agent.Invocation, content string, ch chan<- *event.Event,
 ) {
-	if invocation == nil || invocation.StructuredOutputType == nil {
+	if invocation.StructuredOutputType == nil {
 		return
 	}
 	contentTrim := strings.TrimSpace(content)
@@ -109,7 +109,6 @@ func (p *OutputResponseProcessor) emitTypedStructuredOutput(
 		event.WithObject(model.ObjectTypeStateUpdate),
 		event.WithStructuredOutputPayload(instance),
 	)
-	typedEvt.RequiresCompletion = true
 
 	log.Debugf("Emitted typed structured output payload event.")
 	agent.EmitEvent(ctx, invocation, ch, typedEvt)
@@ -152,10 +151,12 @@ func (p *OutputResponseProcessor) handleOutputKey(
 		return
 	}
 
-	completionID := agent.AppendEventNoticeKeyPrefix + stateEvent.ID
+	// Ensure that the state delta is synchronized to the local session before executing the next agent.
+	// maybe the next agent need to use delta state before executing the flow.
+	completionID := agent.GetAppendEventNoticeKey(stateEvent.ID)
 	if err := invocation.AddNoticeChannelAndWait(ctx, completionID,
 		agent.WaitNoticeWithoutTimeout); err != nil {
-		log.Warnf("Failed to add notice channel for completion ID %s: %v", stateEvent.ID, err)
+		log.Warnf("Failed to add notice channel for completion ID %s: %v", completionID, err)
 	}
 }
 
