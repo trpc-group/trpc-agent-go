@@ -407,7 +407,7 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 		}
 
 		// Create new metadata for overlapped chunk.
-		metadata := make(map[string]interface{})
+		metadata := make(map[string]any)
 		for k, v := range chunks[i].Metadata {
 			metadata[k] = v
 		}

@@ -22,7 +22,7 @@ import (
 type mockSource struct {
 	name     string
 	srcType  string
-	metadata map[string]interface{}
+	metadata map[string]any
 }
 
 func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
@@ -37,7 +37,7 @@ func (m *mockSource) Type() string {
 	return m.srcType
 }
 
-func (m *mockSource) GetMetadata() map[string]interface{} {
+func (m *mockSource) GetMetadata() map[string]any {
 	return m.metadata
 }
 
@@ -45,12 +45,12 @@ func TestGetAllMetadata(t *testing.T) {
 	tests := []struct {
 		name     string
 		sources  []Source
-		expected map[string][]interface{}
+		expected map[string][]any
 	}{
 		{
 			name:     "empty sources",
 			sources:  []Source{},
-			expected: map[string][]interface{}{},
+			expected: map[string][]any{},
 		},
 		{
 			name: "single source",
@@ -58,13 +58,13 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"category": {"docs"},
 				"version":  {"1.0"},
 			},
@@ -75,7 +75,7 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
@@ -83,13 +83,13 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test2",
 					srcType: "url",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "api",
 						"version":  "2.0",
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"category": {"docs", "api"},
 				"version":  {"1.0", "2.0"},
 			},
@@ -100,7 +100,7 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
@@ -108,13 +108,13 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test2",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs", // duplicate value
 						"version":  "2.0",
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"category": {"docs"}, // should be deduplicated
 				"version":  {"1.0", "2.0"},
 			},
@@ -125,19 +125,19 @@ func TestGetAllMetadata(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"count": 5,
 					},
 				},
 				&mockSource{
 					name:    "test2",
 					srcType: "url",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"count": "5", // different type, should not be deduplicated
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"count": {5, "5"},
 			},
 		},
@@ -175,12 +175,12 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 	tests := []struct {
 		name     string
 		sources  []Source
-		expected map[string][]interface{}
+		expected map[string][]any
 	}{
 		{
 			name:     "empty sources",
 			sources:  []Source{},
-			expected: map[string][]interface{}{},
+			expected: map[string][]any{},
 		},
 		{
 			name: "single source",
@@ -188,13 +188,13 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"category": {},
 				"version":  {},
 			},
@@ -205,7 +205,7 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
@@ -213,13 +213,13 @@ func TestGetAllMetadataWithoutValues(t *testing.T) {
 				&mockSource{
 					name:    "test2",
 					srcType: "url",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "api",
 						"author":   "john",
 					},
 				},
 			},
-			expected: map[string][]interface{}{
+			expected: map[string][]any{
 				"category": {},
 				"version":  {},
 				"author":   {},
@@ -259,7 +259,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
@@ -273,7 +273,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 				&mockSource{
 					name:    "test1",
 					srcType: "file",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "docs",
 						"version":  "1.0",
 					},
@@ -281,7 +281,7 @@ func TestGetAllMetadataKeys(t *testing.T) {
 				&mockSource{
 					name:    "test2",
 					srcType: "url",
-					metadata: map[string]interface{}{
+					metadata: map[string]any{
 						"category": "api",
 						"author":   "john",
 					},

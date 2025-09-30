@@ -62,7 +62,7 @@ func cleanText(content string) string {
 // createChunk creates a new document chunk with appropriate metadata.
 func createChunk(originalDoc *document.Document, content string, chunkNumber int) *document.Document {
 	// Create a copy of the original metadata.
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range originalDoc.Metadata {
 		metadata[k] = v
 	}

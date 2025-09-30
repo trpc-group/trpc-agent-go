@@ -132,7 +132,7 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 			message: protocol.Message{
 				Parts: []protocol.Part{
 					&protocol.DataPart{
-						Data: map[string]interface{}{"key": "value"},
+						Data: map[string]any{"key": "value"},
 					},
 				},
 			},

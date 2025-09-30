@@ -153,7 +153,7 @@ func TestDeleteOptions(t *testing.T) {
 	}
 
 	// Test WithDeleteFilter
-	filter := map[string]interface{}{"key": "value"}
+	filter := map[string]any{"key": "value"}
 	config = ApplyDeleteOptions(WithDeleteFilter(filter))
 	if config.Filter["key"] != "value" {
 		t.Error("Expected filter to contain key=value")
@@ -167,7 +167,7 @@ func TestDeleteOptions(t *testing.T) {
 }
 
 func TestCountOptions(t *testing.T) {
-	filter := map[string]interface{}{"test": "data"}
+	filter := map[string]any{"test": "data"}
 	config := ApplyCountOptions(WithCountFilter(filter))
 
 	if config.Filter["test"] != "data" {
@@ -186,7 +186,7 @@ func TestGetMetadataOptions(t *testing.T) {
 	}
 
 	// Test WithGetMetadataFilter
-	filter := map[string]interface{}{"meta": "test"}
+	filter := map[string]any{"meta": "test"}
 	config, err = ApplyGetMetadataOptions(WithGetMetadataFilter(filter))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)

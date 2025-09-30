@@ -155,7 +155,7 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 
 // jsonToText converts JSON content to a readable text format.
 func (r *Reader) jsonToText(jsonContent string) (string, error) {
-	var data interface{}
+	var data any
 	if err := json.Unmarshal([]byte(jsonContent), &data); err != nil {
 		return "", err
 	}

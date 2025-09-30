@@ -23,7 +23,7 @@ func TestVectorStoreFunctionalOptions(t *testing.T) {
 	}
 
 	// Test Count with filter option
-	count, err = vs.Count(ctx, vectorstore.WithCountFilter(map[string]interface{}{"test": "value"}))
+	count, err = vs.Count(ctx, vectorstore.WithCountFilter(map[string]any{"test": "value"}))
 	if err != nil {
 		t.Fatalf("Count with filter failed: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestVectorStoreFunctionalOptions(t *testing.T) {
 	metadata, err = vs.GetMetadata(ctx,
 		vectorstore.WithGetMetadataLimit(10),
 		vectorstore.WithGetMetadataOffset(0),
-		vectorstore.WithGetMetadataFilter(map[string]interface{}{"test": "value"}))
+		vectorstore.WithGetMetadataFilter(map[string]any{"test": "value"}))
 	if err != nil {
 		t.Fatalf("GetMetadata with options failed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestVectorStoreFunctionalOptions(t *testing.T) {
 	}
 
 	// Test DeleteByFilter with filter option
-	err = vs.DeleteByFilter(ctx, vectorstore.WithDeleteFilter(map[string]interface{}{"test": "value"}))
+	err = vs.DeleteByFilter(ctx, vectorstore.WithDeleteFilter(map[string]any{"test": "value"}))
 	if err != nil {
 		t.Fatalf("DeleteByFilter with filter failed: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestVectorStoreOptionsParsing(t *testing.T) {
 	// Test DeleteOptions parsing
 	config := vectorstore.ApplyDeleteOptions(
 		vectorstore.WithDeleteAll(true),
-		vectorstore.WithDeleteFilter(map[string]interface{}{"key": "value"}),
+		vectorstore.WithDeleteFilter(map[string]any{"key": "value"}),
 		vectorstore.WithDeleteDocumentIDs([]string{"doc1", "doc2"}),
 	)
 
@@ -97,7 +97,7 @@ func TestVectorStoreOptionsParsing(t *testing.T) {
 
 	// Test CountOptions parsing
 	countConfig := vectorstore.ApplyCountOptions(
-		vectorstore.WithCountFilter(map[string]interface{}{"test": "data"}),
+		vectorstore.WithCountFilter(map[string]any{"test": "data"}),
 	)
 
 	if countConfig.Filter["test"] != "data" {
@@ -107,7 +107,7 @@ func TestVectorStoreOptionsParsing(t *testing.T) {
 	// Test GetMetadataOptions parsing
 	metaConfig, err := vectorstore.ApplyGetMetadataOptions(
 		vectorstore.WithGetMetadataIDs([]string{"id1", "id2"}),
-		vectorstore.WithGetMetadataFilter(map[string]interface{}{"meta": "test"}),
+		vectorstore.WithGetMetadataFilter(map[string]any{"meta": "test"}),
 		vectorstore.WithGetMetadataLimit(100),
 		vectorstore.WithGetMetadataOffset(10),
 	)

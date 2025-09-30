@@ -1572,7 +1572,7 @@ func TestFanOutWithGlobalStateAccess(t *testing.T) {
 		}
 		assert.True(t, m["task1_global"], "Expected result to contain task1_global")
 		assert.True(t, m["task2_global"], "Expected result to contain task2_global")
-	} else if vals, ok := finalState["results"].([]interface{}); ok {
+	} else if vals, ok := finalState["results"].([]any); ok {
 		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
 		m := map[string]bool{}
 		for _, v := range vals {
@@ -1739,7 +1739,7 @@ func TestFanOutWithNilCommandUpdate(t *testing.T) {
 		}
 		assert.True(t, m["nil_update"], "Expected result to contain nil_update")
 		assert.True(t, m["valid"], "Expected result to contain valid")
-	} else if vals, ok := finalState["results"].([]interface{}); ok {
+	} else if vals, ok := finalState["results"].([]any); ok {
 		assert.GreaterOrEqual(t, len(vals), 2, "Expected at least 2 results")
 		m := map[string]bool{}
 		for _, v := range vals {

@@ -46,7 +46,7 @@ func (m *mockSource) ReadDocuments(ctx context.Context) ([]*document.Document, e
 			ID:      fmt.Sprintf("doc-%d", i),
 			Name:    fmt.Sprintf("Document %d", i),
 			Content: fmt.Sprintf("Content for document %d", i),
-			Metadata: map[string]interface{}{
+			Metadata: map[string]any{
 				"category":            fmt.Sprintf("cat-%d", i%3), // Categories: cat-0, cat-1, cat-2
 				"level":               i%2 + 1,                    // Levels: 1, 2
 				source.MetaSourceName: "test",
@@ -658,7 +658,7 @@ func TestConvertQueryFilter(t *testing.T) {
 	// Test filter with data
 	filter := &SearchFilter{
 		DocumentIDs: []string{"doc1", "doc2"},
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"category": "test",
 			"level":    1,
 		},
@@ -1203,7 +1203,7 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 
 	// Test convertMetaToDocumentInfo
 	meta := &vectorstore.DocumentMetadata{
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			source.MetaURI:        "test://uri",
 			source.MetaSourceName: "test-source",
 			source.MetaChunkIndex: 0,
@@ -1234,7 +1234,7 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 	}
 
 	// Test generateDocumentID
-	docID := generateDocumentID("test-source", "test://uri", "content", 0, map[string]interface{}{"key": "value"})
+	docID := generateDocumentID("test-source", "test://uri", "content", 0, map[string]any{"key": "value"})
 	if docID == "" {
 		t.Error("generateDocumentID returned empty string")
 	}
@@ -1243,7 +1243,7 @@ func TestIncrementalSyncFunctions(t *testing.T) {
 	doc := &document.Document{
 		ID:      docID,
 		Content: "content",
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			source.MetaURI:        "test://uri",
 			source.MetaSourceName: "test-source",
 			source.MetaChunkIndex: 0,
@@ -1339,7 +1339,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				mockStore := &mockVectorStoreWithMetadata{
 					metadata: map[string]vectorstore.DocumentMetadata{
 						"doc-1": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source-1",
 								source.MetaURI:        "file:///test1.txt",
 								source.MetaChunkIndex: 0,
@@ -1348,7 +1348,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 							},
 						},
 						"doc-2": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source-2",
 								source.MetaURI:        "file:///test2.txt",
 								source.MetaChunkIndex: 1,
@@ -1375,14 +1375,14 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				mockStore := &mockVectorStoreWithMetadata{
 					metadata: map[string]vectorstore.DocumentMetadata{
 						"doc-1": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source-1",
 								source.MetaURI:        "file:///test1.txt",
 								source.MetaChunkIndex: 0,
 							},
 						},
 						"doc-2": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source-2",
 								source.MetaURI:        "file:///test2.txt",
 								source.MetaChunkIndex: 1,
@@ -1407,14 +1407,14 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				mockStore := &mockVectorStoreWithMetadata{
 					metadata: map[string]vectorstore.DocumentMetadata{
 						"doc-1": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source",
 								source.MetaURI:        "file:///test1.txt",
 								source.MetaChunkIndex: 0,
 							},
 						},
 						"doc-2": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source",
 								source.MetaURI:        "file:///test2.txt",
 								source.MetaChunkIndex: 1,
@@ -1439,7 +1439,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				mockStore := &mockVectorStoreWithMetadata{
 					metadata: map[string]vectorstore.DocumentMetadata{
 						"doc-1": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source",
 								source.MetaURI:        "file:///test1.txt",
 								source.MetaChunkIndex: 0,
@@ -1447,7 +1447,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 							},
 						},
 						"doc-2": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "test-source",
 								source.MetaURI:        "file:///test2.txt",
 								source.MetaChunkIndex: 1,
@@ -1460,7 +1460,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				return kb
 			},
 			options: []ShowDocumentInfoOption{
-				WithShowDocumentInfoFilter(map[string]interface{}{"category": "important"}),
+				WithShowDocumentInfoFilter(map[string]any{"category": "important"}),
 			},
 			expectError: false,
 			validateResult: func(docs []BuiltinDocumentInfo) bool {
@@ -1497,7 +1497,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 				mockStore := &mockVectorStoreWithMetadata{
 					metadata: map[string]vectorstore.DocumentMetadata{
 						"doc-1": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "source-1",
 								source.MetaURI:        "file:///test1.txt",
 								source.MetaChunkIndex: 0,
@@ -1505,7 +1505,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 							},
 						},
 						"doc-2": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "source-2",
 								source.MetaURI:        "file:///test2.txt",
 								source.MetaChunkIndex: 1,
@@ -1513,7 +1513,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 							},
 						},
 						"doc-3": {
-							Metadata: map[string]interface{}{
+							Metadata: map[string]any{
 								source.MetaSourceName: "source-1",
 								source.MetaURI:        "file:///test3.txt",
 								source.MetaChunkIndex: 2,
@@ -1527,7 +1527,7 @@ func TestBuiltinKnowledge_ShowDocumentInfo(t *testing.T) {
 			},
 			options: []ShowDocumentInfoOption{
 				WithShowDocumentInfoSourceName("source-1"),
-				WithShowDocumentInfoFilter(map[string]interface{}{"category": "test"}),
+				WithShowDocumentInfoFilter(map[string]any{"category": "test"}),
 			},
 			expectError: false,
 			validateResult: func(docs []BuiltinDocumentInfo) bool {
