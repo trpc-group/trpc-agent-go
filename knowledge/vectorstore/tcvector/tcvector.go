@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
@@ -319,13 +318,9 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	tcDoc := result.Documents[0]
-	doc, err := covertToDocument(tcDoc)
+	doc, embedding, err := vs.option.docBuilderFunc(tcDoc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcvectordb covert to document: %w", err)
-	}
-	embedding := make([]float64, len(tcDoc.Vector))
-	for i, v := range tcDoc.Vector {
-		embedding[i] = float64(v)
 	}
 	return doc, embedding, nil
 }
@@ -796,7 +791,7 @@ func (vs *VectorStore) convertSearchResult(
 
 	for _, tcDoc := range searchResult.Documents[0] {
 		log.Debugf("tcvectordb search result: score %v id %v searchMode %v", tcDoc.Score, tcDoc.Id, searchMode)
-		doc, err := covertToDocument(tcDoc)
+		doc, _, err := vs.option.docBuilderFunc(tcDoc)
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
 		}
@@ -816,7 +811,7 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	}
 
 	for _, tcDoc := range queryResult.Documents {
-		doc, err := covertToDocument(tcDoc)
+		doc, _, err := vs.option.docBuilderFunc(tcDoc)
 		if err != nil {
 			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
 		}
@@ -828,40 +823,6 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	}
 
 	return result, nil
-}
-
-// covertToDocument converts tcvectordb document to document.Document.
-func covertToDocument(tcDoc tcvectordb.Document) (*document.Document, error) {
-	doc := &document.Document{
-		ID: tcDoc.Id,
-	}
-	if field, ok := tcDoc.Fields[fieldName]; ok {
-		doc.Name = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldContent]; ok {
-		doc.Content = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldCreatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.CreatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldUpdatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.UpdatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldMetadata]; ok {
-		if metadata, ok := field.Val.(map[string]any); ok {
-			doc.Metadata = metadata
-		}
-	}
-
-	embedding := make([]float64, len(tcDoc.Vector))
-	for i, v := range tcDoc.Vector {
-		embedding[i] = float64(v)
-	}
-	return doc, nil
 }
 
 // covertToVector32 converts float64 slice to float32 slice.
