@@ -128,7 +128,7 @@ func TestReadDocuments_InvalidURL(t *testing.T) {
 
 // TestWithMetadata verifies the WithMetadata option.
 func TestWithMetadata(t *testing.T) {
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"source":   "test-source",
 		"priority": "high",
 		"category": "documentation",
@@ -173,7 +173,7 @@ func TestSetMetadata(t *testing.T) {
 func TestSetMetadataMultiple(t *testing.T) {
 	src := New([]string{"https://example.com"})
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"url_key1": "url_value1",
 		"url_key2": "url_value2",
 		"url_key3": 456,

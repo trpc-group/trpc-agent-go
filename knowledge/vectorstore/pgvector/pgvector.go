@@ -648,7 +648,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	limit,
 	offset int,
 	docIDs []string,
-	filters map[string]interface{},
+	filters map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	// Create a metadata query builder
 	qb := newMetadataQueryBuilder(vs.option.table)

@@ -205,7 +205,7 @@ func TestServer_handleRun(t *testing.T) {
 	// but we can verify the request was processed.
 	if w.Code == http.StatusOK {
 		// If it succeeded, verify the response structure.
-		var response map[string]interface{}
+		var response map[string]any
 		assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response), "failed to unmarshal response: %v")
 	} else {
 		// Expected to fail due to model configuration, but should not be 500.
@@ -235,7 +235,7 @@ func TestConvertContentToMessage_Func(t *testing.T) {
 			{
 				FunctionCall: &schema.FunctionCall{
 					Name: "test_function",
-					Args: map[string]interface{}{
+					Args: map[string]any{
 						"param1": "value1",
 						"param2": 42,
 					},

@@ -20,7 +20,7 @@ type ServiceOpts struct {
 	sessionEventLimit  int
 	url                string
 	instanceName       string
-	extraOptions       []interface{}
+	extraOptions       []any
 	sessionTTL         time.Duration // TTL for session state and event list
 	appStateTTL        time.Duration // TTL for app state
 	userStateTTL       time.Duration // TTL for user state
@@ -64,7 +64,7 @@ func WithRedisInstance(instanceName string) ServiceOpt {
 
 // WithExtraOptions sets the extra options for the redis session service.
 // this option mainly used for the customized redis client builder, it will be passed to the builder.
-func WithExtraOptions(extraOptions ...interface{}) ServiceOpt {
+func WithExtraOptions(extraOptions ...any) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}

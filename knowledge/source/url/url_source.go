@@ -37,7 +37,7 @@ type Source struct {
 	identifierURLs []string // url, used to generate document ID and check update of document.
 	fetchURLs      []string // fetching url , the actual used to fetch content.
 	name           string
-	metadata       map[string]interface{}
+	metadata       map[string]any
 	readers        map[string]reader.Reader
 	httpClient     *http.Client
 	chunkSize      int
@@ -49,7 +49,7 @@ func New(urls []string, opts ...Option) *Source {
 	s := &Source{
 		identifierURLs: urls,
 		name:           defaultURLSourceName,
-		metadata:       make(map[string]interface{}),
+		metadata:       make(map[string]any),
 		httpClient:     defaultClient,
 		chunkSize:      0,
 		chunkOverlap:   0,
@@ -156,7 +156,7 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 	}
 
 	// Create metadata for this URL.
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
@@ -171,7 +171,7 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]interface{})
+			doc.Metadata = make(map[string]any)
 		}
 		for k, v := range metadata {
 			doc.Metadata[k] = v
@@ -218,16 +218,16 @@ func (s *Source) getFileName(parsedURL *url.URL, contentType string) string {
 }
 
 // SetMetadata sets metadata for this source.
-func (s *Source) SetMetadata(key string, value interface{}) {
+func (s *Source) SetMetadata(key string, value any) {
 	if s.metadata == nil {
-		s.metadata = make(map[string]interface{})
+		s.metadata = make(map[string]any)
 	}
 	s.metadata[key] = value
 }
 
 // GetMetadata returns the metadata associated with this source.
-func (s *Source) GetMetadata() map[string]interface{} {
-	result := make(map[string]interface{})
+func (s *Source) GetMetadata() map[string]any {
+	result := make(map[string]any)
 	for k, v := range s.metadata {
 		result[k] = v
 	}
