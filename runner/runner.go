@@ -211,7 +211,7 @@ func (r *runner) processAgentEvents(
 	invocation *agent.Invocation,
 	agentEventCh <-chan *event.Event,
 ) chan *event.Event {
-	processedEventCh := make(chan *event.Event)
+	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	// Start a goroutine to process and append events to session.
 	go func() {
 		defer func() {
