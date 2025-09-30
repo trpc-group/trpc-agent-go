@@ -57,6 +57,8 @@ type thinkingChat struct {
 	runner    runner.Runner
 	userID    string
 	sessionID string
+	appName   string
+	sessSvc   session.Service
 }
 
 func (c *thinkingChat) run(ctx context.Context) error {
@@ -97,6 +99,8 @@ func (c *thinkingChat) setup(_ context.Context) error {
 	)
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("thinking-session-%d", time.Now().Unix())
+	c.appName = "thinking-demo"
+	c.sessSvc = sessionService
 	fmt.Printf("✅ Ready! Session: %s\n", c.sessionID)
 	fmt.Printf("(Note: dim text indicates internal reasoning; normal text is the final answer)\n\n")
 	return nil
@@ -104,7 +108,11 @@ func (c *thinkingChat) setup(_ context.Context) error {
 
 func (c *thinkingChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("Type '/exit' to quit")
+	fmt.Println("💡 Special commands:")
+	fmt.Println("   /history  - Show conversation history")
+	fmt.Println("   /new      - Start a new session")
+	fmt.Println("   /exit     - End the conversation")
+	fmt.Println()
 	for {
 		fmt.Print("👤 You: ")
 		if !scanner.Scan() {
@@ -114,9 +122,19 @@ func (c *thinkingChat) startChat(ctx context.Context) error {
 		if msg == "" {
 			continue
 		}
-		if strings.EqualFold(msg, "/exit") {
+		switch strings.ToLower(msg) {
+		case "/exit":
 			fmt.Println("👋 Goodbye!")
 			return nil
+		case "/history":
+			if err := c.showHistory(ctx); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			}
+			fmt.Println()
+			continue
+		case "/new":
+			c.startNewSession()
+			continue
 		}
 		if err := c.processMessage(ctx, msg); err != nil {
 			fmt.Printf("❌ Error: %v\n", err)
@@ -187,6 +205,57 @@ func (c *thinkingChat) extractContent(choice model.Choice) string {
 		return choice.Delta.Content
 	}
 	return choice.Message.Content
+}
+
+func (c *thinkingChat) showHistory(ctx context.Context) error {
+	if c.sessSvc == nil {
+		return fmt.Errorf("session service not initialized")
+	}
+	key := session.Key{AppName: c.appName, UserID: c.userID, SessionID: c.sessionID}
+	sess, err := c.sessSvc.GetSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	if sess == nil {
+		fmt.Println("(no session found)")
+		return nil
+	}
+	evts := sess.GetEvents()
+	if len(evts) == 0 {
+		fmt.Println("(no events)")
+		return nil
+	}
+	fmt.Println("\n===== Session History =====")
+	for i, evt := range evts {
+		author := evt.Author
+		ts := evt.Timestamp.Format(time.RFC3339)
+		fmt.Printf("[%02d] %s %s\n", i+1, ts, author)
+		if evt.Response == nil || len(evt.Choices) == 0 {
+			continue
+		}
+		ch := evt.Choices[0]
+		// Print reasoning (dim) if present in final message.
+		if rc := ch.Message.ReasoningContent; rc != "" {
+			fmt.Printf("\x1b[2m%s\x1b[0m\n\n", rc)
+		}
+		// Then print visible content.
+		if content := ch.Message.Content; content != "" {
+			fmt.Println(content)
+		}
+		fmt.Println("--------------------------")
+	}
+	fmt.Println("===== End =====")
+	return nil
+}
+
+func (c *thinkingChat) startNewSession() {
+	old := c.sessionID
+	c.sessionID = fmt.Sprintf("thinking-session-%d", time.Now().Unix())
+	fmt.Printf("🆕 Started new session!\n")
+	fmt.Printf("   Previous: %s\n", old)
+	fmt.Printf("   Current:  %s\n", c.sessionID)
+	fmt.Printf("   (Conversation history has been reset)\n")
+	fmt.Println()
 }
 
 func intPtr(i int) *int           { return &i }
