@@ -232,7 +232,7 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		c.processStreamingContent(event, &toolCallsDetected, &assistantStarted, &fullContent)
 
 		// Check if this is the final event
-		if event.Done && !c.isToolEvent(event) {
+		if event.IsFinalResponse() {
 			fmt.Printf("\n")
 			break
 		}
@@ -300,20 +300,6 @@ func (c *multiToolChat) processStreamingContent(event *event.Event, toolCallsDet
 		fmt.Print(choice.Delta.Content)
 		*fullContent += choice.Delta.Content
 	}
-}
-
-// isToolEvent checks if the event is a tool response (not a final response)
-func (c *multiToolChat) isToolEvent(event *event.Event) bool {
-	if event.Response == nil {
-		return false
-	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-		return true
-	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-		return true
-	}
-	return false
 }
 
 // getToolIcon returns the corresponding icon based on tool name

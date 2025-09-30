@@ -401,7 +401,7 @@ func (c *transferChat) displayAgentHeader(event *event.Event, currentAgent *stri
 
 // handleToolResponses processes tool response completion.
 func (c *transferChat) handleToolResponses(event *event.Event) {
-	if c.isToolEvent(event) && len(event.Choices[0].Message.ToolCalls) > 0 &&
+	if event.IsToolResultResponse() && len(event.Choices[0].Message.ToolCalls) > 0 &&
 		!c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
 		fmt.Printf("   ✅ Tool completed\n")
 	}
@@ -459,10 +459,6 @@ func (c *transferChat) isTransferTool(toolCall model.ToolCall) bool {
 
 func (c *transferChat) isTransferResponse(event *event.Event) bool {
 	return len(event.Choices) > 0 && event.Choices[0].Message.ToolID != ""
-}
-
-func (c *transferChat) isToolEvent(event *event.Event) bool {
-	return len(event.Choices) > 0 && event.Choices[0].Message.Role == model.RoleTool
 }
 
 // Helper functions.
