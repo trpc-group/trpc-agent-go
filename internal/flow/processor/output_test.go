@@ -219,7 +219,12 @@ func TestSanitizeJSONContentVariants(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "standard",
+			name:  "normal",
+			input: "{\"city\":\"Beijing\"}",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "with_fences",
 			input: "```json\n{\"city\":\"Beijing\"}\n```",
 			want:  "{\"city\":\"Beijing\"}",
 		},
