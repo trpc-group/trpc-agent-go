@@ -127,7 +127,7 @@ func TestSource_ProcessInputVariants(t *testing.T) {
 
 // TestWithMetadata verifies the WithMetadata option.
 func TestWithMetadata(t *testing.T) {
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"author":      "test-author",
 		"version":     "1.0",
 		"environment": "test",
@@ -172,7 +172,7 @@ func TestSetMetadata(t *testing.T) {
 func TestSetMetadataMultiple(t *testing.T) {
 	src := New([]string{"test input"})
 
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"key1": "value1",
 		"key2": "value2",
 		"key3": 123,

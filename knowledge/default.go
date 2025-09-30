@@ -71,7 +71,7 @@ type BuiltinDocumentInfo struct {
 	SourceName string
 	ChunkIndex int
 	URI        string
-	AllMeta    map[string]interface{}
+	AllMeta    map[string]any
 }
 
 // convertMetaToDocumentInfo converts a vectorstore document metadata to a DocumentInfo
@@ -151,7 +151,7 @@ func (dk *BuiltinKnowledge) ShowDocumentInfo(
 	for _, opt := range opts {
 		opt(config)
 	}
-	filter := map[string]interface{}{}
+	filter := map[string]any{}
 	if config.filter != nil {
 		filter = config.filter
 	}
@@ -296,7 +296,7 @@ func (dk *BuiltinKnowledge) reloadSource(
 ) error {
 	log.Infof("Reloading source %s with direct delete and add", sourceName)
 
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		source.MetaSourceName: sourceName,
 	}
 	// Delete existing documents
@@ -349,7 +349,7 @@ func (dk *BuiltinKnowledge) RemoveSource(ctx context.Context, sourceName string)
 	}
 
 	// Create filter for source documents
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		source.MetaSourceName: sourceName,
 	}
 
@@ -785,7 +785,7 @@ func (dk *BuiltinKnowledge) refreshSourceDocInfo(ctx context.Context, sourceName
 	}
 
 	// get latest metadata by source name
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		source.MetaSourceName: sourceName,
 	}
 	metas, err := dk.vectorStore.GetMetadata(ctx, vectorstore.WithGetMetadataFilter(filter))
@@ -1113,8 +1113,8 @@ func calcETA(start time.Time, processed, total int) time.Duration {
 	return expected - elapsed
 }
 
-// convertToInt converts interface{} to int, handling JSON unmarshaling type conversion
-func convertToInt(value interface{}) (int, bool) {
+// convertToInt converts any to int, handling JSON unmarshaling type conversion
+func convertToInt(value any) (int, bool) {
 	switch v := value.(type) {
 	case int:
 		return v, true
@@ -1149,7 +1149,7 @@ func convertToInt(value interface{}) (int, bool) {
 
 // generateDocumentID generates a unique document ID based on source name, content, chunk index and source metadata.
 // Uses SHA256 hash to ensure uniqueness and avoid collisions.
-func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]interface{}) string {
+func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceMetadata map[string]any) string {
 	hasher := sha256.New()
 
 	// Write source name
@@ -1175,16 +1175,16 @@ func generateDocumentID(sourceName, uri, content string, chunkIndex int, sourceM
 }
 
 // serializeMetadata recursively serializes a value in a deterministic way
-func serializeMetadata(value interface{}) string {
+func serializeMetadata(value any) string {
 	var builder strings.Builder
 	serializeMetadataToBuilder(value, &builder)
 	return builder.String()
 }
 
 // serializeMetadataToBuilder recursively serializes a value to a strings.Builder
-func serializeMetadataToBuilder(value interface{}, builder *strings.Builder) {
+func serializeMetadataToBuilder(value any, builder *strings.Builder) {
 	switch v := value.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		// Handle nested map - sort keys and recursively serialize
 		keys := make([]string, 0, len(v))
 		for k := range v {
@@ -1202,7 +1202,7 @@ func serializeMetadataToBuilder(value interface{}, builder *strings.Builder) {
 			serializeMetadataToBuilder(v[k], builder)
 		}
 		builder.WriteByte('}')
-	case []interface{}:
+	case []any:
 		// Handle slice - serialize each element in order
 		builder.WriteByte('[')
 		for i, item := range v {
@@ -1212,9 +1212,9 @@ func serializeMetadataToBuilder(value interface{}, builder *strings.Builder) {
 			serializeMetadataToBuilder(item, builder)
 		}
 		builder.WriteByte(']')
-	case map[interface{}]interface{}:
-		// Handle map with interface{} keys - convert to string keys first
-		stringMap := make(map[string]interface{}, len(v))
+	case map[any]any:
+		// Handle map with any keys - convert to string keys first
+		stringMap := make(map[string]any, len(v))
 		for k, val := range v {
 			stringMap[fmt.Sprintf("%v", k)] = val
 		}

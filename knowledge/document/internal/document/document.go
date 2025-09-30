@@ -23,7 +23,7 @@ func CreateDocument(content string, name string) *document.Document {
 		ID:        GenerateDocumentID(name),
 		Name:      name,
 		Content:   content,
-		Metadata:  make(map[string]interface{}),
+		Metadata:  make(map[string]any),
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}

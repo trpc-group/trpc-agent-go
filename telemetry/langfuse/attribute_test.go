@@ -54,7 +54,7 @@ func TestConstants(t *testing.T) {
 
 func TestConstantTypes(t *testing.T) {
 	// Ensure all constants are strings
-	constants := []interface{}{
+	constants := []any{
 		traceName, traceUserID, traceSessionID, traceTags, tracePublic,
 		traceMetadata, traceInput, traceOutput,
 		observationType, observationMetadata, observationLevel, observationStatusMessage,

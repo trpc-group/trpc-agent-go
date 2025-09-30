@@ -33,7 +33,7 @@ const (
 type Source struct {
 	dirPaths       []string
 	name           string
-	metadata       map[string]interface{}
+	metadata       map[string]any
 	readers        map[string]reader.Reader
 	fileExtensions []string // Optional: filter by file extensions
 	recursive      bool     // Whether to process subdirectories
@@ -46,7 +46,7 @@ func New(dirPaths []string, opts ...Option) *Source {
 	s := &Source{
 		dirPaths:     dirPaths,
 		name:         defaultDirSourceName,
-		metadata:     make(map[string]interface{}),
+		metadata:     make(map[string]any),
 		recursive:    false, // Default to non-recursive.
 		chunkSize:    0,
 		chunkOverlap: 0,
@@ -205,7 +205,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	}
 
 	// Create metadata for this file.
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	for k, v := range s.metadata {
 		metadata[k] = v
 	}
@@ -230,7 +230,7 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 	// Add metadata to all documents.
 	for _, doc := range documents {
 		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]interface{})
+			doc.Metadata = make(map[string]any)
 		}
 		for k, v := range metadata {
 			doc.Metadata[k] = v
@@ -241,13 +241,13 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 }
 
 // SetMetadata sets a metadata value for the directory source.
-func (s *Source) SetMetadata(key string, value interface{}) {
+func (s *Source) SetMetadata(key string, value any) {
 	s.metadata[key] = value
 }
 
 // GetMetadata returns the metadata associated with this source.
-func (s *Source) GetMetadata() map[string]interface{} {
-	result := make(map[string]interface{})
+func (s *Source) GetMetadata() map[string]any {
+	result := make(map[string]any)
 	for k, v := range s.metadata {
 		result[k] = v
 	}

@@ -22,7 +22,7 @@ func TestADKSession_MarshalJSON(t *testing.T) {
 		CreateTime:     1234567890,
 		LastUpdateTime: 1234567891,
 		State:          map[string][]byte{"key1": []byte("value1")},
-		Events:         []map[string]interface{}{},
+		Events:         []map[string]any{},
 	}
 
 	data, err := json.Marshal(session)
@@ -64,7 +64,7 @@ func TestContent_MarshalJSON(t *testing.T) {
 			{
 				FunctionCall: &FunctionCall{
 					Name: "test_function",
-					Args: map[string]interface{}{
+					Args: map[string]any{
 						"param1": "value1",
 						"param2": 42,
 					},
@@ -152,7 +152,7 @@ func TestAgentRunRequest_MarshalJSON(t *testing.T) {
 func TestFunctionCall_MarshalJSON(t *testing.T) {
 	functionCall := FunctionCall{
 		Name: "test_function",
-		Args: map[string]interface{}{
+		Args: map[string]any{
 			"param1": "value1",
 			"param2": 42,
 			"param3": true,
