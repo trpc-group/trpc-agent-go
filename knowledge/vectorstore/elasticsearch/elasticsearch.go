@@ -578,7 +578,7 @@ func (vs *VectorStore) GetMetadata(ctx context.Context, opts ...vectorstore.GetM
 }
 
 // buildCountQuery builds a count query with optional filters.
-func (vs *VectorStore) buildCountQuery(filter map[string]interface{}) *types.SearchRequestBody {
+func (vs *VectorStore) buildCountQuery(filter map[string]any) *types.SearchRequestBody {
 	query := types.NewSearchRequestBody()
 	query.Size = &[]int{0}[0] // Set size to 0 for count query
 
@@ -703,7 +703,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	limit,
 	offset int,
 	docIDs []string,
-	filters map[string]interface{},
+	filters map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	metadataQuery := types.NewSearchRequestBody()
 	metadataQuery.Size = &limit
@@ -763,7 +763,7 @@ func (vs *VectorStore) queryMetadataBatch(
 			continue // Skip invalid documents
 		}
 
-		metadata := make(map[string]interface{})
+		metadata := make(map[string]any)
 		if source.Metadata != nil {
 			metadata = source.Metadata
 		}

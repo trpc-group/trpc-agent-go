@@ -54,7 +54,7 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 	return schema
 }
 
-// convertProperties converts property definitions from map[string]interface{} to map[string]*Schema.
+// convertProperties converts property definitions from map[string]any to map[string]*Schema.
 func convertProperties(props map[string]any) map[string]*tool.Schema {
 	if props == nil {
 		return nil

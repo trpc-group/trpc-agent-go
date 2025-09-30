@@ -21,7 +21,7 @@ func WithName(name string) Option {
 }
 
 // WithMetadata sets the metadata for the auto source.
-func WithMetadata(metadata map[string]interface{}) Option {
+func WithMetadata(metadata map[string]any) Option {
 	return func(s *Source) {
 		for k, v := range metadata {
 			s.metadata[k] = v
@@ -30,10 +30,10 @@ func WithMetadata(metadata map[string]interface{}) Option {
 }
 
 // WithMetadataValue adds a single metadata key-value pair.
-func WithMetadataValue(key string, value interface{}) Option {
+func WithMetadataValue(key string, value any) Option {
 	return func(s *Source) {
 		if s.metadata == nil {
-			s.metadata = make(map[string]interface{})
+			s.metadata = make(map[string]any)
 		}
 		s.metadata[key] = value
 	}

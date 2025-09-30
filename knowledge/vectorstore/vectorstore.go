@@ -54,7 +54,7 @@ type DeleteOption func(*DeleteConfig)
 // DeleteConfig holds the configuration for delete operations.
 type DeleteConfig struct {
 	DocumentIDs []string
-	Filter      map[string]interface{}
+	Filter      map[string]any
 	DeleteAll   bool
 }
 
@@ -66,7 +66,7 @@ func WithDeleteDocumentIDs(ids []string) DeleteOption {
 }
 
 // WithDeleteFilter sets the filter for delete operations.
-func WithDeleteFilter(filter map[string]interface{}) DeleteOption {
+func WithDeleteFilter(filter map[string]any) DeleteOption {
 	return func(c *DeleteConfig) {
 		c.Filter = filter
 	}
@@ -84,11 +84,11 @@ type CountOption func(*CountConfig)
 
 // CountConfig holds the configuration for count operations.
 type CountConfig struct {
-	Filter map[string]interface{}
+	Filter map[string]any
 }
 
 // WithCountFilter sets the filter for count operations.
-func WithCountFilter(filter map[string]interface{}) CountOption {
+func WithCountFilter(filter map[string]any) CountOption {
 	return func(c *CountConfig) {
 		c.Filter = filter
 	}
@@ -100,7 +100,7 @@ type GetMetadataOption func(*GetMetadataConfig)
 // GetMetadataConfig holds the configuration for get metadata operations.
 type GetMetadataConfig struct {
 	IDs    []string
-	Filter map[string]interface{}
+	Filter map[string]any
 	Limit  int
 	Offset int
 }
@@ -113,7 +113,7 @@ func WithGetMetadataIDs(ids []string) GetMetadataOption {
 }
 
 // WithGetMetadataFilter sets the filter for get metadata operations.
-func WithGetMetadataFilter(filter map[string]interface{}) GetMetadataOption {
+func WithGetMetadataFilter(filter map[string]any) GetMetadataOption {
 	return func(c *GetMetadataConfig) {
 		c.Filter = filter
 	}
@@ -239,5 +239,5 @@ type ScoredDocument struct {
 // DocumentMetadata represents a document metadata.
 type DocumentMetadata struct {
 	// Metadata is the document metadata.
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }

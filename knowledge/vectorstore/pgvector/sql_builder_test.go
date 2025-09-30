@@ -465,7 +465,7 @@ func TestMetadataQueryBuilder_Basic(t *testing.T) {
 	assert.Contains(t, sql, "WHERE 1=1")
 	assert.Contains(t, sql, "ORDER BY created_at")
 	assert.Contains(t, sql, "LIMIT $1 OFFSET $2")
-	assert.Equal(t, []interface{}{10, 0}, args)
+	assert.Equal(t, []any{10, 0}, args)
 }
 
 func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
@@ -475,12 +475,12 @@ func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
 	sql, args := mqb.buildWithPagination(10, 0)
 
 	assert.Contains(t, sql, "id IN ($1, $2, $3)")
-	assert.Equal(t, []interface{}{"id1", "id2", "id3", 10, 0}, args)
+	assert.Equal(t, []any{"id1", "id2", "id3", 10, 0}, args)
 }
 
 func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
 	mqb := newMetadataQueryBuilder("test_table")
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		"category": "test",
 		"status":   "active",
 	}
@@ -497,7 +497,7 @@ func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
 func TestMetadataQueryBuilder_WithBothFilters(t *testing.T) {
 	mqb := newMetadataQueryBuilder("test_table")
 	mqb.addIDFilter([]string{"id1", "id2"})
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		"category": "test",
 	}
 	mqb.addMetadataFilter(filter)
@@ -519,7 +519,7 @@ func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
 
 	// Test with empty ID filter
 	mqb.addIDFilter([]string{})
-	mqb.addMetadataFilter(map[string]interface{}{})
+	mqb.addMetadataFilter(map[string]any{})
 
 	sql, args := mqb.buildWithPagination(10, 0)
 
@@ -527,7 +527,7 @@ func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
 	assert.Contains(t, sql, "WHERE 1=1")
 	assert.NotContains(t, sql, "id IN")
 	assert.NotContains(t, sql, "metadata @>")
-	assert.Equal(t, []interface{}{10, 0}, args)
+	assert.Equal(t, []any{10, 0}, args)
 }
 
 // TestCountQueryBuilder_Basic tests basic count query building
@@ -544,7 +544,7 @@ func TestCountQueryBuilder_Basic(t *testing.T) {
 func TestCountQueryBuilder_WithMetadataFilter(t *testing.T) {
 	cqb := newCountQueryBuilder("test_table")
 
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		"category": "science",
 		"status":   "published",
 	}
@@ -569,7 +569,7 @@ func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
 	cqb := newCountQueryBuilder("test_table")
 
 	// Add empty filter (should be ignored)
-	cqb.addMetadataFilter(map[string]interface{}{})
+	cqb.addMetadataFilter(map[string]any{})
 
 	sql, args := cqb.build()
 
@@ -595,14 +595,14 @@ func TestDeleteSQLBuilder_WithIDFilter(t *testing.T) {
 	sql, args := dsb.build()
 
 	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2, $3)", sql)
-	assert.Equal(t, []interface{}{"doc1", "doc2", "doc3"}, args)
+	assert.Equal(t, []any{"doc1", "doc2", "doc3"}, args)
 }
 
 // TestDeleteSQLBuilder_WithMetadataFilter tests delete query with metadata filter
 func TestDeleteSQLBuilder_WithMetadataFilter(t *testing.T) {
 	dsb := newDeleteSQLBuilder("test_table")
 
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		"category": "test",
 		"status":   "deleted",
 	}
@@ -627,7 +627,7 @@ func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
 	dsb := newDeleteSQLBuilder("test_table")
 	dsb.addIDFilter([]string{"doc1", "doc2"})
 
-	filter := map[string]interface{}{
+	filter := map[string]any{
 		"category": "test",
 	}
 	dsb.addMetadataFilter(filter)
@@ -635,7 +635,7 @@ func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
 	sql, args := dsb.build()
 
 	assert.Equal(t, "DELETE FROM test_table WHERE 1=1 AND id IN ($1, $2) AND metadata @> $3::jsonb", sql)
-	assert.Equal(t, []interface{}{"doc1", "doc2", "{\"category\":\"test\"}"}, args)
+	assert.Equal(t, []any{"doc1", "doc2", "{\"category\":\"test\"}"}, args)
 }
 
 // TestDeleteSQLBuilder_EmptyFilters tests delete query with empty filters
@@ -644,7 +644,7 @@ func TestDeleteSQLBuilder_EmptyFilters(t *testing.T) {
 
 	// Test with empty ID filter
 	dsb.addIDFilter([]string{})
-	dsb.addMetadataFilter(map[string]interface{}{})
+	dsb.addMetadataFilter(map[string]any{})
 
 	sql, args := dsb.build()
 

@@ -344,7 +344,7 @@ func WithOpenAIOptions(openaiOpts ...openaiopt.RequestOption) Option {
 // These fields will be included in every chat completion request.
 // E.g.:
 //
-//	WithExtraFields(map[string]interface{}{
+//	WithExtraFields(map[string]any{
 //		"custom_metadata": map[string]string{
 //			"session_id": "abc",
 //		},

@@ -21,98 +21,98 @@ func TestInjectSessionState(t *testing.T) {
 	tests := []struct {
 		name        string
 		template    string
-		state       map[string]interface{}
+		state       map[string]any
 		expected    string
 		expectError bool
 	}{
 		{
 			name:        "empty template",
 			template:    "",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "",
 			expectError: false,
 		},
 		{
 			name:        "no state variables",
 			template:    "Hello, world!",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "Hello, world!",
 			expectError: false,
 		},
 		{
 			name:        "simple state variable",
 			template:    "Tell me about {capital_city}.",
-			state:       map[string]interface{}{"capital_city": "Paris"},
+			state:       map[string]any{"capital_city": "Paris"},
 			expected:    "Tell me about Paris.",
 			expectError: false,
 		},
 		{
 			name:        "multiple state variables",
 			template:    "The capital of {country} is {capital_city}.",
-			state:       map[string]interface{}{"country": "France", "capital_city": "Paris"},
+			state:       map[string]any{"country": "France", "capital_city": "Paris"},
 			expected:    "The capital of France is Paris.",
 			expectError: false,
 		},
 		{
 			name:        "optional variable present",
 			template:    "Hello {name?}!",
-			state:       map[string]interface{}{"name": "Alice"},
+			state:       map[string]any{"name": "Alice"},
 			expected:    "Hello Alice!",
 			expectError: false,
 		},
 		{
 			name:        "optional variable missing",
 			template:    "Hello {name?}!",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "Hello !",
 			expectError: false,
 		},
 		{
 			name:        "non-optional variable missing",
 			template:    "Hello {name}!",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "Hello {name}!", // Should preserve the template
 			expectError: false,
 		},
 		{
 			name:        "mixed optional and non-optional",
 			template:    "Hello {name?}, your age is {age}.",
-			state:       map[string]interface{}{"age": 25},
+			state:       map[string]any{"age": 25},
 			expected:    "Hello , your age is 25.",
 			expectError: false,
 		},
 		{
 			name:        "invalid variable name",
 			template:    "Hello {invalid-name}!",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "Hello {invalid-name}!", // Should preserve invalid names
 			expectError: false,
 		},
 		{
 			name:        "artifact reference (not implemented)",
 			template:    "Content: {artifact.file.txt}",
-			state:       map[string]interface{}{},
+			state:       map[string]any{},
 			expected:    "Content: {artifact.file.txt}", // Should preserve artifact references
 			expectError: false,
 		},
 		{
 			name:        "prefixed variable names",
 			template:    "User: {user:preference}, App: {app:setting}",
-			state:       map[string]interface{}{"user:preference": "dark", "app:setting": "enabled"},
+			state:       map[string]any{"user:preference": "dark", "app:setting": "enabled"},
 			expected:    "User: dark, App: enabled",
 			expectError: false,
 		},
 		{
 			name:        "numeric values",
 			template:    "Count: {count}, Price: {price}",
-			state:       map[string]interface{}{"count": 42, "price": 19.99},
+			state:       map[string]any{"count": 42, "price": 19.99},
 			expected:    "Count: 42, Price: 19.99",
 			expectError: false,
 		},
 		{
 			name:        "boolean values",
 			template:    "Enabled: {enabled}, Active: {active}",
-			state:       map[string]interface{}{"enabled": true, "active": false},
+			state:       map[string]any{"enabled": true, "active": false},
 			expected:    "Enabled: true, Active: false",
 			expectError: false,
 		},

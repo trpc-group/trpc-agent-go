@@ -110,7 +110,7 @@ func newFilterQueryBuilder(table string, language string) *queryBuilder {
 type deleteSQLBuilder struct {
 	table      string
 	conditions []string
-	args       []interface{}
+	args       []any
 	argIndex   int
 }
 
@@ -119,7 +119,7 @@ func newDeleteSQLBuilder(table string) *deleteSQLBuilder {
 	return &deleteSQLBuilder{
 		table:      table,
 		conditions: []string{"1=1"},
-		args:       make([]interface{}, 0),
+		args:       make([]any, 0),
 		argIndex:   1,
 	}
 }
@@ -143,7 +143,7 @@ func (dsb *deleteSQLBuilder) addIDFilter(ids []string) {
 
 // addMetadataFilter adds metadata filter conditions to the delete query
 // Uses @> operator for efficient JSONB queries, same as queryBuilder implementation
-func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]interface{}) {
+func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]any) {
 	if len(metadata) == 0 {
 		return
 	}
@@ -158,7 +158,7 @@ func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]interface{}) 
 }
 
 // build builds the DELETE query with all conditions
-func (dsb *deleteSQLBuilder) build() (string, []interface{}) {
+func (dsb *deleteSQLBuilder) build() (string, []any) {
 	whereClause := strings.Join(dsb.conditions, " AND ")
 	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dsb.table, whereClause)
 	return sql, dsb.args
@@ -334,7 +334,7 @@ func (qb *queryBuilder) buildKeywordSelectClause() string {
 type metadataQueryBuilder struct {
 	table      string
 	conditions []string
-	args       []interface{}
+	args       []any
 	argIndex   int
 }
 
@@ -343,7 +343,7 @@ func newMetadataQueryBuilder(table string) *metadataQueryBuilder {
 	return &metadataQueryBuilder{
 		table:      table,
 		conditions: []string{"1=1"},
-		args:       make([]interface{}, 0),
+		args:       make([]any, 0),
 		argIndex:   1,
 	}
 }
@@ -366,7 +366,7 @@ func (mqb *metadataQueryBuilder) addIDFilter(ids []string) {
 }
 
 // addMetadataFilter adds metadata filter conditions to the metadata query
-func (mqb *metadataQueryBuilder) addMetadataFilter(metadata map[string]interface{}) {
+func (mqb *metadataQueryBuilder) addMetadataFilter(metadata map[string]any) {
 	if len(metadata) == 0 {
 		return
 	}
@@ -381,7 +381,7 @@ func (mqb *metadataQueryBuilder) addMetadataFilter(metadata map[string]interface
 }
 
 // buildWithPagination builds the metadata query with pagination support
-func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string, []interface{}) {
+func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string, []any) {
 	whereClause := strings.Join(mqb.conditions, " AND ")
 
 	// Add limit and offset as parameters
@@ -407,7 +407,7 @@ func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string,
 type countQueryBuilder struct {
 	table      string
 	conditions []string
-	args       []interface{}
+	args       []any
 	argIndex   int
 }
 
@@ -416,13 +416,13 @@ func newCountQueryBuilder(table string) *countQueryBuilder {
 	return &countQueryBuilder{
 		table:      table,
 		conditions: []string{"1=1"},
-		args:       make([]interface{}, 0),
+		args:       make([]any, 0),
 		argIndex:   1,
 	}
 }
 
 // addMetadataFilter adds metadata filter conditions to the count query
-func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]interface{}) {
+func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]any) {
 	if len(metadata) == 0 {
 		return
 	}
@@ -437,7 +437,7 @@ func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]interface{})
 }
 
 // build builds the COUNT query
-func (cqb *countQueryBuilder) build() (string, []interface{}) {
+func (cqb *countQueryBuilder) build() (string, []any) {
 	whereClause := strings.Join(cqb.conditions, " AND ")
 	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", cqb.table, whereClause)
 	return sql, cqb.args

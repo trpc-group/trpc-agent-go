@@ -735,7 +735,7 @@ func TestWithTransferStateKey(t *testing.T) {
 				Content: "test message",
 			},
 			RunOptions: agent.RunOptions{
-				RuntimeState: map[string]interface{}{
+				RuntimeState: map[string]any{
 					"session_key": "session_value",
 					"user_pref":   "dark_mode",
 					"other_key":   "should_not_transfer",

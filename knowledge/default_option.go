@@ -134,7 +134,7 @@ func WithRecreate(recreate bool) LoadOption {
 
 type showDocumentInfoConfig struct {
 	ids        []string
-	filter     map[string]interface{}
+	filter     map[string]any
 	sourceName string
 }
 
@@ -149,7 +149,7 @@ func WithShowDocumentInfoIDs(ids []string) ShowDocumentInfoOption {
 }
 
 // WithShowDocumentInfoFilter sets the filter for the document info.
-func WithShowDocumentInfoFilter(filter map[string]interface{}) ShowDocumentInfoOption {
+func WithShowDocumentInfoFilter(filter map[string]any) ShowDocumentInfoOption {
 	return func(s *showDocumentInfoConfig) {
 		s.filter = filter
 	}

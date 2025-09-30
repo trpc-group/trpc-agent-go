@@ -94,7 +94,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 }
 
 func TestAgenticFilterSearchTool(t *testing.T) {
-	agenticFilterInfo := map[string][]interface{}{
+	agenticFilterInfo := map[string][]any{
 		"category": {"documentation", "tutorial", "api"},
 		"protocol": {"trpc-go", "http", "grpc"},
 		"level":    {"beginner", "intermediate", "advanced"},
@@ -182,7 +182,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("verify description generation with empty filter info", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, map[string][]interface{}{})
+		searchTool := NewAgenticFilterSearchTool(kb, nil, map[string][]any{})
 		decl := searchTool.Declaration()
 		require.Contains(t, decl.Description, "helpful assistant")
 		require.NotContains(t, decl.Description, "Available filters")
@@ -191,15 +191,15 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 func TestGetFinalFilter(t *testing.T) {
 	t.Run("merge filters with priority", func(t *testing.T) {
-		agentFilter := map[string]interface{}{
+		agentFilter := map[string]any{
 			"source": "agent",
 			"common": "agent_value",
 		}
-		runnerFilter := map[string]interface{}{
+		runnerFilter := map[string]any{
 			"runner": "runner_value",
 			"common": "runner_value", // Will be overridden by agent
 		}
-		invocationFilter := map[string]interface{}{
+		invocationFilter := map[string]any{
 			"invocation": "invocation_value",
 			"common":     "invocation_value", // Will be overridden by runner and agent
 		}
@@ -218,7 +218,7 @@ func TestGetFinalFilter(t *testing.T) {
 	})
 
 	t.Run("partial nil filters", func(t *testing.T) {
-		agentFilter := map[string]interface{}{"agent": "value"}
+		agentFilter := map[string]any{"agent": "value"}
 		result := getFinalFilter(agentFilter, nil, nil)
 		require.Equal(t, "value", result["agent"])
 		require.Len(t, result, 1)
@@ -227,13 +227,13 @@ func TestGetFinalFilter(t *testing.T) {
 
 func TestGenerateAgenticFilterPrompt(t *testing.T) {
 	t.Run("empty filter info", func(t *testing.T) {
-		prompt := generateAgenticFilterPrompt(map[string][]interface{}{})
+		prompt := generateAgenticFilterPrompt(map[string][]any{})
 		require.Contains(t, prompt, "helpful assistant")
 		require.NotContains(t, prompt, "Available filters")
 	})
 
 	t.Run("with filter info", func(t *testing.T) {
-		filterInfo := map[string][]interface{}{
+		filterInfo := map[string][]any{
 			"category": {"doc", "tutorial"},
 			"protocol": {"trpc-go", "http"},
 			"empty":    {},

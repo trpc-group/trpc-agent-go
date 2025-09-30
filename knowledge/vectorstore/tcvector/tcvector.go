@@ -730,7 +730,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	limit,
 	offset int,
 	ids []string,
-	filter map[string]interface{},
+	filter map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	QueryDocumentParams := tcvectordb.QueryDocumentParams{
 		Offset:       int64(offset),
@@ -752,9 +752,9 @@ func (vs *VectorStore) queryMetadataBatch(
 
 	result := make(map[string]vectorstore.DocumentMetadata)
 	for _, tcDoc := range queryResult.Documents {
-		metadata := make(map[string]interface{})
+		metadata := make(map[string]any)
 		if field, ok := tcDoc.Fields[fieldMetadata]; ok {
-			if metaField, ok := field.Val.(map[string]interface{}); ok {
+			if metaField, ok := field.Val.(map[string]any); ok {
 				metadata = metaField
 			}
 		}

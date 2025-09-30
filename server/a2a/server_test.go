@@ -225,7 +225,7 @@ type mockTaskHandler struct {
 	cleanTaskFunc         func(taskID *string) error
 	getMessageHistoryFunc func() []protocol.Message
 	getContextIDFunc      func() string
-	getMetadataFunc       func() (map[string]interface{}, error)
+	getMetadataFunc       func() (map[string]any, error)
 }
 
 func (m *mockTaskHandler) BuildTask(specificTaskID *string, contextID *string) (string, error) {
@@ -284,11 +284,11 @@ func (m *mockTaskHandler) GetContextID() string {
 	return "test-context-id"
 }
 
-func (m *mockTaskHandler) GetMetadata() (map[string]interface{}, error) {
+func (m *mockTaskHandler) GetMetadata() (map[string]any, error) {
 	if m.getMetadataFunc != nil {
 		return m.getMetadataFunc()
 	}
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
 // mockTaskSubscriber implements TaskSubscriber interface for testing

@@ -861,7 +861,7 @@ func formatJSON(jsonStr string) string {
 		return ""
 	}
 	// Try to pretty print the JSON.
-	var prettyJSON interface{}
+	var prettyJSON any
 	if err := json.Unmarshal([]byte(jsonStr), &prettyJSON); err == nil {
 		if prettyBytes, err := json.MarshalIndent(prettyJSON, "", "  "); err == nil {
 			return string(prettyBytes)

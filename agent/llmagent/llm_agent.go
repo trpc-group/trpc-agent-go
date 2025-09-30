@@ -267,14 +267,14 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 }
 
 // WithKnowledgeFilter sets the knowledge filter for the knowledge base.
-func WithKnowledgeFilter(filter map[string]interface{}) Option {
+func WithKnowledgeFilter(filter map[string]any) Option {
 	return func(opts *Options) {
 		opts.KnowledgeFilter = filter
 	}
 }
 
 // WithKnowledgeAgenticFilterInfo sets the knowledge agentic filter info for the knowledge base.
-func WithKnowledgeAgenticFilterInfo(filter map[string][]interface{}) Option {
+func WithKnowledgeAgenticFilterInfo(filter map[string][]any) Option {
 	return func(opts *Options) {
 		opts.AgenticFilterInfo = filter
 	}
@@ -330,12 +330,12 @@ type Options struct {
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
 	// KnowledgeFilter is the filter for the knowledge search tool.
-	KnowledgeFilter map[string]interface{}
+	KnowledgeFilter map[string]any
 	// EnableKnowledgeAgenticFilter enables agentic filter mode for knowledge search.
 	// When true, allows the LLM to dynamically decide whether to pass filter parameters.
 	EnableKnowledgeAgenticFilter bool
 	// KnowledgeAgenticFilter is the knowledge agentic filter for the knowledge search tool.
-	AgenticFilterInfo map[string][]interface{}
+	AgenticFilterInfo map[string][]any
 	// AddNameToInstruction adds the agent name to the instruction if true.
 	AddNameToInstruction bool
 	// EnableParallelTools enables parallel tool execution if true.

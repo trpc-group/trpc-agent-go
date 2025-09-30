@@ -15,13 +15,13 @@ package schema
 // ADKSession mirrors the structure expected by ADK Web UI for a session.
 // Field names follow the camel-case convention required by the UI.
 type ADKSession struct {
-	AppName        string                   `json:"appName"`
-	UserID         string                   `json:"userId"`
-	ID             string                   `json:"id"`
-	CreateTime     int64                    `json:"createTime"`
-	LastUpdateTime int64                    `json:"lastUpdateTime"`
-	State          map[string][]byte        `json:"state"`
-	Events         []map[string]interface{} `json:"events"`
+	AppName        string            `json:"appName"`
+	UserID         string            `json:"userId"`
+	ID             string            `json:"id"`
+	CreateTime     int64             `json:"createTime"`
+	LastUpdateTime int64             `json:"lastUpdateTime"`
+	State          map[string][]byte `json:"state"`
+	Events         []map[string]any  `json:"events"`
 }
 
 // Span represents a single span in the trace.
@@ -56,15 +56,15 @@ type InlineData struct {
 
 // FunctionCall matches GenAI functionCall part.
 type FunctionCall struct {
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"args,omitempty"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"args,omitempty"`
 }
 
 // FunctionResponse matches GenAI functionResponse part.
 type FunctionResponse struct {
-	Name     string      `json:"name"`
-	Response interface{} `json:"response"`
-	ID       string      `json:"id,omitempty"`
+	Name     string `json:"name"`
+	Response any    `json:"response"`
+	ID       string `json:"id,omitempty"`
 }
 
 // Content matches the GenAI content contract used by ADK Web.

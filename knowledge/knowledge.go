@@ -71,5 +71,5 @@ type SearchFilter struct {
 	DocumentIDs []string
 
 	// Metadata filters results by metadata key-value pairs.
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
