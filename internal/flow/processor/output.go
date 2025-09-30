@@ -125,11 +125,12 @@ func (p *OutputResponseProcessor) handleOutputKey(
 	result := content
 	// If output_schema is present, ensure content is JSON.
 	if p.outputSchema != nil {
-		if strings.TrimSpace(content) == "" {
+		cleaned := sanitizeJSONContent(content)
+		if strings.TrimSpace(cleaned) == "" {
 			return
 		}
 		var parsedJSON any
-		if err := json.Unmarshal([]byte(content), &parsedJSON); err != nil {
+		if err := json.Unmarshal([]byte(cleaned), &parsedJSON); err != nil {
 			log.Warnf("Failed to parse output as JSON for output_schema validation: %v", err)
 			return
 		}
@@ -200,4 +201,35 @@ func extractFirstJSONObject(s string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// sanitizeJSONContent removes Markdown code fences (e.g., ```json) and surrounding whitespace.
+// Some LLMs (Large Language Models) may emit code fences like ```json or language hints
+// (e.g., ```json, ```JSON) even when asked for raw JSON. Feeding the content directly to json.Unmarshal
+// would fail because of these extra characters. This helper function strips the fences and returns
+// a clean JSON payload.
+func sanitizeJSONContent(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "```") {
+		return s
+	}
+	cleaned := strings.TrimPrefix(s, "```")
+	idx1 := strings.Index(cleaned, "[")
+	if idx1 < 0 {
+		idx1 = len(cleaned)
+	}
+	idx2 := strings.Index(cleaned, "{")
+	if idx2 < 0 {
+		idx2 = len(cleaned)
+	}
+	minIdx := min(idx1, idx2)
+	if minIdx == len(cleaned) {
+		// Unexpected case, no JSON object/array found, return the original content as a fallback.
+		return s
+	}
+	// Remove start fences.
+	cleaned = cleaned[minIdx:]
+	// Remove end fences.
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	return strings.TrimSpace(cleaned)
 }
