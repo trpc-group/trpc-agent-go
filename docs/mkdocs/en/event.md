@@ -324,7 +324,6 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
         if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
             return err
         }
-        if event.
         // Check if it's the final event.
         if event.IsFinalResponse() {
             fmt.Printf("\n")
