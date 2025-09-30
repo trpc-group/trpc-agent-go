@@ -10,9 +10,49 @@
 package tcvector
 
 import (
+	"math"
+	"time"
+
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+type DocBuilderFunc func(tcDoc tcvectordb.Document) (*document.Document, []float64, error)
+
+// defaultDocBuilder converts tcvectordb document to document.Document.
+func defaultDocBuilder(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+	doc := &document.Document{
+		ID: tcDoc.Id,
+	}
+	if field, ok := tcDoc.Fields[fieldName]; ok {
+		doc.Name = field.String()
+	}
+	if field, ok := tcDoc.Fields[fieldContent]; ok {
+		doc.Content = field.String()
+	}
+	if field, ok := tcDoc.Fields[fieldCreatedAt]; ok {
+		u := min(field.Uint64(), uint64(math.MaxInt64))
+		//nolint:gosec // u is not overflowed and the conversion is safe.
+		doc.CreatedAt = time.Unix(int64(u), 0)
+	}
+	if field, ok := tcDoc.Fields[fieldUpdatedAt]; ok {
+		u := min(field.Uint64(), uint64(math.MaxInt64))
+		//nolint:gosec // u is not overflowed and the conversion is safe.
+		doc.UpdatedAt = time.Unix(int64(u), 0)
+	}
+	if field, ok := tcDoc.Fields[fieldMetadata]; ok {
+		if metadata, ok := field.Val.(map[string]any); ok {
+			doc.Metadata = metadata
+		}
+	}
+
+	embedding := make([]float64, len(tcDoc.Vector))
+	for i, v := range tcDoc.Vector {
+		embedding[i] = float64(v)
+	}
+	return doc, embedding, nil
+}
 
 // options contains the options for tcvectordb.
 type options struct {
@@ -35,6 +75,8 @@ type options struct {
 	// filterField is the field name to filter the document.
 	filterFields  []string
 	filterIndexes []tcvectordb.FilterIndex
+
+	docBuilder DocBuilderFunc
 }
 
 var defaultOptions = options{
@@ -48,6 +90,7 @@ var defaultOptions = options{
 	textWeight:     0.3,
 	language:       "en",
 	filterFields:   []string{source.MetaURI, source.MetaSourceName, fieldCreatedAt},
+	docBuilder:     defaultDocBuilder,
 	filterIndexes: []tcvectordb.FilterIndex{
 		{
 			FieldName: source.MetaURI,
@@ -180,5 +223,12 @@ func WithFilterIndexFields(fields []string) Option {
 				FieldType: tcvectordb.String,
 			})
 		}
+	}
+}
+
+// WithDocBuilder sets the document builder function.
+func WithDocBuilder(builder DocBuilderFunc) Option {
+	return func(o *options) {
+		o.docBuilder = builder
 	}
 }
