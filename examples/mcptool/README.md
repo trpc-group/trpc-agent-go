@@ -262,6 +262,74 @@ import (
 )
 ```
 
+## Session Reconnection for MCP Tools
+
+The trpc-agent-go framework provides automatic session reconnection to handle server restarts and session expiration. When enabled, the session manager automatically recreates the MCP session when detecting connection failures.
+
+### Enabling Session Reconnection
+
+For most use cases, simply enable session reconnection with default settings:
+
+```go
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(3), // Enable automatic session reconnection (max 3 attempts, recommended)
+    mcp.WithMCPOptions(
+        tmcp.WithRetry(...), // Can be combined with retry
+    ),
+)
+```
+
+### Custom Reconnection Configuration
+
+For scenarios requiring different reconnection behavior:
+
+```go
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(5), // Custom max attempts (valid range: 1-10)
+)
+
+// Or use advanced configuration for future extensions
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{...},
+    mcp.WithSessionReconnectConfig(mcp.SessionReconnectConfig{
+        MaxReconnectAttempts: 5,
+        // Future extension fields will be available here
+    }),
+)
+```
+
+### What Errors Trigger Reconnection?
+
+Automatic reconnection handles connection/session failures:
+
+- **Connection failures**: Transport closed, connection refused/reset, broken pipe, EOF
+- **Session expiration**: HTTP 404, session not found, session_expired errors
+
+**Not reconnected**: DNS resolution failures (configuration errors), I/O timeouts (potential performance issues)
+
+### How It Works
+
+```
+User Request → Connection Error Detected → Session Reconnection → Retry Request → Success
+```
+
+**Example Flow**:
+1. Server restarts (connection lost)
+2. Tool call detects `transport is closed` error
+3. Automatically recreates MCP session
+4. Retries the tool call
+5. Returns result successfully
+
 ## Running the Example
 
 ### Prerequisites
