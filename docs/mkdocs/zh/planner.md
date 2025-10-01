@@ -21,8 +21,7 @@ type Planner interface {
         llmRequest *model.Request,
     ) string
 
-    // ProcessPlanningResponse 处理 LLM 的规划响应，返回处理后的响应
-    // 如果不需要处理则返回 nil
+    // ProcessPlanningResponse 处理 LLM 的规划响应
     ProcessPlanningResponse(
         ctx context.Context,
         invocation *agent.Invocation,
@@ -34,7 +33,7 @@ type Planner interface {
 Planner 的工作流程：
 
 1. 请求处理阶段：Planner 在 LLM 请求发送前通过 `BuildPlanningInstruction` 添加规划指令或配置
-2. 响应处理阶段：Planner 处理 LLM 响应，通过 `ProcessPlanningResponse` 组织内容结构
+2. 响应处理阶段：Planner 处理 LLM 响应，通过 `ProcessPlanningResponse` 处理内容
 
 ## BuiltinPlanner
 
