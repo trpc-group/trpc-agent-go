@@ -830,6 +830,8 @@ func (m *Model) handleStreamingResponse(
 	acc := openai.ChatCompletionAccumulator{}
 	// Track ID -> Index mapping.
 	idToIndexMap := make(map[string]int)
+	// Aggregate reasoning deltas for final message fallback (some providers don't retain it in accumulator).
+	var reasoningBuf bytes.Buffer
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -855,6 +857,15 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
+		// Aggregate reasoning delta (if any) for final response fallback.
+		if len(chunk.Choices) > 0 {
+			if raw, ok := chunk.Choices[0].Delta.JSON.ExtraFields[model.ReasoningContentKey]; ok {
+				if s, err := strconv.Unquote(raw.Raw()); err == nil && s != "" {
+					reasoningBuf.WriteString(s)
+				}
+			}
+		}
+
 		response := m.createPartialResponse(chunk)
 
 		select {
@@ -865,7 +876,7 @@ func (m *Model) handleStreamingResponse(
 	}
 
 	// Send final response with usage information if available.
-	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, responseChan)
+	m.sendFinalResponse(ctx, stream, acc, idToIndexMap, reasoningBuf.String(), responseChan)
 
 	// Call the stream complete callback after final response is sent
 	if m.chatStreamCompleteCallback != nil {
@@ -989,6 +1000,7 @@ func (m *Model) sendFinalResponse(
 	stream *ssestream.Stream[openai.ChatCompletionChunk],
 	acc openai.ChatCompletionAccumulator,
 	idToIndexMap map[string]int,
+	aggregatedReasoning string,
 	responseChan chan<- *model.Response,
 ) {
 	if stream.Err() == nil {
@@ -1001,7 +1013,7 @@ func (m *Model) sendFinalResponse(
 			accumulatedToolCalls = m.processAccumulatedToolCalls(acc, idToIndexMap)
 		}
 
-		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls)
+		finalResponse := m.createFinalResponse(acc, hasToolCall, accumulatedToolCalls, aggregatedReasoning)
 
 		select {
 		case responseChan <- finalResponse:
@@ -1073,6 +1085,7 @@ func (m *Model) createFinalResponse(
 	acc openai.ChatCompletionAccumulator,
 	hasToolCall bool,
 	accumulatedToolCalls []model.ToolCall,
+	aggregatedReasoning string,
 ) *model.Response {
 	finalResponse := &model.Response{
 		Object:  model.ObjectTypeChatCompletion,
@@ -1099,6 +1112,10 @@ func (m *Model) createFinalResponse(
 					reasoningContent = reasoningStr
 				}
 			}
+		}
+		// Fallback to aggregated streaming deltas if accumulator didn't retain reasoning.
+		if reasoningContent == "" && i == 0 && aggregatedReasoning != "" {
+			reasoningContent = aggregatedReasoning
 		}
 
 		finalResponse.Choices[i] = model.Choice{
