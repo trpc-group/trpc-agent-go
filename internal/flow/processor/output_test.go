@@ -260,17 +260,17 @@ func TestSanitizeJSONContentVariants(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := sanitizeJSONContent(tc.input); got != tc.want {
-				t.Fatalf("expected %q, got %q", tc.want, got)
-			}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sanitizeJSONContent(tt.input))
 		})
 	}
 }
 
-func TestOutputResponseProcessor_HandleOutputKey_WithFencedContent(t *testing.T) {
-	ctx := context.Background()
+func TestOutputResponseProcessor_WithOutputSchemaStripsFences(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -279,35 +279,25 @@ func TestOutputResponseProcessor_HandleOutputKey_WithFencedContent(t *testing.T)
 			},
 		},
 	}
+
 	processor := NewOutputResponseProcessor("weather", schema)
 	invocation := agent.NewInvocation()
-	content := "```json\n{\"city\":\"Shanghai\"}\n```"
+
+	response := &model.Response{
+		IsPartial: false,
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Content: "```json\n{\"city\":\"Beijing\"}\n```",
+				},
+			},
+		},
+	}
 
 	eventCh := make(chan *event.Event, 1)
-	done := make(chan struct{})
-	go func() {
-		processor.handleOutputKey(ctx, invocation, content, eventCh)
-		close(done)
-	}()
+	processor.ProcessResponse(ctx, invocation, &model.Request{}, response, eventCh)
+	close(eventCh)
 
-	var evt *event.Event
-	select {
-	case evt = <-eventCh:
-		assert.NotNil(t, evt)
-	case <-time.After(time.Second):
-		assert.Fail(t, "timed out waiting for event")
-	}
-
-	assert.True(t, evt.RequiresCompletion)
-	invocation.NotifyCompletion(ctx, agent.AppendEventNoticeKeyPrefix+evt.ID)
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		assert.Fail(t, "handleOutputKey did not finish")
-	}
-
-	value, ok := evt.StateDelta["weather"]
-	assert.True(t, ok)
-	assert.Equal(t, "```json\n{\"city\":\"Shanghai\"}\n```", string(value))
+	want := "{\"city\":\"Beijing\"}"
+	assert.Equal(t, want, response.Choices[0].Message.Content)
 }

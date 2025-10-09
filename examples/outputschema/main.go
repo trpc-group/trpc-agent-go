@@ -38,7 +38,7 @@ const (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-v3-local-II", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("📋 Output Schema Demo\n")
