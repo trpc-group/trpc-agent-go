@@ -236,11 +236,17 @@ if err != nil {
     // 处理 error
 }
 
+docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+    return &document.Document{ID: tcDoc.Id}, nil, nil
+}
+
 // TcVector
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
@@ -255,6 +261,36 @@ kb := knowledge.New(
 #### Elasticsearch
 
 ```go
+
+docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+    var source struct {
+        ID        string    `json:"id"`
+        Title     string    `json:"title"`
+        Content   string    `json:"content"`
+        Page      int       `json:"page"`
+        Author    string    `json:"author"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Embedding []float64 `json:"embedding"`
+    }
+    if err := json.Unmarshal(hitSource, &source); err != nil {
+        return nil, nil, err
+    }
+    // Create document.
+    doc := &document.Document{
+        ID:        source.ID,
+        Name:      source.Title,
+        Content:   source.Content,
+        CreatedAt: source.CreatedAt,
+        UpdatedAt: source.UpdatedAt,
+        Metadata: map[string]any{
+            "page":   source.Page,
+            "author": source.Author,
+        },
+    }
+    return doc, source.Embedding, nil
+}
+
 // 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
 esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
@@ -265,6 +301,8 @@ esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithMaxRetries(3),
     // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
     vectorelasticsearch.WithVersion("v9"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectorelasticsearch.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
