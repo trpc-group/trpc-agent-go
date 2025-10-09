@@ -56,6 +56,9 @@ func (p *OutputResponseProcessor) ProcessResponse(
 	if !ok {
 		return
 	}
+	// Remove ```json``` fence.
+	content = sanitizeJSONContent(content)
+	rsp.Choices[0].Message.Content = content
 
 	// 1) Emit typed structured output payload if configured.
 	p.emitTypedStructuredOutput(ctx, invocation, content, ch)
@@ -200,4 +203,36 @@ func extractFirstJSONObject(s string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// sanitizeJSONContent removes Markdown code fences (e.g., ```json) and surrounding whitespace.
+// Some LLMs (Large Language Models) may emit code fences like ```json or language hints
+// (e.g., ```json, ```JSON) even when asked for raw JSON. Feeding the content directly to json.Unmarshal
+// would fail because of these extra characters. This helper function strips the fences and returns
+// a clean JSON payload.
+func sanitizeJSONContent(s string) string {
+	const fence = "```"
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, fence) {
+		return s
+	}
+	cleaned := strings.TrimPrefix(s, fence)
+	idx1 := strings.Index(cleaned, "[")
+	if idx1 < 0 {
+		idx1 = len(cleaned)
+	}
+	idx2 := strings.Index(cleaned, "{")
+	if idx2 < 0 {
+		idx2 = len(cleaned)
+	}
+	minIdx := min(idx1, idx2)
+	if minIdx == len(cleaned) {
+		// Unexpected case, no JSON object/array found, return the original content as a fallback.
+		return s
+	}
+	// Remove start fences.
+	cleaned = cleaned[minIdx:]
+	// Remove end fences.
+	cleaned = strings.TrimSuffix(cleaned, fence)
+	return strings.TrimSpace(cleaned)
 }

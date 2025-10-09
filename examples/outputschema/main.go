@@ -38,7 +38,7 @@ const (
 
 func main() {
 	// Parse command line flags.
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v3-local-II", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("📋 Output Schema Demo\n")
@@ -237,12 +237,6 @@ func (c *outputSchemaChat) processStreamingResponse(eventChan <-chan *event.Even
 		if err := c.handleEvent(event); err != nil {
 			return err
 		}
-
-		// Check if this is the final runner completion event.
-		if event.Done && event.Response != nil && event.Response.Object == model.ObjectTypeRunnerCompletion {
-			fmt.Printf("\n")
-			break
-		}
 	}
 	return nil
 }
@@ -258,8 +252,8 @@ func (c *outputSchemaChat) handleEvent(event *event.Event) error {
 	// Handle streaming content.
 	if len(event.Choices) > 0 {
 		choice := event.Choices[0]
-		if choice.Delta.Content != "" {
-			fmt.Print(choice.Delta.Content)
+		if choice.Message.Content != "" {
+			fmt.Print(choice.Message.Content)
 		}
 	}
 

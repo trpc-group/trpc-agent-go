@@ -12,7 +12,9 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -208,4 +210,104 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 	if len(events) != 0 {
 		t.Errorf("Expected 0 events for partial response, got %d", len(events))
 	}
+}
+
+func TestSanitizeJSONContentVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "normal",
+			input: "{\"city\":\"Beijing\"}",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "with_fences",
+			input: "```json\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "no_language",
+			input: "```\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "same_line_language",
+			input: "```json {\"city\":\"Beijing\"}```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "multiple_prefix",
+			input: "```json\njson\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "windows_newline",
+			input: "```json\r\n{\"city\":\"Beijing\"}\r\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "embedded_backticks",
+			input: "```json\n{\"city\":\"Beijing\",\"note\":\"contains ``` fence inside\"}\n```",
+			want:  "{\"city\":\"Beijing\",\"note\":\"contains ``` fence inside\"}",
+		},
+		{
+			name:  "multiline_string",
+			input: "```json\n{\"city\":\"Beijing\\n123\"}\n```",
+			want:  "{\"city\":\"Beijing\\n123\"}",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeJSONContent(tc.input); got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestOutputResponseProcessor_HandleOutputKey_WithFencedContent(t *testing.T) {
+	ctx := context.Background()
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"city": map[string]any{
+				"type": "string",
+			},
+		},
+	}
+	processor := NewOutputResponseProcessor("weather", schema)
+	invocation := agent.NewInvocation()
+	content := "```json\n{\"city\":\"Shanghai\"}\n```"
+
+	eventCh := make(chan *event.Event, 1)
+	done := make(chan struct{})
+	go func() {
+		processor.handleOutputKey(ctx, invocation, content, eventCh)
+		close(done)
+	}()
+
+	var evt *event.Event
+	select {
+	case evt = <-eventCh:
+		assert.NotNil(t, evt)
+	case <-time.After(time.Second):
+		assert.Fail(t, "timed out waiting for event")
+	}
+
+	assert.True(t, evt.RequiresCompletion)
+	invocation.NotifyCompletion(ctx, agent.AppendEventNoticeKeyPrefix+evt.ID)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		assert.Fail(t, "handleOutputKey did not finish")
+	}
+
+	value, ok := evt.StateDelta["weather"]
+	assert.True(t, ok)
+	assert.Equal(t, "```json\n{\"city\":\"Shanghai\"}\n```", string(value))
 }
