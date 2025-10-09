@@ -17,7 +17,7 @@ Graph 将可控的工作流编排与可扩展的 Agent 能力结合，适用于�
 
 ### 最小工作流
 
-下面是一个经典的“prepare → ask LLM → 可能调用工具”的循环，使用 `graph.MessagesStateSchema()`（已定义 `messages`、`user_input`、`last_response` 等键）。
+下面是一个经典的“prepare → ask LLM → 可能调用工具”的循环，使用 `graph.MessagesStateSchema()`（已定义 `graph.StateKeyMessages`、`graph.StateKeyUserInput`、`graph.StateKeyLastResponse` 等键）。
 
 ```mermaid
 flowchart LR
@@ -302,8 +302,8 @@ model := openai.New(llmModelName)
 sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
 
 // LLM 节点的输入输出规则：
-// 输入优先级: one_shot_messages > user_input > messages
-// 输出: last_response、messages(原子更新)、node_responses（包含当前节点输出，便于并行汇总）
+// 输入优先级: graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
+// 输出: graph.StateKeyLastResponse、graph.StateKeyMessages(原子更新)、graph.StateKeyNodeResponses（包含当前节点输出，便于并行汇总）
 ```
 
 #### Tools 节点
@@ -321,6 +321,46 @@ sg.AddToolsNode(nodeTools, tools)
 // 如需并行，应该使用多个节点 + 并行边
 // 配对规则：从 messages 尾部回溯定位最近的 assistant(tool_calls)
 // 消息，遇到新的 user 即停止，确保与本轮工具调用配对。
+```
+
+#### 将工具结果写入 State
+
+在 Tools 节点之后，添加一个函数节点，从 `graph.StateKeyMessages` 汇总工具结果并写入结构化 State：
+
+```go
+const stateKeyToolResults = "tool_results"
+
+sg.AddNode("collect_tool_results", func(ctx context.Context, s graph.State) (any, error) {
+    msgs, _ := s[graph.StateKeyMessages].([]model.Message)
+    if len(msgs) == 0 { return nil, nil }
+
+    // 定位本轮 assistant(tool_calls)
+    i := len(msgs) - 1
+    for i >= 0 && !(msgs[i].Role == model.RoleAssistant && len(msgs[i].ToolCalls) > 0) {
+        if msgs[i].Role == model.RoleUser { // 新一轮，停止
+            return nil, nil
+        }
+        i--
+    }
+    if i < 0 { return nil, nil }
+
+    // 收集匹配的工具回复（按 ToolID 配对）
+    idset := map[string]bool{}
+    for _, tc := range msgs[i].ToolCalls { idset[tc.ID] = true }
+    results := map[string]string{}
+    for j := i + 1; j < len(msgs); j++ {
+        m := msgs[j]
+        if m.Role == model.RoleTool && idset[m.ToolID] {
+            results[m.ToolName] = m.Content // 内容可能为 JSON/文本，依工具定义决定
+        }
+        if m.Role == model.RoleUser { break }
+    }
+    if len(results) == 0 { return nil, nil }
+    return graph.State{stateKeyToolResults: results}, nil
+})
+```
+
+参考示例：`examples/graph/io_conventions_tools`。
 ```
 
 #### Agent 节点
@@ -622,9 +662,9 @@ graphAgent, _ := graphagent.New("workflow", g,
         reviewer,
     }))
 
-// I/O：子 Agent 既会把 user_input 作为消息传入，也能通过
+// I/O：子 Agent 既会把 graph.StateKeyUserInput 作为消息传入，也能通过
 // inv.RunOptions.RuntimeState 读取完整图状态；完成后会更新
-// last_response 以及 node_responses[nodeID]
+// graph.StateKeyLastResponse 以及 graph.StateKeyNodeResponses[nodeID]
 ```
 
 ### 混合模式示例
@@ -712,7 +752,7 @@ Graph 的状态底层是 `map[string]any`，通过 `StateSchema` 提供运行时
 
 #### 常用键常量参考
 
-- 用户可见：`user_input`、`one_shot_messages`、`messages`、`last_response`、`node_responses`、`metadata`
+- 用户可见：`graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
 - 系统内部：`session`、`exec_context`、`tool_callbacks`、`model_callbacks`、`agent_callbacks`、`current_node_id`、`parent_agent`
 - 命令/恢复：`__command__`、`__resume_map__`
 
@@ -734,16 +774,16 @@ LLM 节点的输入处理是我们花了很多时间打磨的功能。看起来�
 
 LLM 节点内置了一套固定的输入选择逻辑（无需额外配置）：
 
-1. **优先用 `one_shot_messages`**：完全覆盖本轮输入（含 system/user），执行后清空
-2. **其次用 `user_input`**：在 `messages` 基础上追加本轮 user，再把 assistant 回答一起原子写回，随后清空 `user_input`
-3. **否则仅用 `messages`**：常见于工具回路二次进 LLM（`user_input` 已被清空）
+1. **优先用 `graph.StateKeyOneShotMessages`**：完全覆盖本轮输入（含 system/user），执行后清空
+2. **其次用 `graph.StateKeyUserInput`**：在 `graph.StateKeyMessages` 基础上追加本轮 user，再把 assistant 回答一起原子写回，随后清空 `graph.StateKeyUserInput`
+3. **否则仅用 `graph.StateKeyMessages`**：常见于工具回路二次进 LLM（`graph.StateKeyUserInput` 已被清空）
 
-这套规则的精妙之处在于，它既保证了"预处理节点可以改写 `user_input` 并在同一轮生效"，又与工具循环（tool_calls → tools → LLM）自然衔接。
+这套规则的精妙之处在于，它既保证了"预处理节点可以改写 `graph.StateKeyUserInput` 并在同一轮生效"，又与工具循环（tool_calls → tools → LLM）自然衔接。
 
 示例（技术解析级别的小片段，演示三种输入路径）：
 
 ```go
-// OneShot：完全覆盖本轮输入（包含 system/user），适合“前置节点构造完整 prompt”
+// OneShot（graph.StateKeyOneShotMessages）：完全覆盖本轮输入（包含 system/user），适合“前置节点构造完整 prompt”
 import (
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -761,11 +801,11 @@ sg.AddNode("prepare_prompt", func(ctx context.Context, s graph.State) (any, erro
     }
     return graph.State{graph.StateKeyOneShotMessages: oneShot}, nil
 })
-// 后续进入 LLM 节点时将仅使用 one_shot_messages，并在执行后清空
+// 后续进入 LLM 节点时将仅使用 graph.StateKeyOneShotMessages，并在执行后清空
 ```
 
 ```go
-// UserInput：在历史 messages 基础上附加本轮用户输入
+// UserInput（graph.StateKeyUserInput）：在历史 graph.StateKeyMessages 基础上附加本轮用户输入
 import (
     "strings"
 
@@ -786,7 +826,7 @@ sg.AddNode("clean_input", func(ctx context.Context, s graph.State) (any, error) 
 ```
 
 ```go
-// Messages-only：工具回路返回后，user_input 已清空；LLM 仅基于 messages（含 tool 响应）继续推理
+// Messages-only（graph.StateKeyMessages）：工具回路返回后，graph.StateKeyUserInput 已清空；LLM 仅基于 graph.StateKeyMessages（含 tool 响应）继续推理
 import (
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -799,7 +839,7 @@ const (
 
 sg.AddToolsNode(nodeExecTools, tools)
 sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
-// 再次回到 nodeAsk（或下游 LLM 节点）时，由于 user_input 已清空，将走 messages-only 分支
+// 再次回到 nodeAsk（或下游 LLM 节点）时，由于 graph.StateKeyUserInput 已清空，将走 messages-only 分支
 ```
 
 #### 指令占位符注入
@@ -808,7 +848,9 @@ sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
 - `{key}` / `{key?}`：从会话 `session.State` 读取键值，可选后缀 `?` 缺失时为空；
 - `{user:subkey}`、`{app:subkey}`、`{temp:subkey}`：按命名空间读取。
 
-GraphAgent 会把当前 `*session.Session` 放入状态（`session` 键），LLM 节点会在执行前对指令进行占位符展开。
+GraphAgent 会把当前 `*session.Session` 放入状态（`graph.StateKeySession` 键），LLM 节点会在执行前对指令进行占位符展开。
+
+提示：GraphAgent 会从会话事件播种 `graph.StateKeyMessages` 以保证多轮连贯；从检查点恢复时，若用户消息仅为 "resume"，不会注入到 `graph.StateKeyUserInput`，以避免干扰已恢复的状态。
 
 ### 并发执行和状态安全
 
@@ -829,6 +871,53 @@ stateGraph.
 ```
 
 内部实现保证了并发安全：执行器为每个任务构造浅拷贝（maps.Copy）并在合并时加锁，同时通过 Reducer 机制来安全地合并并发更新。
+
+### 节点 I/O 约定与常用键
+
+节点之间仅通过共享 `State` 传递数据，节点函数返回的增量由 Schema 的 Reducer 合并。
+
+- 函数节点（Function）
+  - 输入：完整 `State`（按 Schema 声明读取）
+  - 输出：只写业务键（例如 `{"parsed_time":"..."}`），不要写内部键
+
+- LLM 节点
+  - 输入优先级：`graph.StateKeyOneShotMessages` → `graph.StateKeyUserInput` → `graph.StateKeyMessages`
+  - 输出：原子写回 `graph.StateKeyMessages`、设置 `graph.StateKeyLastResponse`、设置 `graph.StateKeyNodeResponses[<llm_node_id>]`
+
+- 工具节点（Tools）
+  - 自 `graph.StateKeyMessages` 尾部配对当前轮的 `assistant(tool_calls)`，按顺序追加工具返回到 `graph.StateKeyMessages`
+  - 多个工具按 LLM 返回顺序顺序执行
+
+- Agent 节点
+  - 通过 `Invocation.RunOptions.RuntimeState` 接收 Graph 的 `State`
+  - 输出：设置 `graph.StateKeyLastResponse` 与 `graph.StateKeyNodeResponses[<agent_node_id>]`；执行成功后会清空 `graph.StateKeyUserInput`
+
+实践建议：
+- 串行读取：紧邻下游直接读取 `graph.StateKeyLastResponse`；
+- 并行/汇合读取：从 `graph.StateKeyNodeResponses[<nodeID>]` 读取指定节点输出；
+- 为业务键在 Schema 中声明合适的 Reducer，避免并发写入冲突。
+
+### API 速查表
+
+- 构图
+  - `graph.NewStateGraph(schema)` → 构建器
+  - `AddNode(id, func, ...opts)` / `AddLLMNode(id, model, instruction, tools, ...opts)`
+  - `AddToolsNode(id, tools, ...opts)` / `AddAgentNode(id, ...opts)`
+  - `AddEdge(from, to)` / `AddConditionalEdges(from, condition, pathMap)`
+  - `AddToolsConditionalEdges(llmNode, toolsNode, fallback)`
+  - `SetEntryPoint(nodeID)` / `SetFinishPoint(nodeID)` / `Compile()`
+
+- 常用 State 键（用户可见）
+  - `graph.StateKeyUserInput`、`graph.StateKeyOneShotMessages`、`graph.StateKeyMessages`、`graph.StateKeyLastResponse`、`graph.StateKeyNodeResponses`、`graph.StateKeyMetadata`
+
+- 节点级可选项
+  - `graph.WithGenerationConfig`、`graph.WithModelCallbacks`、`graph.WithToolCallbacks`
+  - `graph.WithPreNodeCallback`、`graph.WithPostNodeCallback`、`graph.WithNodeErrorCallback`
+
+- 执行
+  - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
+
+更多端到端用法见 `examples/graph`（基础/并行/多轮/中断/工具/占位符）。
 
 ## 高级特性
 
@@ -887,6 +976,44 @@ _ = cm.DeleteLineage(ctx, lineageID)
 ```
 
 建议在生产中为 `namespace` 使用稳定的业务标识（如 `svc:prod:flowX`），便于审计与对账。
+
+### 默认值与注意事项
+
+- 默认值（Executor）
+  - `ChannelBufferSize = 256`、`MaxSteps = 100`、`CheckpointSaveTimeout = 10s`
+  - 步/节点超时可通过 `Executor` 的 `WithStepTimeout` / `WithNodeTimeout` 配置（目前 GraphAgent 选项未直接暴露）
+
+- 会话
+  - 生产环境优先使用 Redis Session；设置合理 TTL 与清理策略
+- Runner 会自动从会话事件播种多轮 `graph.StateKeyMessages`
+
+- 检查点
+  - 采用稳定的 `namespace` 命名（如 `svc:prod:flowX`）；使用 `CheckpointManager` 按谱系审计与清理
+
+- 事件与背压
+  - 调整 `WithChannelBufferSize`；按 `author`/`object` 过滤事件降低噪音
+
+- 命名与键
+  - 节点/路由标签/状态键使用常量；为需要合并的键声明 Reducer
+
+- 治理与合规
+- 关键路径引入 HITL；敏感信息优先落到 `graph.StateKeyMetadata`，避免混入 `graph.StateKeyMessages`
+
+### 事件速览
+
+- Author 约定
+  - 节点级：节点 ID（无法获取时为 `graph.AuthorGraphNode`）
+  - Pregel 阶段：`graph.AuthorGraphPregel`
+  - 执行器/系统：`graph.AuthorGraphExecutor`
+  - 用户输入：`user`（未导出常量）
+
+- 对象类型（子集）
+  - 节点：`graph.ObjectTypeGraphNodeStart | graph.ObjectTypeGraphNodeComplete | graph.ObjectTypeGraphNodeError`
+  - Pregel：`graph.ObjectTypeGraphPregelPlanning | graph.ObjectTypeGraphPregelExecution | graph.ObjectTypeGraphPregelUpdate`
+  - 通道/状态：`graph.ObjectTypeGraphChannelUpdate` / `graph.ObjectTypeGraphStateUpdate`
+  - 检查点：`graph.ObjectTypeGraphCheckpoint`、`graph.ObjectTypeGraphCheckpointCreated`、`graph.ObjectTypeGraphCheckpointCommitted`、`graph.ObjectTypeGraphCheckpointInterrupt`
+
+更多示例见下文“事件监控”。
 
 ### Human-in-the-Loop
 
@@ -1004,8 +1131,8 @@ for ev := range eventCh {
 在实际使用中，建议结合 Event 的 `Author` 字段进行过滤：
 
 - 节点级事件（模型、工具、节点起止）：`Author = <nodeID>`（若无法获取 nodeID，则为 `graph-node`）
-- Pregel（规划/执行/更新/错误）：`Author = graph-pregel`
-- 执行器级别事件（状态更新/检查点等）：`Author = graph-executor`
+- Pregel（规划/执行/更新/错误）：`Author = graph.AuthorGraphPregel`
+- 执行器级别事件（状态更新/检查点等）：`Author = graph.AuthorGraphExecutor`
 - 用户输入事件（Runner 写入）：`Author = user`
 
 利用这一约定，你可以精准订阅某个节点的流式输出，而无需在节点之间传递流式上下文（流式由事件通道统一承载，状态仍按 LangGraph 风格以结构化 State 传递）。
@@ -1092,6 +1219,30 @@ graphAgent, _ := graphagent.New("workflow", g,
     graphagent.WithAgentCallbacks(cb),
 )
 ```
+
+## 常见问题排查
+
+- 报错 "graph must have an entry point"
+  - 未设置入口点。调用 `SetEntryPoint()`，并确保目标节点已定义。
+
+- 报错目标/源节点不存在
+  - 在连边/条件路由前先定义节点；条件路由的 `pathMap` 目标也需存在。
+
+- 工具未执行
+  - 确认 LLM 返回了 `tool_calls`，并使用了 `AddToolsConditionalEdges(ask, tools, fallback)`；
+  - 工具名需与模型声明一致；
+  - 配对规则是从最近一次 `assistant(tool_calls)` 回溯到下一个 `user`，检查消息顺序。
+
+- 没有观察到流式事件
+  - 调大 `WithChannelBufferSize` 并按 `Author`/对象类型过滤；
+  - 确认从 `Runner.Run(...)` 消费事件。
+
+- 从检查点恢复未按预期继续
+  - 通过 `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })` 传入；
+  - HITL 恢复时提供 `ResumeMap`；纯 "resume" 文本不会注入到 `graph.StateKeyUserInput`。
+
+- 并行下状态冲突
+  - 为列表/映射等声明合并型 Reducer（如 `StringSliceReducer`、`MergeReducer`），避免多个分支覆盖同一键。
 
 ## 实际案例
 
@@ -1189,4 +1340,8 @@ func buildApprovalWorkflow() (*graph.Graph, error) {
 
 - 代码仓库: https://github.com/trpc-group/trpc-agent-go
 - Graph 示例: `examples/graph` 目录（基础/并行/多轮/中断与恢复等）
+  - I/O 约定：`io_conventions`、`io_conventions_tools`
+  - 并行 / 扇出：`parallel`、`fanout`、`diamond`
+  - 占位符：`placeholder`
+  - 检查点 / 中断：`checkpoint`、`interrupt`
 - 进一步阅读：`graph/state_graph.go`、`graph/executor.go`、`agent/graphagent`
