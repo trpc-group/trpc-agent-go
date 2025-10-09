@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 )
 
+const approxRunesPerToken = 4 // heuristic: ~1 token per 4 UTF-8 runes
+
 // TokenCounter counts tokens for messages and tools.
 // The implementation is model-agnostic to keep the model package lightweight.
 type TokenCounter interface {
@@ -48,17 +50,17 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 	total := 0
 
 	// Count main content.
-	total += utf8.RuneCountInString(message.Content) / 4
+	total += utf8.RuneCountInString(message.Content) / approxRunesPerToken
 
 	// Count reasoning content if present.
 	if message.ReasoningContent != "" {
-		total += utf8.RuneCountInString(message.ReasoningContent) / 4
+		total += utf8.RuneCountInString(message.ReasoningContent) / approxRunesPerToken
 	}
 
 	// Count text parts in multimodal content.
 	for _, part := range message.ContentParts {
 		if part.Text != nil {
-			total += utf8.RuneCountInString(*part.Text) / 4
+			total += utf8.RuneCountInString(*part.Text) / approxRunesPerToken
 		}
 	}
 
@@ -174,7 +176,7 @@ func (s *MiddleOutStrategy) buildPrefixSum(ctx context.Context, messages []Messa
 		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
 		if err != nil {
 			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/4
+			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
 		} else {
 			prefixSum[i+1] = prefixSum[i] + tokens
 		}
@@ -331,7 +333,7 @@ func (s *HeadOutStrategy) buildPrefixSum(ctx context.Context, messages []Message
 		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
 		if err != nil {
 			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/4
+			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
 		} else {
 			prefixSum[i+1] = prefixSum[i] + tokens
 		}
@@ -468,7 +470,7 @@ func (s *TailOutStrategy) buildPrefixSum(ctx context.Context, messages []Message
 		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
 		if err != nil {
 			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/4
+			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
 		} else {
 			prefixSum[i+1] = prefixSum[i] + tokens
 		}
