@@ -1245,29 +1245,29 @@ func buildApprovalWorkflow() (*graph.Graph, error) {
     sg := graph.NewStateGraph(graph.MessagesStateSchema())
 
     // AI pre‑review (define LLM model)
-const (
-    modelNameApprove      = "gpt-4o-mini"
-    promptApproveDecision = "Decide whether the application meets requirements; reply approve or reject"
+    const (
+        modelNameApprove      = "gpt-4o-mini"
+        promptApproveDecision = "Decide whether the application meets requirements; reply approve or reject"
 
-    nodeAIReview    = "ai_review"
-    nodeHumanReview = "human_review"
-    nodeApprove     = "approve"
-    nodeReject      = "reject"
+        nodeAIReview    = "ai_review"
+        nodeHumanReview = "human_review"
+        nodeApprove     = "approve"
+        nodeReject      = "reject"
 
-    routeHumanReview = "route_human_review"
-    routeReject      = "route_reject"
-    routeApprove     = "route_approve"
+        routeHumanReview = "route_human_review"
+        routeReject      = "route_reject"
+        routeApprove     = "route_approve"
 
-    stateKeyApplication = "application"
-    stateKeyDecision    = "decision"
-)
+        stateKeyApplication = "application"
+        stateKeyDecision    = "decision"
+    )
 
-llm := openai.New(modelNameApprove)
-sg.AddLLMNode(nodeAIReview, llm, promptApproveDecision, nil)
+    llm := openai.New(modelNameApprove)
+    sg.AddLLMNode(nodeAIReview, llm, promptApproveDecision, nil)
 
     // Route to human review or reject
-sg.AddConditionalEdges(nodeAIReview,
-    func(ctx context.Context, s graph.State) (string, error) {
+    sg.AddConditionalEdges(nodeAIReview,
+        func(ctx context.Context, s graph.State) (string, error) {
             resp := s[graph.StateKeyLastResponse].(string)
             if strings.Contains(resp, "approve") {
                 return routeHumanReview, nil
@@ -1279,7 +1279,7 @@ sg.AddConditionalEdges(nodeAIReview,
         })
 
     // Human review node
-sg.AddNode(nodeHumanReview, func(ctx context.Context, s graph.State) (any, error) {
+    sg.AddNode(nodeHumanReview, func(ctx context.Context, s graph.State) (any, error) {
         app := s[stateKeyApplication].(string)
         decision, err := graph.Interrupt(ctx, s, "approval",
             fmt.Sprintf("Please approve: %s", app))
@@ -1290,7 +1290,7 @@ sg.AddNode(nodeHumanReview, func(ctx context.Context, s graph.State) (any, error
     })
 
     // Outcome handling
-sg.AddNode(nodeApprove, func(ctx context.Context, s graph.State) (any, error) {
+    sg.AddNode(nodeApprove, func(ctx context.Context, s graph.State) (any, error) {
         // perform approval logic
         return graph.State{"status": "approved"}, nil
     })
@@ -1299,8 +1299,8 @@ sg.AddNode(nodeApprove, func(ctx context.Context, s graph.State) (any, error) {
     })
 
     // Wire the flow
-sg.SetEntryPoint(nodeAIReview)
-sg.AddConditionalEdges(nodeHumanReview,
+    sg.SetEntryPoint(nodeAIReview)
+    sg.AddConditionalEdges(nodeHumanReview,
         func(ctx context.Context, s graph.State) (string, error) {
             if s[stateKeyDecision] == "approve" {
                 return routeApprove, nil
