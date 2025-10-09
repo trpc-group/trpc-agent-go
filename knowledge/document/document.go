@@ -26,7 +26,7 @@ type Document struct {
 	Content string `json:"content"`
 
 	// Metadata contains additional information about the document.
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 
 	// CreatedAt is the creation timestamp of the document.
 	CreatedAt time.Time `json:"created_at,omitempty"`
@@ -54,7 +54,7 @@ func (d *Document) Clone() *Document {
 	}
 
 	if d.Metadata != nil {
-		clone.Metadata = make(map[string]interface{})
+		clone.Metadata = make(map[string]any)
 		for k, v := range d.Metadata {
 			clone.Metadata[k] = v
 		}

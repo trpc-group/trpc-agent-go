@@ -61,7 +61,7 @@ type QueryFilter struct {
 	DocumentIDs []string
 
 	// Metadata filters documents by metadata key-value pairs.
-	Metadata map[string]interface{}
+	Metadata map[string]any
 }
 
 // Result represents the result of a retrieval operation.

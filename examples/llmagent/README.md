@@ -1,6 +1,6 @@
 # LLMAgent Example
 
-This example demonstrates how to use the `LLMAgent` implementation that was created to satisfy the `agent.Agent` interface.
+This example demonstrates how to use the `LLMAgent` implementation with an interactive chat interface.
 
 ## What is LLMAgent?
 
@@ -8,10 +8,13 @@ The `LLMAgent` is a concrete implementation of the `agent.Agent` interface that 
 
 ### Key Features
 
-- **Implements `agent.Agent` interface**: Provides a `Run` method that accepts a context and invocation, returning a channel of events
-- **Configurable**: Supports custom channel buffer sizes, request processors, and response processors
-- **Flow-based execution**: Uses the `llmflow` package for handling LLM interactions
-- **Event-driven**: Communicates through events that can include LLM responses, errors, and metadata
+- **🔄 Interactive Chat**: Multi-turn conversation interface with streaming responses
+- **🌊 Streaming Control**: Choose between real-time streaming or batch responses
+- **🚀 Simple Interface**: Clean, focused chat experience
+- **🔧 Implements `agent.Agent` interface**: Provides a `Run` method that accepts a context and invocation, returning a channel of events
+- **⚙️ Configurable**: Supports custom channel buffer sizes, request processors, and response processors
+- **🌊 Flow-based execution**: Uses the `llmflow` package for handling LLM interactions
+- **⚡ Event-driven**: Communicates through events that can include LLM responses, errors, and metadata
 
 ## Prerequisites
 
@@ -29,26 +32,64 @@ The `LLMAgent` is a concrete implementation of the `agent.Agent` interface that 
 
 ## Command Line Arguments
 
-| Argument | Description              | Default Value |
-| -------- | ------------------------ | ------------- |
-| `-model` | Name of the model to use | `gpt-4o-mini` |
+| Argument     | Description              | Default Value   |
+| ------------ | ------------------------ | --------------- |
+| `-model`     | Name of the model to use | `deepseek-chat` |
+| `-streaming` | Enable streaming mode    | `true`          |
 
 ## Usage
 
-### Basic Usage
+### Basic Chat
 
 ```bash
 cd examples/llmagent
 export OPENAI_API_KEY="your-api-key-here"
-go run main.go
+go run . # or: go run main.go
 ```
 
-### With Custom Configuration
+### Custom Model
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-go run main.go -model gpt-4
+go run . -model gpt-4o # or: go run main.go -model gpt-4o
+```
+
+### Response Modes
+
+Choose between streaming and non-streaming responses:
+
+```bash
+# Default streaming mode (real-time character output)
+go run . # or: go run main.go
+
+# Non-streaming mode (complete response at once)
+go run . -streaming=false # or: go run main.go -streaming=false
+```
+
+## Chat Interface
+
+The interface is simple and intuitive:
+
+```
+🚀 Interactive Chat with LLMAgent
+Model: deepseek-chat
+Streaming: true
+==================================================
+✅ Chat ready!
+
+💡 Commands:
+   /exit     - End the conversation
+
+👤 You: Hello! Can you help me with a question?
+🤖 Assistant: Of course! I'd be happy to help. What's your question?
+
+👤 You: What is the capital of France?
+🤖 Assistant: The capital of France is **Paris**! 🇫🇷
+
+It's a beautiful city known for its iconic landmarks like the Eiffel Tower, the Louvre Museum, and Notre-Dame Cathedral. Paris is also famous for its art, fashion, and delicious cuisine. Have you ever been, or are you planning a visit?
+
+👤 You: /exit
+👋 Goodbye!
 ```
 
 ## Architecture
@@ -63,46 +104,19 @@ LLMAgent
 └── Returns events via channel
 
 Components:
-- Model: OpenAI-compatible model for LLM calls
-- RequestProcessors: Process requests before sending to LLM
-- ResponseProcessors: Process responses after receiving from LLM
-- Flow: Handles the execution logic and event generation
+- **🤖 Model**: OpenAI-compatible model for LLM calls
+- **⚙️ RequestProcessors**: Process requests before sending to LLM
+- **⚡ ResponseProcessors**: Process responses after receiving from LLM
+- **🌊 Flow**: Handles the execution logic and event generation
 ```
-
-## Example Output
-
-When you run the example, you might see output like:
-
-```
-Creating LLMAgent with configuration:
-- Base URL: https://api.openai.com/v1
-- Model Name: gpt-4o-mini
-- API Key: sk-***
-Created LLMAgent: demo-llm-agent
-
-=== LLMAgent Execution ===
-Processing events from LLMAgent:
-
---- Event 1 ---
-ID: 550e8400-e29b-41d4-a716-446655440000
-Author: demo-llm-agent
-InvocationID: demo-invocation-001
-Error: no model available for LLM call (Type: flow_error)
-Done: true
-
-=== Execution Complete ===
-Total events processed: 1
-```
-
-**Note**: Since this basic example doesn't provide request processors, the agent has no instructions on what to request from the LLM, resulting in an error. In a real implementation, you would add request processors that prepare the LLM request with system messages, user input, etc.
 
 ## Advanced Usage
 
 To create a more functional LLMAgent, you would typically:
 
-1. **Add Request Processors**: These prepare the LLM request with appropriate messages
-2. **Add Response Processors**: These handle the LLM responses and can trigger additional actions
-3. **Configure Buffer Sizes**: Optimize for your specific throughput requirements
+1. **🔧 Add Request Processors**: These prepare the LLM request with appropriate messages
+2. **⚡ Add Response Processors**: These handle the LLM responses and can trigger additional actions
+3. **⚙️ Configure Buffer Sizes**: Optimize for your specific throughput requirements
 
 Example with function options:
 

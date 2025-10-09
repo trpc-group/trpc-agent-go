@@ -37,13 +37,13 @@ type KnowledgeSearchResponse struct {
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
-func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]interface{}) tool.Tool {
+func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]any) tool.Tool {
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequest) (*KnowledgeSearchResponse, error) {
 		if req.Query == "" {
 			return nil, errors.New("query cannot be empty")
 		}
 		invocation, ok := agent.InvocationFromContext(ctx)
-		var runnerFilter map[string]interface{}
+		var runnerFilter map[string]any
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
@@ -101,8 +101,8 @@ type KnowledgeFilter struct {
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewAgenticFilterSearchTool(
 	kb knowledge.Knowledge,
-	filter map[string]interface{},
-	agenticFilterInfo map[string][]interface{},
+	filter map[string]any,
+	agenticFilterInfo map[string][]any,
 ) tool.Tool {
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequestWithFilter) (*KnowledgeSearchResponse, error) {
 		if req.Query == "" {
@@ -110,15 +110,15 @@ func NewAgenticFilterSearchTool(
 		}
 
 		invocation, ok := agent.InvocationFromContext(ctx)
-		var runnerFilter map[string]interface{}
+		var runnerFilter map[string]any
 		if !ok {
 			log.Debugf("knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
 		}
 
-		// Convert request filters to map[string]interface{}
-		requestFilter := make(map[string]interface{})
+		// Convert request filters to map[string]any
+		requestFilter := make(map[string]any)
 		for _, f := range req.Filters {
 			requestFilter[f.Key] = f.Value
 		}
@@ -152,11 +152,11 @@ func NewAgenticFilterSearchTool(
 }
 
 func getFinalFilter(
-	agentFilter map[string]interface{},
-	runnerFilter map[string]interface{},
-	invocationFilter map[string]interface{},
-) map[string]interface{} {
-	filter := make(map[string]interface{})
+	agentFilter map[string]any,
+	runnerFilter map[string]any,
+	invocationFilter map[string]any,
+) map[string]any {
+	filter := make(map[string]any)
 	for k, v := range invocationFilter {
 		filter[k] = v
 	}
@@ -169,7 +169,7 @@ func getFinalFilter(
 	return filter
 }
 
-func generateAgenticFilterPrompt(agenticFilterInfo map[string][]interface{}) string {
+func generateAgenticFilterPrompt(agenticFilterInfo map[string][]any) string {
 	if len(agenticFilterInfo) == 0 {
 		return "You are a helpful assistant that can search for relevant information in the knowledge base."
 	}

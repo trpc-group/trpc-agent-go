@@ -69,7 +69,7 @@ func InjectSessionState(template string, invocation *agent.Invocation) (string, 
 		if invocation != nil && invocation.Session != nil && invocation.Session.State != nil {
 			if jsonBytes, exists := invocation.Session.State[varName]; exists {
 				// Try to unmarshal as JSON first.
-				var jsonValue interface{}
+				var jsonValue any
 				if err := json.Unmarshal(jsonBytes, &jsonValue); err == nil {
 					return fmt.Sprintf("%v", jsonValue)
 				}

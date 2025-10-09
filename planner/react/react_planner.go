@@ -83,17 +83,12 @@ func (p *Planner) BuildPlanningInstruction(
 	return p.buildPlannerInstruction()
 }
 
-// ProcessPlanningResponse processes the LLM response to organize content
-// according to the React planning structure.
+// ProcessPlanningResponse processes the LLM response by filtering and cleaning
+// tool calls to ensure only valid function calls are preserved.
 //
 // This method:
-// - Identifies and preserves function calls while filtering empty ones
-// - Splits text content based on planning tags
-// - Marks planning, reasoning, and action content as thoughts
-// - Separates final answers from internal reasoning
-//
-// Returns a processed response with properly organized content, or nil
-// if no processing is needed.
+// - Filters out tool calls with empty function names
+// - Preserves all other response content unchanged
 func (p *Planner) ProcessPlanningResponse(
 	ctx context.Context,
 	invocation *agent.Invocation,

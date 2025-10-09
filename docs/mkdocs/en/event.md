@@ -324,9 +324,8 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
         if err := c.handleEvent(event, &toolCallsDetected, &assistantStarted, &fullContent); err != nil {
             return err
         }
-
         // Check if it's the final event.
-        if event.Done && !c.isToolEvent(event) {
+        if event.IsFinalResponse() {
             fmt.Printf("\n")
             break
         }
@@ -445,31 +444,5 @@ func (c *multiTurnChat) displayContent(
     }
     fmt.Print(content)
     *fullContent += content
-}
-
-// isToolEvent checks if event is a tool response.
-func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
-    if event.Response == nil {
-        return false
-    }
-    
-    // Check if there are tool calls.
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        return true
-    }
-    
-    // Check if there's a tool ID.
-    if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-        return true
-    }
-
-    // Check if it's a tool role.
-    for _, choice := range event.Response.Choices {
-        if choice.Message.Role == model.RoleTool {
-            return true
-        }
-    }
-
-    return false
 }
 ```

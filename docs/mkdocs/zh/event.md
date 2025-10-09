@@ -324,7 +324,7 @@ func (c *multiTurnChat) processResponse(eventChan <-chan *event.Event) error {
         }
 
         // 检查是否为最终事件
-        if event.Done && !c.isToolEvent(event) {
+        if event.IsFinalResponse() {
             fmt.Printf("\n")
             break
         }
@@ -443,31 +443,5 @@ func (c *multiTurnChat) displayContent(
     }
     fmt.Print(content)
     *fullContent += content
-}
-
-// isToolEvent 检查事件是否为工具响应
-func (c *multiTurnChat) isToolEvent(event *event.Event) bool {
-    if event.Response == nil {
-        return false
-    }
-    
-    // 检查是否有工具调用
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        return true
-    }
-    
-    // 检查是否有工具 ID
-    if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
-        return true
-    }
-
-    // 检查是否为工具角色
-    for _, choice := range event.Response.Choices {
-        if choice.Message.Role == model.RoleTool {
-            return true
-        }
-    }
-
-    return false
 }
 ```

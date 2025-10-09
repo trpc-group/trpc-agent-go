@@ -50,21 +50,21 @@ This implementation showcases the essential features for building conversational
 ```bash
 cd examples/runner
 export OPENAI_API_KEY="your-api-key-here"
-go run main.go
+go run .
 ```
 
 ### Custom Model
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model gpt-4o
+go run . -model gpt-4o
 ```
 
 ### With Redis Session
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-go run main.go -session redis -redis-addr localhost:6379
+go run . -session redis -redis-addr localhost:6379
 ```
 
 ### Using Environment Variable
@@ -72,7 +72,7 @@ go run main.go -session redis -redis-addr localhost:6379
 If you have `MODEL_NAME` set in your environment:
 
 ```bash
-source ~/.bashrc && go run main.go -model "$MODEL_NAME"
+source ~/.bashrc && go run . -model "$MODEL_NAME"
 ```
 
 ### Response Modes
@@ -81,13 +81,13 @@ Choose between streaming and non-streaming responses:
 
 ```bash
 # Default streaming mode (real-time character output)
-go run main.go
+go run .
 
 # Non-streaming mode (complete response at once)
-go run main.go -streaming=false
+go run . -streaming=false
 
 # Combined with other options
-go run main.go -model gpt-4o -streaming=false -session redis
+go run . -model gpt-4o -streaming=false -session redis
 ```
 
 **When to use each mode:**
@@ -101,10 +101,10 @@ Control how multiple tools are executed when the AI makes multiple tool calls:
 
 ```bash
 # Default serial tool execution (safe and compatible)
-go run main.go
+go run .
 
 # Parallel tool execution (faster performance)
-go run main.go -enable-parallel=true
+go run . -enable-parallel=true
 ```
 
 **When to use each mode:**
@@ -123,7 +123,7 @@ go run main.go -enable-parallel=true
 To see all available command line options:
 
 ```bash
-go run main.go --help
+go run . --help
 ```
 
 Output:

@@ -431,7 +431,7 @@ type JSONSchemaConfig struct {
 	// Name is the name of the structured output format.
 	Name string `json:"name,omitempty"`
 	// Schema is the JSON schema definition.
-	Schema map[string]interface{} `json:"schema"`
+	Schema map[string]any `json:"schema"`
 	// Strict controls whether to enforce strict schema adherence.
 	Strict bool `json:"strict,omitempty"`
 	// Description provides context for the model about the structured output.

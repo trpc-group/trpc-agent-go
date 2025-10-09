@@ -128,54 +128,29 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		return
 	}
 
-	// 1) Prepend session summary as a system message if enabled and available.
-	// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
-	var summaryUpdatedAt time.Time
-	if p.AddSessionSummary && invocation.Session != nil {
-		if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
-			// Prepend to the front of messages.
-			req.Messages = append([]model.Message{*msg}, req.Messages...)
-			summaryUpdatedAt = updatedAt
-		}
-	}
-
 	// 2) Append per-filter messages from session events when allowed.
-	var addedFromSession int
+	needToAddInvocationMessage := true
 	if p.IncludeContents != IncludeContentsNone && invocation.Session != nil {
 		var messages []model.Message
-
+		var summaryUpdatedAt time.Time
 		if p.AddSessionSummary {
-			// Use incremental messages logic (preserves context integrity).
-			messages = p.getFilterIncrementalMessages(invocation, summaryUpdatedAt)
-		} else {
-			// Use history messages logic (may be truncated by MaxHistoryRuns).
-			messages = p.getFilterHistoryMessages(invocation)
+			// Prepend session summary as a system message if enabled and available.
+			// Also get the summary's UpdatedAt to ensure consistency with incremental messages.
+			if msg, updatedAt := p.getSessionSummaryMessage(invocation); msg != nil {
+				// Prepend to the front of messages.
+				req.Messages = append([]model.Message{*msg}, req.Messages...)
+				summaryUpdatedAt = updatedAt
+			}
 		}
-
+		messages = p.getHistoryMessages(invocation, summaryUpdatedAt)
 		req.Messages = append(req.Messages, messages...)
-		addedFromSession = len(messages)
+		needToAddInvocationMessage = summaryUpdatedAt.IsZero() && len(messages) == 0
 	}
 
-	// 3) Include the current invocation message if:
-	// 1. It has content, AND
-	// 2. There's no session OR the session has no events
-	// This prevents duplication when using Runner (which adds user message to session)
-	// while ensuring standalone usage works (where invocation.Message is the source)
-	// Additionally, when the session exists but has no messages for the
-	// current branch (e.g. sub agent first turn), include the invocation
-	// message so the sub agent receives the tool arguments as a user input.
-	if invocation.Message.Content != "" &&
-		(invocation.Session == nil || len(invocation.Session.Events) == 0 || addedFromSession == 0) {
+	if invocation.Message.Content != "" && needToAddInvocationMessage {
 		req.Messages = append(req.Messages, invocation.Message)
 		log.Debugf("Content request processor: added invocation message with role %s (no session or empty session)",
 			invocation.Message.Role)
-	}
-
-	// 4) Safety fallback: if messages are still empty, include the current
-	// invocation message when non-empty to avoid empty model input.
-	if len(req.Messages) == 0 && invocation.Message.Content != "" {
-		req.Messages = append(req.Messages, invocation.Message)
-		log.Debugf("Content request processor: fallback added invocation message to avoid empty input.")
 	}
 
 	// Send a preprocessing event.
@@ -212,96 +187,33 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	return &model.Message{Role: model.RoleSystem, Content: sum.Summary}, sum.UpdatedAt
 }
 
-// getFilterIncrementalMessages converts per-filter incremental events into messages,
-// using the provided summaryUpdatedAt to ensure consistency with the summary message.
-func (p *ContentRequestProcessor) getFilterIncrementalMessages(inv *agent.Invocation, summaryUpdatedAt time.Time) []model.Message {
-	filter := inv.GetEventFilterKey()
-	var evs []event.Event
-	if inv.Session != nil {
-		// Use incremental events only if summaryUpdatedAt is provided.
-		// Otherwise, get all events for this filter.
-		if !summaryUpdatedAt.IsZero() {
-			evs = p.eventsSince(inv.Session.Events, summaryUpdatedAt, filter)
-		} else {
-			evs = p.eventsInFilter(inv.Session.Events, filter)
-		}
-	}
-	// Reserve all incremental messages to maintain context integrity.
-	// MaxHistoryRuns is not applied to incremental messages as they represent
-	// a complete work unit that should not be truncated.
-	return p.convertEventsToMessages(evs, inv.AgentName, inv.Branch)
-}
-
-// getFilterHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
+// getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
 // This method is used when AddSessionSummary is false to get recent history messages.
-func (p *ContentRequestProcessor) getFilterHistoryMessages(inv *agent.Invocation) []model.Message {
+func (p *ContentRequestProcessor) getHistoryMessages(inv *agent.Invocation, since time.Time) []model.Message {
 	if inv.Session == nil {
 		return nil
 	}
-
+	isZeroTime := since.IsZero()
 	filter := inv.GetEventFilterKey()
-	evs := p.eventsInFilter(inv.Session.Events, filter)
-	msgs := p.convertEventsToMessages(evs, inv.AgentName, inv.Branch)
-
-	// Apply MaxHistoryRuns limit if set.
-	if p.MaxHistoryRuns > 0 && len(msgs) > p.MaxHistoryRuns {
-		startIdx := len(msgs) - p.MaxHistoryRuns
-		msgs = msgs[startIdx:]
-	}
-
-	return msgs
-}
-
-// eventsSince returns events after the given time and matching the filter key.
-func (p *ContentRequestProcessor) eventsSince(
-	events []event.Event,
-	since time.Time,
-	filter string,
-) []event.Event {
-	var result []event.Event
-	for _, evt := range events {
+	var events []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
 		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
 			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) &&
-			evt.Timestamp.After(since) {
-			result = append(result, evt)
+			(isZeroTime || evt.Timestamp.After(since)) {
+			events = append(events, evt)
 		}
 	}
-	return result
-}
+	inv.Session.EventMu.RUnlock()
 
-// eventsInFilter returns all events matching the filter key.
-func (p *ContentRequestProcessor) eventsInFilter(
-	events []event.Event,
-	filter string,
-) []event.Event {
-	var result []event.Event
-	for _, evt := range events {
-		if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() &&
-			(p.IncludeContents != IncludeContentsFiltered || evt.Filter(filter)) {
-			result = append(result, evt)
-		}
-	}
-	return result
-}
-
-// convertEventsToMessages converts a list of events (already filtered for
-// validity/branch) into model messages, reusing the same conversion rules
-// as getContents.
-func (p *ContentRequestProcessor) convertEventsToMessages(
-	events []event.Event,
-	agentName string,
-	branch string,
-) []model.Message {
-	// Rearrange events for function call/response consistency.
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
-
 	// Convert events to messages.
 	var messages []model.Message
 	for _, evt := range resultEvents {
 		// Convert foreign events or keep as-is.
 		ev := evt
-		if p.isOtherAgentReply(agentName, branch, &ev) {
+		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
 			ev = p.convertForeignEvent(&ev)
 		}
 		if len(ev.Choices) > 0 {
@@ -309,6 +221,12 @@ func (p *ContentRequestProcessor) convertEventsToMessages(
 				messages = append(messages, choice.Message)
 			}
 		}
+	}
+
+	// Apply MaxHistoryRuns limit if set MaxHistoryRuns and AddSessionSummary is false.
+	if !p.AddSessionSummary && p.MaxHistoryRuns > 0 && len(messages) > p.MaxHistoryRuns {
+		startIdx := len(messages) - p.MaxHistoryRuns
+		messages = messages[startIdx:]
 	}
 	return messages
 }

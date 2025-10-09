@@ -153,14 +153,14 @@ The following memory tools are manually registered via `memoryService.Tools()`:
 ```bash
 cd examples/memory
 export OPENAI_API_KEY="your-api-key-here"
-go run main.go
+go run .
 ```
 
 ### Custom Model
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
-go run main.go -model gpt-4o
+go run . -model gpt-4o
 ```
 
 ### Using Environment Variable
@@ -168,7 +168,7 @@ go run main.go -model gpt-4o
 If you have `MODEL_NAME` set in your environment:
 
 ```bash
-source ~/.bashrc && go run main.go -model "$MODEL_NAME"
+source ~/.bashrc && go run . -model "$MODEL_NAME"
 ```
 
 ### Response Modes
@@ -177,13 +177,13 @@ Choose between streaming and non-streaming responses:
 
 ```bash
 # Default streaming mode (real-time character output)
-go run main.go
+go run .
 
 # Non-streaming mode (complete response at once)
-go run main.go -streaming=false
+go run . -streaming=false
 
 # Combined with other options
-go run main.go -model gpt-4o -streaming=false
+go run . -model gpt-4o -streaming=false
 ```
 
 **When to use each mode:**
@@ -197,10 +197,10 @@ Currently, the example supports both in-memory and Redis memory services, while 
 
 ```bash
 # Default in-memory memory service
-go run main.go
+go run .
 
 # Redis memory service (ready to use)
-go run main.go -memory redis -redis-addr localhost:6379
+go run . -memory redis -redis-addr localhost:6379
 ```
 
 **Available service combinations:**
@@ -215,7 +215,7 @@ go run main.go -memory redis -redis-addr localhost:6379
 To see all available command line options:
 
 ```bash
-go run main.go --help
+go run . --help
 ```
 
 Output:
@@ -628,13 +628,13 @@ docker run -d --name redis-memory -p 6379:6379 redis:7-alpine
 
 ```bash
 # Connect to default Redis port (6379)
-go run main.go -memory redis
+go run . -memory redis
 
 # Connect to custom Redis port
-go run main.go -memory redis -redis-addr localhost:6380
+go run . -memory redis -redis-addr localhost:6380
 
 # Connect to Redis with authentication
-go run main.go -memory redis -redis-addr redis://username:password@localhost:6379
+go run . -memory redis -redis-addr redis://username:password@localhost:6379
 ```
 
 ## Extensibility

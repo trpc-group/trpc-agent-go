@@ -122,6 +122,12 @@ func (p *TransferResponseProcessor) ProcessResponse(
 			Role:    model.RoleUser,
 			Content: transferInfo.Message,
 		}
+		// emit transfer message event
+		agent.EmitEvent(ctx, targetInvocation, ch, event.NewResponseEvent(
+			targetInvocation.InvocationID,
+			targetAgent.Info().Name,
+			&model.Response{Choices: []model.Choice{{Message: targetInvocation.Message}}},
+		))
 	}
 
 	// Actually call the target agent's Run method with the target invocation in context

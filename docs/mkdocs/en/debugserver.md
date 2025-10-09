@@ -14,6 +14,16 @@ It can be combined with [ADK Web UI](https://github.com/google/adk-web) to allow
 - **Session Management**: Supports creating and managing multiple conversation sessions
 - **Tool Validation**: Can intuitively test and verify various tool functions of Agents
 
+## Design and Scope
+
+- Purpose: Built for quick, visual debugging with ADK Web. It is not intended for production use.
+- Runner construction: Debug Server accepts `Agent`s and lazily creates `runner.Runner` internally based on the app name requested by the UI; it does not accept user‑supplied `Runner` instances.
+- Single session backend: Because Debug Server exposes session REST APIs (list/create/get), it requires a single `session.Service` shared by all operations and all internally created runners.
+  - Configure via `debug.WithSessionService(...)` (defaults to in‑memory).
+  - For consistency, Debug Server enforces the same `session.Service` for each created runner (it appends `runner.WithSessionService(s.sessionSvc)`), which overrides any session service you pass via `WithRunnerOptions`.
+  - Per‑app/per‑runner session backends are not supported here.
+- Production guidance: For production frontends (e.g., AG‑UI), build a server that accepts your own preconfigured `runner.Runner`(s) or use `server/a2a` when appropriate, so you fully control session/memory/artifact backends, auth, and scaling.
+
 ## Architecture Diagram
 
 ```

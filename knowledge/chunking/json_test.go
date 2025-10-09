@@ -48,7 +48,7 @@ func TestJSONChunking(t *testing.T) {
 
 	// Verify each chunk is valid JSON.
 	for i, chunk := range chunks {
-		var jsonData interface{}
+		var jsonData any
 		if err := json.Unmarshal([]byte(chunk.Content), &jsonData); err != nil {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
@@ -87,7 +87,7 @@ func TestJSONChunkingWithArrays(t *testing.T) {
 
 	// Verify each chunk is valid JSON.
 	for i, chunk := range chunks {
-		var jsonData interface{}
+		var jsonData any
 		if err := json.Unmarshal([]byte(chunk.Content), &jsonData); err != nil {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
@@ -139,7 +139,7 @@ func TestJSONChunkingLargeDocument(t *testing.T) {
 
 	// Verify each chunk is valid JSON.
 	for i, chunk := range chunks {
-		var jsonData interface{}
+		var jsonData any
 		if err := json.Unmarshal([]byte(chunk.Content), &jsonData); err != nil {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}
@@ -166,7 +166,7 @@ func TestJSONChunkingSplitJSONString(t *testing.T) {
 
 	// Verify each chunk is valid JSON.
 	for i, chunk := range chunks {
-		var jsonData interface{}
+		var jsonData any
 		if err := json.Unmarshal([]byte(chunk), &jsonData); err != nil {
 			t.Errorf("Chunk %d is not valid JSON: %v", i, err)
 		}

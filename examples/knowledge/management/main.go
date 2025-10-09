@@ -189,7 +189,7 @@ func (chat *knowledgeChat) addSourceMenu(scanner *bufio.Scanner) {
 	metadataInput := strings.TrimSpace(scanner.Text())
 
 	// Parse metadata
-	metadata := make(map[string]interface{})
+	metadata := make(map[string]any)
 	if metadataInput != "" {
 		parts := strings.Fields(metadataInput)
 		if len(parts)%2 != 0 {
@@ -339,9 +339,9 @@ func (chat *knowledgeChat) showCurrentSources() {
 
 	// Organize document info by source name
 	sourceStats := make(map[string]struct {
-		uriCounts map[string]int         // URI -> document count
-		metadata  map[string]interface{} // source-level metadata
-		uris      []string               // unique URIs for this source
+		uriCounts map[string]int // URI -> document count
+		metadata  map[string]any // source-level metadata
+		uris      []string       // unique URIs for this source
 	})
 
 	for _, docInfo := range docInfos {
@@ -353,11 +353,11 @@ func (chat *knowledgeChat) showCurrentSources() {
 			if _, exists := sourceStats[sourceName]; !exists {
 				sourceStats[sourceName] = struct {
 					uriCounts map[string]int
-					metadata  map[string]interface{}
+					metadata  map[string]any
 					uris      []string
 				}{
 					uriCounts: make(map[string]int),
-					metadata:  make(map[string]interface{}),
+					metadata:  make(map[string]any),
 					uris:      []string{},
 				}
 			}
@@ -440,12 +440,12 @@ func (chat *knowledgeChat) setupKnowledgeBase() error {
 	fileSource1 := file.New(
 		[]string{"../exampledata/file/llm.md"},
 		file.WithName("LLMDocSource"),
-		file.WithMetadata(map[string]interface{}{"tag": "llm"}),
+		file.WithMetadata(map[string]any{"tag": "llm"}),
 	)
 	fileSource2 := file.New(
 		[]string{"../exampledata/file/golang.md"},
 		file.WithName("GolangDocSource"),
-		file.WithMetadata(map[string]interface{}{"tag": "golang"}),
+		file.WithMetadata(map[string]any{"tag": "golang"}),
 	)
 	urlSource1 := url.New(
 		[]string{"https://en.wikipedia.org/wiki/Byte-pair_encoding"},

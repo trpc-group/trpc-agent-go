@@ -245,9 +245,9 @@ func (at *Tool) Declaration() *tool.Declaration {
 	}
 }
 
-// convertMapToToolSchema converts a map[string]interface{} schema to tool.Schema format.
+// convertMapToToolSchema converts a map[string]any schema to tool.Schema format.
 // This function handles the conversion from the agent's input schema format to the tool schema format.
-func convertMapToToolSchema(schema map[string]interface{}) *tool.Schema {
+func convertMapToToolSchema(schema map[string]any) *tool.Schema {
 	if schema == nil {
 		return nil
 	}

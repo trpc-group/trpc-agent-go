@@ -10,7 +10,9 @@
 // Package event provides the event system for agent communication.
 package event
 
-import "trpc.group/trpc-go/trpc-agent-go/model"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 // Option is a function that can be used to configure the Event.
 type Option func(*Event)

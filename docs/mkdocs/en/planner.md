@@ -141,7 +141,7 @@ llmAgent := llmagent.New(
 )
 ```
 
-See the complete example at examples/react.
+For complete code examples, please refer to [examples/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/react).
 
 ## Custom Planner
 
