@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -490,8 +491,10 @@ func TestVectorStore_convertQueryResult(t *testing.T) {
 					Documents: []tcvectordb.Document{{}},
 				},
 			},
-			want:    nil,
-			wantErr: true,
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{},
+			},
+			wantErr: false,
 		},
 		{
 			name: "empty documents list",
@@ -519,11 +522,11 @@ func TestVectorStore_convertQueryResult(t *testing.T) {
 					docBuilder: func() func(tcvectordb.Document) (*document.Document, []float64, error) {
 						count := 0
 						return func(doc tcvectordb.Document) (*document.Document, []float64, error) {
+							count++
 							if count == 1 {
 								return nil, nil, errors.New("second doc error")
 							}
-							count++
-							return &document.Document{}, nil, nil
+							return &document.Document{ID: "doc" + strconv.Itoa(count)}, nil, nil
 						}
 					}(),
 				},
@@ -533,8 +536,13 @@ func TestVectorStore_convertQueryResult(t *testing.T) {
 					Documents: []tcvectordb.Document{{}, {}, {}},
 				},
 			},
-			want:    nil,
-			wantErr: true,
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{
+					{Document: &document.Document{ID: "doc2"}, Score: 1.0},
+					{Document: &document.Document{ID: "doc3"}, Score: 1.0},
+				},
+			},
+			wantErr: false,
 		},
 	}
 
@@ -550,6 +558,165 @@ func TestVectorStore_convertQueryResult(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("convertQueryResult() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestVectorStore_convertSearchResult(t *testing.T) {
+	type fields struct {
+		option options
+	}
+	type args struct {
+		searchMode   vectorstore.SearchMode
+		searchResult *tcvectordb.SearchDocumentResult
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *vectorstore.SearchResult
+		wantErr bool
+	}{
+		{
+			name: "empty documents list",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return &document.Document{}, nil, nil
+					},
+				},
+			},
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple document lists error",
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{{}, {}},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "normal document conversion",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+						return &document.Document{ID: tcDoc.Id}, nil, nil
+					},
+				},
+			},
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{
+						{
+							{Id: "doc1", Score: 95},
+							{Id: "doc2", Score: 85},
+						},
+					},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{
+					{Document: &document.Document{ID: "doc1"}, Score: 95},
+					{Document: &document.Document{ID: "doc2"}, Score: 85},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "docBuilder returns error",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return nil, nil, errors.New("conversion error")
+					},
+				},
+			},
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{{{}, {}}},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "partial document conversion failure",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+						if tcDoc.Id == "error_id" {
+							return nil, nil, errors.New("conversion error")
+						}
+						return &document.Document{ID: tcDoc.Id}, nil, nil
+					},
+				},
+			},
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{
+						{
+							{Id: "doc1"},
+							{Id: "error_id"},
+							{Id: "doc3"},
+						},
+					},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{
+					{Document: &document.Document{ID: "doc1"}, Score: 0},
+					{Document: &document.Document{ID: "doc3"}, Score: 0},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "nil document from docBuilder",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return nil, nil, nil
+					},
+				},
+			},
+			args: args{
+				searchResult: &tcvectordb.SearchDocumentResult{
+					Documents: [][]tcvectordb.Document{{{}}},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := &VectorStore{
+				option: tt.fields.option,
+			}
+			got, err := vs.convertSearchResult(tt.args.searchMode, tt.args.searchResult)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("%q. VectorStore.convertSearchResult() error = %v, wantErr %v", tt.name, err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("%q. VectorStore.convertSearchResult() = %v, want %v", tt.name, got, tt.want)
 			}
 		})
 	}

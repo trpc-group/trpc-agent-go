@@ -793,7 +793,11 @@ func (vs *VectorStore) convertSearchResult(
 		log.Debugf("tcvectordb search result: score %v id %v searchMode %v", tcDoc.Score, tcDoc.Id, searchMode)
 		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
-			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
+			log.Errorf("tcvectordb convert to document: %w", err)
+			continue
+		}
+		if doc == nil {
+			continue
 		}
 		result.Results = append(result.Results, &vectorstore.ScoredDocument{
 			Document: doc,
@@ -813,7 +817,11 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	for _, tcDoc := range queryResult.Documents {
 		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
-			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
+			log.Errorf("tcvectordb convert to document: %w", err)
+			continue
+		}
+		if doc == nil {
+			continue
 		}
 		// For query results, we assign a default score of 1.0.
 		result.Results = append(result.Results, &vectorstore.ScoredDocument{
