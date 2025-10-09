@@ -85,8 +85,8 @@ func main() {
             continue
         }
 
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
     }
 }
@@ -319,14 +319,14 @@ for event := range eventChan {
     }
 
     // 流式内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
 
     // 工具调用
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("调用工具: %s\n", toolCall.Function.Name)
         }
     }
@@ -356,9 +356,9 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // 处理工具调用
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 工具调用:")
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
                 fmt.Printf("    参数: %s\n",
@@ -377,8 +377,8 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // 处理流式内容
-        if len(event.Choices) > 0 {
-            content := event.Choices[0].Delta.Content
+        if len(event.Response.Choices) > 0 {
+            content := event.Response.Choices[0].Delta.Content
             if content != "" {
                 fmt.Print(content)
                 fullResponse.WriteString(content)

@@ -265,7 +265,7 @@ func (c *multiTurnChatWithCallbacks) handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) == 0 || len(event.Choices[0].Message.ToolCalls) == 0 {
+	if len(event.Response.Choices) == 0 || len(event.Response.Choices[0].Message.ToolCalls) == 0 {
 		return false
 	}
 
@@ -275,7 +275,7 @@ func (c *multiTurnChatWithCallbacks) handleToolCalls(
 	}
 
 	fmt.Printf("🔧 CallableTool calls initiated:\n")
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		if len(toolCall.Function.Arguments) > 0 {
 			fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -312,11 +312,11 @@ func (c *multiTurnChatWithCallbacks) handleContent(
 	assistantStarted *bool,
 	fullContent *string,
 ) {
-	if len(event.Choices) == 0 {
+	if len(event.Response.Choices) == 0 {
 		return
 	}
 
-	choice := event.Choices[0]
+	choice := event.Response.Choices[0]
 	content := c.extractContent(choice)
 
 	if content == "" {

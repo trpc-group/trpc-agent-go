@@ -347,8 +347,8 @@ func main() {
             continue
         }
 
-        if len(event.Choices) > 0 {
-            choice := event.Choices[0]
+        if len(event.Response.Choices) > 0 {
+            choice := event.Response.Choices[0]
             if choice.Delta.Content != "" {
                 fmt.Print(choice.Delta.Content)
             }
@@ -1451,8 +1451,8 @@ func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Even
             continue
         }
 
-        if len(event.Choices) > 0 {
-            choice := event.Choices[0]
+        if len(event.Response.Choices) > 0 {
+            choice := event.Response.Choices[0]
             if choice.Delta.Content != "" {
                 if !workflowStarted {
                     fmt.Print("🤖 Workflow: ")

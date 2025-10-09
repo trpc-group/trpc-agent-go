@@ -256,8 +256,8 @@ func (c *outputSchemaChat) handleEvent(event *event.Event) error {
 	}
 
 	// Handle streaming content.
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			fmt.Print(choice.Delta.Content)
 		}

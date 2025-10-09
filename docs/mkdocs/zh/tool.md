@@ -571,16 +571,16 @@ func main() {
         }
         
         // 显示工具调用
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("🔧 调用工具: %s\n", toolCall.Function.Name)
                 fmt.Printf("   参数: %s\n", string(toolCall.Function.Arguments))
             }
         }
         
         // 显示流式内容
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
         
         if event.Done {
