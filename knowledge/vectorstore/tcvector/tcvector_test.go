@@ -12,6 +12,7 @@ package tcvector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
@@ -436,4 +438,119 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func TestVectorStore_convertQueryResult(t *testing.T) {
+	type fields struct {
+		option options
+	}
+	type args struct {
+		queryResult *tcvectordb.QueryDocumentResult
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    *vectorstore.SearchResult
+		wantErr bool
+	}{
+		{
+			name: "normal case with multiple documents",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return &document.Document{ID: "doc1"}, nil, nil
+					},
+				},
+			},
+			args: args{
+				queryResult: &tcvectordb.QueryDocumentResult{
+					Documents: []tcvectordb.Document{{}, {}},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{
+					{Document: &document.Document{ID: "doc1"}, Score: 1.0},
+					{Document: &document.Document{ID: "doc1"}, Score: 1.0},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "docBuilder returns error",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return nil, nil, errors.New("conversion error")
+					},
+				},
+			},
+			args: args{
+				queryResult: &tcvectordb.QueryDocumentResult{
+					Documents: []tcvectordb.Document{{}},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name: "empty documents list",
+			fields: fields{
+				option: options{
+					docBuilder: func(tcvectordb.Document) (*document.Document, []float64, error) {
+						return &document.Document{}, nil, nil
+					},
+				},
+			},
+			args: args{
+				queryResult: &tcvectordb.QueryDocumentResult{
+					Documents: []tcvectordb.Document{},
+				},
+			},
+			want: &vectorstore.SearchResult{
+				Results: []*vectorstore.ScoredDocument{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "partial document conversion failure",
+			fields: fields{
+				option: options{
+					docBuilder: func() func(tcvectordb.Document) (*document.Document, []float64, error) {
+						count := 0
+						return func(doc tcvectordb.Document) (*document.Document, []float64, error) {
+							if count == 1 {
+								return nil, nil, errors.New("second doc error")
+							}
+							count++
+							return &document.Document{}, nil, nil
+						}
+					}(),
+				},
+			},
+			args: args{
+				queryResult: &tcvectordb.QueryDocumentResult{
+					Documents: []tcvectordb.Document{{}, {}, {}},
+				},
+			},
+			want:    nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vs := &VectorStore{
+				option: tt.fields.option,
+			}
+			got, err := vs.convertQueryResult(tt.args.queryResult)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("convertQueryResult() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("convertQueryResult() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
