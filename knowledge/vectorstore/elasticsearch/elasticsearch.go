@@ -470,7 +470,11 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 		if score < vs.option.scoreThreshold {
 			continue
 		}
-		doc, _, _ := vs.option.docBuilder(hit.Source_)
+		doc, _, err := vs.option.docBuilder(hit.Source_)
+		if err != nil {
+			log.Errorf("elasticsearch parse search result: %v", err)
+			continue
+		}
 		if doc == nil {
 			continue
 		}
