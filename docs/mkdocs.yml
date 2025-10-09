@@ -23,10 +23,11 @@ nav:
       - Knowledge: knowledge.md
       - Planner: planner.md
       - Event: event.md
-  - Debug: debugserver.md
-  - AG-UI: agui.md
+  - Server:
+    - Debug: debugserver.md
+    - AG-UI: agui.md
+    - A2A: a2a.md
   - Observability: observability.md
-  - A2A: a2a.md
   - Ecosystem: ecosystem.md
 
 plugins:
@@ -61,10 +62,11 @@ plugins:
                 - Planner: planner.md
                 - Graph: graph.md
                 - Event: event.md
-            - 调试: debugserver.md
-            - AG-UI: agui.md
+            - 服务:
+              - 调试: debugserver.md
+              - AG-UI: agui.md
+              - A2A: a2a.md
             - 可观测: observability.md
-            - A2A: a2a.md
             - 生态: ecosystem.md
   - git-revision-date-localized:
       enable_creation_date: true
@@ -101,7 +103,10 @@ markdown_extensions:
       pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
   - mdx_truly_sane_lists
 
 extra_css:
