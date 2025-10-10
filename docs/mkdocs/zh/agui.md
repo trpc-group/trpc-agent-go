@@ -59,11 +59,27 @@ AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默�
 import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 )
 
-type wsService struct{}
+type wsService struct {
+	path    string
+	runner  aguirunner.Runner
+	handler http.Handler
+}
 
-func (s *wsService) Handler() http.Handler { /* 注册 WebSocket 并写入事件 */ }
+func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	s := &wsService{
+		path:   "/agui",
+		runner: runner,
+	}
+	h := http.NewServeMux()
+	h.HandleFunc(s.path, s.handle)
+	s.handler = h
+	return s
+}
+
+func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithService(&wsService{}))
