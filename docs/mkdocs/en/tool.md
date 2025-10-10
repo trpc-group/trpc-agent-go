@@ -336,7 +336,7 @@ mathAgent := llmagent.New(
 // 2) Wrap as an Agent tool
 mathTool := agenttool.NewTool(
     mathAgent,
-    agenttool.WithSkipSummarization(true), // default true: no extra outer summarization after tool.response
+    agenttool.WithSkipSummarization(true), // opt-in: skip the outer summarization after tool.response
     agenttool.WithStreamInner(true),       // forward child Agent streaming events to parent flow
 )
 
@@ -375,8 +375,8 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
 ### Options
 
 - WithSkipSummarization(bool):
-  - true (default): The outer flow does not run an extra summarization LLM call after `tool.response`
-  - false: Allow an additional summarization/answer call after the tool result
+  - false (default): Allow an additional summarization/answer call after the tool result
+  - true: Skip the outer summarization LLM call once the tool returns
 
 - WithStreamInner(bool):
   - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
