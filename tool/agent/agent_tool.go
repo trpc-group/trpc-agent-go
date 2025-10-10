@@ -66,10 +66,9 @@ func WithStreamInner(enabled bool) Option {
 
 // NewTool creates a new Tool that wraps the given agent.
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
-	// Default to skipping summarization for AgentTool to avoid redundant
-	// outer-agent summaries after tool.response. This mirrors ADK-style
-	// behavior where the tool result is the end of the turn by default.
-	options := &agentToolOptions{skipSummarization: true}
+	// Default to allowing summarization so the parent agent can perform its
+	// normal post-tool reasoning unless opt-out is requested.
+	options := &agentToolOptions{skipSummarization: false}
 	for _, opt := range opts {
 		opt(options)
 	}

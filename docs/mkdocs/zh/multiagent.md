@@ -377,8 +377,8 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 
 #### 选项对照
 
-- `WithSkipSummarization(true)`：工具响应后不再让外层模型做额外总结（默认推荐）
-- `WithSkipSummarization(false)`：工具后再进行一次总结型 LLM 调用
+- `WithSkipSummarization(false)`：默认，工具返回后允许外层模型再总结一次
+- `WithSkipSummarization(true)`：工具返回后跳过外层模型的总结调用
 - `WithStreamInner(true)`：启用子 Agent 事件转发（父/子 Agent 建议都 `Stream: true`）
 - `WithStreamInner(false)`：按普通可调用工具处理，不转发内部流
 

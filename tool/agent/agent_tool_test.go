@@ -154,6 +154,19 @@ func TestTool_Call(t *testing.T) {
 	}
 }
 
+func TestTool_DefaultSkipSummarization(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent for testing",
+	}
+
+	agentTool := NewTool(mockAgent)
+
+	if agentTool.skipSummarization {
+		t.Error("Expected skip summarization to be false by default")
+	}
+}
+
 func TestTool_WithSkipSummarization(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",

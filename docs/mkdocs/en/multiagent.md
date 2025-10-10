@@ -377,8 +377,8 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 
 #### Option Matrix
 
-- `WithSkipSummarization(true)`: Don’t run an extra outer summarization after the tool response (recommended default)
-- `WithSkipSummarization(false)`: Allow one more summarization LLM call after the tool
+- `WithSkipSummarization(false)`: (default) Allow one more summarization LLM call after the tool
+- `WithSkipSummarization(true)`: Skip the outer summarization so the tool output is surfaced directly
 - `WithStreamInner(true)`: Forward child Agent events (use `Stream: true` on both parent and child Agents)
 - `WithStreamInner(false)`: Treat as a callable-only tool, without inner forwarding
 
