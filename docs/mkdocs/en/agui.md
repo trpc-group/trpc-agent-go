@@ -59,14 +59,30 @@ The AG-UI specification does not enforce a transport. The framework uses SSE by 
 import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 )
 
-type wsService struct{}
+type wsService struct {
+	path    string
+	runner  aguirunner.Runner
+	handler http.Handler
+}
 
-func (s *wsService) Handler() http.Handler { /* Register WebSocket and stream events. */ }
+func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	s := &wsService{
+		path:   "/agui",
+		runner: runner,
+	}
+	h := http.NewServeMux()
+	h.HandleFunc(s.path, s.handle)
+	s.handler = h
+	return s
+}
+
+func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
-server, _ := agui.New(runner, agui.WithService(&wsService{}))
+server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```
 
 ### Custom translator
