@@ -17,8 +17,14 @@ type Event struct {
     // Response 是 Event 的基础响应结构，承载 LLM 的响应
     *model.Response
 
-    // InvocationID 是本次调用的唯一标识
-    InvocationID string `json:"invocationId"`
+    // RequestID 记录关联本次请求的ID，可由runner.Run通过agent.WithRequestID("request-ID")传递.
+	RequestID string `json:"requestID,omitempty"`
+
+	// InvocationID 当前执行上下文的ID.
+	InvocationID string `json:"invocationId"`
+
+	// ParentInvocationID 上一级执行上下文ID.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
 
     // Author 是事件的发起者
     Author string `json:"author"`
