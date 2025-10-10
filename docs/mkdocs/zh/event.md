@@ -451,3 +451,22 @@ func (c *multiTurnChat) displayContent(
     *fullContent += content
 }
 ```
+
+### RequestID,ParentInvocationID,InvocationID三者的关系与使用场景
+- `RequestID string`：用于标识区分同一session会话下的多次用户交互请求，可由runner.Run通过agent.WithRequestID绑定业务层自己的请求ID。
+- `ParentInvocationID string`：用于关联父级执行上下文，可通过此ID关联到父级执行中的相关事件
+- `InvocationID string`：当前执行上下文ID。可通过此ID关联同一个执行上下文中的相关事件
+
+可通过以上三个ID，将事件流按照层级结构组织，如下：
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9
