@@ -82,7 +82,7 @@ func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Servi
 func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
-server, _ := agui.New(runner, agui.WithService(&wsService{}))
+server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```
 
 ### 自定义 Translator
