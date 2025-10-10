@@ -11,10 +11,35 @@
 package elasticsearch
 
 import (
+	"encoding/json"
 	"net/http"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
+
+type DocBuilderFunc func(hitSource json.RawMessage) (*document.Document, []float64, error)
+
+func defaultDocBuilder(hitSource json.RawMessage) (*document.Document, []float64, error) {
+	// Parse the _source field using our unified esDocument struct.
+	var source esDocument
+	if err := json.Unmarshal(hitSource, &source); err != nil {
+		return nil, nil, err
+	}
+	// Create document.
+	doc := &document.Document{
+		ID:        source.ID,
+		Name:      source.Name,
+		Content:   source.Content,
+		CreatedAt: source.CreatedAt,
+		UpdatedAt: source.UpdatedAt,
+	}
+	// Extract metadata.
+	if source.Metadata != nil {
+		doc.Metadata = source.Metadata
+	}
+	return doc, source.Embedding, nil
+}
 
 // options holds Elasticsearch vectorstore configuration.
 type options struct {
@@ -60,6 +85,8 @@ type options struct {
 	embeddingFieldName string
 	// extraOptions allows passing builder-specific extras to the storage client.
 	extraOptions []any
+	// docBuilder is the function to build document from hit source.
+	docBuilder DocBuilderFunc
 }
 
 // defaultOptions returns default configuration.
@@ -81,6 +108,7 @@ var defaultOptions = options{
 	nameFieldName:      "name",
 	contentFieldName:   "content",
 	embeddingFieldName: "embedding",
+	docBuilder:         defaultDocBuilder,
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -230,5 +258,12 @@ func WithEmbeddingField(field string) Option {
 func WithExtraOptions(extraOptions ...any) Option {
 	return func(o *options) {
 		o.extraOptions = append(o.extraOptions, extraOptions...)
+	}
+}
+
+// WithDocBuilder sets the document builder function.
+func WithDocBuilder(builder DocBuilderFunc) Option {
+	return func(o *options) {
+		o.docBuilder = builder
 	}
 }

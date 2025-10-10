@@ -363,6 +363,77 @@ func TestSearchSuccess(t *testing.T) {
 	assert.Equal(t, "N", res.Results[0].Document.Name)
 }
 
+// {"id":"i","title":"title-a","content":"content-a","page":1,"author":"author-a","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","embedding":[0.1,0.2,0.3]}}
+func TestSearchSuccess_withDocBuilder(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodPut && !strings.Contains(r.URL.Path, "_doc") {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.Contains(r.URL.Path, "_search") {
+			payload := map[string]any{
+				"hits": map[string]any{
+					"hits": []map[string]any{
+						{"_score": 0.9, "_source": map[string]any{"id": "d1", "title": "title-a", "content": "content-a", "page": 1, "author": "author-a", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"}},
+						{"_score": 0.9, "_source": map[string]any{"id": "d2", "title": "title-b", "content": "content-b", "page": 2, "author": "author-b", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z"}},
+					},
+				},
+			}
+			json.NewEncoder(w).Encode(payload)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer hs.Close()
+	docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+		var source struct {
+			ID        string    `json:"id"`
+			Title     string    `json:"title"`
+			Content   string    `json:"content"`
+			Page      int       `json:"page"`
+			Author    string    `json:"author"`
+			CreatedAt time.Time `json:"created_at"`
+			UpdatedAt time.Time `json:"updated_at"`
+			Embedding []float64 `json:"embedding"`
+		}
+		if err := json.Unmarshal(hitSource, &source); err != nil {
+			return nil, nil, err
+		}
+		// Create document.
+		doc := &document.Document{
+			ID:        source.ID,
+			Name:      source.Title,
+			Content:   source.Content,
+			CreatedAt: source.CreatedAt,
+			UpdatedAt: source.UpdatedAt,
+			Metadata: map[string]any{
+				"page":   source.Page,
+				"author": source.Author,
+			},
+		}
+		return doc, source.Embedding, nil
+	}
+	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithScoreThreshold(0.5), WithDocBuilder(docBuilder))
+	require.NoError(t, err)
+
+	res, err := vs.Search(context.Background(), &vectorstore.SearchQuery{
+		Vector:     []float64{0.1, 0.2, 0.3},
+		SearchMode: vectorstore.SearchModeVector,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, len(res.Results))
+	assert.Equal(t, "title-a", res.Results[0].Document.Name)
+	assert.Equal(t, 2, len(res.Results[0].Document.Metadata))
+	assert.Equal(t, 2, res.Results[1].Document.Metadata["page"])
+}
+
 func TestDeleteTwice(t *testing.T) {
 	var deletedOnce bool
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,4 +593,61 @@ func TestGetSuccess(t *testing.T) {
 	assert.Equal(t, "n", d.Name)
 	assert.Equal(t, "c", d.Content)
 	assert.Equal(t, 3, len(emb))
+}
+
+func TestGetSuccess_withDocBuilder(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Elastic-Product", "Elasticsearch")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "_doc/") {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"found":true, "_source": {"id":"i","title":"title-a","content":"content-a","page":1,"author":"author-a","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","embedding":[0.1,0.2,0.3]}}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer hs.Close()
+	docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+		var source struct {
+			ID        string    `json:"id"`
+			Title     string    `json:"title"`
+			Content   string    `json:"content"`
+			Page      int       `json:"page"`
+			Author    string    `json:"author"`
+			CreatedAt time.Time `json:"created_at"`
+			UpdatedAt time.Time `json:"updated_at"`
+			Embedding []float64 `json:"embedding"`
+		}
+		if err := json.Unmarshal(hitSource, &source); err != nil {
+			return nil, nil, err
+		}
+		// Create document.
+		doc := &document.Document{
+			ID:        source.ID,
+			Name:      source.Title,
+			Content:   source.Content,
+			CreatedAt: source.CreatedAt,
+			UpdatedAt: source.UpdatedAt,
+			Metadata: map[string]any{
+				"page":   source.Page,
+				"author": source.Author,
+			},
+		}
+		return doc, source.Embedding, nil
+	}
+	vs, err := New(WithAddresses([]string{hs.URL}), WithVectorDimension(3), WithDocBuilder(docBuilder))
+	require.NoError(t, err)
+	d, emb, err := vs.Get(context.Background(), "id")
+	require.NoError(t, err)
+	require.NotNil(t, d)
+	assert.Equal(t, "i", d.ID)
+	assert.Equal(t, "title-a", d.Name)
+	assert.Equal(t, "content-a", d.Content)
+	assert.Equal(t, 3, len(emb))
+	assert.Equal(t, 2, len(d.Metadata))
+	assert.Equal(t, 1, d.Metadata["page"])
 }
