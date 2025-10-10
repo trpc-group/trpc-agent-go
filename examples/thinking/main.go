@@ -164,8 +164,8 @@ func (c *thinkingChat) processResponse(eventChan <-chan *event.Event) error {
 			continue
 		}
 		// Show reasoning content.
-		if len(e.Choices) > 0 {
-			ch := e.Choices[0]
+		if len(e.Response.Choices) > 0 {
+			ch := e.Response.Choices[0]
 			if c.streaming {
 				if rc := ch.Delta.ReasoningContent; rc != "" {
 					// Dim style for reasoning content.
