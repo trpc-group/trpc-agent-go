@@ -49,10 +49,10 @@ func WithPath(path string) Option {
 	}
 }
 
-// ServiceFactory is a function that xxx.
+// ServiceFactory is a function that creates AG-UI service.
 type ServiceFactory func(runner aguirunner.Runner, opt ...service.Option) service.Service
 
-// WithServiceFactory sets the service factory.
+// WithServiceFactory sets the service factory, sse.New in default.
 func WithServiceFactory(f ServiceFactory) Option {
 	return func(o *options) {
 		o.serviceFactory = f
