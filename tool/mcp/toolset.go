@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
@@ -26,14 +27,16 @@ import (
 // Conservative approach: only reconnect for clear connection/session failures.
 // Configuration errors (DNS) and potential performance issues (timeout) are excluded.
 var sessionReconnectErrorPatterns = []string{
-	"session_expired:",    // Explicit session expiration from transport layer
-	"transport is closed", // Transport layer closed
-	"connection refused",  // Server not reachable (possibly restarting)
-	"connection reset",    // Connection reset by peer
-	"EOF",                 // End of file (stream closed)
-	"broken pipe",         // Broken connection
-	"HTTP 404",            // Session not found on server
-	"session not found",   // Explicit session not found error
+	"session_expired:",       // Explicit session expiration from transport layer
+	"transport is closed",    // Transport layer closed
+	"client not initialized", // MCP client not initialized
+	"not initialized",        // Generic initialization error
+	"connection refused",     // Server not reachable (possibly restarting)
+	"connection reset",       // Connection reset by peer
+	"EOF",                    // End of file (stream closed)
+	"broken pipe",            // Broken connection
+	"HTTP 404",               // Session not found on server
+	"session not found",      // Explicit session not found error
 }
 
 // ToolSet implements the ToolSet interface for MCP tools.
@@ -185,7 +188,7 @@ type mcpSessionManager struct {
 	mu                     sync.RWMutex
 	connected              bool
 	initialized            bool
-	reconnectAttempts      int // Current number of reconnection attempts in this session lifecycle
+	reconnectGroup         singleflight.Group // Ensures only one reconnection happens at a time
 }
 
 // newMCPSessionManager creates a new MCP session manager.
@@ -343,8 +346,8 @@ func (m *mcpSessionManager) listTools(ctx context.Context) ([]mcp.Tool, error) {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 
-		if !m.connected || !m.initialized {
-			return fmt.Errorf("MCP session not connected or initialized")
+		if m.client == nil {
+			return fmt.Errorf("transport is closed")
 		}
 
 		log.Debug("Listing tools from MCP server")
@@ -374,8 +377,8 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		m.mu.RLock()
 		defer m.mu.RUnlock()
 
-		if !m.connected || !m.initialized {
-			return fmt.Errorf("MCP session not connected or initialized")
+		if m.client == nil {
+			return fmt.Errorf("transport is closed")
 		}
 
 		log.Debug("Calling tool", "name", name, "arguments", arguments)
@@ -390,7 +393,7 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 		if callErr != nil {
 			// Enhanced error with parameter information.
 			enhancedErr := fmt.Errorf("failed to call tool %s: %w", name, callErr)
-			log.Error("Tool call failed", "name", name, "error", callErr)
+			log.Errorf("Tool call failed (name=%s, error=%v)", name, callErr)
 			return enhancedErr
 		}
 
@@ -460,10 +463,11 @@ func (m *mcpSessionManager) isConnected() bool {
 }
 
 // executeWithSessionReconnect executes an operation with automatic session reconnection support.
+// Uses per-operation retry strategy: each operation gets independent reconnection attempts.
 // If the operation fails with a session-expired error and session reconnection is enabled,
-// it will attempt to recreate the session and retry the operation once.
+// it will attempt to recreate the session and retry the operation up to maxAttempts times.
 func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, operation func() error) error {
-	// Execute the operation
+	// Execute the operation first
 	err := operation()
 	if err == nil {
 		return nil
@@ -474,37 +478,60 @@ func (m *mcpSessionManager) executeWithSessionReconnect(ctx context.Context, ope
 		return err
 	}
 
-	// Check if max reconnection attempts exceeded
-	m.mu.Lock()
-	currentAttempts := m.reconnectAttempts
+	// Get max attempts from config
 	maxAttempts := m.sessionReconnectConfig.MaxReconnectAttempts
-	m.mu.Unlock()
 
-	if currentAttempts >= maxAttempts {
-		log.Warn("Max session reconnect attempts reached, giving up",
-			"attempts", currentAttempts,
-			"max_attempts", maxAttempts)
-		return err
+	// Per-operation reconnection attempts
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check if context is already cancelled or timed out
+		if ctx.Err() != nil {
+			log.Debugf("Context cancelled or timed out, stopping reconnection attempts (attempt=%d, error=%v)", attempt, ctx.Err())
+			return fmt.Errorf("reconnection aborted: %w", ctx.Err())
+		}
+
+		log.Debugf("Session expired error detected, attempting session reconnection (attempt=%d/%d)", attempt, maxAttempts)
+
+		// Attempt session reconnection
+		if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
+			log.Errorf("Session reconnection failed (attempt=%d/%d, reconnect_error=%v, original_error=%v)",
+				attempt, maxAttempts, reconnectErr, err)
+
+			// If this was the last attempt, return the original error
+			if attempt >= maxAttempts {
+				log.Warnf("Max session reconnect attempts reached for this operation, giving up (attempts=%d/%d)",
+					attempt, maxAttempts)
+				return err
+			}
+
+			// Continue to next attempt
+			continue
+		}
+
+		log.Debugf("Session reconnection successful, retrying operation (attempt=%d)", attempt)
+
+		// Retry the operation after successful reconnection
+		err = operation()
+		if err == nil {
+			log.Debugf("Operation succeeded after session reconnection (attempt=%d)", attempt)
+			return nil
+		}
+
+		// If operation still fails, check if we should retry reconnection
+		if !m.shouldAttemptSessionReconnect(err) {
+			// Different error type, don't retry
+			return err
+		}
+
+		// If we have more attempts, continue the loop
+		if attempt < maxAttempts {
+			log.Debugf("Operation failed after reconnection, will retry (attempt=%d/%d, error=%v)",
+				attempt, maxAttempts, err)
+		}
 	}
 
-	m.mu.Lock()
-	m.reconnectAttempts++
-	m.mu.Unlock()
-
-	log.Debug("Session expired error detected, attempting session reconnection",
-		"attempt", m.reconnectAttempts,
-		"max_attempts", maxAttempts)
-
-	// Attempt session reconnection
-	if reconnectErr := m.recreateSession(ctx); reconnectErr != nil {
-		log.Error("Session reconnection failed", "reconnect_error", reconnectErr, "original_error", err)
-		return err // Return original error if reconnection fails
-	}
-
-	log.Debug("Session reconnection successful, retrying operation")
-
-	// Retry the operation after successful reconnection
-	return operation()
+	// All attempts exhausted
+	log.Warnf("All reconnection attempts exhausted for this operation (max_attempts=%d)", maxAttempts)
+	return err
 }
 
 // shouldAttemptSessionReconnect determines if session reconnection should be attempted
@@ -533,7 +560,19 @@ func (m *mcpSessionManager) shouldAttemptSessionReconnect(err error) bool {
 
 // recreateSession recreates the MCP session by closing the old connection,
 // creating a new client, and re-initializing the session.
+// Uses singleflight to ensure only one reconnection happens at a time across all goroutines.
 func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
+	// Use singleflight to ensure only one reconnection happens at a time
+	// If multiple goroutines call this simultaneously, only one will execute,
+	// and others will wait for the result
+	_, err, _ := m.reconnectGroup.Do("reconnect", func() (interface{}, error) {
+		return nil, m.doRecreateSession(ctx)
+	})
+	return err
+}
+
+// doRecreateSession performs the actual session recreation logic.
+func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -547,7 +586,7 @@ func (m *mcpSessionManager) recreateSession(ctx context.Context) error {
 		m.client = nil
 	}
 
-	// Reset connection state
+	// Reset connection state (will be set to true on success)
 	m.connected = false
 	m.initialized = false
 
