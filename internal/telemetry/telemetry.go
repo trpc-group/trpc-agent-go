@@ -89,7 +89,7 @@ var (
 	KeyGenAIResponseModel           = "gen_ai.response.model"
 	KeyGenAIRequestStopSequences    = "gen_ai.request.stop_sequences"
 	KeyGenAIRequestFrequencyPenalty = "gen_ai.request.frequency_penalty"
-	KeyGenAIRequestMaxTokens        = "gen_ai.request.max_tokens"
+	KeyGenAIRequestMaxTokens        = "gen_ai.request.max_tokens" // #nosec G101 - this is a metric key name, not a credential.
 	KeyGenAIRequestPresencePenalty  = "gen_ai.request.presence_penalty"
 	KeyGenAIRequestTemperature      = "gen_ai.request.temperature"
 	KeyGenAIRequestTopP             = "gen_ai.request.top_p"
