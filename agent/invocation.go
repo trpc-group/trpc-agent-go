@@ -312,7 +312,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation.")
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
 		return nil
 	}
 	inv.noticeMu.Lock()
