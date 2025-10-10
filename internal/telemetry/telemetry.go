@@ -41,6 +41,7 @@ const (
 	OperationCallLLM     = "call_llm"
 	OperationInvokeAgent = "invoke_agent"
 	OperationCreateAgent = "create_agent"
+	OperationEmbeddings  = "embeddings"
 )
 
 const (
@@ -100,8 +101,11 @@ var (
 	KeyGenAIToolCallArguments = "gen_ai.tool.call.arguments"
 	KeyGenAIToolCallResult    = "gen_ai.tool.call.result"
 
+	KeyGenAIRequestEncodingFormats = "gen_ai.request.encoding_formats"
+
 	// https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
-	KeyErrorType = "error.type"
+	KeyErrorType          = "error.type"
+	ValueDefaultErrorType = "_OTHER"
 
 	// System value
 	SystemTRPCGoAgent = "trpc.go.agent"
@@ -292,6 +296,22 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 		)
 	} else {
 		span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
+	}
+}
+
+// TraceEmbedding traces the invocation of an embedding call.
+func TraceEmbedding(span trace.Span, requestEncodingFormat, requestModel string, inputToken *int64, err error) {
+	span.SetAttributes(
+		attribute.String(KeyGenAIOperationName, OperationEmbeddings),
+		attribute.String(KeyGenAIRequestModel, requestModel),
+		attribute.StringSlice(KeyGenAIRequestEncodingFormats, []string{requestEncodingFormat}),
+	)
+	if err != nil {
+		span.SetAttributes(attribute.String(KeyErrorType, ValueDefaultErrorType))
+		span.SetStatus(codes.Error, err.Error())
+	}
+	if inputToken != nil {
+		span.SetAttributes(attribute.Int64(KeyGenAIUsageInputTokens, *inputToken))
 	}
 }
 

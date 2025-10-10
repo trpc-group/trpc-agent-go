@@ -16,6 +16,8 @@ import (
 	"math"
 	"os"
 	"strings"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"google.golang.org/genai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
@@ -233,10 +235,20 @@ func (e *Embedder) GetDimensions() int {
 	return e.dimensions
 }
 
-func (e *Embedder) response(ctx context.Context, text string) (*genai.EmbedContentResponse, error) {
+func (e *Embedder) response(ctx context.Context, text string) (rsp *genai.EmbedContentResponse, err error) {
 	if text == "" {
 		return nil, fmt.Errorf("text cannot be empty")
 	}
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	defer func() {
+		var inputToken *int64
+		if rsp != nil && rsp.Metadata != nil {
+			i := int64(rsp.Metadata.BillableCharacterCount)
+			inputToken = &i
+		}
+		itelemetry.TraceEmbedding(span, e.requestOptions.MIMEType, e.model, inputToken, err)
+		span.End()
+	}()
 	// Remove the `models/` prefix from the model id if it exists.
 	model := strings.TrimPrefix(e.model, "models/")
 	// Create content from text.
@@ -257,10 +269,7 @@ func (e *Embedder) response(ctx context.Context, text string) (*genai.EmbedConte
 	if request.Title == "" {
 		request.Title = e.title
 	}
+
 	// Call Gemini embeddings API.
-	response, err := e.client.Models.EmbedContent(ctx, model, []*genai.Content{content}, &request)
-	if err != nil {
-		return nil, fmt.Errorf("create embedding: %w", err)
-	}
-	return response, nil
+	return e.client.Models.EmbedContent(ctx, model, []*genai.Content{content}, &request)
 }
