@@ -10,6 +10,7 @@ Artifacts（制品）是 trpc-agent-go 中的命名、版本化二进制数据�
 ## 什么是 Artifacts（制品）？
 
 Artifacts（制品）是包含以下内容的数据容器：
+
 - 二进制内容（图像、文档、文件等）
 - 元数据（MIME 类型、名称、URL）
 - 版本信息
@@ -18,6 +19,7 @@ Artifacts（制品）是包含以下内容的数据容器：
 ## 什么是 Artifact Service（制品服务）？
 
 Artifact Service（制品服务）是后端系统，负责：
+
 - 存储和检索制品
 - 管理版本
 - 处理命名空间组织（会话范围 vs 用户范围）
