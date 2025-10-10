@@ -16,8 +16,8 @@ Users obtain event streams through the `runner.Run()` method, then listen to eve
 type Event struct {
     // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
-    // RequestID Record the ID associated with this request, 
-    // which can be passed by runner.Run through agent-WithRequestID ("request ID").
+    // RequestID The unique identifier for this request.
+    // It can be passed via runner.Run using agent.WithRequestID.
 	RequestID string `json:"requestID,omitempty"`
 
 	// ParentInvocationID is the parent invocation ID of the event.
