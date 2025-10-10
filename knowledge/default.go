@@ -986,11 +986,19 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// Return the best result.
 	bestDoc := result.Documents[0]
 	content := bestDoc.Document.Content
+	documents := make([]*DocumentResult, 0, len(result.Documents))
+	for _, doc := range result.Documents {
+		documents = append(documents, &DocumentResult{
+			Document: doc.Document,
+			Score:    doc.Score,
+		})
+	}
 
 	return &SearchResult{
-		Document: bestDoc.Document,
-		Score:    bestDoc.Score,
-		Text:     content,
+		Document:  bestDoc.Document,
+		Score:     bestDoc.Score,
+		Text:      content,
+		Documents: documents,
 	}, nil
 }
 
@@ -1020,8 +1028,9 @@ func convertQueryFilter(qf *SearchFilter) *retriever.QueryFilter {
 	}
 
 	return &retriever.QueryFilter{
-		DocumentIDs: qf.DocumentIDs,
-		Metadata:    qf.Metadata,
+		DocumentIDs:      qf.DocumentIDs,
+		Metadata:         qf.Metadata,
+		FilterConditions: qf.UniversalCondition,
 	}
 }
 

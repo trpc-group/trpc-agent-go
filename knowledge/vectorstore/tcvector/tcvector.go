@@ -485,7 +485,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	}
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+		cond = getCondFromQuery(query.Filter)
 	}
 
 	querySparseVector, err := vs.sparseEncoder.EncodeQueries([]string{query.Query})
@@ -593,7 +593,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	}
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+		cond = getCondFromQuery(query.Filter)
 	}
 	queryParams := tcvectordb.QueryDocumentParams{
 		Filter:         cond,
@@ -843,8 +843,8 @@ func covertToVector32(embedding []float64) []float32 {
 }
 
 // getCondFromQuery converts filter to tcvectordb filter.
-func getCondFromQuery(ids []string, filter map[string]any) *tcvectordb.Filter {
-	if filter == nil && len(ids) == 0 {
+func getCondFromQuery(searchFilter *vectorstore.SearchFilter) *tcvectordb.Filter {
+	if searchFilter.Metadata == nil && len(searchFilter.IDs) == 0 && searchFilter.FilterConditions == nil {
 		return nil
 	}
 	cond := tcvectordb.NewFilter("")

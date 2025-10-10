@@ -18,7 +18,9 @@ import (
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types/enums/textquerytype"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
@@ -138,31 +140,40 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 // buildFilterQuery builds a filter query for search results.
 func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.QueryVariant {
-	var filters []types.QueryVariant
+	filters := make([]*searchfilter.UniversalFilterCondition, 0)
+	if filter.FilterConditions != nil {
+		filters = append(filters, filter.FilterConditions)
+	}
 
 	// Filter by document IDs.
 	if len(filter.IDs) > 0 {
-		termsQuery := esdsl.NewTermsQuery()
-		fieldValues := make([]types.FieldValueVariant, len(filter.IDs))
-		for i, id := range filter.IDs {
-			fieldValues[i] = esdsl.NewFieldValue().String(id)
-		}
-		idField := vs.option.idFieldName
-		termsQuery.AddTermsQuery(idField, esdsl.NewTermsQueryField().FieldValues(fieldValues...))
-		filters = append(filters, termsQuery)
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorIn,
+			Field:    vs.option.idFieldName,
+			Value:    filter.IDs,
+		})
 	}
 
 	// Filter by metadata.
 	for key, value := range filter.Metadata {
-		termQuery := esdsl.NewTermQuery(fmt.Sprintf("%s.%s", defaultFieldMetadata, key),
-			esdsl.NewFieldValue().String(fmt.Sprintf("%v", value)))
-		filters = append(filters, termQuery)
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorEqual,
+			Field:    fmt.Sprintf("%s.%s", defaultFieldMetadata, key),
+			Value:    value,
+		})
 	}
 
 	if len(filters) == 0 {
 		return nil
 	}
 
-	boolQuery := esdsl.NewBoolQuery().Filter(filters...)
-	return boolQuery
+	boolQuery, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    filters,
+	})
+	if err != nil {
+		log.Warn("elasticsearch build filter query failed: %v", err)
+		return nil
+	}
+	return boolQuery.(types.QueryVariant)
 }

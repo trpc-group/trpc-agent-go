@@ -15,6 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
 // Knowledge is the main interface for knowledge management operations.
@@ -57,19 +58,31 @@ type ConversationMessage = query.ConversationMessage
 type SearchResult struct {
 	// Document is the best matching document.
 	Document *document.Document
-
 	// Score is the relevance score (0.0 to 1.0).
 	Score float64
-
 	// Text is the document content for agent context.
 	Text string
+
+	// Documents search document results
+	Documents []*DocumentResult
+}
+
+// DocumentResult represents a document search result.
+type DocumentResult struct {
+	// Document is the search result document.
+	Document *document.Document
+	// Score is the relevance score (0.0 to 1.0).
+	Score float64
 }
 
 // SearchFilter represents filtering criteria for vector search.
 type SearchFilter struct {
 	// DocumentIDs filters results to specific document DocumentIDs.
 	DocumentIDs []string
-
 	// Metadata filters results by metadata key-value pairs.
 	Metadata map[string]any
+
+	// UniversalCondition is the universal condition applied to all search results.
+	// It is compatible with all storage engines.
+	UniversalCondition *searchfilter.UniversalFilterCondition
 }
