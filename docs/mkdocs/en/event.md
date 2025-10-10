@@ -16,8 +16,14 @@ Users obtain event streams through the `runner.Run()` method, then listen to eve
 type Event struct {
     // Response is the basic response structure of Event, carrying LLM responses.
     *model.Response
+    // RequestID The unique identifier for this request.
+    // It can be passed via runner.Run using agent.WithRequestID.
+	RequestID string `json:"requestID,omitempty"`
 
-    // InvocationID is the unique identifier for this invocation.
+	// ParentInvocationID is the parent invocation ID of the event.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
+
+    // InvocationID is current invocation ID of the event.
     InvocationID string `json:"invocationId"`
 
     // Author is the initiator of the event.
@@ -446,3 +452,22 @@ func (c *multiTurnChat) displayContent(
     *fullContent += content
 }
 ```
+
+### Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID
+- `RequestID string`​​: Used to identify and distinguish multiple user interaction requests within the same session. It can be bound to the business layer's own request ID via runner.Runu agent.WithRequestID. This ensures unique identification for each request cycle, similar to how request IDs are employed to guarantee idempotency and de-duplication in API interactions.
+- `​​ParentInvocationID string`​​: Used to associate the parent execution context. This ID can link to related events in the parent execution, enabling hierarchical tracking of nested operations. This mirrors concepts where a parent request ID groups multiple sub-requests, each with distinct identifiers but shared parent context for cohesive management.
+- `​​InvocationID string`​​: The current execution context ID. This ID associates related events within the same execution context, allowing precise correlation of actions and outcomes for a specific invocation. It functions similarly to child request IDs in systems where individual operations are tracked under a parent scope.
+
+Using these three IDs, the event flow can be organized in a hierarchical structure as follows:
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9

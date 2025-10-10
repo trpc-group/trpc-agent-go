@@ -17,8 +17,14 @@ type Event struct {
     // Response 是 Event 的基础响应结构，承载 LLM 的响应
     *model.Response
 
-    // InvocationID 是本次调用的唯一标识
-    InvocationID string `json:"invocationId"`
+    // RequestID 记录关联本次请求的ID，可由runner.Run通过agent.WithRequestID("request-ID")传递.
+	RequestID string `json:"requestID,omitempty"`
+
+	// InvocationID 当前执行上下文的ID.
+	InvocationID string `json:"invocationId"`
+
+	// ParentInvocationID 上一级执行上下文ID.
+	ParentInvocationID string `json:"parentInvocationId,omitempty"`
 
     // Author 是事件的发起者
     Author string `json:"author"`
@@ -445,3 +451,22 @@ func (c *multiTurnChat) displayContent(
     *fullContent += content
 }
 ```
+
+### RequestID,ParentInvocationID,InvocationID三者的关系与使用场景
+- `RequestID string`：用于标识区分同一session会话下的多次用户交互请求，可由runner.Run通过agent.WithRequestID绑定业务层自己的请求ID。
+- `ParentInvocationID string`：用于关联父级执行上下文，可通过此ID关联到父级执行中的相关事件
+- `InvocationID string`：当前执行上下文ID。可通过此ID关联同一个执行上下文中的相关事件
+
+可通过以上三个ID，将事件流按照层级结构组织，如下：
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9

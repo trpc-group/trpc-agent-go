@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -271,8 +272,9 @@ func (c *chainChat) startChat(ctx context.Context) error {
 func (c *chainChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
+	requestID := uuid.NewString()
 	// Run the chain agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
 	if err != nil {
 		return fmt.Errorf("failed to run chain agent: %w", err)
 	}

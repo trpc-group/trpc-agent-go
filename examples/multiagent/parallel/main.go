@@ -22,6 +22,7 @@ import (
 
 	"flag"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/parallelagent"
@@ -221,8 +222,9 @@ func (c *parallelChat) processMessage(ctx context.Context, userMessage string) e
 	// Track timing for performance insights.
 	startTime := time.Now()
 
+	requestID := uuid.NewString()
 	// Run the parallel agent system through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
 	if err != nil {
 		return fmt.Errorf("failed to run parallel agents: %w", err)
 	}

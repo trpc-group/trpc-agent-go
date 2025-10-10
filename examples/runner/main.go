@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -216,8 +218,9 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 func (c *multiTurnChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
+	requestID := uuid.New().String()
 	// Run the agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
 	if err != nil {
 		return fmt.Errorf("failed to run agent: %w", err)
 	}

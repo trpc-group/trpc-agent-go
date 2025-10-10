@@ -50,6 +50,7 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,7 +74,7 @@ func main() {
     ctx := context.Background()
     userMessage := model.NewUserMessage("Hello!")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
+    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
     if err != nil {
         panic(err)
     }
@@ -174,7 +175,7 @@ msgs := []model.Message{
     model.NewUserMessage("What’s the next step?"),
 }
 
-ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
 Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
@@ -423,7 +424,7 @@ invocation := agent.NewInvocation(
 
 ```go
 // Handle errors from Runner.Run.
-eventChan, err := r.Run(ctx, userID, sessionID, message)
+eventChan, err := r.Run(ctx, userID, sessionID, message, agent.WithRequestID("request-ID"))
 if err != nil {
     log.Printf("Runner execution failed: %v", err)
     return err
