@@ -66,9 +66,9 @@ func TestContentRequestProcessor_WithAddContextPrefix(t *testing.T) {
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
 			// Check that the content matches expected.
-			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
+			assert.NotEqual(t, 0, len(convertedEvent.Response.Choices), "Expected converted event to have choices")
 
-			actualContent := convertedEvent.Choices[0].Message.Content
+			actualContent := convertedEvent.Response.Choices[0].Message.Content
 			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}
@@ -93,11 +93,11 @@ func TestContentRequestProcessor_DefaultBehavior(t *testing.T) {
 
 	convertedEvent := processor.convertForeignEvent(testEvent)
 
-	if len(convertedEvent.Choices) == 0 {
+	if len(convertedEvent.Response.Choices) == 0 {
 		t.Fatal("Expected converted event to have choices")
 	}
 
-	actualContent := convertedEvent.Choices[0].Message.Content
+	actualContent := convertedEvent.Response.Choices[0].Message.Content
 	expectedContent := "For context: [test-agent] said: test content"
 
 	if actualContent != expectedContent {
@@ -151,9 +151,9 @@ func TestContentRequestProcessor_ToolCalls(t *testing.T) {
 
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
-			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
+			assert.NotEqual(t, 0, len(convertedEvent.Response.Choices), "Expected converted event to have choices")
 
-			actualContent := convertedEvent.Choices[0].Message.Content
+			actualContent := convertedEvent.Response.Choices[0].Message.Content
 			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}
@@ -261,9 +261,9 @@ func TestContentRequestProcessor_ToolResponses(t *testing.T) {
 
 			convertedEvent := processor.convertForeignEvent(testEvent)
 
-			assert.NotEqual(t, 0, len(convertedEvent.Choices), "Expected converted event to have choices")
+			assert.NotEqual(t, 0, len(convertedEvent.Response.Choices), "Expected converted event to have choices")
 
-			actualContent := convertedEvent.Choices[0].Message.Content
+			actualContent := convertedEvent.Response.Choices[0].Message.Content
 			assert.Equalf(t, tt.expectedPrefix, actualContent, "Expected content '%s', got '%s'", tt.expectedPrefix, actualContent)
 		})
 	}

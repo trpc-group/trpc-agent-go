@@ -276,8 +276,8 @@ func (c *parallelChat) handleParallelEvents(eventChan <-chan *event.Event) error
 		case event.IsToolResultResponse():
 			fmt.Printf("%s [%s] 🔧 Using tool...\n", agentIcon, event.Author)
 
-		case len(event.Choices) > 0:
-			choice := event.Choices[0]
+		case len(event.Response.Choices) > 0:
+			choice := event.Response.Choices[0]
 			// With streaming=false, display only complete response content
 			if choice.Message.Content != "" {
 				fmt.Printf("%s [%s]: %s\n\n", agentIcon, event.Author, choice.Message.Content)

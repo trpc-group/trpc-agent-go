@@ -118,7 +118,7 @@ func main() {
 	// Process event stream.
 	for event := range events {
 		if event.Object == "chat.completion.chunk" {
-			fmt.Print(event.Choices[0].Delta.Content)
+			fmt.Print(event.Response.Choices[0].Delta.Content)
 		}
 	}
 	fmt.Println()

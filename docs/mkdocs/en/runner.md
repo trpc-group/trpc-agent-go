@@ -85,8 +85,8 @@ func main() {
             continue
         }
 
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
     }
 }
@@ -323,14 +323,14 @@ for event := range eventChan {
     }
 
     // Streaming content.
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
 
     // Tool invocation.
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("Call tool: %s\n", toolCall.Function.Name)
         }
     }
@@ -360,9 +360,9 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // Handle tool calls.
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 Tool Call:")
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
                 fmt.Printf("    Params: %s\n",
@@ -381,8 +381,8 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // Handle streaming content.
-        if len(event.Choices) > 0 {
-            content := event.Choices[0].Delta.Content
+        if len(event.Response.Choices) > 0 {
+            content := event.Response.Choices[0].Delta.Content
             if content != "" {
                 fmt.Print(content)
                 fullResponse.WriteString(content)

@@ -549,12 +549,12 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Tool calls initiated:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -580,8 +580,8 @@ func (c *knowledgeChat) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Process streaming content.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
@@ -623,12 +623,12 @@ func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Even
 		}
 
 		// Detect and display tool calls.
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			if !hasToolCalls {
 				fmt.Printf("\n🔧 Tool calls initiated:\n")
 				hasToolCalls = true
 			}
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -656,8 +656,8 @@ func (c *knowledgeChat) processNonStreamingResponse(eventChan <-chan *event.Even
 		// Process final content from non-streaming response.
 		if event.IsFinalResponse() {
 			// In non-streaming mode, the final content should be in the Message.Content
-			if len(event.Choices) > 0 {
-				choice := event.Choices[0]
+			if len(event.Response.Choices) > 0 {
+				choice := event.Response.Choices[0]
 				if choice.Message.Content != "" {
 					fullContent = choice.Message.Content
 					fmt.Print(fullContent)

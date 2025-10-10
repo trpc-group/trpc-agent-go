@@ -149,8 +149,8 @@ for event := range eventChan {
         continue
     }
     // 处理内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         if choice.Delta.Content != "" {
             // 流式输出
             fmt.Print(choice.Delta.Content)
@@ -176,8 +176,8 @@ for event := range eventChan {
         continue
     }
     // 处理内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         if choice.Delta.Content != "" {
             // 流式输出
             fmt.Print(choice.Delta.Content)

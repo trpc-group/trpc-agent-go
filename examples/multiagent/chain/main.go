@@ -368,10 +368,10 @@ func (c *chainChat) displayAgentTransition(currentAgent string) {
 
 // handleToolCalls detects and displays tool calls.
 func (c *chainChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsActive = true
 		fmt.Printf("\n🔧 Using tools:\n")
-		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -401,8 +401,8 @@ func (c *chainChat) displayToolResponse(choice model.Choice) {
 
 // handleStreamingContent processes streaming content from agents.
 func (c *chainChat) handleStreamingContent(event *event.Event, currentAgent *string, toolCallsActive *bool) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			if *toolCallsActive {
 				*toolCallsActive = false
