@@ -302,7 +302,7 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 
 	// Set the converted message.
 	if len(contentParts) > 0 {
-		convertedEvent.Choices = []model.Choice{
+		convertedEvent.Response.Choices = []model.Choice{
 			{
 				Index: 0,
 				Message: model.Message{
@@ -483,7 +483,7 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	}
 
 	if len(allChoices) > 0 {
-		mergedEvent.Choices = allChoices
+		mergedEvent.Response.Choices = allChoices
 	}
 
 	return mergedEvent

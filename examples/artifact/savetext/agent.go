@@ -143,13 +143,13 @@ func (a *logQueryAgent) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Detect and display tool calls
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			if assistantStarted {
 				fmt.Printf("\n")
 			}
 			fmt.Printf("🔧 Tool calls:\n")
-			for _, toolCall := range event.Choices[0].Message.ToolCalls {
+			for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 				toolIcon := "🔧"
 				fmt.Printf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
 				if len(toolCall.Function.Arguments) > 0 {
@@ -176,8 +176,8 @@ func (a *logQueryAgent) processStreamingResponse(eventChan <-chan *event.Event) 
 		}
 
 		// Process streaming content
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Process streaming delta content
 			if choice.Delta.Content != "" {

@@ -96,8 +96,8 @@ You should NEVER install any package on your own like pip install ....
 			fmt.Printf("Error: %s (Type: %s)\n", event.Error.Message, event.Error.Type)
 		}
 
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			if choice.Message.Content != "" {
 				fmt.Printf("Message Content: %s\n", choice.Message.Content)

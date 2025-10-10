@@ -329,10 +329,10 @@ func (c *cycleChat) handleAgentTransition(
 
 // handleToolCalls detects and displays tool calls.
 func (c *cycleChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsActive = true
 		fmt.Printf("\n🔧 Using tools:\n")
-		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		}
 		fmt.Printf("🔄 Executing...\n")
@@ -398,8 +398,8 @@ func (c *cycleChat) displayToolSummary(content string) {
 
 // handleStreamingContent processes streaming content from agents.
 func (c *cycleChat) handleStreamingContent(event *event.Event, currentAgent *string, toolCallsActive *bool) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			if *toolCallsActive {
 				*toolCallsActive = false
