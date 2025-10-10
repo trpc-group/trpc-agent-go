@@ -247,7 +247,7 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 })
 ```
 
-以上示例与 [`examples/callbacks`](../../../examples/callbacks/) 可运行示例保持一致。
+以上示例与 [`examples/callbacks`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks) 可运行示例保持一致。
 
 ---
 
