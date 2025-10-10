@@ -972,6 +972,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#relationship-and-usage-scenarios-of-requestid-parentinvocationid-and-invocationid" class="md-nav__link">
+    <span class="md-ellipsis">
+      Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1268,6 +1277,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#relationship-and-usage-scenarios-of-requestid-parentinvocationid-and-invocationid" class="md-nav__link">
+    <span class="md-ellipsis">
+      Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1354,49 +1372,61 @@
 <span class="normal"><a href="#__codelineno-0-40">40</a></span>
 <span class="normal"><a href="#__codelineno-0-41">41</a></span>
 <span class="normal"><a href="#__codelineno-0-42">42</a></span>
-<span class="normal"><a href="#__codelineno-0-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-0-43">43</a></span>
+<span class="normal"><a href="#__codelineno-0-44">44</a></span>
+<span class="normal"><a href="#__codelineno-0-45">45</a></span>
+<span class="normal"><a href="#__codelineno-0-46">46</a></span>
+<span class="normal"><a href="#__codelineno-0-47">47</a></span>
+<span class="normal"><a href="#__codelineno-0-48">48</a></span>
+<span class="normal"><a href="#__codelineno-0-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="c1">// Response is the basic response structure of Event, carrying LLM responses.</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// InvocationID is the unique identifier for this invocation.</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="c1">// RequestID The unique identifier for this request.</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// It can be passed via runner.Run using agent.WithRequestID.</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">RequestID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;requestID,omitempty&quot;`</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">// Author is the initiator of the event.</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">// ParentInvocationID is the parent invocation ID of the event.</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">ParentInvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;parentInvocationId,omitempty&quot;`</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// ID is the unique identifier of the event.</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// InvocationID is current invocation ID of the event.</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="c1">// Timestamp is the timestamp of the event.</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="c1">// Author is the initiator of the event.</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for multi-Agent collaboration.</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="c1">// ID is the unique identifier of the event.</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="c1">// RequiresCompletion indicates whether this event requires a completion signal.</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="c1">// Timestamp is the timestamp of the event.</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
 </span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls.</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="c1">// Agent clients will understand which function calls are long-running from this field.</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="c1">// Only valid for function call events.</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">    </span><span class="c1">// StateDelta contains state changes to be written to the session.</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="nx">StateDelta</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="w"> </span><span class="s">`json:&quot;stateDelta,omitempty&quot;`</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="c1">// StructuredOutput carries a typed, in-memory structured payload (not serialized).</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="kt">any</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="c1">// Branch is a branch identifier for multi-Agent collaboration.</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="c1">// RequiresCompletion indicates whether this event requires a completion signal.</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs is a set of IDs for long-running function calls.</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">    </span><span class="c1">// Agent clients will understand which function calls are long-running from this field.</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="c1">// Only valid for function call events.</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
 </span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="c1">// Actions carry flow-level hints (e.g., skip post-tool summarization).</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">    </span><span class="nx">Actions</span><span class="w"> </span><span class="o">*</span><span class="nx">EventActions</span><span class="w"> </span><span class="s">`json:&quot;actions,omitempty&quot;`</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="p">}</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="c1">// EventActions provides optional behavior hints attached to the event.</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EventActions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">    </span><span class="c1">// SkipSummarization indicates the flow should not run a summarization LLM call</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="w">    </span><span class="c1">// after a tool.response event.</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;skipSummarization,omitempty&quot;`</span>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="p">}</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="c1">// StateDelta contains state changes to be written to the session.</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">    </span><span class="nx">StateDelta</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="w"> </span><span class="s">`json:&quot;stateDelta,omitempty&quot;`</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="c1">// StructuredOutput carries a typed, in-memory structured payload (not serialized).</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="kt">any</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">    </span><span class="c1">// Actions carry flow-level hints (e.g., skip post-tool summarization).</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="w">    </span><span class="nx">Actions</span><span class="w"> </span><span class="o">*</span><span class="nx">EventActions</span><span class="w"> </span><span class="s">`json:&quot;actions,omitempty&quot;`</span>
+</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="p">}</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a><span class="c1">// EventActions provides optional behavior hints attached to the event.</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EventActions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46"></a><span class="w">    </span><span class="c1">// SkipSummarization indicates the flow should not run a summarization LLM call</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47"></a><span class="w">    </span><span class="c1">// after a tool.response event.</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;skipSummarization,omitempty&quot;`</span>
+</span><span id="__span-0-49"><a id="__codelineno-0-49" name="__codelineno-0-49"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>model.Response</code> is the basic response structure of Event, carrying LLM responses, tool calls, and error information, defined as follows:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
@@ -2046,6 +2076,25 @@
 </span><span id="__span-7-149"><a id="__codelineno-7-149" name="__codelineno-7-149"></a><span class="w">    </span><span class="o">*</span><span class="nx">fullContent</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">content</span>
 </span><span id="__span-7-150"><a id="__codelineno-7-150" name="__codelineno-7-150"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="relationship-and-usage-scenarios-of-requestid-parentinvocationid-and-invocationid">Relationship and Usage Scenarios of RequestID, ParentInvocationID, and InvocationID</h3>
+<ul>
+<li><code>RequestID string</code>​​: Used to identify and distinguish multiple user interaction requests within the same session. It can be bound to the business layer's own request ID via runner.Runu agent.WithRequestID. This ensures unique identification for each request cycle, similar to how request IDs are employed to guarantee idempotency and de-duplication in API interactions.</li>
+<li><code>​​ParentInvocationID string</code>​​: Used to associate the parent execution context. This ID can link to related events in the parent execution, enabling hierarchical tracking of nested operations. This mirrors concepts where a parent request ID groups multiple sub-requests, each with distinct identifiers but shared parent context for cohesive management.</li>
+<li><code>​​InvocationID string</code>​​: The current execution context ID. This ID associates related events within the same execution context, allowing precise correlation of actions and outcomes for a specific invocation. It functions similarly to child request IDs in systems where individual operations are tracked under a parent scope.</li>
+</ul>
+<p>Using these three IDs, the event flow can be organized in a hierarchical structure as follows:
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9</p>
 
 
 
@@ -2068,7 +2117,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 10, 2025 03:21:46 UTC">2025-10-10 03:21:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="October 10, 2025 12:05:22 UTC">2025-10-10 12:05:22</span>
   </span>
 
     

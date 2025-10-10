@@ -995,6 +995,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#requestidparentinvocationidinvocationid" class="md-nav__link">
+    <span class="md-ellipsis">
+      RequestID,ParentInvocationID,InvocationID三者的关系与使用场景
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1291,6 +1300,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#requestidparentinvocationidinvocationid" class="md-nav__link">
+    <span class="md-ellipsis">
+      RequestID,ParentInvocationID,InvocationID三者的关系与使用场景
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1376,48 +1394,60 @@
 <span class="normal"><a href="#__codelineno-0-39">39</a></span>
 <span class="normal"><a href="#__codelineno-0-40">40</a></span>
 <span class="normal"><a href="#__codelineno-0-41">41</a></span>
-<span class="normal"><a href="#__codelineno-0-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-0-42">42</a></span>
+<span class="normal"><a href="#__codelineno-0-43">43</a></span>
+<span class="normal"><a href="#__codelineno-0-44">44</a></span>
+<span class="normal"><a href="#__codelineno-0-45">45</a></span>
+<span class="normal"><a href="#__codelineno-0-46">46</a></span>
+<span class="normal"><a href="#__codelineno-0-47">47</a></span>
+<span class="normal"><a href="#__codelineno-0-48">48</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Event</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="c1">// Response 是 Event 的基础响应结构，承载 LLM 的响应</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Response</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// InvocationID 是本次调用的唯一标识</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// RequestID 记录关联本次请求的ID，可由runner.Run通过agent.WithRequestID(&quot;request-ID&quot;)传递.</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="nx">RequestID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;requestID,omitempty&quot;`</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">// Author 是事件的发起者</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">// InvocationID 当前执行上下文的ID.</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">InvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;invocationId&quot;`</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// ID 是事件的唯一标识符</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// ParentInvocationID 上一级执行上下文ID.</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">ParentInvocationID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;parentInvocationId,omitempty&quot;`</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="c1">// Timestamp 是事件的时间戳</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="c1">// Author 是事件的发起者</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">Author</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;author&quot;`</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="c1">// Branch 是分支标识符，用于多 Agent 协作</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="c1">// ID 是事件的唯一标识符</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;id&quot;`</span>
 </span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="c1">// RequiresCompletion 表示此事件是否需要完成信号</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="c1">// Timestamp 是事件的时间戳</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="w">    </span><span class="nx">Timestamp</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w"> </span><span class="s">`json:&quot;timestamp&quot;`</span>
 </span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs 是长运行函数调用的 ID 集合</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="c1">// Agent 客户端将从此字段了解哪些函数调用是长时间运行的</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="c1">// 仅对函数调用事件有效</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">    </span><span class="c1">// StateDelta 是需要写入会话状态的增量（例如 Processor 产出的状态变更）</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="nx">StateDelta</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="w"> </span><span class="s">`json:&quot;stateDelta,omitempty&quot;`</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="c1">// StructuredOutput 携带类型化的内存内结构化输出，不参与序列化</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="kt">any</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="c1">// Branch 是分支标识符，用于多 Agent 协作</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="nx">Branch</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="s">`json:&quot;branch,omitempty&quot;`</span>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="c1">// RequiresCompletion 表示此事件是否需要完成信号</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">    </span><span class="nx">RequiresCompletion</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;requiresCompletion,omitempty&quot;`</span>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="c1">// LongRunningToolIDs 是长运行函数调用的 ID 集合</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="w">    </span><span class="c1">// Agent 客户端将从此字段了解哪些函数调用是长时间运行的</span>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="w">    </span><span class="c1">// 仅对函数调用事件有效</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">LongRunningToolIDs</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">struct</span><span class="p">{}</span><span class="w"> </span><span class="s">`json:&quot;longRunningToolIDs,omitempty&quot;`</span>
 </span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="c1">// Actions 携带对 Flow 的行为提示（例如：跳过工具后的总结）</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">    </span><span class="nx">Actions</span><span class="w"> </span><span class="o">*</span><span class="nx">EventActions</span><span class="w"> </span><span class="s">`json:&quot;actions,omitempty&quot;`</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="p">}</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="c1">// EventActions 为事件附带的可选行为提示</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EventActions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">    </span><span class="c1">// SkipSummarization 表示 Flow 在 tool.response 后不再进行总结型 LLM 调用</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;skipSummarization,omitempty&quot;`</span>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="w">    </span><span class="c1">// StateDelta 是需要写入会话状态的增量（例如 Processor 产出的状态变更）</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="w">    </span><span class="nx">StateDelta</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">][]</span><span class="kt">byte</span><span class="w"> </span><span class="s">`json:&quot;stateDelta,omitempty&quot;`</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="c1">// StructuredOutput 携带类型化的内存内结构化输出，不参与序列化</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="nx">StructuredOutput</span><span class="w"> </span><span class="kt">any</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="w">    </span><span class="c1">// Actions 携带对 Flow 的行为提示（例如：跳过工具后的总结）</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="w">    </span><span class="nx">Actions</span><span class="w"> </span><span class="o">*</span><span class="nx">EventActions</span><span class="w"> </span><span class="s">`json:&quot;actions,omitempty&quot;`</span>
 </span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="p">}</span>
+</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a>
+</span><span id="__span-0-44"><a id="__codelineno-0-44" name="__codelineno-0-44"></a><span class="c1">// EventActions 为事件附带的可选行为提示</span>
+</span><span id="__span-0-45"><a id="__codelineno-0-45" name="__codelineno-0-45"></a><span class="kd">type</span><span class="w"> </span><span class="nx">EventActions</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-46"><a id="__codelineno-0-46" name="__codelineno-0-46"></a><span class="w">    </span><span class="c1">// SkipSummarization 表示 Flow 在 tool.response 后不再进行总结型 LLM 调用</span>
+</span><span id="__span-0-47"><a id="__codelineno-0-47" name="__codelineno-0-47"></a><span class="w">    </span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="s">`json:&quot;skipSummarization,omitempty&quot;`</span>
+</span><span id="__span-0-48"><a id="__codelineno-0-48" name="__codelineno-0-48"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>model.Response</code> 是 Event 的基础响应结构，承载了 LLM 的响应、工具调用以及错误等信息，定义如下：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
@@ -2067,6 +2097,25 @@
 </span><span id="__span-7-150"><a id="__codelineno-7-150" name="__codelineno-7-150"></a><span class="w">    </span><span class="o">*</span><span class="nx">fullContent</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="nx">content</span>
 </span><span id="__span-7-151"><a id="__codelineno-7-151" name="__codelineno-7-151"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="requestidparentinvocationidinvocationid">RequestID,ParentInvocationID,InvocationID三者的关系与使用场景</h3>
+<ul>
+<li><code>RequestID string</code>：用于标识区分同一session会话下的多次用户交互请求，可由runner.Run通过agent.WithRequestID绑定业务层自己的请求ID。</li>
+<li><code>ParentInvocationID string</code>：用于关联父级执行上下文，可通过此ID关联到父级执行中的相关事件</li>
+<li><code>InvocationID string</code>：当前执行上下文ID。可通过此ID关联同一个执行上下文中的相关事件</li>
+</ul>
+<p>可通过以上三个ID，将事件流按照层级结构组织，如下：
+- requestID-1:
+  - invocationID-1:
+    - invocationID-2
+    - invocationID-3
+  - invocationID-1
+  - invocationID-4
+  - invocationID-5
+- requestID-2:
+  - invocationID-6
+    - invocationID-7
+  - invocationID-8
+  - invocationID-9</p>
 
 
 
@@ -2089,7 +2138,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年10月10日 03:21:46 UTC">2025-10-10 03:21:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2025年10月10日 12:05:22 UTC">2025-10-10 12:05:22</span>
   </span>
 
     
