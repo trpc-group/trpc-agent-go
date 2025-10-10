@@ -287,7 +287,7 @@ func GetAppendEventNoticeKey(eventID string) string {
 func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, timeout time.Duration) error {
 	ch := inv.AddNoticeChannel(ctx, key)
 	if ch == nil {
-		return fmt.Errorf("notice channel create failed. for %s.", key)
+		return fmt.Errorf("notice channel create failed for %s", key)
 	}
 	if timeout == WaitNoticeWithoutTimeout {
 		// no timeout, maybe wait for ever
@@ -312,7 +312,7 @@ func (inv *Invocation) AddNoticeChannelAndWait(ctx context.Context, key string, 
 // AddNoticeChannel add a new notice channel
 func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan any {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation.")
 		return nil
 	}
 	inv.noticeMu.Lock()
@@ -334,15 +334,15 @@ func (inv *Invocation) AddNoticeChannel(ctx context.Context, key string) chan an
 // NotifyCompletion notify completion signal to waiting task
 func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
-		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation. key:%s.", key)
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
+		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation key:%s", key)
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
 
 	ch, ok := inv.noticeChanMap[key]
 	if !ok {
-		return fmt.Errorf("notice channel not found for %s.", key)
+		return fmt.Errorf("notice channel not found for %s", key)
 	}
 
 	close(ch)
@@ -356,7 +356,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
 	if inv == nil || inv.noticeMu == nil {
-		log.Error("noticeMu is uninitialized, please use agent.NewInvocaiton or Clone method to create Invocation.")
+		log.Error("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
 		return
 	}
 	inv.noticeMu.Lock()
