@@ -92,7 +92,7 @@ func TestOutputResponseProcessor_ProcessResponse(t *testing.T) {
 		emittedEvent = event
 		// Send completion signal for the event
 		if event.RequiresCompletion {
-			invocation.NotifyCompletion(ctx, agent.AppendEventNoticeKeyPrefix+event.ID)
+			invocation.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(event.ID))
 		}
 	case <-ctx.Done():
 		t.Fatal("Test timed out waiting for event")
@@ -207,5 +207,68 @@ func TestOutputResponseProcessor_ProcessResponse_PartialResponse(t *testing.T) {
 	// Verify that no events were emitted for partial response
 	if len(events) != 0 {
 		t.Errorf("Expected 0 events for partial response, got %d", len(events))
+	}
+}
+
+func TestOutputResponseProcessor_extractFirstJSONObject(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "normal",
+			input: "{\"city\":\"Beijing\"}",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "with_fences",
+			input: "```json\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "no_language",
+			input: "```\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "same_line_language",
+			input: "```json {\"city\":\"Beijing\"}```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "multiple_prefix",
+			input: "```json\njson\n{\"city\":\"Beijing\"}\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "windows_newline",
+			input: "```json\r\n{\"city\":\"Beijing\"}\r\n```",
+			want:  "{\"city\":\"Beijing\"}",
+		},
+		{
+			name:  "embedded_backticks",
+			input: "```json\n{\"city\":\"Beijing\",\"note\":\"contains ``` fence inside\"}\n```",
+			want:  "{\"city\":\"Beijing\",\"note\":\"contains ``` fence inside\"}",
+		},
+		{
+			name:  "multiline_string",
+			input: "```json\n{\"city\":\"Beijing\\n123\"}\n```",
+			want:  "{\"city\":\"Beijing\\n123\"}",
+		},
+		{
+			name:  "slice",
+			input: "```json\n[{\"city\":\"Beijing\\n123\"}]\n```",
+			want:  "[{\"city\":\"Beijing\\n123\"}]",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := extractFirstJSONObject(tc.input)
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
 	}
 }
