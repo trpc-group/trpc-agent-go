@@ -13,14 +13,17 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -30,6 +33,7 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
 	// Embedder.
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	geminiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
@@ -224,6 +228,38 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 		}
 		return vs, nil
 	case "tcvector":
+		docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+			doc := &document.Document{
+				ID: tcDoc.Id,
+			}
+			if field, ok := tcDoc.Fields["name"]; ok {
+				doc.Name = field.String()
+			}
+			if field, ok := tcDoc.Fields["content"]; ok {
+				doc.Content = field.String()
+			}
+			if field, ok := tcDoc.Fields["created_at"]; ok {
+				u := min(field.Uint64(), uint64(math.MaxInt64))
+				//nolint:gosec // u is not overflowed and the conversion is safe.
+				doc.CreatedAt = time.Unix(int64(u), 0)
+			}
+			if field, ok := tcDoc.Fields["updated_at"]; ok {
+				u := min(field.Uint64(), uint64(math.MaxInt64))
+				//nolint:gosec // u is not overflowed and the conversion is safe.
+				doc.UpdatedAt = time.Unix(int64(u), 0)
+			}
+			if field, ok := tcDoc.Fields["metadata"]; ok {
+				if metadata, ok := field.Val.(map[string]any); ok {
+					doc.Metadata = metadata
+				}
+			}
+
+			embedding := make([]float64, len(tcDoc.Vector))
+			for i, v := range tcDoc.Vector {
+				embedding[i] = float64(v)
+			}
+			return doc, embedding, nil
+		}
 		vs, err := vectortcvector.New(
 			vectortcvector.WithURL(tcvectorURL),
 			vectortcvector.WithUsername(tcvectorUsername),
@@ -231,6 +267,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectortcvector.WithCollection("tcvector-agent-go"),
 			// tcvector need build index for the filter fields
 			vectortcvector.WithFilterIndexFields(source.GetAllMetadataKeys(c.sources)),
+			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			vectortcvector.WithDocBuilder(docBuilder),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tcvector store: %w", err)
@@ -243,6 +281,31 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			hosts[i] = strings.TrimSpace(host)
 		}
 
+		docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+			var source struct {
+				ID        string         `json:"id"`
+				Name      string         `json:"name"`
+				Content   string         `json:"content"`
+				CreatedAt time.Time      `json:"created_at"`
+				UpdatedAt time.Time      `json:"updated_at"`
+				Embedding []float64      `json:"embedding"`
+				Metadata  map[string]any `json:"metadata"`
+			}
+			if err := json.Unmarshal(hitSource, &source); err != nil {
+				return nil, nil, err
+			}
+			// Create document.
+			doc := &document.Document{
+				ID:        source.ID,
+				Name:      source.Name,
+				Content:   source.Content,
+				CreatedAt: source.CreatedAt,
+				UpdatedAt: source.UpdatedAt,
+				Metadata:  source.Metadata,
+			}
+			return doc, source.Embedding, nil
+		}
+
 		vs, err := vectorelasticsearch.New(
 			vectorelasticsearch.WithAddresses(hosts),
 			vectorelasticsearch.WithUsername(elasticsearchUsername),
@@ -251,6 +314,8 @@ func (c *knowledgeChat) setupVectorDB() (vectorstore.VectorStore, error) {
 			vectorelasticsearch.WithIndexName(elasticsearchIndexName),
 			vectorelasticsearch.WithMaxRetries(3),
 			vectorelasticsearch.WithVersion(*esVersion),
+			// 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+			vectorelasticsearch.WithDocBuilder(docBuilder),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create elasticsearch store: %w", err)
