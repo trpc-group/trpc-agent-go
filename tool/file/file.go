@@ -127,11 +127,11 @@ type fileToolSet struct {
 	createDirMode            os.FileMode
 	createFileMode           os.FileMode
 	maxFileSize              int64
-	tools                    []tool.CallableTool
+	tools                    []tool.Tool
 }
 
 // Tools implements the ToolSet interface.
-func (f *fileToolSet) Tools(ctx context.Context) []tool.CallableTool {
+func (f *fileToolSet) Tools(ctx context.Context) []tool.Tool {
 	return f.tools
 }
 
@@ -172,7 +172,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		return nil, fmt.Errorf("base directory '%s' is not a directory", fileToolSet.baseDir)
 	}
 	// Create function tools based on enabled features.
-	var tools []tool.CallableTool
+	var tools []tool.Tool
 	if fileToolSet.saveFileEnabled {
 		tools = append(tools, fileToolSet.saveFileTool())
 	}
