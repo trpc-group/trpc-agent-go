@@ -18,6 +18,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
+var comparisonOperators = map[string]string{
+	searchfilter.OperatorEqual:              "=",
+	searchfilter.OperatorNotEqual:           "!=",
+	searchfilter.OperatorGreaterThan:        ">",
+	searchfilter.OperatorGreaterThanOrEqual: ">=",
+	searchfilter.OperatorLessThan:           "<",
+	searchfilter.OperatorLessThanOrEqual:    "<=",
+}
+
 // tcVectorConverter converts a filter condition to a TC Vector query.
 type tcVectorConverter struct{}
 
@@ -77,11 +86,16 @@ func (c *tcVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFi
 }
 
 func (c *tcVectorConverter) buildComparisonCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
+	operator, ok := comparisonOperators[cond.Operator]
+	if !ok {
+		return nil, fmt.Errorf("unsupported comparison operator: %s", cond.Operator)
+	}
+
 	var filter string
 	if reflect.TypeOf(cond.Value).Kind() == reflect.String {
-		filter = fmt.Sprintf(`%s%s"%v"`, cond.Field, cond.Operator, cond.Value)
+		filter = fmt.Sprintf(`%s%s"%v"`, cond.Field, operator, cond.Value)
 	} else {
-		filter = fmt.Sprintf(`%s%s%v`, cond.Field, cond.Operator, cond.Value)
+		filter = fmt.Sprintf(`%s%s%v`, cond.Field, operator, cond.Value)
 	}
 	return tcvectordb.NewFilter(filter), nil
 }
