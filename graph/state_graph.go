@@ -397,8 +397,8 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 			runner.tools = make(map[string]tool.Tool)
 		}
 		for _, toolSet := range toolSets {
-			for _, tool := range toolSet.Tools(context.Background()) {
-				runner.tools[tool.Declaration().Name] = tool
+			for _, t := range toolSet.Tools(context.Background()) {
+				runner.tools[t.Declaration().Name] = t
 			}
 		}
 	}
@@ -770,8 +770,8 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		tools = make(map[string]tool.Tool)
 	}
 	for _, toolSet := range node.toolSets {
-		for _, tool := range toolSet.Tools(context.Background()) {
-			tools[tool.Declaration().Name] = tool
+		for _, t := range toolSet.Tools(context.Background()) {
+			tools[t.Declaration().Name] = t
 		}
 	}
 	return func(ctx context.Context, state State) (any, error) {
