@@ -187,9 +187,15 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 // Subgraph I/O mapping and scope utilities
 
 // SubgraphResult captures a subgraph's outputs exposed to the parent mapper.
+// RawStateDelta provides the original serialized final-state snapshot map coming
+// from the subgraph's terminal graph.execution event. Callers can decode values
+// with custom types if needed. Note that FinalState is reconstructed by JSON
+// decoding, which may coerce numbers to float64 and complex structures to
+// map[string]any.
 type SubgraphResult struct {
-	LastResponse string
-	FinalState   State
+	LastResponse  string
+	FinalState    State
+	RawStateDelta map[string][]byte
 }
 
 // SubgraphInputMapper projects parent state into child runtime state.
@@ -197,6 +203,7 @@ type SubgraphResult struct {
 type SubgraphInputMapper func(parent State) State
 
 // SubgraphOutputMapper converts subgraph results into parent state updates.
+// Returning nil or an empty State means "no updates" will be applied.
 type SubgraphOutputMapper func(parent State, result SubgraphResult) State
 
 // WithSubgraphInputMapper sets a mapper used to build the child runtime state.
@@ -854,6 +861,23 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	}
 }
 
+// copyRuntimeStateFiltered creates a shallow copy of the parent state excluding
+// internal/ephemeral keys that should not leak into a child sub-agent's
+// Invocation.RunOptions.RuntimeState (e.g., exec context, callbacks, session).
+func copyRuntimeStateFiltered(parent State) State {
+	if parent == nil {
+		return State{}
+	}
+	out := make(State, len(parent))
+	for k, v := range parent {
+		if isInternalStateKey(k) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // NewAgentNodeFunc creates a NodeFunc that looks up and uses a sub-agent by name.
 // The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
@@ -893,30 +917,25 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
 		}
 
-        // Build child runtime state via optional mapper; default to a shallow copy of parent state
-        // to avoid mutating the parent's map when applying include_contents, etc.
-        var childState State
-        if inputMapper != nil {
-            if s := inputMapper(state); s != nil {
-                childState = s
-            } else {
-                childState = State{}
-            }
-        } else {
-            // Shallow copy parent state map (values may be shared by reference; that's OK
-            // for read-only use as runtime overlay in the child invocation).
-            childState = make(State, len(state))
-            for k, v := range state {
-                childState[k] = v
-            }
-        }
-        if isolated {
-            // Instruct child GraphAgent to not include session contents in its request.
-            if childState == nil {
-                childState = State{}
-            }
-            childState[CfgKeyIncludeContents] = "none"
-        }
+		// Build child runtime state via optional mapper; default to a filtered shallow copy
+		// of the parent state to avoid leaking internal/ephemeral keys (exec context, callbacks, etc.).
+		var childState State
+		if inputMapper != nil {
+			if s := inputMapper(state); s != nil {
+				childState = s
+			} else {
+				childState = State{}
+			}
+		} else {
+			childState = copyRuntimeStateFiltered(state)
+		}
+		if isolated {
+			// Instruct child GraphAgent to not include session contents in its request.
+			if childState == nil {
+				childState = State{}
+			}
+			childState[CfgKeyIncludeContents] = "none"
+		}
 
 		// Build invocation for the target agent with custom runtime state and scope.
 		invocation := buildAgentInvocationWithStateAndScope(ctx, state, childState, targetAgent, scope)
@@ -941,6 +960,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		// Forward all events from the target agent and capture completion state.
 		var lastResponse string
 		var finalState State
+		var rawDelta map[string][]byte
 		for agentEvent := range agentEventChan {
 			if nodeCallbacks != nil {
 				for _, callback := range nodeCallbacks.AgentEvent {
@@ -972,6 +992,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 					}
 				}
 				finalState = tmp
+				rawDelta = agentEvent.StateDelta
 			}
 		}
 		// Emit agent execution complete event.
@@ -979,7 +1000,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
 		// Update state with either custom output mapping or default behavior.
 		if outputMapper != nil {
-			mapped := outputMapper(state, SubgraphResult{LastResponse: lastResponse, FinalState: finalState})
+			mapped := outputMapper(state, SubgraphResult{LastResponse: lastResponse, FinalState: finalState, RawStateDelta: rawDelta})
 			if mapped != nil {
 				return mapped, nil
 			}
@@ -1476,41 +1497,8 @@ func MessagesStateSchema() *StateSchema {
 
 // buildAgentInvocation builds an invocation for the target agent.
 func buildAgentInvocation(ctx context.Context, state State, targetAgent agent.Agent) *agent.Invocation {
-	// Extract user input from state.
-	var userInput string
-	if input, exists := state[StateKeyUserInput]; exists {
-		if inputStr, ok := input.(string); ok {
-			userInput = inputStr
-		}
-	}
-	// Extract session from state.
-	var sessionData *session.Session
-	if sess, exists := state[StateKeySession]; exists {
-		if sessData, ok := sess.(*session.Session); ok {
-			sessionData = sessData
-		}
-	}
-
-	// clone a new Invocation from parent.
-	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
-		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + targetAgent.Info().Name + uuid.NewString()
-		invocation := parentInvocation.Clone(
-			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-			agent.WithInvocationEventFilterKey(filterKey),
-		)
-		return invocation
-	}
-	// Create the invocation.
-	invocation := agent.NewInvocation(
-		agent.WithInvocationAgent(targetAgent),
-		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: state}),
-		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-		agent.WithInvocationSession(sessionData),
-		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+uuid.NewString()),
-	)
-	return invocation
+	// Delegate to the unified builder with default runtime state and empty scope.
+	return buildAgentInvocationWithStateAndScope(ctx, state, state, targetAgent, "")
 }
 
 // emitAgentStartEvent emits an agent execution start event.

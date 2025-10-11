@@ -243,8 +243,8 @@ func buildChildSubgraph(name string) (*graphagent.GraphAgent, map[string]tool.To
 		tools,
 	)
 	sg.AddToolsNode(nodeTools, tools)
-    // If llm_decider emits tool_calls, go to tools; otherwise finish.
-    sg.AddToolsConditionalEdges(nodeLLMDecide, nodeTools, graph.End)
+	// If llm_decider emits tool_calls, go to tools; otherwise finish.
+	sg.AddToolsConditionalEdges(nodeLLMDecide, nodeTools, graph.End)
 	// After tools, route back to LLM to get a natural assistant message summarizing tool results.
 	sg.AddEdge(nodeTools, nodeLLMDecide)
 	sg.SetEntryPoint(nodeLLMDecide).SetFinishPoint(nodeLLMDecide)
