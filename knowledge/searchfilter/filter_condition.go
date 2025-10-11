@@ -60,6 +60,10 @@ type UniversalFilterCondition struct {
 	Operator string
 
 	// Value is the value to compare against.
+	// If the Operator is "and" or "or", Value should be a slice of UniversalFilterCondition pointer.
+	// If the Operator is "in" or "not in", Value should be a slice of any.
+	// If the Operator is "between", Value should be a slice of two elements.
+	// If the Operator is "like" or "not like", Value should be a string.
 	Value any
 }
 
