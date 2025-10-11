@@ -47,9 +47,7 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 	}
 }
 
-// buildLogicalCondition 构建逻辑条件查询（用于复合查询）
 func (c *esConverter) buildLogicalCondition(filter *searchfilter.UniversalFilterCondition) (*types.Query, error) {
-	// 假设Value是一个UniversalFilterCondition的切片
 	conditions, ok := filter.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
 		return nil, fmt.Errorf("bool operator requires an array of conditions")
@@ -172,14 +170,12 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 	return &termsQuery, nil
 }
 
-// convertWildcard 转换like和not like操作符（通配符查询）
 func (c *esConverter) convertWildcard(cond *searchfilter.UniversalFilterCondition) (*types.Query, error) {
 	valueStr, ok := cond.Value.(string)
 	if !ok {
 		return nil, fmt.Errorf("like operator requires string value")
 	}
 
-	// 将like模式转换为通配符模式
 	wildcardPattern := strings.ReplaceAll(valueStr, "%", "*")
 	wildcardPattern = strings.ReplaceAll(wildcardPattern, "_", "?")
 
