@@ -82,7 +82,7 @@ type SearchFilter struct {
 	// Metadata filters results by metadata key-value pairs.
 	Metadata map[string]any
 
-	// UniversalCondition is the universal condition applied to all search results.
+	// FilterCondition is the universal condition applied to all search results.
 	// It is compatible with all storage engines.
-	UniversalCondition *searchfilter.UniversalFilterCondition
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
