@@ -149,7 +149,8 @@ func convertQueryFilter(qf *QueryFilter) *vectorstore.SearchFilter {
 	}
 
 	return &vectorstore.SearchFilter{
-		IDs:      qf.DocumentIDs,
-		Metadata: qf.Metadata,
+		IDs:             qf.DocumentIDs,
+		Metadata:        qf.Metadata,
+		FilterCondition: qf.FilterCondition,
 	}
 }
