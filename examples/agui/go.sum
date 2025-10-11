@@ -1,5 +1,5 @@
-github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20250919021155-c1b3471899c8 h1:3ZcB9AXuWmx/hFCptPv/DcY+zmwkruRTJREXSQjBHhM=
-github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20250919021155-c1b3471899c8/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251010213829-13eb1f218b38 h1:vlJcVm6FgkczJIwxfwYpDG5TOuKWI6iZP3cBtVFGPF4=
+github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20251010213829-13eb1f218b38/go.mod h1:ERAMOexUee4AIuoxksuuGoEcHl3aqLwaazjGwlR9ZCI=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
