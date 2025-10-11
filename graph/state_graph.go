@@ -92,6 +92,14 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithNodeCachePolicy sets a cache policy for this node.
+// When set, the executor will attempt to cache the node's final result using this policy.
+func WithNodeCachePolicy(policy *CachePolicy) Option {
+	return func(node *Node) {
+		node.cachePolicy = policy
+	}
+}
+
 // WithGenerationConfig sets the generation config for an LLM node.
 // Effective only for nodes added via AddLLMNode.
 func WithGenerationConfig(cfg model.GenerationConfig) Option {
@@ -368,6 +376,37 @@ func (sg *StateGraph) WithNodeCallbacks(callbacks *NodeCallbacks) *StateGraph {
 		Reducer: DefaultReducer,
 		Default: func() any { return callbacks },
 	})
+	return sg
+}
+
+// WithCache sets the graph-level cache implementation.
+func (sg *StateGraph) WithCache(cache Cache) *StateGraph {
+	if cache != nil {
+		sg.graph.setCache(cache)
+	}
+	return sg
+}
+
+// WithCachePolicy sets the default cache policy for all nodes (can be overridden per-node).
+func (sg *StateGraph) WithCachePolicy(policy *CachePolicy) *StateGraph {
+	sg.graph.setCachePolicy(policy)
+	return sg
+}
+
+// ClearCache clears caches for the specified nodes. If nodes is empty, it clears all nodes currently in the graph.
+func (sg *StateGraph) ClearCache(nodes ...string) *StateGraph {
+	if len(nodes) == 0 {
+		// collect all nodes
+		var all []string
+		sg.graph.mu.RLock()
+		for id := range sg.graph.nodes {
+			all = append(all, id)
+		}
+		sg.graph.mu.RUnlock()
+		sg.graph.clearCacheForNodes(all)
+		return sg
+	}
+	sg.graph.clearCacheForNodes(nodes)
 	return sg
 }
 

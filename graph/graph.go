@@ -80,6 +80,8 @@ type Node struct {
 	toolSets []tool.ToolSet
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
+	// Optional per-node cache policy. If nil, graph-level policy applies.
+	cachePolicy *CachePolicy
 
 	// Pregel-style extensions
 	triggers []string            // Channels that trigger this node
@@ -132,6 +134,10 @@ type Graph struct {
 	// Pregel-style extensions
 	channelManager *channel.Manager
 	triggerToNodes map[string][]string // Maps channel names to nodes that are triggered
+
+	// Caching
+	cache       Cache
+	cachePolicy *CachePolicy
 }
 
 // New creates a new empty graph with the given state schema.
@@ -183,6 +189,47 @@ func (g *Graph) EntryPoint() string {
 // Schema returns the state schema.
 func (g *Graph) Schema() *StateSchema {
 	return g.schema
+}
+
+// Cache returns the graph-level cache (may be nil).
+func (g *Graph) Cache() Cache {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cache
+}
+
+// CachePolicy returns the graph-level cache policy (may be nil).
+func (g *Graph) CachePolicy() *CachePolicy {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cachePolicy
+}
+
+// setCache sets the graph-level cache.
+func (g *Graph) setCache(c Cache) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cache = c
+}
+
+// setCachePolicy sets the graph-level cache policy.
+func (g *Graph) setCachePolicy(p *CachePolicy) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cachePolicy = p
+}
+
+// clearCacheForNodes clears cache entries for the given node IDs.
+func (g *Graph) clearCacheForNodes(nodes []string) {
+	g.mu.RLock()
+	c := g.cache
+	g.mu.RUnlock()
+	if c == nil {
+		return
+	}
+	for _, id := range nodes {
+		c.Clear(buildCacheNamespace(id))
+	}
 }
 
 // validate validates the graph structure.
