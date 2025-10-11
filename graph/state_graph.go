@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -204,6 +205,8 @@ type SubgraphInputMapper func(parent State) State
 
 // SubgraphOutputMapper converts subgraph results into parent state updates.
 // Returning nil or an empty State means "no updates" will be applied.
+// Note: Prefer returning nil when there are no updates to write back;
+// this reads clearer and is equivalent to applying an empty update.
 type SubgraphOutputMapper func(parent State, result SubgraphResult) State
 
 // WithSubgraphInputMapper sets a mapper used to build the child runtime state.
@@ -222,6 +225,9 @@ func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 
 // WithSubgraphIsolatedMessages toggles seeding of session messages to the child.
 // When true, the child GraphAgent runs with include_contents=none.
+// Docs note: This effectively sets CfgKeyIncludeContents="none" in the child
+// runtime state so the child does not inject session history and only sees the
+// projected input from the parent.
 func WithSubgraphIsolatedMessages(isolate bool) Option {
 	return func(node *Node) {
 		node.agentIsolatedMessages = isolate
@@ -229,6 +235,9 @@ func WithSubgraphIsolatedMessages(isolate bool) Option {
 }
 
 // WithSubgraphEventScope customizes the child invocation's filter scope segment.
+// Docs note: Scope may be hierarchical (can include '/'). If empty, it
+// defaults to the child agent name. The final filterKey becomes
+// parent/scope/<uuid>.
 func WithSubgraphEventScope(scope string) Option {
 	return func(node *Node) {
 		node.agentEventScope = scope
@@ -864,6 +873,11 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 // copyRuntimeStateFiltered creates a shallow copy of the parent state excluding
 // internal/ephemeral keys that should not leak into a child sub-agent's
 // Invocation.RunOptions.RuntimeState (e.g., exec context, callbacks, session).
+//
+// Important: This is a shallow copy (only key bindings are copied); complex
+// values (map/slice) remain shared references. Avoid concurrent mutation of the
+// same complex object from parent/child. If isolation is required, deep copy in
+// SubgraphInputMapper.
 func copyRuntimeStateFiltered(parent State) State {
 	if parent == nil {
 		return State{}
@@ -989,6 +1003,11 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 					var v any
 					if err := json.Unmarshal(b, &v); err == nil {
 						tmp[k] = v
+					} else {
+						// Debug-only: record keys that failed to unmarshal to
+						// help diagnose type drift. RawStateDelta still
+						// carries the original JSON.
+						log.Debugf("subgraph: failed to unmarshal final state key=%s: %v", k, err)
 					}
 				}
 				finalState = tmp
@@ -1059,7 +1078,8 @@ func buildAgentInvocationWithStateAndScope(
 		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
-		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+uuid.NewString()),
+		// Unify format with clone branch: <agentName>/<uuid>
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+agent.EventFilterKeyDelimiter+uuid.NewString()),
 	)
 	return inv
 }

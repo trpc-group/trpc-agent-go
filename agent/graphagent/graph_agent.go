@@ -191,6 +191,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
 		// Default include mode is All for graphs unless overridden by runtime state.
+		// Docs note: If RuntimeState[CfgKeyIncludeContents] is not one of
+		// {none, filtered, all}, ignore it and fall back to the default (all)
+		// to avoid accidental context loss.
 		include := processor.IncludeContentsAll
 		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
 			switch strings.ToLower(mode) {
