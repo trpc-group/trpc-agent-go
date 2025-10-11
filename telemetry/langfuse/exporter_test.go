@@ -329,13 +329,13 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key: itelemetry.KeyToolCallArgs,
+						Key: itelemetry.KeyGenAIToolCallArguments,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"arg1": "value1"}`},
 						},
 					},
 					{
-						Key: itelemetry.KeyToolResponse,
+						Key: itelemetry.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: `{"result": "success"}`},
 						},
@@ -361,11 +361,11 @@ func TestTransformExecuteTool(t *testing.T) {
 				Name: "tool-call",
 				Attributes: []*commonpb.KeyValue{
 					{
-						Key:   itelemetry.KeyToolCallArgs,
+						Key:   itelemetry.KeyGenAIToolCallArguments,
 						Value: nil,
 					},
 					{
-						Key: itelemetry.KeyToolResponse,
+						Key: itelemetry.KeyGenAIToolCallResult,
 						Value: &commonpb.AnyValue{
 							Value: &commonpb.AnyValue_StringValue{StringValue: "response"},
 						},
@@ -398,8 +398,8 @@ func TestTransformExecuteTool(t *testing.T) {
 
 			// Check that tool-specific attributes are removed
 			for _, attr := range tt.input.Attributes {
-				assert.NotEqual(t, itelemetry.KeyToolCallArgs, attr.Key, "tool args attribute should be removed")
-				assert.NotEqual(t, itelemetry.KeyToolResponse, attr.Key, "tool response attribute should be removed")
+				assert.NotEqual(t, itelemetry.KeyGenAIToolCallArguments, attr.Key, "tool args attribute should be removed")
+				assert.NotEqual(t, itelemetry.KeyGenAIToolCallResult, attr.Key, "tool response attribute should be removed")
 			}
 		})
 	}

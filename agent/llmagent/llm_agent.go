@@ -16,6 +16,8 @@ import (
 	"reflect"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -591,10 +593,12 @@ func registerTools(options *Options) []tool.Tool {
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("invoke_agent {%s}", a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation)
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, a.genConfig)
 	defer func() {
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
 			span.End()
 		}
 	}()
@@ -654,10 +658,10 @@ func (a *LLMAgent) wrapEventChannel(
 	wrappedChan := make(chan *event.Event, 256) // Use default buffer size
 
 	go func() {
-		var fullResponse *model.Response
+		var fullRespEvent *event.Event
 		defer func() {
-			if fullResponse != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullResponse)
+			if fullRespEvent != nil {
+				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent)
 			}
 			span.End()
 			close(wrappedChan)
@@ -666,7 +670,7 @@ func (a *LLMAgent) wrapEventChannel(
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
-				fullResponse = evt.Response
+				fullRespEvent = evt
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
@@ -686,9 +690,11 @@ func (a *LLMAgent) wrapEventChannel(
 					err.Error(),
 				)
 			} else if customResponse != nil {
-				fullResponse = customResponse
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
+			}
+			if evt != nil {
+				fullRespEvent = evt
 			}
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
