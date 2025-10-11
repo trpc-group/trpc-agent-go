@@ -230,3 +230,17 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
 }
+
+func TestInvocation_AddNoticeChannel_nil(t *testing.T) {
+	var inv *Invocation
+
+	ch := inv.AddNoticeChannel(context.Background(), "test-key")
+	require.Nil(t, ch)
+}
+
+func TestInvocation_AddNoticeChannelAndWait_nil(t *testing.T) {
+	var inv *Invocation
+
+	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
+	require.Error(t, err)
+}
