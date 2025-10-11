@@ -13,9 +13,11 @@ package tcvector
 import (
 	"fmt"
 	"reflect"
+	"runtime/debug"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 var comparisonOperators = map[string]string{
@@ -32,6 +34,12 @@ type tcVectorConverter struct{}
 
 // Convert converts a filter condition to an Elasticsearch query filter.
 func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition) (any, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.Errorf("panic in tcVectorConverter Convert: %v\n%s", r, string(stack))
+		}
+	}()
 	if cond == nil {
 		return nil, nil
 	}
@@ -55,6 +63,10 @@ func (c *tcVectorConverter) convertCondition(cond *searchfilter.UniversalFilterC
 }
 
 func (c *tcVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+
 	var filter string
 	if cond.Operator == searchfilter.OperatorIn {
 		filter = tcvectordb.In(cond.Field, cond.Value)
@@ -91,11 +103,15 @@ func (c *tcVectorConverter) buildComparisonCondition(cond *searchfilter.Universa
 		return nil, fmt.Errorf("unsupported comparison operator: %s", cond.Operator)
 	}
 
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+
 	var filter string
 	if reflect.TypeOf(cond.Value).Kind() == reflect.String {
-		filter = fmt.Sprintf(`%s%s"%v"`, cond.Field, operator, cond.Value)
+		filter = fmt.Sprintf(`%s %s "%v"`, cond.Field, operator, cond.Value)
 	} else {
-		filter = fmt.Sprintf(`%s%s%v`, cond.Field, operator, cond.Value)
+		filter = fmt.Sprintf(`%s %s %v`, cond.Field, operator, cond.Value)
 	}
 	return tcvectordb.NewFilter(filter), nil
 }
