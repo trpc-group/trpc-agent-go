@@ -130,7 +130,7 @@ func New(opts ...Option) (*VectorStore, error) {
 	vs := &VectorStore{
 		client:          client,
 		option:          option,
-		filterConverter: &searchfilter.ESConverter{},
+		filterConverter: &esConverter{},
 	}
 
 	// Ensure index exists with proper mapping.

@@ -26,8 +26,14 @@ const (
 	// OperatorGreaterThan is the "greater than" operator.
 	OperatorGreaterThan = "gt"
 
+	// OperatorGreaterThanOrEqual is the "greater than or equal" operator.
+	OperatorGreaterThanOrEqual = "gte"
+
 	// OperatorLessThan is the "less than" operator.
 	OperatorLessThan = "lt"
+
+	// OperatorLessThanOrEqual is the "less than or equal" operator.
+	OperatorLessThanOrEqual = "lte"
 
 	// OperatorIn is the "in" operator.
 	OperatorIn = "in"
