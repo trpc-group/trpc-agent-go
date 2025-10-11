@@ -60,6 +60,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
 type wsService struct {
@@ -69,8 +70,9 @@ type wsService struct {
 }
 
 func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	opts := service.NewOptions(opt...)
 	s := &wsService{
-		path:   "/agui",
+		path:   opts.Path,
 		runner: runner,
 	}
 	h := http.NewServeMux()
