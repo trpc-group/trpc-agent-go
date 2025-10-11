@@ -14,12 +14,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Verify that Embedder implements the embedder.Embedder interface.
@@ -211,10 +213,19 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	return embedding, usage, nil
 }
 
-func (e *Embedder) response(ctx context.Context, text string) (res *openai.CreateEmbeddingResponse, err error) {
+func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.CreateEmbeddingResponse, err error) {
 	if text == "" {
 		return nil, fmt.Errorf("text cannot be empty")
 	}
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	defer func() {
+		var inputToken *int64
+		if rsp != nil {
+			inputToken = &rsp.Usage.PromptTokens
+		}
+		itelemetry.TraceEmbedding(span, e.encodingFormat, e.model, inputToken, err)
+		span.End()
+	}()
 
 	// Create embedding request.
 	request := openai.EmbeddingNewParams{
