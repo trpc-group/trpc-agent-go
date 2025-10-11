@@ -1,4 +1,5 @@
 /*
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -14,6 +15,21 @@
   --copilot-kit-contrast-color: #ffffff;
   --copilot-kit-secondary-contrast-color: #ffffff;
   --copilot-kit-separator-color: rgba(255, 255, 255, 0.12);
+  /* Custom event color palette. */
+  --agui-custom-event-bg: #3a250f; /* dark amber background. */
+  --agui-custom-event-border: #f59e0b; /* amber 500 border. */
+  --agui-custom-event-label: #fbbf24; /* amber 400 label. */
+  --agui-custom-event-body: #fde68a; /* amber 200 body text. */
+  /* Tool call color palette. */
+  --agui-tool-call-bg: #0f1f2a; /* dark cyan slate. */
+  --agui-tool-call-border: #38bdf8; /* sky 400. */
+  --agui-tool-call-label: #7dd3fc; /* sky 300. */
+  --agui-tool-call-body: #bae6fd; /* sky 200. */
+  /* Tool result color palette. */
+  --agui-tool-result-bg: #0f251a; /* dark emerald. */
+  --agui-tool-result-border: #34d399; /* emerald 400. */
+  --agui-tool-result-label: #86efac; /* emerald 300. */
+  --agui-tool-result-body: #bbf7d0; /* emerald 200. */
 }
 
 html,
@@ -72,7 +88,7 @@ main.agui-chat {
   font-size: 0.85rem;
   letter-spacing: 0.01em;
   text-transform: uppercase;
-  color: rgba(129, 212, 250, 0.9);
+  color: inherit;
   margin-bottom: 0.5rem;
 }
 
@@ -83,7 +99,7 @@ main.agui-chat {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  color: #bae6fd;
+  color: inherit;
   background: transparent;
 }
 
@@ -188,10 +204,55 @@ main.agui-chat {
   color: rgba(255, 255, 255, 0.5);
 }
 
-.tool-message__label {
-  color: #ffffff;
+/* Remove generic overrides to allow per-kind colors to show. */
+
+/* Custom event specific styling. */
+.tool-message--custom,
+.tool-message[data-message-kind="custom"] {
+  background: #303030 !important;
+  box-shadow: none !important;
+  border-left-color: var(--agui-custom-event-border) !important;
+  border-left-width: 3px !important;
+  border-left-style: solid !important;
 }
 
-.tool-message__body {
-  color: #ffffff;
+.tool-message--custom .tool-message__label,
+.tool-message[data-message-kind="custom"] .tool-message__label {
+  color: inherit !important;
+  position: static;
+}
+
+.tool-message--custom .tool-message__body,
+.tool-message[data-message-kind="custom"] .tool-message__body {
+  color: inherit !important;
+}
+
+.tool-message--custom .tool-message__label::before {
+  content: "";
+}
+
+/* Tool call/result unified styling. */
+.tool-message--tool-call,
+.tool-message--tool-result,
+.tool-message[data-message-kind="tool-call"],
+.tool-message[data-message-kind="tool-result"] {
+  background: #303030 !important;
+  box-shadow: none !important;
+  border-left-color: var(--agui-tool-call-border) !important;
+  border-left-width: 3px !important;
+  border-left-style: solid !important;
+}
+
+.tool-message--tool-call .tool-message__label,
+.tool-message--tool-result .tool-message__label,
+.tool-message[data-message-kind="tool-call"] .tool-message__label,
+.tool-message[data-message-kind="tool-result"] .tool-message__label {
+  color: inherit !important;
+}
+
+.tool-message--tool-call .tool-message__body,
+.tool-message--tool-result .tool-message__body,
+.tool-message[data-message-kind="tool-call"] .tool-message__body,
+.tool-message[data-message-kind="tool-result"] .tool-message__body {
+  color: inherit !important;
 }
