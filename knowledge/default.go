@@ -1028,9 +1028,9 @@ func convertQueryFilter(qf *SearchFilter) *retriever.QueryFilter {
 	}
 
 	return &retriever.QueryFilter{
-		DocumentIDs:      qf.DocumentIDs,
-		Metadata:         qf.Metadata,
-		FilterConditions: qf.UniversalCondition,
+		DocumentIDs:     qf.DocumentIDs,
+		Metadata:        qf.Metadata,
+		FilterCondition: qf.UniversalCondition,
 	}
 }
 

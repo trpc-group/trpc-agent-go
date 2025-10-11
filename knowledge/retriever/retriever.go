@@ -63,8 +63,8 @@ type QueryFilter struct {
 	// Metadata filters documents by metadata key-value pairs.
 	Metadata map[string]any
 
-	// FilterConditions filters documents by universal filter conditions.
-	FilterConditions *searchfilter.UniversalFilterCondition
+	// FilterCondition filters documents by universal filter conditions.
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
 
 // Result represents the result of a retrieval operation.

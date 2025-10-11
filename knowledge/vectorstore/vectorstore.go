@@ -220,8 +220,8 @@ type SearchFilter struct {
 	// Metadata filters results by metadata key-value pairs.
 	Metadata map[string]any
 
-	// FilterConditions filters documents by universal filter conditions.
-	FilterConditions *searchfilter.UniversalFilterCondition
+	// FilterCondition filters documents by universal filter conditions.
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
 
 // SearchResult represents the result of a vector similarity search.

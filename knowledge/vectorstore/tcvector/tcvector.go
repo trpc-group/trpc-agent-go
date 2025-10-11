@@ -851,7 +851,7 @@ func covertToVector32(embedding []float64) []float32 {
 
 // getCondFromQuery converts filter to tcvectordb filter.
 func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) *tcvectordb.Filter {
-	if searchFilter.Metadata == nil && len(searchFilter.IDs) == 0 && searchFilter.FilterConditions == nil {
+	if searchFilter.Metadata == nil && len(searchFilter.IDs) == 0 && searchFilter.FilterCondition == nil {
 		return nil
 	}
 	filters := make([]*searchfilter.UniversalFilterCondition, 0)
@@ -869,8 +869,8 @@ func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) 
 			Value:    searchFilter.IDs,
 		})
 	}
-	if searchFilter.FilterConditions != nil {
-		filters = append(filters, searchFilter.FilterConditions)
+	if searchFilter.FilterCondition != nil {
+		filters = append(filters, searchFilter.FilterCondition)
 	}
 
 	if len(filters) == 0 {

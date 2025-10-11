@@ -141,8 +141,8 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 // buildFilterQuery builds a filter query for search results.
 func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.QueryVariant {
 	filters := make([]*searchfilter.UniversalFilterCondition, 0)
-	if filter.FilterConditions != nil {
-		filters = append(filters, filter.FilterConditions)
+	if filter.FilterCondition != nil {
+		filters = append(filters, filter.FilterCondition)
 	}
 
 	// Filter by document IDs.
