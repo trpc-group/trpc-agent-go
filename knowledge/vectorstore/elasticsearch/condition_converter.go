@@ -71,7 +71,7 @@ func (c *esConverter) buildLogicalCondition(filter *searchfilter.UniversalFilter
 			return nil, err
 		}
 		if query != nil {
-			queries = append(queries, *query.(*types.Query))
+			queries = append(queries, *query.QueryCaster())
 		}
 	}
 
