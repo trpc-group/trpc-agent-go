@@ -215,7 +215,7 @@ func TestNodeRetry_MetadataOnRetryErrors(t *testing.T) {
 		}
 	}
 
-	// We expect exactly one start for the node, with attempt metadata present.
+	// We expect at least one start for the node, with attempt metadata present.
 	require.NotEmpty(t, starts)
 	// Find start for unstable node
 	var s NodeExecutionMetadata

@@ -191,6 +191,9 @@ func unstableAPINode(ctx context.Context, state graph.State) (any, error) {
 		return nil, fmt.Errorf("unstable_api simulated failure on attempt %d", cur)
 	}
 
+	// on success, cleanup tracker
+	attemptTracker.Delete(key)
+
 	// Success: return fetched data stored in state
 	fetched := map[string]any{
 		"attempts":  cur,
@@ -228,10 +231,6 @@ func handleStreaming(ch <-chan *event.Event) error {
 					}
 				}
 			}
-		}
-		if ev.Error != nil {
-			fmt.Printf("❌ Error: %s\n", ev.Error.Message)
-			continue
 		}
 		// Stream model deltas
 		if len(ev.Response.Choices) > 0 {
