@@ -243,7 +243,10 @@ func buildChildSubgraph(name string) (*graphagent.GraphAgent, map[string]tool.To
 		tools,
 	)
 	sg.AddToolsNode(nodeTools, tools)
-	sg.AddToolsConditionalEdges(nodeLLMDecide, nodeTools, nodeLLMDecide)
+    // If llm_decider emits tool_calls, go to tools; otherwise finish.
+    sg.AddToolsConditionalEdges(nodeLLMDecide, nodeTools, graph.End)
+	// After tools, route back to LLM to get a natural assistant message summarizing tool results.
+	sg.AddEdge(nodeTools, nodeLLMDecide)
 	sg.SetEntryPoint(nodeLLMDecide).SetFinishPoint(nodeLLMDecide)
 	g, err := sg.Compile()
 	if err != nil {
@@ -377,6 +380,7 @@ func collect(ctx context.Context, state graph.State) (any, error) {
 
 // stream consumes events and prints streaming model/tool details and final outputs.
 func stream(ch <-chan *event.Event, verbose bool) error {
+	var lastFinal string
 	for e := range ch {
 		if e == nil {
 			continue
@@ -393,8 +397,11 @@ func stream(ch <-chan *event.Event, verbose bool) error {
 				continue
 			}
 			if !e.Response.IsPartial && choice.Message.Content != "" {
-				fmt.Println("\n---")
-				fmt.Printf("[%s] %s\n", e.Author, choice.Message.Content)
+				if choice.Message.Content != lastFinal {
+					fmt.Println("\n---")
+					fmt.Printf("[%s] %s\n", e.Author, choice.Message.Content)
+					lastFinal = choice.Message.Content
+				}
 				continue
 			}
 		}
