@@ -1,13 +1,13 @@
 package graph
 
 import (
-    crand "crypto/rand"
-    "context"
-    "errors"
-    "math"
-    "math/big"
-    "net"
-    "time"
+	"context"
+	"crypto/rand"
+	"errors"
+	"math"
+	"math/big"
+	"net"
+	"time"
 )
 
 // RetryCondition determines whether an error is retryable.
@@ -63,14 +63,14 @@ func (p RetryPolicy) NextDelay(attempt int) time.Duration {
 	if maxInt > 0 {
 		delay = math.Min(delay, float64(maxInt))
 	}
-    d := time.Duration(delay)
-    if p.Jitter && d > 0 {
-        // Full jitter in [d, 2d) style is common; here use [0, d) additive jitter.
-        // Use crypto/rand to avoid gosec G404 complaint.
-        if n, err := crand.Int(crand.Reader, big.NewInt(int64(d))); err == nil {
-            d += time.Duration(n.Int64())
-        }
-    }
+	d := time.Duration(delay)
+	if p.Jitter && d > 0 {
+		// Full jitter in [d, 2d) style is common; here use [0, d) additive jitter.
+		// Use crypto/rand to avoid gosec G404 complaint.
+		if n, err := rand.Int(rand.Reader, big.NewInt(int64(d))); err == nil {
+			d += time.Duration(n.Int64())
+		}
+	}
 	if d < 0 {
 		d = 0
 	}
