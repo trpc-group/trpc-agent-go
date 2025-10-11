@@ -172,7 +172,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 
 func TestLLMAgent_WithToolSet(t *testing.T) {
 	ct := &mockTool{name: "foo"}
-	ts := &mockToolSet{tools: []tool.CallableTool{ct}}
+	ts := &mockToolSet{tools: []tool.Tool{ct}}
 
 	agt := New("toolset-agent",
 		WithModel(newDummyModel()),
