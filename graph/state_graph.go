@@ -184,6 +184,50 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 	}
 }
 
+// Subgraph I/O mapping and scope utilities
+
+// SubgraphResult captures a subgraph's outputs exposed to the parent mapper.
+type SubgraphResult struct {
+	LastResponse string
+	FinalState   State
+}
+
+// SubgraphInputMapper projects parent state into child runtime state.
+// The returned state replaces the runtime state passed to the child.
+type SubgraphInputMapper func(parent State) State
+
+// SubgraphOutputMapper converts subgraph results into parent state updates.
+type SubgraphOutputMapper func(parent State, result SubgraphResult) State
+
+// WithSubgraphInputMapper sets a mapper used to build the child runtime state.
+func WithSubgraphInputMapper(f SubgraphInputMapper) Option {
+	return func(node *Node) {
+		node.agentInputMapper = f
+	}
+}
+
+// WithSubgraphOutputMapper sets a mapper that writes subgraph outputs back to parent state.
+func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
+	return func(node *Node) {
+		node.agentOutputMapper = f
+	}
+}
+
+// WithSubgraphIsolatedMessages toggles seeding of session messages to the child.
+// When true, the child GraphAgent runs with include_contents=none.
+func WithSubgraphIsolatedMessages(isolate bool) Option {
+	return func(node *Node) {
+		node.agentIsolatedMessages = isolate
+	}
+}
+
+// WithSubgraphEventScope customizes the child invocation's filter scope segment.
+func WithSubgraphEventScope(scope string) Option {
+	return func(node *Node) {
+		node.agentEventScope = scope
+	}
+}
+
 // WithModelCallbacks sets the model callbacks for LLM node.
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(node *Node) {
@@ -263,6 +307,11 @@ func (sg *StateGraph) AddAgentNode(
 	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
 	sg.AddNode(id, agentNodeFunc, agentOpts...)
 	return sg
+}
+
+// AddSubgraphNode is a sugar alias of AddAgentNode to emphasize subgraph semantics.
+func (sg *StateGraph) AddSubgraphNode(id string, opts ...Option) *StateGraph {
+	return sg.AddAgentNode(id, opts...)
 }
 
 // channelUpdateMarker value for marking channel updates.
@@ -813,6 +862,10 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		opt(dummyNode)
 	}
 	nodeCallbacks := dummyNode.callbacks
+	inputMapper := dummyNode.agentInputMapper
+	outputMapper := dummyNode.agentOutputMapper
+	isolated := dummyNode.agentIsolatedMessages
+	scope := dummyNode.agentEventScope
 	return func(ctx context.Context, state State) (any, error) {
 		ctx, span := trace.Tracer.Start(ctx, "agent_node_execution")
 		defer span.End()
@@ -840,8 +893,33 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("sub-agent '%s' not found in parent agent's sub-agent list", agentName)
 		}
 
-		// Build invocation for the target agent.
-		invocation := buildAgentInvocation(ctx, state, targetAgent)
+        // Build child runtime state via optional mapper; default to a shallow copy of parent state
+        // to avoid mutating the parent's map when applying include_contents, etc.
+        var childState State
+        if inputMapper != nil {
+            if s := inputMapper(state); s != nil {
+                childState = s
+            } else {
+                childState = State{}
+            }
+        } else {
+            // Shallow copy parent state map (values may be shared by reference; that's OK
+            // for read-only use as runtime overlay in the child invocation).
+            childState = make(State, len(state))
+            for k, v := range state {
+                childState[k] = v
+            }
+        }
+        if isolated {
+            // Instruct child GraphAgent to not include session contents in its request.
+            if childState == nil {
+                childState = State{}
+            }
+            childState[CfgKeyIncludeContents] = "none"
+        }
+
+		// Build invocation for the target agent with custom runtime state and scope.
+		invocation := buildAgentInvocationWithStateAndScope(ctx, state, childState, targetAgent, scope)
 
 		// Emit agent execution start event.
 		startTime := time.Now()
@@ -860,8 +938,9 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
-		// Forward all events from the target agent.
+		// Forward all events from the target agent and capture completion state.
 		var lastResponse string
+		var finalState State
 		for agentEvent := range agentEventChan {
 			if nodeCallbacks != nil {
 				for _, callback := range nodeCallbacks.AgentEvent {
@@ -881,19 +960,87 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 				agentEvent.Response.Choices[0].Message.Content != "" {
 				lastResponse = agentEvent.Response.Choices[0].Message.Content
 			}
+			// Capture subgraph completion state from its final graph.execution event.
+			if agentEvent.Done && agentEvent.Response != nil &&
+				agentEvent.Response.Object == ObjectTypeGraphExecution && agentEvent.StateDelta != nil {
+				// Convert StateDelta (JSON bytes) back into a State map.
+				tmp := make(State)
+				for k, b := range agentEvent.StateDelta {
+					var v any
+					if err := json.Unmarshal(b, &v); err == nil {
+						tmp[k] = v
+					}
+				}
+				finalState = tmp
+			}
 		}
 		// Emit agent execution complete event.
 		endTime := time.Now()
 		emitAgentCompleteEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime)
-		// Update state with the agent's response.
-		stateUpdate := State{}
-		stateUpdate[StateKeyLastResponse] = lastResponse
-		stateUpdate[StateKeyNodeResponses] = map[string]any{
-			nodeID: lastResponse,
+		// Update state with either custom output mapping or default behavior.
+		if outputMapper != nil {
+			mapped := outputMapper(state, SubgraphResult{LastResponse: lastResponse, FinalState: finalState})
+			if mapped != nil {
+				return mapped, nil
+			}
+			return State{}, nil
 		}
-		stateUpdate[StateKeyUserInput] = "" // Clear user input after execution.
-		return stateUpdate, nil
+		upd := State{}
+		upd[StateKeyLastResponse] = lastResponse
+		upd[StateKeyNodeResponses] = map[string]any{nodeID: lastResponse}
+		upd[StateKeyUserInput] = ""
+		return upd, nil
 	}
+}
+
+// buildAgentInvocationWithStateAndScope builds an invocation for the target agent
+// using a custom runtime state and an optional event filter scope segment.
+func buildAgentInvocationWithStateAndScope(
+	ctx context.Context,
+	parentState State,
+	runtime State,
+	targetAgent agent.Agent,
+	scope string,
+) *agent.Invocation {
+	// Extract user input from parent state.
+	var userInput string
+	if input, exists := parentState[StateKeyUserInput]; exists {
+		if inputStr, ok := input.(string); ok {
+			userInput = inputStr
+		}
+	}
+	// Extract session from parent state.
+	var sessionData *session.Session
+	if sess, exists := parentState[StateKeySession]; exists {
+		if sessData, ok := sess.(*session.Session); ok {
+			sessionData = sessData
+		}
+	}
+
+	// Clone from parent invocation if available to preserve linkage and filtering.
+	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok && parentInvocation != nil {
+		base := scope
+		if base == "" {
+			base = targetAgent.Info().Name
+		}
+		filterKey := parentInvocation.GetEventFilterKey() + agent.EventFilterKeyDelimiter + base + uuid.NewString()
+		inv := parentInvocation.Clone(
+			agent.WithInvocationAgent(targetAgent),
+			agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+			agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+			agent.WithInvocationEventFilterKey(filterKey),
+		)
+		return inv
+	}
+	// Create standalone invocation.
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationSession(sessionData),
+		agent.WithInvocationEventFilterKey(targetAgent.Info().Name+uuid.NewString()),
+	)
+	return inv
 }
 
 // runTool executes a tool with before/after callbacks and returns the result.

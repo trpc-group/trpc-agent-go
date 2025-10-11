@@ -13,6 +13,7 @@ package graphagent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -189,9 +190,21 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	if invocation.Session != nil {
 		// Build a temporary request to reuse the processor logic.
 		req := &model.Request{}
-		// Default processor: IncludeContentsFiltered + AddContextPrefix.
+		// Default include mode is All for graphs unless overridden by runtime state.
+		include := processor.IncludeContentsAll
+		if mode, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents].(string); ok && mode != "" {
+			switch strings.ToLower(mode) {
+			case processor.IncludeContentsNone:
+				include = processor.IncludeContentsNone
+			case processor.IncludeContentsFiltered:
+				include = processor.IncludeContentsFiltered
+			case processor.IncludeContentsAll:
+				include = processor.IncludeContentsAll
+			}
+		}
+		// Default processor: include (possibly overridden) + preserve same branch.
 		p := processor.NewContentRequestProcessor(
-			processor.WithIncludeContents(processor.IncludeContentsAll),
+			processor.WithIncludeContents(include),
 			processor.WithPreserveSameBranch(true),
 		)
 		// We only need messages side effect; no output channel needed.
