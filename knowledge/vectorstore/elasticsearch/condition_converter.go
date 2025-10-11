@@ -12,22 +12,31 @@ package elasticsearch
 
 import (
 	"fmt"
+	"reflect"
+	"runtime/debug"
 	"strings"
 
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // esConverter converts a filter condition to an Elasticsearch query.
 type esConverter struct{}
 
 // Convert converts a filter condition to an Elasticsearch query filter.
-func (c *esConverter) Convert(filter *searchfilter.UniversalFilterCondition) (any, error) {
-	if filter == nil {
+func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (any, error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stack := debug.Stack()
+			log.Errorf("panic in esConverter Convert: %v\n%s", r, string(stack))
+		}
+	}()
+	if cond == nil {
 		return nil, nil
 	}
 
-	return nil, nil
+	return c.convertCondition(cond)
 }
 
 func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
@@ -42,6 +51,8 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 		return c.buildInCondition(cond)
 	case searchfilter.OperatorLike, searchfilter.OperatorNotLike:
 		return c.convertWildcard(cond)
+	case searchfilter.OperatorBetween:
+		return c.convertRangeBetween(cond)
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", cond.Operator)
 	}
@@ -80,6 +91,10 @@ func (c *esConverter) buildLogicalCondition(filter *searchfilter.UniversalFilter
 }
 
 func (c *esConverter) buildComparisonCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+
 	switch cond.Operator {
 	case searchfilter.OperatorEqual:
 		return c.convertEqual(cond)
@@ -130,31 +145,39 @@ func (c *esConverter) convertRange(cond *searchfilter.UniversalFilterCondition) 
 }
 
 func (c *esConverter) convertRangeBetween(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
-	values, ok := cond.Value.([]any)
-	if !ok || len(values) != 2 {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
+		return nil, fmt.Errorf("in operator requires an array of values")
+	}
+	value := reflect.ValueOf(cond.Value)
+	if value.Len() != 2 {
 		return nil, fmt.Errorf("between operator requires an array with two values")
 	}
 
 	return &types.Query{
 		Range: map[string]types.RangeQuery{
 			cond.Field: map[string]any{
-				"gte": &values[0],
-				"lte": &values[1],
+				"gte": value.Index(0).Interface(),
+				"lte": value.Index(1).Interface(),
 			},
 		},
 	}, nil
 }
 
 func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
-	values, ok := cond.Value.([]any)
-	if !ok {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
+	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
 		return nil, fmt.Errorf("in operator requires an array of values")
 	}
 
 	termsQuery := types.Query{
 		Terms: &types.TermsQuery{
 			TermsQuery: map[string]types.TermsQueryField{
-				cond.Field: values,
+				cond.Field: cond.Value,
 			},
 		},
 	}
@@ -171,6 +194,9 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 }
 
 func (c *esConverter) convertWildcard(cond *searchfilter.UniversalFilterCondition) (*types.Query, error) {
+	if cond.Field == "" {
+		return nil, fmt.Errorf("field is empty")
+	}
 	valueStr, ok := cond.Value.(string)
 	if !ok {
 		return nil, fmt.Errorf("like operator requires string value")
