@@ -16,6 +16,11 @@ const (
 	CfgKeyCheckpointID = "checkpoint_id"
 	CfgKeyCheckpointNS = "checkpoint_ns"
 	CfgKeyResumeMap    = "resume_map"
+	// CfgKeyIncludeContents allows callers to control how the GraphAgent
+	// seeds model request messages from the session history for a run.
+	// Accepted values: "none", "filtered", "all". See
+	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
+	CfgKeyIncludeContents = "include_contents"
 )
 
 // State map keys (stored into execution state)
