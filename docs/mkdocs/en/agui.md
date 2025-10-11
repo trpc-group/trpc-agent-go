@@ -107,7 +107,11 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
 
-For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator. A complete code example can be found in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
+For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator, as shown in the image below.
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+You can find the complete code example in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
 
 ### Custom `UserIDResolver`
 

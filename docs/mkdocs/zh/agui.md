@@ -106,7 +106,11 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
 
-例如，在使用 React Planner 时，如果希望对不同标签应用不同的自定义事件，可以通过自定义 Translator 来实现。完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
+例如，在使用 React Planner 时，如果希望为不同标签应用不同的自定义事件，可以通过实现自定义 Translator 来实现，效果如下图所示。
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
 ### 自定义 `UserIDResolver`
 
