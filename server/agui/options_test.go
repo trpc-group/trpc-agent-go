@@ -10,7 +10,6 @@
 package agui
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,24 +18,20 @@ import (
 
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
-	assert.Equal(t, "", opts.path)
-	assert.Nil(t, opts.service)
+	assert.Equal(t, "/", opts.path)
+	assert.NotNil(t, opts.serviceFactory)
 	assert.Empty(t, opts.aguiRunnerOptions)
 }
 
 func TestOptionMutators(t *testing.T) {
-	handler := http.NewServeMux()
-	svc := &stubService{handler: handler}
 	var aguiOpt aguirunner.Option
 
 	opts := newOptions(
 		WithPath("/custom"),
-		WithService(svc),
 		WithAGUIRunnerOptions(aguiOpt),
 	)
 
 	assert.Equal(t, "/custom", opts.path)
-	assert.Same(t, svc, opts.service)
 	assert.Equal(t, []aguirunner.Option{aguiOpt}, opts.aguiRunnerOptions)
 }
 
