@@ -31,6 +31,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 }
 ```
 
+注意：若未显式指定 `WithPath`，AG-UI 服务默认路由为 `/`。
+
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
 
 Runner 全面的使用方法参见 [runner](./runner.md)。

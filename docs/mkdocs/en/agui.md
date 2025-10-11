@@ -31,6 +31,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 }
 ```
 
+Note: If `WithPath` is not specified, the AG-UI server mounts at `/` by default.
+
 A complete version of this example lives in [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
 For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
