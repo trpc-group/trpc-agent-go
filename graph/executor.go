@@ -1213,36 +1213,70 @@ func (e *Executor) executeSingleTask(
 	// any in-place state changes made by before-node callbacks.
 	t.Input = stateCopy
 
-	// Execute the node function.
-	result, err := e.executeNodeFunction(nodeCtx, execCtx, t)
-	if err != nil {
-		// Check if this is an interrupt error
-		if IsInterruptError(err) {
-			// For interrupt errors, we need to set the node ID and task ID
-			if interrupt, ok := GetInterruptError(err); ok {
-				interrupt.NodeID = t.NodeID
-				interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
-				interrupt.Step = step
-			}
-			return err // Return interrupt error directly without wrapping
-		}
+	// Optional: attempt cache lookup based on sanitized task input.
+	var (
+		result   any
+		err      error
+		cacheHit bool
+	)
 
-		// Run on node error callbacks.
-		if mergedCallbacks != nil {
-			mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
+	if c := e.graph.Cache(); c != nil {
+		if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
+			sanitized := sanitizeForCacheKey(t.Input)
+			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
+				ns := buildCacheNamespace(t.NodeID)
+				if cached, ok := c.Get(ns, string(keyBytes)); ok {
+					// Cache hit: skip node execution and callbacks; use cached result.
+					result = cached
+					cacheHit = true
+				}
+			}
 		}
-		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
-		return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
 	}
 
-	// Run after node callbacks.
-	if res, err := e.runAfterCallbacks(
-		ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
-		execCtx, t.NodeID, nodeType, step,
-	); err != nil {
-		return err
-	} else if res != nil {
-		result = res
+	if !cacheHit {
+		// Execute the node function on cache miss.
+		result, err = e.executeNodeFunction(nodeCtx, execCtx, t)
+		if err != nil {
+			// Check if this is an interrupt error
+			if IsInterruptError(err) {
+				// For interrupt errors, we need to set the node ID and task ID
+				if interrupt, ok := GetInterruptError(err); ok {
+					interrupt.NodeID = t.NodeID
+					interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
+					interrupt.Step = step
+				}
+				return err // Return interrupt error directly without wrapping
+			}
+
+			// Run on node error callbacks.
+			if mergedCallbacks != nil {
+				mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
+			}
+			e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
+			return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
+		}
+
+		// Run after node callbacks.
+		if res, err := e.runAfterCallbacks(
+			ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
+			execCtx, t.NodeID, nodeType, step,
+		); err != nil {
+			return err
+		} else if res != nil {
+			result = res
+		}
+
+		// Store into cache if configured
+		if c := e.graph.Cache(); c != nil {
+			if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
+				sanitized := sanitizeForCacheKey(t.Input)
+				if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
+					ns := buildCacheNamespace(t.NodeID)
+					c.Set(ns, string(keyBytes), result, pol.TTL)
+				}
+			}
+		}
 	}
 
 	// Handle result and process channel writes.
@@ -1262,7 +1296,7 @@ func (e *Executor) executeSingleTask(
 		}
 	}
 	// Emit node completion event.
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, cacheHit)
 
 	return nil
 }
@@ -1430,7 +1464,7 @@ func (e *Executor) runBeforeCallbacks(
 		}
 	}
 
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, false)
 	return true, nil
 }
 
@@ -1848,6 +1882,7 @@ func (e *Executor) emitNodeCompleteEvent(
 	nodeType NodeType,
 	step int,
 	startTime time.Time,
+	cacheHit bool,
 ) {
 	if execCtx.EventChan == nil {
 		return
@@ -1867,7 +1902,30 @@ func (e *Executor) emitNodeCompleteEvent(
 		WithNodeEventEndTime(execEndTime),
 		WithNodeEventOutputKeys(outputKeys),
 	)
+	// Attach cache-hit metadata if supported by the event schema.
+	// We piggyback on node metadata extension by encoding a boolean marker inside
+	// the existing Node metadata via StateDelta in NewNodeCompleteEvent.
+	// Here we cannot mutate the event payload directly, so we re-emit a separate
+	// event that carries cache info is not strictly necessary. As a lightweight
+	// approach, when cacheHit=true we append a synthetic key in OutputKeys to
+	// aid debugging without breaking compatibility.
+	if cacheHit {
+		if completeEvent.StateDelta == nil {
+			completeEvent.StateDelta = make(map[string][]byte)
+		}
+		// Best-effort hint: add a virtual output key for observability.
+		completeEvent.StateDelta["_cache_hit"] = []byte("true")
+	}
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, completeEvent)
+}
+
+// getEffectiveCachePolicy returns the node-level cache policy if set, otherwise the graph-level policy.
+func (e *Executor) getEffectiveCachePolicy(nodeID string) *CachePolicy {
+	node, exists := e.graph.Node(nodeID)
+	if exists && node != nil && node.cachePolicy != nil {
+		return node.cachePolicy
+	}
+	return e.graph.CachePolicy()
 }
 
 // updateChannels processes channel updates and emits events.
