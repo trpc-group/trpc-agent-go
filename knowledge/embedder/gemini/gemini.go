@@ -16,12 +16,13 @@ import (
 	"math"
 	"os"
 	"strings"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"google.golang.org/genai"
+
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Verify that Embedder implements the embedder.Embedder interface.
@@ -241,12 +242,7 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *genai.EmbedC
 	}
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
 	defer func() {
-		var inputToken *int64
-		if rsp != nil && rsp.Metadata != nil {
-			i := int64(rsp.Metadata.BillableCharacterCount)
-			inputToken = &i
-		}
-		itelemetry.TraceEmbedding(span, e.requestOptions.MIMEType, e.model, inputToken, err)
+		itelemetry.TraceEmbedding(span, e.requestOptions.MIMEType, e.model, nil, err)
 		span.End()
 	}()
 	// Remove the `models/` prefix from the model id if it exists.

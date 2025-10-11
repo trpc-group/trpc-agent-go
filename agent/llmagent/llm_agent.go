@@ -16,6 +16,8 @@ import (
 	"reflect"
 	"sync"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -595,6 +597,8 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, a.description, a.systemPrompt+a.instruction, a.genConfig)
 	defer func() {
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(itelemetry.KeyErrorType, itelemetry.ValueDefaultErrorType))
 			span.End()
 		}
 	}()
@@ -689,7 +693,9 @@ func (a *LLMAgent) wrapEventChannel(
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, customResponse)
 			}
-			fullRespEvent = evt
+			if evt != nil {
+				fullRespEvent = evt
+			}
 
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
