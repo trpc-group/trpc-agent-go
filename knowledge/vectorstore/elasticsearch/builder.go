@@ -179,7 +179,7 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types
 		return nil, nil
 	}
 
-	boolQuery, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+	filterQuery, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
 		Operator: searchfilter.OperatorAnd,
 		Value:    filters,
 	})
@@ -187,7 +187,7 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types
 		log.Warnf("elasticsearch build filter query failed: %v", err)
 		return nil, err
 	}
-	return boolQuery.(types.QueryVariant), nil
+	return filterQuery.(types.QueryVariant), nil
 }
 
 func (vs *VectorStore) getMaxResult(maxResults int) int {
