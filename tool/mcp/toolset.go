@@ -60,7 +60,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 }
 
 // Tools implements the ToolSet interface.
-func (ts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
+func (ts *ToolSet) Tools(ctx context.Context) []tool.Tool {
 	if err := ts.listTools(ctx); err != nil {
 		log.Error("Failed to refresh tools", err)
 		// Return cached tools if refresh fails
@@ -71,10 +71,10 @@ func (ts *ToolSet) Tools(ctx context.Context) []tool.CallableTool {
 
 	// Since we control the creation of mcpTool instances and they all implement CallableTool,
 	// we can safely do the type conversion. Using a more explicit approach for better readability.
-	result := make([]tool.CallableTool, 0, len(ts.tools))
+	result := make([]tool.Tool, 0, len(ts.tools))
 	for _, t := range ts.tools {
 		// All tools created by newMCPTool implement CallableTool, so this should always succeed
-		result = append(result, t.(tool.CallableTool))
+		result = append(result, t.(tool.Tool))
 	}
 	return result
 }
