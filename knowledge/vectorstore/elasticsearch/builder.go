@@ -58,7 +58,11 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+		filterQuery, err := vs.buildFilterQuery(query.Filter)
+		if err != nil {
+			return nil, err
+		}
+		if filterQuery != nil {
 			searchBody.PostFilter(filterQuery)
 		}
 	}
@@ -83,7 +87,11 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+		filterQuery, err := vs.buildFilterQuery(query.Filter)
+		if err != nil {
+			return nil, err
+		}
+		if filterQuery != nil {
 			searchBody.PostFilter(filterQuery)
 		}
 	}
@@ -130,7 +138,11 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 	// Add filters if specified.
 	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
+		filterQuery, err := vs.buildFilterQuery(query.Filter)
+		if err != nil {
+			return nil, err
+		}
+		if filterQuery != nil {
 			searchBody.PostFilter(filterQuery)
 		}
 	}
@@ -139,8 +151,8 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 }
 
 // buildFilterQuery builds a filter query for search results.
-func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.QueryVariant {
-	filters := make([]*searchfilter.UniversalFilterCondition, 0)
+func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types.QueryVariant, error) {
+	var filters []*searchfilter.UniversalFilterCondition
 	if filter.FilterCondition != nil {
 		filters = append(filters, filter.FilterCondition)
 	}
@@ -164,7 +176,7 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.
 	}
 
 	if len(filters) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	boolQuery, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
@@ -172,8 +184,8 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.
 		Value:    filters,
 	})
 	if err != nil {
-		log.Warn("elasticsearch build filter query failed: %v", err)
-		return nil
+		log.Warnf("elasticsearch build filter query failed: %v", err)
+		return nil, err
 	}
-	return boolQuery.(types.QueryVariant)
+	return boolQuery.(types.QueryVariant), nil
 }
