@@ -99,6 +99,12 @@ type Node struct {
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
+
+	// Subgraph (agent node) options
+	agentInputMapper      SubgraphInputMapper
+	agentOutputMapper     SubgraphOutputMapper
+	agentIsolatedMessages bool
+	agentEventScope       string
 }
 
 // Edge represents an edge in the graph.
