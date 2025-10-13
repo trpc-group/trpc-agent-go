@@ -1286,12 +1286,7 @@ func serializeFinalState(e *event.Event, state State) {
 	for key, value := range state {
 		// Skip internal/ephemeral keys that are not JSON-serializable or can race
 		// due to concurrent updates (e.g., execution context and callbacks).
-		if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
-			key == MetadataKeyState || key == MetadataKeyCompletion ||
-			key == StateKeyExecContext || key == StateKeyParentAgent ||
-			key == StateKeyToolCallbacks || key == StateKeyModelCallbacks ||
-			key == StateKeyAgentCallbacks || key == StateKeyCurrentNodeID ||
-			key == StateKeySession {
+		if isInternalStateKey(key) {
 			continue
 		}
 		// Marshal a deep-copied snapshot to avoid racing on shared references.
