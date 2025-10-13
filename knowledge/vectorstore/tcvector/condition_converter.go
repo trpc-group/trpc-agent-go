@@ -7,7 +7,7 @@
 //
 //
 
-// Package searchfilter provides search and filter functionality for trpc-agent-go.
+// Package tcvector provides search and filter functionality for trpc-agent-go.
 package tcvector
 
 import (
