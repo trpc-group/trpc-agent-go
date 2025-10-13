@@ -153,18 +153,26 @@ func (p *OutputResponseProcessor) handleOutputKey(ctx context.Context, invocatio
 
 // extractFirstJSONObject tries to extract the first balanced top-level JSON object from s.
 func extractFirstJSONObject(s string) (string, bool) {
-	var start int = -1
-	for i := 0; i < len(s); i++ {
-		if s[i] == '{' || s[i] == '[' {
-			start = i
-			break
-		}
-	}
+	start := findJSONStart(s)
 	if start == -1 {
 		return "", false
 	}
+	return scanBalancedJSON(s, start)
+}
 
-	stack := make([]byte, 0)
+// findJSONStart finds the index of the first opening bracket in s.
+func findJSONStart(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			return i
+		}
+	}
+	return -1
+}
+
+// scanBalancedJSON scans a string for a balanced JSON object.
+func scanBalancedJSON(s string, start int) (string, bool) {
+	stack := make([]byte, 0, 8)
 	inString := false
 	escaped := false
 
@@ -177,25 +185,22 @@ func extractFirstJSONObject(s string) (string, bool) {
 		}
 
 		if inString {
-			if c == '\\' {
+			switch c {
+			case '\\':
 				escaped = true
-			} else if c == '"' {
+			case '"':
 				inString = false
+			default:
 			}
 			continue
 		}
 
-		if c == '"' {
+		switch c {
+		case '"':
 			inString = true
-			continue
-		}
-
-		if c == '{' || c == '[' {
+		case '{', '[':
 			stack = append(stack, c)
-			continue
-		}
-
-		if c == '}' || c == ']' {
+		case '}', ']':
 			if len(stack) == 0 {
 				return "", false
 			}
@@ -208,6 +213,7 @@ func extractFirstJSONObject(s string) (string, bool) {
 			} else {
 				return "", false
 			}
+		default:
 		}
 	}
 	return "", false

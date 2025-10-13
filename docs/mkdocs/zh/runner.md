@@ -50,6 +50,7 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,7 +74,7 @@ func main() {
     ctx := context.Background()
     userMessage := model.NewUserMessage("你好！")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
+    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
     if err != nil {
         panic(err)
     }
@@ -154,7 +155,7 @@ r := runner.NewRunner("my-app", agent,
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 
 // 带运行选项（当前 RunOptions 为空结构体，留作未来扩展）
-eventChan, err := r.Run(ctx, userID, sessionID, message)
+eventChan, err := r.Run(ctx, userID, sessionID, message, agent.WithRequestID("request-ID"))
 ```
 
 #### 传入对话历史（auto-seed + 复用 Session）
@@ -173,7 +174,7 @@ msgs := []model.Message{
     model.NewUserMessage("新的问题是什么？"),
 }
 
-ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
 示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）

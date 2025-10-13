@@ -31,6 +31,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 }
 ```
 
+Note: If `WithPath` is not specified, the AG-UI server mounts at `/` by default.
+
 A complete version of this example lives in [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
 For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
@@ -59,14 +61,32 @@ The AG-UI specification does not enforce a transport. The framework uses SSE by 
 import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-type wsService struct{}
+type wsService struct {
+	path    string
+	runner  aguirunner.Runner
+	handler http.Handler
+}
 
-func (s *wsService) Handler() http.Handler { /* Register WebSocket and stream events. */ }
+func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	opts := service.NewOptions(opt...)
+	s := &wsService{
+		path:   opts.Path,
+		runner: runner,
+	}
+	h := http.NewServeMux()
+	h.HandleFunc(s.path, s.handle)
+	s.handler = h
+	return s
+}
+
+func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
-server, _ := agui.New(runner, agui.WithService(&wsService{}))
+server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```
 
 ### Custom translator
