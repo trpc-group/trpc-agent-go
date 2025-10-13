@@ -52,8 +52,8 @@ type Option func(*VectorStore)
 // WithMaxResults sets the maximum number of search results.
 func WithMaxResults(maxResults int) Option {
 	return func(vs *VectorStore) {
-		if maxResults > 0 {
-			vs.maxResults = maxResults
+		if maxResults <= 0 {
+			vs.maxResults = defaultMaxResults
 		}
 		vs.maxResults = maxResults
 	}
