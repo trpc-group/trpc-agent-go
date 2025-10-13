@@ -127,7 +127,7 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 	)
 	fmt.Println("Streamable MCP Toolset created successfully")
 
-	// Create SSE MCP tools.
+	// Create SSE MCP tools with session reconnection.
 	sseToolSet := mcp.NewMCPToolSet(
 		mcp.ConnectionConfig{
 			Transport: "sse",
@@ -138,6 +138,8 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			},
 		},
 		mcp.WithToolFilter(mcp.NewIncludeFilter("sse_recipe", "sse_health_tip")),
+		// Enable session reconnection for automatic recovery when server restarts (max 3 attempts)
+		mcp.WithSessionReconnect(3),
 		mcp.WithMCPOptions(
 			// WithRetry: Custom retry configuration for fine-tuned control.
 			// Retry sequence: 1s -> 1.5s -> 2.25s -> 3.375s -> 5.0625s (capped at 15s)
@@ -149,7 +151,6 @@ func (c *multiTurnChat) setup(ctx context.Context) error {
 			}),
 		),
 	)
-	fmt.Println("SSE MCP Toolset created successfully")
 
 	// Create LLM agent with tools.
 	genConfig := model.GenerationConfig{
@@ -275,7 +276,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 					fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
 				}
 			}
-			fmt.Printf("\n🔄 Executing tools...\n")
+			fmt.Printf("\n🔄 Executing tools (with session reconnection if needed)...\n")
 		}
 
 		// Detect tool responses.
@@ -283,7 +284,7 @@ func (c *multiTurnChat) processStreamingResponse(eventChan <-chan *event.Event) 
 			hasToolResponse := false
 			for _, choice := range event.Response.Choices {
 				if choice.Message.Role == model.RoleTool && choice.Message.ToolID != "" {
-					fmt.Printf("✅ CallableTool response (ID: %s): %s\n",
+					fmt.Printf("✅ Tool response received (ID: %s): %s\n",
 						choice.Message.ToolID,
 						strings.TrimSpace(choice.Message.Content))
 					hasToolResponse = true

@@ -306,6 +306,28 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+### 会话重连支持
+
+MCP ToolSet 支持自动会话重连，当服务器重启或会话过期时自动恢复连接。
+
+```go
+// SSE/Streamable HTTP 传输支持会话重连
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(3), // 启用会话重连，最多尝试3次
+)
+```
+
+**重连特性：**
+
+- 🔄 **自动重连**：检测到连接断开或会话过期时自动重建会话
+- 🎯 **独立重试**：每次工具调用独立计数，不会因早期失败影响后续调用
+- 🛡️ **保守策略**：仅针对明确的连接/会话错误触发重连，避免配置错误导致的无限循环
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
