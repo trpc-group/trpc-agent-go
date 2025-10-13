@@ -336,9 +336,9 @@ kb := knowledge.New(
 )
 ```
 
-### Rerank
+### Reranker
 
-Rerank 负责对检索结果的精排：
+Reranker 负责对检索结果的精排：
 
 ```go
 import (

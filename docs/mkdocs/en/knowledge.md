@@ -165,7 +165,7 @@ knowledge/
 │   ├── embedder.go      # Embedder interface definition.
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
-├── rerank/             # rerank models.
+├── reranker/             # reranker layer.
 │   ├── reranker.go      # Reranker interface definition.
 │   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
@@ -337,9 +337,9 @@ kb := knowledge.New(
 )
 ```
 
-### Rerank
+### Reranker
 
-Rerank is responsible for the precise ranking of search results
+Reranker is responsible for the precise ranking of search results
 
 ```go
 import (
