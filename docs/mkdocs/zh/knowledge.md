@@ -163,6 +163,9 @@ knowledge/
 │   ├── embedder.go      # Embedder 接口定义
 │   ├── openai/          # OpenAI embedding 模型
 │   └── local/           # 本地 embedding 模型
+├── reranker/             # 结果重排
+│   ├── reranker.go      # Reranker 接口定义
+│   ├── topk.go          # 返回topK的检索结果
 ├── document/             # 文档表示
 │   └── document.go      # Document 结构定义
 ├── query/                # 查询增强器
@@ -330,6 +333,25 @@ embedder := openaiembedder.New(
 // 传递给 Knowledge
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker 负责对检索结果的精排：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
+)
+
+// 传递给 Knowledge
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 
