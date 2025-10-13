@@ -156,7 +156,6 @@ function renderToolBlock({
   name: string;
   label: string;
   body: unknown;
-  // optional type of tool block for styling.
   kind?: "custom" | "tool-call" | "tool-result";
 }) {
   const content = formatStructuredContent(body);
