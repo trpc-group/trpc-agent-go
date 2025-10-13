@@ -26,7 +26,7 @@ type Option func(*TopKReranker)
 func WithK(k int) Option {
 	return func(tkr *TopKReranker) {
 		if k <= 0 {
-			k = 1
+			k = defaultTopK
 		}
 		tkr.k = k
 	}
