@@ -32,7 +32,7 @@ var comparisonOperators = map[string]string{
 // tcVectorConverter converts a filter condition to a TC Vector query.
 type tcVectorConverter struct{}
 
-// Convert converts a filter condition to an Elasticsearch query filter.
+// Convert converts a filter condition to an TC Vector query filter.
 func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition) (any, error) {
 	defer func() {
 		if r := recover(); r != nil {
