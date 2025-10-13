@@ -49,6 +49,16 @@ type VectorStore struct {
 // Option represents a functional option for configuring VectorStore.
 type Option func(*VectorStore)
 
+// WithMaxResults sets the maximum number of search results.
+func WithMaxResults(maxResults int) Option {
+	return func(vs *VectorStore) {
+		if maxResults > 0 {
+			vs.maxResults = maxResults
+		}
+		vs.maxResults = maxResults
+	}
+}
+
 // New creates a new in-memory vector store instance with options.
 func New(opts ...Option) *VectorStore {
 	vs := &VectorStore{
