@@ -937,6 +937,7 @@ func TestWithTokenTailoring(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
 	var captured *openaigo.ChatCompletionNewParams
 	m := New("test-model",
+		WithEnableTokenTailoring(true), // Enable token tailoring.
 		WithMaxInputTokens(100),
 		WithTokenCounter(testStubCounter{}),
 		WithTailoringStrategy(testStubStrategy{}),
@@ -967,6 +968,160 @@ func TestWithTokenTailoring(t *testing.T) {
 	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
 	if got := len(captured.Messages); got != 1 {
 		t.Fatalf("expected 1 message after tailoring, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_SimpleMode tests the simple mode of token tailoring.
+func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini", // Known model with 200000 context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 100; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 100))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, messages should be reduced.
+	if got := len(captured.Messages); got >= len(messages) {
+		t.Fatalf("expected messages to be tailored, got %d (original: %d)", got, len(messages))
+	}
+}
+
+// TestWithEnableTokenTailoring_AdvancedMode tests the advanced mode with custom parameters.
+func TestWithEnableTokenTailoring_AdvancedMode(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1000), // Custom max input tokens
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; strategy will drop the second one.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, OpenAI messages should be 1 user message.
+	if got := len(captured.Messages); got != 1 {
+		t.Fatalf("expected 1 message after tailoring, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_Disabled tests that token tailoring is disabled when flag is false.
+func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(false),
+		WithMaxInputTokens(100), // This should be ignored when tailoring is disabled
+		WithTokenCounter(testStubCounter{}),
+		WithTailoringStrategy(testStubStrategy{}),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Two user messages; should NOT be tailored when disabled.
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("A"),
+		model.NewUserMessage("B"),
+	}}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring disabled, OpenAI messages should be unchanged (2 messages).
+	if got := len(captured.Messages); got != 2 {
+		t.Fatalf("expected 2 messages when tailoring disabled, got %d", got)
+	}
+}
+
+// TestWithEnableTokenTailoring_UnknownModel tests behavior with unknown model.
+func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
+	// Capture the built OpenAI request to check messages count reflects tailoring.
+	var captured *openaigo.ChatCompletionNewParams
+	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+		WithEnableTokenTailoring(true),
+		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+			captured = req
+		}),
+	)
+
+	// Create many messages to trigger tailoring.
+	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
+	for i := 0; i < 50; i++ {
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+	}
+
+	req := &model.Request{Messages: messages}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateContent: %v", err)
+	}
+	// Drain once to trigger request path; may error due to no API key, we just consume.
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if captured == nil {
+		t.Fatal("expected request callback to capture request")
+	}
+	// After tailoring, messages should be reduced even with unknown model.
+	if got := len(captured.Messages); got >= len(messages) {
+		t.Fatalf("expected messages to be tailored with unknown model, got %d (original: %d)", got, len(messages))
 	}
 }
 

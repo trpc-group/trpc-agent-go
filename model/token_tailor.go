@@ -209,6 +209,11 @@ func (s *MiddleOutStrategy) buildPreservedOnlyResult(messages []Message, preserv
 	if preservedTail > 0 {
 		result = append(result, messages[len(messages)-preservedTail:]...)
 	}
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
+	}
 	return result
 }
 
@@ -323,7 +328,13 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	maxTailCount := s.binarySearchMaxTailCount(prefixSum, preservedHead, preservedTail, maxTokens)
 
 	// Build result: preserved head + tail messages + preserved tail.
-	return s.buildHeadOutResult(messages, preservedHead, maxTailCount, preservedTail), nil
+	result := s.buildHeadOutResult(messages, preservedHead, maxTailCount, preservedTail)
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
+	}
+	return result, nil
 }
 
 // buildPrefixSum builds a prefix sum array for efficient range queries.
@@ -365,6 +376,11 @@ func (s *HeadOutStrategy) buildPreservedOnlyResult(messages []Message, preserved
 	}
 	if preservedTail > 0 {
 		result = append(result, messages[len(messages)-preservedTail:]...)
+	}
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
 	}
 	return result
 }
@@ -460,7 +476,13 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	maxHeadCount := s.binarySearchMaxHeadCount(prefixSum, preservedHead, preservedTail, maxTokens)
 
 	// Build result: preserved head + head messages + preserved tail.
-	return s.buildTailOutResult(messages, preservedHead, maxHeadCount, preservedTail), nil
+	result := s.buildTailOutResult(messages, preservedHead, maxHeadCount, preservedTail)
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
+	}
+	return result, nil
 }
 
 // buildPrefixSum builds a prefix sum array for efficient range queries.
@@ -502,6 +524,11 @@ func (s *TailOutStrategy) buildPreservedOnlyResult(messages []Message, preserved
 	}
 	if preservedTail > 0 {
 		result = append(result, messages[len(messages)-preservedTail:]...)
+	}
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
 	}
 	return result
 }

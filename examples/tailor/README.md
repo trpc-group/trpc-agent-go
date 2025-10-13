@@ -19,13 +19,25 @@ This example demonstrates interactive token tailoring using `openai.WithMaxInput
 ```bash
 cd examples/tailor
 
-# Basic run with flags (defaults shown):
+# Simple mode (recommended): automatic token management
 go run . \
   -model deepseek-chat \
-  -max-input-tokens 512 \
+  -enable-token-tailoring=true
+
+# Advanced mode: custom parameters
+go run . \
+  -model deepseek-chat \
+  -enable-token-tailoring=true \
+  -max-input-tokens 2048 \
   -counter tiktoken \  # or: simple
   -strategy middle \
   -streaming=true
+
+# Legacy mode: manual token limit (for comparison)
+go run . \
+  -model deepseek-chat \
+  -enable-token-tailoring=false \
+  -max-input-tokens 512
 ```
 
 Then type:
@@ -40,8 +52,9 @@ You should see lines like (banner + tailoring stats + message summary):
 ```
 ✂️  Token Tailoring Demo
 🧩 model: deepseek-chat
-🔢 max-input-tokens: 512
-🧮 counter: tiktoken
+🔧 enable-token-tailoring: true
+🔢 max-input-tokens: auto (from context window)
+🧮 counter: simple
 🎛️ strategy: middle
 📡 streaming: true
 ==================================================
@@ -55,7 +68,7 @@ Added 10 messages. Total=11
 👤 You: What is LLM
 🤖 Assistant: An LLM (Large Language Model) is a type of artificial intelligence model designed to understand, generate, and work with human language...
 
-[tailor] maxInputTokens=512 before=12 after=7
+[tailor] maxInputTokens=auto before=12 after=7
 [tailor] messages (after tailoring):
 [0] system: You are a helpful assistant.
 [1] user: synthetic 1: lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum ...

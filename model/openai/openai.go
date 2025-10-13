@@ -30,6 +30,7 @@ import (
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -42,6 +43,11 @@ const (
 	defaultBatchCompletionWindow = "24h"
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
+	// Default budget constants for token tailoring.
+	defaultProtocolOverheadTokens = 128  // Protocol overhead tokens for request/response formatting.
+	defaultReserveOutputTokens    = 1024 // Reserved tokens for output generation.
+	defaultInputTokensFloor       = 1024 // Minimum input tokens to ensure reasonable processing.
+	defaultOutputTokensFloor      = 256  // Minimum output tokens to ensure meaningful response.
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -192,6 +198,7 @@ type Model struct {
 	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
 	batchMetadata              map[string]string
 	batchBaseURL               string
+	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
@@ -256,6 +263,8 @@ type options struct {
 	BatchMetadata map[string]string
 	// BatchBaseURL overrides the base URL for batch requests (batches/files).
 	BatchBaseURL string
+	// EnableTokenTailoring enables automatic token tailoring based on model context window.
+	EnableTokenTailoring bool
 	// TokenCounter count tokens for token tailoring.
 	TokenCounter model.TokenCounter
 	// TailoringStrategy defines the strategy for token tailoring.
@@ -428,6 +437,15 @@ func WithTailoringStrategy(strategy model.TailoringStrategy) Option {
 	}
 }
 
+// WithEnableTokenTailoring enables automatic token tailoring based on model context window.
+// When enabled, the system will automatically calculate max input tokens using the model's
+// context window minus reserved tokens and protocol overhead.
+func WithEnableTokenTailoring(enabled bool) Option {
+	return func(opts *options) {
+		opts.EnableTokenTailoring = enabled
+	}
+}
+
 // New creates a new OpenAI-like model.
 func New(name string, opts ...Option) *Model {
 	o := &options{
@@ -485,6 +503,7 @@ func New(name string, opts ...Option) *Model {
 		batchCompletionWindow:      batchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
+		enableTokenTailoring:       o.EnableTokenTailoring,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
@@ -533,27 +552,59 @@ func (m *Model) GenerateContent(
 
 // applyTokenTailoring performs best-effort token tailoring if configured.
 func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request) {
-	// Lazy default injection: if token limit is enabled but counter/strategy
-	// are not set, provide sensible defaults.
-	if m.maxInputTokens > 0 {
-		if m.tokenCounter == nil {
-			m.tokenCounter = model.NewSimpleTokenCounter(m.maxInputTokens)
-		}
-		if m.tailoringStrategy == nil {
-			m.tailoringStrategy = model.NewMiddleOutStrategy(m.tokenCounter)
-		}
+	// Early return if token tailoring is disabled or no messages to process.
+	if !m.enableTokenTailoring || len(request.Messages) == 0 {
+		return
 	}
 
-	if m.tokenCounter == nil || m.tailoringStrategy == nil || m.maxInputTokens <= 0 {
-		return
+	// Determine max input tokens using priority: user config > auto calculation > default.
+	maxInputTokens := m.maxInputTokens
+	if maxInputTokens <= 0 {
+		// Auto-calculate based on model context window.
+		contextWindow := imodel.ResolveContextWindow(m.name)
+		maxInputTokens = max(contextWindow-defaultReserveOutputTokens-defaultProtocolOverheadTokens, defaultInputTokensFloor)
+		log.Info("auto-calculated max input tokens", "model", m.name, "contextWindow", contextWindow, "maxInputTokens", maxInputTokens)
 	}
-	if len(request.Messages) == 0 {
-		return
+
+	// Determine token counter using priority: user config > default.
+	tokenCounter := m.tokenCounter
+	if tokenCounter == nil {
+		tokenCounter = model.NewSimpleTokenCounter(maxInputTokens)
+		m.tokenCounter = tokenCounter // Cache for reuse in subsequent requests.
 	}
-	if tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, m.maxInputTokens); err != nil {
+
+	// Determine tailoring strategy using priority: user config > default.
+	tailoringStrategy := m.tailoringStrategy
+	if tailoringStrategy == nil {
+		tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
+		m.tailoringStrategy = tailoringStrategy // Cache for reuse in subsequent requests.
+	}
+
+	// Apply token tailoring.
+	tailored, err := tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
+	if err != nil {
 		log.Warn("token tailoring failed in openai.Model", err)
-	} else {
-		request.Messages = tailored
+		return
+	}
+
+	request.Messages = tailored
+
+	// Calculate remaining tokens for output and set max output tokens.
+	usedTokens, err := tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err != nil {
+		log.Warn("failed to count tokens after tailoring", err)
+		return
+	}
+
+	remainingTokens := maxInputTokens - usedTokens
+	if remainingTokens <= 0 {
+		return
+	}
+
+	// Set max output tokens to remaining tokens, with a minimum threshold.
+	maxOutputTokens := max(remainingTokens, defaultOutputTokensFloor)
+	if request.GenerationConfig.MaxTokens == nil {
+		request.GenerationConfig.MaxTokens = &maxOutputTokens
 	}
 }
 

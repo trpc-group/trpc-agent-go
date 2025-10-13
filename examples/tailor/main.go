@@ -26,11 +26,12 @@ import (
 )
 
 var (
-	flagModel          = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
-	flagMaxInputTokens = flag.Int("max-input-tokens", 512, "Max input tokens for message tailoring")
-	flagCounter        = flag.String("counter", "simple", "Token counter: simple|tiktoken")
-	flagStrategy       = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
-	flagStreaming      = flag.Bool("streaming", true, "Stream assistant responses")
+	flagModel                = flag.String("model", "deepseek-chat", "Model name, e.g., deepseek-chat or gpt-4o")
+	flagEnableTokenTailoring = flag.Bool("enable-token-tailoring", true, "Enable automatic token tailoring based on model context window")
+	flagMaxInputTokens       = flag.Int("max-input-tokens", 0, "Max input tokens for token tailoring (0 = auto-calculate from context window)")
+	flagCounter              = flag.String("counter", "simple", "Token counter: simple|tiktoken")
+	flagStrategy             = flag.String("strategy", "middle", "Tailoring strategy: middle|head|tail")
+	flagStreaming            = flag.Bool("streaming", true, "Stream assistant responses")
 )
 
 // Interactive demo with /bulk to generate many messages and showcase
@@ -38,20 +39,35 @@ var (
 func main() {
 	flag.Parse()
 
-	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
-	strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
-	modelInstance := openai.New(*flagModel,
-		openai.WithMaxInputTokens(*flagMaxInputTokens),
-		// The following two options are OPTIONAL. If omitted:
-		//   - counter defaults to SimpleTokenCounter(max-input-tokens).
-		//   - strategy defaults to MiddleOutStrategy(counter).
-		openai.WithTokenCounter(counter),
-		openai.WithTailoringStrategy(strategy),
-	)
+	// Build model with dual-mode token tailoring support.
+	var opts []openai.Option
+	opts = append(opts, openai.WithEnableTokenTailoring(*flagEnableTokenTailoring))
+
+	if *flagMaxInputTokens > 0 {
+		opts = append(opts, openai.WithMaxInputTokens(*flagMaxInputTokens))
+	}
+
+	if *flagCounter != "simple" {
+		counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
+		opts = append(opts, openai.WithTokenCounter(counter))
+	}
+
+	if *flagStrategy != "middle" {
+		counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
+		strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
+		opts = append(opts, openai.WithTailoringStrategy(strategy))
+	}
+
+	modelInstance := openai.New(*flagModel, opts...)
 
 	fmt.Printf("✂️  Token Tailoring Demo\n")
 	fmt.Printf("🧩 model: %s\n", *flagModel)
-	fmt.Printf("🔢 max-input-tokens: %d\n", *flagMaxInputTokens)
+	fmt.Printf("🔧 enable-token-tailoring: %t\n", *flagEnableTokenTailoring)
+	if *flagMaxInputTokens > 0 {
+		fmt.Printf("🔢 max-input-tokens: %d\n", *flagMaxInputTokens)
+	} else {
+		fmt.Printf("🔢 max-input-tokens: auto (from context window)\n")
+	}
 	fmt.Printf("🧮 counter: %s\n", strings.ToLower(*flagCounter))
 	fmt.Printf("🎛️ strategy: %s\n", strings.ToLower(*flagStrategy))
 	fmt.Printf("📡 streaming: %t\n", *flagStreaming)
@@ -95,16 +111,16 @@ func buildStrategy(counter model.TokenCounter, strategyName string) model.Tailor
 	}
 }
 
-func buildCounter(name string, modelName string, maxInputTokens int) model.TokenCounter {
+func buildCounter(name string, modelName string, maxTokens int) model.TokenCounter {
 	switch name {
 	case "tiktoken":
-		if c, err := tiktoken.New(modelName, maxInputTokens); err == nil {
+		if c, err := tiktoken.New(modelName, maxTokens); err == nil {
 			return c
 		} else {
 			log.Warn("tiktoken counter init failed, falling back to simple", err)
 		}
 	}
-	return model.NewSimpleTokenCounter(maxInputTokens)
+	return model.NewSimpleTokenCounter(maxTokens)
 }
 
 func handleCommand(messages *[]model.Message, line string) bool {
@@ -148,8 +164,13 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 	}
 
 	final := renderResponse(ch, *flagStreaming)
-	fmt.Printf("\n[tailor] maxInputTokens=%d before=%d after=%d\n",
-		*flagMaxInputTokens, before, len(req.Messages))
+	if *flagMaxInputTokens > 0 {
+		fmt.Printf("\n[tailor] maxInputTokens=%d before=%d after=%d\n",
+			*flagMaxInputTokens, before, len(req.Messages))
+	} else {
+		fmt.Printf("\n[tailor] maxInputTokens=auto before=%d after=%d\n",
+			before, len(req.Messages))
+	}
 	// Show a concise summary of the tailored messages (index, role, truncated content)
 	fmt.Printf("[tailor] messages (after tailoring):\n%s", summarizeMessages(req.Messages, 12))
 	if !*flagStreaming && final != "" {

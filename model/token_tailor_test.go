@@ -383,6 +383,37 @@ func TestTailOutStrategy_RemovesFromTail(t *testing.T) {
 }
 
 // TestMiddleOutStrategy_RemovesFromMiddle tests that MiddleOut strategy removes messages from the middle.
+// TestRoleToolRemoval tests that all strategies properly remove leading RoleTool messages.
+func TestRoleToolRemoval(t *testing.T) {
+	// Create a counter for testing.
+	counter := NewSimpleTokenCounter(1000)
+
+	// Create messages with a leading tool message followed by user messages.
+	messages := []Message{
+		NewToolMessage("call_1", "calculator", "2 + 2 = 4"),
+		NewUserMessage("Hello"),
+		NewUserMessage("How are you?"),
+		NewAssistantMessage("I'm doing well, thank you!"),
+	}
+
+	strategies := []TailoringStrategy{
+		NewHeadOutStrategy(counter),
+		NewMiddleOutStrategy(counter),
+		NewTailOutStrategy(counter),
+	}
+
+	for _, strategy := range strategies {
+		t.Run(fmt.Sprintf("%T", strategy), func(t *testing.T) {
+			result, err := strategy.TailorMessages(context.Background(), messages, 100)
+			require.NoError(t, err)
+			require.NotEmpty(t, result)
+
+			// The first message should not be a tool message.
+			require.NotEqual(t, RoleTool, result[0].Role, "First message should not be a tool message")
+		})
+	}
+}
+
 func TestMiddleOutStrategy_RemovesFromMiddle(t *testing.T) {
 	// Create messages with clear head/middle/tail structure
 	msgs := []Message{
