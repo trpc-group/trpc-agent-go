@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/tencent/vectordatabase-sdk-go/tcvdbtext/encoder"
@@ -46,7 +45,6 @@ var (
 	fieldVector       = "vector"
 	fieldSparseVector = "sparse_vector"
 	fieldMetadata     = "metadata"
-	defaultLimit      = 10
 )
 
 const (
@@ -319,13 +317,9 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	tcDoc := result.Documents[0]
-	doc, err := covertToDocument(tcDoc)
+	doc, embedding, err := vs.option.docBuilder(tcDoc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tcvectordb covert to document: %w", err)
-	}
-	embedding := make([]float64, len(tcDoc.Vector))
-	for i, v := range tcDoc.Vector {
-		embedding[i] = float64(v)
 	}
 	return doc, embedding, nil
 }
@@ -441,11 +435,6 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	if len(query.Vector) != int(vs.option.indexDimension) {
 		return nil, fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(query.Vector))
 	}
-
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
 		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
@@ -453,7 +442,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 
 	queryParams := tcvectordb.SearchDocumentParams{
 		Filter:         cond,
-		Limit:          int64(limit),
+		Limit:          int64(vs.getMaxResult(query.Limit)),
 		RetrieveVector: true,
 	}
 
@@ -483,11 +472,6 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	if query.Query == "" {
 		return nil, errors.New("tcvectordb keyword is required for keyword search")
 	}
-
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
 		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
@@ -497,6 +481,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	if err != nil {
 		return nil, fmt.Errorf("tcvectordb encode query text: %w", err)
 	}
+	limit := vs.getMaxResult(query.Limit)
 	queryParams := tcvectordb.FullTextSearchParams{
 		Filter:         cond,
 		Limit:          &limit,
@@ -533,11 +518,6 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		textWeight = 0.0
 	}
 
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
 		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
@@ -550,7 +530,7 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	}
 
 	vector32 := covertToVector32(query.Vector)
-
+	limit := vs.getMaxResult(query.Limit)
 	queryParams := tcvectordb.HybridSearchDocumentParams{
 		Limit:          &limit,
 		RetrieveVector: true,
@@ -592,17 +572,13 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	if query.Filter == nil {
 		return &vectorstore.SearchResult{Results: make([]*vectorstore.ScoredDocument, 0)}, nil
 	}
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
 	var cond *tcvectordb.Filter
 	if query.Filter != nil {
 		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
 	}
 	queryParams := tcvectordb.QueryDocumentParams{
 		Filter:         cond,
-		Limit:          int64(limit),
+		Limit:          int64(vs.getMaxResult(query.Limit)),
 		RetrieveVector: true,
 	}
 	result, err := vs.client.Query(
@@ -796,9 +772,13 @@ func (vs *VectorStore) convertSearchResult(
 
 	for _, tcDoc := range searchResult.Documents[0] {
 		log.Debugf("tcvectordb search result: score %v id %v searchMode %v", tcDoc.Score, tcDoc.Id, searchMode)
-		doc, err := covertToDocument(tcDoc)
+		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
-			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
+			log.Errorf("tcvectordb convert to document: %w", err)
+			continue
+		}
+		if doc == nil {
+			continue
 		}
 		result.Results = append(result.Results, &vectorstore.ScoredDocument{
 			Document: doc,
@@ -816,9 +796,13 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	}
 
 	for _, tcDoc := range queryResult.Documents {
-		doc, err := covertToDocument(tcDoc)
+		doc, _, err := vs.option.docBuilder(tcDoc)
 		if err != nil {
-			return nil, fmt.Errorf("tcvectordb convert to document: %w", err)
+			log.Errorf("tcvectordb convert to document: %w", err)
+			continue
+		}
+		if doc == nil {
+			continue
 		}
 		// For query results, we assign a default score of 1.0.
 		result.Results = append(result.Results, &vectorstore.ScoredDocument{
@@ -830,38 +814,11 @@ func (vs *VectorStore) convertQueryResult(queryResult *tcvectordb.QueryDocumentR
 	return result, nil
 }
 
-// covertToDocument converts tcvectordb document to document.Document.
-func covertToDocument(tcDoc tcvectordb.Document) (*document.Document, error) {
-	doc := &document.Document{
-		ID: tcDoc.Id,
+func (vs *VectorStore) getMaxResult(maxResults int) int {
+	if maxResults <= 0 {
+		return vs.option.maxResults
 	}
-	if field, ok := tcDoc.Fields[fieldName]; ok {
-		doc.Name = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldContent]; ok {
-		doc.Content = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldCreatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.CreatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldUpdatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.UpdatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldMetadata]; ok {
-		if metadata, ok := field.Val.(map[string]any); ok {
-			doc.Metadata = metadata
-		}
-	}
-
-	embedding := make([]float64, len(tcDoc.Vector))
-	for i, v := range tcDoc.Vector {
-		embedding[i] = float64(v)
-	}
-	return doc, nil
+	return maxResults
 }
 
 // covertToVector32 converts float64 slice to float32 slice.

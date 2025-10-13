@@ -9,6 +9,9 @@
 
 package pgvector
 
+// defaultMaxResults is the default maximum number of search results.
+const defaultMaxResults = 10
+
 // options contains the options for pgvector.
 type options struct {
 	host           string // PostgreSQL host
@@ -25,6 +28,8 @@ type options struct {
 	vectorWeight float64 // Weight for vector similarity (0.0-1.0)
 	textWeight   float64 // Weight for text relevance (0.0-1.0)
 	language     string  // Default: english, if you install zhparser or jieba, you can set it to your configuration
+
+	maxResults int // Maximum number of search results
 }
 
 // defaultOptions is the default options for pgvector.
@@ -39,6 +44,7 @@ var defaultOptions = options{
 	vectorWeight:   0.7, // Default: Vector similarity weight 70%
 	textWeight:     0.3, // Default: Text relevance weight 30%
 	language:       "english",
+	maxResults:     defaultMaxResults,
 }
 
 // Option is the option for pgvector.
@@ -130,5 +136,15 @@ func WithHybridSearchWeights(vectorWeight, textWeight float64) Option {
 func WithLanguageExtension(languageExtension string) Option {
 	return func(o *options) {
 		o.language = languageExtension
+	}
+}
+
+// WithMaxResults sets the maximum number of search results.
+func WithMaxResults(maxResults int) Option {
+	return func(o *options) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
+		o.maxResults = maxResults
 	}
 }

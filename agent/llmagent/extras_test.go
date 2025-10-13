@@ -34,10 +34,10 @@ func (m *mockTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 }
 
 // mockToolSet returns a static slice of tools.
-type mockToolSet struct{ tools []tool.CallableTool }
+type mockToolSet struct{ tools []tool.Tool }
 
-func (s *mockToolSet) Tools(context.Context) []tool.CallableTool { return s.tools }
-func (s *mockToolSet) Close() error                              { return nil }
+func (s *mockToolSet) Tools(context.Context) []tool.Tool { return s.tools }
+func (s *mockToolSet) Close() error                      { return nil }
 
 // fakeKnowledge implements a minimal Knowledge interface.
 // It is only used to verify that the knowledge search tool is appended.
@@ -52,7 +52,7 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 	direct := []tool.Tool{&mockTool{name: "direct"}}
 
 	setTool := &mockTool{name: "set-tool"}
-	ts := &mockToolSet{tools: []tool.CallableTool{setTool}}
+	ts := &mockToolSet{tools: []tool.Tool{setTool}}
 
 	kb := &fakeKnowledge{}
 
@@ -172,7 +172,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 
 func TestLLMAgent_WithToolSet(t *testing.T) {
 	ct := &mockTool{name: "foo"}
-	ts := &mockToolSet{tools: []tool.CallableTool{ct}}
+	ts := &mockToolSet{tools: []tool.Tool{ct}}
 
 	agt := New("toolset-agent",
 		WithModel(newDummyModel()),

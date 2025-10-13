@@ -202,7 +202,7 @@ mathAgent := llmagent.New(
 // Wrap the agent as a tool
 agentTool := agent.NewTool(
     mathAgent,
-    agent.WithSkipSummarization(true),
+    agent.WithSkipSummarization(true), // opt-in: skip parent summarization after the tool response
     agent.WithStreamInner(true),
 )
 ```
@@ -248,14 +248,14 @@ This lets the agent tool stream results progressively while keeping the main con
 
 ### AgentTool Defaults and Flags
 
-- Default behavior: AgentTool skips summarization by default. The final `tool.response` is treated as the end of the turn (no extra outer summary). This reduces duplication.
+- Default behavior: AgentTool lets the outer agent run its follow-up turn after `tool.response`, allowing it to summarize or combine results.
 - Streaming inner transcript: By default, inner agent deltas are not forwarded. Pass `-show-inner` to see the inner agent’s streamed deltas in the parent transcript. Under the hood this enables `agenttool.WithStreamInner(true)`.
 - Tool output printing: The framework always emits a final non-partial `tool.response` with merged content for session history and provider compliance. To avoid printing the merged content again when you already saw deltas, the example hides it unless `-show-tool` is set.
 
 Examples:
 
 ```bash
-# Clean UX, no inner streaming, end turn at tool.response (default)
+# Clean UX, no inner streaming; outer agent summarizes after tool.response (default)
 go run . -model gpt-4o-mini
 
 # Stream inner agent deltas and show tool messages
@@ -268,4 +268,4 @@ go run . -show-inner
 Notes:
 
 - Even when inner deltas are streamed, the example suppresses the inner agent’s final full content to avoid duplication. The final `tool.response` persists the merged content for history, but the UI prints only a completion marker unless `-show-tool` is used.
-- If you want an outer-agent summary after the tool finishes, you can construct the AgentTool with `agenttool.WithSkipSummarization(false)`.
+- The default configuration keeps the outer-agent summary after the tool finishes; pass `agenttool.WithSkipSummarization(true)` if you want the tool result to be surfaced directly instead.

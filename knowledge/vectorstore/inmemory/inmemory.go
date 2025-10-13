@@ -30,6 +30,9 @@ var (
 	errDocumentIDCannotBeEmpty = errors.New("document ID cannot be empty")
 	// errEmbeddingCannotBeEmpty is the error when the embedding is empty.
 	errEmbeddingCannotBeEmpty = errors.New("embedding cannot be empty")
+
+	// defaultMaxResults is the default maximum number of search results.
+	defaultMaxResults = 10
 )
 var _ vectorstore.VectorStore = (*VectorStore)(nil)
 
@@ -38,16 +41,30 @@ type VectorStore struct {
 	documents  map[string]*document.Document
 	embeddings map[string][]float64
 	mutex      sync.RWMutex
+
+	// maxResults is the maximum number of search results.
+	maxResults int
 }
 
 // Option represents a functional option for configuring VectorStore.
 type Option func(*VectorStore)
+
+// WithMaxResults sets the maximum number of search results.
+func WithMaxResults(maxResults int) Option {
+	return func(vs *VectorStore) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
+		vs.maxResults = maxResults
+	}
+}
 
 // New creates a new in-memory vector store instance with options.
 func New(opts ...Option) *VectorStore {
 	vs := &VectorStore{
 		documents:  make(map[string]*document.Document),
 		embeddings: make(map[string][]float64),
+		maxResults: defaultMaxResults,
 	}
 
 	// Apply options.
@@ -236,8 +253,9 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	sortByScore(results)
 
 	// Apply limit
-	if query.Limit > 0 && len(results) > query.Limit {
-		results = results[:query.Limit]
+	limit := vs.getMaxResult(query.Limit)
+	if len(results) > limit {
+		results = results[:limit]
 	}
 
 	return &vectorstore.SearchResult{
@@ -274,8 +292,9 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 	})
 
 	// Apply limit
-	if query.Limit > 0 && len(results) > query.Limit {
-		results = results[:query.Limit]
+	limit := vs.getMaxResult(query.Limit)
+	if len(results) > limit {
+		results = results[:limit]
 	}
 
 	return &vectorstore.SearchResult{
@@ -525,4 +544,11 @@ func (vs *VectorStore) matchesFilter(docID string, filter *vectorstore.SearchFil
 	}
 
 	return true
+}
+
+func (vs *VectorStore) getMaxResult(maxResults int) int {
+	if maxResults <= 0 {
+		return vs.maxResults
+	}
+	return maxResults
 }

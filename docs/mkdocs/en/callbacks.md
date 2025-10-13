@@ -255,7 +255,7 @@ toolCallbacks.RegisterBeforeTool(func(ctx context.Context, toolName string, d *t
 })
 ```
 
-Both examples mirror the runnable demo under [examples/callbacks](../../../examples/callbacks/).
+Both examples mirror the runnable demo under [examples/callbacks](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/callbacks).
 
 ---
 

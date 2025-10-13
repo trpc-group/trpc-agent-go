@@ -19,7 +19,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
-	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -29,8 +28,8 @@ type Runner interface {
 }
 
 // New wraps a trpc-agent-go runner with AG-UI specific translation logic.
-func New(r trunner.Runner, opt ...aguirunner.Option) Runner {
-	opts := aguirunner.NewOptions(opt...)
+func New(r trunner.Runner, opt ...Option) Runner {
+	opts := NewOptions(opt...)
 	run := &runner{
 		runner:            r,
 		translatorFactory: opts.TranslatorFactory,
@@ -42,8 +41,8 @@ func New(r trunner.Runner, opt ...aguirunner.Option) Runner {
 // runner is the default implementation of the Runner.
 type runner struct {
 	runner            trunner.Runner
-	translatorFactory aguirunner.TranslatorFactory
-	userIDResolver    aguirunner.UserIDResolver
+	translatorFactory TranslatorFactory
+	userIDResolver    UserIDResolver
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.

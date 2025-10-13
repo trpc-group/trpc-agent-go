@@ -406,8 +406,8 @@ func (w *perNodeCallbacksWorkflow) processStreamingResponse(eventChan <-chan *ev
 		}
 
 		// Process streaming content from LLM nodes.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				if !responseStarted {

@@ -44,7 +44,6 @@ var (
 	fieldContent   = "content"
 	fieldVector    = "embedding"
 	fieldMetadata  = "metadata"
-	defaultLimit   = 10
 )
 
 const (
@@ -340,11 +339,6 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
 	}
 
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build vector search query
 	qb := newVectorQueryBuilder(vs.option.table, vs.option.language)
 
@@ -364,7 +358,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeVector)
 }
 
@@ -372,11 +366,6 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query.Query == "" {
 		return nil, errors.New("pgvector keyword is required for keyword search")
-	}
-
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
 	}
 
 	// Build keyword search query with full-text search
@@ -394,7 +383,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeKeyword)
 }
 
@@ -413,11 +402,6 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 	if query.Query == "" {
 		vectorWeight = 1.0
 		textWeight = 0.0
-	}
-
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
 	}
 
 	// Build hybrid search query.
@@ -442,17 +426,12 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeHybrid)
 }
 
 // searchByFilter returns documents based on filters only
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build filter-only search query.
 	qb := newFilterQueryBuilder(vs.option.table, vs.option.language)
 
@@ -465,7 +444,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeFilter)
 }
 
@@ -697,6 +676,13 @@ func (vs *VectorStore) queryMetadataBatch(
 	}
 
 	return result, nil
+}
+
+func (vs *VectorStore) getMaxResult(maxResults int) int {
+	if maxResults <= 0 {
+		return vs.option.maxResults
+	}
+	return maxResults
 }
 
 // Close closes the vector store connection.

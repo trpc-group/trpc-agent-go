@@ -135,56 +135,45 @@ if err != nil {
 
 ### 处理事件流
 
+`runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。
+
+每个 Event 包含了某个时刻的执行状态信息：LLM 生成的内容、工具调用的请求和结果、错误信息等。通过遍历事件通道，你可以实时获取 Agent 的执行进展（详见下方 [Event](#event) 章节）。
+
 通过事件通道接收执行结果：
 
 ```go
-import "context"
-
-ctx := context.Background()
-// 处理 Event
-for event := range eventChan {
-    // 检查错误
-    if event.Error != nil {
-        log.Printf("err: %s", event.Error.Message)
-        continue
-    }
-    // 处理内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
-        if choice.Delta.Content != "" {
-            // 流式输出
-            fmt.Print(choice.Delta.Content)
-        }
-    }
-    // 检查是否完成
-    if event.Done {
-        break
-    }
+// 1. 获取事件通道（立即返回，开始异步执行）
+eventChan, err := runner.Run(ctx, userID, sessionID, message)
+if err != nil {
+    log.Fatalf("failed to run agent: %v", err)
 }
-```
 
-### 处理事件流
-
-通过事件通道接收执行结果：
-
-```go
-// 处理 Event
+// 2. 处理事件流（实时接收执行结果）
 for event := range eventChan {
     // 检查错误
     if event.Error != nil {
-        log.Printf("err: %s", event.Error.Message)
+        log.Printf("error: %s", event.Error.Message)
         continue
     }
-    // 处理内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+
+    // 处理响应内容
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
+
+        // 流式内容（实时显示）
         if choice.Delta.Content != "" {
-            // 流式输出
             fmt.Print(choice.Delta.Content)
         }
+
+        // 工具调用信息
+        for _, toolCall := range choice.Message.ToolCalls {
+            fmt.Printf("calling tool: %s\n", toolCall.Function.Name)
+        }
     }
-    // 检查是否完成
-    if event.Done {
+
+    // 检查是否完成（注意：工具调用完成时不应该 break）
+    if event.IsFinalResponse() {
+        fmt.Println()
         break
     }
 }
