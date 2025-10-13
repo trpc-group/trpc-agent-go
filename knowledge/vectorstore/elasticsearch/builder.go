@@ -52,7 +52,7 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 	// Build the complete search request using official SearchRequestBody.
 	searchBody := esdsl.NewSearchRequestBody().
 		Query(scriptScoreQuery).
-		Size(vs.option.maxResults)
+		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
 	if query.Filter != nil {
@@ -77,7 +77,7 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 	// Build the complete search request using official SearchRequestBody.
 	searchBody := esdsl.NewSearchRequestBody().
 		Query(multiMatchQuery).
-		Size(vs.option.maxResults)
+		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
 	if query.Filter != nil {
@@ -124,7 +124,7 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 	// Build the complete search request using official SearchRequestBody.
 	searchBody := esdsl.NewSearchRequestBody().
 		Query(boolQuery).
-		Size(vs.option.maxResults)
+		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
 	if query.Filter != nil {
@@ -165,4 +165,11 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.
 
 	boolQuery := esdsl.NewBoolQuery().Filter(filters...)
 	return boolQuery
+}
+
+func (vs *VectorStore) getMaxResult(maxResults int) int {
+	if maxResults <= 0 {
+		return vs.option.maxResults
+	}
+	return maxResults
 }

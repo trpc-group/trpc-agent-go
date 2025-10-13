@@ -165,6 +165,9 @@ knowledge/
 │   ├── embedder.go      # Embedder interface definition.
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
+├── reranker/             # reranker layer.
+│   ├── reranker.go      # Reranker interface definition.
+│   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
 │   └── document.go      # Document structure definition.
 ├── query/                # Query enhancer.
@@ -331,6 +334,26 @@ embedder := openaiembedder.New(
 // Pass to Knowledge.
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker is responsible for the precise ranking of search results
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    // Specify the number of results to be returned after precision sorting. 
+    // If not set, all results will be returned by default
+    reranker.WithK(1),
+)
+
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

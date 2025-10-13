@@ -201,6 +201,9 @@ func WithScoreThreshold(threshold float64) Option {
 // WithMaxResults sets the maximum number of search results.
 func WithMaxResults(maxResults int) Option {
 	return func(o *options) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
 		o.maxResults = maxResults
 	}
 }

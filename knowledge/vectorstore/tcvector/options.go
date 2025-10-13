@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
+// defaultMaxResults is the default maximum number of search results.
+const defaultMaxResults = 10
+
 type DocBuilderFunc func(tcDoc tcvectordb.Document) (*document.Document, []float64, error)
 
 // defaultDocBuilder converts tcvectordb document to document.Document.
@@ -77,6 +80,9 @@ type options struct {
 	filterIndexes []tcvectordb.FilterIndex
 
 	docBuilder DocBuilderFunc
+
+	// maxResults is the maximum number of search results.
+	maxResults int
 }
 
 var defaultOptions = options{
@@ -91,6 +97,7 @@ var defaultOptions = options{
 	language:       "en",
 	filterFields:   []string{source.MetaURI, source.MetaSourceName, fieldCreatedAt},
 	docBuilder:     defaultDocBuilder,
+	maxResults:     defaultMaxResults,
 	filterIndexes: []tcvectordb.FilterIndex{
 		{
 			FieldName: source.MetaURI,
@@ -230,5 +237,15 @@ func WithFilterIndexFields(fields []string) Option {
 func WithDocBuilder(builder DocBuilderFunc) Option {
 	return func(o *options) {
 		o.docBuilder = builder
+	}
+}
+
+// WithMaxResults sets the maximum number of search results.
+func WithMaxResults(maxResults int) Option {
+	return func(o *options) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
+		o.maxResults = maxResults
 	}
 }
