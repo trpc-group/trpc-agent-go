@@ -1145,8 +1145,19 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 		Duration:   options.EndTime.Sub(options.StartTime),
 		Error:      options.Error,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
+	// Build base graph event with metadata.
+	ge := NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))
+	// Mirror error to Event.Error for easier consumption by clients that
+	// only check event.Error, while keeping object as graph.pregel.step
+	// for compatibility with existing consumers.
+	if options.Error != "" {
+		ge.Response.Error = &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: options.Error,
+		}
+	}
+	return ge
 }
 
 // NewPregelInterruptEvent creates a new Pregel interrupt event.
