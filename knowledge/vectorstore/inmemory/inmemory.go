@@ -53,7 +53,7 @@ type Option func(*VectorStore)
 func WithMaxResults(maxResults int) Option {
 	return func(vs *VectorStore) {
 		if maxResults <= 0 {
-			vs.maxResults = defaultMaxResults
+			maxResults = defaultMaxResults
 		}
 		vs.maxResults = maxResults
 	}
