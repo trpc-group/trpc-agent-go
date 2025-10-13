@@ -207,6 +207,11 @@ func TestNewPregelAndChannelStateEvents(t *testing.T) {
 	require.Equal(t, ObjectTypeGraphPregelStep, pe.Object)
 	require.NoError(t, json.Unmarshal(pe.StateDelta[MetadataKeyPregel], &pmeta))
 	require.Equal(t, "fail", pmeta.Error)
+	// Also mirrored to Event.Error for convenient consumption
+	require.NotNil(t, pe.Response)
+	require.NotNil(t, pe.Response.Error)
+	require.Equal(t, model.ErrorTypeFlowError, pe.Response.Error.Type)
+	require.Equal(t, "fail", pe.Response.Error.Message)
 
 	pi := NewPregelInterruptEvent(
 		WithPregelEventInvocationID("inv"),
