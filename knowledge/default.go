@@ -986,19 +986,11 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// Return the best result.
 	bestDoc := result.Documents[0]
 	content := bestDoc.Document.Content
-	documents := make([]*DocumentResult, 0, len(result.Documents))
-	for _, doc := range result.Documents {
-		documents = append(documents, &DocumentResult{
-			Document: doc.Document,
-			Score:    doc.Score,
-		})
-	}
 
 	return &SearchResult{
-		Document:  bestDoc.Document,
-		Score:     bestDoc.Score,
-		Text:      content,
-		Documents: documents,
+		Document: bestDoc.Document,
+		Score:    bestDoc.Score,
+		Text:     content,
 	}, nil
 }
 

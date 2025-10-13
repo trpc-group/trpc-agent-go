@@ -58,21 +58,12 @@ type ConversationMessage = query.ConversationMessage
 type SearchResult struct {
 	// Document is the best matching document.
 	Document *document.Document
+
 	// Score is the relevance score (0.0 to 1.0).
 	Score float64
+
 	// Text is the document content for agent context.
 	Text string
-
-	// Documents search document results
-	Documents []*DocumentResult
-}
-
-// DocumentResult represents a document search result.
-type DocumentResult struct {
-	// Document is the search result document.
-	Document *document.Document
-	// Score is the relevance score (0.0 to 1.0).
-	Score float64
 }
 
 // SearchFilter represents filtering criteria for vector search.
