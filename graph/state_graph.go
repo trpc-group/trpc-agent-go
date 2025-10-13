@@ -466,6 +466,9 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 			// Create named toolset wrapper to avoid name conflicts
 			namedToolSet := itool.NewNamedToolSet(toolSet)
 			for _, t := range namedToolSet.Tools(context.Background()) {
+				if _, ok := runner.tools[t.Declaration().Name]; ok {
+					log.Warnf("tool %s already exists at %s toolset, will be overridden", t.Declaration().Name, toolSet.Name())
+				}
 				runner.tools[t.Declaration().Name] = t
 			}
 		}
