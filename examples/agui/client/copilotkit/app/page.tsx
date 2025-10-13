@@ -316,5 +316,3 @@ export default function Home() {
     </main>
   );
 }
-
-// Intentionally not exported to satisfy Next.js app page constraints.

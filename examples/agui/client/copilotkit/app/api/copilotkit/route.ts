@@ -7,7 +7,6 @@
 //
 //
 
-import { randomUUID } from "crypto";
 import { NextRequest } from "next/server";
 import {
   CopilotRuntime,
@@ -15,112 +14,7 @@ import {
   copilotRuntimeNextJSAppRouterEndpoint,
 } from "@copilotkit/runtime";
 import { HttpAgent } from "@ag-ui/client";
-import type { BaseEvent, CustomEvent, Message, RunAgentInput } from "@ag-ui/client";
-// Do not import Observable from rxjs here to avoid multi-version typing conflicts.
-
-const CUSTOM_EVENT_MESSAGE_TYPE = "AguiCustomEventMessage";
-
-function safeStringify(value: unknown) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function buildCustomEventMessage(event: CustomEvent, messages: Message[]) {
-  const nextValueSignature = safeStringify(event.value);
-  const existing = messages.find((message: any) => {
-    const payload = (message as any)?.customEvent;
-    const currentValueSignature = safeStringify(payload?.value);
-    return (
-      (message as any)?.type === CUSTOM_EVENT_MESSAGE_TYPE &&
-      payload?.name === event.name &&
-      payload?.timestamp === event.timestamp &&
-      currentValueSignature === nextValueSignature
-    );
-  });
-  if (existing) {
-    return undefined;
-  }
-  const baseId = event.timestamp ? `${event.name}-${event.timestamp}` : `${event.name}-${Date.now()}`;
-  const messageId = `custom-${baseId}-${randomUUID()}`;
-  return {
-    id: messageId,
-    role: "assistant",
-    name: event.name,
-    content: safeStringify(event.value) ?? "",
-    type: CUSTOM_EVENT_MESSAGE_TYPE,
-    customEvent: {
-      name: event.name,
-      value: event.value,
-      timestamp: event.timestamp,
-    },
-  } as Message & {
-    type: string;
-    customEvent: {
-      name: string;
-      value: unknown;
-      timestamp?: number;
-    };
-  };
-}
-
-function createCustomEventSubscriber(): any {
-  let pending: Message[] = [];
-  let seenIds = new Set<string>();
-
-  const reset = () => {
-    pending = [];
-    seenIds = new Set<string>();
-  };
-
-  const remember = (message: Message) => {
-    if (seenIds.has(message.id)) {
-      return false;
-    }
-    seenIds.add(message.id);
-    pending = [...pending, message];
-    return true;
-  };
-
-  return {
-    onRunInitialized: () => {
-      console.log("[agui] subscriber reset");
-      reset();
-    },
-    onCustomEvent: ({ event, messages }: { event: CustomEvent; messages: Message[] }) => {
-      console.log("[agui] onCustomEvent", { name: event.name });
-      const baseline = messages.concat(pending);
-      const customMessage = buildCustomEventMessage(event, baseline);
-      if (!customMessage) {
-        return;
-      }
-      if (!remember(customMessage)) {
-        return;
-      }
-      return {
-        messages: [...messages, customMessage],
-      };
-    },
-    onRunFinalized: ({ messages }: { messages: Message[] }) => {
-      console.log("[agui] onRunFinalized", { pending: pending.length, messages: messages.length });
-      if (pending.length === 0) {
-        return;
-      }
-      const existingIds = new Set(messages.map((message) => message.id));
-      const merged = messages.slice();
-      for (const message of pending) {
-        if (!existingIds.has(message.id)) {
-          merged.push(message);
-        }
-      }
-      console.log("[agui] merging custom events", { added: merged.length - messages.length });
-      reset();
-      return { messages: merged };
-    },
-  };
-}
+import type { BaseEvent, RunAgentInput } from "@ag-ui/client";
 
 class CustomEventMirroringAgent extends HttpAgent {
   // Use ReturnType<HttpAgent["run"]> to align with the exact Observable type of the base class.
