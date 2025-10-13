@@ -27,3 +27,4 @@ CLAUDE.md
 *.db
 .codex
 pnpm-lock.yaml
+.gocache
