@@ -1259,24 +1259,101 @@ flowchart TB
 
 ### 执行模型
 
-GraphAgent 借鉴了 Google Pregel 的 BSP（Bulk Synchronous Parallel）模型，但适配到了单进程环境：
+GraphAgent 借鉴了 Google Pregel 的 BSP（Bulk Synchronous Parallel）模型，但适配到了单进程环境；在此基础上还支持检查点、HITL 中断/恢复与时间旅行：
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant R as Runner
     participant GA as GraphAgent
-    participant E as Executor
-    participant N as Nodes
+    participant EX as Executor
+    participant CK as Checkpoint Saver
+    participant DB as Storage
+    participant H as Human
+
     R->>GA: Run(invocation)
-    GA->>E: Execute(graph, state)
-    loop BSP Superstep
-        E->>E: Plan
-        E->>N: Execute (parallel)
-        N-->>E: Updates
-        E->>E: Merge via reducers
+    GA->>EX: Execute(graph, state, options)
+    GA-->>R: Stream node/tool/model events
+
+    loop 每个超级步 (BSP)
+        EX->>EX: Planning — 计算前沿(Frontier)
+        par 并行执行节点
+            EX->>EX: 执行节点 i（状态浅拷贝）
+            EX-->>GA: 节点开始事件(author=nodeID)
+        and
+            EX->>EX: 执行节点 j（状态浅拷贝）
+            EX-->>GA: 节点开始事件
+        end
+
+        alt 节点触发 Interrupt(key,prompt)
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen,reason=interrupt)
+            CK->>DB: 原子提交
+            EX-->>GA: interrupt 事件(checkpoint_id,prompt)
+            GA-->>R: 转发中断事件并暂停
+            R->>H: 请求人工输入/审批
+            H-->>R: 提交决策/值
+            R->>GA: Run(resume) runtime_state{
+            R->>GA: checkpoint_id,resume_map}
+            GA->>EX: ResumeFromCheckpoint(checkpoint_id,resume_map)
+            EX->>CK: Load checkpoint
+            CK->>EX: state/frontier/pending_writes/versions_seen
+            EX->>EX: 重建前沿并应用恢复值
+        else 正常执行
+            EX-->>GA: 节点完成事件（含 tool/model 事件）
+            EX->>EX: Update — Reducer 合并状态
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen)
+            CK->>DB: 原子提交
+        end
     end
-    E-->>GA: Events
-    GA-->>R: Streaming events
+
+    Note over EX,CK: versions_seen 避免重复执行；
+    Note over EX,CK: pending_writes 重建通道；
+    Note over EX,CK: parent_id 形成谱系以支持时间旅行
+
+    opt 时间旅行（回溯/分支）
+        R->>GA: Run(runtime_state{checkpoint_id})
+        GA->>EX: ResumeFromCheckpoint(checkpoint_id)
+        EX->>CK: Load checkpoint + lineage
+        CK->>EX: 恢复状态并可创建新 lineage_id
+    end
+
+    EX-->>GA: done 事件（last_response）
+    GA-->>R: 输出最终消息
+```
+
+```mermaid
+flowchart TB
+    %% 执行全景图（精简连线）
+    subgraph Client
+        R[Runner]:::runner --> GA[GraphAgent]:::agent
+    end
+
+    subgraph Engine[Graph Engine]
+        GA --> EX[Executor]:::executor
+        subgraph BSP["BSP Superstep"]
+            P[Planning]:::phase --> X[Execution]:::phase --> U[Update]:::phase
+        end
+    end
+
+    N[Nodes: LLM / Tools / Function / Agent]:::process
+    CK[(Checkpoint)]:::storage
+    H[Human]:::human
+
+    EX --> BSP
+    EX --> N
+    EX -.-> CK
+    GA <--> H
+    GA --> R
+
+    classDef runner fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef executor fill:#e0f2f1,stroke:#00796b,stroke-width:2px
+    classDef phase fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+    classDef storage fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
 ```
 
 执行过程的关键点：
@@ -1326,6 +1403,78 @@ chain := chainagent.New("chain",
         graphAgent2,  // 结构化流程2
     }))
 ```
+
+### 高级编排
+
+下图展示复杂业务编排：入口清洗 → 智能路由 → 多子编队（Email、Weather、Research）→ 并行 fanout/聚合 → 最终合成与发布。
+
+```mermaid
+flowchart LR
+    %% Layout
+    subgraph UE["User & Entry"]
+        U((User)):::human --> IN["entry<br/>normalize"]:::process
+    end
+
+    subgraph FAB["Graph Orchestration"]
+        Rtr["where_to_go<br/>router"]:::router
+        Compose["compose<br/>LLM"]:::llm
+    end
+
+    IN --> Rtr
+
+    %% Email Agent (expanded)
+    subgraph EC["Email Agent"]
+        direction LR
+        CE["classifier<br/>LLM"]:::llm --> WE["writer<br/>LLM"]:::llm
+    end
+
+    %% Weather Agent (expanded)
+    subgraph WA["Weather Agent"]
+        direction LR
+        LE["locate<br/>LLM"]:::llm --> WT["weather tool"]:::tool
+    end
+
+    %% Routing from router to pods
+    Rtr -- email --> CE
+    Rtr -- weather --> LE
+    Rtr -- other --> REPLY["reply<br/>LLM"]:::llm
+
+    %% Fanout Pipeline (fanout → workers → aggregate)
+    subgraph FP["Fanout Pipeline"]
+        direction LR
+        Fan["plan_fanout"]:::process --> W1["worker A"]:::process
+        Fan --> W2["worker B"]:::process
+        Fan --> W3["worker C"]:::process
+        W1 --> Agg["aggregate"]:::process
+        W2 --> Agg
+        W3 --> Agg
+    end
+    Rtr -- research --> Fan
+
+    %% Human-in-the-loop (optional)
+    Compose -. review .- HG["human<br/>review"]:::human
+
+    %% Compose final (minimal wiring)
+    Agg --> Compose
+    WE --> Compose
+    WT --> Compose
+    REPLY --> Compose
+    Compose --> END([END]):::terminal
+
+    %% Styles
+    classDef router fill:#fff7e0,stroke:#f5a623,stroke-width:2px
+    classDef llm fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef tool fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef terminal fill:#ffebee,stroke:#e53935,stroke-width:2px
+```
+
+要点：
+- 智能路由 where_to_go 可由 LLM 决策或函数节点实现（条件边）。
+- Fanout Pipeline 使用 Command GoTo 进行运行时 fanout，三路并行后在 aggregate 节点聚合。
+- 可选的人机把关位于聚合之后，确保关键输出经人工确认。
+- 仅在 Compose 处展示一次保存检查点，既不喧宾夺主，又能体现可恢复能力。
 
 ### 在图中嵌入 Agent
 

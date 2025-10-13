@@ -1246,33 +1246,110 @@ Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and s
 
 ### Execution Model
 
-GraphAgent adapts Pregel’s BSP model to a single‑process environment:
+GraphAgent adapts Pregel’s BSP (Bulk Synchronous Parallel) to a single‑process runtime and adds checkpoints, HITL interrupts/resumes, and time travel:
 
 ```mermaid
 sequenceDiagram
+    autonumber
     participant R as Runner
     participant GA as GraphAgent
-    participant E as Executor
-    participant N as Nodes
+    participant EX as Executor
+    participant CK as Checkpoint Saver
+    participant DB as Storage
+    participant H as Human
+
     R->>GA: Run(invocation)
-    GA->>E: Execute(graph, state)
-    loop BSP Superstep
-        E->>E: Plan
-        E->>N: Execute (parallel)
-        N-->>E: Updates
-        E->>E: Merge via reducers
+    GA->>EX: Execute(graph, state, options)
+    GA-->>R: Stream node/tool/model events
+
+    loop Each superstep (BSP)
+        EX->>EX: Planning — compute frontier
+        par Parallel node execution
+            EX->>EX: Run node i (shallow state copy)
+            EX-->>GA: node-start event (author=nodeID)
+        and
+            EX->>EX: Run node j (shallow state copy)
+            EX-->>GA: node-start event
+        end
+
+        alt Node triggers Interrupt(key,prompt)
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen,reason=interrupt)
+            CK->>DB: atomic commit
+            EX-->>GA: interrupt event(checkpoint_id,prompt)
+            GA-->>R: propagate + pause
+            R->>H: ask for input/approval
+            H-->>R: provide decision/value
+            R->>GA: Run(resume) runtime_state{
+            R->>GA: checkpoint_id,resume_map}
+            GA->>EX: ResumeFromCheckpoint(checkpoint_id,resume_map)
+            EX->>CK: Load checkpoint
+            CK->>EX: state/frontier/pending_writes/versions_seen
+            EX->>EX: rebuild frontier and apply resume values
+        else Normal
+            EX-->>GA: node-complete events (incl. tool/model)
+            EX->>EX: Update — merge via reducers
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen)
+            CK->>DB: atomic commit
+        end
     end
-    E-->>GA: Events
-    GA-->>R: Streaming events
+
+    Note over EX,CK: versions_seen prevents re-execution
+    Note over EX,CK: pending_writes rebuilds channels
+    Note over EX,CK: parent_id forms lineage for time travel
+
+    opt Time travel (rewind/branch)
+        R->>GA: Run(runtime_state{checkpoint_id})
+        GA->>EX: ResumeFromCheckpoint(checkpoint_id)
+        EX->>CK: Load checkpoint + lineage
+        CK->>EX: Restore state; may create new lineage_id
+    end
+
+    EX-->>GA: done event (last_response)
+    GA-->>R: final output
+```
+
+```mermaid
+flowchart TB
+    %% Execution panorama (compact wiring)
+    subgraph Client
+        R[Runner]:::runner --> GA[GraphAgent]:::agent
+    end
+
+    subgraph Engine[Graph Engine]
+        GA --> EX[Executor]:::executor
+        subgraph BSP["BSP Superstep"]
+            P[Planning]:::phase --> X[Execution]:::phase --> U[Update]:::phase
+        end
+    end
+
+    N[Nodes: LLM / Tools / Function / Agent]:::process
+    CK[(Checkpoint)]:::storage
+    H[Human]:::human
+
+    EX --> BSP
+    EX --> N
+    EX -.-> CK
+    GA <--> H
+    GA --> R
+
+    classDef runner fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef executor fill:#e0f2f1,stroke:#00796b,stroke-width:2px
+    classDef phase fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+    classDef storage fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
 ```
 
 Key points:
 
-1. Planning Phase: determine which nodes to run from the channel frontier.
-2. Execution Phase: each node receives a shallow copy of state (maps.Copy) and runs in parallel.
-3. Update Phase: merge node updates via reducers, ensuring concurrency safety.
+1. Planning: determine runnable nodes from the channel frontier.
+2. Execution: each node gets a shallow state copy (maps.Copy) and runs in parallel.
+3. Update: reducers merge updates safely for concurrency.
 
-This design enables per‑step observability along with safe interrupts and recovery.
+This design enables per‑step observability and safe interruption/recovery.
 
 #### Runtime Isolation and Event Snapshots
 
@@ -1335,6 +1412,78 @@ chain := chainagent.New("chain",
         graphAgent2,  // structured flow #2
     }))
 ```
+
+### Advanced Orchestration
+
+End‑to‑end business flow: entry normalization → smart routing → multiple pods (Email, Weather, Research) → parallel fan‑out/aggregation → final composition and publish.
+
+```mermaid
+flowchart LR
+    %% Layout
+    subgraph UE["User & Entry"]
+        U((User)):::human --> IN["entry<br/>normalize"]:::process
+    end
+
+    subgraph FAB["Graph Orchestration"]
+        Rtr["where_to_go<br/>router"]:::router
+        Compose["compose<br/>LLM"]:::llm
+    end
+
+    IN --> Rtr
+
+    %% Email Agent (expanded)
+    subgraph EC["Email Agent"]
+        direction LR
+        CE["classifier<br/>LLM"]:::llm --> WE["writer<br/>LLM"]:::llm
+    end
+
+    %% Weather Agent (expanded)
+    subgraph WA["Weather Agent"]
+        direction LR
+        LE["locate<br/>LLM"]:::llm --> WT["weather tool"]:::tool
+    end
+
+    %% Routing from router to pods
+    Rtr -- email --> CE
+    Rtr -- weather --> LE
+    Rtr -- other --> REPLY["reply<br/>LLM"]:::llm
+
+    %% Fanout Pipeline (fanout → workers → aggregate)
+    subgraph FP["Fanout Pipeline"]
+        direction LR
+        Fan["plan_fanout"]:::process --> W1["worker A"]:::process
+        Fan --> W2["worker B"]:::process
+        Fan --> W3["worker C"]:::process
+        W1 --> Agg["aggregate"]:::process
+        W2 --> Agg
+        W3 --> Agg
+    end
+    Rtr -- research --> Fan
+
+    %% Human-in-the-loop (optional)
+    Compose -. review .- HG["human<br/>review"]:::human
+
+    %% Compose final (minimal wiring)
+    Agg --> Compose
+    WE --> Compose
+    WT --> Compose
+    REPLY --> Compose
+    Compose --> END([END]):::terminal
+
+    %% Styles
+    classDef router fill:#fff7e0,stroke:#f5a623,stroke-width:2px
+    classDef llm fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef tool fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef terminal fill:#ffebee,stroke:#e53935,stroke-width:2px
+```
+
+Highlights:
+- `where_to_go` can be LLM‑decided or function‑driven (conditional edges).
+- Fanout Pipeline uses Command GoTo at runtime, then aggregates.
+- Optional human review follows aggregation to gate critical output.
+- Single checkpoint display at Compose balances clarity and recoverability.
 
 ### Embedding Agents in a Graph
 
