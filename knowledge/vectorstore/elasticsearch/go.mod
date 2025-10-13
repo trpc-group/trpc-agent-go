@@ -2,8 +2,6 @@ module trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch
 
 go 1.23
 
-toolchain go1.24.8
-
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../../
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../../storage/elasticsearch
