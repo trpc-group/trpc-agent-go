@@ -142,6 +142,7 @@ func main() {
 ```
 
 ### 手动调用示例
+FilterCondition暂只支持Elasticsearch与TCVector
 
 ```go
 
@@ -221,8 +222,10 @@ req := &knowledge.SearchRequest{
     MaxResults: 5,
     MinScore: 0.7,
     SearchFilter: &knowledge.SearchFilter{
-        DocumentIDs: ["id1","id2"],
-        Metadata: map[string]any,
+        DocumentIDs: []string{"id1","id2"},
+        Metadata: map[string]any{
+            "title": "title test",
+        },
         FilterCondition: filterCondition,
     }
 }
