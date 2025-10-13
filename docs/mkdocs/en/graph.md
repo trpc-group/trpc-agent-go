@@ -1,8 +1,39 @@
-# Graph Package Usage Guide
-
-The Graph package is a core component in trpc-agent-go for building and executing workflows. It provides a type-safe, extensible graph execution engine that supports complex AI workflow orchestration.
+# Graph Package Guide
 
 ## Overview
+
+Graph combines controllable workflow orchestration with extensible agent capabilities. It is suitable for:
+- Type-safe state management and predictable routing.
+- LLM decision making, tool-calling loops, and optional Human in the Loop (HITL).
+- Reusable components that can run standalone or be composed as sub‑agents.
+
+Highlights:
+- Schema‑driven State and Reducers to avoid data races when concurrent branches write the same field.
+- Deterministic parallelism with BSP style (Plan / Execute / Update).
+- Built‑in node types wrap LLM, Tools, and Agent to reduce boilerplate.
+- Streaming events, checkpoints, and interrupts for observability and recovery.
+
+## Quick Start
+
+### Minimal Workflow
+
+Below is a classic “prepare → ask LLM → optionally call tools” loop using `graph.MessagesStateSchema()` (predefines `graph.StateKeyMessages`, `graph.StateKeyUserInput`, `graph.StateKeyLastResponse`, etc.).
+
+```mermaid
+flowchart LR
+    START([start]):::startNode --> P[prepare]:::processNode
+    P --> A[ask LLM]:::llmNode
+    A -. tool_calls .-> T[tools]:::toolNode
+    A -- no tool_calls --> F[fallback]:::processNode
+    T --> A
+    F --> END([finish]):::endNode
+
+    classDef startNode fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+    classDef endNode fill:#ffe1e1,stroke:#f44336,stroke-width:2px
+    classDef llmNode fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    classDef toolNode fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    classDef processNode fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+```
 
 The Graph package allows you to model complex AI workflows as directed graphs, where nodes represent processing steps and edges represent data flow and control flow. It is particularly suitable for building AI applications that require conditional routing, state management, and multi-step processing.
 
@@ -680,512 +711,9 @@ b.AddNode("approval_node", func(ctx context.Context, s graph.State) (any, error)
         "message": "Please approve this action (yes/no):",
         "data":    s["some_data"],
     }
-    
-    // Interrupt execution and wait for user input
-    // The key "approval" identifies this specific interrupt point
-    resumeValue, err := graph.Interrupt(ctx, s, "approval", prompt)
-    if err != nil {
-        return nil, err
-    }
-    
-    // Process the resume value when execution continues
-    approved := false
-    if resumeStr, ok := resumeValue.(string); ok {
-        approved = resumeStr == "yes"
-    }
-    
-    return graph.State{
-        "approved": approved,
-    }, nil
-})
-```
+ 
 
-#### Multi-Stage Approval Example
-
-```go
-// First approval stage
-b.AddNode("first_approval", func(ctx context.Context, s graph.State) (any, error) {
-    prompt := map[string]any{
-        "message": "Manager approval required:",
-        "level": 1,
-    }
-    
-    approval, err := graph.Interrupt(ctx, s, "manager_approval", prompt)
-    if err != nil {
-        return nil, err
-    }
-    
-    if approval != "yes" {
-        return graph.State{"rejected_at": "manager"}, nil
-    }
-    
-    return graph.State{"manager_approved": true}, nil
-})
-
-// Second approval stage (only if first approved)
-b.AddNode("second_approval", func(ctx context.Context, s graph.State) (any, error) {
-    if !s["manager_approved"].(bool) {
-        return s, nil // Skip if not approved by manager
-    }
-    
-    prompt := map[string]any{
-        "message": "Director approval required:",
-        "level": 2,
-    }
-    
-    approval, err := graph.Interrupt(ctx, s, "director_approval", prompt)
-    if err != nil {
-        return nil, err
-    }
-    
-    return graph.State{
-        "director_approved": approval == "yes",
-        "final_approval": approval == "yes",
-    }, nil
-})
-```
-
-#### Resume from Interrupt
-
-```go
-// Resume execution with user input using ResumeMap
-cmd := &graph.Command{
-    ResumeMap: map[string]any{
-        "approval": "yes", // Resume value for the "approval" interrupt key
-    },
-}
-
-// Pass the command through state
-state := graph.State{
-    graph.StateKeyCommand: cmd,
-}
-
-// Execute with resume command
-events, err := executor.Execute(ctx, state, invocation)
-
-// Resume merge rule:
-// When resuming, if the caller provides initial state keys that do not start
-// with an underscore ("_") and are not present in the restored checkpoint
-// state, they will be merged into the execution state. Internal framework
-// keys (prefixed with "_") are ignored for this merge.
-```
-
-#### Resume Helper Functions
-
-```go
-// Type-safe resume value extraction
-if value, ok := graph.ResumeValue[string](ctx, state, "approval"); ok {
-    // Use the resume value
-}
-
-// Resume with default value
-value := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
-
-// Check if resume value exists
-if graph.HasResumeValue(state, "approval") {
-    // Handle resume case
-}
-
-// Clear resume values
-graph.ClearResumeValue(state, "approval")
-graph.ClearAllResumeValues(state)
-```
-
-### 2. Checkpoint-based Time Travel
-
-Checkpoints enable "time travel" capabilities, allowing you to navigate through execution history and restore previous states. This is essential for debugging, auditing, and implementing sophisticated recovery strategies.
-
-#### Checkpoint Configuration
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
-)
-
-// Create checkpoint saver (Memory or SQLite)
-// Memory saver - good for development/testing
-memorySaver := inmemory.NewSaver()
-
-// SQLite saver - persistent storage for production
-sqliteSaver, err := sqlite.NewCheckpointSaver("checkpoints.db")
-
-// Create executor with checkpoint support
-executor, err := graph.NewExecutor(compiledGraph,
-    graph.WithCheckpointSaver(sqliteSaver),
-    graph.WithCheckpointSaveTimeout(30*time.Second), // Configurable timeout
-    graph.WithMaxSteps(100),
-)
-```
-
-#### Checkpoint Lineage and Branching
-
-```go
-// Checkpoints form a lineage - a thread of execution
-lineageID := "user-session-123"
-namespace := "" // Optional namespace for branching
-// Note: when namespace is empty (""), Latest/List/GetTuple perform cross-namespace
-// queries within the same lineage. Use a concrete namespace to restrict scope.
-
-// Create checkpoint configuration
-config := graph.NewCheckpointConfig(lineageID).
-    WithNamespace(namespace)
-
-// Execute with checkpoint support
-state := graph.State{
-    "lineage_id": lineageID,
-    "checkpoint_ns": namespace,
-}
-
-events, err := executor.Execute(ctx, state, invocation)
-```
-
-#### Checkpoint Management
-
-```go
-// Create checkpoint manager
-manager := graph.NewCheckpointManager(saver)
-
-// List all checkpoints for a lineage
-checkpoints, err := manager.ListCheckpoints(ctx, config.ToMap(), &graph.CheckpointFilter{
-    Limit: 10, // Results are ordered by timestamp (newest first)
-})
-
-// Get the latest checkpoint
-// When namespace is empty (""), Latest searches across namespaces for the lineage
-latest, err := manager.Latest(ctx, lineageID, namespace)
-if latest != nil && latest.Checkpoint.IsInterrupted() {
-    fmt.Printf("Workflow interrupted at: %s\n", latest.Checkpoint.InterruptState.NodeID)
-}
-
-// Get specific checkpoint by ID
-ckptConfig := graph.CreateCheckpointConfig(lineageID, checkpointID, namespace)
-tuple, err := manager.GetTuple(ctx, ckptConfig)
-
-// Delete a lineage (all its checkpoints)
-err = manager.DeleteLineage(ctx, lineageID)
-```
-
-#### Checkpoint Tree Visualization
-
-```go
-// Build checkpoint tree showing parent-child relationships
-tree, err := manager.GetCheckpointTree(ctx, lineageID)
-
-// Visualize the tree
-for _, node := range tree {
-    indent := strings.Repeat("  ", node.Level)
-    marker := "📍"
-    if node.Checkpoint.IsInterrupted() {
-        marker = "🔴" // Interrupted checkpoint
-    }
-    fmt.Printf("%s%s %s (step=%d)\n", 
-        indent, marker, node.ID[:8], node.Metadata.Step)
-}
-```
-
-#### Resume from Specific Checkpoint
-
-```go
-// Resume from a specific checkpoint (time travel)
-state := graph.State{
-    "lineage_id": lineageID,
-    "checkpoint_id": checkpointID, // Resume from this checkpoint
-}
-
-// The executor will load the checkpoint and continue from there
-events, err := executor.Execute(ctx, state, invocation)
-```
-
-### 3. Checkpoint Storage Strategies
-
-#### In-Memory Storage
-Best for development and testing:
-```go
-saver := memory.NewCheckpointSaver()
-```
-
-#### SQLite Storage
-Best for production with persistence:
-```go
-saver, err := sqlite.NewCheckpointSaver("workflow.db",
-    sqlite.WithMaxConnections(10),
-    sqlite.WithTimeout(30*time.Second),
-)
-```
-
-#### Checkpoint Metadata
-Each checkpoint stores:
-- **State**: Complete workflow state at that point
-- **Metadata**: Source (input/loop/interrupt), step number, timestamp
-- **Parent ID**: Link to parent checkpoint for tree structure
-- **Interrupt State**: If interrupted, contains node ID, task ID, and prompt
-- **Next Nodes**: Nodes to execute when resuming
-- **Channel Versions**: For Pregel-style execution
-- **Pending Writes**: Uncommitted channel writes recorded and atomically stored
-  with checkpoints to deterministically rebuild the frontier during resume
-- **Versions Seen**: Per-node, per-channel version map used to avoid re-running
-  a node if it has already observed the latest version of its trigger channels
-
-### 4. Custom Reducer
-
-Reducer defines how to merge state updates:
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-// Default Reducer: Override existing values.
-graph.DefaultReducer(existing, update) any
-
-// Merge Reducer: Merge maps.
-graph.MergeReducer(existing, update) any
-
-// Append Reducer: Append to slices.
-graph.AppendReducer(existing, update) any
-
-// Message Reducer: Handle message arrays.
-graph.MessageReducer(existing, update) any
-```
-
-### 5. Command Pattern
-
-Nodes can return commands to simultaneously update state and specify routing:
-
-```go
-import (
-    "context"
-
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-func routingNodeFunc(ctx context.Context, state graph.State) (any, error) {
-    // Decide next step based on conditions.
-    if shouldGoToA(state) {
-        return &graph.Command{
-            Update: graph.State{"status": "going_to_a"},
-            GoTo:   "node_a",
-        }, nil
-    }
-
-    return &graph.Command{
-        Update: graph.State{"status": "going_to_b"},
-        GoTo:   "node_b",
-    }, nil
-}
-```
-
-Fan-out and dynamic routing:
-
-- Return `[]*graph.Command` from a node to create parallel branches that run in the next step.
-- Using `Command{ GoTo: "target" }` dynamically routes to `target` at runtime; no static edge is required for reachability checks. Ensure the target node exists, and use `SetFinishPoint(target)` if it is terminal.
-
-Example (fan-out with dynamic routing):
-
-```go
-stateGraph.AddNode("fanout", func(ctx context.Context, s graph.State) (any, error) {
-    tasks := []*graph.Command{
-        {Update: graph.State{"param": "A"}, GoTo: "worker"},
-        {Update: graph.State{"param": "B"}, GoTo: "worker"},
-        {Update: graph.State{"param": "C"}, GoTo: "worker"},
-    }
-    return tasks, nil
-})
-
-stateGraph.AddNode("worker", func(ctx context.Context, s graph.State) (any, error) {
-    p, _ := s["param"].(string)
-    if p == "" {
-        return graph.State{}, nil
-    }
-    return graph.State{"results": []string{p}}, nil
-})
-
-// Entry/finish
-stateGraph.SetEntryPoint("fanout")
-stateGraph.SetFinishPoint("worker")
-
-// No need to add a static edge fanout->worker; routing is driven by GoTo.
-```
-
-### 6. Executor Configuration
-
-```go
-import (
-    "time"
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
-)
-
-// Create executor with comprehensive configuration
-executor, err := graph.NewExecutor(compiledGraph,
-    graph.WithChannelBufferSize(1024),      // Event channel buffer size
-    graph.WithMaxSteps(50),                  // Maximum execution steps
-    graph.WithStepTimeout(5*time.Minute),    // Timeout per step
-    graph.WithNodeTimeout(2*time.Minute),    // Timeout per node execution
-    graph.WithCheckpointSaver(inmemory.NewSaver()),  // Enable checkpointing
-    graph.WithCheckpointSaveTimeout(30*time.Second), // Checkpoint save timeout
-)
-```
-
-### 7. Virtual Nodes and Routing
-
-The Graph package uses virtual nodes to simplify workflow entry and exit:
-
-```go
-import (
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-// Special node identifiers.
-const (
-    Start = "__start__"  // Virtual start node.
-    End   = "__end__"    // Virtual end node.
-)
-
-// Set entry point (automatically creates edge from Start -> nodeID).
-stateGraph.SetEntryPoint("first_node")
-
-// Set finish point (automatically creates edge from nodeID -> End).
-stateGraph.SetFinishPoint("last_node")
-
-// No need to explicitly add these edges:
-// stateGraph.AddEdge(Start, "first_node")  // Not needed.
-// stateGraph.AddEdge("last_node", End)     // Not needed.
-```
-
-This design makes workflow definitions more concise, developers only need to focus on actual business nodes and their connections.
-
-## Best Practices
-
-### 1. State Management
-
-- Use constants to define state keys, avoid hardcoded strings
-- Create Helper functions for complex states
-- Use Schema to validate state structure
-- Distinguish between built-in state keys and user-defined state keys
-
-```go
-import (
-    "errors"
-
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-// Define user-defined state key constants.
-const (
-    StateKeyInput        = "input"          // User business data.
-    StateKeyResult       = "result"         // Processing result.
-    StateKeyProcessedData = "processed_data" // Processed data.
-    StateKeyStatus       = "status"         // Processing status.
-)
-
-// User-accessible built-in state keys (use with caution).
-// StateKeyUserInput    - User input (automatically set by GraphAgent).
-// StateKeyLastResponse - Last response (read by Executor as final result).
-// StateKeyMessages     - Message history (automatically updated by LLM nodes).
-// StateKeyMetadata     - Metadata (general storage available to users).
-
-// System internal state keys (users should not use directly).
-// StateKeySession      - Session information (automatically set by GraphAgent).
-// StateKeyExecContext  - Execution context (automatically set by Executor).
-// StateKeyToolCallbacks - Tool callbacks (automatically set by Executor).
-// StateKeyModelCallbacks - Model callbacks (automatically set by Executor).
-
-// Create state Helper.
-type StateHelper struct {
-    state graph.State
-}
-
-func (h *StateHelper) GetInput() (string, error) {
-    if input, ok := h.state[StateKeyInput].(string); ok {
-        return input, nil
-    }
-    return "", errors.New("input not found")
-}
-
-func (h *StateHelper) GetUserInput() (string, error) {
-    if input, ok := h.state[graph.StateKeyUserInput].(string); ok {
-        return input, nil
-    }
-    return "", errors.New("user_input not found")
-}
-```
-
-### 2. Error Handling
-
-- Return meaningful errors in node functions
-- Use error type constants for classification
-- Handle exceptional cases in condition functions
-
-```go
-import (
-    "context"
-    "fmt"
-
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-func safeNodeFunc(ctx context.Context, state graph.State) (any, error) {
-    input, ok := state["input"].(string)
-    if !ok {
-        return nil, fmt.Errorf("input field not found or wrong type")
-    }
-
-    if input == "" {
-        return nil, fmt.Errorf("input cannot be empty")
-    }
-
-    // Processing logic...
-    return result, nil
-}
-```
-
-### 3. Performance Optimization
-
-- Reasonably set executor buffer size
-- Use maximum step limits to prevent infinite loops
-- Consider parallel execution paths (if supported)
-
-### 4. Testing
-
-```go
-import (
-    "context"
-    "testing"
-
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-)
-
-func TestWorkflow(t *testing.T) {
-    // Create test graph.
-    graph := createTestGraph()
-
-    // Create executor.
-    executor, err := graph.NewExecutor(graph)
-    require.NoError(t, err)
-
-    // Execute test.
-    initialState := graph.State{"test_input": "test"}
-    eventChan, err := executor.Execute(context.Background(), initialState, nil)
-    require.NoError(t, err)
-
-    // Verify results.
-    for event := range eventChan {
-        // Verify event content.
-        assert.NotNil(t, event)
-    }
-}
-```
-
-## Common Use Cases
-
-### 1. Document Processing Workflow
-
-This is a complete document processing workflow example, demonstrating how to use GraphAgent and Runner:
+Turn the diagram into a runnable workflow:
 
 ```go
 package main
@@ -1194,605 +722,1437 @@ import (
     "context"
     "fmt"
     "strings"
-    "time"
 
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-    "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/graph"
     "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/tool"
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-// User-defined state keys.
+// Unexported constants to avoid magic strings
 const (
-    StateKeyDocumentLength  = "document_length"
-    StateKeyWordCount       = "word_count"
-    StateKeyComplexityLevel = "complexity_level"
-    StateKeyProcessingStage = "processing_stage"
+    nodePrepare  = "prepare"
+    nodeAsk      = "ask"
+    nodeTools    = "tools"
+    nodeFallback = "fallback"
+    nodeFinish   = "finish"
+
+    modelName     = "gpt-4o-mini"
+    systemPrompt  = "You are a careful assistant."
+    outputKeyFinal = "final_output"
+
+    toolNameCalculator = "calculator"
+
+    demoUserID    = "user"
+    demoSessionID = "session"
+    demoQuestion  = "What is 6 * 7?"
 )
 
-type documentWorkflow struct {
-    modelName string
-    runner    runner.Runner
-    userID    string
-    sessionID string
+func newCalculator() tool.Tool {
+    type Input struct {
+        Expression string `json:"expression"`
+    }
+    type Output struct {
+        Result float64 `json:"result"`
+    }
+    return function.NewFunctionTool[Input, Output](
+        func(ctx context.Context, in Input) (Output, error) {
+            // Implement a real evaluator here
+            return Output{Result: 42}, nil
+        },
+        function.WithName(toolNameCalculator),
+        function.WithDescription("Evaluate a math expression"),
+    )
 }
 
-func (w *documentWorkflow) setup() error {
-    // 1. Create document processing graph.
-    workflowGraph, err := w.createDocumentProcessingGraph()
-    if err != nil {
-        return fmt.Errorf("failed to create graph: %w", err)
-    }
+func buildWorkflow(m model.Model, tools map[string]tool.Tool) (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
 
-    // 2. Create GraphAgent.
-    graphAgent, err := graphagent.New("document-processor", workflowGraph,
-        graphagent.WithDescription("Comprehensive document processing workflow"),
-        graphagent.WithInitialState(graph.State{}),
-    )
-    if err != nil {
-        return fmt.Errorf("failed to create graph agent: %w", err)
-    }
-
-    // 3. Create session service.
-    sessionService := inmemory.NewSessionService()
-
-    // 4. Create Runner.
-    w.runner = runner.NewRunner(
-        "document-workflow",
-        graphAgent,
-        runner.WithSessionService(sessionService),
-    )
-
-    // 5. Set identifiers.
-    w.userID = "user"
-    w.sessionID = fmt.Sprintf("workflow-session-%d", time.Now().Unix())
-
-    return nil
-}
-
-func (w *documentWorkflow) createDocumentProcessingGraph() (*graph.Graph, error) {
-    // Create state schema.
-    schema := graph.MessagesStateSchema()
-
-    // Create model instance.
-    modelInstance := openai.New(w.modelName)
-
-    // Create analysis tool.
-    complexityTool := function.NewFunctionTool(
-        w.analyzeComplexity,
-        function.WithName("analyze_complexity"),
-        function.WithDescription("Analyze document complexity level"),
-    )
-
-    // Create state graph.
-    stateGraph := graph.NewStateGraph(schema)
-    tools := map[string]tool.Tool{
-        "analyze_complexity": complexityTool,
-    }
-
-    // Build workflow graph.
-    stateGraph.
-        AddNode("preprocess", w.preprocessDocument).
-        AddLLMNode("analyze", modelInstance,
-            `You are a document analysis expert. Analyze the provided document and:
-1. Classify document type and complexity (simple, moderate, complex)
-2. Extract key themes
-3. Evaluate content quality
-Use the analyze_complexity tool for detailed analysis.
-Only return complexity level: "simple" or "complex".`,
-            tools).
-        AddToolsNode("tools", tools).
-        AddNode("route_complexity", w.routeComplexity).
-        AddLLMNode("summarize", modelInstance,
-            `You are a document summarization expert. Create a comprehensive and concise summary of the document.
-Focus on:
-1. Key points and main arguments
-2. Important details and insights
-3. Logical structure and flow
-4. Conclusions and implications
-Provide a well-structured summary that preserves important information.
-Remember: Only output the final result itself, no other text.`,
-            map[string]tool.Tool{}).
-        AddLLMNode("enhance", modelInstance,
-            `You are a content enhancement expert. Improve the provided content by:
-1. Improving clarity and readability
-2. Improving structure and organization
-3. Adding relevant details where appropriate
-4. Ensuring consistency and coherence
-Focus on making content more engaging and professional while maintaining the original meaning.
-Remember: Only output the final result itself, no other text.`,
-            map[string]tool.Tool{}).
-        AddNode("format_output", w.formatOutput).
-        SetEntryPoint("preprocess").
-        SetFinishPoint("format_output")
-
-    // Add workflow edges.
-    stateGraph.AddEdge("preprocess", "analyze")
-    stateGraph.AddToolsConditionalEdges("analyze", "tools", "route_complexity")
-    stateGraph.AddEdge("tools", "analyze")
-
-    // Add complexity conditional routing.
-    stateGraph.AddConditionalEdges("route_complexity", w.complexityCondition, map[string]string{
-        "simple":  "enhance",
-        "complex": "summarize",
+    sg.AddNode(nodePrepare, func(ctx context.Context, s graph.State) (any, error) {
+        raw := fmt.Sprint(s[graph.StateKeyUserInput])
+        cleaned := strings.TrimSpace(raw)
+        return graph.State{graph.StateKeyUserInput: cleaned}, nil
     })
 
-    stateGraph.AddEdge("enhance", "format_output")
-    stateGraph.AddEdge("summarize", "format_output")
+    sg.AddLLMNode(nodeAsk, m, systemPrompt, tools)
+    sg.AddToolsNode(nodeTools, tools)
 
-    // SetEntryPoint and SetFinishPoint automatically handle connections with virtual Start/End nodes.
+    sg.AddNode(nodeFallback, func(ctx context.Context, s graph.State) (any, error) {
+        return graph.State{graph.StateKeyLastResponse: "No tools required; answer directly"}, nil
+    })
 
-    return stateGraph.Compile()
+    sg.AddNode(nodeFinish, func(ctx context.Context, s graph.State) (any, error) {
+        return graph.State{outputKeyFinal: fmt.Sprint(s[graph.StateKeyLastResponse])}, nil
+    })
+
+    sg.SetEntryPoint(nodePrepare)
+    sg.AddEdge(nodePrepare, nodeAsk)
+    sg.AddToolsConditionalEdges(nodeAsk, nodeTools, nodeFallback)
+    sg.AddEdge(nodeTools, nodeAsk)
+    sg.AddEdge(nodeFallback, nodeFinish)
+    sg.SetFinishPoint(nodeFinish)
+
+    return sg.Compile()
 }
 
-// Node function implementations.
-func (w *documentWorkflow) preprocessDocument(ctx context.Context, state graph.State) (any, error) {
-    var input string
-    if userInput, ok := state[graph.StateKeyUserInput].(string); ok {
-        input = userInput
-    }
-    if input == "" {
-        return nil, fmt.Errorf("no input document found")
-    }
+func main() {
+    mdl := openai.New(modelName)
+    tools := map[string]tool.Tool{toolNameCalculator: newCalculator()}
 
-    input = strings.TrimSpace(input)
-    if len(input) < 10 {
-        return nil, fmt.Errorf("document too short for processing (minimum 10 characters)")
-    }
-
-    return graph.State{
-        StateKeyDocumentLength:  len(input),
-        StateKeyWordCount:       len(strings.Fields(input)),
-        graph.StateKeyUserInput: input,
-        StateKeyProcessingStage: "preprocessing",
-    }, nil
-}
-
-func (w *documentWorkflow) routeComplexity(ctx context.Context, state graph.State) (any, error) {
-    return graph.State{
-        StateKeyProcessingStage: "complexity_routing",
-    }, nil
-}
-
-func (w *documentWorkflow) complexityCondition(ctx context.Context, state graph.State) (string, error) {
-    if msgs, ok := state[graph.StateKeyMessages].([]model.Message); ok {
-        if len(msgs) > 0 {
-            lastMsg := msgs[len(msgs)-1]
-            if strings.Contains(strings.ToLower(lastMsg.Content), "simple") {
-                return "simple", nil
-            }
-        }
-    }
-    return "complex", nil
-}
-
-func (w *documentWorkflow) formatOutput(ctx context.Context, state graph.State) (any, error) {
-    var result string
-    if lastResponse, ok := state[graph.StateKeyLastResponse].(string); ok {
-        result = lastResponse
-    }
-
-    finalOutput := fmt.Sprintf(`DOCUMENT PROCESSING RESULTS
-========================
-Processing Stage: %s
-Document Length: %d characters
-Word Count: %d words
-Complexity Level: %s
-
-Processed Content:
-%s
-`,
-        state[StateKeyProcessingStage],
-        state[StateKeyDocumentLength],
-        state[StateKeyWordCount],
-        state[StateKeyComplexityLevel],
-        result,
-    )
-
-    return graph.State{
-        graph.StateKeyLastResponse: finalOutput,
-    }, nil
-}
-
-// Tool function.
-func (w *documentWorkflow) analyzeComplexity(ctx context.Context, args map[string]any) (any, error) {
-    text, ok := args["text"].(string)
-    if !ok {
-        return nil, fmt.Errorf("text argument is required")
-    }
-
-    wordCount := len(strings.Fields(text))
-    sentenceCount := len(strings.Split(text, "."))
-
-    var level string
-    var score float64
-
-    if wordCount < 100 {
-        level = "simple"
-        score = 0.3
-    } else if wordCount < 500 {
-        level = "moderate"
-        score = 0.6
-    } else {
-        level = "complex"
-        score = 0.9
-    }
-
-    return map[string]any{
-        "level":          level,
-        "score":          score,
-        "word_count":     wordCount,
-        "sentence_count": sentenceCount,
-    }, nil
-}
-
-// Execute workflow.
-func (w *documentWorkflow) processDocument(ctx context.Context, content string) error {
-    message := model.NewUserMessage(content)
-    eventChan, err := w.runner.Run(ctx, w.userID, w.sessionID, message)
+    g, err := buildWorkflow(mdl, tools)
     if err != nil {
-        return fmt.Errorf("failed to run workflow: %w", err)
+        panic(err)
     }
-    return w.processStreamingResponse(eventChan)
-}
 
-func (w *documentWorkflow) processStreamingResponse(eventChan <-chan *event.Event) error {
-    var workflowStarted bool
-    var finalResult string
-
-    for event := range eventChan {
-        if event.Error != nil {
-            fmt.Printf("❌ Error: %s\n", event.Error.Message)
+    // Run with GraphAgent + Runner (no direct Executor.Execute)
+    ga, err := graphagent.New("demo", g)
+    if err != nil {
+        panic(err)
+    }
+    app := runner.NewRunner("app", ga)
+    events, err := app.Run(context.Background(), demoUserID, demoSessionID,
+        model.NewUserMessage(demoQuestion))
+    if err != nil {
+        panic(err)
+    }
+    for ev := range events {
+        if ev.Response == nil {
             continue
         }
-
-        if len(event.Response.Choices) > 0 {
-            choice := event.Response.Choices[0]
-            if choice.Delta.Content != "" {
-                if !workflowStarted {
-                    fmt.Print("🤖 Workflow: ")
-                    workflowStarted = true
-                }
-                fmt.Print(choice.Delta.Content)
-            }
-
-            if choice.Message.Content != "" && event.Done {
-                finalResult = choice.Message.Content
-            }
+        if ev.Author == nodeAsk && !ev.Response.IsPartial && len(ev.Response.Choices) > 0 {
+            fmt.Println("LLM:", ev.Response.Choices[0].Message.Content)
         }
-
-        if event.Done {
-            if finalResult != "" && strings.Contains(finalResult, "DOCUMENT PROCESSING RESULTS") {
-                fmt.Printf("\n\n%s\n", finalResult)
-            }
-            break
         }
     }
-    return nil
 }
 ```
 
-### 2. Chat Bot
+The example shows how to declare nodes, connect edges, and run. Next, we’ll cover execution with GraphAgent + Runner, then core concepts and common practices.
+
+### Execution
+
+- Wrap the compiled graph with `graphagent.New` (as a generic `agent.Agent`) and hand it to `runner.Runner` to manage sessions and streaming events.
+
+Minimal GraphAgent + Runner:
+
+```go
+compiled, _ := buildWorkflow(openai.New("gpt-4o-mini"), nil)
+ga, _ := graphagent.New("demo", compiled)
+app := runner.NewRunner("app", ga)
+
+events, _ := app.Run(ctx, "user", "session", model.NewUserMessage("hi"))
+for ev := range events { /* handle events */ }
+```
+
+Session backends:
+- In-memory: `session/inmemory` (used by examples)
+- Redis: `session/redis` (more common in production)
 
 ```go
 import (
-    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-    "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/model/openai"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
+    "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
-// Create chat bot.
-func createChatBot(modelName string) (*runner.Runner, error) {
-    // Create state graph.
-    stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
-
-    // Create model and tools.
-    modelInstance := openai.New(modelName)
-    tools := map[string]tool.Tool{
-        "calculator": calculatorTool,
-        "search":     searchTool,
-    }
-
-    // Build conversation graph.
-    stateGraph.
-        AddLLMNode("chat", modelInstance,
-            `You are a helpful AI assistant. Provide help based on user questions and use tools when needed.`,
-            tools).
-        AddToolsNode("tools", tools).
-        AddToolsConditionalEdges("chat", "tools", "chat").
-        SetEntryPoint("chat").
-        SetFinishPoint("chat")
-
-    // Compile graph.
-    compiledGraph, err := stateGraph.Compile()
-    if err != nil {
-        return nil, err
-    }
-
-    // Create GraphAgent.
-    graphAgent, err := graphagent.New("chat-bot", compiledGraph,
-        graphagent.WithDescription("Intelligent chat bot"),
-        graphagent.WithInitialState(graph.State{}),
-    )
-    if err != nil {
-        return nil, err
-    }
-
-    // Create Runner.
-    sessionService := inmemory.NewSessionService()
-    appRunner := runner.NewRunner(
-        "chat-bot-app",
-        graphAgent,
-        runner.WithSessionService(sessionService),
-    )
-
-    return appRunner, nil
-}
+sess, _ := redis.NewService(redis.WithRedisClientURL("redis://localhost:6379"))
+app := runner.NewRunner("app", ga, runner.WithSessionService(sess))
 ```
 
-### 3. Data Processing Pipeline
+### GraphAgent Options
+
+```go
+ga, err := graphagent.New(
+    "workflow",
+    compiledGraph,
+    graphagent.WithDescription("Workflow description"),
+    graphagent.WithInitialState(graph.State{"init": 1}),
+    graphagent.WithChannelBufferSize(512),
+    graphagent.WithCheckpointSaver(saver),
+    graphagent.WithSubAgents([]agent.Agent{subAgent}),
+    graphagent.WithAgentCallbacks(agent.NewCallbacks()),
+)
+```
+
+## Core Concepts
+
+
+
+### State Management
+
+GraphAgent uses a Schema + Reducer model to manage state. You first define the state shape and merge rules; later nodes have clear expectations about the origin and lifecycle of keys they read/write.
+
+#### Built‑in Schema
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+schema := graph.MessagesStateSchema()
+
+// Predefined fields (key constants) and semantics:
+// - graph.StateKeyMessages       ("messages")        Conversation history ([]model.Message; MessageReducer + MessageOp for atomic updates)
+// - graph.StateKeyUserInput      ("user_input")      User input (string; one-shot; cleared after successful execution)
+// - graph.StateKeyLastResponse   ("last_response")   Last response (string)
+// - graph.StateKeyNodeResponses  ("node_responses")  Per-node outputs (map[string]any; aggregated across parallel branches)
+// - graph.StateKeyMetadata       ("metadata")        Metadata (map[string]any; merged by MergeReducer)
+
+// Additional one-shot/system keys (use as needed):
+// - graph.StateKeyOneShotMessages ("one_shot_messages")  One-shot override of this turn's input ([]model.Message)
+// - graph.StateKeySession         ("session")            Session object (internal)
+// - graph.StateKeyExecContext     ("exec_context")       Execution context (events etc., internal)
+```
+
+#### Custom Schema
 
 ```go
 import (
     "reflect"
-
-    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
-// Create data processing pipeline.
-func createDataPipeline() (*runner.Runner, error) {
-    // Create custom state schema.
-    schema := graph.NewStateSchema()
-    schema.AddField("data", graph.StateField{
-        Type:    reflect.TypeOf([]any{}),
-        Reducer: graph.AppendReducer,
-        Default: func() any { return []any{} },
-    })
-    schema.AddField("quality_score", graph.StateField{
-        Type:    reflect.TypeOf(0.0),
-        Reducer: graph.DefaultReducer,
-    })
+schema := graph.NewStateSchema()
 
-    // Create state graph.
-    stateGraph := graph.NewStateGraph(schema)
+// Add a custom field
+schema.AddField("counter", graph.StateField{
+    Type:    reflect.TypeOf(0),
+    Default: func() any { return 0 },
+    Reducer: func(old, new any) any {
+        return old.(int) + new.(int)  // accumulate
+    },
+})
 
-    // Build data processing pipeline.
-    stateGraph.
-        AddNode("extract", extractData).
-        AddNode("validate", validateData).
-        AddConditionalEdges("validate", routeByQuality, map[string]string{
-            "high":   "transform",
-            "medium": "clean",
-            "low":    "reject",
-        }).
-        AddNode("clean", cleanData).
-        AddNode("transform", transformData).
-        AddNode("load", loadData).
-        AddEdge("clean", "transform").
-        AddEdge("transform", "load").
-        SetEntryPoint("extract").
-        SetFinishPoint("load")
-
-    // Compile graph.
-    compiledGraph, err := stateGraph.Compile()
-    if err != nil {
-        return nil, err
-    }
-
-    // Create GraphAgent.
-    graphAgent, err := graphagent.New("data-pipeline", compiledGraph,
-        graphagent.WithDescription("Data processing pipeline"),
-        graphagent.WithInitialState(graph.State{}),
-    )
-    if err != nil {
-        return nil, err
-    }
-
-    // Create Runner.
-    sessionService := inmemory.NewSessionService()
-    appRunner := runner.NewRunner(
-        "data-pipeline-app",
-        graphAgent,
-        runner.WithSessionService(sessionService),
-    )
-
-    return appRunner, nil
-}
+// String slice with a built-in reducer
+schema.AddField("items", graph.StateField{
+    Type:    reflect.TypeOf([]string{}),
+    Default: func() any { return []string{} },
+    Reducer: graph.StringSliceReducer,
+})
 ```
 
-### 4. GraphAgent as SubAgent
+Reducers ensure fields are merged safely per predefined rules, which is critical under concurrent execution.
 
-GraphAgent can be used as a sub-agent of other Agents, implementing complex multi-Agent collaboration:
+Tip: define constants for business keys to avoid scattered magic strings.
+
+### Node Types
+
+GraphAgent provides four built‑in node types:
+
+#### Function Node
+The most basic node, for custom logic:
 
 ```go
 import (
     "context"
-    "log"
 
-    "trpc.group/trpc-go/trpc-agent-go/agent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// Create document processing GraphAgent.
-func createDocumentProcessor() (agent.Agent, error) {
-    // Create document processing graph.
-    stateGraph := graph.NewStateGraph(graph.MessagesStateSchema())
+const (
+    stateKeyInput  = "input"
+    stateKeyOutput = "output"
+    nodeProcess    = "process"
+)
 
-    // Add document processing nodes.
-    stateGraph.
-        AddNode("preprocess", preprocessDocument).
-        AddLLMNode("analyze", modelInstance, analysisPrompt, tools).
-        AddNode("format", formatOutput).
-        SetEntryPoint("preprocess").
-        SetFinishPoint("format")
+sg.AddNode(nodeProcess, func(ctx context.Context, state graph.State) (any, error) {
+    data := state[stateKeyInput].(string)
+    processed := transform(data)
+    // Function nodes must explicitly specify the output key
+    return graph.State{stateKeyOutput: processed}, nil
+})
+```
 
-    // Compile graph.
-    compiledGraph, err := stateGraph.Compile()
+#### LLM Node
+Integrates an LLM and auto‑manages conversation history:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+const (
+    llmModelName     = "gpt-4o-mini"
+    llmSystemPrompt  = "System prompt"
+    llmNodeAssistant = "assistant"
+)
+
+model := openai.New(llmModelName)
+sg.AddLLMNode(llmNodeAssistant, model, llmSystemPrompt, tools)
+
+// Inputs (priority): graph.StateKeyOneShotMessages > graph.StateKeyUserInput > graph.StateKeyMessages
+// Outputs: graph.StateKeyLastResponse, graph.StateKeyMessages (atomic), graph.StateKeyNodeResponses (includes this node's output for aggregation)
+```
+
+#### Tools Node
+Executes tool calls in sequence:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const nodeTools = "tools"
+
+sg.AddToolsNode(nodeTools, tools)
+// Multiple tools execute in the order returned by the LLM
+// For parallelism, use multiple nodes + parallel edges
+// Pairing rule: walk the messages from the tail to the most recent assistant(tool_calls)
+// message; stop at a new user to ensure pairing with the current tool call round.
+```
+
+#### Reading Tool Results into State
+
+After a tools node, add a function node to collect tool outputs from `graph.StateKeyMessages` and write a structured result into state:
+
+```go
+const stateKeyToolResults = "tool_results"
+
+sg.AddNode("collect_tool_results", func(ctx context.Context, s graph.State) (any, error) {
+    msgs, _ := s[graph.StateKeyMessages].([]model.Message)
+    if len(msgs) == 0 { return nil, nil }
+
+    // Find latest assistant(tool_calls) for this round
+    i := len(msgs) - 1
+    for i >= 0 && !(msgs[i].Role == model.RoleAssistant && len(msgs[i].ToolCalls) > 0) {
+        if msgs[i].Role == model.RoleUser { // crossed a new round
+            return nil, nil
+        }
+        i--
+    }
+    if i < 0 { return nil, nil }
+
+    // Collect matching tool results (by ToolID)
+    idset := map[string]bool{}
+    for _, tc := range msgs[i].ToolCalls { idset[tc.ID] = true }
+    results := map[string]string{}
+    for j := i + 1; j < len(msgs); j++ {
+        m := msgs[j]
+        if m.Role == model.RoleTool && idset[m.ToolID] {
+            // Each tool decided its own output encoding; here treat content as JSON/text
+            results[m.ToolName] = m.Content
+        }
+        if m.Role == model.RoleUser { break }
+    }
+    if len(results) == 0 { return nil, nil }
+    return graph.State{stateKeyToolResults: results}, nil
+})
+```
+
+Reference example: `examples/graph/io_conventions_tools`.
+```
+
+#### Agent Node
+Embed a sub‑agent to enable multi‑agent collaboration:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+)
+
+const (
+    subAgentNameAnalyzer = "analyzer"
+    graphAgentNameMain   = "main"
+)
+
+// Important: node ID must match the sub‑agent's name
+sg.AddAgentNode(subAgentNameAnalyzer)
+
+// Inject sub‑agent instances when creating the GraphAgent
+analyzer := createAnalyzer()  // internal agent name must be "analyzer"
+graphAgent, _ := graphagent.New(graphAgentNameMain, g,
+    graphagent.WithSubAgents([]agent.Agent{analyzer}))
+```
+
+### Edges and Routing
+
+Edges define control flow between nodes:
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeA         = "nodeA"
+    nodeB         = "nodeB"
+    nodeDecision  = "decision"
+    nodePathA     = "pathA"
+    nodePathB     = "pathB"
+
+    routeToPathA  = "route_to_pathA"
+    routeToPathB  = "route_to_pathB"
+    stateKeyFlag  = "flag"
+)
+
+// Straight edge
+sg.AddEdge(nodeA, nodeB)
+
+// Conditional edges (third arg is the route map; provide explicitly for static checks)
+// Define target nodes first
+sg.AddNode(nodePathA, handlerA)
+sg.AddNode(nodePathB, handlerB)
+// Then add conditional routing
+sg.AddConditionalEdges(nodeDecision, 
+    func(ctx context.Context, s graph.State) (string, error) {
+        if s[stateKeyFlag].(bool) {
+            return routeToPathA, nil
+        }
+        return routeToPathB, nil
+    }, map[string]string{
+        routeToPathA: nodePathA,
+        routeToPathB: nodePathB,
+    })
+
+// Tools conditional edges: handle LLM tool calls
+const (
+    nodeLLM      = "llm"
+    nodeToolsUse = "tools"
+    nodeFallback = "fallback"
+)
+sg.AddToolsConditionalEdges(nodeLLM, nodeToolsUse, nodeFallback)
+
+// Parallel edges: branches from the same node run in parallel
+const (
+    nodeSplit   = "split"
+    nodeBranch1 = "branch1"
+    nodeBranch2 = "branch2"
+)
+sg.AddEdge(nodeSplit, nodeBranch1)
+sg.AddEdge(nodeSplit, nodeBranch2)  // branch1 and branch2 execute in parallel
+```
+
+Tip: setting entry and finish points implicitly connects to virtual Start/End nodes:
+- `SetEntryPoint("first")` is equivalent to Start → first.
+- `SetFinishPoint("last")` is equivalent to last → End.
+There’s no need to add these two edges explicitly.
+
+Constants: `graph.Start == "__start__"`, `graph.End == "__end__"`.
+
+### Command Mode (Dynamic Routing / Fan‑out)
+
+Nodes can return `graph.State`, or `*graph.Command` / `[]*graph.Command` to update state and direct the next hop:
+
+```go
+// Dynamic route to A or B with a state write
+const (
+    nodeDecide = "decide"
+    nodeA      = "A"
+    nodeB      = "B"
+    stateKeyFlag = "flag"
+)
+
+sg.AddNode(nodeDecide, func(ctx context.Context, s graph.State) (any, error) {
+    if s[stateKeyFlag].(bool) {
+        return &graph.Command{Update: graph.State{"routed": nodeA}, GoTo: nodeA}, nil
+    }
+    return &graph.Command{Update: graph.State{"routed": nodeB}, GoTo: nodeB}, nil
+})
+
+// Fan-out: dispatch multiple tasks to the same worker in parallel
+const (
+    nodeFanout = "fanout"
+    nodeWorker = "worker"
+)
+sg.AddNode(nodeFanout, func(ctx context.Context, s graph.State) (any, error) {
+    cmds := []*graph.Command{
+        {Update: graph.State{"param": "A"}, GoTo: nodeWorker},
+        {Update: graph.State{"param": "B"}, GoTo: nodeWorker},
+        {Update: graph.State{"param": "C"}, GoTo: nodeWorker},
+    }
+    return cmds, nil
+})
+```
+
+When using command‑based routing, you don’t need static edges to `GoTo` targets; just ensure the target nodes exist and call `SetFinishPoint` where appropriate.
+
+## Architecture
+
+### Overall Architecture
+
+GraphAgent’s architecture manages complexity via clear layering. Each layer has a well‑defined responsibility and communicates through standard interfaces.
+
+```mermaid
+flowchart TB
+    subgraph "Runner Layer"
+        R[Runner]:::runnerClass
+        S[Session Service]:::sessionClass
+    end
+    
+    subgraph "GraphAgent"
+        GA[GraphAgent Wrapper]:::agentClass
+        CB[Callbacks]:::callbackClass
+    end
+    
+    subgraph "Graph Engine"
+        SG[StateGraph Builder]:::builderClass
+        G[Graph]:::graphClass
+        E[Executor]:::executorClass
+    end
+    
+    subgraph "Execution Components"
+        P[Planning]:::phaseClass
+        EX[Execution]:::phaseClass
+        U[Update]:::phaseClass
+    end
+    
+    subgraph "Storage"
+        CP[Checkpoint]:::storageClass
+        ST[State Store]:::storageClass
+    end
+    
+    R --> GA
+    GA --> G
+    G --> E
+    E --> P
+    E --> EX
+    E --> U
+    E --> CP
+    
+    classDef runnerClass fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef sessionClass fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    classDef agentClass fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef callbackClass fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef builderClass fill:#fff8e1,stroke:#f57c00,stroke-width:2px
+    classDef graphClass fill:#f1f8e9,stroke:#689f38,stroke-width:2px
+    classDef executorClass fill:#e0f2f1,stroke:#00796b,stroke-width:2px
+    classDef phaseClass fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef storageClass fill:#efebe9,stroke:#5d4037,stroke-width:2px
+```
+
+### Core Modules
+
+Overview of core components:
+
+`graph/state_graph.go` — StateGraph builder  
+Provides a fluent, declarative Go API to build graphs via method chaining (AddNode → AddEdge → Compile) covering nodes, edges, and conditional routing.
+
+`graph/graph.go` — Compiled runtime  
+Implements channel‑based, event‑triggered execution. Node results merge into State; channels are used to drive routing and carry sentinel values (not business data).
+
+`graph/executor.go` — BSP executor  
+Heart of the system, inspired by Google’s Pregel. Implements BSP (Bulk Synchronous Parallel) supersteps: Planning → Execution → Update.
+
+`graph/checkpoint/*` — Checkpoints and recovery  
+Optional checkpoint persistence (e.g., sqlite). Atomically saves state and pending writes; supports lineage/checkpoint‑based recovery.
+
+`agent/graphagent/graph_agent.go` — Bridge between Graph and Agent  
+Adapts a compiled Graph into a generic Agent, reusing sessions, callbacks, and streaming.
+
+### Execution Model
+
+GraphAgent adapts Pregel’s BSP (Bulk Synchronous Parallel) to a single‑process runtime and adds checkpoints, HITL interrupts/resumes, and time travel:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as Runner
+    participant GA as GraphAgent
+    participant EX as Executor
+    participant CK as Checkpoint Saver
+    participant DB as Storage
+    participant H as Human
+
+    R->>GA: Run(invocation)
+    GA->>EX: Execute(graph, state, options)
+    GA-->>R: Stream node/tool/model events
+
+    loop Each superstep (BSP)
+        EX->>EX: Planning — compute frontier
+        par Parallel node execution
+            EX->>EX: Run node i (shallow state copy)
+            EX-->>GA: node-start event (author=nodeID)
+        and
+            EX->>EX: Run node j (shallow state copy)
+            EX-->>GA: node-start event
+        end
+
+        alt Node triggers Interrupt(key,prompt)
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen,reason=interrupt)
+            CK->>DB: atomic commit
+            EX-->>GA: interrupt event(checkpoint_id,prompt)
+            GA-->>R: propagate + pause
+            R->>H: ask for input/approval
+            H-->>R: provide decision/value
+            R->>GA: Run(resume) runtime_state{
+            R->>GA: checkpoint_id,resume_map}
+            GA->>EX: ResumeFromCheckpoint(checkpoint_id,resume_map)
+            EX->>CK: Load checkpoint
+            CK->>EX: state/frontier/pending_writes/versions_seen
+            EX->>EX: rebuild frontier and apply resume values
+        else Normal
+            EX-->>GA: node-complete events (incl. tool/model)
+            EX->>EX: Update — merge via reducers
+            EX->>CK: Save checkpoint(state,frontier,
+            EX->>CK: pending_writes,versions_seen)
+            CK->>DB: atomic commit
+        end
+    end
+
+    Note over EX,CK: versions_seen prevents re-execution
+    Note over EX,CK: pending_writes rebuilds channels
+    Note over EX,CK: parent_id forms lineage for time travel
+
+    opt Time travel (rewind/branch)
+        R->>GA: Run(runtime_state{checkpoint_id})
+        GA->>EX: ResumeFromCheckpoint(checkpoint_id)
+        EX->>CK: Load checkpoint + lineage
+        CK->>EX: Restore state; may create new lineage_id
+    end
+
+    EX-->>GA: done event (last_response)
+    GA-->>R: final output
+```
+
+```mermaid
+flowchart TB
+    %% Execution panorama (compact wiring)
+    subgraph Client
+        R[Runner]:::runner --> GA[GraphAgent]:::agent
+    end
+
+    subgraph Engine[Graph Engine]
+        GA --> EX[Executor]:::executor
+        subgraph BSP["BSP Superstep"]
+            P[Planning]:::phase --> X[Execution]:::phase --> U[Update]:::phase
+        end
+    end
+
+    N[Nodes: LLM / Tools / Function / Agent]:::process
+    CK[(Checkpoint)]:::storage
+    H[Human]:::human
+
+    EX --> BSP
+    EX --> N
+    EX -.-> CK
+    GA <--> H
+    GA --> R
+
+    classDef runner fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
+    classDef executor fill:#e0f2f1,stroke:#00796b,stroke-width:2px
+    classDef phase fill:#ede7f6,stroke:#512da8,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+    classDef storage fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+```
+
+Key points:
+
+1. Planning: determine runnable nodes from the channel frontier.
+2. Execution: each node gets a shallow state copy (maps.Copy) and runs in parallel.
+3. Update: reducers merge updates safely for concurrency.
+
+This design enables per‑step observability and safe interruption/recovery.
+
+#### Runtime Isolation and Event Snapshots
+
+- The Executor is reusable and concurrency‑safe. Per‑run state lives in `ExecutionContext` (channel versions, pending writes, last checkpoint, etc.).
+- Each event’s `StateDelta` is a deep‑copy snapshot containing only serializable and allowed keys; internal keys (execution context, callbacks, etc.) are filtered out for external telemetry and persistence.
+
+### Executor Configuration
+
+```go
+exec, err := graph.NewExecutor(g,
+    graph.WithChannelBufferSize(1024),              // event channel buffer
+    graph.WithMaxSteps(50),                          // max steps
+    graph.WithStepTimeout(5*time.Minute),            // step timeout
+    graph.WithNodeTimeout(2*time.Minute),            // node timeout
+    graph.WithCheckpointSaver(saver),                // enable checkpoints (sqlite/inmemory)
+    graph.WithCheckpointSaveTimeout(30*time.Second), // checkpoint save timeout
+)
+```
+
+### Defaults and Notes
+
+- Defaults (Executor)
+  - `ChannelBufferSize = 256`, `MaxSteps = 100`, `CheckpointSaveTimeout = 10s`
+  - Per‑step/node timeouts are available on `Executor` via `WithStepTimeout` / `WithNodeTimeout` (not exposed by `GraphAgent` options yet)
+
+- Sessions
+  - Prefer Redis session backend in production; set TTLs and cleanup
+- Runner seeds multi‑turn `graph.StateKeyMessages` from session events automatically
+
+- Checkpoints
+  - Use stable `namespace` names (e.g., `svc:prod:flowX`); audit and clean up by lineage via `CheckpointManager`
+
+- Events/backpressure
+  - Tune `WithChannelBufferSize`; filter events by `author`/`object` to reduce noise
+
+- Naming and keys
+  - Use constants for node IDs, route labels, and state keys; define reducers for non‑trivial merges
+
+- Governance
+- Insert HITL on critical paths; prefer storing sensitive details under `graph.StateKeyMetadata` rather than `graph.StateKeyMessages`
+
+## Integrating with Multi‑Agent Systems
+
+GraphAgent is designed to be part of the tRPC‑Agent‑Go multi‑agent ecosystem, not an island. It implements the standard Agent interface and collaborates with other agent types.
+
+### GraphAgent as an Agent
+
+GraphAgent implements the standard Agent interface:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
+)
+
+// Use directly inside ChainAgent, ParallelAgent, CycleAgent
+chain := chainagent.New("chain",
+    chainagent.WithSubAgents([]agent.Agent{
+        graphAgent1,  // structured flow #1
+        graphAgent2,  // structured flow #2
+    }))
+```
+
+### Advanced Orchestration
+
+End‑to‑end business flow: entry normalization → smart routing → multiple pods (Email, Weather, Research) → parallel fan‑out/aggregation → final composition and publish.
+
+```mermaid
+flowchart LR
+    %% Layout
+    subgraph UE["User & Entry"]
+        U((User)):::human --> IN["entry<br/>normalize"]:::process
+    end
+
+    subgraph FAB["Graph Orchestration"]
+        Rtr["where_to_go<br/>router"]:::router
+        Compose["compose<br/>LLM"]:::llm
+    end
+
+    IN --> Rtr
+
+    %% Email Agent (expanded)
+    subgraph EC["Email Agent"]
+        direction LR
+        CE["classifier<br/>LLM"]:::llm --> WE["writer<br/>LLM"]:::llm
+    end
+
+    %% Weather Agent (expanded)
+    subgraph WA["Weather Agent"]
+        direction LR
+        LE["locate<br/>LLM"]:::llm --> WT["weather tool"]:::tool
+    end
+
+    %% Routing from router to pods
+    Rtr -- email --> CE
+    Rtr -- weather --> LE
+    Rtr -- other --> REPLY["reply<br/>LLM"]:::llm
+
+    %% Fanout Pipeline (fanout → workers → aggregate)
+    subgraph FP["Fanout Pipeline"]
+        direction LR
+        Fan["plan_fanout"]:::process --> W1["worker A"]:::process
+        Fan --> W2["worker B"]:::process
+        Fan --> W3["worker C"]:::process
+        W1 --> Agg["aggregate"]:::process
+        W2 --> Agg
+        W3 --> Agg
+    end
+    Rtr -- research --> Fan
+
+    %% Human-in-the-loop (optional)
+    Compose -. review .- HG["human<br/>review"]:::human
+
+    %% Compose final (minimal wiring)
+    Agg --> Compose
+    WE --> Compose
+    WT --> Compose
+    REPLY --> Compose
+    Compose --> END([END]):::terminal
+
+    %% Styles
+    classDef router fill:#fff7e0,stroke:#f5a623,stroke-width:2px
+    classDef llm fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef tool fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef process fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
+    classDef human fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef terminal fill:#ffebee,stroke:#e53935,stroke-width:2px
+```
+
+Highlights:
+- `where_to_go` can be LLM‑decided or function‑driven (conditional edges).
+- Fanout Pipeline uses Command GoTo at runtime, then aggregates.
+- Optional human review follows aggregation to gate critical output.
+- Single checkpoint display at Compose balances clarity and recoverability.
+
+### Embedding Agents in a Graph
+
+Inside a graph, you can call existing sub‑agents as nodes. The example below shows how to create sub‑agents, declare the corresponding nodes, and inject them when constructing the GraphAgent.
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+)
+
+// Create sub‑agents
+const (
+    SubAgentAnalyzer = "analyzer"
+    SubAgentReviewer = "reviewer"
+)
+analyzer := createAnalyzer()  // name must be "analyzer"
+reviewer := createReviewer()  // name must be "reviewer"
+
+// Declare agent nodes in the graph
+sg.AddAgentNode(SubAgentAnalyzer)
+sg.AddAgentNode(SubAgentReviewer)
+
+// Inject sub‑agents when creating the GraphAgent
+graphAgent, _ := graphagent.New("workflow", g,
+    graphagent.WithSubAgents([]agent.Agent{
+        analyzer,
+        reviewer,
+    }))
+
+// I/O: sub‑agents receive graph.StateKeyUserInput as the message AND the full
+// graph state via inv.RunOptions.RuntimeState; on finish they update
+// graph.StateKeyLastResponse and graph.StateKeyNodeResponses[nodeID]
+```
+
+### Hybrid Pattern Example
+
+Embed dynamic decision‑making within a structured flow:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+sg := graph.NewStateGraph(schema)
+
+const (
+    nodePrepare  = "prepare"
+    nodeAnalyzer = "analyzer"
+    nodeFinalize = "finalize"
+)
+
+// Structured data preparation
+sg.AddNode(nodePrepare, prepareData)
+
+// Dynamic decision point — use a ChainAgent
+dynamicAgent := chainagent.New(nodeAnalyzer,
+    chainagent.WithSubAgents([]agent.Agent{...}))
+sg.AddAgentNode(nodeAnalyzer)
+
+// Continue the structured flow
+sg.AddNode(nodeFinalize, finalizeResults)
+
+// Wire the flow
+sg.SetEntryPoint(nodePrepare)
+sg.AddEdge(nodePrepare, nodeAnalyzer)   // hand over to dynamic agent
+sg.AddEdge(nodeAnalyzer, nodeFinalize)  // return to structured flow
+sg.SetFinishPoint(nodeFinalize)
+
+// Inject on creation
+graphAgent, _ := graphagent.New("hybrid", g,
+    graphagent.WithSubAgents([]agent.Agent{dynamicAgent}))
+```
+
+## Core Mechanics in Depth
+
+### State Management: Schema + Reducer
+
+State is a central challenge in graph workflows. We designed a Schema + Reducer mechanism that provides type safety and supports high‑concurrency atomic updates.
+
+```mermaid
+flowchart LR
+    subgraph "State Schema"
+        MS[messages: MessageList]:::schemaClass
+        UI[user_input: string]:::schemaClass
+        LR[last_response: string]:::schemaClass
+        NR[node_responses: Map]:::schemaClass
+    end
+    
+    subgraph "Reducers"
+        R1[MessageReducer + MessageOp]:::reducerClass
+        R2[MergeReducer (Map)]:::reducerClass
+        R3[ReplaceReducer (String)]:::reducerClass
+    end
+    
+    subgraph "Node Outputs"
+        N1[Node 1 Output]:::nodeOutputClass
+        N2[Node 2 Output]:::nodeOutputClass
+        N3[Node 3 Output]:::nodeOutputClass
+    end
+    
+    N1 --> R1
+    N2 --> R2
+    N3 --> R3
+    R1 --> MS
+    R2 --> NR
+    R3 --> LR
+    
+    classDef schemaClass fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef reducerClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef nodeOutputClass fill:#fff8e1,stroke:#f57f17,stroke-width:2px
+```
+
+Graph state is a `map[string]any` with runtime validation provided by `StateSchema`. The reducer mechanism ensures safe merging and avoids conflicts under concurrent updates.
+
+#### Common State Keys
+
+- User‑visible: `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
+- Internal: `session`, `exec_context`, `tool_callbacks`, `model_callbacks`, `agent_callbacks`, `current_node_id`, `parent_agent`
+- Command/Resume: `__command__`, `__resume_map__`
+
+Constants live in `graph/state.go` and `graph/keys.go`. Prefer referencing constants over hard‑coding strings.
+
+#### Node‑level Callbacks & Generation Parameters
+
+Per‑node options (see `graph/state_graph.go`):
+- `graph.WithPreNodeCallback` / `graph.WithPostNodeCallback` / `graph.WithNodeErrorCallback`
+- LLM nodes: `graph.WithGenerationConfig`, `graph.WithModelCallbacks`
+- Tool nodes: `graph.WithToolCallbacks`
+- Agent nodes: `graph.WithAgentNodeEventCallback`
+
+Additionally, `graph.WithName`/`graph.WithDescription` add friendly labels; `graph.WithDestinations` declares potential dynamic destinations (for static checks/visualization only).
+
+### LLM Input Rules: Three‑Stage Design
+
+The LLM input pipeline looks simple but solves common context‑management problems in AI apps.
+
+Built‑in selection logic (no extra config):
+
+1. Prefer `graph.StateKeyOneShotMessages`: fully override inputs (system/user) for this turn; cleared after execution.
+2. Else use `graph.StateKeyUserInput`: append this turn’s user to `graph.StateKeyMessages`, then atomically write back user+assistant; finally clear `graph.StateKeyUserInput`.
+3. Else use `graph.StateKeyMessages` only: common on tool loops re‑entering LLM (since `graph.StateKeyUserInput` has been cleared).
+
+The benefit: preprocess nodes can rewrite `graph.StateKeyUserInput` and take effect in the same turn, while seamlessly integrating with the tool loop (tool_calls → tools → LLM).
+
+Examples (showing the three paths):
+
+```go
+// OneShot (graph.StateKeyOneShotMessages): completely override this turn’s inputs (system/user)
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    systemPrompt = "You are a careful and reliable assistant"
+    userPrompt   = "Summarize this text in bullet points"
+)
+
+sg.AddNode("prepare_prompt", func(ctx context.Context, s graph.State) (any, error) {
+    oneShot := []model.Message{
+        model.NewSystemMessage(systemPrompt),
+        model.NewUserMessage(userPrompt),
+    }
+    return graph.State{graph.StateKeyOneShotMessages: oneShot}, nil
+})
+// The following LLM node will use graph.StateKeyOneShotMessages only and clear it afterwards
+```
+
+```go
+// UserInput (graph.StateKeyUserInput): append this turn’s user input on top of history graph.StateKeyMessages
+import (
+    "strings"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    stateKeyCleanedInput = "cleaned_input"
+)
+
+sg.AddNode("clean_input", func(ctx context.Context, s graph.State) (any, error) {
+    in := strings.TrimSpace(s[graph.StateKeyUserInput].(string))
+    return graph.State{
+        graph.StateKeyUserInput: in,                // LLM node atomically writes user+assistant to messages
+        stateKeyCleanedInput:    in,                // keep a business‑specific key as well
+    }, nil
+})
+```
+
+```go
+// Messages‑only (graph.StateKeyMessages): after tool loop returns, graph.StateKeyUserInput is cleared; LLM continues based on graph.StateKeyMessages (incl. tool responses)
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const (
+    nodeAsk       = "ask"
+    nodeExecTools = "exec_tools"
+    nodeFallback  = "fallback"
+)
+
+sg.AddToolsNode(nodeExecTools, tools)
+sg.AddToolsConditionalEdges(nodeAsk, nodeExecTools, nodeFallback)
+// On returning to nodeAsk (or a downstream LLM) graph.StateKeyUserInput is empty, so it follows the messages‑only path
+```
+
+#### Instruction Placeholder Injection
+
+`AddLLMNode`’s `instruction` supports placeholders, same syntax as `llmagent`:
+- `{key}` / `{key?}`: read from `session.State`; optional `?` yields empty when missing.
+- `{user:subkey}`, `{app:subkey}`, `{temp:subkey}`: read by namespace.
+
+GraphAgent stores the current `*session.Session` into state (`graph.StateKeySession`) and expands placeholders before the LLM call.
+
+Tip: GraphAgent seeds `graph.StateKeyMessages` from prior session events for multi‑turn continuity. When resuming from a checkpoint, a plain "resume" message is not injected as `graph.StateKeyUserInput`, preserving the recovered state.
+
+### Concurrency and State Safety
+
+When a node has multiple outgoing edges, parallel execution is triggered automatically:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+// This graph structure executes in parallel automatically
+stateGraph.
+    AddNode("analyze", analyzeData).
+    AddNode("generate_report", generateReport). 
+    AddNode("call_external_api", callAPI).
+    AddEdge("analyze", "generate_report").    // these two run in parallel
+    AddEdge("analyze", "call_external_api")   // 
+```
+
+Internally, the executor constructs shallow copies (maps.Copy) per task and merges under a lock, with reducers ensuring safe concurrent updates.
+
+### Node I/O Conventions
+
+Nodes communicate only via the shared `State`. Each node returns a state delta that merges via the Schema’s reducers.
+
+- Function nodes
+  - Input: full `State` (read keys declared in your schema)
+  - Output: write business keys only (e.g., `{"parsed_time":"..."}`); avoid internal keys
+
+- LLM nodes
+  - Input priority: `graph.StateKeyOneShotMessages` → `graph.StateKeyUserInput` → `graph.StateKeyMessages`
+  - Output: append to `graph.StateKeyMessages` atomically, set `graph.StateKeyLastResponse`, set `graph.StateKeyNodeResponses[<llm_node_id>]`
+
+- Tools nodes
+  - Read the latest assistant message with `tool_calls` for the current round and append tool responses to `graph.StateKeyMessages`
+  - Multiple tools execute in the order returned by the LLM
+
+- Agent nodes
+  - Receive graph `State` via `Invocation.RunOptions.RuntimeState`
+  - Output: set `graph.StateKeyLastResponse` and `graph.StateKeyNodeResponses[<agent_node_id>]`; `graph.StateKeyUserInput` is cleared after execution
+
+Good practice:
+- Sequential reads: consume the immediate upstream text from `graph.StateKeyLastResponse`.
+- Parallel/merge reads: read specific node outputs from `graph.StateKeyNodeResponses[<nodeID>]`.
+- Declare business keys in your schema with suitable reducers to avoid data races.
+
+### API Cheat Sheet
+
+- Build graph
+  - `graph.NewStateGraph(schema)` → builder
+  - `AddNode(id, func, ...opts)` / `AddLLMNode(id, model, instruction, tools, ...opts)`
+  - `AddToolsNode(id, tools, ...opts)` / `AddAgentNode(id, ...opts)`
+  - `AddEdge(from, to)` / `AddConditionalEdges(from, condition, pathMap)`
+  - `AddToolsConditionalEdges(llmNode, toolsNode, fallback)`
+  - `SetEntryPoint(nodeID)` / `SetFinishPoint(nodeID)` / `Compile()`
+
+- State keys (user‑visible)
+  - `graph.StateKeyUserInput`, `graph.StateKeyOneShotMessages`, `graph.StateKeyMessages`, `graph.StateKeyLastResponse`, `graph.StateKeyNodeResponses`, `graph.StateKeyMetadata`
+
+- Per‑node options
+  - `graph.WithGenerationConfig`, `graph.WithModelCallbacks`, `graph.WithToolCallbacks`
+  - `graph.WithPreNodeCallback`, `graph.WithPostNodeCallback`, `graph.WithNodeErrorCallback`
+
+- Execution
+  - `graphagent.New(name, compiledGraph, ...opts)` → `runner.NewRunner(app, agent)` → `Run(...)`
+
+See examples under `examples/graph` for end‑to‑end patterns (basic/parallel/multi‑turn/interrupts/tools/placeholder).
+
+## Advanced Features
+
+### Checkpoints and Recovery
+
+To support time‑travel and reliable recovery, configure a checkpoint saver on the Executor or GraphAgent. Below uses the SQLite saver to persist checkpoints and resume from a specific checkpoint.
+
+```go
+import (
+    "database/sql"
+
+    _ "github.com/mattn/go-sqlite3"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/sqlite"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// Configure checkpoints
+db, _ := sql.Open("sqlite3", "./checkpoints.db")
+saver, _ := sqlite.NewSaver(db)
+
+graphAgent, _ := graphagent.New("workflow", g,
+    graphagent.WithCheckpointSaver(saver))
+
+// Checkpoints are saved automatically during execution (by default every step)
+
+// Resume from a checkpoint
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: "ckpt-123",
+    }),
+)
+```
+
+#### Checkpoint Management
+
+Use the manager to list, query, and delete checkpoints:
+
+```go
+cm := graph.NewCheckpointManager(saver)
+
+// Latest checkpoint (filter by namespace; empty string means cross‑namespace)
+latest, _ := cm.Latest(ctx, lineageID, "")
+
+// List (time‑desc)
+tuples, _ := cm.ListCheckpoints(ctx, graph.NewCheckpointConfig(lineageID).ToMap(), &graph.CheckpointFilter{Limit: 10})
+
+// Get a specific checkpoint tuple (includes pending writes)
+tuple, _ := cm.GetTuple(ctx, graph.CreateCheckpointConfig(lineageID, checkpointID, namespace))
+
+// Delete a lineage
+_ = cm.DeleteLineage(ctx, lineageID)
+```
+
+Use a stable business identifier for `namespace` in production (e.g., `svc:prod:flowX`) for clear auditing.
+
+### Events at a Glance
+
+- Authors
+  - Node-level: node ID (fallback `graph.AuthorGraphNode`)
+  - Pregel phases: `graph.AuthorGraphPregel`
+  - Executor/system: `graph.AuthorGraphExecutor`
+  - User input: `user` (no exported constant)
+
+- Object types (subset)
+  - Node: `graph.ObjectTypeGraphNodeStart | graph.ObjectTypeGraphNodeComplete | graph.ObjectTypeGraphNodeError`
+  - Pregel: `graph.ObjectTypeGraphPregelPlanning | graph.ObjectTypeGraphPregelExecution | graph.ObjectTypeGraphPregelUpdate`
+  - Channel/state: `graph.ObjectTypeGraphChannelUpdate` / `graph.ObjectTypeGraphStateUpdate`
+  - Checkpoints: `graph.ObjectTypeGraphCheckpoint`, `graph.ObjectTypeGraphCheckpointCreated`, `graph.ObjectTypeGraphCheckpointCommitted`, `graph.ObjectTypeGraphCheckpointInterrupt`
+
+See “Event Monitoring” for a full streaming example and metadata parsing.
+
+### Human‑in‑the‑Loop
+
+Introduce human confirmation on critical paths. The example shows a basic interrupt → resume flow:
+
+```go
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    stateKeyContent    = "content"
+    stateKeyDecision   = "decision"
+    interruptKeyReview = "review_key"
+    nodeReview         = "review"
+)
+
+sg.AddNode(nodeReview, func(ctx context.Context, s graph.State) (any, error) {
+    content := s[stateKeyContent].(string)
+
+    // Interrupt and wait for human input
+    result, err := graph.Interrupt(ctx, s, interruptKeyReview,
+        fmt.Sprintf("Please review: %s", content))
     if err != nil {
         return nil, err
     }
 
-    // Create GraphAgent.
-    return graphagent.New("document-processor", compiledGraph,
-        graphagent.WithDescription("Professional document processing workflow"),
-    )
-}
+    return graph.State{stateKeyDecision: result}, nil
+})
 
-// Create coordinator Agent, using GraphAgent as sub-agent.
-func createCoordinatorAgent() (agent.Agent, error) {
-    // Create document processing GraphAgent.
-    documentProcessor, err := createDocumentProcessor()
-    if err != nil {
-        return nil, err
+// Resume execution (requires the agent package)
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyCheckpointID: checkpointID,
+        graph.StateKeyResumeMap: map[string]any{
+            "review_key": "approved",
+        },
+    }),
+)
+```
+
+Helpers:
+
+```go
+// Typed resume value
+if v, ok := graph.ResumeValue[string](ctx, state, "approval"); ok { /* use v */ }
+
+// With default
+v := graph.ResumeValueOrDefault(ctx, state, "approval", "no")
+
+// Check / clear
+_ = graph.HasResumeValue(state, "approval")
+graph.ClearResumeValue(state, "approval")
+graph.ClearAllResumeValues(state)
+```
+
+You can also inject resume values at entry via a command (no need to jump to a specific node first). Pass it via Runner runtime state:
+
+```go
+cmd := graph.NewResumeCommand().
+    WithResumeMap(map[string]any{"approval": "yes"})
+
+// Inject __command__ into initial state via RuntimeState
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.StateKeyCommand: cmd,
+    }),
+)
+```
+
+### Event Monitoring
+
+The event stream carries execution progress and incremental outputs. The example shows how to iterate events and distinguish graph events vs model deltas:
+
+```go
+import (
+    "fmt"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+for ev := range eventCh {
+    if ev.Response == nil {
+        continue
     }
-
-    // Create other sub-agents.
-    mathAgent := llmagent.New("math-agent",
-        llmagent.WithModel(modelInstance),
-        llmagent.WithDescription("Mathematical calculation expert"),
-        llmagent.WithTools([]tool.Tool{calculatorTool}),
-    )
-
-    // Create coordinator Agent.
-    coordinator := llmagent.New("coordinator",
-        llmagent.WithModel(modelInstance),
-        llmagent.WithDescription("Task coordinator, can delegate to professional sub-agents"),
-        llmagent.WithInstruction(`You are a coordinator that can delegate tasks to professional sub-agents:
-- document-processor: Document processing and analysis
-- math-agent: Mathematical calculations and formula processing
-
-Choose appropriate sub-agents based on user needs to handle tasks.`),
-        llmagent.WithSubAgents([]agent.Agent{
-            documentProcessor,  // GraphAgent as sub-agent.
-            mathAgent,
-        }),
-    )
-
-    return coordinator, nil
-}
-
-// Usage example.
-func main() {
-    // Create coordinator Agent.
-    coordinator, err := createCoordinatorAgent()
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    // Create Runner.
-    runner := runner.NewRunner("coordinator-app", coordinator)
-
-    // Execute task (coordinator will automatically choose appropriate sub-agent).
-    message := model.NewUserMessage("Please analyze this document and calculate the statistical data in it")
-    eventChan, err := runner.Run(ctx, userID, sessionID, message)
-    // ...
+    // ... your handling here
 }
 ```
 
-**Key Features**:
+You can also filter by the event’s `Author` field:
 
-- GraphAgent implements the `agent.Agent` interface and can be used as a sub-agent by other Agents
-- Coordinator Agents can delegate tasks to GraphAgent through the `transfer_to_agent` tool or custom logic
-- GraphAgent can in turn delegate to registered sub-agents through `graphagent.WithSubAgents` + `AddAgentNode`
-- This design enables seamless, bi-directional integration between complex workflows and multi-Agent systems
+- Node‑level events (model, tools, node start/stop): `Author = <nodeID>` (or `graph-node` if unavailable)
+- Pregel (planning/execution/update/errors): `Author = graph.AuthorGraphPregel`
+- Executor‑level (state updates/checkpoints): `Author = graph.AuthorGraphExecutor`
+- User input (Runner writes): `Author = user`
+
+This convention lets you subscribe to a specific node’s stream without passing streaming context through nodes (streaming travels via the event channel; state stays structured in a LangGraph‑like style).
+
+Example: consume only node `ask`’s streaming output and print the final message when done.
+
+```go
+import (
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+const nodeIDWatch = "ask"
+
+for ev := range eventCh {
+    // Only care about events from the watched node
+    if ev.Author != nodeIDWatch {
+        continue
+    }
+    if ev.Response == nil || len(ev.Response.Choices) == 0 {
+        continue
+    }
+    choice := ev.Response.Choices[0]
+
+    // Streaming deltas
+    if ev.Response.IsPartial && choice.Delta.Content != "" {
+        fmt.Print(choice.Delta.Content)
+        continue
+    }
+
+    // Final full message
+    if !ev.Response.IsPartial && choice.Message.Content != "" {
+        fmt.Println("\n[ask] final output:", choice.Message.Content)
+    }
+}
+```
+
+#### Event Metadata (StateDelta)
+
+Each event also carries `StateDelta`, which includes execution metadata for models/tools:
+
+```go
+import (
+    "encoding/json"
+    
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+for ev := range events {
+    if ev.StateDelta == nil { continue }
+    if b, ok := ev.StateDelta[graph.MetadataKeyModel]; ok {
+        var md graph.ModelExecutionMetadata
+        _ = json.Unmarshal(b, &md)
+        // md.Input / md.Output / md.Duration
+    }
+    if b, ok := ev.StateDelta[graph.MetadataKeyTool]; ok {
+        var td graph.ToolExecutionMetadata
+        _ = json.Unmarshal(b, &td)
+    }
+}
+```
+
+You can also configure agent‑level callbacks:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+// Construct and register callbacks (recommended)
+cb := agent.NewCallbacks().
+    RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+        // Return a non‑nil *model.Response to short‑circuit this turn
+        return nil, nil
+    }).
+    RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+        // Modify/replace the final response
+        return nil, nil
+    })
+
+graphAgent, _ := graphagent.New("workflow", g,
+    graphagent.WithAgentCallbacks(cb),
+)
+```
 
 ## Troubleshooting
 
-### Common Errors
+- Graph has no entry point
+  - Error: "graph must have an entry point". Call `SetEntryPoint()` and ensure the node exists.
 
-1. **"node not found"**: Check if node ID is correct
-2. **"invalid graph"**: Ensure graph has entry point and all nodes are reachable
-3. **"maximum execution steps exceeded"**: Check for loops or increase maximum steps
-4. **"state validation failed"**: Check state schema definition
+- Edge target/source does not exist
+  - Error mentions missing node. Define nodes before wiring edges/condition maps.
 
-### Debugging Tips
+- Tools don’t run after LLM
+  - Ensure the LLM actually returned `tool_calls` and you used `AddToolsConditionalEdges(ask, tools, fallback)`.
+  - Check that tool names in your map match the model’s declared tool names.
+  - Pairing walks from the latest assistant(tool_calls) until a new user; verify messages ordering.
 
-- Use event streams to monitor execution process
-- Add logs in node functions
-- Validate state schema definitions
-- Check condition function logic
+- No streaming events observed
+  - Increase `WithChannelBufferSize` and filter by `Author`/object types.
+  - Verify you’re consuming events from `Runner.Run(...)` and not from direct `Executor` calls.
 
-## Summary
+- Resume did not continue where expected
+  - Pass `agent.WithRuntimeState(map[string]any{ graph.CfgKeyCheckpointID: "..." })`.
+  - Provide `ResumeMap` for HITL continuation when needed. A plain "resume" message is not added to `graph.StateKeyUserInput`.
 
-The Graph package provides a powerful and flexible workflow orchestration system, particularly suitable for building complex AI applications. Through the combined use of GraphAgent and Runner, you can create efficient and maintainable workflow applications.
+- State conflicts in parallel
+  - Define reducers for lists/maps (e.g., `StringSliceReducer`, `MergeReducer`), avoid overwriting the same key from multiple branches without merge semantics.
 
-### Key Points
+## Real‑World Example
 
-**Workflow Creation**:
-
-- Use `StateGraph` builder to create graph structure
-- Define clear state schemas and data flow
-- Reasonably use conditional routing and tool nodes
-
-**Application Integration**:
-
-- Wrap workflow graphs through `GraphAgent`
-- Use `Runner` to manage sessions and execution environment
-- Handle streaming events and error responses
-
-**Agent Integration**:
-
-- GraphAgent implements the `agent.Agent` interface
-- Can be used as a sub-agent of other Agents
-- Can also orchestrate other agents via `graphagent.WithSubAgents` and `AddAgentNode`
-- Supports complex multi-Agent collaboration scenarios
-
-**Best Practices**:
-
-- Use type-safe state key constants
-- Implement appropriate error handling and recovery mechanisms
-- Test and monitor workflow execution process
-- Reasonably configure executor parameters and buffer size
-- Consider encapsulating complex workflows as GraphAgent sub-agents
-
-### Typical Usage Flow
+### Approval Workflow
 
 ```go
 import (
     "context"
+    "fmt"
+    "strings"
 
-    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
     "trpc.group/trpc-go/trpc-agent-go/graph"
-    "trpc.group/trpc-go/trpc-agent-go/model"
-    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
-// 1. Create and compile graph.
-stateGraph := graph.NewStateGraph(schema)
-// ... Add nodes and edges.
-compiledGraph, err := stateGraph.Compile()
+func buildApprovalWorkflow() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
 
-// 2. Create GraphAgent.
-graphAgent, err := graphagent.New("workflow-name", compiledGraph, opts...)
+    // AI pre‑review (define LLM model)
+    const (
+        modelNameApprove      = "gpt-4o-mini"
+        promptApproveDecision = "Decide whether the application meets requirements; reply approve or reject"
 
-// 3. Create Runner.
-appRunner := runner.NewRunner("app-name", graphAgent, runnerOpts...)
+        nodeAIReview    = "ai_review"
+        nodeHumanReview = "human_review"
+        nodeApprove     = "approve"
+        nodeReject      = "reject"
 
-// 4. Execute workflow.
-message := model.NewUserMessage("User input")
-eventChan, err := appRunner.Run(ctx, userID, sessionID, message)
+        routeHumanReview = "route_human_review"
+        routeReject      = "route_reject"
+        routeApprove     = "route_approve"
+
+        stateKeyApplication = "application"
+        stateKeyDecision    = "decision"
+    )
+
+    llm := openai.New(modelNameApprove)
+    sg.AddLLMNode(nodeAIReview, llm, promptApproveDecision, nil)
+
+    // Route to human review or reject
+    sg.AddConditionalEdges(nodeAIReview,
+        func(ctx context.Context, s graph.State) (string, error) {
+            resp := s[graph.StateKeyLastResponse].(string)
+            if strings.Contains(resp, "approve") {
+                return routeHumanReview, nil
+            }
+            return routeReject, nil
+        }, map[string]string{
+            routeHumanReview: nodeHumanReview,
+            routeReject:      nodeReject,
+        })
+
+    // Human review node
+    sg.AddNode(nodeHumanReview, func(ctx context.Context, s graph.State) (any, error) {
+        app := s[stateKeyApplication].(string)
+        decision, err := graph.Interrupt(ctx, s, "approval",
+            fmt.Sprintf("Please approve: %s", app))
+        if err != nil {
+            return nil, err
+        }
+        return graph.State{stateKeyDecision: decision}, nil
+    })
+
+    // Outcome handling
+    sg.AddNode(nodeApprove, func(ctx context.Context, s graph.State) (any, error) {
+        // perform approval logic
+        return graph.State{"status": "approved"}, nil
+    })
+    sg.AddNode(nodeReject, func(ctx context.Context, s graph.State) (any, error) {
+        return graph.State{"status": "rejected"}, nil
+    })
+
+    // Wire the flow
+    sg.SetEntryPoint(nodeAIReview)
+    sg.AddConditionalEdges(nodeHumanReview,
+        func(ctx context.Context, s graph.State) (string, error) {
+            if s[stateKeyDecision] == "approve" {
+                return routeApprove, nil
+            }
+            return routeReject, nil
+        }, map[string]string{
+            routeApprove: nodeApprove,
+            routeReject:  nodeReject,
+        })
+
+    return sg.Compile()
+}
 ```
 
-This pattern makes the Graph package particularly suitable for building enterprise-level AI workflow applications, providing good scalability, maintainability, and user experience.
-### Runtime Isolation (Executor vs ExecutionContext)
+## Summary
 
-- Executor is reusable and safe for concurrent runs. It intentionally does not store per-run mutable state.
-- All per-run artifacts (e.g., restored checkpoint metadata, versions seen, pending writes) are carried inside an ExecutionContext instance created for that run.
-- Functions like resumeFromCheckpoint only read from the checkpoint store and reconstruct state; they do not mutate the Executor. Callers pass any needed checkpoint-derived data into the ExecutionContext used for that run.
-- Completion event serialization operates on a deep-copied snapshot and skips non-serializable/internal keys to avoid data races and reduce payload size.
+This guide introduced the core usage of the `graph` package and GraphAgent: declaring nodes and routes, safely merging state via Schema + Reducers, and leveraging events, checkpoints, and interrupts for observability and recovery. For structured flows (approvals, content moderation, stepwise processing), Graph provides stable, auditable execution. For intelligent decisions, extend with LLM nodes and sub‑agents.
+
+## References & Examples
+
+- Repository: https://github.com/trpc-group/trpc-agent-go
+- Graph examples: `examples/graph` (basic/parallel/multi‑turn/interrupts and recovery)
+  - I/O conventions: `io_conventions`, `io_conventions_tools`
+  - Parallel/fan‑out: `parallel`, `fanout`, `diamond`
+  - Placeholders: `placeholder`
+  - Checkpoints/interrupts: `checkpoint`, `interrupt`
+- Further reading: `graph/state_graph.go`, `graph/executor.go`, `agent/graphagent`
