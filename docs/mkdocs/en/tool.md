@@ -307,6 +307,28 @@ mcpToolSet := mcp.NewMCPToolSet(
 )
 ```
 
+### Session Reconnection Support
+
+MCP ToolSet supports automatic session reconnection to recover from server restarts or session expiration.
+
+```go
+// SSE/Streamable HTTP transports support session reconnection
+sseToolSet := mcp.NewMCPToolSet(
+    mcp.ConnectionConfig{
+        Transport: "sse",
+        ServerURL: "http://localhost:8080/sse",
+        Timeout:   10 * time.Second,
+    },
+    mcp.WithSessionReconnect(3), // Enable session reconnection with max 3 attempts
+)
+```
+
+**Reconnection Features:**
+
+- 🔄 **Auto Reconnect**: Automatically recreates session when connection loss or expiration is detected
+- 🎯 **Independent Retries**: Each tool call gets independent reconnection attempts
+- 🛡️ **Conservative Strategy**: Only triggers reconnection for clear connection/session errors to avoid infinite loops
+
 ## Agent Tool (AgentTool)
 
 AgentTool lets you expose an existing Agent as a tool to be used by a parent Agent. Compared with a plain function tool, AgentTool provides:
