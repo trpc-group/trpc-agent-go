@@ -166,7 +166,7 @@ knowledge/
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
 ├── rerank/             # rerank models.
-│   ├── embedder.go      # Rerank interface definition.
+│   ├── reranker.go      # Reranker interface definition.
 │   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
 │   └── document.go      # Document structure definition.
