@@ -163,6 +163,9 @@ knowledge/
 │   ├── embedder.go      # Embedder 接口定义
 │   ├── openai/          # OpenAI embedding 模型
 │   └── local/           # 本地 embedding 模型
+├── reranker/             # 结果重排
+│   ├── reranker.go      # Reranker 接口定义
+│   ├── topk.go          # 返回topK的检索结果
 ├── document/             # 文档表示
 │   └── document.go      # Document 结构定义
 ├── query/                # 查询增强器
@@ -236,11 +239,17 @@ if err != nil {
     // 处理 error
 }
 
+docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+    return &document.Document{ID: tcDoc.Id}, nil, nil
+}
+
 // TcVector
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
@@ -255,6 +264,36 @@ kb := knowledge.New(
 #### Elasticsearch
 
 ```go
+
+docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+    var source struct {
+        ID        string    `json:"id"`
+        Title     string    `json:"title"`
+        Content   string    `json:"content"`
+        Page      int       `json:"page"`
+        Author    string    `json:"author"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Embedding []float64 `json:"embedding"`
+    }
+    if err := json.Unmarshal(hitSource, &source); err != nil {
+        return nil, nil, err
+    }
+    // Create document.
+    doc := &document.Document{
+        ID:        source.ID,
+        Name:      source.Title,
+        Content:   source.Content,
+        CreatedAt: source.CreatedAt,
+        UpdatedAt: source.UpdatedAt,
+        Metadata: map[string]any{
+            "page":   source.Page,
+            "author": source.Author,
+        },
+    }
+    return doc, source.Embedding, nil
+}
+
 // 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
 esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
@@ -265,6 +304,8 @@ esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithMaxRetries(3),
     // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
     vectorelasticsearch.WithVersion("v9"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectorelasticsearch.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // 处理 error
@@ -292,6 +333,25 @@ embedder := openaiembedder.New(
 // 传递给 Knowledge
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker 负责对检索结果的精排：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
+)
+
+// 传递给 Knowledge
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

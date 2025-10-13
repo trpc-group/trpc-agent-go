@@ -165,6 +165,9 @@ knowledge/
 │   ├── embedder.go      # Embedder interface definition.
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
+├── reranker/             # reranker layer.
+│   ├── reranker.go      # Reranker interface definition.
+│   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
 │   └── document.go      # Document structure definition.
 ├── query/                # Query enhancer.
@@ -238,11 +241,17 @@ if err != nil {
     // Handle error.
 }
 
+docBuilder := func(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
+    return &document.Document{ID: tcDoc.Id}, nil, nil
+}
+
 // TcVector.
 tcVS, err := vectortcvector.New(
     vectortcvector.WithURL("https://your-tcvector-endpoint"),
     vectortcvector.WithUsername("your-username"),
     vectortcvector.WithPassword("your-password"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectortcvector.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // Handle error.
@@ -257,6 +266,35 @@ kb := knowledge.New(
 #### Elasticsearch
 
 ```go
+docBuilder := func(hitSource json.RawMessage) (*document.Document, []float64, error) {
+    var source struct {
+        ID        string    `json:"id"`
+        Title     string    `json:"title"`
+        Content   string    `json:"content"`
+        Page      int       `json:"page"`
+        Author    string    `json:"author"`
+        CreatedAt time.Time `json:"created_at"`
+        UpdatedAt time.Time `json:"updated_at"`
+        Embedding []float64 `json:"embedding"`
+    }
+    if err := json.Unmarshal(hitSource, &source); err != nil {
+        return nil, nil, err
+    }
+    // Create document.
+    doc := &document.Document{
+        ID:        source.ID,
+        Name:      source.Title,
+        Content:   source.Content,
+        CreatedAt: source.CreatedAt,
+        UpdatedAt: source.UpdatedAt,
+        Metadata: map[string]any{
+            "page":   source.Page,
+            "author": source.Author,
+        },
+    }
+    return doc, source.Embedding, nil
+}
+
 // Create Elasticsearch vector store with multi-version support (v7, v8, v9)
 esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
@@ -267,6 +305,8 @@ esVS, err := vectorelasticsearch.New(
     vectorelasticsearch.WithMaxRetries(3),
     // Version options: "v7", "v8", "v9" (default "v9")
     vectorelasticsearch.WithVersion("v9"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectorelasticsearch.WithDocBuilder(docBuilder),
 )
 if err != nil {
     // Handle error.
@@ -294,6 +334,26 @@ embedder := openaiembedder.New(
 // Pass to Knowledge.
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker is responsible for the precise ranking of search results
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    // Specify the number of results to be returned after precision sorting. 
+    // If not set, all results will be returned by default
+    reranker.WithK(1),
+)
+
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

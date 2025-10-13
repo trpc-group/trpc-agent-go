@@ -47,8 +47,8 @@ func (e *echoTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 // simpleToolSet returns a fixed set of tools.
 type simpleToolSet struct{}
 
-func (s *simpleToolSet) Tools(ctx context.Context) []tool.CallableTool {
-	return []tool.CallableTool{&echoTool{name: "echo"}}
+func (s *simpleToolSet) Tools(ctx context.Context) []tool.Tool {
+	return []tool.Tool{&echoTool{name: "echo"}}
 }
 func (s *simpleToolSet) Close() error { return nil }
 

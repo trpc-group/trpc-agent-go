@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -271,8 +272,9 @@ func (c *chainChat) startChat(ctx context.Context) error {
 func (c *chainChat) processMessage(ctx context.Context, userMessage string) error {
 	message := model.NewUserMessage(userMessage)
 
+	requestID := uuid.NewString()
 	// Run the chain agent through the runner.
-	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message)
+	eventChan, err := c.runner.Run(ctx, c.userID, c.sessionID, message, agent.WithRequestID(requestID))
 	if err != nil {
 		return fmt.Errorf("failed to run chain agent: %w", err)
 	}
@@ -368,10 +370,10 @@ func (c *chainChat) displayAgentTransition(currentAgent string) {
 
 // handleToolCalls detects and displays tool calls.
 func (c *chainChat) handleToolCalls(event *event.Event, toolCallsActive *bool) {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsActive = true
 		fmt.Printf("\n🔧 Using tools:\n")
-		for _, toolCall := range event.Choices[0].Message.ToolCalls {
+		for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 			fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 			if len(toolCall.Function.Arguments) > 0 {
 				fmt.Printf("     Args: %s\n", string(toolCall.Function.Arguments))
@@ -401,8 +403,8 @@ func (c *chainChat) displayToolResponse(choice model.Choice) {
 
 // handleStreamingContent processes streaming content from agents.
 func (c *chainChat) handleStreamingContent(event *event.Event, currentAgent *string, toolCallsActive *bool) {
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		if choice.Delta.Content != "" {
 			if *toolCallsActive {
 				*toolCallsActive = false

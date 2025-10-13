@@ -344,14 +344,14 @@ func processTestResponse(t *testing.T, eventChan <-chan *event.Event, streaming 
 		}
 
 		// Handle tool calls
-		if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+		if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 			toolCallsDetected = true
 			continue
 		}
 
 		// Handle content
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 			if streaming {
 				fullContent += choice.Delta.Content
 			} else {
@@ -389,10 +389,10 @@ func isTestToolEvent(event *event.Event) bool {
 	if event.Response == nil {
 		return false
 	}
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		return true
 	}
-	if len(event.Choices) > 0 && event.Choices[0].Message.ToolID != "" {
+	if len(event.Response.Choices) > 0 && event.Response.Choices[0].Message.ToolID != "" {
 		return true
 	}
 

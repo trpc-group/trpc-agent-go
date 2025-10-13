@@ -195,8 +195,8 @@ func (c *llmAgentChat) handleEvent(event *event.Event, fullContent *strings.Buil
 	}
 
 	// Handle content.
-	if len(event.Choices) > 0 {
-		choice := event.Choices[0]
+	if len(event.Response.Choices) > 0 {
+		choice := event.Response.Choices[0]
 		content := c.extractContent(choice)
 
 		if content != "" {

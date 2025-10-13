@@ -22,8 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	irunner "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/runner"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -33,51 +31,12 @@ func TestNewNilRunner(t *testing.T) {
 	assert.EqualError(t, err, "agui: runner must not be nil")
 }
 
-func TestNewWithProvidedService(t *testing.T) {
-	called := false
-	original := DefaultNewService
-	DefaultNewService = func(irunner.Runner, ...service.Option) service.Service {
-		called = true
-		return nil
-	}
-	t.Cleanup(func() { DefaultNewService = original })
-
-	handler := http.NewServeMux()
-	fakeSvc := &stubService{handler: handler}
-	r := &stubRunner{}
-
-	srv, err := New(r, WithService(fakeSvc), WithPath("/custom"))
+func TestDefaultPath(t *testing.T) {
+	agent := &mockAgent{info: agent.Info{Name: "demo"}}
+	r := runner.NewRunner(agent.Info().Name, agent)
+	srv, err := New(r)
 	assert.NoError(t, err)
-	assert.NotNil(t, srv)
-	assert.False(t, called)
-	assert.Same(t, fakeSvc, srv.service)
-	assert.Equal(t, "/custom", srv.path)
-	assert.Same(t, r, srv.runner)
-	assert.Same(t, handler, srv.Handler())
-}
-
-func TestNewCreatesDefaultService(t *testing.T) {
-	original := DefaultNewService
-	var capturedPath string
-	fakeHandler := http.NewServeMux()
-	DefaultNewService = func(_ irunner.Runner, opts ...service.Option) service.Service {
-		var svcOpts service.Options
-		for _, opt := range opts {
-			opt(&svcOpts)
-		}
-		capturedPath = svcOpts.Path
-		return &stubService{handler: fakeHandler}
-	}
-	t.Cleanup(func() { DefaultNewService = original })
-
-	r := &stubRunner{}
-	srv, err := New(r, WithPath("/agui/custom"))
-	assert.NoError(t, err)
-	assert.NotNil(t, srv)
-	assert.Equal(t, "/agui/custom", srv.path)
-	assert.Equal(t, "/agui/custom", capturedPath)
-	assert.Same(t, r, srv.runner)
-	assert.Same(t, fakeHandler, srv.Handler())
+	assert.Equal(t, "/", srv.Path())
 }
 
 func TestEndToEndServerSendsSSEEvents(t *testing.T) {
@@ -85,6 +44,7 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	r := runner.NewRunner(agent.Info().Name, agent)
 	srv, err := New(r, WithPath("/agui"))
 	assert.NoError(t, err)
+	assert.Equal(t, "/agui", srv.Path())
 
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -114,20 +74,6 @@ func TestEndToEndServerSendsSSEEvents(t *testing.T) {
 	assert.Equal(t, "hi there", agent.lastInvocation.Message.Content)
 	assert.Equal(t, model.RoleUser, agent.lastInvocation.Message.Role)
 }
-
-type stubRunner struct{}
-
-func (r *stubRunner) Run(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *event.Event, error) {
-	ch := make(chan *event.Event)
-	close(ch)
-	return ch, nil
-}
-
-type stubService struct {
-	handler http.Handler
-}
-
-func (s *stubService) Handler() http.Handler { return s.handler }
 
 type mockAgent struct {
 	info           agent.Info

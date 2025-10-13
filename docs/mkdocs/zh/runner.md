@@ -50,6 +50,7 @@ import (
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
     "trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,7 +74,7 @@ func main() {
     ctx := context.Background()
     userMessage := model.NewUserMessage("你好！")
 
-    eventChan, err := r.Run(ctx, "user1", "session1", userMessage)
+    eventChan, err := r.Run(ctx, "user1", "session1", userMessage, agent.WithRequestID("request-ID"))
     if err != nil {
         panic(err)
     }
@@ -85,8 +86,8 @@ func main() {
             continue
         }
 
-        if len(event.Choices) > 0 {
-            fmt.Print(event.Choices[0].Delta.Content)
+        if len(event.Response.Choices) > 0 {
+            fmt.Print(event.Response.Choices[0].Delta.Content)
         }
     }
 }
@@ -154,7 +155,7 @@ r := runner.NewRunner("my-app", agent,
 eventChan, err := r.Run(ctx, userID, sessionID, message, options...)
 
 // 带运行选项（当前 RunOptions 为空结构体，留作未来扩展）
-eventChan, err := r.Run(ctx, userID, sessionID, message)
+eventChan, err := r.Run(ctx, userID, sessionID, message, agent.WithRequestID("request-ID"))
 ```
 
 #### 传入对话历史（auto-seed + 复用 Session）
@@ -173,7 +174,7 @@ msgs := []model.Message{
     model.NewUserMessage("新的问题是什么？"),
 }
 
-ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs)
+ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
 示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）
@@ -319,14 +320,14 @@ for event := range eventChan {
     }
 
     // 流式内容
-    if len(event.Choices) > 0 {
-        choice := event.Choices[0]
+    if len(event.Response.Choices) > 0 {
+        choice := event.Response.Choices[0]
         fmt.Print(choice.Delta.Content)
     }
 
     // 工具调用
-    if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
-        for _, toolCall := range event.Choices[0].Message.ToolCalls {
+    if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
+        for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
             fmt.Printf("调用工具: %s\n", toolCall.Function.Name)
         }
     }
@@ -356,9 +357,9 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // 处理工具调用
-        if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+        if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
             fmt.Println("🔧 工具调用:")
-            for _, toolCall := range event.Choices[0].Message.ToolCalls {
+            for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
                 fmt.Printf("  • %s (ID: %s)\n",
                     toolCall.Function.Name, toolCall.ID)
                 fmt.Printf("    参数: %s\n",
@@ -377,8 +378,8 @@ func processEvents(eventChan <-chan *event.Event) error {
         }
 
         // 处理流式内容
-        if len(event.Choices) > 0 {
-            content := event.Choices[0].Delta.Content
+        if len(event.Response.Choices) > 0 {
+            content := event.Response.Choices[0].Delta.Content
             if content != "" {
                 fmt.Print(content)
                 fullResponse.WriteString(content)
