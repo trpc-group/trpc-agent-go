@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -462,7 +463,9 @@ func WithLLMToolSets(toolSets []tool.ToolSet) LLMNodeFuncOption {
 			runner.tools = make(map[string]tool.Tool)
 		}
 		for _, toolSet := range toolSets {
-			for _, t := range toolSet.Tools(context.Background()) {
+			// Create named toolset wrapper to avoid name conflicts
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			for _, t := range namedToolSet.Tools(context.Background()) {
 				runner.tools[t.Declaration().Name] = t
 			}
 		}
@@ -835,7 +838,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		tools = make(map[string]tool.Tool)
 	}
 	for _, toolSet := range node.toolSets {
-		for _, t := range toolSet.Tools(context.Background()) {
+		// Create named toolset wrapper to avoid name conflicts
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		for _, t := range namedToolSet.Tools(context.Background()) {
 			tools[t.Declaration().Name] = t
 		}
 	}

@@ -70,7 +70,7 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 		names = append(names, t.Declaration().Name)
 	}
 	require.Contains(t, names, "direct")
-	require.Contains(t, names, "set-tool")
+	require.Contains(t, names, "mock_set-tool") // Tool name is now namespaced with toolset name
 	// Knowledge search tool name is "knowledge_search" per implementation.
 	require.Contains(t, names, "knowledge_search")
 }
@@ -186,7 +186,7 @@ func TestLLMAgent_WithToolSet(t *testing.T) {
 	tools := agt.Tools()
 	var found bool
 	for _, tl := range tools {
-		if tl.Declaration().Name == "foo" {
+		if tl.Declaration().Name == "mock_foo" { // Tool name is now namespaced with toolset name
 			found = true
 			break
 		}

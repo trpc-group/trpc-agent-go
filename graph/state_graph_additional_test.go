@@ -77,7 +77,7 @@ func TestAddLLMNode_ToolSetInjection_And_ModelEventInput(t *testing.T) {
 
 	// Verify model received tools injected from ToolSet
 	require.NotNil(t, cm.lastReq)
-	require.Contains(t, cm.lastReq.Tools, "echo")
+	require.Contains(t, cm.lastReq.Tools, "simple_echo") // Tool name is now namespaced with toolset name
 
 	// Drain available events and verify model start/complete include input built from instruction+user_input
 	var modelInputs []string
