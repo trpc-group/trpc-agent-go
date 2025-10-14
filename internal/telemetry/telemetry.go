@@ -276,8 +276,8 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
 	}
 }
 
-// TraceCallLLM traces the invocation of an LLM call.
-func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
+// TraceChat traces the invocation of an LLM call.
+func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationChat),
@@ -309,12 +309,18 @@ func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request,
 		span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
 	}
 
-	if bts, err := json.Marshal(rsp); err == nil {
-		span.SetAttributes(
-			attribute.String(KeyLLMResponse, string(bts)),
-		)
-	} else {
-		span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
+	if rsp != nil {
+		if e := rsp.Error; e != nil {
+			span.SetStatus(codes.Error, e.Message)
+			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		}
+		if bts, err := json.Marshal(rsp); err == nil {
+			span.SetAttributes(
+				attribute.String(KeyLLMResponse, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(KeyLLMResponse, "<not json serializable>"))
+		}
 	}
 }
 

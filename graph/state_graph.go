@@ -795,7 +795,7 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) error
 		}
 
 		// Trace the LLM call using the telemetry package.
-		itelemetry.TraceCallLLM(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
+		itelemetry.TraceChat(config.Span, invocation, config.Request, config.Response, llmEvent.ID)
 		if err := agent.EmitEvent(ctx, invocation, config.EventChan, llmEvent); err != nil {
 			return err
 		}

@@ -219,7 +219,7 @@ func (f *Flow) processStreamingResponses(
 			return lastEvent, err
 		}
 
-		itelemetry.TraceCallLLM(span, invocation, llmRequest, response, llmResponseEvent.ID)
+		itelemetry.TraceChat(span, invocation, llmRequest, response, llmResponseEvent.ID)
 	}
 
 	return lastEvent, nil
