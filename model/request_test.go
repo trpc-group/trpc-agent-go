@@ -10,7 +10,11 @@
 package model
 
 import (
+	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRole_String(t *testing.T) {
@@ -299,4 +303,140 @@ func intPtr(i int) *int {
 
 func floatPtr(f float64) *float64 {
 	return &f
+}
+
+func TestFunctionDefinitionParam_MarshalJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		param    FunctionDefinitionParam
+		expected string
+	}{
+		{
+			name: "empty arguments",
+			param: FunctionDefinitionParam{
+				Name:        "test_function",
+				Description: "A test function",
+				Arguments:   []byte{},
+			},
+			expected: `{"name":"test_function","description":"A test function"}`,
+		},
+		{
+			name: "with arguments",
+			param: FunctionDefinitionParam{
+				Name:        "test_function",
+				Description: "A test function",
+				Arguments:   []byte(`{"param1": "value1", "param2": 42}`),
+			},
+			expected: `{"arguments":"{\"param1\": \"value1\", \"param2\": 42}","name":"test_function","description":"A test function"}`,
+		},
+		{
+			name: "with strict flag",
+			param: FunctionDefinitionParam{
+				Name:        "strict_function",
+				Description: "A strict function",
+				Strict:      true,
+				Arguments:   []byte(`{"param": "value"}`),
+			},
+			expected: `{"arguments":"{\"param\": \"value\"}","name":"strict_function","description":"A strict function","strict":true}`,
+		},
+		{
+			name: "complex arguments",
+			param: FunctionDefinitionParam{
+				Name:        "complex_function",
+				Description: "A complex function",
+				Arguments:   []byte(`{"nested": {"key": "value"}, "array": [1, 2, 3], "boolean": true}`),
+			},
+			expected: `{"arguments":"{\"nested\": {\"key\": \"value\"}, \"array\": [1, 2, 3], \"boolean\": true}","name":"complex_function","description":"A complex function"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test marshaling
+			jsonData, err := json.Marshal(tt.param)
+			require.NoError(t, err)
+
+			// Parse the result to check structure
+			var result map[string]interface{}
+			err = json.Unmarshal(jsonData, &result)
+			require.NoError(t, err)
+
+			// Check that Arguments field is a string (not base64 encoded)
+			if len(tt.param.Arguments) > 0 {
+				arguments, exists := result["arguments"]
+				require.True(t, exists, "Arguments field should exist")
+				require.IsType(t, "", arguments, "Arguments should be a string, not base64 encoded")
+
+				// Verify the string content is readable JSON
+				argumentsStr := arguments.(string)
+				assert.Equal(t, string(tt.param.Arguments), argumentsStr, "Arguments should be readable JSON string")
+			}
+
+			// Check other fields
+			assert.Equal(t, tt.param.Name, result["name"])
+			assert.Equal(t, tt.param.Description, result["description"])
+			if tt.param.Strict {
+				assert.Equal(t, tt.param.Strict, result["strict"])
+			}
+		})
+	}
+}
+
+func TestFunctionDefinitionParam_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
+		expected FunctionDefinitionParam
+	}{
+		{
+			name:     "empty arguments",
+			jsonData: `{"name":"test_function","description":"A test function"}`,
+			expected: FunctionDefinitionParam{
+				Name:        "test_function",
+				Description: "A test function",
+				Arguments:   []byte{},
+			},
+		},
+		{
+			name:     "with arguments",
+			jsonData: `{"arguments":"{\"param1\": \"value1\", \"param2\": 42}","name":"test_function","description":"A test function"}`,
+			expected: FunctionDefinitionParam{
+				Name:        "test_function",
+				Description: "A test function",
+				Arguments:   []byte(`{"param1": "value1", "param2": 42}`),
+			},
+		},
+		{
+			name:     "with strict flag",
+			jsonData: `{"arguments":"{\"param\": \"value\"}","name":"strict_function","description":"A strict function","strict":true}`,
+			expected: FunctionDefinitionParam{
+				Name:        "strict_function",
+				Description: "A strict function",
+				Strict:      true,
+				Arguments:   []byte(`{"param": "value"}`),
+			},
+		},
+		{
+			name:     "complex arguments",
+			jsonData: `{"arguments":"{\"nested\": {\"key\": \"value\"}, \"array\": [1, 2, 3], \"boolean\": true}","name":"complex_function","description":"A complex function"}`,
+			expected: FunctionDefinitionParam{
+				Name:        "complex_function",
+				Description: "A complex function",
+				Arguments:   []byte(`{"nested": {"key": "value"}, "array": [1, 2, 3], "boolean": true}`),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result FunctionDefinitionParam
+			err := json.Unmarshal([]byte(tt.jsonData), &result)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expected.Name, result.Name)
+			assert.Equal(t, tt.expected.Description, result.Description)
+			assert.Equal(t, tt.expected.Strict, result.Strict)
+			assert.Equal(t, tt.expected.Arguments, result.Arguments)
+		})
+	}
 }
