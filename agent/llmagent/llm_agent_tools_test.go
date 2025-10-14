@@ -27,7 +27,9 @@ func (m *minimalKnowledge) Search(_ context.Context, _ *knowledge.SearchRequest)
 }
 
 // dummyToolSet returns a fixed tool for coverage.
-type dummyToolSet struct{}
+type dummyToolSet struct {
+	name string
+}
 
 func (d dummyToolSet) Tools(ctx context.Context) []tool.Tool {
 	// Wrap the tool to a CallableTool by asserting to the known concrete type.
@@ -39,6 +41,7 @@ func (d dummyToolSet) Tools(ctx context.Context) []tool.Tool {
 	return nil
 }
 func (d dummyToolSet) Close() error { return nil }
+func (d dummyToolSet) Name() string { return d.name }
 
 // dummyTool implements tool.Tool.
 type dummyTool struct{ decl *tool.Declaration }
@@ -48,7 +51,7 @@ func (d dummyTool) Declaration() *tool.Declaration                { return d.dec
 
 func TestRegisterTools_Combinations(t *testing.T) {
 	base := []tool.Tool{dummyTool{decl: &tool.Declaration{Name: "a"}}}
-	sets := []tool.ToolSet{dummyToolSet{}}
+	sets := []tool.ToolSet{dummyToolSet{name: "dummy"}}
 	kb := &minimalKnowledge{}
 
 	// with tools, toolset and knowledge and nil memory.

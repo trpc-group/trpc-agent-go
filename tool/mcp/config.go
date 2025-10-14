@@ -90,6 +90,7 @@ type toolSetConfig struct {
 	toolFilter             ToolFilter
 	mcpOptions             []mcp.ClientOption      // MCP client options.
 	sessionReconnectConfig *SessionReconnectConfig // Session reconnection configuration.
+	name                   string                  // ToolSet name for identification and conflict resolution.
 }
 
 // ToolSetOption is a function type for configuring ToolSet.
@@ -144,6 +145,15 @@ func WithSessionReconnectConfig(config SessionReconnectConfig) ToolSetOption {
 			config.MaxReconnectAttempts = maxReconnectAttemptsLimit
 		}
 		c.sessionReconnectConfig = &config
+	}
+}
+
+// WithName sets the name of the MCP toolset for identification and conflict resolution.
+// This name will be used when implementing tool name prefixing to avoid conflicts
+// between tools from different toolsets.
+func WithName(name string) ToolSetOption {
+	return func(c *toolSetConfig) {
+		c.name = name
 	}
 }
 
