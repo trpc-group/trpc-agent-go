@@ -165,7 +165,7 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	)
 }
 
-const ToolNameMergedTolls = "(merged tools)"
+const ToolNameMergedTools = "(merged tools)"
 
 // TraceMergedToolCalls traces the invocation of a merged tool call.
 // Calling this function is not needed for telemetry purposes. This is provided
@@ -174,7 +174,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-		attribute.String(KeyGenAIToolName, ToolNameMergedTolls),
+		attribute.String(KeyGenAIToolName, ToolNameMergedTools),
 		attribute.String(KeyGenAIToolDescription, "(merged tools)"),
 		attribute.String(KeyGenAIToolCallArguments, "N/A"),
 	)
