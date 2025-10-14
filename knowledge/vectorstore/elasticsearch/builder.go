@@ -57,14 +57,12 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		filterQuery, err := vs.buildFilterQuery(query.Filter)
-		if err != nil {
-			return nil, err
-		}
-		if filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -86,14 +84,12 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		filterQuery, err := vs.buildFilterQuery(query.Filter)
-		if err != nil {
-			return nil, err
-		}
-		if filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -137,14 +133,12 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		filterQuery, err := vs.buildFilterQuery(query.Filter)
-		if err != nil {
-			return nil, err
-		}
-		if filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -152,6 +146,9 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 
 // buildFilterQuery builds a filter query for search results.
 func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types.QueryVariant, error) {
+	if filter == nil {
+		return nil, nil
+	}
 	var filters []*searchfilter.UniversalFilterCondition
 	if filter.FilterCondition != nil {
 		filters = append(filters, filter.FilterCondition)
