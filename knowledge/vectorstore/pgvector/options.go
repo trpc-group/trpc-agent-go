@@ -30,7 +30,7 @@ func defaultDocBuilder(row pgx.Row) (*vectorstore.ScoredDocument, []float64, err
 	var createdAt, updatedAt int64
 	var score float64
 
-	if err := row.Scan(&id, &name, &content, &metadataJSON, &createdAt, &updatedAt, &vector, &score); err != nil {
+	if err := row.Scan(&id, &name, &content, &vector, &metadataJSON, &createdAt, &updatedAt, &score); err != nil {
 		return nil, nil, err
 	}
 	metadata, err := jsonToMap(metadataJSON)
