@@ -169,8 +169,7 @@ func (f *Flow) runOneStep(
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
-
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
+	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
