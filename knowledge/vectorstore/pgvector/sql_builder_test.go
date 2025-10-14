@@ -720,3 +720,21 @@ func (suite *SQLBuilderTestSuite) TestDeleteSQLBuilder_Integration() {
 	require.NoError(suite.T(), err)
 	assert.Equal(suite.T(), 0, finalCount)
 }
+
+func Test_buildUpsertSQL(t *testing.T) {
+	o := defaultOptions
+	o.table = "test_table"
+
+	sql := `
+		INSERT INTO test_table (id, name, content, embedding, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			content = EXCLUDED.content,
+			embedding = EXCLUDED.embedding,
+			metadata = EXCLUDED.metadata,
+			updated_at = EXCLUDED.updated_at`
+
+	upsertSQL := buildUpsertSQL(o)
+	assert.Equal(t, sql, upsertSQL)
+}
