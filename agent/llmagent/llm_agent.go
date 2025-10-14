@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -564,10 +565,12 @@ func registerTools(options *Options) []tool.Tool {
 	allTools := make([]tool.Tool, 0, len(options.Tools))
 	allTools = append(allTools, options.Tools...)
 
-	// Add tools from each toolset.
+	// Add tools from each toolset with automatic namespacing.
 	ctx := context.Background()
 	for _, toolSet := range options.ToolSets {
-		setTools := toolSet.Tools(ctx)
+		// Create named toolset wrapper to avoid name conflicts
+		namedToolSet := itool.NewNamedToolSet(toolSet)
+		setTools := namedToolSet.Tools(ctx)
 		for _, t := range setTools {
 			allTools = append(allTools, t)
 		}

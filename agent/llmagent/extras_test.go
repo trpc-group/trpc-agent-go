@@ -34,10 +34,14 @@ func (m *mockTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 }
 
 // mockToolSet returns a static slice of tools.
-type mockToolSet struct{ tools []tool.Tool }
+type mockToolSet struct {
+	tools []tool.Tool
+	name  string
+}
 
 func (s *mockToolSet) Tools(context.Context) []tool.Tool { return s.tools }
 func (s *mockToolSet) Close() error                      { return nil }
+func (s *mockToolSet) Name() string                      { return s.name }
 
 // fakeKnowledge implements a minimal Knowledge interface.
 // It is only used to verify that the knowledge search tool is appended.
@@ -52,7 +56,7 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 	direct := []tool.Tool{&mockTool{name: "direct"}}
 
 	setTool := &mockTool{name: "set-tool"}
-	ts := &mockToolSet{tools: []tool.Tool{setTool}}
+	ts := &mockToolSet{tools: []tool.Tool{setTool}, name: "mock"}
 
 	kb := &fakeKnowledge{}
 
@@ -66,7 +70,7 @@ func TestRegisterTools_AddsToolSet(t *testing.T) {
 		names = append(names, t.Declaration().Name)
 	}
 	require.Contains(t, names, "direct")
-	require.Contains(t, names, "set-tool")
+	require.Contains(t, names, "mock_set-tool") // Tool name is now namespaced with toolset name
 	// Knowledge search tool name is "knowledge_search" per implementation.
 	require.Contains(t, names, "knowledge_search")
 }
@@ -172,7 +176,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 
 func TestLLMAgent_WithToolSet(t *testing.T) {
 	ct := &mockTool{name: "foo"}
-	ts := &mockToolSet{tools: []tool.Tool{ct}}
+	ts := &mockToolSet{tools: []tool.Tool{ct}, name: "mock"}
 
 	agt := New("toolset-agent",
 		WithModel(newDummyModel()),
@@ -182,7 +186,7 @@ func TestLLMAgent_WithToolSet(t *testing.T) {
 	tools := agt.Tools()
 	var found bool
 	for _, tl := range tools {
-		if tl.Declaration().Name == "foo" {
+		if tl.Declaration().Name == "mock_foo" { // Tool name is now namespaced with toolset name
 			found = true
 			break
 		}

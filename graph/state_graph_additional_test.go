@@ -45,19 +45,22 @@ func (e *echoTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 }
 
 // simpleToolSet returns a fixed set of tools.
-type simpleToolSet struct{}
+type simpleToolSet struct {
+	name string
+}
 
 func (s *simpleToolSet) Tools(ctx context.Context) []tool.Tool {
 	return []tool.Tool{&echoTool{name: "echo"}}
 }
 func (s *simpleToolSet) Close() error { return nil }
+func (s *simpleToolSet) Name() string { return s.name }
 
 func TestAddLLMNode_ToolSetInjection_And_ModelEventInput(t *testing.T) {
 	schema := MessagesStateSchema()
 	cm := &captureModel{}
 	sg := NewStateGraph(schema)
 	// Inject toolset via node options
-	sg.AddLLMNode("llm", cm, "inst", nil, WithToolSets([]tool.ToolSet{&simpleToolSet{}}))
+	sg.AddLLMNode("llm", cm, "inst", nil, WithToolSets([]tool.ToolSet{&simpleToolSet{"simple"}}))
 	// Ensure node type is LLM
 	n, ok := sg.graph.nodes["llm"]
 	require.True(t, ok)
@@ -74,7 +77,7 @@ func TestAddLLMNode_ToolSetInjection_And_ModelEventInput(t *testing.T) {
 
 	// Verify model received tools injected from ToolSet
 	require.NotNil(t, cm.lastReq)
-	require.Contains(t, cm.lastReq.Tools, "echo")
+	require.Contains(t, cm.lastReq.Tools, "simple_echo") // Tool name is now namespaced with toolset name
 
 	// Drain available events and verify model start/complete include input built from instruction+user_input
 	var modelInputs []string
