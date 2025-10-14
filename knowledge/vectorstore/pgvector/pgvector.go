@@ -494,7 +494,7 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 }
 
 func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
-	dsb := newDeleteSQLBuilder(vs.option.table)
+	dsb := newDeleteSQLBuilder(vs.option)
 
 	if len(config.DocumentIDs) > 0 {
 		dsb.addIDFilter(config.DocumentIDs)
@@ -522,7 +522,7 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 	config := vectorstore.ApplyCountOptions(opts...)
 
 	// Create a count query builder
-	cqb := newCountQueryBuilder(vs.option.table)
+	cqb := newCountQueryBuilder(vs.option)
 
 	// Add metadata filter if provided
 	if len(config.Filter) > 0 {
@@ -589,7 +589,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	filters map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	// Create a metadata query builder
-	qb := newMetadataQueryBuilder(vs.option.table)
+	qb := newMetadataQueryBuilder(vs.option)
 
 	// Add ID filter if provided
 	if len(docIDs) > 0 {
@@ -612,18 +612,16 @@ func (vs *VectorStore) queryMetadataBatch(
 
 	result := make(map[string]vectorstore.DocumentMetadata)
 	for rows.Next() {
-		var docID string
-		var metadataJSON string
-
-		err := rows.Scan(&docID, &metadataJSON)
+		scoredDoc, _, err := vs.option.docBuilder(rows)
 		if err != nil {
-			return nil, fmt.Errorf("pgvector scan metadata: %w", err)
+			return nil, fmt.Errorf("pgvector get metadata batch: %w", err)
+		}
+		if scoredDoc == nil || scoredDoc.Document == nil {
+			continue
 		}
 
-		metadata, err := jsonToMap(metadataJSON)
-		if err != nil {
-			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
-		}
+		docID := scoredDoc.Document.ID
+		metadata := scoredDoc.Document.Metadata
 
 		result[docID] = vectorstore.DocumentMetadata{
 			Metadata: metadata,

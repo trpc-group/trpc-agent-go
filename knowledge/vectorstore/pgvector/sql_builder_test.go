@@ -470,11 +470,13 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 }
 
 func TestMetadataQueryBuilder_Basic(t *testing.T) {
-	mqb := newMetadataQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	mqb := newMetadataQueryBuilder(o)
 
 	sql, args := mqb.buildWithPagination(10, 0)
 
-	assert.Contains(t, sql, "SELECT id, metadata")
+	assert.Contains(t, sql, "SELECT *, 0.0 as score")
 	assert.Contains(t, sql, "FROM test_table")
 	assert.Contains(t, sql, "WHERE 1=1")
 	assert.Contains(t, sql, "ORDER BY created_at")
@@ -483,7 +485,9 @@ func TestMetadataQueryBuilder_Basic(t *testing.T) {
 }
 
 func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
-	mqb := newMetadataQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	mqb := newMetadataQueryBuilder(o)
 	mqb.addIDFilter([]string{"id1", "id2", "id3"})
 
 	sql, args := mqb.buildWithPagination(10, 0)
@@ -493,7 +497,9 @@ func TestMetadataQueryBuilder_WithIDFilter(t *testing.T) {
 }
 
 func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
-	mqb := newMetadataQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	mqb := newMetadataQueryBuilder(o)
 	filter := map[string]any{
 		"category": "test",
 		"status":   "active",
@@ -509,7 +515,9 @@ func TestMetadataQueryBuilder_WithMetadataFilter(t *testing.T) {
 }
 
 func TestMetadataQueryBuilder_WithBothFilters(t *testing.T) {
-	mqb := newMetadataQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	mqb := newMetadataQueryBuilder(o)
 	mqb.addIDFilter([]string{"id1", "id2"})
 	filter := map[string]any{
 		"category": "test",
@@ -529,7 +537,9 @@ func TestMetadataQueryBuilder_WithBothFilters(t *testing.T) {
 }
 
 func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
-	mqb := newMetadataQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	mqb := newMetadataQueryBuilder(o)
 
 	// Test with empty ID filter
 	mqb.addIDFilter([]string{})
@@ -546,7 +556,9 @@ func TestMetadataQueryBuilder_EmptyFilters(t *testing.T) {
 
 // TestCountQueryBuilder_Basic tests basic count query building
 func TestCountQueryBuilder_Basic(t *testing.T) {
-	cqb := newCountQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	cqb := newCountQueryBuilder(o)
 
 	sql, args := cqb.build()
 
@@ -556,7 +568,9 @@ func TestCountQueryBuilder_Basic(t *testing.T) {
 
 // TestCountQueryBuilder_WithMetadataFilter tests count query with metadata filter
 func TestCountQueryBuilder_WithMetadataFilter(t *testing.T) {
-	cqb := newCountQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	cqb := newCountQueryBuilder(o)
 
 	filter := map[string]any{
 		"category": "science",
@@ -580,7 +594,9 @@ func TestCountQueryBuilder_WithMetadataFilter(t *testing.T) {
 
 // TestCountQueryBuilder_EmptyFilter tests count query with empty filter
 func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
-	cqb := newCountQueryBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	cqb := newCountQueryBuilder(o)
 
 	// Add empty filter (should be ignored)
 	cqb.addMetadataFilter(map[string]any{})
@@ -593,7 +609,9 @@ func TestCountQueryBuilder_EmptyFilter(t *testing.T) {
 
 // TestDeleteSQLBuilder_Basic tests basic delete query building
 func TestDeleteSQLBuilder_Basic(t *testing.T) {
-	dsb := newDeleteSQLBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 
 	sql, args := dsb.build()
 
@@ -603,7 +621,9 @@ func TestDeleteSQLBuilder_Basic(t *testing.T) {
 
 // TestDeleteSQLBuilder_WithIDFilter tests delete query with ID filter
 func TestDeleteSQLBuilder_WithIDFilter(t *testing.T) {
-	dsb := newDeleteSQLBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 	dsb.addIDFilter([]string{"doc1", "doc2", "doc3"})
 
 	sql, args := dsb.build()
@@ -614,7 +634,9 @@ func TestDeleteSQLBuilder_WithIDFilter(t *testing.T) {
 
 // TestDeleteSQLBuilder_WithMetadataFilter tests delete query with metadata filter
 func TestDeleteSQLBuilder_WithMetadataFilter(t *testing.T) {
-	dsb := newDeleteSQLBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 
 	filter := map[string]any{
 		"category": "test",
@@ -638,7 +660,9 @@ func TestDeleteSQLBuilder_WithMetadataFilter(t *testing.T) {
 
 // TestDeleteSQLBuilder_WithBothFilters tests delete query with both ID and metadata filters
 func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
-	dsb := newDeleteSQLBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 	dsb.addIDFilter([]string{"doc1", "doc2"})
 
 	filter := map[string]any{
@@ -654,7 +678,9 @@ func TestDeleteSQLBuilder_WithBothFilters(t *testing.T) {
 
 // TestDeleteSQLBuilder_EmptyFilters tests delete query with empty filters
 func TestDeleteSQLBuilder_EmptyFilters(t *testing.T) {
-	dsb := newDeleteSQLBuilder("test_table")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 
 	// Test with empty ID filter
 	dsb.addIDFilter([]string{})
@@ -677,7 +703,9 @@ func (suite *SQLBuilderTestSuite) TestDeleteSQLBuilder_Integration() {
 	assert.Greater(suite.T(), initialCount, 0)
 
 	// Build delete query
-	dsb := newDeleteSQLBuilder("test_documents")
+	o := defaultOptions
+	o.table = "test_table"
+	dsb := newDeleteSQLBuilder(o)
 	dsb.addIDFilter([]string{"doc1", "doc2"})
 
 	sql, args := dsb.build()
