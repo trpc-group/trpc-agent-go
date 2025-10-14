@@ -40,7 +40,8 @@ type SearchRequest struct {
 	// SessionID can help with session-specific context.
 	SessionID string
 
-	// MaxResults limits the number of results returned (optional).
+	// MaxResults limits the maximum number of results returned by a vector store,
+	// and the final number of results will be limited by Rerank (optional).
 	MaxResults int
 
 	// MinScore sets minimum relevance score threshold (optional).
@@ -57,12 +58,21 @@ type ConversationMessage = query.ConversationMessage
 type SearchResult struct {
 	// Document is the best matching document.
 	Document *document.Document
-
 	// Score is the relevance score (0.0 to 1.0).
 	Score float64
-
 	// Text is the document content for agent context.
 	Text string
+
+	// Documents is the top N documents
+	Documents []*Result
+}
+
+// Result represents the result of a knowledge search.
+type Result struct {
+	// Document is the best matching document.
+	Document *document.Document
+	// Score is the relevance score (0.0 to 1.0).
+	Score float64
 }
 
 // SearchFilter represents filtering criteria for vector search.

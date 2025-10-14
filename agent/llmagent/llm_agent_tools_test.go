@@ -29,12 +29,12 @@ func (m *minimalKnowledge) Search(_ context.Context, _ *knowledge.SearchRequest)
 // dummyToolSet returns a fixed tool for coverage.
 type dummyToolSet struct{}
 
-func (d dummyToolSet) Tools(ctx context.Context) []tool.CallableTool {
+func (d dummyToolSet) Tools(ctx context.Context) []tool.Tool {
 	// Wrap the tool to a CallableTool by asserting to the known concrete type.
 	kt := knowledgetool.NewKnowledgeSearchTool(&minimalKnowledge{}, nil)
 	type callable interface{ tool.CallableTool }
 	if c, ok := any(kt).(callable); ok {
-		return []tool.CallableTool{c}
+		return []tool.Tool{c}
 	}
 	return nil
 }
