@@ -58,8 +58,8 @@ func (c *esConverter) convertCondition(cond *searchfilter.UniversalFilterConditi
 	}
 }
 
-func (c *esConverter) buildLogicalCondition(filter *searchfilter.UniversalFilterCondition) (*types.Query, error) {
-	conditions, ok := filter.Value.([]*searchfilter.UniversalFilterCondition)
+func (c *esConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+	conditions, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
 		return nil, fmt.Errorf("bool operator requires an array of conditions")
 	}
@@ -75,7 +75,7 @@ func (c *esConverter) buildLogicalCondition(filter *searchfilter.UniversalFilter
 		}
 	}
 
-	if filter.Operator == searchfilter.OperatorAnd {
+	if cond.Operator == searchfilter.OperatorAnd {
 		return &types.Query{
 			Bool: &types.BoolQuery{
 				Must: queries,
@@ -108,24 +108,24 @@ func (c *esConverter) buildComparisonCondition(cond *searchfilter.UniversalFilte
 	}
 }
 
-func (c *esConverter) convertEqual(filter *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+func (c *esConverter) convertEqual(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	return &types.Query{
 		Term: map[string]types.TermQuery{
-			filter.Field: {
-				Value: filter.Value,
+			cond.Field: {
+				Value: cond.Value,
 			},
 		},
 	}, nil
 }
 
-func (c *esConverter) convertNotEqual(filter *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
+func (c *esConverter) convertNotEqual(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	return &types.Query{
 		Bool: &types.BoolQuery{
 			MustNot: []types.Query{
 				{
 					Term: map[string]types.TermQuery{
-						filter.Field: {
-							Value: filter.Value,
+						cond.Field: {
+							Value: cond.Value,
 						},
 					},
 				},
@@ -193,7 +193,7 @@ func (c *esConverter) buildInCondition(cond *searchfilter.UniversalFilterConditi
 	return &termsQuery, nil
 }
 
-func (c *esConverter) convertWildcard(cond *searchfilter.UniversalFilterCondition) (*types.Query, error) {
+func (c *esConverter) convertWildcard(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	if cond.Field == "" {
 		return nil, fmt.Errorf("field is empty")
 	}
