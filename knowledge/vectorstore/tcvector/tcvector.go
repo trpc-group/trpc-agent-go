@@ -20,6 +20,7 @@ import (
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	tcdocument "github.com/tencent/vectordatabase-sdk-go/tcvectordb/api/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/tcvector"
@@ -54,9 +55,10 @@ const (
 
 // VectorStore is the vector store for tcvectordb.
 type VectorStore struct {
-	client        storage.ClientInterface
-	option        options
-	sparseEncoder encoder.SparseEncoder
+	client          storage.ClientInterface
+	option          options
+	sparseEncoder   encoder.SparseEncoder
+	filterConverter searchfilter.Converter[*tcvectordb.Filter]
 }
 
 // New creates a new tcvectordb vector store.
@@ -110,7 +112,12 @@ func New(opts ...Option) (*VectorStore, error) {
 		}
 	}
 
-	return &VectorStore{client: c, option: option, sparseEncoder: sparseEncoder}, nil
+	return &VectorStore{
+		client:          c,
+		option:          option,
+		sparseEncoder:   sparseEncoder,
+		filterConverter: &tcVectorConverter{},
+	}, nil
 }
 
 func initVectorDB(client storage.ClientInterface, options options) error {
@@ -435,9 +442,10 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 	if len(query.Vector) != int(vs.option.indexDimension) {
 		return nil, fmt.Errorf("tcvectordb vector dimension mismatch, expected: %d, got: %d", vs.option.indexDimension, len(query.Vector))
 	}
-	var cond *tcvectordb.Filter
-	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
 	}
 
 	queryParams := tcvectordb.SearchDocumentParams{
@@ -472,9 +480,9 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 	if query.Query == "" {
 		return nil, errors.New("tcvectordb keyword is required for keyword search")
 	}
-	var cond *tcvectordb.Filter
-	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
 	}
 
 	querySparseVector, err := vs.sparseEncoder.EncodeQueries([]string{query.Query})
@@ -518,9 +526,9 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		textWeight = 0.0
 	}
 
-	var cond *tcvectordb.Filter
-	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
 	}
 
 	// Encode the query text using BM25 for sparse vector.
@@ -573,8 +581,9 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		return &vectorstore.SearchResult{Results: make([]*vectorstore.ScoredDocument, 0)}, nil
 	}
 	var cond *tcvectordb.Filter
-	if query.Filter != nil {
-		cond = getCondFromQuery(query.Filter.IDs, query.Filter.Metadata)
+	cond, err := vs.getCondFromQuery(query.Filter)
+	if err != nil {
+		return nil, err
 	}
 	queryParams := tcvectordb.QueryDocumentParams{
 		Filter:         cond,
@@ -628,12 +637,13 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 }
 
 func (vs *VectorStore) deleteByFilter(ctx context.Context, options *vectorstore.DeleteConfig) error {
+	cond, err := vs.getCondFromQuery(&vectorstore.SearchFilter{Metadata: options.Filter})
+	if err != nil {
+		return fmt.Errorf("tcvectordb delete documents by filter: %w", err)
+	}
 	deleteParams := tcvectordb.DeleteDocumentParams{
 		DocumentIds: options.DocumentIDs,
-	}
-
-	if len(options.Filter) > 0 {
-		deleteParams.Filter = getCondFromQuery([]string{}, options.Filter)
+		Filter:      cond,
 	}
 
 	if _, err := vs.client.Delete(ctx, vs.option.database, vs.option.collection, deleteParams); err != nil {
@@ -645,12 +655,12 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, options *vectorstore.
 // Count counts the number of documents in the vector store.
 func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOption) (int, error) {
 	options := vectorstore.ApplyCountOptions(opts...)
-	filter := options.Filter
-
-	countParams := tcvectordb.CountDocumentParams{}
-	if filter != nil {
-		tcFilter := getCondFromQuery([]string{}, filter)
-		countParams.CountFilter = tcFilter
+	cond, err := vs.getCondFromQuery(&vectorstore.SearchFilter{Metadata: options.Filter})
+	if err != nil {
+		return 0, fmt.Errorf("tcvectordb count documents: %w", err)
+	}
+	countParams := tcvectordb.CountDocumentParams{
+		CountFilter: cond,
 	}
 
 	countResult, err := vs.client.Count(ctx, vs.option.database, vs.option.collection, countParams)
@@ -708,10 +718,14 @@ func (vs *VectorStore) queryMetadataBatch(
 	ids []string,
 	filter map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
+	cond, err := vs.getCondFromQuery(&vectorstore.SearchFilter{IDs: ids, Metadata: filter})
+	if err != nil {
+		return nil, fmt.Errorf("tcvectordb get metadata batch: %w", err)
+	}
 	QueryDocumentParams := tcvectordb.QueryDocumentParams{
 		Offset:       int64(offset),
 		Limit:        int64(limit),
-		Filter:       getCondFromQuery(ids, filter),
+		Filter:       cond,
 		OutputFields: []string{fieldMetadata, fieldID},
 		Sort: []tcdocument.SortRule{
 			{
@@ -831,16 +845,40 @@ func covertToVector32(embedding []float64) []float32 {
 }
 
 // getCondFromQuery converts filter to tcvectordb filter.
-func getCondFromQuery(ids []string, filter map[string]any) *tcvectordb.Filter {
-	if filter == nil && len(ids) == 0 {
-		return nil
+func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) (*tcvectordb.Filter, error) {
+	if searchFilter == nil {
+		return nil, nil
 	}
-	cond := tcvectordb.NewFilter("")
-	for k, v := range filter {
-		cond.And(fmt.Sprintf(`%s = "%v"`, k, v))
+	var filters []*searchfilter.UniversalFilterCondition
+	for k, v := range searchFilter.Metadata {
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorEqual,
+			Field:    fmt.Sprintf("%s.%s", fieldMetadata, k),
+			Value:    v,
+		})
 	}
-	if len(ids) > 0 {
-		cond.And(tcvectordb.In(fieldID, ids))
+	if len(searchFilter.IDs) > 0 {
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorIn,
+			Field:    fieldID,
+			Value:    searchFilter.IDs,
+		})
 	}
-	return cond
+	if searchFilter.FilterCondition != nil {
+		filters = append(filters, searchFilter.FilterCondition)
+	}
+
+	if len(filters) == 0 {
+		return nil, nil
+	}
+
+	cond, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    filters,
+	})
+	if err != nil {
+		log.Warnf("tcvectordb build filter query failed: %v", err)
+		return nil, err
+	}
+	return cond, nil
 }
