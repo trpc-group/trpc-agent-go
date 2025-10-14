@@ -20,6 +20,7 @@ import (
 type Options struct {
 	TranslatorFactory TranslatorFactory
 	UserIDResolver    UserIDResolver
+	Callbacks         *Callbacks
 }
 
 // NewOptions creates a new options instance.
@@ -54,6 +55,13 @@ type TranslatorFactory func(input *adapter.RunAgentInput) translator.Translator
 func WithTranslatorFactory(factory TranslatorFactory) Option {
 	return func(o *Options) {
 		o.TranslatorFactory = factory
+	}
+}
+
+// WithCallbacks sets the callbacks.
+func WithCallbacks(c *Callbacks) Option {
+	return func(o *Options) {
+		o.Callbacks = c
 	}
 }
 

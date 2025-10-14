@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -34,6 +35,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		runner:            r,
 		translatorFactory: opts.TranslatorFactory,
 		userIDResolver:    opts.UserIDResolver,
+		callbacks:         opts.Callbacks,
 	}
 	return run
 }
@@ -43,6 +45,7 @@ type runner struct {
 	runner            trunner.Runner
 	translatorFactory TranslatorFactory
 	userIDResolver    UserIDResolver
+	callbacks         *Callbacks
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -85,14 +88,54 @@ func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, 
 		return
 	}
 	for event := range ch {
-		aguiEvents, err := translator.Translate(event)
+		customEvent, err := r.handleBeforeTranslate(ctx, event)
+		if err != nil {
+			events <- aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
+				aguievents.WithRunID(runAgentInput.RunID))
+			return
+		}
+		aguiEvents, err := translator.Translate(customEvent)
 		if err != nil {
 			events <- aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
 				aguievents.WithRunID(runAgentInput.RunID))
 			return
 		}
 		for _, aguiEvent := range aguiEvents {
-			events <- aguiEvent
+			customEvent, err := r.handleAfterTranslate(ctx, aguiEvent)
+			if err != nil {
+				events <- aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
+					aguievents.WithRunID(runAgentInput.RunID))
+				return
+			}
+			events <- customEvent
 		}
 	}
+}
+
+func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) (*event.Event, error) {
+	if r.callbacks == nil {
+		return event, nil
+	}
+	customEvent, err := r.callbacks.RunBeforeTranslate(ctx, event)
+	if err != nil {
+		return nil, err
+	}
+	if customEvent != nil {
+		return customEvent, nil
+	}
+	return event, nil
+}
+
+func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+	if r.callbacks == nil {
+		return event, nil
+	}
+	customEvent, err := r.callbacks.RunAfterTranslate(ctx, event)
+	if err != nil {
+		return nil, err
+	}
+	if customEvent != nil {
+		return customEvent, nil
+	}
+	return event, nil
 }

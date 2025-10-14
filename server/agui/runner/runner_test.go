@@ -224,6 +224,274 @@ func TestRunNormal(t *testing.T) {
 	assert.Equal(t, 1, underlying.calls)
 }
 
+func TestRunnerHandleBeforeWithCallback(t *testing.T) {
+	t.Run("without callback", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		r := &runner{}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Same(t, base, got)
+	})
+	t.Run("with callback", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		replacement := agentevent.New("inv-replacement", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return replacement, nil
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, replacement, got)
+	})
+	t.Run("return err", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return nil, errors.New("fail")
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.Error(t, err)
+		assert.Nil(t, got)
+	})
+	t.Run("both nil", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return nil, nil
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Same(t, base, got)
+	})
+	t.Run("multiple callbacks", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		event1 := agentevent.New("inv-1", "assistant")
+		event2 := agentevent.New("inv-2", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return event1, nil
+				}).
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, event1, got)
+	})
+	t.Run("multiple callbacks return nil", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		event2 := agentevent.New("inv-2", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return nil, nil
+				}).
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, event2, got)
+	})
+	t.Run("multiple callbacks return err", func(t *testing.T) {
+		base := agentevent.New("inv", "assistant")
+		event2 := agentevent.New("inv-2", "assistant")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return nil, errors.New("fail")
+				}).
+				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleBeforeTranslate(context.Background(), base)
+		assert.Error(t, err)
+		assert.Nil(t, got)
+	})
+}
+
+func TestRunnerHandleAfterWithCallback(t *testing.T) {
+	t.Run("without callback", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Same(t, base, got)
+	})
+	t.Run("with callback", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		replacement := aguievents.NewRunErrorEvent("callback override")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return replacement, nil
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, replacement, got)
+	})
+	t.Run("return err", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return nil, errors.New("fail")
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.Error(t, err)
+		assert.Nil(t, got)
+	})
+	t.Run("both nil", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return nil, nil
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Same(t, base, got)
+	})
+	t.Run("multiple callbacks", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		event1 := aguievents.NewRunFinishedEvent("thread", "run")
+		event2 := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return event1, nil
+				}).
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, event1, got)
+	})
+	t.Run("multiple callbacks return nil", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		event2 := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return nil, nil
+				}).
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.NoError(t, err)
+		assert.Equal(t, event2, got)
+	})
+	t.Run("multiple callbacks return err", func(t *testing.T) {
+		base := aguievents.NewRunFinishedEvent("thread", "run")
+		event2 := aguievents.NewRunFinishedEvent("thread", "run")
+		r := &runner{
+			callbacks: NewCallbacks().
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return nil, errors.New("fail")
+				}).
+				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+					return event2, nil
+				}),
+		}
+		got, err := r.handleAfterTranslate(context.Background(), base)
+		assert.Error(t, err)
+		assert.Nil(t, got)
+	})
+}
+
+func TestRunnerBeforeTranslateCallbackOverridesInput(t *testing.T) {
+	original := agentevent.NewResponseEvent("inv", "assistant",
+		&model.Response{
+			ID:      "id",
+			Object:  model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "original"}}}})
+	replacement := agentevent.NewResponseEvent("inv", "assistant",
+		&model.Response{
+			ID:      "id",
+			Object:  model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "replacement"}}}})
+
+	callbacks := NewCallbacks().
+		RegisterBeforeTranslate(func(ctx context.Context, evt *agentevent.Event) (*agentevent.Event, error) {
+			return replacement, nil
+		})
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event, 1)
+			ch <- original
+			close(ch)
+			return ch, nil
+		}}
+
+	r := New(underlying, WithCallbacks(callbacks))
+
+	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	ch, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	out := collectEvents(t, ch)
+
+	assert.Len(t, out, 4)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), out[0])
+	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), out[1])
+	assert.IsType(t, (*aguievents.TextMessageContentEvent)(nil), out[2])
+	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), out[3])
+
+	contentEvent, ok := out[2].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "replacement", contentEvent.Delta)
+}
+
+func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
+	replacement := aguievents.NewRunErrorEvent("override")
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}}
+	callbacks := NewCallbacks().RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+		return replacement, nil
+	})
+
+	underlying := &fakeRunner{run: func(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+		ch := make(chan *agentevent.Event, 1)
+		ch <- agentevent.New("inv", "assistant")
+		close(ch)
+		return ch, nil
+	}}
+
+	r := &runner{
+		runner:            underlying,
+		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		userIDResolver:    NewOptions().UserIDResolver,
+		callbacks:         callbacks,
+	}
+
+	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run", Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	ch, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	out := collectEvents(t, ch)
+	assert.Len(t, out, 2)
+	assert.IsType(t, (*aguievents.RunErrorEvent)(nil), out[1])
+}
+
 type fakeTranslator struct {
 	events [][]aguievents.Event
 	err    error
