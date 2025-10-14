@@ -15,6 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
 // Retriever defines the interface for retrieving relevant documents based on queries.
@@ -59,9 +60,11 @@ type Query struct {
 type QueryFilter struct {
 	// DocumentIDs filters to specific document IDs.
 	DocumentIDs []string
-
 	// Metadata filters documents by metadata key-value pairs.
 	Metadata map[string]any
+
+	// FilterCondition filters documents by universal filter conditions.
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
 
 // Result represents the result of a retrieval operation.
