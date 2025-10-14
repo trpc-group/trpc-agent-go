@@ -177,7 +177,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d, table: %s", vs.option.indexDimension, len(embedding), vs.option.table)
 	}
 
-	upsertSQL := buildUpdateSQL(vs.option)
+	upsertSQL := buildUpsertSQL(vs.option)
 	now := time.Now().Unix()
 	vector := pgvector.NewVector(convertToFloat32Vector(embedding))
 	metadataJSON := mapToJSON(doc.Metadata)

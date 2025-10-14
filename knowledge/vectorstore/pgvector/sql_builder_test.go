@@ -128,7 +128,7 @@ func (suite *SQLBuilderTestSuite) SetupTest() {
 	}
 
 	for _, data := range testData {
-		upsertSQL := buildUpdateSQL(o)
+		upsertSQL := buildUpsertSQL(o)
 		vector := pgvector.NewVector(data.vector)
 		now := int64(1640995200) // Fixed timestamp for testing.
 		_, err := suite.pool.Exec(context.Background(), upsertSQL,

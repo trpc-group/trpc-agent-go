@@ -442,7 +442,7 @@ func (cqb *countQueryBuilder) build() (string, []any) {
 	return sql, cqb.args
 }
 
-func buildUpdateSQL(o options) string {
+func buildUpsertSQL(o options) string {
 	return fmt.Sprintf(sqlUpsertDocument, o.table,
 		o.idFieldName, o.nameFieldName, o.contentFieldName, o.embeddingFieldName, o.metadataFieldName, o.createdAtFieldName, o.updatedAtFieldName,
 		o.nameFieldName, o.nameFieldName,
