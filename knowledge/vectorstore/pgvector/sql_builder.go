@@ -19,8 +19,7 @@ import (
 )
 
 // Common field list for SELECT clauses.
-var commonFieldsStr = fmt.Sprintf("%s, %s, %s, %s, %s, %s, %s",
-	fieldID, fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
+var commonFieldsStr = "*"
 
 // Use SearchMode from vectorstore package.
 
@@ -33,11 +32,11 @@ type updateBuilder struct {
 	argIndex int
 }
 
-func newUpdateBuilder(table, id string) *updateBuilder {
+func newUpdateBuilder(o options, id string) *updateBuilder {
 	return &updateBuilder{
-		table:    table,
+		table:    o.table,
 		id:       id,
-		setParts: []string{"updated_at = $2"},
+		setParts: []string{o.updatedAtFieldName + " = $2"},
 		args:     []any{id, time.Now().Unix()},
 		argIndex: 3,
 	}
@@ -50,7 +49,7 @@ func (ub *updateBuilder) addField(field string, value any) {
 }
 
 func (ub *updateBuilder) build() (string, []any) {
-	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $1`, ub.table, strings.Join(ub.setParts, ", "))
+	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s = $1`, ub.table, strings.Join(ub.setParts, ", "), ub.id)
 	return sql, ub.args
 }
 
@@ -75,35 +74,35 @@ type queryBuilder struct {
 	textQueryPos int
 }
 
-func newQueryBuilder(table string, language string) *queryBuilder {
+func newQueryBuilder(o options) *queryBuilder {
 	return &queryBuilder{
-		table:        table,
+		table:        o.table,
 		conditions:   []string{"1=1"},
 		args:         make([]any, 0),
 		argIndex:     1,
 		selectClause: commonFieldsStr,
-		language:     language,
+		language:     o.language,
 	}
 }
 
 // newVectorQueryBuilder creates a builder for pure vector similarity search.
-func newVectorQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeVector, 0, 0)
+func newVectorQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeVector, 0, 0)
 }
 
 // newKeywordQueryBuilder creates a builder for full-text search.
-func newKeywordQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeKeyword, 0, 0)
+func newKeywordQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeKeyword, 0, 0)
 }
 
 // newHybridQueryBuilder creates a builder for hybrid search (vector + text).
-func newHybridQueryBuilder(table string, language string, vectorWeight, textWeight float64) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeHybrid, vectorWeight, textWeight)
+func newHybridQueryBuilder(o options, vectorWeight, textWeight float64) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeHybrid, vectorWeight, textWeight)
 }
 
 // newFilterQueryBuilder creates a builder for filter-only search.
-func newFilterQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeFilter, 0, 0)
+func newFilterQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeFilter, 0, 0)
 }
 
 // deleteSQLBuilder builds DELETE SQL statements safely with comprehensive filter support
@@ -165,8 +164,8 @@ func (dsb *deleteSQLBuilder) build() (string, []any) {
 }
 
 // newQueryBuilderWithMode creates a query builder with specific search mode and weights
-func newQueryBuilderWithMode(table, language string, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
-	qb := newQueryBuilder(table, language)
+func newQueryBuilderWithMode(o options, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
+	qb := newQueryBuilder(o)
 	qb.searchMode = mode
 	qb.vectorWeight = vectorWeight
 	qb.textWeight = textWeight
@@ -441,4 +440,15 @@ func (cqb *countQueryBuilder) build() (string, []any) {
 	whereClause := strings.Join(cqb.conditions, " AND ")
 	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", cqb.table, whereClause)
 	return sql, cqb.args
+}
+
+func buildUpdateSQL(o options) string {
+	return fmt.Sprintf(sqlUpsertDocument, o.table,
+		o.idFieldName, o.nameFieldName, o.contentFieldName, o.embeddingFieldName, o.metadataFieldName, o.createdAtFieldName, o.updatedAtFieldName,
+		o.nameFieldName, o.nameFieldName,
+		o.contentFieldName, o.contentFieldName,
+		o.embeddingFieldName, o.embeddingFieldName,
+		o.metadataFieldName, o.metadataFieldName,
+		o.updatedAtFieldName, o.updatedAtFieldName,
+	)
 }

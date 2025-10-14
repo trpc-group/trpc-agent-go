@@ -88,17 +88,28 @@ func (suite *SQLBuilderTestSuite) SetupTest() {
 	}
 
 	// Create test table.
-	createTableSQL := fmt.Sprintf(sqlCreateTable, "test_documents", 3)
+	o := defaultOptions
+	o.table = "test_documents"
+	o.indexDimension = 3
+	createTableSQL := fmt.Sprintf(sqlCreateTable, o.table,
+		o.idFieldName,
+		o.nameFieldName,
+		o.contentFieldName,
+		o.embeddingFieldName, o.indexDimension,
+		o.metadataFieldName,
+		o.createdAtFieldName,
+		o.updatedAtFieldName,
+	)
 	_, err := suite.pool.Exec(context.Background(), createTableSQL)
 	require.NoError(suite.T(), err)
 
 	// Create vector index.
-	indexSQL := fmt.Sprintf(sqlCreateIndex, "test_documents", "test_documents")
+	indexSQL := fmt.Sprintf(sqlCreateIndex, o.table, o.table, o.embeddingFieldName)
 	_, err = suite.pool.Exec(context.Background(), indexSQL)
 	require.NoError(suite.T(), err)
 
 	// Create text index for full-text search.
-	textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, "test_documents", "test_documents", "english")
+	textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, o.table, o.table, o.language, o.contentFieldName)
 	_, err = suite.pool.Exec(context.Background(), textIndexSQL)
 	require.NoError(suite.T(), err)
 
@@ -117,7 +128,7 @@ func (suite *SQLBuilderTestSuite) SetupTest() {
 	}
 
 	for _, data := range testData {
-		upsertSQL := fmt.Sprintf(sqlUpsertDocument, "test_documents")
+		upsertSQL := buildUpdateSQL(o)
 		vector := pgvector.NewVector(data.vector)
 		now := int64(1640995200) // Fixed timestamp for testing.
 		_, err := suite.pool.Exec(context.Background(), upsertSQL,
@@ -173,7 +184,7 @@ func (suite *SQLBuilderTestSuite) TestUpdateBuilder() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			ub := newUpdateBuilder(tt.table, tt.id)
+			ub := newUpdateBuilder(defaultOptions, tt.id)
 
 			// Test initial state.
 			assert.Equal(suite.T(), tt.table, ub.table)
@@ -259,15 +270,16 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilders() {
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
 			var qb *queryBuilder
+			defaultOptions.table = "test_documents"
 			switch tt.mode {
 			case vectorstore.SearchModeVector:
-				qb = newVectorQueryBuilder("test_documents", "english")
+				qb = newVectorQueryBuilder(defaultOptions)
 			case vectorstore.SearchModeKeyword:
-				qb = newKeywordQueryBuilder("test_documents", "english")
+				qb = newKeywordQueryBuilder(defaultOptions)
 			case vectorstore.SearchModeHybrid:
-				qb = newHybridQueryBuilder("test_documents", "english", tt.vectorWeight, tt.textWeight)
+				qb = newHybridQueryBuilder(defaultOptions, tt.vectorWeight, tt.textWeight)
 			case vectorstore.SearchModeFilter:
-				qb = newFilterQueryBuilder("test_documents", "english")
+				qb = newFilterQueryBuilder(defaultOptions)
 			}
 
 			// Test initial state.
@@ -358,15 +370,16 @@ func (suite *SQLBuilderTestSuite) TestBuildSelectClause() {
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
 			var qb *queryBuilder
+			defaultOptions.table = "test_documents"
 			switch tt.mode {
 			case vectorstore.SearchModeVector:
-				qb = newVectorQueryBuilder("test_documents", "english")
+				qb = newVectorQueryBuilder(defaultOptions)
 			case vectorstore.SearchModeKeyword:
-				qb = newKeywordQueryBuilder("test_documents", "english")
+				qb = newKeywordQueryBuilder(defaultOptions)
 			case vectorstore.SearchModeHybrid:
-				qb = newHybridQueryBuilder("test_documents", "english", tt.vectorWeight, tt.textWeight)
+				qb = newHybridQueryBuilder(defaultOptions, tt.vectorWeight, tt.textWeight)
 			case vectorstore.SearchModeFilter:
-				qb = newFilterQueryBuilder("test_documents", "english")
+				qb = newFilterQueryBuilder(defaultOptions)
 			}
 
 			qb.textQueryPos = tt.textQueryPos
@@ -429,7 +442,8 @@ func (suite *SQLBuilderTestSuite) TestQueryBuilderEdgeCases() {
 
 	for _, tt := range tests {
 		suite.Run(tt.name, func() {
-			qb := newVectorQueryBuilder("test_documents", "english")
+			defaultOptions.table = "test_documents"
+			qb := newVectorQueryBuilder(defaultOptions)
 
 			// Add filters.
 			qb.addIDFilter(tt.idFilter)
