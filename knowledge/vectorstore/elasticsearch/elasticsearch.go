@@ -83,7 +83,7 @@ type indexCreateBody struct {
 type VectorStore struct {
 	client          istorage.Client
 	option          options
-	filterConverter searchfilter.Converter
+	filterConverter searchfilter.Converter[types.QueryVariant]
 }
 
 // New creates a new Elasticsearch vector store with options.

@@ -58,7 +58,7 @@ type VectorStore struct {
 	client          storage.ClientInterface
 	option          options
 	sparseEncoder   encoder.SparseEncoder
-	filterConverter searchfilter.Converter
+	filterConverter searchfilter.Converter[*tcvectordb.Filter]
 }
 
 // New creates a new tcvectordb vector store.
@@ -880,12 +880,5 @@ func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) 
 		log.Warnf("tcvectordb build filter query failed: %v", err)
 		return nil, err
 	}
-
-	filterCond, ok := cond.(*tcvectordb.Filter)
-	if !ok {
-		log.Warnf("tcvectordb build filter query failed: %v", err)
-		return nil, fmt.Errorf("tcvectordb build filter query failed: %w", err)
-	}
-
-	return filterCond, nil
+	return cond, nil
 }

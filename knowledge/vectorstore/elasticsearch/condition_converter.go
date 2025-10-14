@@ -25,7 +25,7 @@ import (
 type esConverter struct{}
 
 // Convert converts a filter condition to an Elasticsearch query filter.
-func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (any, error) {
+func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (types.QueryVariant, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()

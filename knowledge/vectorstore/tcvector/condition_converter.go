@@ -33,7 +33,7 @@ var comparisonOperators = map[string]string{
 type tcVectorConverter struct{}
 
 // Convert converts a filter condition to an TC Vector query filter.
-func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition) (any, error) {
+func (c *tcVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition) (*tcvectordb.Filter, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
