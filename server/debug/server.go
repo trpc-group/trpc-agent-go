@@ -120,7 +120,7 @@ const (
 
 func setTraceInfo() {
 	itelemetry.KeyEventID = keyEventID
-	itelemetry.KeySessionID = keySessionID
+	itelemetry.KeyGenAIConversationID = keySessionID
 	itelemetry.KeyLLMRequest = keyLLMRequest
 	itelemetry.KeyLLMResponse = keyLLMResponse
 	itelemetry.KeyInvocationID = keyInvocationID

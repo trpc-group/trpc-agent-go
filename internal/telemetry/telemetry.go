@@ -74,7 +74,6 @@ var (
 	ResourceServiceVersion   = "v0.1.0"
 
 	KeyEventID      = "trpc.go.agent.event_id"
-	KeySessionID    = "trpc.go.agent.session_id"
 	KeyInvocationID = "trpc.go.agent.invocation_id"
 	KeyLLMRequest   = "trpc.go.agent.llm_request"
 	KeyLLMResponse  = "trpc.go.agent.llm_response"
@@ -91,6 +90,7 @@ var (
 	KeyGenAISystem        = "gen_ai.system"
 
 	KeyGenAIRequestModel            = "gen_ai.request.model"
+	KeyGenAIRequestChoiceCount      = "gen_ai.request.choice.count"
 	KeyGenAIInputMessages           = "gen_ai.input.messages"
 	KeyGenAIOutputMessages          = "gen_ai.output.messages"
 	KeyGenAIAgentName               = "gen_ai.agent.name"
@@ -254,14 +254,21 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
 		return
 	}
 	if len(rsp.Choices) > 0 {
-		if bts, err := json.Marshal(rsp.Choices[0].Message); err == nil {
+		if bts, err := json.Marshal(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(KeyGenAIOutputMessages, string(bts)),
 			)
 		}
-		if fr := rsp.Choices[0].FinishReason; fr != nil && *fr != "" {
-			span.SetAttributes(attribute.StringSlice(KeyGenAIResponseFinishReasons, []string{*fr}))
+		var finishReasons []string
+		for _, choice := range rsp.Choices {
+			if choice.FinishReason != nil {
+				finishReasons = append(finishReasons, *choice.FinishReason)
+			} else {
+				finishReasons = append(finishReasons, "")
+			}
 		}
+		span.SetAttributes(attribute.StringSlice(KeyGenAIResponseFinishReasons, finishReasons))
+
 	}
 	span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
 	if rsp.Usage != nil {
@@ -287,9 +294,9 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 
 	// Add session ID if session exists
 	if invoke.Session != nil {
-		attrs = append(attrs, attribute.String(KeySessionID, invoke.Session.ID))
+		attrs = append(attrs, attribute.String(KeyGenAIConversationID, invoke.Session.ID))
 	} else {
-		attrs = append(attrs, attribute.String(KeySessionID, ""))
+		attrs = append(attrs, attribute.String(KeyGenAIConversationID, ""))
 	}
 
 	// Add model name if model exists
@@ -301,18 +308,63 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 
 	span.SetAttributes(attrs...)
 
-	if bts, err := json.Marshal(req); err == nil {
+	if req != nil {
+		genConfig := req.GenerationConfig
 		span.SetAttributes(
-			attribute.String(KeyLLMRequest, string(bts)),
+			attribute.StringSlice(KeyGenAIRequestStopSequences, genConfig.Stop),
 		)
-	} else {
-		span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
+		if fp := genConfig.FrequencyPenalty; fp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
+		}
+		if mt := genConfig.MaxTokens; mt != nil {
+			span.SetAttributes(attribute.Int(KeyGenAIRequestMaxTokens, *mt))
+		}
+		if pp := genConfig.PresencePenalty; pp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
+		}
+		if tp := genConfig.Temperature; tp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestTemperature, *tp))
+		}
+		if tp := genConfig.TopP; tp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
+		}
+		if bts, err := json.Marshal(req); err == nil {
+			span.SetAttributes(
+				attribute.String(KeyLLMRequest, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(KeyLLMRequest, "<not json serializable>"))
+		}
+		span.SetAttributes(attribute.Int(KeyGenAIRequestChoiceCount, len(req.Messages)))
+		if bts, err := json.Marshal(req.Messages); err == nil {
+			span.SetAttributes(
+				attribute.String(KeyGenAIInputMessages, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
+		}
 	}
 
 	if rsp != nil {
 		if e := rsp.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
 			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
+		}
+		if len(rsp.Choices) > 0 {
+			if bts, err := json.Marshal(rsp.Choices); err == nil {
+				span.SetAttributes(
+					attribute.String(KeyGenAIOutputMessages, string(bts)),
+				)
+			}
+			var finishReasons []string
+			for _, choice := range rsp.Choices {
+				if choice.FinishReason != nil {
+					finishReasons = append(finishReasons, *choice.FinishReason)
+				} else {
+					finishReasons = append(finishReasons, "")
+				}
+			}
+			span.SetAttributes(attribute.StringSlice(KeyGenAIResponseFinishReasons, finishReasons))
 		}
 		if bts, err := json.Marshal(rsp); err == nil {
 			span.SetAttributes(
