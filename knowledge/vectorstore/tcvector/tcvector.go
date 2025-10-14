@@ -853,7 +853,7 @@ func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) 
 	for k, v := range searchFilter.Metadata {
 		filters = append(filters, &searchfilter.UniversalFilterCondition{
 			Operator: searchfilter.OperatorEqual,
-			Field:    k,
+			Field:    fmt.Sprintf("%s.%s", fieldMetadata, k),
 			Value:    v,
 		})
 	}
@@ -881,5 +881,11 @@ func (vs *VectorStore) getCondFromQuery(searchFilter *vectorstore.SearchFilter) 
 		return nil, err
 	}
 
-	return cond.(*tcvectordb.Filter), nil
+	filterCond, ok := cond.(*tcvectordb.Filter)
+	if !ok {
+		log.Warnf("tcvectordb build filter query failed: %v", err)
+		return nil, fmt.Errorf("tcvectordb build filter query failed: %w", err)
+	}
+
+	return filterCond, nil
 }

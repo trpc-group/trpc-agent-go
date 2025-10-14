@@ -190,17 +190,17 @@ filterCondition := &searchfilter.UniversalFilterCondition{
         {
             Field: "tag",
             Operator: searchfilter.OperatorEqual,
-            Value: "tag"
+            Value: "tag",
         },
         {
             Field: "age",
             Operator: searchfilter.OperatorGreaterThanOrEqual,
-            Value: 18
+            Value: 18,
         },
         {
             Field: "create_time",
             Operator: searchfilter.OperatorBetween,
-            Value: ["2024-10-11 12:11:00", "2025-10-11 12:11:00"]
+            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
         },
         {
             Operator: searchfilter.OperatorOr,
@@ -212,8 +212,8 @@ filterCondition := &searchfilter.UniversalFilterCondition{
                 },
                 {
                     Field: "status",
-                    Operator: searchfilter.OperatorOperatorEqual,
-                    Value: "logout"
+                    Operator: searchfilter.OperatorEqual,
+                    Value: "logout",
                 },
             },
         },

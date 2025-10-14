@@ -187,7 +187,12 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types
 		log.Warnf("elasticsearch build filter query failed: %v", err)
 		return nil, err
 	}
-	return filterQuery.(types.QueryVariant), nil
+	query, ok := filterQuery.(types.QueryVariant)
+	if !ok {
+		log.Warnf("elasticsearch build filter query failed: %v", err)
+		return nil, fmt.Errorf("elasticsearch build filter query failed: %w", err)
+	}
+	return query, nil
 }
 
 func (vs *VectorStore) getMaxResult(maxResults int) int {
