@@ -41,16 +41,6 @@ On the client side you can pair the server with frameworks that understand the A
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
-## Dependency Explanation
-
-Since the official AG-UI repository has not yet merged the Golang SDK PR, we have forked and fixed the related bugs. To use it, add the following replace directive in your go.mod:
-
-```go
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
-```
-
-After that, run go mod tidy to update the dependencies.
-
 ## Advanced Usage
 
 ### Custom transport
@@ -136,6 +126,12 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator, as shown in the image below.
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+You can find the complete code example in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
 
 ### Custom `UserIDResolver`
 

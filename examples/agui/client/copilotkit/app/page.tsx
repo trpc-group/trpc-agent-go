@@ -150,19 +150,36 @@ function renderToolBlock({
   name,
   label,
   body,
+  kind,
 }: {
   id: string;
   name: string;
   label: string;
   body: unknown;
+  kind?: "custom" | "tool-call" | "tool-result";
 }) {
   const content = formatStructuredContent(body);
   return (
-    <div key={id} className="tool-message" data-message-role="tool">
+    <div
+      key={id}
+      className={`tool-message${kind ? ` tool-message--${kind}` : ""}`}
+      data-message-role="tool"
+      data-message-kind={kind || undefined}
+    >
       <span className="tool-message__label">{label || name}</span>
       <pre className="tool-message__body">{content}</pre>
     </div>
   );
+}
+
+function isCustomIdentifier(id: unknown): boolean {
+  // Detect our mirrored custom tool calls by id prefix.
+  try {
+    const s = String(id ?? "");
+    return s.startsWith("custom-");
+  } catch {
+    return false;
+  }
 }
 
 const ToolAwareRenderMessage = ({
@@ -180,15 +197,37 @@ const ToolAwareRenderMessage = ({
   ImageRenderer = DefaultImageRenderer,
 }: RenderMessageProps) => {
   const messageType = (message as any)?.type;
+  const customEventPayload =
+    messageType === "AguiCustomEventMessage" || (message as any)?.customEvent
+      ? (message as any)?.customEvent ?? {
+          name: (message as any)?.name,
+          value: (message as any)?.content,
+        }
+      : undefined;
+
+  if (customEventPayload) {
+    const identifier = String(message.id ?? `${index}-custom-event`);
+    const label = customEventPayload.name ? String(customEventPayload.name) : "Custom event";
+    return renderToolBlock({
+      id: identifier,
+      name: label,
+      label,
+      body: customEventPayload.value,
+      kind: "custom",
+    });
+  }
 
   if (messageType === "ActionExecutionMessage") {
     const actionName = (message as any)?.name ?? "Tool call";
     const args = (message as any)?.arguments ?? {};
+    const maybeId = (message as any)?.id ?? (message as any)?.toolCallId;
+    const kind = isCustomIdentifier(maybeId) ? "custom" : "tool-call";
     return renderToolBlock({
       id: String((message as any)?.id ?? `${index}-tool-call`),
       name: actionName,
       label: actionName,
       body: args,
+      kind,
     });
   }
 
@@ -196,11 +235,14 @@ const ToolAwareRenderMessage = ({
     const actionName = (message as any)?.actionName ?? (message as any)?.name ?? "Tool result";
     const body =
       (message as any)?.result !== undefined ? (message as any)?.result : (message as any)?.content;
+    const maybeId = (message as any)?.id ?? (message as any)?.toolCallId ?? (message as any)?.parentId;
+    const kind = isCustomIdentifier(maybeId) ? "custom" : "tool-result";
     return renderToolBlock({
       id: String((message as any)?.id ?? `${index}-tool-result`),
       name: actionName,
       label: actionName,
       body,
+      kind,
     });
   }
 
@@ -231,11 +273,13 @@ const ToolAwareRenderMessage = ({
           const identifier = String(call?.id ?? `${messageId}-call-${callIndex}`);
           const callName = call?.function?.name ?? call?.name ?? "Tool call";
           const callArgs = call?.function?.arguments ?? call?.arguments ?? {};
+          const callKind = isCustomIdentifier(call?.id) ? "custom" : "tool-call";
           return renderToolBlock({
             id: identifier,
             name: callName,
             label: callName,
             body: callArgs,
+            kind: callKind,
           });
         })}
       </Fragment>
@@ -271,5 +315,3 @@ export default function Home() {
     </main>
   );
 }
-
-export { ToolAwareRenderMessage };
