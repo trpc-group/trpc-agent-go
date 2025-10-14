@@ -187,12 +187,12 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 			span.SetAttributes(attribute.String(KeyErrorType, e.Type))
 		}
 		span.SetAttributes(attribute.String(KeyEventID, rspEvent.ID))
-	}
 
-	if bts, err := json.Marshal(rspEvent.Response); err == nil {
-		span.SetAttributes(attribute.String(KeyGenAIToolCallResult, string(bts)))
-	} else {
-		span.SetAttributes(attribute.String(KeyGenAIToolCallResult, "<not json serializable>"))
+		if bts, err := json.Marshal(rspEvent.Response); err == nil {
+			span.SetAttributes(attribute.String(KeyGenAIToolCallResult, string(bts)))
+		} else {
+			span.SetAttributes(attribute.String(KeyGenAIToolCallResult, "<not json serializable>"))
+		}
 	}
 
 	// Setting empty llm request and response (as UI expect these) while not
@@ -204,7 +204,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 }
 
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
-func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig model.GenerationConfig) {
+func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
 	if bts, err := json.Marshal(&model.Request{Messages: []model.Message{invoke.Message}}); err == nil {
 		span.SetAttributes(
 			attribute.String(KeyGenAIInputMessages, string(bts)),
@@ -218,24 +218,27 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		attribute.String(KeyGenAIAgentName, invoke.AgentName),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyGenAIAgentDescription, agentDescription),
-		attribute.StringSlice(KeyGenAIRequestStopSequences, genConfig.Stop),
 		attribute.String(KeyGenAISystemInstructions, instructions),
 	)
-	if fp := genConfig.FrequencyPenalty; fp != nil {
-		span.SetAttributes(attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
+	if genConfig != nil {
+		span.SetAttributes(attribute.StringSlice(KeyGenAIRequestStopSequences, genConfig.Stop))
+		if fp := genConfig.FrequencyPenalty; fp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestFrequencyPenalty, *fp))
+		}
+		if mt := genConfig.MaxTokens; mt != nil {
+			span.SetAttributes(attribute.Int(KeyGenAIRequestMaxTokens, *mt))
+		}
+		if pp := genConfig.PresencePenalty; pp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
+		}
+		if tp := genConfig.Temperature; tp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestTemperature, *tp))
+		}
+		if tp := genConfig.TopP; tp != nil {
+			span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
+		}
 	}
-	if mt := genConfig.MaxTokens; mt != nil {
-		span.SetAttributes(attribute.Int(KeyGenAIRequestMaxTokens, *mt))
-	}
-	if pp := genConfig.PresencePenalty; pp != nil {
-		span.SetAttributes(attribute.Float64(KeyGenAIRequestPresencePenalty, *pp))
-	}
-	if tp := genConfig.Temperature; tp != nil {
-		span.SetAttributes(attribute.Float64(KeyGenAIRequestTemperature, *tp))
-	}
-	if tp := genConfig.TopP; tp != nil {
-		span.SetAttributes(attribute.Float64(KeyGenAIRequestTopP, *tp))
-	}
+
 	if invoke.Session != nil {
 		span.SetAttributes(
 			attribute.String(KeyRunnerUserID, invoke.Session.UserID),
