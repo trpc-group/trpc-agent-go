@@ -81,6 +81,11 @@ type Node struct {
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 
+	// Retry policies configured for this node. When empty, executor defaults
+	// (if any) will be used. Policies are evaluated in order to determine
+	// whether an error is retryable and which parameters to use.
+	retryPolicies []RetryPolicy
+
 	// Pregel-style extensions
 	triggers []string            // Channels that trigger this node
 	channels []string            // Channels this node reads from
