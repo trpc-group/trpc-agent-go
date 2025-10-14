@@ -25,6 +25,7 @@ var commonFieldsStr = "*"
 
 // updateBuilder builds UPDATE SQL statements safely.
 type updateBuilder struct {
+	o        options
 	table    string
 	id       string
 	setParts []string
@@ -34,6 +35,7 @@ type updateBuilder struct {
 
 func newUpdateBuilder(o options, id string) *updateBuilder {
 	return &updateBuilder{
+		o:        o,
 		table:    o.table,
 		id:       id,
 		setParts: []string{o.updatedAtFieldName + " = $2"},
@@ -49,7 +51,7 @@ func (ub *updateBuilder) addField(field string, value any) {
 }
 
 func (ub *updateBuilder) build() (string, []any) {
-	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s = $1`, ub.table, strings.Join(ub.setParts, ", "), ub.id)
+	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s = $1`, ub.table, strings.Join(ub.setParts, ", "), ub.o.idFieldName)
 	return sql, ub.args
 }
 
