@@ -69,5 +69,6 @@ type UniversalFilterCondition struct {
 
 // Converter is an interface for converting universal filter conditions to specific query formats.
 type Converter interface {
+	// Convert converts a universal filter condition to a specific query format.
 	Convert(condition *UniversalFilterCondition) (any, error)
 }
