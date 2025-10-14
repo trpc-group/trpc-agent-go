@@ -93,6 +93,19 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithRetryPolicy sets retry policies for the node. Policies are evaluated
+// in order when an error occurs to determine whether to retry and what
+// backoff to apply. Passing multiple policies allows matching by different
+// conditions (e.g., network vs. HTTP status).
+func WithRetryPolicy(policies ...RetryPolicy) Option {
+	return func(node *Node) {
+		if len(policies) == 0 {
+			return
+		}
+		node.retryPolicies = append(node.retryPolicies, policies...)
+	}
+}
+
 // WithGenerationConfig sets the generation config for an LLM node.
 // Effective only for nodes added via AddLLMNode.
 func WithGenerationConfig(cfg model.GenerationConfig) Option {
