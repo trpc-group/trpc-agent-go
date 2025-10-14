@@ -15,6 +15,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 )
 
 // Knowledge is the main interface for knowledge management operations.
@@ -79,7 +80,10 @@ type Result struct {
 type SearchFilter struct {
 	// DocumentIDs filters results to specific document DocumentIDs.
 	DocumentIDs []string
-
 	// Metadata filters results by metadata key-value pairs.
 	Metadata map[string]any
+
+	// FilterCondition is the universal condition applied to all search results.
+	// It is compatible with all storage engines.
+	FilterCondition *searchfilter.UniversalFilterCondition
 }
