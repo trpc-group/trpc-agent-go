@@ -184,9 +184,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
-	ctxWithInvocation, span := trace.Tracer.Start(
-		ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, toolCall.Function.Name),
-	)
+	ctxWithInvocation, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	defer span.End()
 	choice, modifiedArgs, err := p.executeToolCall(
 		ctxWithInvocation, invocation, toolCall, tools, index, eventChan,
@@ -279,9 +277,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}()
 
 	// Trace the tool execution for observability.
-	ctxWithInvocation, span := trace.Tracer.Start(
-		ctx, fmt.Sprintf("%s %s", itelemetry.SpanNamePrefixExecuteTool, tc.Function.Name),
-	)
+	ctxWithInvocation, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
 	defer span.End()
 
 	// Execute the tool (streamable or callable) with callbacks.
@@ -392,9 +388,7 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
 	}
 	if len(toolCallEvents) > 1 {
-		_, span := trace.Tracer.Start(
-			ctx, fmt.Sprintf("%s (merged)", itelemetry.SpanNamePrefixExecuteTool),
-		)
+		_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(itelemetry.ToolNameMergedTolls))
 		itelemetry.TraceMergedToolCalls(span, mergedEvent)
 		span.End()
 	}

@@ -34,15 +34,30 @@ const (
 	ServiceNamespace = "trpc-go-agent"
 	InstrumentName   = "trpc.agent.go"
 
-	SpanNameCallLLM           = "call_llm"
 	SpanNamePrefixExecuteTool = "execute_tool"
 
-	OperationExecuteTool = "execute_tool"
-	OperationCallLLM     = "call_llm"
-	OperationInvokeAgent = "invoke_agent"
-	OperationCreateAgent = "create_agent"
-	OperationEmbeddings  = "embeddings"
+	OperationExecuteTool     = "execute_tool"
+	OperationChat            = "chat"
+	OperationGenerateContent = "generate_content"
+	OperationInvokeAgent     = "invoke_agent"
+	OperationCreateAgent     = "create_agent"
+	OperationEmbeddings      = "embeddings"
 )
+
+func NewChatSpanName(requestModel string) string {
+	return newInferenceSpanName(OperationChat, requestModel)
+}
+
+func NewExecuteToolSpanName(toolName string) string {
+	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
+}
+
+// newInferenceSpanName creates a new inference span name.
+// inference operation name: "chat" for openai, "generate_content" for gemini.
+// For example, "chat gpt-4.0".
+func newInferenceSpanName(operationNames, requestModel string) string {
+	return fmt.Sprintf("%s %s", operationNames, requestModel)
+}
 
 const (
 	// ProtocolGRPC uses gRPC protocol for OTLP exporter.
@@ -150,12 +165,16 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	)
 }
 
+const ToolNameMergedTolls = "(merged tools)"
+
 // TraceMergedToolCalls traces the invocation of a merged tool call.
+// Calling this function is not needed for telemetry purposes. This is provided
+// for preventing /debug/trace requests (typically sent by web UI).
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
 		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-		attribute.String(KeyGenAIToolName, "(merged tools)"),
+		attribute.String(KeyGenAIToolName, ToolNameMergedTolls),
 		attribute.String(KeyGenAIToolDescription, "(merged tools)"),
 		attribute.String(KeyGenAIToolCallArguments, "N/A"),
 	)
@@ -261,7 +280,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event) {
 func TraceCallLLM(span trace.Span, invoke *agent.Invocation, req *model.Request, rsp *model.Response, eventID string) {
 	attrs := []attribute.KeyValue{
 		attribute.String(KeyGenAISystem, SystemTRPCGoAgent),
-		attribute.String(KeyGenAIOperationName, OperationCallLLM),
+		attribute.String(KeyGenAIOperationName, OperationChat),
 		attribute.String(KeyInvocationID, invoke.InvocationID),
 		attribute.String(KeyEventID, eventID),
 	}

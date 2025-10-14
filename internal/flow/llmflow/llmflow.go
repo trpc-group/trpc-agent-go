@@ -170,7 +170,7 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.SpanNameCallLLM)
+	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(invocation.Model.Info().Name))
 	defer span.End()
 
 	// 2. Call LLM (get response channel).
