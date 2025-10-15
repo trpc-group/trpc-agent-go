@@ -451,6 +451,7 @@ func (cqb *countQueryBuilder) build() (string, []any) {
 func buildUpsertSQL(o options) string {
 	return fmt.Sprintf(sqlUpsertDocument, o.table,
 		o.idFieldName, o.nameFieldName, o.contentFieldName, o.embeddingFieldName, o.metadataFieldName, o.createdAtFieldName, o.updatedAtFieldName,
+		o.idFieldName,
 		o.nameFieldName, o.nameFieldName,
 		o.contentFieldName, o.contentFieldName,
 		o.embeddingFieldName, o.embeddingFieldName,

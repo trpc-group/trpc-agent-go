@@ -63,7 +63,7 @@ const (
 	sqlUpsertDocument = `
 		INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (%s) DO UPDATE SET
 			%s = EXCLUDED.%s,
 			%s = EXCLUDED.%s,
 			%s = EXCLUDED.%s,
@@ -444,11 +444,18 @@ func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []any
 		if err != nil {
 			return nil, fmt.Errorf("pgvector parse document: %w", err)
 		}
+		var score float64
+		var id string
 		if scoredDoc != nil {
+			score = scoredDoc.Score
+			if scoredDoc.Document != nil {
+				id = scoredDoc.Document.ID
+			}
+			id = scoredDoc.Document.ID
 			result.Results = append(result.Results, scoredDoc)
 		}
-		log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, sql: %v", scoredDoc.Score,
-			scoredDoc.Document.ID, searchMode, sql)
+		log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, sql: %v", score,
+			id, searchMode, sql)
 	}
 
 	if err = rows.Err(); err != nil {
