@@ -992,48 +992,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
-		// Forward all events from the target agent and capture completion state.
-		var lastResponse string
-		var finalState State
-		var rawDelta map[string][]byte
-		for agentEvent := range agentEventChan {
-			if nodeCallbacks != nil {
-				for _, callback := range nodeCallbacks.AgentEvent {
-					callback(ctx, &NodeCallbackContext{
-						NodeID:   nodeID,
-						NodeName: agentName,
-					}, state, agentEvent)
-				}
-			}
-			// Forward the event to the parent event channel.
-			if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
-				return nil, err
-			}
-
-			// Track the last response for state update.
-			if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
-				agentEvent.Response.Choices[0].Message.Content != "" {
-				lastResponse = agentEvent.Response.Choices[0].Message.Content
-			}
-			// Capture subgraph completion state from its final graph.execution event.
-			if agentEvent.Done && agentEvent.Response != nil &&
-				agentEvent.Response.Object == ObjectTypeGraphExecution && agentEvent.StateDelta != nil {
-				// Convert StateDelta (JSON bytes) back into a State map.
-				tmp := make(State)
-				for k, b := range agentEvent.StateDelta {
-					var v any
-					if err := json.Unmarshal(b, &v); err == nil {
-						tmp[k] = v
-					} else {
-						// Debug-only: record keys that failed to unmarshal to
-						// help diagnose type drift. RawStateDelta still
-						// carries the original JSON.
-						log.Debugf("subgraph: failed to unmarshal final state key=%s: %v", k, err)
-					}
-				}
-				finalState = tmp
-				rawDelta = agentEvent.StateDelta
-			}
+		// Process agent event stream and capture completion state.
+		lastResponse, finalState, rawDelta, err := processAgentEventStream(
+			ctx, agentEventChan, nodeCallbacks, nodeID, state, eventChan, agentName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 		}
 		// Emit agent execution complete event.
 		endTime := time.Now()
@@ -1052,6 +1016,67 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		upd[StateKeyUserInput] = ""
 		return upd, nil
 	}
+}
+
+// processAgentEventStream processes the event stream from the target agent.
+// This function handles forwarding events and capturing completion state.
+func processAgentEventStream(
+	ctx context.Context,
+	agentEventChan <-chan *event.Event,
+	nodeCallbacks *NodeCallbacks,
+	nodeID string,
+	state State,
+	eventChan chan<- *event.Event,
+	agentName string,
+) (string, State, map[string][]byte, error) {
+	var lastResponse string
+	var finalState State
+	var rawDelta map[string][]byte
+
+	for agentEvent := range agentEventChan {
+		// Run node callbacks for this event.
+		if nodeCallbacks != nil {
+			for _, callback := range nodeCallbacks.AgentEvent {
+				callback(ctx, &NodeCallbackContext{
+					NodeID:   nodeID,
+					NodeName: agentName,
+				}, state, agentEvent)
+			}
+		}
+
+		// Forward the event to the parent event channel.
+		if err := event.EmitEvent(ctx, eventChan, agentEvent); err != nil {
+			return "", nil, nil, err
+		}
+
+		// Track the last response for state update.
+		if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 &&
+			agentEvent.Response.Choices[0].Message.Content != "" {
+			lastResponse = agentEvent.Response.Choices[0].Message.Content
+		}
+
+		// Capture subgraph completion state from its final graph.execution event.
+		if agentEvent.Done && agentEvent.Response != nil &&
+			agentEvent.Response.Object == ObjectTypeGraphExecution && agentEvent.StateDelta != nil {
+			// Convert StateDelta (JSON bytes) back into a State map.
+			tmp := make(State)
+			for k, b := range agentEvent.StateDelta {
+				var v any
+				if err := json.Unmarshal(b, &v); err == nil {
+					tmp[k] = v
+				} else {
+					// Debug-only: record keys that failed to unmarshal to
+					// help diagnose type drift. RawStateDelta still
+					// carries the original JSON.
+					log.Debugf("subgraph: failed to unmarshal final state key=%s: %v", k, err)
+				}
+			}
+			finalState = tmp
+			rawDelta = agentEvent.StateDelta
+		}
+	}
+
+	return lastResponse, finalState, rawDelta, nil
 }
 
 // buildAgentInvocationWithStateAndScope builds an invocation for the target agent
