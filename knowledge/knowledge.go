@@ -48,7 +48,11 @@ type SearchRequest struct {
 	// MinScore sets minimum relevance score threshold (optional).
 	MinScore float64
 
+	// SearchFilter is the search filter (optional).
 	SearchFilter *SearchFilter
+
+	// SearchMode specifies the search mode.
+	SearchMode int
 }
 
 // ConversationMessage represents a message in conversation history.

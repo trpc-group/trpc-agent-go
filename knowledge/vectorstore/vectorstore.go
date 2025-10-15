@@ -200,7 +200,7 @@ type SearchQuery struct {
 }
 
 // SearchMode specifies the search mode.
-type SearchMode int
+type SearchMode = int
 
 const (
 	// SearchModeHybrid is the default search mode.
