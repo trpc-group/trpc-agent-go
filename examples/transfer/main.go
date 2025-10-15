@@ -42,7 +42,7 @@ func main() {
 	fmt.Printf("🔄 Agent Transfer Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Type 'exit' to end the conversation\n")
-	fmt.Printf("Available sub-agents: math-agent, weather-agent, research-agent\n")
+	fmt.Printf("Available sub-agents: math-agent, weather-agent, research-agent, time-agent\n")
 	fmt.Printf("Use natural language to request tasks - the coordinator will transfer to appropriate agents\n")
 	fmt.Println(strings.Repeat("=", 70))
 
@@ -96,12 +96,14 @@ func (c *transferChat) setup(_ context.Context) error {
 	mathAgent := c.createMathAgent(modelInstance)
 	weatherAgent := c.createWeatherAgent(modelInstance)
 	researchAgent := c.createResearchAgent(modelInstance)
+	timeAgent := c.createTimeAgent(modelInstance)
 
 	// Create coordinator agent with sub-agents.
 	coordinatorAgent := c.createCoordinatorAgent(modelInstance, []agent.Agent{
 		mathAgent,
 		weatherAgent,
 		researchAgent,
+		timeAgent,
 	})
 
 	// Create runner.
@@ -134,8 +136,9 @@ func (c *transferChat) createCoordinatorAgent(modelInstance model.Model, subAgen
 		llmagent.WithInstruction(`You are a coordinator agent that helps users by delegating tasks to specialized sub-agents.
 Available sub-agents:
 - math-agent: For mathematical calculations, equations, and numerical problems
-- weather-agent: For weather information, forecasts, and weather-related recommendations  
+- weather-agent: For weather information, forecasts, and weather-related recommendations
 - research-agent: For research, information gathering, and general knowledge questions
+- time-agent: For time calculations, duration differences, and temporal analysis
 
 When a user asks a question:
 1. Analyze what type of task it is
@@ -157,6 +160,7 @@ func (c *transferChat) startChat(ctx context.Context) error {
 	fmt.Println("   • Math: 'Calculate the power of 2 to 10'")
 	fmt.Println("   • Weather: 'What's the weather like in Tokyo?'")
 	fmt.Println("   • Research: 'Tell me about renewable energy trends'")
+	fmt.Println("   • Time: 'Calculate time difference between 2023-01-01T00:00:00Z and 2023-01-02T12:30:45Z'")
 	fmt.Println("   • General: 'Hello, what can you help me with?'")
 	fmt.Println()
 
@@ -418,6 +422,8 @@ func (c *transferChat) getAgentIcon(agentName string) string {
 		return "🌤️"
 	case "research-agent":
 		return "🔍"
+	case "time-agent":
+		return "⏰"
 	default:
 		return "🤖"
 	}
@@ -433,6 +439,8 @@ func (c *transferChat) getAgentDisplayName(agentName string) string {
 		return "Weather Specialist"
 	case "research-agent":
 		return "Research Specialist"
+	case "time-agent":
+		return "Time Specialist"
 	default:
 		return agentName
 	}
@@ -448,6 +456,8 @@ func (c *transferChat) getAgentFromTransfer(event *event.Event) string {
 			return "weather-agent"
 		} else if strings.Contains(content, "research-agent") {
 			return "research-agent"
+		} else if strings.Contains(content, "time-agent") {
+			return "time-agent"
 		}
 	}
 	return "coordinator-agent"
