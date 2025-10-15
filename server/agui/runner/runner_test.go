@@ -22,7 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
-	aguitranslator "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 func TestNew(t *testing.T) {
@@ -58,7 +57,7 @@ func TestRunNoMessages(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
 		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
 	}
 
@@ -79,7 +78,7 @@ func TestRunUserIDResolverError(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
 		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "", errors.New("boom")
 		},
@@ -104,7 +103,7 @@ func TestRunLastMessageNotUser(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
 		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
 	}
 
@@ -132,7 +131,7 @@ func TestRunUnderlyingRunnerError(t *testing.T) {
 	fakeTrans := &fakeTranslator{}
 	r := &runner{
 		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver:    NewOptions().UserIDResolver,
 	}
 
@@ -157,13 +156,16 @@ func TestRunTranslateError(t *testing.T) {
 	close(eventsCh)
 
 	underlying := &fakeRunner{}
-	underlying.run = func(ctx context.Context, userID, sessionID string, message model.Message, _ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+	underlying.run = func(ctx context.Context,
+		userID, sessionID string,
+		message model.Message,
+		_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
 		return eventsCh, nil
 	}
 
 	r := &runner{
 		runner: underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator {
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator {
 			return fakeTrans
 		},
 		userIDResolver: NewOptions().UserIDResolver,
@@ -188,7 +190,10 @@ func TestRunNormal(t *testing.T) {
 	}}
 
 	underlying := &fakeRunner{}
-	underlying.run = func(ctx context.Context, userID, sessionID string, message model.Message, _ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+	underlying.run = func(ctx context.Context,
+		userID, sessionID string,
+		message model.Message,
+		_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
 		assert.Equal(t, "user-123", userID)
 		assert.Equal(t, "thread", sessionID)
 		ch := make(chan *agentevent.Event, 2)
@@ -199,7 +204,7 @@ func TestRunNormal(t *testing.T) {
 	}
 	r := &runner{
 		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
+		translatorFactory: func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
 		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
 			return "user-123", nil
 		},
@@ -236,7 +241,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 		base := agentevent.New("inv", "assistant")
 		replacement := agentevent.New("inv-replacement", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return replacement, nil
 				}),
@@ -248,7 +253,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 	t.Run("return err", func(t *testing.T) {
 		base := agentevent.New("inv", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return nil, errors.New("fail")
 				}),
@@ -260,7 +265,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 	t.Run("both nil", func(t *testing.T) {
 		base := agentevent.New("inv", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return nil, nil
 				}),
@@ -274,7 +279,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 		event1 := agentevent.New("inv-1", "assistant")
 		event2 := agentevent.New("inv-2", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return event1, nil
 				}).
@@ -290,7 +295,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 		base := agentevent.New("inv", "assistant")
 		event2 := agentevent.New("inv-2", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return nil, nil
 				}).
@@ -306,7 +311,7 @@ func TestRunnerHandleBeforeWithCallback(t *testing.T) {
 		base := agentevent.New("inv", "assistant")
 		event2 := agentevent.New("inv-2", "assistant")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterBeforeTranslate(func(ctx context.Context, event *agentevent.Event) (*agentevent.Event, error) {
 					return nil, errors.New("fail")
 				}).
@@ -332,7 +337,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 		base := aguievents.NewRunFinishedEvent("thread", "run")
 		replacement := aguievents.NewRunErrorEvent("callback override")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return replacement, nil
 				}),
@@ -344,7 +349,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 	t.Run("return err", func(t *testing.T) {
 		base := aguievents.NewRunFinishedEvent("thread", "run")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return nil, errors.New("fail")
 				}),
@@ -356,7 +361,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 	t.Run("both nil", func(t *testing.T) {
 		base := aguievents.NewRunFinishedEvent("thread", "run")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return nil, nil
 				}),
@@ -370,7 +375,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 		event1 := aguievents.NewRunFinishedEvent("thread", "run")
 		event2 := aguievents.NewRunFinishedEvent("thread", "run")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return event1, nil
 				}).
@@ -386,7 +391,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 		base := aguievents.NewRunFinishedEvent("thread", "run")
 		event2 := aguievents.NewRunFinishedEvent("thread", "run")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return nil, nil
 				}).
@@ -402,7 +407,7 @@ func TestRunnerHandleAfterWithCallback(t *testing.T) {
 		base := aguievents.NewRunFinishedEvent("thread", "run")
 		event2 := aguievents.NewRunFinishedEvent("thread", "run")
 		r := &runner{
-			callbacks: NewCallbacks().
+			translateCallbacks: translator.NewCallbacks().
 				RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
 					return nil, errors.New("fail")
 				}).
@@ -428,7 +433,7 @@ func TestRunnerBeforeTranslateCallbackOverridesInput(t *testing.T) {
 			Object:  model.ObjectTypeChatCompletion,
 			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "replacement"}}}})
 
-	callbacks := NewCallbacks().
+	callbacks := translator.NewCallbacks().
 		RegisterBeforeTranslate(func(ctx context.Context, evt *agentevent.Event) (*agentevent.Event, error) {
 			return replacement, nil
 		})
@@ -444,7 +449,7 @@ func TestRunnerBeforeTranslateCallbackOverridesInput(t *testing.T) {
 			return ch, nil
 		}}
 
-	r := New(underlying, WithCallbacks(callbacks))
+	r := New(underlying, WithTranslateCallbacks(callbacks))
 
 	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run",
 		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
@@ -466,25 +471,34 @@ func TestRunnerBeforeTranslateCallbackOverridesInput(t *testing.T) {
 func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 	replacement := aguievents.NewRunErrorEvent("override")
 	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}}
-	callbacks := NewCallbacks().RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
-		return replacement, nil
-	})
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			return replacement, nil
+		})
 
-	underlying := &fakeRunner{run: func(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-		ch := make(chan *agentevent.Event, 1)
-		ch <- agentevent.New("inv", "assistant")
-		close(ch)
-		return ch, nil
-	}}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event, 1)
+			ch <- agentevent.New("inv", "assistant")
+			close(ch)
+			return ch, nil
+		}}
 
 	r := &runner{
-		runner:            underlying,
-		translatorFactory: func(*adapter.RunAgentInput) aguitranslator.Translator { return fakeTrans },
-		userIDResolver:    NewOptions().UserIDResolver,
-		callbacks:         callbacks,
+		runner:             underlying,
+		translatorFactory:  func(*adapter.RunAgentInput) translator.Translator { return fakeTrans },
+		userIDResolver:     NewOptions().UserIDResolver,
+		translateCallbacks: callbacks,
 	}
 
-	input := &adapter.RunAgentInput{ThreadID: "thread", RunID: "run", Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
 	ch, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
 	out := collectEvents(t, ch)
@@ -510,11 +524,17 @@ func (f *fakeTranslator) Translate(evt *agentevent.Event) ([]aguievents.Event, e
 }
 
 type fakeRunner struct {
-	run   func(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *agentevent.Event, error)
+	run func(ctx context.Context,
+		userID, sessionID string,
+		message model.Message,
+		opts ...agent.RunOption) (<-chan *agentevent.Event, error)
 	calls int
 }
 
-func (f *fakeRunner) Run(ctx context.Context, userID, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+func (f *fakeRunner) Run(ctx context.Context,
+	userID, sessionID string,
+	message model.Message,
+	opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
 	f.calls++
 	if f.run != nil {
 		return f.run(ctx, userID, sessionID, message, opts...)

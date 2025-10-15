@@ -26,7 +26,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	userID, err := opts.UserIDResolver(context.Background(), &adapter.RunAgentInput{})
 	assert.NoError(t, err)
 	assert.Equal(t, "user", userID)
-	assert.Nil(t, opts.Callbacks)
+	assert.Nil(t, opts.TranslateCallbacks)
 
 	assert.NotNil(t, opts.TranslatorFactory)
 	input := &adapter.RunAgentInput{ThreadID: "thread-1", RunID: "run-1"}
@@ -66,8 +66,8 @@ func TestWithTranslatorFactory(t *testing.T) {
 	assert.Equal(t, customTranslator, tr)
 }
 
-func TestWithCallbacks(t *testing.T) {
-	cb := NewCallbacks()
-	opts := NewOptions(WithCallbacks(cb))
-	assert.Same(t, cb, opts.Callbacks)
+func TestWithTranslateCallbacks(t *testing.T) {
+	cb := translator.NewCallbacks()
+	opts := NewOptions(WithTranslateCallbacks(cb))
+	assert.Same(t, cb, opts.TranslateCallbacks)
 }

@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -32,20 +33,20 @@ type Runner interface {
 func New(r trunner.Runner, opt ...Option) Runner {
 	opts := NewOptions(opt...)
 	run := &runner{
-		runner:            r,
-		translatorFactory: opts.TranslatorFactory,
-		userIDResolver:    opts.UserIDResolver,
-		callbacks:         opts.Callbacks,
+		runner:             r,
+		translatorFactory:  opts.TranslatorFactory,
+		userIDResolver:     opts.UserIDResolver,
+		translateCallbacks: opts.TranslateCallbacks,
 	}
 	return run
 }
 
 // runner is the default implementation of the Runner.
 type runner struct {
-	runner            trunner.Runner
-	translatorFactory TranslatorFactory
-	userIDResolver    UserIDResolver
-	callbacks         *Callbacks
+	runner             trunner.Runner
+	translatorFactory  TranslatorFactory
+	userIDResolver     UserIDResolver
+	translateCallbacks *translator.Callbacks
 }
 
 // Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -113,10 +114,10 @@ func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, 
 }
 
 func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) (*event.Event, error) {
-	if r.callbacks == nil {
+	if r.translateCallbacks == nil {
 		return event, nil
 	}
-	customEvent, err := r.callbacks.RunBeforeTranslate(ctx, event)
+	customEvent, err := r.translateCallbacks.RunBeforeTranslate(ctx, event)
 	if err != nil {
 		return nil, err
 	}
@@ -127,10 +128,10 @@ func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) 
 }
 
 func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
-	if r.callbacks == nil {
+	if r.translateCallbacks == nil {
 		return event, nil
 	}
-	customEvent, err := r.callbacks.RunAfterTranslate(ctx, event)
+	customEvent, err := r.translateCallbacks.RunAfterTranslate(ctx, event)
 	if err != nil {
 		return nil, err
 	}

@@ -154,3 +154,49 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```
+
+### Callback
+
+AG-UI 具有事件翻译的回调能力，方便在事件翻译流程前后插入自定义逻辑。
+
+- `translator.BeforeTranslateCallback`：在内部事件翻译为 AG-UI 事件之前触发。返回值约定：
+  - 返回 `(customEvent, nil)`：使用 `customEvent` 事件作为翻译的输入。
+  - 返回 `(nil, nil)`：保留当前事件，继续执行后续回调；若全部回调都返回 `nil`，最终使用原事件。
+  - 返回错误：终止当前 Run，客户端收到 `RunError`。
+- `translator.AfterTranslateCallback`：在 AG-UI 事件翻译完成、准备发往客户端前触发。返回值约定：
+  - 返回 `(customEvent, nil)`：使用 `customEvent` 作为翻译的输出，最终发送给客户端。
+  - 返回 `(nil, nil)`：保留当前事件，继续执行后续回调；若全部回调都返回 `nil`，最终发送原事件。
+  - 返回错误：终止当前 Run，客户端收到 `RunError`。
+
+使用示例：
+
+```go
+import (
+    "strings"
+
+    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+)
+
+callbacks := translator.NewCallbacks().
+    RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
+        return nil, nil
+    }).
+    RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+        if msg, ok := event.(*aguievents.TextMessageContentEvent); ok {
+            return aguievents.NewTextMessageContentEvent(msg.MessageID, msg.Delta+" [via callback]"), nil
+        }
+        return nil, nil
+    })
+
+server, err := agui.New(
+    runner,
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithTranslateCallbacks(callbacks),
+    ),
+)
+```
+
+事件翻译回调可用于实现自定义监控上报，AG-UI Server 上报 langfuse 可观测平台的完整代码可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。

@@ -7,7 +7,7 @@
 //
 //
 
-package runner
+package translator
 
 import (
 	"context"

@@ -18,9 +18,9 @@ import (
 
 // Options holds the options for the runner.
 type Options struct {
-	TranslatorFactory TranslatorFactory
-	UserIDResolver    UserIDResolver
-	Callbacks         *Callbacks
+	TranslatorFactory  TranslatorFactory
+	UserIDResolver     UserIDResolver
+	TranslateCallbacks *translator.Callbacks
 }
 
 // NewOptions creates a new options instance.
@@ -58,10 +58,10 @@ func WithTranslatorFactory(factory TranslatorFactory) Option {
 	}
 }
 
-// WithCallbacks sets the callbacks.
-func WithCallbacks(c *Callbacks) Option {
+// WithTranslateCallbacks sets the translate callbacks.
+func WithTranslateCallbacks(c *translator.Callbacks) Option {
 	return func(o *Options) {
-		o.Callbacks = c
+		o.TranslateCallbacks = c
 	}
 }
 
