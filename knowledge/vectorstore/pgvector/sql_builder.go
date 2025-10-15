@@ -19,13 +19,13 @@ import (
 )
 
 // Common field list for SELECT clauses.
-var commonFieldsStr = fmt.Sprintf("%s, %s, %s, %s, %s, %s, %s",
-	fieldID, fieldName, fieldContent, fieldVector, fieldMetadata, fieldCreatedAt, fieldUpdatedAt)
+var commonFieldsStr = "*"
 
 // Use SearchMode from vectorstore package.
 
 // updateBuilder builds UPDATE SQL statements safely.
 type updateBuilder struct {
+	o        options
 	table    string
 	id       string
 	setParts []string
@@ -33,11 +33,11 @@ type updateBuilder struct {
 	argIndex int
 }
 
-func newUpdateBuilder(table, id string) *updateBuilder {
+func newUpdateBuilder(o options, id string) *updateBuilder {
 	return &updateBuilder{
-		table:    table,
+		o:        o,
 		id:       id,
-		setParts: []string{"updated_at = $2"},
+		setParts: []string{o.updatedAtFieldName + " = $2"},
 		args:     []any{id, time.Now().Unix()},
 		argIndex: 3,
 	}
@@ -50,7 +50,7 @@ func (ub *updateBuilder) addField(field string, value any) {
 }
 
 func (ub *updateBuilder) build() (string, []any) {
-	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE id = $1`, ub.table, strings.Join(ub.setParts, ", "))
+	sql := fmt.Sprintf(`UPDATE %s SET %s WHERE %s = $1`, ub.o.table, strings.Join(ub.setParts, ", "), ub.o.idFieldName)
 	return sql, ub.args
 }
 
@@ -58,13 +58,12 @@ func (ub *updateBuilder) build() (string, []any) {
 // It supports different search modes: vector, keyword, hybrid, and filter.
 type queryBuilder struct {
 	// Basic query components
-	table        string
+	o            options
 	conditions   []string
 	args         []any
 	argIndex     int
 	orderClause  string
 	selectClause string
-	language     string
 
 	// Search mode specific fields
 	searchMode   vectorstore.SearchMode // Type of search being performed
@@ -75,49 +74,48 @@ type queryBuilder struct {
 	textQueryPos int
 }
 
-func newQueryBuilder(table string, language string) *queryBuilder {
+func newQueryBuilder(o options) *queryBuilder {
 	return &queryBuilder{
-		table:        table,
+		o:            o,
 		conditions:   []string{"1=1"},
 		args:         make([]any, 0),
 		argIndex:     1,
 		selectClause: commonFieldsStr,
-		language:     language,
 	}
 }
 
 // newVectorQueryBuilder creates a builder for pure vector similarity search.
-func newVectorQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeVector, 0, 0)
+func newVectorQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeVector, 0, 0)
 }
 
 // newKeywordQueryBuilder creates a builder for full-text search.
-func newKeywordQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeKeyword, 0, 0)
+func newKeywordQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeKeyword, 0, 0)
 }
 
 // newHybridQueryBuilder creates a builder for hybrid search (vector + text).
-func newHybridQueryBuilder(table string, language string, vectorWeight, textWeight float64) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeHybrid, vectorWeight, textWeight)
+func newHybridQueryBuilder(o options, vectorWeight, textWeight float64) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeHybrid, vectorWeight, textWeight)
 }
 
 // newFilterQueryBuilder creates a builder for filter-only search.
-func newFilterQueryBuilder(table string, language string) *queryBuilder {
-	return newQueryBuilderWithMode(table, language, vectorstore.SearchModeFilter, 0, 0)
+func newFilterQueryBuilder(o options) *queryBuilder {
+	return newQueryBuilderWithMode(o, vectorstore.SearchModeFilter, 0, 0)
 }
 
 // deleteSQLBuilder builds DELETE SQL statements safely with comprehensive filter support
 type deleteSQLBuilder struct {
-	table      string
+	o          options
 	conditions []string
 	args       []any
 	argIndex   int
 }
 
 // newDeleteSQLBuilder creates a builder for DELETE operations
-func newDeleteSQLBuilder(table string) *deleteSQLBuilder {
+func newDeleteSQLBuilder(o options) *deleteSQLBuilder {
 	return &deleteSQLBuilder{
-		table:      table,
+		o:          o,
 		conditions: []string{"1=1"},
 		args:       make([]any, 0),
 		argIndex:   1,
@@ -137,7 +135,7 @@ func (dsb *deleteSQLBuilder) addIDFilter(ids []string) {
 		dsb.argIndex++
 	}
 
-	condition := fmt.Sprintf("id IN (%s)", strings.Join(placeholders, ", "))
+	condition := fmt.Sprintf("%s IN (%s)", dsb.o.idFieldName, strings.Join(placeholders, ", "))
 	dsb.conditions = append(dsb.conditions, condition)
 }
 
@@ -148,7 +146,7 @@ func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]any) {
 		return
 	}
 
-	condition := fmt.Sprintf("metadata @> $%d::jsonb", dsb.argIndex)
+	condition := fmt.Sprintf("%s @> $%d::jsonb", dsb.o.metadataFieldName, dsb.argIndex)
 	dsb.conditions = append(dsb.conditions, condition)
 
 	// Convert map to JSON string for @> operator
@@ -160,13 +158,13 @@ func (dsb *deleteSQLBuilder) addMetadataFilter(metadata map[string]any) {
 // build builds the DELETE query with all conditions
 func (dsb *deleteSQLBuilder) build() (string, []any) {
 	whereClause := strings.Join(dsb.conditions, " AND ")
-	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dsb.table, whereClause)
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s", dsb.o.table, whereClause)
 	return sql, dsb.args
 }
 
 // newQueryBuilderWithMode creates a query builder with specific search mode and weights
-func newQueryBuilderWithMode(table, language string, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
-	qb := newQueryBuilder(table, language)
+func newQueryBuilderWithMode(o options, mode vectorstore.SearchMode, vectorWeight, textWeight float64) *queryBuilder {
+	qb := newQueryBuilder(o)
 	qb.searchMode = mode
 	qb.vectorWeight = vectorWeight
 	qb.textWeight = textWeight
@@ -174,14 +172,14 @@ func newQueryBuilderWithMode(table, language string, mode vectorstore.SearchMode
 	// Set mode-specific configurations.
 	switch mode {
 	case vectorstore.SearchModeVector:
-		qb.orderClause = "ORDER BY embedding <=> $1"
+		qb.orderClause = fmt.Sprintf("ORDER BY %s <=> $1", o.embeddingFieldName)
 	case vectorstore.SearchModeKeyword:
-		qb.orderClause = "ORDER BY score DESC, created_at DESC"
+		qb.orderClause = fmt.Sprintf("ORDER BY score DESC, %s DESC", o.createdAtFieldName)
 	case vectorstore.SearchModeHybrid:
 		qb.orderClause = "ORDER BY score DESC"
 	case vectorstore.SearchModeFilter:
 		qb.addSelectClause("1.0 as score")
-		qb.orderClause = "ORDER BY created_at DESC"
+		qb.orderClause = fmt.Sprintf("ORDER BY %s DESC", o.createdAtFieldName)
 	}
 
 	return qb
@@ -196,8 +194,10 @@ func (qb *queryBuilder) addKeywordSearchConditions(query string, minScore float6
 
 	// Add score filter if needed.
 	if minScore > 0 {
-		scoreCondition := fmt.Sprintf("ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%d)) >= $%d",
-			qb.language, qb.language, qb.textQueryPos, qb.argIndex)
+		scoreCondition := fmt.Sprintf("ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)) >= $%d",
+			qb.o.language, qb.o.contentFieldName,
+			qb.o.language, qb.textQueryPos,
+			qb.argIndex)
 		qb.conditions = append(qb.conditions, scoreCondition)
 		qb.args = append(qb.args, minScore)
 		qb.argIndex++
@@ -234,7 +234,7 @@ func (qb *queryBuilder) addIDFilter(ids []string) {
 		qb.argIndex++
 	}
 
-	condition := fmt.Sprintf("id IN (%s)", strings.Join(placeholders, ","))
+	condition := fmt.Sprintf("%s IN (%s)", qb.o.idFieldName, strings.Join(placeholders, ","))
 	qb.conditions = append(qb.conditions, condition)
 }
 
@@ -247,7 +247,7 @@ func (qb *queryBuilder) addMetadataFilter(metadata map[string]any) {
 
 	// Use @> operator for containment check, more efficient with GIN index.
 	// Cast the parameter to JSONB to ensure proper type matching.
-	condition := fmt.Sprintf("metadata @> $%d::jsonb", qb.argIndex)
+	condition := fmt.Sprintf("%s @> $%d::jsonb", qb.o.metadataFieldName, qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 
 	// Convert map to JSON string for @> operator.
@@ -258,13 +258,15 @@ func (qb *queryBuilder) addMetadataFilter(metadata map[string]any) {
 
 // addScoreFilter adds score filter to the query.
 func (qb *queryBuilder) addScoreFilter(minScore float64) {
-	condition := fmt.Sprintf("(1 - (embedding <=> $1)) >= %f", minScore)
+	condition := fmt.Sprintf("(1 - (%s <=> $1)) >= %f", qb.o.embeddingFieldName, minScore)
 	qb.conditions = append(qb.conditions, condition)
 }
 
 // addFtsCondition is a helper to add full-text search conditions.
 func (qb *queryBuilder) addFtsCondition(query string) {
-	condition := fmt.Sprintf("to_tsvector('%s', content) @@ plainto_tsquery('%s', $%d)", qb.language, qb.language, qb.argIndex)
+	condition := fmt.Sprintf("to_tsvector('%s', %s) @@ plainto_tsquery('%s', $%d)",
+		qb.o.language, qb.o.contentFieldName,
+		qb.o.language, qb.argIndex)
 	qb.conditions = append(qb.conditions, condition)
 	qb.args = append(qb.args, query)
 	qb.argIndex++
@@ -280,7 +282,7 @@ func (qb *queryBuilder) build(limit int) (string, []any) {
 		FROM %s
 		WHERE %s
 		%s
-		LIMIT %d`, finalSelectClause, qb.table, whereClause, qb.orderClause, limit)
+		LIMIT %d`, finalSelectClause, qb.o.table, whereClause, qb.orderClause, limit)
 
 	return sql, qb.args
 }
@@ -310,11 +312,13 @@ func (qb *queryBuilder) buildHybridSelectClause() string {
 	if qb.textQueryPos > 0 {
 		// Hybrid search: vector + text.
 		scoreExpr = fmt.Sprintf(
-			"(1 - (embedding <=> $1)) * %.3f + ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%d)) * %.3f",
-			qb.vectorWeight, qb.language, qb.language, qb.textQueryPos, qb.textWeight)
+			"(1 - (%s <=> $1)) * %.3f + ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d)) * %.3f",
+			qb.o.embeddingFieldName, qb.vectorWeight,
+			qb.o.language, qb.o.contentFieldName,
+			qb.o.language, qb.textQueryPos, qb.textWeight)
 	} else {
 		// Pure vector search: only vector similarity.
-		scoreExpr = fmt.Sprintf("(1 - (embedding <=> $1)) * %.3f", qb.vectorWeight)
+		scoreExpr = fmt.Sprintf("(1 - (%s <=> $1)) * %.3f", qb.o.embeddingFieldName, qb.vectorWeight)
 	}
 	return fmt.Sprintf("%s, %s as score", commonFieldsStr, scoreExpr)
 }
@@ -323,8 +327,9 @@ func (qb *queryBuilder) buildHybridSelectClause() string {
 func (qb *queryBuilder) buildKeywordSelectClause() string {
 	if qb.textQueryPos > 0 {
 		scoreExpr := fmt.Sprintf(
-			"ts_rank_cd(to_tsvector('%s', content), plainto_tsquery('%s', $%d))",
-			qb.language, qb.language, qb.textQueryPos)
+			"ts_rank_cd(to_tsvector('%s', %s), plainto_tsquery('%s', $%d))",
+			qb.o.language, qb.o.contentFieldName,
+			qb.o.language, qb.textQueryPos)
 		return fmt.Sprintf("%s, %s as score", commonFieldsStr, scoreExpr)
 	}
 	return fmt.Sprintf("%s, 0.0 as score", commonFieldsStr)
@@ -332,16 +337,16 @@ func (qb *queryBuilder) buildKeywordSelectClause() string {
 
 // metadataQueryBuilder builds SQL queries specifically for metadata retrieval
 type metadataQueryBuilder struct {
-	table      string
+	o          options
 	conditions []string
 	args       []any
 	argIndex   int
 }
 
 // newMetadataQueryBuilder creates a builder for metadata queries
-func newMetadataQueryBuilder(table string) *metadataQueryBuilder {
+func newMetadataQueryBuilder(o options) *metadataQueryBuilder {
 	return &metadataQueryBuilder{
-		table:      table,
+		o:          o,
 		conditions: []string{"1=1"},
 		args:       make([]any, 0),
 		argIndex:   1,
@@ -361,7 +366,7 @@ func (mqb *metadataQueryBuilder) addIDFilter(ids []string) {
 		mqb.argIndex++
 	}
 
-	condition := fmt.Sprintf("id IN (%s)", strings.Join(placeholders, ", "))
+	condition := fmt.Sprintf("%s IN (%s)", mqb.o.idFieldName, strings.Join(placeholders, ", "))
 	mqb.conditions = append(mqb.conditions, condition)
 }
 
@@ -371,7 +376,7 @@ func (mqb *metadataQueryBuilder) addMetadataFilter(metadata map[string]any) {
 		return
 	}
 
-	condition := fmt.Sprintf("metadata @> $%d::jsonb", mqb.argIndex)
+	condition := fmt.Sprintf("%s @> $%d::jsonb", mqb.o.metadataFieldName, mqb.argIndex)
 	mqb.conditions = append(mqb.conditions, condition)
 
 	// Convert map to JSON string for @> operator
@@ -393,28 +398,28 @@ func (mqb *metadataQueryBuilder) buildWithPagination(limit, offset int) (string,
 	mqb.args = append(mqb.args, offset)
 
 	sql := fmt.Sprintf(`
-		SELECT id, metadata
+		SELECT *, 0.0 as score
 		FROM %s
 		WHERE %s
-		ORDER BY created_at
+		ORDER BY %s
 		LIMIT %s OFFSET %s`,
-		mqb.table, whereClause, limitPlaceholder, offsetPlaceholder)
+		mqb.o.table, whereClause, mqb.o.createdAtFieldName, limitPlaceholder, offsetPlaceholder)
 
 	return sql, mqb.args
 }
 
 // countQueryBuilder builds SQL COUNT queries for document counting
 type countQueryBuilder struct {
-	table      string
+	o          options
 	conditions []string
 	args       []any
 	argIndex   int
 }
 
 // newCountQueryBuilder creates a builder for count queries
-func newCountQueryBuilder(table string) *countQueryBuilder {
+func newCountQueryBuilder(o options) *countQueryBuilder {
 	return &countQueryBuilder{
-		table:      table,
+		o:          o,
 		conditions: []string{"1=1"},
 		args:       make([]any, 0),
 		argIndex:   1,
@@ -427,7 +432,7 @@ func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]any) {
 		return
 	}
 
-	condition := fmt.Sprintf("metadata @> $%d::jsonb", cqb.argIndex)
+	condition := fmt.Sprintf("%s @> $%d::jsonb", cqb.o.metadataFieldName, cqb.argIndex)
 	cqb.conditions = append(cqb.conditions, condition)
 
 	// Convert map to JSON string for @> operator
@@ -439,6 +444,18 @@ func (cqb *countQueryBuilder) addMetadataFilter(metadata map[string]any) {
 // build builds the COUNT query
 func (cqb *countQueryBuilder) build() (string, []any) {
 	whereClause := strings.Join(cqb.conditions, " AND ")
-	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", cqb.table, whereClause)
+	sql := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", cqb.o.table, whereClause)
 	return sql, cqb.args
+}
+
+func buildUpsertSQL(o options) string {
+	return fmt.Sprintf(sqlUpsertDocument, o.table,
+		o.idFieldName, o.nameFieldName, o.contentFieldName, o.embeddingFieldName, o.metadataFieldName, o.createdAtFieldName, o.updatedAtFieldName,
+		o.idFieldName,
+		o.nameFieldName, o.nameFieldName,
+		o.contentFieldName, o.contentFieldName,
+		o.embeddingFieldName, o.embeddingFieldName,
+		o.metadataFieldName, o.metadataFieldName,
+		o.updatedAtFieldName, o.updatedAtFieldName,
+	)
 }
