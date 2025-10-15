@@ -17,15 +17,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 )
 
-type esDocument map[string]any
+type esDocument map[string]json.RawMessage
 
 func (es esDocument) getString(key string) string {
 	value, ok := es[key]
 	if !ok {
 		return ""
 	}
-	str, ok := value.(string)
-	if !ok {
+	var str string
+	err := json.Unmarshal(value, &str)
+	if err != nil {
 		return ""
 	}
 	return str
@@ -36,8 +37,9 @@ func (es esDocument) getMetadata(key string) map[string]any {
 	if !ok {
 		return nil
 	}
-	m, ok := value.(map[string]any)
-	if !ok {
+	var m map[string]any
+	err := json.Unmarshal(value, &m)
+	if err != nil {
 		return nil
 	}
 	return m
@@ -48,20 +50,12 @@ func (es esDocument) getEmbedding(key string) []float64 {
 	if !ok {
 		return nil
 	}
-	values, ok := value.([]any)
-	if !ok {
+	var embedding []float64
+	err := json.Unmarshal(value, &embedding)
+	if err != nil {
 		return nil
 	}
-	var floatSlice []float64
-	for _, v := range values {
-		val, ok := v.(float64)
-		if !ok {
-			return nil
-		}
-		floatSlice = append(floatSlice, val)
-	}
-
-	return floatSlice
+	return embedding
 }
 
 func (es esDocument) getTime(key string) time.Time {
@@ -69,15 +63,12 @@ func (es esDocument) getTime(key string) time.Time {
 	if !ok {
 		return time.Time{}
 	}
-	str, ok := value.(string)
-	if !ok {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, str)
+	var date time.Time
+	err := json.Unmarshal(value, &date)
 	if err != nil {
 		return time.Time{}
 	}
-	return t
+	return date
 }
 
 func (vs *VectorStore) docBuilder(hitSource json.RawMessage) (*document.Document, []float64, error) {
