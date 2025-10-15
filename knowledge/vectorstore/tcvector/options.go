@@ -256,6 +256,7 @@ func WithContentField(field string) Option {
 }
 
 // WithEmbeddingField sets the tcvectordb field name for embedding.
+// This field value type is []float64
 func WithEmbeddingField(field string) Option {
 	return func(o *options) {
 		o.embeddingFieldName = field
@@ -270,6 +271,7 @@ func WithMetadataField(field string) Option {
 }
 
 // WithCreatedAtField sets the tcvectordb field name for created_at.
+// This field value type is uint64, so the value is converted to time.Time
 func WithCreatedAtField(field string) Option {
 	return func(o *options) {
 		o.createdAtFieldName = field
@@ -277,6 +279,7 @@ func WithCreatedAtField(field string) Option {
 }
 
 // WithUpdatedAtField sets the tcvectordb field name for updated_at.
+// This field value type is uint64, so the value is converted to time.Time
 func WithUpdatedAtField(field string) Option {
 	return func(o *options) {
 		o.updatedAtFieldName = field
