@@ -139,7 +139,7 @@ func initVectorDB(client storage.ClientInterface, options options) error {
 	indexes.FilterIndex = append(indexes.FilterIndex, tcvectordb.FilterIndex{
 		FieldName: options.createdAtFieldName,
 		IndexType: tcvectordb.FILTER,
-		FieldType: tcvectordb.String,
+		FieldType: tcvectordb.Uint64,
 	})
 
 	indexes.FilterIndex = append(indexes.FilterIndex, tcvectordb.FilterIndex{
