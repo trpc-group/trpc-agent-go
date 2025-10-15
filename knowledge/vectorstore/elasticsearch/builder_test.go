@@ -21,7 +21,8 @@ func TestBuildVectorSearchQuery(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults: 20,
+			maxResults:      20,
+			vectorDimension: 3,
 		},
 		filterConverter: &esConverter{},
 	}
@@ -63,7 +64,8 @@ func TestBuildHybridSearchQuery(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults: 25,
+			maxResults:      25,
+			vectorDimension: 3,
 		},
 		filterConverter: &esConverter{},
 	}
@@ -141,8 +143,9 @@ func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults:  30,
-			idFieldName: "id",
+			maxResults:      30,
+			idFieldName:     "id",
+			vectorDimension: 3,
 		},
 		filterConverter: &esConverter{},
 	}
@@ -172,7 +175,7 @@ func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
 
 func TestBuildVectorSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
 	vs := &VectorStore{
-		option:          options{maxResults: 10},
+		option:          options{maxResults: 10, vectorDimension: 2},
 		filterConverter: &esConverter{},
 	}
 	query := &vectorstore.SearchQuery{
@@ -204,7 +207,7 @@ func TestBuildKeywordSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
 
 func TestBuildHybridSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
 	vs := &VectorStore{
-		option:          options{maxResults: 10},
+		option:          options{maxResults: 10, vectorDimension: 2},
 		filterConverter: &esConverter{},
 	}
 	query := &vectorstore.SearchQuery{
