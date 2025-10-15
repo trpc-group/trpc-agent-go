@@ -46,6 +46,9 @@ func (b *baseSQLBuilder) addFilterCondition(cond *condConvertResult) {
 		b.argIndex++
 	}
 	c := fmt.Sprintf(cond.cond, indexes...)
+	if len(b.conditions) > 0 {
+		c = fmt.Sprintf("(%s)", c)
+	}
 	b.conditions = append(b.conditions, c)
 	b.args = append(b.args, cond.args...)
 }

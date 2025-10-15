@@ -1182,7 +1182,7 @@ func Test_Vector_buildQueryFilter(t *testing.T) {
 				},
 			},
 			wantErr:  false,
-			wantSql:  "WHERE 1=1 AND (name = $1) AND (age > $2)\n",
+			wantSql:  "WHERE 1=1 AND ((name = $1) AND (age > $2))\n",
 			wantArgs: []any{"test", 30},
 		},
 		{
@@ -1206,7 +1206,7 @@ func Test_Vector_buildQueryFilter(t *testing.T) {
 				},
 			},
 			wantErr:  false,
-			wantSql:  "WHERE 1=1 AND id IN ($1, $2) AND (name = $3) AND (age > $4)\n",
+			wantSql:  "WHERE 1=1 AND id IN ($1, $2) AND ((name = $3) AND (age > $4))\n",
 			wantArgs: []any{"1", "2", "test", 30},
 		},
 	}
