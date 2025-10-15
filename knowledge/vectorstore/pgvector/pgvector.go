@@ -205,7 +205,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	if scoredDoc == nil || scoredDoc.Document == nil {
-		return nil, nil, fmt.Errorf("pgvector get document: %w", err)
+		return nil, nil, fmt.Errorf("pgvector get document: not found")
 	}
 
 	return scoredDoc.Document, embedding, nil
