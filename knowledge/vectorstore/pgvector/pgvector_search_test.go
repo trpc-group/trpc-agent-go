@@ -1167,12 +1167,12 @@ func Test_Vector_buildQueryFilter(t *testing.T) {
 				FilterCondition: &searchfilter.UniversalFilterCondition{
 					Operator: searchfilter.OperatorAnd,
 					Value: []*searchfilter.UniversalFilterCondition{
-						&searchfilter.UniversalFilterCondition{
+						{
 							Field:    "name",
 							Operator: searchfilter.OperatorEqual,
 							Value:    "test",
 						},
-						&searchfilter.UniversalFilterCondition{
+						{
 							Field:    "age",
 							Operator: searchfilter.OperatorGreaterThan,
 							Value:    30,
@@ -1191,12 +1191,12 @@ func Test_Vector_buildQueryFilter(t *testing.T) {
 				FilterCondition: &searchfilter.UniversalFilterCondition{
 					Operator: searchfilter.OperatorAnd,
 					Value: []*searchfilter.UniversalFilterCondition{
-						&searchfilter.UniversalFilterCondition{
+						{
 							Field:    "name",
 							Operator: searchfilter.OperatorEqual,
 							Value:    "test",
 						},
-						&searchfilter.UniversalFilterCondition{
+						{
 							Field:    "age",
 							Operator: searchfilter.OperatorGreaterThan,
 							Value:    30,
