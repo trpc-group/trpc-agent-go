@@ -173,12 +173,11 @@ Usage Example:
 
 ```go
 import (
-    "strings"
-
-    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-    "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-    "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 callbacks := translator.NewCallbacks().

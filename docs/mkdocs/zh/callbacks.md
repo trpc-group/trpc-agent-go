@@ -11,6 +11,9 @@
 
 每类都有 Before 与 After 两种回调。Before 回调可以通过返回非空结果提前返回，跳过默认执行。
 
+所有回调将按照注册顺序依次执行，且一旦有回调返回非 `nil` 值，回调链路将立即停止。如果需要叠加多个回调效果，请在单一回调中实现相应的逻辑。
+
+
 ---
 
 ## ModelCallbacks
@@ -29,6 +32,7 @@ type AfterModelCallback  func(ctx context.Context, req *model.Request, resp *mod
 
 - Before 可返回非空响应以跳过模型调用
 - After 可获取原始请求 `req`，便于内容还原与后处理
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
@@ -59,6 +63,8 @@ modelCallbacks := model.NewCallbacks().
 
 - BeforeToolCallback：工具调用前触发
 - AfterToolCallback：工具调用后触发
+
+注意：Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 签名：
 
@@ -141,6 +147,7 @@ type AfterAgentCallback  func(ctx context.Context, inv *agent.Invocation, runErr
 
 - Before 可返回自定义 `*model.Response` 以中止后续模型调用
 - After 可返回替换响应
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 
@@ -193,6 +200,7 @@ type AfterTranslateCallback  func(ctx context.Context, evt aguievents.Event) (ag
 
 - Before 回调返回非空自定义事件时，事件翻译的输入被替换为该自定义事件
 - After 回调返回非空自定义事件时，事件翻译的输出被替换为该自定义事件，最终发送给客户端
+- Before/After 回调遵循全局短路规则，若要叠加修改请在单个回调内完成合并逻辑
 
 示例：
 

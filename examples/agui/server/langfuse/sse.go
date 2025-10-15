@@ -7,7 +7,9 @@ import (
 
 	aguisse "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
@@ -108,7 +110,9 @@ func (s *sse) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	for event := range eventsCh {
 		if err := s.writer.WriteEvent(ctx, w, event); err != nil {
-			span.SetAttributes(attribute.String("error", err.Error()))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			log.Errorf("write event: %v", err)
 			return
 		}
 	}

@@ -172,10 +172,11 @@ AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前�
 
 ```go
 import (
-    aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
-    "trpc.group/trpc-go/trpc-agent-go/server/agui"
-    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
-    "trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 callbacks := translator.NewCallbacks().
