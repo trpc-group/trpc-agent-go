@@ -593,6 +593,9 @@ func TestGetSuccess(t *testing.T) {
 	assert.Equal(t, "n", d.Name)
 	assert.Equal(t, "c", d.Content)
 	assert.Equal(t, 3, len(emb))
+	assert.Equal(t, float64(1), d.Metadata["a"])
+	assert.Equal(t, "2024-01-01T00:00:00Z", d.CreatedAt.Format(time.RFC3339))
+	assert.Equal(t, "2024-01-01T00:00:00Z", d.UpdatedAt.Format(time.RFC3339))
 }
 
 func TestGetSuccess_withDocBuilder(t *testing.T) {

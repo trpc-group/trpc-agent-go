@@ -167,7 +167,7 @@ func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types
 	for key, value := range filter.Metadata {
 		filters = append(filters, &searchfilter.UniversalFilterCondition{
 			Operator: searchfilter.OperatorEqual,
-			Field:    fmt.Sprintf("%s.%s", defaultFieldMetadata, key),
+			Field:    fmt.Sprintf("%s.%s", vs.option.metadataFieldName, key),
 			Value:    value,
 		})
 	}
