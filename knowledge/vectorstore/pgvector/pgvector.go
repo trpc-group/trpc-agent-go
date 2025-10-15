@@ -204,6 +204,10 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 		return nil, nil, fmt.Errorf("pgvector get document: %w", err)
 	}
 
+	if scoredDoc == nil || scoredDoc.Document == nil {
+		return nil, nil, fmt.Errorf("pgvector get document: %w", err)
+	}
+
 	return scoredDoc.Document, embedding, nil
 }
 
@@ -446,11 +450,8 @@ func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []any
 		}
 		var score float64
 		var id string
-		if scoredDoc != nil {
+		if scoredDoc != nil && scoredDoc.Document != nil {
 			score = scoredDoc.Score
-			if scoredDoc.Document != nil {
-				id = scoredDoc.Document.ID
-			}
 			id = scoredDoc.Document.ID
 			result.Results = append(result.Results, scoredDoc)
 		}
