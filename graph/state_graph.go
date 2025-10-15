@@ -495,15 +495,6 @@ func WithLLMGenerationConfig(cfg model.GenerationConfig) LLMNodeFuncOption {
 	}
 }
 
-// WithTokenTailoring configures token tailoring for the LLM node.
-func WithTokenTailoring(maxTokens int, tokenCounter model.TokenCounter, strategy model.TailoringStrategy) LLMNodeFuncOption {
-	return func(runner *llmRunner) {
-		runner.maxTokens = maxTokens
-		runner.tokenCounter = tokenCounter
-		runner.tailoringStrategy = strategy
-	}
-}
-
 // NewLLMNodeFunc creates a NodeFunc that uses the model package directly.
 // This implements LLM node functionality using the model package interface.
 func NewLLMNodeFunc(
@@ -535,14 +526,11 @@ func NewLLMNodeFunc(
 
 // llmRunner encapsulates LLM execution dependencies to avoid long parameter lists.
 type llmRunner struct {
-	llmModel          model.Model
-	instruction       string
-	tools             map[string]tool.Tool
-	nodeID            string
-	generationConfig  model.GenerationConfig
-	tokenCounter      model.TokenCounter      // TokenCounter count tokens for token tailoring.
-	tailoringStrategy model.TailoringStrategy // TailoringStrategy defines the strategy for token tailoring.
-	maxTokens         int                     // MaxTokens is the max tokens for token tailoring.
+	llmModel         model.Model
+	instruction      string
+	tools            map[string]tool.Tool
+	nodeID           string
+	generationConfig model.GenerationConfig
 }
 
 // execute implements the three-stage rule for LLM execution.
@@ -660,8 +648,6 @@ func (r *llmRunner) executeModel(
 	span oteltrace.Span,
 	instructionUsed string,
 ) (any, error) {
-	// Apply token tailoring before building request if configured.
-	messages = r.applyTokenTailoring(ctx, messages)
 	request := &model.Request{
 		Messages:         messages,
 		Tools:            r.tools,
@@ -721,22 +707,6 @@ func (r *llmRunner) processInstruction(state State) string {
 		}
 	}
 	return instr
-}
-
-// applyTokenTailoring performs best-effort tailoring and returns possibly-updated messages.
-func (r *llmRunner) applyTokenTailoring(ctx context.Context, messages []model.Message) []model.Message {
-	if r.tokenCounter == nil || r.tailoringStrategy == nil || r.maxTokens <= 0 {
-		return messages
-	}
-	if len(messages) == 0 {
-		return messages
-	}
-	tailored, err := r.tailoringStrategy.TailorMessages(ctx, messages, r.maxTokens)
-	if err != nil {
-		log.Warn("token tailoring failed", err)
-		return messages
-	}
-	return tailored
 }
 
 // extractAssistantMessage extracts the assistant message from model result.
