@@ -50,7 +50,7 @@ func marshalArgsWithFilter(t *testing.T, query string, filters []KnowledgeFilter
 func TestKnowledgeSearchTool(t *testing.T) {
 	t.Run("empty query", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewKnowledgeSearchTool(kb, nil)
+		searchTool := NewKnowledgeSearchTool(kb)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, ""))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "query cannot be empty")
@@ -58,7 +58,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 
 	t.Run("search error", func(t *testing.T) {
 		kb := stubKnowledge{err: errors.New("boom")}
-		searchTool := NewKnowledgeSearchTool(kb, nil)
+		searchTool := NewKnowledgeSearchTool(kb)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "search failed")
@@ -66,7 +66,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 
 	t.Run("no result", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewKnowledgeSearchTool(kb, nil)
+		searchTool := NewKnowledgeSearchTool(kb)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no relevant information found")
@@ -74,7 +74,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "foo", Score: 0.9}}
-		searchTool := NewKnowledgeSearchTool(kb, nil)
+		searchTool := NewKnowledgeSearchTool(kb)
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgs(t, "hello"))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
@@ -85,7 +85,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 
 	// Verify Declaration metadata is populated.
 	kb := stubKnowledge{}
-	ttool := NewKnowledgeSearchTool(kb, nil)
+	ttool := NewKnowledgeSearchTool(kb)
 	decl := ttool.Declaration()
 	require.NotEmpty(t, decl.Name)
 	require.NotEmpty(t, decl.Description)
@@ -102,7 +102,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("empty query", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "", nil))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "query cannot be empty")
@@ -110,7 +110,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("search error", func(t *testing.T) {
 		kb := stubKnowledge{err: errors.New("search failed")}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
 		require.Error(t, err)
@@ -119,7 +119,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("no result", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
 		_, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
 		require.Error(t, err)
@@ -128,7 +128,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("success with single filter", func(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "filtered content", Score: 0.85}}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		filters := []KnowledgeFilter{{Key: "category", Value: "documentation"}}
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "hello", filters))
 		require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("success with multiple filters", func(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "multi-filtered content", Score: 0.92}}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		filters := []KnowledgeFilter{
 			{Key: "category", Value: "documentation"},
 			{Key: "protocol", Value: "trpc-go"},
@@ -156,7 +156,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("success with no filters", func(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{Text: "unfiltered content", Score: 0.75}}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		res, err := searchTool.(ctool.CallableTool).Call(context.Background(), marshalArgsWithFilter(t, "general query", nil))
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
@@ -167,7 +167,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("verify declaration metadata", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, agenticFilterInfo)
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
 		decl := searchTool.Declaration()
 		require.NotEmpty(t, decl.Name)
 		require.Equal(t, "knowledge_search_with_agentic_filter", decl.Name)
@@ -182,7 +182,7 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 
 	t.Run("verify description generation with empty filter info", func(t *testing.T) {
 		kb := stubKnowledge{}
-		searchTool := NewAgenticFilterSearchTool(kb, nil, map[string][]any{})
+		searchTool := NewAgenticFilterSearchTool(kb, map[string][]any{})
 		decl := searchTool.Declaration()
 		require.Contains(t, decl.Description, "helpful assistant")
 		require.NotContains(t, decl.Description, "Available filters")
