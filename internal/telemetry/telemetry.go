@@ -44,10 +44,12 @@ const (
 	OperationEmbeddings      = "embeddings"
 )
 
+// NewChatSpanName creates a new chat span name.
 func NewChatSpanName(requestModel string) string {
 	return newInferenceSpanName(OperationChat, requestModel)
 }
 
+// NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
 	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
 }
@@ -165,6 +167,7 @@ func TraceToolCall(span trace.Span, declaration *tool.Declaration, args []byte, 
 	)
 }
 
+// ToolNameMergedTools is the name of the merged tools.
 const ToolNameMergedTools = "(merged tools)"
 
 // TraceMergedToolCalls traces the invocation of a merged tool call.
