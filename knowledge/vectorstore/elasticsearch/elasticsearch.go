@@ -25,6 +25,7 @@ import (
 
 	istorage "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
@@ -80,8 +81,9 @@ type indexCreateBody struct {
 
 // VectorStore implements vectorstore.VectorStore interface using Elasticsearch.
 type VectorStore struct {
-	client istorage.Client
-	option options
+	client          istorage.Client
+	option          options
+	filterConverter searchfilter.Converter[types.QueryVariant]
 }
 
 // New creates a new Elasticsearch vector store with options.
@@ -126,8 +128,9 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	vs := &VectorStore{
-		client: client,
-		option: option,
+		client:          client,
+		option:          option,
+		filterConverter: &esConverter{},
 	}
 
 	// Ensure index exists with proper mapping.

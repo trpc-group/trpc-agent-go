@@ -18,7 +18,9 @@ import (
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/types/enums/textquerytype"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
@@ -55,10 +57,12 @@ func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -80,10 +84,12 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
@@ -127,44 +133,58 @@ func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*
 		Size(vs.getMaxResult(query.Limit))
 
 	// Add filters if specified.
-	if query.Filter != nil {
-		if filterQuery := vs.buildFilterQuery(query.Filter); filterQuery != nil {
-			searchBody.PostFilter(filterQuery)
-		}
+	filterQuery, err := vs.buildFilterQuery(query.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if filterQuery != nil {
+		searchBody.PostFilter(filterQuery)
 	}
 
 	return searchBody.SearchRequestBodyCaster(), nil
 }
 
 // buildFilterQuery builds a filter query for search results.
-func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) types.QueryVariant {
-	var filters []types.QueryVariant
+func (vs *VectorStore) buildFilterQuery(filter *vectorstore.SearchFilter) (types.QueryVariant, error) {
+	if filter == nil {
+		return nil, nil
+	}
+	var filters []*searchfilter.UniversalFilterCondition
+	if filter.FilterCondition != nil {
+		filters = append(filters, filter.FilterCondition)
+	}
 
 	// Filter by document IDs.
 	if len(filter.IDs) > 0 {
-		termsQuery := esdsl.NewTermsQuery()
-		fieldValues := make([]types.FieldValueVariant, len(filter.IDs))
-		for i, id := range filter.IDs {
-			fieldValues[i] = esdsl.NewFieldValue().String(id)
-		}
-		idField := vs.option.idFieldName
-		termsQuery.AddTermsQuery(idField, esdsl.NewTermsQueryField().FieldValues(fieldValues...))
-		filters = append(filters, termsQuery)
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorIn,
+			Field:    vs.option.idFieldName,
+			Value:    filter.IDs,
+		})
 	}
 
 	// Filter by metadata.
 	for key, value := range filter.Metadata {
-		termQuery := esdsl.NewTermQuery(fmt.Sprintf("%s.%s", defaultFieldMetadata, key),
-			esdsl.NewFieldValue().String(fmt.Sprintf("%v", value)))
-		filters = append(filters, termQuery)
+		filters = append(filters, &searchfilter.UniversalFilterCondition{
+			Operator: searchfilter.OperatorEqual,
+			Field:    fmt.Sprintf("%s.%s", defaultFieldMetadata, key),
+			Value:    value,
+		})
 	}
 
 	if len(filters) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	boolQuery := esdsl.NewBoolQuery().Filter(filters...)
-	return boolQuery
+	filterQuery, err := vs.filterConverter.Convert(&searchfilter.UniversalFilterCondition{
+		Operator: searchfilter.OperatorAnd,
+		Value:    filters,
+	})
+	if err != nil {
+		log.Warnf("elasticsearch build filter query failed: %v", err)
+		return nil, err
+	}
+	return filterQuery, nil
 }
 
 func (vs *VectorStore) getMaxResult(maxResults int) int {

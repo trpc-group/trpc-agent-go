@@ -45,6 +45,7 @@ type ToolSet struct {
 	sessionManager *mcpSessionManager
 	tools          []tool.Tool
 	mu             sync.RWMutex
+	name           string
 }
 
 // NewMCPToolSet creates a new MCP tool set with the given configuration.
@@ -53,6 +54,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	cfg := toolSetConfig{
 		connectionConfig: config,
 		mcpOptions:       []mcp.ClientOption{}, // Initialize mcpOptions
+		name:             "mcp",
 	}
 
 	// Apply user options.
@@ -72,6 +74,7 @@ func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 		config:         cfg,
 		sessionManager: sessionManager,
 		tools:          nil,
+		name:           cfg.name,
 	}
 
 	return toolSet
@@ -112,6 +115,11 @@ func (ts *ToolSet) Close() error {
 
 	log.Debug("MCP tool set closed successfully")
 	return nil
+}
+
+// Name implements the ToolSet interface.
+func (ts *ToolSet) Name() string {
+	return ts.name
 }
 
 // listTools connects to the MCP server and refreshes the tool list.
