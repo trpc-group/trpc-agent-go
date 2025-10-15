@@ -250,22 +250,6 @@ func (qb *queryBuilder) addSelectClause(scoreExpression string) {
 	qb.selectClause = fmt.Sprintf("%s, %s", commonFieldsStr, scoreExpression)
 }
 
-func (qb *queryBuilder) addFilterCondition(cond *condConvertResult) {
-	if cond == nil || cond.cond == "" {
-		return
-	}
-
-	argNum := len(cond.args)
-	indexes := make([]any, argNum)
-	for i := 0; i < argNum; i++ {
-		indexes[i] = qb.argIndex
-		qb.argIndex++
-	}
-	c := fmt.Sprintf(cond.cond, indexes...)
-	qb.conditions = append(qb.conditions, c)
-	qb.args = append(qb.args, cond.args...)
-}
-
 // addScoreFilter adds score filter to the query.
 func (qb *queryBuilder) addScoreFilter(minScore float64) {
 	condition := fmt.Sprintf("(1 - (%s <=> $1)) >= %f", qb.o.embeddingFieldName, minScore)
