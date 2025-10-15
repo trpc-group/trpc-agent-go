@@ -346,6 +346,12 @@ func TraceChat(span trace.Span, invoke *agent.Invocation, req *model.Request, rs
 		} else {
 			span.SetAttributes(attribute.String(KeyGenAIInputMessages, "<not json serializable>"))
 		}
+		span.SetAttributes(attribute.String(KeyGenAIResponseModel, rsp.Model))
+		if rsp.Usage != nil {
+			span.SetAttributes(attribute.Int(KeyGenAIUsageInputTokens, rsp.Usage.PromptTokens))
+			span.SetAttributes(attribute.Int(KeyGenAIUsageOutputTokens, rsp.Usage.CompletionTokens))
+		}
+		span.SetAttributes(attribute.String(KeyGenAIResponseID, rsp.ID))
 	}
 
 	if rsp != nil {
