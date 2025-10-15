@@ -64,9 +64,6 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 		}
 	}
 
-	if total < 0 {
-		return 0, fmt.Errorf("invalid negative token count for message %v", message)
-	}
 	return total, nil
 }
 
@@ -78,10 +75,8 @@ func (c *SimpleTokenCounter) CountTokensRange(ctx context.Context, messages []Me
 
 	total := 0
 	for i := start; i < end; i++ {
-		tokens, err := c.CountTokens(ctx, messages[i])
-		if err != nil {
-			return 0, fmt.Errorf("count tokens for message %d failed: %w", i, err)
-		}
+		// Ignore error because SimpleTokenCounter's CountTokens does not return error.
+		tokens, _ := c.CountTokens(ctx, messages[i])
 		total += tokens
 	}
 	return total, nil
@@ -432,12 +427,18 @@ func (s *TailOutStrategy) buildTailOutResult(messages []Message, preservedHead, 
 	return result
 }
 
-// calculatePreservedHeadCount calculates the number of preserved head messages (system message).
+// calculatePreservedHeadCount calculates the number of preserved head messages.
+// It preserves all consecutive system messages from the beginning.
 func calculatePreservedHeadCount(messages []Message) int {
-	if len(messages) > 0 && messages[0].Role == RoleSystem {
-		return 1
+	count := 0
+	for _, msg := range messages {
+		// Stop at first non-system message.
+		if msg.Role != RoleSystem {
+			break
+		}
+		count++
 	}
-	return 0
+	return count
 }
 
 // calculatePreservedTailCount calculates the number of preserved tail messages (last turn).

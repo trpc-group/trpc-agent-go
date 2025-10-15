@@ -383,6 +383,71 @@ func TestTailOutStrategy_RemovesFromTail(t *testing.T) {
 }
 
 // TestMiddleOutStrategy_RemovesFromMiddle tests that MiddleOut strategy removes messages from the middle.
+// TestCalculatePreservedHeadCount tests the shared calculatePreservedHeadCount function.
+func TestCalculatePreservedHeadCount(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []Message
+		expected int
+	}{
+		{
+			name:     "empty messages",
+			messages: []Message{},
+			expected: 0,
+		},
+		{
+			name: "single system message",
+			messages: []Message{
+				NewSystemMessage("System 1"),
+			},
+			expected: 1,
+		},
+		{
+			name: "multiple consecutive system messages",
+			messages: []Message{
+				NewSystemMessage("System 1"),
+				NewSystemMessage("System 2"),
+				NewSystemMessage("System 3"),
+			},
+			expected: 3,
+		},
+		{
+			name: "system messages followed by user",
+			messages: []Message{
+				NewSystemMessage("System 1"),
+				NewSystemMessage("System 2"),
+				NewUserMessage("User message"),
+			},
+			expected: 2,
+		},
+		{
+			name: "no system message at start",
+			messages: []Message{
+				NewUserMessage("User message"),
+				NewSystemMessage("System 1"),
+			},
+			expected: 0,
+		},
+		{
+			name: "system, user, system pattern",
+			messages: []Message{
+				NewSystemMessage("System 1"),
+				NewUserMessage("User message"),
+				NewSystemMessage("System 2"),
+			},
+			expected: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculatePreservedHeadCount(tt.messages)
+			require.Equal(t, tt.expected, result,
+				"Expected %d preserved head messages, got %d", tt.expected, result)
+		})
+	}
+}
+
 // TestCalculatePreservedTailCount tests the shared calculatePreservedTailCount function.
 func TestCalculatePreservedTailCount(t *testing.T) {
 	tests := []struct {
@@ -524,6 +589,150 @@ func TestRoleToolRemoval(t *testing.T) {
 
 			// The first message should not be a tool message.
 			require.NotEqual(t, RoleTool, result[0].Role, "First message should not be a tool message")
+		})
+	}
+}
+
+// TestBuildPreservedOnlyResult tests the shared buildPreservedOnlyResult function.
+func TestBuildPreservedOnlyResult(t *testing.T) {
+	tests := []struct {
+		name          string
+		messages      []Message
+		preservedHead int
+		preservedTail int
+		expected      []Message
+		description   string
+	}{
+		{
+			name: "preserve head and tail",
+			messages: []Message{
+				NewSystemMessage("System"),
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+				NewUserMessage("User 3"),
+				NewUserMessage("User 4"),
+			},
+			preservedHead: 1,
+			preservedTail: 2,
+			expected: []Message{
+				NewSystemMessage("System"),
+				NewUserMessage("User 3"),
+				NewUserMessage("User 4"),
+			},
+			description: "Should preserve system message and last 2 messages",
+		},
+		{
+			name: "preserve only head",
+			messages: []Message{
+				NewSystemMessage("System"),
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 1,
+			preservedTail: 0,
+			expected: []Message{
+				NewSystemMessage("System"),
+			},
+			description: "Should preserve only system message",
+		},
+		{
+			name: "preserve only tail",
+			messages: []Message{
+				NewSystemMessage("System"),
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 0,
+			preservedTail: 2,
+			expected: []Message{
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			description: "Should preserve only last 2 messages",
+		},
+		{
+			name: "remove leading tool message",
+			messages: []Message{
+				NewToolMessage("tool_1", "test", "Result"),
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 0,
+			preservedTail: 3,
+			expected: []Message{
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			description: "Should remove leading tool message",
+		},
+		{
+			name: "tool message in head, keep in tail",
+			messages: []Message{
+				NewSystemMessage("System"),
+				NewUserMessage("User 1"),
+				NewToolMessage("tool_1", "test", "Result"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 1,
+			preservedTail: 2,
+			expected: []Message{
+				NewSystemMessage("System"),
+				NewToolMessage("tool_1", "test", "Result"),
+				NewUserMessage("User 2"),
+			},
+			description: "Tool message in tail should be preserved",
+		},
+		{
+			name: "all head preserved leads with tool",
+			messages: []Message{
+				NewToolMessage("tool_1", "test", "Result"),
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 3,
+			preservedTail: 0,
+			expected: []Message{
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			description: "Leading tool message should be removed even when all head is preserved",
+		},
+		{
+			name: "empty result",
+			messages: []Message{
+				NewUserMessage("User 1"),
+				NewUserMessage("User 2"),
+			},
+			preservedHead: 0,
+			preservedTail: 0,
+			expected:      []Message{},
+			description:   "Empty preservation should return empty result",
+		},
+		{
+			name: "single tool message only",
+			messages: []Message{
+				NewToolMessage("tool_1", "test", "Result"),
+			},
+			preservedHead: 0,
+			preservedTail: 1,
+			expected:      []Message{},
+			description:   "Single tool message should be removed, resulting in empty list",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildPreservedOnlyResult(tt.messages, tt.preservedHead, tt.preservedTail)
+
+			require.Equal(t, len(tt.expected), len(result),
+				"%s: expected %d messages, got %d", tt.description, len(tt.expected), len(result))
+
+			for i := range result {
+				assert.Equal(t, tt.expected[i].Role, result[i].Role,
+					"%s: message[%d] role mismatch", tt.description, i)
+				assert.Equal(t, tt.expected[i].Content, result[i].Content,
+					"%s: message[%d] content mismatch", tt.description, i)
+			}
 		})
 	}
 }
