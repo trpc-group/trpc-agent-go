@@ -283,8 +283,8 @@ func WithUpdatedAtField(field string) Option {
 	}
 }
 
-// WithSparseVectorFieldName sets the tcvectordb field name for sparse vector.
-func WithSparseVectorFieldName(field string) Option {
+// WithSparseVectorField sets the tcvectordb field name for sparse vector.
+func WithSparseVectorField(field string) Option {
 	return func(o *options) {
 		o.sparseVectorFieldName = field
 	}
