@@ -155,25 +155,23 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```
 
-### Callback
+### 事件翻译回调
 
-AG-UI 具有事件翻译的回调能力，方便在事件翻译流程前后插入自定义逻辑。
+AG-UI 提供了事件翻译的回调机制，便于在事件翻译流程的前后插入自定义逻辑。
 
-- `translator.BeforeTranslateCallback`：在内部事件翻译为 AG-UI 事件之前触发。返回值约定：
-  - 返回 `(customEvent, nil)`：使用 `customEvent` 事件作为翻译的输入。
-  - 返回 `(nil, nil)`：保留当前事件，继续执行后续回调；若全部回调都返回 `nil`，最终使用原事件。
-  - 返回错误：终止当前 Run，客户端收到 `RunError`。
-- `translator.AfterTranslateCallback`：在 AG-UI 事件翻译完成、准备发往客户端前触发。返回值约定：
-  - 返回 `(customEvent, nil)`：使用 `customEvent` 作为翻译的输出，最终发送给客户端。
-  - 返回 `(nil, nil)`：保留当前事件，继续执行后续回调；若全部回调都返回 `nil`，最终发送原事件。
-  - 返回错误：终止当前 Run，客户端收到 `RunError`。
+- `translator.BeforeTranslateCallback`：在内部事件被翻译为 AG-UI 事件之前触发。返回值约定：
+  - 返回 `(customEvent, nil)`：使用 `customEvent` 作为翻译的输入事件。
+  - 返回 `(nil, nil)`：保留当前事件并继续执行后续回调；若所有回调都返回 `nil`，则最终使用原事件。
+  - 返回错误：终止当前的执行流程，客户端将接收到 `RunError`。
+- `translator.AfterTranslateCallback`：在 AG-UI 事件翻译完成，准备发送到客户端之前触发。返回值约定：
+  - 返回 `(customEvent, nil)`：使用 `customEvent` 作为最终发送给客户端的事件。
+  - 返回 `(nil, nil)`：保留当前事件并继续执行后续回调；若所有回调都返回 `nil`，则最终发送原事件。
+  - 返回错误：终止当前的执行流程，客户端将接收到 `RunError`。
 
 使用示例：
 
 ```go
 import (
-    "strings"
-
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
@@ -182,21 +180,22 @@ import (
 
 callbacks := translator.NewCallbacks().
     RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
+        // 在事件翻译前执行的逻辑
         return nil, nil
     }).
     RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+        // 在事件翻译后执行的逻辑
         if msg, ok := event.(*aguievents.TextMessageContentEvent); ok {
+            // 在事件中修改消息内容
             return aguievents.NewTextMessageContentEvent(msg.MessageID, msg.Delta+" [via callback]"), nil
         }
         return nil, nil
     })
 
-server, err := agui.New(
-    runner,
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithTranslateCallbacks(callbacks),
-    ),
-)
+server, err := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslateCallbacks(callbacks)))
 ```
 
-事件翻译回调可用于实现自定义监控上报，AG-UI Server 上报 langfuse 可观测平台的完整代码可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
+事件翻译回调可以用于多种场景，比如：
+
+- 自定义事件处理：在事件翻译过程中修改事件数据，添加额外的业务逻辑。
+- 监控上报：在翻译前后插入监控上报逻辑，与 Langfuse 可观测平台的结合示例可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
