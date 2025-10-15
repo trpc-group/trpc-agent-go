@@ -424,9 +424,172 @@ model := openai.New("deepseek-chat",
         if streamErr != nil {
             log.Printf("Streaming failed: %v", streamErr)
         } else {
-            log.Printf("Streaming completed: reason=%s", 
+            log.Printf("Streaming completed: reason=%s",
                 acc.Choices[0].FinishReason)
         }
     }),
 )
 ```
+
+### 2. Token Tailoring
+
+Token Tailoring is an intelligent message management technique that automatically trims messages when they exceed the model's context window limit, ensuring requests can be successfully sent to the LLM API. This feature is particularly useful for long conversation scenarios, maintaining key context while keeping the message list within the model's token constraints.
+
+#### Core Features
+
+- **Dual-mode Configuration**: Supports automatic and advanced modes
+- **Intelligent Preservation**: Automatically preserves system messages and the last conversation turn
+- **Multiple Strategies**: Provides MiddleOut, HeadOut, and TailOut trimming strategies
+- **Efficient Algorithm**: Uses prefix sum and binary search with O(n) time complexity
+- **Real-time Statistics**: Displays message and token counts before and after tailoring
+
+#### Quick Start
+
+**Automatic Mode (Recommended)**:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// Simply enable token tailoring, other parameters are auto-configured
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+)
+```
+
+Automatic mode will:
+
+- Automatically detect the model's context window size
+- Calculate optimal `maxInputTokens` (subtracting protocol overhead and output reserve)
+- Use default `SimpleTokenCounter` and `MiddleOutStrategy`
+
+**Advanced Mode**:
+
+```go
+// Custom token limit and strategy
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),                    // Custom token limit
+    openai.WithTokenCounter(customCounter),              // Optional: custom counter
+    openai.WithTailoringStrategy(customStrategy),        // Optional: custom strategy
+)
+```
+
+#### Tailoring Strategies
+
+The framework provides three built-in strategies for different scenarios:
+
+**MiddleOutStrategy (Default)**:
+
+Removes messages from the middle, preserving head and tail:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+counter := model.NewSimpleTokenCounter(10000)
+strategy := model.NewMiddleOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **Use Case**: Scenarios requiring both initial and recent context
+- **Preserves**: System message + early messages + recent messages + last turn
+
+**HeadOutStrategy**:
+
+Removes messages from the head, prioritizing recent messages:
+
+```go
+strategy := model.NewHeadOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **Use Case**: Chat applications where recent context is more important
+- **Preserves**: System message + recent messages + last turn
+
+**TailOutStrategy**:
+
+Removes messages from the tail, prioritizing early messages:
+
+```go
+strategy := model.NewTailOutStrategy(counter)
+
+model := openai.New("deepseek-chat",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithMaxInputTokens(10000),
+    openai.WithTailoringStrategy(strategy),
+)
+```
+
+- **Use Case**: RAG applications where initial instructions and context are more important
+- **Preserves**: System message + early messages + last turn
+
+#### Token Counters
+
+**SimpleTokenCounter (Default)**:
+
+Fast estimation based on character count:
+
+```go
+counter := model.NewSimpleTokenCounter(maxInputTokens)
+```
+
+- **Pros**: Fast, no external dependencies, suitable for most scenarios
+- **Cons**: Slightly less accurate than tiktoken
+
+**TikToken Counter (Optional)**:
+
+Accurate counting using OpenAI's official tokenizer:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
+
+tkCounter, err := tiktoken.NewTokenCounter(
+    tiktoken.WithModelName("gpt-4o-mini"),
+)
+if err != nil {
+    // Handle error
+}
+
+model := openai.New("gpt-4o-mini",
+    openai.WithEnableTokenTailoring(true),
+    openai.WithTokenCounter(tkCounter),
+)
+```
+
+- **Pros**: Accurately matches OpenAI API token counting
+- **Cons**: Requires additional dependency, slightly lower performance
+
+#### How It Works
+
+Token Tailoring execution flow:
+
+```
+1. Check if token tailoring is enabled
+2. Calculate total tokens for current messages
+3. If exceeds limit:
+   a. Mark messages that must be preserved (system message + last turn)
+   b. Apply selected strategy to trim middle messages
+   c. Ensure result is within token limit
+4. Return trimmed message list
+```
+
+Key design principles:
+
+- **Immutable Original**: Original message list remains unchanged
+- **Smart Preservation**: Automatically preserves system message and last complete user-assistant pair
+- **Efficient Algorithm**: Uses prefix sum (O(n)) + binary search (O(log n))
+
+#### Usage Example
+
+For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).
