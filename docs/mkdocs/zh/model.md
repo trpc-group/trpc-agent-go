@@ -590,6 +590,35 @@ Token Tailoring 的执行流程：
 - **智能保留**：自动保留系统消息和最后完整的用户-助手对话对
 - **高效算法**：使用前缀和（O(n)）+ 二分查找（O(log n)）
 
+#### 模型上下文注册
+
+对于框架不认识的自定义模型，可以注册其上下文窗口大小以启用自动模式：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// 注册单个模型
+model.RegisterModelContextWindow("my-custom-model", 8192)
+
+// 批量注册多个模型
+model.RegisterModelContextWindows(map[string]int{
+    "my-model-1": 4096,
+    "my-model-2": 16384,
+    "my-model-3": 32768,
+})
+
+// 之后可以使用自动模式
+m := openai.New("my-custom-model",
+    openai.WithEnableTokenTailoring(true), // 自动检测 context window
+)
+```
+
+**使用场景**：
+
+- 使用私有部署或自定义模型
+- 覆盖框架内置的 context window 配置
+- 适配新发布的模型版本
+
 #### 使用示例
 
 完整的交互式示例请参考 [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor)。

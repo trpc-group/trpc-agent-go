@@ -590,6 +590,35 @@ Key design principles:
 - **Smart Preservation**: Automatically preserves system message and last complete user-assistant pair
 - **Efficient Algorithm**: Uses prefix sum (O(n)) + binary search (O(log n))
 
+#### Model Context Registration
+
+For custom models not recognized by the framework, you can register their context window size to enable automatic mode:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
+// Register a single model
+model.RegisterModelContextWindow("my-custom-model", 8192)
+
+// Batch register multiple models
+model.RegisterModelContextWindows(map[string]int{
+    "my-model-1": 4096,
+    "my-model-2": 16384,
+    "my-model-3": 32768,
+})
+
+// Then use automatic mode
+m := openai.New("my-custom-model",
+    openai.WithEnableTokenTailoring(true), // Auto-detect context window
+)
+```
+
+**Use Cases**:
+
+- Using privately deployed or custom models
+- Overriding framework built-in context window configurations
+- Adapting to newly released model versions
+
 #### Usage Example
 
 For a complete interactive example, see [examples/tailor](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tailor).

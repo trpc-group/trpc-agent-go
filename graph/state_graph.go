@@ -524,7 +524,8 @@ func NewLLMNodeFunc(
 	}
 }
 
-// llmRunner encapsulates LLM execution dependencies to avoid long parameter lists.
+// llmRunner encapsulates LLM execution dependencies to avoid long parameter
+// lists.
 type llmRunner struct {
 	llmModel         model.Model
 	instruction      string
