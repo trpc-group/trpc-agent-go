@@ -355,14 +355,6 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 		return nil, errors.New("elasticsearch search query cannot be nil")
 	}
 
-	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("elasticsearch query vector cannot be empty for %s", query.Query)
-	}
-
-	if len(query.Vector) != vs.option.vectorDimension {
-		return nil, fmt.Errorf("elasticsearch query vector dimension %d does not match expected dimension %d", len(query.Vector), vs.option.vectorDimension)
-	}
-
 	// Build search query based on search mode.
 	var searchQuery *types.SearchRequestBody
 	var err error

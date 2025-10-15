@@ -54,6 +54,9 @@ type Query struct {
 
 	// Filter specifies additional filtering criteria.
 	Filter *QueryFilter
+
+	// SearchMode specifies the search mode.
+	SearchMode int
 }
 
 // QueryFilter represents filtering criteria for retrieval.

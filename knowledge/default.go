@@ -959,13 +959,14 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 	// Use built-in retriever for RAG pipeline with full context.
 	// The retriever will handle query enhancement if configured.
 	retrieverReq := &retriever.Query{
-		Text:      req.Query,
-		History:   req.History, // Same type now, no conversion needed
-		UserID:    req.UserID,
-		SessionID: req.SessionID,
-		Filter:    convertQueryFilter(req.SearchFilter),
-		Limit:     req.MaxResults,
-		MinScore:  minScore,
+		Text:       req.Query,
+		History:    req.History, // Same type now, no conversion needed
+		UserID:     req.UserID,
+		SessionID:  req.SessionID,
+		Filter:     convertQueryFilter(req.SearchFilter),
+		Limit:      req.MaxResults,
+		MinScore:   minScore,
+		SearchMode: req.SearchMode,
 	}
 
 	result, err := dk.retriever.Retrieve(ctx, retrieverReq)

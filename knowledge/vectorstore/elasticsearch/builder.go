@@ -30,6 +30,13 @@ const (
 
 // buildVectorSearchQuery builds a vector similarity search query.
 func (vs *VectorStore) buildVectorSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
+	if len(query.Vector) == 0 {
+		return nil, fmt.Errorf("elasticsearch query vector cannot be empty for %s", query.Query)
+	}
+
+	if len(query.Vector) != vs.option.vectorDimension {
+		return nil, fmt.Errorf("elasticsearch query vector dimension %d does not match expected dimension %d", len(query.Vector), vs.option.vectorDimension)
+	}
 	// Marshal query vector to a valid JSON array for script params.
 	vectorJSON, err := json.Marshal(query.Vector)
 	if err != nil {
@@ -97,6 +104,13 @@ func (vs *VectorStore) buildKeywordSearchQuery(query *vectorstore.SearchQuery) (
 
 // buildHybridSearchQuery builds a hybrid search query combining vector and keyword search.
 func (vs *VectorStore) buildHybridSearchQuery(query *vectorstore.SearchQuery) (*types.SearchRequestBody, error) {
+	if len(query.Vector) == 0 {
+		return nil, fmt.Errorf("elasticsearch query vector cannot be empty for %s", query.Query)
+	}
+
+	if len(query.Vector) != vs.option.vectorDimension {
+		return nil, fmt.Errorf("elasticsearch query vector dimension %d does not match expected dimension %d", len(query.Vector), vs.option.vectorDimension)
+	}
 	// Marshal query vector to a valid JSON array for script params.
 	vectorJSON, err := json.Marshal(query.Vector)
 	if err != nil {
