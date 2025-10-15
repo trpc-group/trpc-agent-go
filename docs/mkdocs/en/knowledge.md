@@ -144,7 +144,7 @@ func main() {
 ```
 
 ### Manual Search Example
-FilterCondition currently only supports Elasticsearch and TCVector
+The FilterCondition feature is currently not supported in the inmemory vector store.
 
 ```go
 
