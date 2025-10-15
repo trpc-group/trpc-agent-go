@@ -81,6 +81,11 @@ type Node struct {
 	// Per-node callbacks for fine-grained control
 	callbacks *NodeCallbacks
 
+	// Retry policies configured for this node. When empty, executor defaults
+	// (if any) will be used. Policies are evaluated in order to determine
+	// whether an error is retryable and which parameters to use.
+	retryPolicies []RetryPolicy
+
 	// Pregel-style extensions
 	triggers []string            // Channels that trigger this node
 	channels []string            // Channels this node reads from
@@ -99,6 +104,12 @@ type Node struct {
 	// llmGenerationConfig stores per-node generation configuration for LLM nodes.
 	// If set, AddLLMNode forwards it to the underlying LLM runner.
 	llmGenerationConfig *model.GenerationConfig
+
+	// Subgraph (agent node) options
+	agentInputMapper      SubgraphInputMapper
+	agentOutputMapper     SubgraphOutputMapper
+	agentIsolatedMessages bool
+	agentEventScope       string
 }
 
 // Edge represents an edge in the graph.

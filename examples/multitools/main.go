@@ -243,7 +243,7 @@ func (c *multiToolChat) processStreamingResponse(eventChan <-chan *event.Event) 
 
 // handleToolCalls processes tool call events and returns true if handled
 func (c *multiToolChat) handleToolCalls(event *event.Event, toolCallsDetected *bool, assistantStarted *bool) bool {
-	if len(event.Choices) == 0 || len(event.Choices[0].Message.ToolCalls) == 0 {
+	if len(event.Response.Choices) == 0 || len(event.Response.Choices[0].Message.ToolCalls) == 0 {
 		return false
 	}
 
@@ -252,7 +252,7 @@ func (c *multiToolChat) handleToolCalls(event *event.Event, toolCallsDetected *b
 		fmt.Printf("\n")
 	}
 	fmt.Printf("🔧 Tool calls:\n")
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		toolIcon := getToolIcon(toolCall.Function.Name)
 		fmt.Printf("   %s %s (ID: %s)\n", toolIcon, toolCall.Function.Name, toolCall.ID)
 		if len(toolCall.Function.Arguments) > 0 {
@@ -283,11 +283,11 @@ func (c *multiToolChat) handleToolResponses(event *event.Event) bool {
 
 // processStreamingContent processes streaming content events
 func (c *multiToolChat) processStreamingContent(event *event.Event, toolCallsDetected *bool, assistantStarted *bool, fullContent *string) {
-	if len(event.Choices) == 0 {
+	if len(event.Response.Choices) == 0 {
 		return
 	}
 
-	choice := event.Choices[0]
+	choice := event.Response.Choices[0]
 
 	// Process streaming delta content
 	if choice.Delta.Content != "" {

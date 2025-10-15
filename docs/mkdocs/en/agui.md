@@ -31,6 +31,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 }
 ```
 
+Note: If `WithPath` is not specified, the AG-UI server mounts at `/` by default.
+
 A complete version of this example lives in [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default).
 
 For an in-depth guide to Runners, refer to the [runner](./runner.md) documentation.
@@ -38,16 +40,6 @@ For an in-depth guide to Runners, refer to the [runner](./runner.md) documentati
 On the client side you can pair the server with frameworks that understand the AG-UI protocol, such as [CopilotKit](https://github.com/CopilotKit/CopilotKit). It provides React/Next.js components with built-in SSE subscriptions. The sample at [examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) builds a web UI that communicates with the agent through AG-UI, as shown below.
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
-
-## Dependency Explanation
-
-Since the official AG-UI repository has not yet merged the Golang SDK PR, we have forked and fixed the related bugs. To use it, add the following replace directive in your go.mod:
-
-```go
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
-```
-
-After that, run go mod tidy to update the dependencies.
 
 ## Advanced Usage
 
@@ -59,14 +51,32 @@ The AG-UI specification does not enforce a transport. The framework uses SSE by 
 import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-type wsService struct{}
+type wsService struct {
+	path    string
+	runner  aguirunner.Runner
+	handler http.Handler
+}
 
-func (s *wsService) Handler() http.Handler { /* Register WebSocket and stream events. */ }
+func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	opts := service.NewOptions(opt...)
+	s := &wsService{
+		path:   opts.Path,
+		runner: runner,
+	}
+	h := http.NewServeMux()
+	h.HandleFunc(s.path, s.handle)
+	s.handler = h
+	return s
+}
+
+func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
-server, _ := agui.New(runner, agui.WithService(&wsService{}))
+server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```
 
 ### Custom translator
@@ -116,6 +126,12 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator, as shown in the image below.
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+You can find the complete code example in [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react).
 
 ### Custom `UserIDResolver`
 

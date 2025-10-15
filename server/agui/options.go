@@ -12,18 +12,27 @@ package agui
 import (
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service/sse"
+)
+
+var (
+	defaultPath           = "/"
+	defaultServiceFactory = sse.New
 )
 
 // options holds the options for the AG-UI server.
 type options struct {
 	path              string
-	service           service.Service
+	serviceFactory    ServiceFactory
 	aguiRunnerOptions []aguirunner.Option
 }
 
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
-	opts := &options{}
+	opts := &options{
+		path:           defaultPath,
+		serviceFactory: defaultServiceFactory,
+	}
 	for _, o := range opt {
 		o(opts)
 	}
@@ -40,10 +49,13 @@ func WithPath(path string) Option {
 	}
 }
 
-// WithService sets the service.
-func WithService(s service.Service) Option {
+// ServiceFactory is a function that creates AG-UI service.
+type ServiceFactory func(runner aguirunner.Runner, opt ...service.Option) service.Service
+
+// WithServiceFactory sets the service factory, sse.New in default.
+func WithServiceFactory(f ServiceFactory) Option {
 	return func(o *options) {
-		o.service = s
+		o.serviceFactory = f
 	}
 }
 

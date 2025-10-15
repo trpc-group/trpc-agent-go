@@ -31,6 +31,8 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 }
 ```
 
+注意：若未显式指定 `WithPath`，AG-UI 服务默认路由为 `/`。
+
 完整代码示例参见 [examples/agui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default)。
 
 Runner 全面的使用方法参见 [runner](./runner.md)。
@@ -38,16 +40,6 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 在前端侧，可以配合 [CopilotKit](https://github.com/CopilotKit/CopilotKit) 等支持 AG-UI 协议的客户端框架，它提供 React/Next.js 组件并内置 SSE 订阅能力。[examples/agui/client/copilotkit](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit) 使用 CopilotKit 搭建了 Web UI 界面，通过 AG-UI 协议与 Agent 通信，效果如下图所示。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
-
-## 依赖说明
-
-由于 AG-UI 官方仓库尚未合并 Golang SDK 的 PR，我们已经 fork 并修复了相关 BUG。使用时，需要在 go.mod 中添加以下 replace 语句：
-
-```go
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
-```
-
-完成后，执行 `go mod tidy` 以更新依赖。
 
 ## 进阶用法
 
@@ -59,14 +51,32 @@ AG-UI 协议未强制规定通信协议，框架使用 SSE 作为 AG-UI 的默�
 import (
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
 )
 
-type wsService struct{}
+type wsService struct {
+	path    string
+	runner  aguirunner.Runner
+	handler http.Handler
+}
 
-func (s *wsService) Handler() http.Handler { /* 注册 WebSocket 并写入事件 */ }
+func NewWSService(runner aguirunner.Runner, opt ...service.Option) service.Service {
+	opts := service.NewOptions(opt...)
+	s := &wsService{
+		path:   opts.Path,
+		runner: runner,
+	}
+	h := http.NewServeMux()
+	h.HandleFunc(s.path, s.handle)
+	s.handler = h
+	return s
+}
+
+func (s *wsService) Handler() http.Handler { /* HTTP Handler */ }
 
 runner := runner.NewRunner(agent.Info().Name, agent)
-server, _ := agui.New(runner, agui.WithService(&wsService{}))
+server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 ```
 
 ### 自定义 Translator
@@ -115,6 +125,12 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+例如，在使用 React Planner 时，如果希望为不同标签应用不同的自定义事件，可以通过实现自定义 Translator 来实现，效果如下图所示。
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
 ### 自定义 `UserIDResolver`
 

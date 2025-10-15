@@ -14,12 +14,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 
 	openai "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // Verify that Embedder implements the embedder.Embedder interface.
@@ -161,33 +163,7 @@ func New(opts ...Option) *Embedder {
 // GetEmbedding implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text.
 func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
-	if text == "" {
-		return nil, fmt.Errorf("text cannot be empty")
-	}
-
-	// Create embedding request.
-	request := openai.EmbeddingNewParams{
-		Input:          openai.EmbeddingNewParamsInputUnion{OfString: openai.String(text)},
-		Model:          openai.EmbeddingModel(e.model),
-		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
-	}
-
-	// Set optional parameters.
-	if e.user != "" {
-		request.User = openai.String(e.user)
-	}
-
-	// Set dimensions for text-embedding-3 models.
-	if isTextEmbedding3Model(e.model) {
-		request.Dimensions = openai.Int(int64(e.dimensions))
-	}
-
-	// Combine request options.
-	requestOpts := make([]option.RequestOption, len(e.requestOptions))
-	copy(requestOpts, e.requestOptions)
-
-	// Call OpenAI embeddings API.
-	response, err := e.client.Embeddings.New(ctx, request, requestOpts...)
+	response, err := e.response(ctx, text)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -210,33 +186,7 @@ func (e *Embedder) GetEmbedding(ctx context.Context, text string) ([]float64, er
 // GetEmbeddingWithUsage implements the embedder.Embedder interface.
 // It generates an embedding vector for the given text and returns usage information.
 func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
-	if text == "" {
-		return nil, nil, fmt.Errorf("text cannot be empty")
-	}
-
-	// Create embedding request.
-	request := openai.EmbeddingNewParams{
-		Input:          openai.EmbeddingNewParamsInputUnion{OfString: openai.String(text)},
-		Model:          openai.EmbeddingModel(e.model),
-		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
-	}
-
-	// Set optional parameters.
-	if e.user != "" {
-		request.User = openai.String(e.user)
-	}
-
-	// Set dimensions for text-embedding-3 models.
-	if isTextEmbedding3Model(e.model) {
-		request.Dimensions = openai.Int(int64(e.dimensions))
-	}
-
-	// Combine request options.
-	requestOpts := make([]option.RequestOption, len(e.requestOptions))
-	copy(requestOpts, e.requestOptions)
-
-	// Call OpenAI embeddings API.
-	response, err := e.client.Embeddings.New(ctx, request, requestOpts...)
+	response, err := e.response(ctx, text)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create embedding: %w", err)
 	}
@@ -261,6 +211,45 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	}
 
 	return embedding, usage, nil
+}
+
+func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.CreateEmbeddingResponse, err error) {
+	if text == "" {
+		return nil, fmt.Errorf("text cannot be empty")
+	}
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	defer func() {
+		var inputToken *int64
+		if rsp != nil {
+			inputToken = &rsp.Usage.PromptTokens
+		}
+		itelemetry.TraceEmbedding(span, e.encodingFormat, e.model, inputToken, err)
+		span.End()
+	}()
+
+	// Create embedding request.
+	request := openai.EmbeddingNewParams{
+		Input:          openai.EmbeddingNewParamsInputUnion{OfString: openai.String(text)},
+		Model:          e.model,
+		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
+	}
+
+	// Set optional parameters.
+	if e.user != "" {
+		request.User = openai.String(e.user)
+	}
+
+	// Set dimensions for text-embedding-3 models.
+	if isTextEmbedding3Model(e.model) {
+		request.Dimensions = openai.Int(int64(e.dimensions))
+	}
+
+	// Combine request options.
+	requestOpts := make([]option.RequestOption, len(e.requestOptions))
+	copy(requestOpts, e.requestOptions)
+
+	// Call OpenAI embeddings API.
+	return e.client.Embeddings.New(ctx, request, requestOpts...)
 }
 
 // GetDimensions implements the embedder.Embedder interface.

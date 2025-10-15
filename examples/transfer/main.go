@@ -231,9 +231,9 @@ func (c *transferChat) processStreamingResponse(eventChan <-chan *event.Event) e
 				done = event.Response.Done
 			}
 			fmt.Printf("\n[DBG] event id=%s obj=%s author=%s partial=%t done=%t branch=%s\n", event.ID, obj, author, partial, done, event.Branch)
-			if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+			if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 				fmt.Printf("[DBG]  tool_calls: ")
-				for _, tc := range event.Choices[0].Message.ToolCalls {
+				for _, tc := range event.Response.Choices[0].Message.ToolCalls {
 					fmt.Printf("%s ", tc.Function.Name)
 				}
 				fmt.Println()
@@ -312,13 +312,13 @@ func (c *transferChat) handleToolCalls(
 	toolCallsDetected *bool,
 	assistantStarted *bool,
 ) bool {
-	if len(event.Choices) > 0 && len(event.Choices[0].Message.ToolCalls) > 0 {
+	if len(event.Response.Choices) > 0 && len(event.Response.Choices[0].Message.ToolCalls) > 0 {
 		*toolCallsDetected = true
 		if *assistantStarted {
 			fmt.Printf("\n")
 		}
 
-		if c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+		if c.isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 			fmt.Printf("🔄 Initiating transfer...\n")
 		} else {
 			c.displayToolCalls(event)
@@ -331,7 +331,7 @@ func (c *transferChat) handleToolCalls(
 // displayToolCalls shows tool call information.
 func (c *transferChat) displayToolCalls(event *event.Event) {
 	fmt.Printf("🔧 %s executing tools:\n", c.getAgentIcon(event.Author))
-	for _, toolCall := range event.Choices[0].Message.ToolCalls {
+	for _, toolCall := range event.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s", toolCall.Function.Name)
 		if len(toolCall.Function.Arguments) > 0 {
 			fmt.Printf(" (%s)", string(toolCall.Function.Arguments))
@@ -348,8 +348,8 @@ func (c *transferChat) handleContent(
 	assistantStarted *bool,
 	currentAgent *string,
 ) {
-	if len(event.Choices) > 0 {
-		content := c.extractContent(event.Choices[0])
+	if len(event.Response.Choices) > 0 {
+		content := c.extractContent(event.Response.Choices[0])
 
 		if content != "" {
 			c.displayContent(event, content, fullContent, toolCallsDetected, assistantStarted, currentAgent)
@@ -401,8 +401,8 @@ func (c *transferChat) displayAgentHeader(event *event.Event, currentAgent *stri
 
 // handleToolResponses processes tool response completion.
 func (c *transferChat) handleToolResponses(event *event.Event) {
-	if event.IsToolResultResponse() && len(event.Choices[0].Message.ToolCalls) > 0 &&
-		!c.isTransferTool(event.Choices[0].Message.ToolCalls[0]) {
+	if event.IsToolResultResponse() && len(event.Response.Choices[0].Message.ToolCalls) > 0 &&
+		!c.isTransferTool(event.Response.Choices[0].Message.ToolCalls[0]) {
 		fmt.Printf("   ✅ Tool completed\n")
 	}
 }
@@ -458,7 +458,7 @@ func (c *transferChat) isTransferTool(toolCall model.ToolCall) bool {
 }
 
 func (c *transferChat) isTransferResponse(event *event.Event) bool {
-	return len(event.Choices) > 0 && event.Choices[0].Message.ToolID != ""
+	return len(event.Response.Choices) > 0 && event.Response.Choices[0].Message.ToolID != ""
 }
 
 // Helper functions.

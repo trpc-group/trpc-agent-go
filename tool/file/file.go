@@ -114,6 +114,13 @@ func WithMaxFileSize(s int64) Option {
 	}
 }
 
+// WithName sets the name of the file toolset.
+func WithName(name string) Option {
+	return func(f *fileToolSet) {
+		f.name = name
+	}
+}
+
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
 	baseDir                  string
@@ -127,11 +134,12 @@ type fileToolSet struct {
 	createDirMode            os.FileMode
 	createFileMode           os.FileMode
 	maxFileSize              int64
-	tools                    []tool.CallableTool
+	tools                    []tool.Tool
+	name                     string
 }
 
 // Tools implements the ToolSet interface.
-func (f *fileToolSet) Tools(ctx context.Context) []tool.CallableTool {
+func (f *fileToolSet) Tools(ctx context.Context) []tool.Tool {
 	return f.tools
 }
 
@@ -139,6 +147,11 @@ func (f *fileToolSet) Tools(ctx context.Context) []tool.CallableTool {
 func (f *fileToolSet) Close() error {
 	// No resources to clean up for file tools.
 	return nil
+}
+
+// Name implements the ToolSet interface.
+func (f *fileToolSet) Name() string {
+	return f.name
 }
 
 // NewToolSet creates a new file operation tool set with the provided options.
@@ -156,6 +169,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		createDirMode:            defaultCreateDirMode,
 		createFileMode:           defaultCreateFileMode,
 		maxFileSize:              defaultMaxFileSize,
+		name:                     "file",
 	}
 	// Apply user-provided options.
 	for _, opt := range opts {
@@ -172,7 +186,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		return nil, fmt.Errorf("base directory '%s' is not a directory", fileToolSet.baseDir)
 	}
 	// Create function tools based on enabled features.
-	var tools []tool.CallableTool
+	var tools []tool.Tool
 	if fileToolSet.saveFileEnabled {
 		tools = append(tools, fileToolSet.saveFileTool())
 	}

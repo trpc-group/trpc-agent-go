@@ -285,8 +285,8 @@ func (p *fileProcessor) processResponse(eventChan <-chan *event.Event) error {
 		}
 
 		// Process content from choices.
-		if len(event.Choices) > 0 {
-			choice := event.Choices[0]
+		if len(event.Response.Choices) > 0 {
+			choice := event.Response.Choices[0]
 
 			// Handle content based on streaming mode.
 			var content string
