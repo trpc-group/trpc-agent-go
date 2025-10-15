@@ -563,7 +563,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		// Auto-calculate based on model context window.
 		contextWindow := imodel.ResolveContextWindow(m.name)
 		maxInputTokens = max(contextWindow-defaultReserveOutputTokens-defaultProtocolOverheadTokens, defaultInputTokensFloor)
-		log.Info("auto-calculated max input tokens", "model", m.name, "contextWindow", contextWindow, "maxInputTokens", maxInputTokens)
+		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d", m.name, contextWindow, maxInputTokens)
 	}
 
 	// Determine token counter using priority: user config > default.

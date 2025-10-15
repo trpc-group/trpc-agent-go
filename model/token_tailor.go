@@ -133,11 +133,11 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 	}
 
 	// Build prefix sum for efficient range queries.
-	prefixSum := s.buildPrefixSum(ctx, messages)
+	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
 	// Calculate preserved segments (always preserve system message and last turn).
-	preservedHead := s.calculatePreservedHead(messages)
-	preservedTail := s.calculatePreservedTail(messages)
+	preservedHead := calculatePreservedHeadCount(messages)
+	preservedTail := calculatePreservedTailCount(messages)
 
 	// Calculate preserved token costs.
 	headTokens := 0
@@ -152,7 +152,7 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 
 	// If preserved segments exceed budget, return only preserved segments.
 	if headTokens+tailTokens > maxTokens {
-		return s.buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
+		return buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
 	}
 
 	// For MiddleOut, we need to find the optimal balance between head and tail messages.
@@ -167,54 +167,6 @@ func (s *MiddleOutStrategy) TailorMessages(ctx context.Context, messages []Messa
 		result = result[1:]
 	}
 	return result, nil
-}
-
-// buildPrefixSum builds a prefix sum array for efficient range queries.
-func (s *MiddleOutStrategy) buildPrefixSum(ctx context.Context, messages []Message) []int {
-	prefixSum := make([]int, len(messages)+1)
-	for i, msg := range messages {
-		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
-		if err != nil {
-			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
-		} else {
-			prefixSum[i+1] = prefixSum[i] + tokens
-		}
-	}
-	return prefixSum
-}
-
-// calculatePreservedHead calculates the number of preserved head messages (system message).
-func (s *MiddleOutStrategy) calculatePreservedHead(messages []Message) int {
-	if len(messages) > 0 && messages[0].Role == RoleSystem {
-		return 1
-	}
-	return 0
-}
-
-// calculatePreservedTail calculates the number of preserved tail messages (last turn).
-func (s *MiddleOutStrategy) calculatePreservedTail(messages []Message) int {
-	if len(messages) >= 2 {
-		return 2
-	}
-	return 1
-}
-
-// buildPreservedOnlyResult builds result with only preserved segments.
-func (s *MiddleOutStrategy) buildPreservedOnlyResult(messages []Message, preservedHead, preservedTail int) []Message {
-	result := []Message{}
-	if preservedHead > 0 {
-		result = append(result, messages[:preservedHead]...)
-	}
-	if preservedTail > 0 {
-		result = append(result, messages[len(messages)-preservedTail:]...)
-	}
-
-	// Remove the first function execution result message if present.
-	if len(result) > 0 && result[0].Role == RoleTool {
-		result = result[1:]
-	}
-	return result
 }
 
 // buildMiddleOutResult builds the final result with system + head + tail + last_turn.
@@ -302,11 +254,11 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	}
 
 	// Build prefix sum for efficient range queries.
-	prefixSum := s.buildPrefixSum(ctx, messages)
+	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
 	// Calculate preserved segments (preserve system message and last turn).
-	preservedHead := s.calculatePreservedHead(messages)
-	preservedTail := s.calculatePreservedTail(messages)
+	preservedHead := calculatePreservedHeadCount(messages)
+	preservedTail := calculatePreservedTailCount(messages)
 
 	// Calculate preserved token costs.
 	headTokens := 0
@@ -321,7 +273,7 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 
 	// If preserved segments exceed budget, return only preserved segments.
 	if headTokens+tailTokens > maxTokens {
-		return s.buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
+		return buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
 	}
 
 	// For HeadOut, find maximum messages from tail that fit with preserved head.
@@ -335,54 +287,6 @@ func (s *HeadOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		result = result[1:]
 	}
 	return result, nil
-}
-
-// buildPrefixSum builds a prefix sum array for efficient range queries.
-func (s *HeadOutStrategy) buildPrefixSum(ctx context.Context, messages []Message) []int {
-	prefixSum := make([]int, len(messages)+1)
-	for i, msg := range messages {
-		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
-		if err != nil {
-			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
-		} else {
-			prefixSum[i+1] = prefixSum[i] + tokens
-		}
-	}
-	return prefixSum
-}
-
-// calculatePreservedHead calculates the number of preserved head messages (system message).
-func (s *HeadOutStrategy) calculatePreservedHead(messages []Message) int {
-	if len(messages) > 0 && messages[0].Role == RoleSystem {
-		return 1
-	}
-	return 0
-}
-
-// calculatePreservedTail calculates the number of preserved tail messages (last turn).
-func (s *HeadOutStrategy) calculatePreservedTail(messages []Message) int {
-	if len(messages) >= 2 {
-		return 2
-	}
-	return 1
-}
-
-// buildPreservedOnlyResult builds result with only preserved segments.
-func (s *HeadOutStrategy) buildPreservedOnlyResult(messages []Message, preservedHead, preservedTail int) []Message {
-	result := []Message{}
-	if preservedHead > 0 {
-		result = append(result, messages[:preservedHead]...)
-	}
-	if preservedTail > 0 {
-		result = append(result, messages[len(messages)-preservedTail:]...)
-	}
-
-	// Remove the first function execution result message if present.
-	if len(result) > 0 && result[0].Role == RoleTool {
-		result = result[1:]
-	}
-	return result
 }
 
 // binarySearchMaxTailCount finds the maximum number of tail messages that fit with preserved head.
@@ -450,11 +354,11 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 	}
 
 	// Build prefix sum for efficient range queries.
-	prefixSum := s.buildPrefixSum(ctx, messages)
+	prefixSum := buildPrefixSum(ctx, s.tokenCounter, messages)
 
 	// Calculate preserved segments (preserve system message and last turn).
-	preservedHead := s.calculatePreservedHead(messages)
-	preservedTail := s.calculatePreservedTail(messages)
+	preservedHead := calculatePreservedHeadCount(messages)
+	preservedTail := calculatePreservedTailCount(messages)
 
 	// Calculate preserved token costs.
 	headTokens := 0
@@ -469,7 +373,7 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 
 	// If preserved segments exceed budget, return only preserved segments.
 	if headTokens+tailTokens > maxTokens {
-		return s.buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
+		return buildPreservedOnlyResult(messages, preservedHead, preservedTail), nil
 	}
 
 	// For TailOut, find maximum messages from head that fit with preserved tail.
@@ -483,54 +387,6 @@ func (s *TailOutStrategy) TailorMessages(ctx context.Context, messages []Message
 		result = result[1:]
 	}
 	return result, nil
-}
-
-// buildPrefixSum builds a prefix sum array for efficient range queries.
-func (s *TailOutStrategy) buildPrefixSum(ctx context.Context, messages []Message) []int {
-	prefixSum := make([]int, len(messages)+1)
-	for i, msg := range messages {
-		tokens, err := s.tokenCounter.CountTokens(ctx, msg)
-		if err != nil {
-			// In case of error, use a fallback estimation.
-			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
-		} else {
-			prefixSum[i+1] = prefixSum[i] + tokens
-		}
-	}
-	return prefixSum
-}
-
-// calculatePreservedHead calculates the number of preserved head messages (system message).
-func (s *TailOutStrategy) calculatePreservedHead(messages []Message) int {
-	if len(messages) > 0 && messages[0].Role == RoleSystem {
-		return 1
-	}
-	return 0
-}
-
-// calculatePreservedTail calculates the number of preserved tail messages (last turn).
-func (s *TailOutStrategy) calculatePreservedTail(messages []Message) int {
-	if len(messages) >= 2 {
-		return 2
-	}
-	return 1
-}
-
-// buildPreservedOnlyResult builds result with only preserved segments.
-func (s *TailOutStrategy) buildPreservedOnlyResult(messages []Message, preservedHead, preservedTail int) []Message {
-	result := []Message{}
-	if preservedHead > 0 {
-		result = append(result, messages[:preservedHead]...)
-	}
-	if preservedTail > 0 {
-		result = append(result, messages[len(messages)-preservedTail:]...)
-	}
-
-	// Remove the first function execution result message if present.
-	if len(result) > 0 && result[0].Role == RoleTool {
-		result = result[1:]
-	}
-	return result
 }
 
 // binarySearchMaxHeadCount finds the maximum number of head messages that fit with preserved tail.
@@ -573,5 +429,90 @@ func (s *TailOutStrategy) buildTailOutResult(messages []Message, preservedHead, 
 		result = append(result, messages[len(messages)-preservedTail:]...)
 	}
 
+	return result
+}
+
+// calculatePreservedHeadCount calculates the number of preserved head messages (system message).
+func calculatePreservedHeadCount(messages []Message) int {
+	if len(messages) > 0 && messages[0].Role == RoleSystem {
+		return 1
+	}
+	return 0
+}
+
+// calculatePreservedTailCount calculates the number of preserved tail messages (last turn).
+// It finds the last complete user-assistant conversation pair from the end of the message list.
+// This function is shared by all tailoring strategies for consistent behavior.
+func calculatePreservedTailCount(messages []Message) int {
+	if len(messages) == 0 {
+		return 0
+	}
+
+	// Find the last assistant message from the end.
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+
+		// Skip if not assistant message.
+		if msg.Role != RoleAssistant {
+			if msg.Role == RoleSystem {
+				// Hit system message, no valid assistant found.
+				return 1
+			}
+			continue
+		}
+
+		// Found assistant message, look for preceding user message.
+		for j := i - 1; j >= 0; j-- {
+			if messages[j].Role == RoleUser {
+				// Found user message, return count from user to end.
+				return len(messages) - j
+			}
+			if messages[j].Role == RoleSystem {
+				// Hit system message, no user before assistant.
+				return len(messages) - i
+			}
+		}
+
+		// Assistant is first or preceded only by tool messages.
+		return len(messages) - i
+	}
+
+	// No assistant message found, preserve last message.
+	return 1
+}
+
+// buildPrefixSum builds a prefix sum array for message token counts.
+// prefixSum[i] represents the cumulative token count from messages[0] to messages[i-1].
+// This function is shared by all tailoring strategies for consistent token calculation.
+func buildPrefixSum(ctx context.Context, tokenCounter TokenCounter, messages []Message) []int {
+	prefixSum := make([]int, len(messages)+1)
+	for i, msg := range messages {
+		tokens, err := tokenCounter.CountTokens(ctx, msg)
+		if err != nil {
+			// In case of error, use a fallback estimation.
+			prefixSum[i+1] = prefixSum[i] + utf8.RuneCountInString(msg.Content)/approxRunesPerToken
+		} else {
+			prefixSum[i+1] = prefixSum[i] + tokens
+		}
+	}
+	return prefixSum
+}
+
+// buildPreservedOnlyResult builds result with only preserved head and tail segments.
+// It removes any leading RoleTool messages from the result.
+// This function is shared by all tailoring strategies for consistent behavior.
+func buildPreservedOnlyResult(messages []Message, preservedHead, preservedTail int) []Message {
+	result := []Message{}
+	if preservedHead > 0 {
+		result = append(result, messages[:preservedHead]...)
+	}
+	if preservedTail > 0 {
+		result = append(result, messages[len(messages)-preservedTail:]...)
+	}
+
+	// Remove the first function execution result message if present.
+	if len(result) > 0 && result[0].Role == RoleTool {
+		result = result[1:]
+	}
 	return result
 }

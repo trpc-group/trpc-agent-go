@@ -383,6 +383,120 @@ func TestTailOutStrategy_RemovesFromTail(t *testing.T) {
 }
 
 // TestMiddleOutStrategy_RemovesFromMiddle tests that MiddleOut strategy removes messages from the middle.
+// TestCalculatePreservedTailCount tests the shared calculatePreservedTailCount function.
+func TestCalculatePreservedTailCount(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []Message
+		expected int
+	}{
+		{
+			name:     "empty messages",
+			messages: []Message{},
+			expected: 0,
+		},
+		{
+			name: "single system message",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+			},
+			expected: 1,
+		},
+		{
+			name: "user-assistant pair",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("Hello"),
+				NewAssistantMessage("Hi there!"),
+			},
+			expected: 2, // user + assistant
+		},
+		{
+			name: "user-assistant-tool sequence",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("What's the weather?"),
+				NewAssistantMessage("Let me check."),
+				NewToolMessage("tool_1", "weather", "Sunny, 75°F"),
+			},
+			expected: 3, // user + assistant + tool
+		},
+		{
+			name: "multiple turns with tool at end",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("First question"),
+				NewAssistantMessage("First answer"),
+				NewUserMessage("What's the weather?"),
+				NewAssistantMessage("Let me check."),
+				NewToolMessage("tool_1", "weather", "Sunny"),
+			},
+			expected: 3, // last user + assistant + tool
+		},
+		{
+			name: "assistant without preceding user",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewAssistantMessage("Hello!"),
+			},
+			expected: 1, // only assistant
+		},
+		{
+			name: "user without assistant",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("Hello"),
+			},
+			expected: 1, // only last message (user)
+		},
+		{
+			name: "tool between user and assistant",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("Hello"),
+				NewToolMessage("tool_1", "search", "Result"),
+				NewAssistantMessage("Based on the result..."),
+			},
+			expected: 3, // user + tool + assistant (from user to end, tool is skipped in search but included in result)
+		},
+		{
+			name: "multiple tools after user",
+			messages: []Message{
+				NewSystemMessage("You are a helpful assistant."),
+				NewUserMessage("Search for something"),
+				NewToolMessage("tool_1", "search", "Result 1"),
+				NewToolMessage("tool_2", "search", "Result 2"),
+				NewAssistantMessage("Here are the results..."),
+			},
+			expected: 4, // user + 2 tools + assistant
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculatePreservedTailCount(tt.messages)
+			require.Equal(t, tt.expected, result, "Expected %d preserved messages, got %d", tt.expected, result)
+
+			// Verify the actual messages that would be preserved.
+			if result > 0 && len(tt.messages) > 0 {
+				preservedMessages := tt.messages[len(tt.messages)-result:]
+				t.Logf("Preserved messages: %d", len(preservedMessages))
+				for i, msg := range preservedMessages {
+					t.Logf("  [%d] %s: %s", i, msg.Role, truncateContent(msg.Content, 50))
+				}
+			}
+		})
+	}
+}
+
+// Helper function to truncate content for logging.
+func truncateContent(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
+
 // TestRoleToolRemoval tests that all strategies properly remove leading RoleTool messages.
 func TestRoleToolRemoval(t *testing.T) {
 	// Create a counter for testing.

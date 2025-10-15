@@ -3,12 +3,12 @@ module trpc.group/trpc-go/trpc-agent-go/examples/tailor
 go 1.23
 
 replace (
-    trpc.group/trpc-go/trpc-agent-go => ../..
-    trpc.group/trpc-go/trpc-agent-go/model/tiktoken => ../../model/tiktoken
+	trpc.group/trpc-go/trpc-agent-go => ../..
+	trpc.group/trpc-go/trpc-agent-go/model/tiktoken => ../../model/tiktoken
 )
 
 require (
-	trpc.group/trpc-go/trpc-agent-go v0.2.1
+	trpc.group/trpc-go/trpc-agent-go v0.3.0
 	trpc.group/trpc-go/trpc-agent-go/model/tiktoken v0.0.0
 )
 

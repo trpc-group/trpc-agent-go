@@ -75,6 +75,7 @@ func main() {
 	fmt.Println("💡 Commands:")
 	fmt.Println("  /bulk N     - append N synthetic user messages")
 	fmt.Println("  /history    - show current message count")
+	fmt.Println("  /show       - display current messages (head + tail)")
 	fmt.Println("  /exit       - quit")
 	fmt.Println()
 
@@ -114,13 +115,15 @@ func buildStrategy(counter model.TokenCounter, strategyName string) model.Tailor
 func buildCounter(name string, modelName string, maxTokens int) model.TokenCounter {
 	switch name {
 	case "tiktoken":
-		if c, err := tiktoken.New(modelName, maxTokens); err == nil {
+		c, err := tiktoken.New(modelName, maxTokens)
+		if err == nil {
 			return c
-		} else {
-			log.Warn("tiktoken counter init failed, falling back to simple", err)
 		}
+		log.Warn("tiktoken counter init failed, falling back to simple", err)
+		fallthrough
+	default:
+		return model.NewSimpleTokenCounter(maxTokens)
 	}
-	return model.NewSimpleTokenCounter(maxTokens)
 }
 
 func handleCommand(messages *[]model.Message, line string) bool {
@@ -129,7 +132,11 @@ func handleCommand(messages *[]model.Message, line string) bool {
 		fmt.Println("👋 Goodbye!")
 		return true
 	case strings.HasPrefix(line, "/history"):
-		fmt.Printf("Messages in buffer: %d\n", len(*messages))
+		fmt.Printf("📊 Messages in buffer: %d\n", len(*messages))
+		return true
+	case strings.HasPrefix(line, "/show"):
+		fmt.Printf("📋 Current messages (total: %d):\n", len(*messages))
+		fmt.Print(summarizeMessagesHeadTail(*messages, 10, 10))
 		return true
 	case strings.HasPrefix(line, "/bulk"):
 		parts := strings.Fields(line)
@@ -142,7 +149,7 @@ func handleCommand(messages *[]model.Message, line string) bool {
 		for i := 0; i < n; i++ {
 			*messages = append(*messages, model.NewUserMessage(long(fmt.Sprintf("synthetic %d", i+1))))
 		}
-		fmt.Printf("Added %d messages. Total=%d\n", n, len(*messages))
+		fmt.Printf("✅ Added %d messages. Total=%d\n", n, len(*messages))
 		return true
 	default:
 		return false
@@ -152,6 +159,10 @@ func handleCommand(messages *[]model.Message, line string) bool {
 func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message, userLine string) {
 	*messages = append(*messages, model.NewUserMessage(userLine))
 	before := len(*messages)
+
+	// Calculate token count before tailoring.
+	counter := model.NewSimpleTokenCounter(1000000)
+	tokensBefore, _ := counter.CountTokensRange(ctx, *messages, 0, len(*messages))
 
 	req := &model.Request{
 		Messages:         cloneMessages(*messages),
@@ -164,15 +175,23 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 	}
 
 	final := renderResponse(ch, *flagStreaming)
+
+	// Calculate token count after tailoring.
+	tokensAfter, _ := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
+
+	// Display tailoring statistics.
 	if *flagMaxInputTokens > 0 {
-		fmt.Printf("\n[tailor] maxInputTokens=%d before=%d after=%d\n",
-			*flagMaxInputTokens, before, len(req.Messages))
+		fmt.Printf("\n✂️  [Tailoring] maxInputTokens=%d 📨 messages=%d→%d 🎯 tokens=%d→%d\n",
+			*flagMaxInputTokens, before, len(req.Messages), tokensBefore, tokensAfter)
 	} else {
-		fmt.Printf("\n[tailor] maxInputTokens=auto before=%d after=%d\n",
-			before, len(req.Messages))
+		fmt.Printf("\n✂️  [Tailoring] maxInputTokens=auto 📨 messages=%d→%d 🎯 tokens=%d→%d\n",
+			before, len(req.Messages), tokensBefore, tokensAfter)
 	}
-	// Show a concise summary of the tailored messages (index, role, truncated content)
-	fmt.Printf("[tailor] messages (after tailoring):\n%s", summarizeMessages(req.Messages, 12))
+
+	// Show head and tail messages to visualize what was kept/removed.
+	fmt.Printf("📝 Messages (after tailoring, showing head + tail):\n%s",
+		summarizeMessagesHeadTail(req.Messages, 5, 5))
+
 	if !*flagStreaming && final != "" {
 		fmt.Printf("🤖 Assistant: %s\n\n", strings.TrimSpace(final))
 		*messages = append(*messages, model.NewAssistantMessage(final))
@@ -257,6 +276,53 @@ func summarizeMessages(msgs []model.Message, maxItems int) string {
 		content = strings.ReplaceAll(content, "\n", " ")
 		fmt.Fprintf(&b, "[%d] %s: %s\n", i, role, content)
 	}
+	return b.String()
+}
+
+// summarizeMessagesHeadTail shows head and tail messages with omitted middle count.
+func summarizeMessagesHeadTail(msgs []model.Message, headCount, tailCount int) string {
+	var b strings.Builder
+	total := len(msgs)
+
+	if total <= headCount+tailCount {
+		// All messages fit, show them all.
+		return summarizeMessages(msgs, total)
+	}
+
+	// Show head messages.
+	for i := 0; i < headCount && i < total; i++ {
+		m := msgs[i]
+		role := string(m.Role)
+		content := firstNonEmpty(
+			strings.TrimSpace(m.Content),
+			strings.TrimSpace(m.ReasoningContent),
+			firstTextPart(m),
+		)
+		content = truncate(content, 100)
+		content = strings.ReplaceAll(content, "\n", " ")
+		fmt.Fprintf(&b, "[%d] %s: %s\n", i, role, content)
+	}
+
+	// Show omitted count.
+	omitted := total - headCount - tailCount
+	if omitted > 0 {
+		fmt.Fprintf(&b, "... (%d messages omitted)\n", omitted)
+	}
+
+	// Show tail messages.
+	for i := total - tailCount; i < total; i++ {
+		m := msgs[i]
+		role := string(m.Role)
+		content := firstNonEmpty(
+			strings.TrimSpace(m.Content),
+			strings.TrimSpace(m.ReasoningContent),
+			firstTextPart(m),
+		)
+		content = truncate(content, 100)
+		content = strings.ReplaceAll(content, "\n", " ")
+		fmt.Fprintf(&b, "[%d] %s: %s\n", i, role, content)
+	}
+
 	return b.String()
 }
 
