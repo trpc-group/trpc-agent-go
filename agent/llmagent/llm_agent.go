@@ -580,12 +580,12 @@ func registerTools(options *Options) []tool.Tool {
 	if options.Knowledge != nil {
 		if options.EnableKnowledgeAgenticFilter {
 			agentticKnowledge := knowledgetool.NewAgenticFilterSearchTool(
-				options.Knowledge, options.KnowledgeFilter, options.AgenticFilterInfo,
+				options.Knowledge, options.AgenticFilterInfo, knowledgetool.WithFilter(options.KnowledgeFilter),
 			)
 			allTools = append(allTools, agentticKnowledge)
 		} else {
 			allTools = append(allTools, knowledgetool.NewKnowledgeSearchTool(
-				options.Knowledge, options.KnowledgeFilter,
+				options.Knowledge, knowledgetool.WithFilter(options.KnowledgeFilter),
 			))
 		}
 	}

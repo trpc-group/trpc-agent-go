@@ -34,10 +34,44 @@ type KnowledgeSearchResponse struct {
 	Message string  `json:"message,omitempty"`
 }
 
+// Option is a function that configures the knowledge search tool.
+type Option func(*options)
+
+type options struct {
+	toolName        string
+	toolDescription string
+	filter          map[string]any
+}
+
+// WithToolName sets the name of the knowledge search tool.
+func WithToolName(toolName string) Option {
+	return func(opts *options) {
+		opts.toolName = toolName
+	}
+}
+
+// WithToolDescription sets the description of the knowledge search tool.
+func WithToolDescription(toolDescription string) Option {
+	return func(opts *options) {
+		opts.toolDescription = toolDescription
+	}
+}
+
+// WithFilter sets the filter for the knowledge search tool.
+func WithFilter(filter map[string]any) Option {
+	return func(opts *options) {
+		opts.filter = filter
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
-func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]any) tool.Tool {
+func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
+	opt := &options{}
+	for _, o := range opts {
+		o(opt)
+	}
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequest) (*KnowledgeSearchResponse, error) {
 		if req.Query == "" {
 			return nil, errors.New("query cannot be empty")
@@ -49,7 +83,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]any) tool.
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
 		}
-		finalFilter := getFinalFilter(filter, runnerFilter, nil)
+		finalFilter := getFinalFilter(opt.filter, runnerFilter, nil)
 		log.Infof("knowledge search tool: final filter: %v", finalFilter)
 
 		// Create search request - for tools, we don't have conversation history yet.
@@ -75,11 +109,19 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, filter map[string]any) tool.
 		}, nil
 	}
 
+	toolName := opt.toolName
+	if toolName == "" {
+		toolName = "knowledge_search"
+	}
+	description := opt.toolDescription
+	if description == "" {
+		description = "Search for relevant information in the knowledge base. " +
+			"Use this tool to find context and facts to help answer user questions."
+	}
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName("knowledge_search"),
-		function.WithDescription("Search for relevant information in the knowledge base. "+
-			"Use this tool to find context and facts to help answer user questions."),
+		function.WithName(toolName),
+		function.WithDescription(description),
 	)
 }
 
@@ -99,11 +141,17 @@ type KnowledgeFilter struct {
 // NewAgenticFilterSearchTool creates a function tool for knowledge search using
 // the Knowledge interface with filter.
 // This tool allows agents to search for relevant information in the knowledge base.
+// agentFilter is the filter for the agent/tool, it will be used to filter the knowledge base.
+// agenticFilterInfo is the filter info of the sources, it will be used to generate the filter prompt.
 func NewAgenticFilterSearchTool(
 	kb knowledge.Knowledge,
-	filter map[string]any,
 	agenticFilterInfo map[string][]any,
+	opts ...Option,
 ) tool.Tool {
+	opt := &options{}
+	for _, o := range opts {
+		o(opt)
+	}
 	searchFunc := func(ctx context.Context, req *KnowledgeSearchRequestWithFilter) (*KnowledgeSearchResponse, error) {
 		if req.Query == "" {
 			return nil, errors.New("query cannot be empty")
@@ -122,7 +170,7 @@ func NewAgenticFilterSearchTool(
 		for _, f := range req.Filters {
 			requestFilter[f.Key] = f.Value
 		}
-		finalFilter := getFinalFilter(filter, runnerFilter, requestFilter)
+		finalFilter := getFinalFilter(opt.filter, runnerFilter, requestFilter)
 		searchReq := &knowledge.SearchRequest{
 			Query: req.Query,
 			SearchFilter: &knowledge.SearchFilter{
@@ -143,10 +191,20 @@ func NewAgenticFilterSearchTool(
 		}, nil
 	}
 
-	description := generateAgenticFilterPrompt(agenticFilterInfo)
+	toolName := opt.toolName
+	if toolName == "" {
+		toolName = "knowledge_search_with_agentic_filter"
+	}
+	filterInfo := generateAgenticFilterPrompt(agenticFilterInfo)
+	description := ""
+	if opt.toolDescription == "" {
+		description = filterInfo
+	} else {
+		description = fmt.Sprintf("tool description:%s, filter info:%s", opt.toolDescription, filterInfo)
+	}
 	return function.NewFunctionTool(
 		searchFunc,
-		function.WithName("knowledge_search_with_agentic_filter"),
+		function.WithName(toolName),
 		function.WithDescription(description),
 	)
 }
