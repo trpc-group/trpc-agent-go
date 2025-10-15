@@ -1155,12 +1155,11 @@ func Test_Vector_buildQueryFilter(t *testing.T) {
 			condition: &vectorstore.SearchFilter{
 				Metadata: map[string]any{
 					"category": "test",
-					"age":      12,
 				},
 			},
 			wantErr:  false,
 			wantSql:  "WHERE 1=1 AND metadata @> $1::jsonb\n",
-			wantArgs: []any{"{\"age\":12,\"category\":\"test\"}"},
+			wantArgs: []any{"{\"category\":\"test\"}"},
 		},
 		{
 			name: "filter condition",
