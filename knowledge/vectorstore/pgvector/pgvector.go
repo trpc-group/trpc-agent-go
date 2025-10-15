@@ -36,17 +36,6 @@ var (
 	errIDRequired = errors.New("pgvector id is required")
 )
 
-var (
-	fieldID        = "id"
-	fieldUpdatedAt = "updated_at"
-	fieldCreatedAt = "created_at"
-	fieldName      = "name"
-	fieldContent   = "content"
-	fieldVector    = "embedding"
-	fieldMetadata  = "metadata"
-	defaultLimit   = 10
-)
-
 const (
 	// Batch processing constants
 	metadataBatchSize = 5000 // Maximum records per batch when querying all metadata
@@ -56,41 +45,38 @@ const (
 const (
 	sqlCreateTable = `
 		CREATE TABLE IF NOT EXISTS %s (
-			id TEXT PRIMARY KEY,                    -- Unique document identifier, supports arbitrary length strings
-			name VARCHAR(255),                      -- Document name for display and search
-			content TEXT,                           -- Main document content with unlimited length
-			embedding vector(%d),                   -- Vector embedding for similarity search
-			metadata JSONB,                         -- Metadata supporting complex structured data and indexing
-			created_at BIGINT,                      -- Creation timestamp (Unix timestamp)
-			updated_at BIGINT                       -- Update timestamp (Unix timestamp)
+			%s TEXT PRIMARY KEY,            -- Unique document identifier, supports arbitrary length strings
+			%s VARCHAR(255),                -- Document name for display and search
+			%s TEXT,                        -- Main document content with unlimited length
+			%s vector(%d),                  -- Vector embedding for similarity search
+			%s JSONB,                       -- Metadata supporting complex structured data and indexing
+			%s BIGINT,                      -- Creation timestamp (Unix timestamp)
+			%s BIGINT                       -- Update timestamp (Unix timestamp)
 		)`
 
 	sqlCreateIndex = `
-		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING hnsw (embedding vector_cosine_ops) WITH (m = 32, ef_construction = 400)`
+		CREATE INDEX IF NOT EXISTS %s_embedding_idx ON %s USING hnsw (%s vector_cosine_ops) WITH (m = 32, ef_construction = 400)`
 
 	sqlCreateTextIndex = `
-		CREATE INDEX IF NOT EXISTS %s_content_fts_idx ON %s USING gin (to_tsvector('%s', content))`
+		CREATE INDEX IF NOT EXISTS %s_content_fts_idx ON %s USING gin (to_tsvector('%s', %s))`
 
 	sqlUpsertDocument = `
-		INSERT INTO %s (id, name, content, embedding, metadata, created_at, updated_at)
+		INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			content = EXCLUDED.content,
-			embedding = EXCLUDED.embedding,
-			metadata = EXCLUDED.metadata,
-			updated_at = EXCLUDED.updated_at`
+		ON CONFLICT (%s) DO UPDATE SET
+			%s = EXCLUDED.%s,
+			%s = EXCLUDED.%s,
+			%s = EXCLUDED.%s,
+			%s = EXCLUDED.%s,
+			%s = EXCLUDED.%s`
 
-	sqlSelectDocument = `SELECT id, name, content, embedding, metadata, created_at, updated_at FROM %s WHERE id = $1 LIMIT 1`
+	sqlSelectDocument = `SELECT *, 0.0 as score FROM %s WHERE %s = $1 LIMIT 1`
 
-	sqlDeleteDocument = `DELETE FROM %s WHERE id = $1`
+	sqlDeleteDocument = `DELETE FROM %s WHERE %s = $1`
 
 	sqlTruncateTable = `TRUNCATE TABLE %s`
 
-	sqlDocumentExists = `SELECT 1 FROM %s WHERE id = $1`
-
-	// Metadata query templates
-	sqlGetAllMetadata = `SELECT id, metadata FROM %s ORDER BY created_at LIMIT $1 OFFSET $2`
+	sqlDocumentExists = `SELECT 1 FROM %s WHERE %s = $1`
 )
 
 // VectorStore is the vector store for pgvector.
@@ -142,7 +128,15 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 	}
 
 	// Create table if not exists with detailed column comments.
-	createTableSQL := fmt.Sprintf(sqlCreateTable, vs.option.table, vs.option.indexDimension)
+	createTableSQL := fmt.Sprintf(sqlCreateTable, vs.option.table,
+		vs.option.idFieldName,
+		vs.option.nameFieldName,
+		vs.option.contentFieldName,
+		vs.option.embeddingFieldName, vs.option.indexDimension,
+		vs.option.metadataFieldName,
+		vs.option.createdAtFieldName,
+		vs.option.updatedAtFieldName,
+	)
 	_, err = vs.pool.Exec(ctx, createTableSQL)
 	if err != nil {
 		return fmt.Errorf("pgvector create table: %w", err)
@@ -150,7 +144,7 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 
 	// Create HNSW vector index for faster similarity search.
 	// Using cosine distance operator for semantic similarity.
-	indexSQL := fmt.Sprintf(sqlCreateIndex, vs.option.table, vs.option.table)
+	indexSQL := fmt.Sprintf(sqlCreateIndex, vs.option.table, vs.option.table, vs.option.embeddingFieldName)
 	_, err = vs.pool.Exec(ctx, indexSQL)
 	if err != nil {
 		return fmt.Errorf("pgvector create vector index: %w", err)
@@ -158,7 +152,7 @@ func (vs *VectorStore) initDB(ctx context.Context) error {
 
 	// If tsvector is enabled, create GIN index for full-text search on content.
 	if vs.option.enableTSVector {
-		textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, vs.option.table, vs.option.table, vs.option.language)
+		textIndexSQL := fmt.Sprintf(sqlCreateTextIndex, vs.option.table, vs.option.table, vs.option.language, vs.option.contentFieldName)
 		_, err = vs.pool.Exec(ctx, textIndexSQL)
 		if err != nil {
 			return fmt.Errorf("pgvector create text search index: %w", err)
@@ -183,7 +177,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 		return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d, table: %s", vs.option.indexDimension, len(embedding), vs.option.table)
 	}
 
-	upsertSQL := fmt.Sprintf(sqlUpsertDocument, vs.option.table)
+	upsertSQL := buildUpsertSQL(vs.option)
 	now := time.Now().Unix()
 	vector := pgvector.NewVector(convertToFloat32Vector(embedding))
 	metadataJSON := mapToJSON(doc.Metadata)
@@ -202,31 +196,19 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 		return nil, nil, errIDRequired
 	}
 
-	querySQL := fmt.Sprintf(sqlSelectDocument, vs.option.table)
-	var docID, name, content, metadataJSON string
-	var embedding pgvector.Vector
-	var createdAt, updatedAt int64
+	querySQL := fmt.Sprintf(sqlSelectDocument, vs.option.table, vs.option.idFieldName)
+	row := vs.pool.QueryRow(ctx, querySQL, id)
+	scoredDoc, embedding, err := vs.option.docBuilder(row)
 
-	err := vs.pool.QueryRow(ctx, querySQL, id).Scan(&docID, &name, &content, &embedding, &metadataJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pgvector get document: %w", err)
 	}
 
-	metadata, err := jsonToMap(metadataJSON)
-	if err != nil {
-		return nil, nil, fmt.Errorf("pgvector parse metadata: %w", err)
+	if scoredDoc == nil || scoredDoc.Document == nil {
+		return nil, nil, fmt.Errorf("pgvector get document: not found")
 	}
 
-	doc := &document.Document{
-		ID:        docID,
-		Name:      name,
-		Content:   content,
-		Metadata:  metadata,
-		CreatedAt: time.Unix(createdAt, 0),
-		UpdatedAt: time.Unix(updatedAt, 0),
-	}
-
-	return doc, convertToFloat64Vector(embedding.Slice()), nil
+	return scoredDoc.Document, embedding, nil
 }
 
 // Update modifies an existing document.
@@ -248,25 +230,25 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Build update using updateBuilder.
-	ub := newUpdateBuilder(vs.option.table, doc.ID)
+	ub := newUpdateBuilder(vs.option, doc.ID)
 
 	if doc.Name != "" {
-		ub.addField("name", doc.Name)
+		ub.addField(vs.option.nameFieldName, doc.Name)
 	}
 
 	if doc.Content != "" {
-		ub.addField("content", doc.Content)
+		ub.addField(vs.option.contentFieldName, doc.Content)
 	}
 
 	if len(embedding) > 0 {
 		if len(embedding) != vs.option.indexDimension {
 			return fmt.Errorf("pgvector embedding dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(embedding))
 		}
-		ub.addField("embedding", pgvector.NewVector(convertToFloat32Vector(embedding)))
+		ub.addField(vs.option.embeddingFieldName, pgvector.NewVector(convertToFloat32Vector(embedding)))
 	}
 
 	if len(doc.Metadata) > 0 {
-		ub.addField("metadata", mapToJSON(doc.Metadata))
+		ub.addField(vs.option.metadataFieldName, mapToJSON(doc.Metadata))
 	}
 
 	updateSQL, args := ub.build()
@@ -287,7 +269,7 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 		return errIDRequired
 	}
 
-	deleteSQL := fmt.Sprintf(sqlDeleteDocument, vs.option.table)
+	deleteSQL := fmt.Sprintf(sqlDeleteDocument, vs.option.table, vs.option.idFieldName)
 
 	result, err := vs.pool.Exec(ctx, deleteSQL, id)
 	if err != nil {
@@ -340,13 +322,8 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		return nil, fmt.Errorf("pgvector vector dimension mismatch: expected %d, got %d", vs.option.indexDimension, len(query.Vector))
 	}
 
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build vector search query
-	qb := newVectorQueryBuilder(vs.option.table, vs.option.language)
+	qb := newVectorQueryBuilder(vs.option)
 
 	// add vector arg, used above
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
@@ -364,7 +341,7 @@ func (vs *VectorStore) searchByVector(ctx context.Context, query *vectorstore.Se
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeVector)
 }
 
@@ -374,13 +351,8 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		return nil, errors.New("pgvector keyword is required for keyword search")
 	}
 
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build keyword search query with full-text search
-	qb := newKeywordQueryBuilder(vs.option.table, vs.option.language)
+	qb := newKeywordQueryBuilder(vs.option)
 
 	// Add keyword and score conditions
 	qb.addKeywordSearchConditions(query.Query, query.MinScore)
@@ -394,7 +366,7 @@ func (vs *VectorStore) searchByKeyword(ctx context.Context, query *vectorstore.S
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeKeyword)
 }
 
@@ -415,13 +387,8 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		textWeight = 0.0
 	}
 
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build hybrid search query.
-	qb := newHybridQueryBuilder(vs.option.table, vs.option.language, vectorWeight, textWeight)
+	qb := newHybridQueryBuilder(vs.option, vectorWeight, textWeight)
 	qb.addVectorArg(pgvector.NewVector(convertToFloat32Vector(query.Vector)))
 
 	// Add full-text search condition only if query text is provided.
@@ -442,19 +409,14 @@ func (vs *VectorStore) searchByHybrid(ctx context.Context, query *vectorstore.Se
 		qb.addScoreFilter(query.MinScore)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeHybrid)
 }
 
 // searchByFilter returns documents based on filters only
 func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
-	limit := query.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-
 	// Build filter-only search query.
-	qb := newFilterQueryBuilder(vs.option.table, vs.option.language)
+	qb := newFilterQueryBuilder(vs.option)
 
 	// Add filters.
 	if query.Filter != nil && len(query.Filter.IDs) > 0 {
@@ -465,7 +427,7 @@ func (vs *VectorStore) searchByFilter(ctx context.Context, query *vectorstore.Se
 		qb.addMetadataFilter(query.Filter.Metadata)
 	}
 
-	sql, args := qb.build(limit)
+	sql, args := qb.build(vs.getMaxResult(query.Limit))
 	return vs.executeSearch(ctx, sql, args, vectorstore.SearchModeFilter)
 }
 
@@ -482,35 +444,19 @@ func (vs *VectorStore) executeSearch(ctx context.Context, sql string, args []any
 	}
 
 	for rows.Next() {
-		var docID, name, content, metadataJSON string
-		var embedding pgvector.Vector
-		var createdAt, updatedAt int64
+		scoredDoc, _, err := vs.option.docBuilder(rows)
+		if err != nil {
+			return nil, fmt.Errorf("pgvector parse document: %w", err)
+		}
 		var score float64
-
-		err := rows.Scan(&docID, &name, &content, &embedding, &metadataJSON, &createdAt, &updatedAt, &score)
-		if err != nil {
-			return nil, fmt.Errorf("pgvector scan document: %w", err)
+		var id string
+		if scoredDoc != nil && scoredDoc.Document != nil {
+			score = scoredDoc.Score
+			id = scoredDoc.Document.ID
+			result.Results = append(result.Results, scoredDoc)
 		}
-
-		metadata, err := jsonToMap(metadataJSON)
-		if err != nil {
-			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
-		}
-
-		log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, sql: %v", score, docID, searchMode, sql)
-		doc := &document.Document{
-			ID:        docID,
-			Name:      name,
-			Content:   content,
-			Metadata:  metadata,
-			CreatedAt: time.Unix(createdAt, 0),
-			UpdatedAt: time.Unix(updatedAt, 0),
-		}
-
-		result.Results = append(result.Results, &vectorstore.ScoredDocument{
-			Document: doc,
-			Score:    score,
-		})
+		log.Debugf("pgvector search result: score: %v id: %v searchMode: %v, sql: %v", score,
+			id, searchMode, sql)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -556,7 +502,7 @@ func (vs *VectorStore) deleteAll(ctx context.Context) error {
 }
 
 func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.DeleteConfig) error {
-	dsb := newDeleteSQLBuilder(vs.option.table)
+	dsb := newDeleteSQLBuilder(vs.option)
 
 	if len(config.DocumentIDs) > 0 {
 		dsb.addIDFilter(config.DocumentIDs)
@@ -584,7 +530,7 @@ func (vs *VectorStore) Count(ctx context.Context, opts ...vectorstore.CountOptio
 	config := vectorstore.ApplyCountOptions(opts...)
 
 	// Create a count query builder
-	cqb := newCountQueryBuilder(vs.option.table)
+	cqb := newCountQueryBuilder(vs.option)
 
 	// Add metadata filter if provided
 	if len(config.Filter) > 0 {
@@ -651,7 +597,7 @@ func (vs *VectorStore) queryMetadataBatch(
 	filters map[string]any,
 ) (map[string]vectorstore.DocumentMetadata, error) {
 	// Create a metadata query builder
-	qb := newMetadataQueryBuilder(vs.option.table)
+	qb := newMetadataQueryBuilder(vs.option)
 
 	// Add ID filter if provided
 	if len(docIDs) > 0 {
@@ -674,18 +620,16 @@ func (vs *VectorStore) queryMetadataBatch(
 
 	result := make(map[string]vectorstore.DocumentMetadata)
 	for rows.Next() {
-		var docID string
-		var metadataJSON string
-
-		err := rows.Scan(&docID, &metadataJSON)
+		scoredDoc, _, err := vs.option.docBuilder(rows)
 		if err != nil {
-			return nil, fmt.Errorf("pgvector scan metadata: %w", err)
+			return nil, fmt.Errorf("pgvector get metadata batch: %w", err)
+		}
+		if scoredDoc == nil || scoredDoc.Document == nil {
+			continue
 		}
 
-		metadata, err := jsonToMap(metadataJSON)
-		if err != nil {
-			return nil, fmt.Errorf("pgvector parse metadata: %w", err)
-		}
+		docID := scoredDoc.Document.ID
+		metadata := scoredDoc.Document.Metadata
 
 		result[docID] = vectorstore.DocumentMetadata{
 			Metadata: metadata,
@@ -699,6 +643,13 @@ func (vs *VectorStore) queryMetadataBatch(
 	return result, nil
 }
 
+func (vs *VectorStore) getMaxResult(maxResults int) int {
+	if maxResults <= 0 {
+		return vs.option.maxResults
+	}
+	return maxResults
+}
+
 // Close closes the vector store connection.
 func (vs *VectorStore) Close() error {
 	vs.pool.Close()
@@ -707,7 +658,7 @@ func (vs *VectorStore) Close() error {
 
 // Helper functions.
 func (vs *VectorStore) documentExists(ctx context.Context, id string) (bool, error) {
-	querySQL := fmt.Sprintf(sqlDocumentExists, vs.option.table)
+	querySQL := fmt.Sprintf(sqlDocumentExists, vs.option.table, vs.option.idFieldName)
 	var exists int
 	err := vs.pool.QueryRow(ctx, querySQL, id).Scan(&exists)
 	if err != nil {

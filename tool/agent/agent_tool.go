@@ -65,6 +65,14 @@ func WithStreamInner(enabled bool) Option {
 }
 
 // NewTool creates a new Tool that wraps the given agent.
+//
+// Note: The tool name is derived from the agent's info (agent.Info().Name).
+// The agent name must comply with LLM API requirements for compatibility.
+// Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
+// - Must match pattern: ^[a-zA-Z0-9_-]+$
+// - Cannot contain Chinese characters, parentheses, or special symbols
+//
+// Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	// Default to allowing summarization so the parent agent can perform its
 	// normal post-tool reasoning unless opt-out is requested.
@@ -235,6 +243,13 @@ func (at *Tool) SkipSummarization() bool { return at.skipSummarization }
 func (at *Tool) StreamInner() bool { return at.streamInner }
 
 // Declaration returns the tool's declaration information.
+//
+// Note: The tool name must comply with LLM API requirements.
+// Some APIs (e.g., Kimi, DeepSeek) enforce strict naming patterns:
+// - Must match pattern: ^[a-zA-Z0-9_-]+$
+// - Cannot contain Chinese characters, parentheses, or special symbols
+//
+// Best practice: Use ^[a-zA-Z0-9_-]+ only to ensure maximum compatibility.
 func (at *Tool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:         at.name,

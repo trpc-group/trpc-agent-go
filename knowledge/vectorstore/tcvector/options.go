@@ -10,49 +10,16 @@
 package tcvector
 
 import (
-	"math"
-	"time"
-
 	"github.com/tencent/vectordatabase-sdk-go/tcvectordb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
+// defaultMaxResults is the default maximum number of search results.
+const defaultMaxResults = 10
+
+// DocBuilderFunc is the document builder function.
 type DocBuilderFunc func(tcDoc tcvectordb.Document) (*document.Document, []float64, error)
-
-// defaultDocBuilder converts tcvectordb document to document.Document.
-func defaultDocBuilder(tcDoc tcvectordb.Document) (*document.Document, []float64, error) {
-	doc := &document.Document{
-		ID: tcDoc.Id,
-	}
-	if field, ok := tcDoc.Fields[fieldName]; ok {
-		doc.Name = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldContent]; ok {
-		doc.Content = field.String()
-	}
-	if field, ok := tcDoc.Fields[fieldCreatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.CreatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldUpdatedAt]; ok {
-		u := min(field.Uint64(), uint64(math.MaxInt64))
-		//nolint:gosec // u is not overflowed and the conversion is safe.
-		doc.UpdatedAt = time.Unix(int64(u), 0)
-	}
-	if field, ok := tcDoc.Fields[fieldMetadata]; ok {
-		if metadata, ok := field.Val.(map[string]any); ok {
-			doc.Metadata = metadata
-		}
-	}
-
-	embedding := make([]float64, len(tcDoc.Vector))
-	for i, v := range tcDoc.Vector {
-		embedding[i] = float64(v)
-	}
-	return doc, embedding, nil
-}
 
 // options contains the options for tcvectordb.
 type options struct {
@@ -72,25 +39,54 @@ type options struct {
 	textWeight   float64 // Default: Text relevance weight 30%
 	language     string  // Default: zh, options: zh, en
 
+	//field
+	// idFieldName is the tcvectordb field name for ID.
+	idFieldName string
+	// nameFieldName is the tcvectordb field name for name/title.
+	nameFieldName string
+	// contentFieldName is the tcvectordb field name for content.
+	contentFieldName string
+	// embeddingFieldName is the tcvectordb field name for embedding.
+	embeddingFieldName string
+	// metadataFieldName is the tcvectordb field name for metadata.
+	metadataFieldName string
+	// createdAtFieldName is the tcvectordb field name for created at timestamp.
+	createdAtFieldName string
+	// updatedAtFieldName is the tcvectordb field name for updated at timestamp.
+	updatedAtFieldName string
+	// sparseVectorFieldName is the tcvectordb field name for sparse vector.
+	sparseVectorFieldName string
+
 	// filterField is the field name to filter the document.
 	filterFields  []string
 	filterIndexes []tcvectordb.FilterIndex
 
 	docBuilder DocBuilderFunc
+
+	// maxResults is the maximum number of search results.
+	maxResults int
 }
 
 var defaultOptions = options{
-	indexDimension: 1536,
-	database:       "trpc-agent-go",
-	collection:     "documents",
-	replicas:       0,
-	sharding:       1,
-	enableTSVector: true,
-	vectorWeight:   0.7,
-	textWeight:     0.3,
-	language:       "en",
-	filterFields:   []string{source.MetaURI, source.MetaSourceName, fieldCreatedAt},
-	docBuilder:     defaultDocBuilder,
+	indexDimension:        1536,
+	database:              "trpc-agent-go",
+	collection:            "documents",
+	replicas:              0,
+	sharding:              1,
+	enableTSVector:        true,
+	vectorWeight:          0.7,
+	textWeight:            0.3,
+	language:              "en",
+	filterFields:          []string{source.MetaURI, source.MetaSourceName},
+	maxResults:            defaultMaxResults,
+	idFieldName:           "id",
+	nameFieldName:         "name",
+	contentFieldName:      "content",
+	embeddingFieldName:    "vector",
+	metadataFieldName:     "metadata",
+	createdAtFieldName:    "created_at",
+	updatedAtFieldName:    "updated_at",
+	sparseVectorFieldName: "sparse_vector",
 	filterIndexes: []tcvectordb.FilterIndex{
 		{
 			FieldName: source.MetaURI,
@@ -101,11 +97,6 @@ var defaultOptions = options{
 			FieldName: source.MetaSourceName,
 			IndexType: tcvectordb.FILTER,
 			FieldType: tcvectordb.String,
-		},
-		{
-			FieldName: fieldCreatedAt,
-			IndexType: tcvectordb.FILTER,
-			FieldType: tcvectordb.Uint64,
 		},
 	},
 }
@@ -230,5 +221,74 @@ func WithFilterIndexFields(fields []string) Option {
 func WithDocBuilder(builder DocBuilderFunc) Option {
 	return func(o *options) {
 		o.docBuilder = builder
+	}
+}
+
+// WithMaxResults sets the maximum number of search results.
+func WithMaxResults(maxResults int) Option {
+	return func(o *options) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
+		o.maxResults = maxResults
+	}
+}
+
+// WithIDField sets the tcvectordb field name for ID.
+func WithIDField(field string) Option {
+	return func(o *options) {
+		o.idFieldName = field
+	}
+}
+
+// WithNameField sets the tcvectordb field name for name/title.
+func WithNameField(field string) Option {
+	return func(o *options) {
+		o.nameFieldName = field
+	}
+}
+
+// WithContentField sets the tcvectordb field name for content.
+func WithContentField(field string) Option {
+	return func(o *options) {
+		o.contentFieldName = field
+	}
+}
+
+// WithEmbeddingField sets the tcvectordb field name for embedding.
+// This field value type is []float64
+func WithEmbeddingField(field string) Option {
+	return func(o *options) {
+		o.embeddingFieldName = field
+	}
+}
+
+// WithMetadataField sets the tcvectordb field name for metadata.
+func WithMetadataField(field string) Option {
+	return func(o *options) {
+		o.metadataFieldName = field
+	}
+}
+
+// WithCreatedAtField sets the tcvectordb field name for created_at.
+// This field value type is uint64, so the value is converted to time.Time
+func WithCreatedAtField(field string) Option {
+	return func(o *options) {
+		o.createdAtFieldName = field
+	}
+}
+
+// WithUpdatedAtField sets the tcvectordb field name for updated_at.
+// This field value type is uint64, so the value is converted to time.Time
+func WithUpdatedAtField(field string) Option {
+	return func(o *options) {
+		o.updatedAtFieldName = field
+	}
+}
+
+// WithSparseVectorField sets the tcvectordb field name for sparse vector.
+func WithSparseVectorField(field string) Option {
+	return func(o *options) {
+		o.sparseVectorFieldName = field
 	}
 }

@@ -141,6 +141,98 @@ func main() {
 }
 ```
 
+### 手动调用示例
+FilterCondition暂只支持Elasticsearch与TCVector
+
+```go
+
+package main
+
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+)
+
+// 创建支持多版本 (v7, v8, v9) 的 Elasticsearch 向量存储
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // 版本可选："v7"、"v8"、"v9"（默认 "v9"）
+    vectorelasticsearch.WithVersion("v9"),
+    // 用于文档检索时的自定义文档构建方法。若不提供，则使用默认构建方法。
+    vectorelasticsearch.WithDocBuilder(docBuilder),
+)
+if err != nil {
+    // 处理 error
+}
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"), // embedding 模型，也可通过 OPENAI_EMBEDDING_MODEL 环境变量设置
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+    knowledge.WithEmbedder(embedder),
+)
+
+filterCondition := &searchfilter.UniversalFilterCondition{
+    Operator: searchfilter.OperatorAnd,
+    Value: []*searchfilter.UniversalFilterCondition{
+        {
+            Field: "tag",
+            Operator: searchfilter.OperatorEqual,
+            Value: "tag",
+        },
+        {
+            Field: "age",
+            Operator: searchfilter.OperatorGreaterThanOrEqual,
+            Value: 18,
+        },
+        {
+            Field: "create_time",
+            Operator: searchfilter.OperatorBetween,
+            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
+        },
+        {
+            Operator: searchfilter.OperatorOr,
+            Value: []*searchfilter.UniversalFilterCondition{
+                {
+                    Field: "login_time",
+                    Operator: searchfilter.OperatorLessThanOrEqual,
+                    Value: "2025-01-11 12:11:00",
+                },
+                {
+                    Field: "status",
+                    Operator: searchfilter.OperatorEqual,
+                    Value: "logout",
+                },
+            },
+        },
+    },
+}
+
+req := &knowledge.SearchRequest{
+    Query: "any text"
+    MaxResults: 5,
+    MinScore: 0.7,
+    SearchFilter: &knowledge.SearchFilter{
+        DocumentIDs: []string{"id1","id2"},
+        Metadata: map[string]any{
+            "title": "title test",
+        },
+        FilterCondition: filterCondition,
+    }
+}
+searchResult, err := kb.Search(ctx, req)
+```
+
+
 ## 核心概念
 
 [knowledge 模块](https://github.com/trpc-group/trpc-agent-go/tree/main/knowledge) 是 tRPC-Agent-Go 框架的知识管理核心，提供了完整的 RAG 能力。该模块采用模块化设计，支持多种文档源、向量存储后端和 embedding 模型。
@@ -163,6 +255,9 @@ knowledge/
 │   ├── embedder.go      # Embedder 接口定义
 │   ├── openai/          # OpenAI embedding 模型
 │   └── local/           # 本地 embedding 模型
+├── reranker/             # 结果重排
+│   ├── reranker.go      # Reranker 接口定义
+│   ├── topk.go          # 返回topK的检索结果
 ├── document/             # 文档表示
 │   └── document.go      # Document 结构定义
 ├── query/                # 查询增强器
@@ -330,6 +425,25 @@ embedder := openaiembedder.New(
 // 传递给 Knowledge
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker 负责对检索结果的精排：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    reranker.WithK(1), // 指定精排后的返回结果数，不设置的情况下默认返回所有结果
+)
+
+// 传递给 Knowledge
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

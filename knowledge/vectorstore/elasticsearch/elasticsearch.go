@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/elastic/go-elasticsearch/v9/typedapi/core/search"
 	"github.com/elastic/go-elasticsearch/v9/typedapi/core/update"
@@ -25,6 +24,7 @@ import (
 
 	istorage "trpc.group/trpc-go/trpc-agent-go/internal/storage/elasticsearch"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
@@ -50,28 +50,6 @@ const (
 	defaultMaxResults = 10
 )
 
-// Elasticsearch field name constants.
-const (
-	defaultFieldMetadata  = "metadata"
-	defaultFieldCreatedAt = "created_at"
-	defaultFieldUpdatedAt = "updated_at"
-)
-
-// esDocument represents a document in Elasticsearch format using composition.
-type esDocument struct {
-	*document.Document `json:",inline"`
-	Embedding          []float64 `json:"embedding"`
-}
-
-// esUpdateDoc represents the typed partial update body for a document.
-type esUpdateDoc struct {
-	Name      string         `json:"name"`
-	Content   string         `json:"content"`
-	Metadata  map[string]any `json:"metadata"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Embedding []float64      `json:"embedding"`
-}
-
 // indexCreateBody is a lightweight helper used to marshal typed mappings and settings.
 type indexCreateBody struct {
 	Mappings *types.TypeMapping   `json:"mappings,omitempty"`
@@ -80,8 +58,9 @@ type indexCreateBody struct {
 
 // VectorStore implements vectorstore.VectorStore interface using Elasticsearch.
 type VectorStore struct {
-	client istorage.Client
-	option options
+	client          istorage.Client
+	option          options
+	filterConverter searchfilter.Converter[types.QueryVariant]
 }
 
 // New creates a new Elasticsearch vector store with options.
@@ -126,8 +105,9 @@ func New(opts ...Option) (*VectorStore, error) {
 	}
 
 	vs := &VectorStore{
-		client: client,
-		option: option,
+		client:          client,
+		option:          option,
+		filterConverter: &esConverter{},
 	}
 
 	// Ensure index exists with proper mapping.
@@ -165,16 +145,15 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	tm.Properties[vs.option.idFieldName] = types.NewKeywordProperty()
 	// name/content: text
 	tm.Properties[vs.option.nameFieldName] = types.NewTextProperty()
-	contentField := vs.option.contentFieldName
-	tm.Properties[contentField] = types.NewTextProperty()
+	tm.Properties[vs.option.contentFieldName] = types.NewTextProperty()
 	// metadata: object with dynamic true
 	metaObj := types.NewObjectProperty()
 	dm := dynamicmapping.True
 	metaObj.Dynamic = &dm
-	tm.Properties[defaultFieldMetadata] = metaObj
+	tm.Properties[vs.option.metadataFieldName] = metaObj
 	// created_at / updated_at: date
-	tm.Properties[defaultFieldCreatedAt] = types.NewDateProperty()
-	tm.Properties[defaultFieldUpdatedAt] = types.NewDateProperty()
+	tm.Properties[vs.option.createdAtFieldName] = types.NewDateProperty()
+	tm.Properties[vs.option.updatedAtFieldName] = types.NewDateProperty()
 	// embedding: dense_vector with dims, index, similarity
 	dv := types.NewDenseVectorProperty()
 	dims := vs.option.vectorDimension
@@ -183,8 +162,7 @@ func (vs *VectorStore) buildIndexCreateBody() *indexCreateBody {
 	dv.Index = &indexed
 	sim := densevectorsimilarity.Cosine
 	dv.Similarity = &sim
-	embeddingField := vs.option.embeddingFieldName
-	tm.Properties[embeddingField] = dv
+	tm.Properties[vs.option.embeddingFieldName] = dv
 
 	// Settings: shards/replicas are strings in IndexSettings
 	is := types.NewIndexSettings()
@@ -220,14 +198,6 @@ func (vs *VectorStore) createIndex(ctx context.Context, indexName string, body *
 	return nil
 }
 
-// newESDocument creates an Elasticsearch document from document.Document and embedding.
-func newESDocument(doc *document.Document, embedding []float64) *esDocument {
-	return &esDocument{
-		Document:  doc,
-		Embedding: embedding,
-	}
-}
-
 // Add stores a document with its embedding vector.
 func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embedding []float64) error {
 	if doc == nil {
@@ -244,13 +214,21 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	}
 
 	// Prepare document for indexing using helper function.
-	esDoc := newESDocument(doc, embedding)
+	esDoc := map[string]any{
+		vs.option.idFieldName:        doc.ID,
+		vs.option.nameFieldName:      doc.Name,
+		vs.option.contentFieldName:   doc.Content,
+		vs.option.metadataFieldName:  doc.Metadata,
+		vs.option.embeddingFieldName: embedding,
+		vs.option.createdAtFieldName: doc.CreatedAt,
+		vs.option.updatedAtFieldName: doc.UpdatedAt,
+	}
 
 	return vs.indexDocument(ctx, vs.option.indexName, doc.ID, esDoc)
 }
 
 // indexDocument indexes a document.
-func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, document *esDocument) error {
+func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, document map[string]any) error {
 	documentBytes, err := json.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("elasticsearch marshal index document: %w", err)
@@ -281,7 +259,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	if !response.Found {
 		return nil, nil, fmt.Errorf("elasticsearch document not found: %s", id)
 	}
-	doc, embedding, err := vs.option.docBuilder(response.Source_)
+	doc, embedding, err := vs.docBuilder(response.Source_)
 	if err != nil {
 		return nil, nil, fmt.Errorf("elasticsearch invalid document source: %w", err)
 	}
@@ -319,21 +297,19 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	}
 
 	// Prepare document for updating using helper function.
-	esDoc := newESDocument(doc, embedding)
+	esDoc := map[string]any{
+		vs.option.nameFieldName:      doc.Name,
+		vs.option.contentFieldName:   doc.Content,
+		vs.option.metadataFieldName:  doc.Metadata,
+		vs.option.updatedAtFieldName: doc.UpdatedAt,
+		vs.option.embeddingFieldName: embedding,
+	}
 
 	return vs.updateDocument(ctx, vs.option.indexName, doc.ID, esDoc)
 }
 
 // updateDocument updates a document.
-func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string, document *esDocument) error {
-	updateDoc := esUpdateDoc{
-		Name:      document.Name,
-		Content:   document.Content,
-		Metadata:  document.Metadata,
-		UpdatedAt: document.UpdatedAt,
-		Embedding: document.Embedding,
-	}
-
+func (vs *VectorStore) updateDocument(ctx context.Context, indexName, id string, updateDoc map[string]any) error {
 	// Marshal the update document to JSON.
 	docBytes, err := json.Marshal(updateDoc)
 	if err != nil {
@@ -377,14 +353,6 @@ func (vs *VectorStore) deleteDocument(ctx context.Context, indexName, id string)
 func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuery) (*vectorstore.SearchResult, error) {
 	if query == nil {
 		return nil, errors.New("elasticsearch search query cannot be nil")
-	}
-
-	if len(query.Vector) == 0 {
-		return nil, fmt.Errorf("elasticsearch query vector cannot be empty for %s", query.Query)
-	}
-
-	if len(query.Vector) != vs.option.vectorDimension {
-		return nil, fmt.Errorf("elasticsearch query vector dimension %d does not match expected dimension %d", len(query.Vector), vs.option.vectorDimension)
 	}
 
 	// Build search query based on search mode.
@@ -470,7 +438,7 @@ func (vs *VectorStore) parseSearchResults(data []byte) (*vectorstore.SearchResul
 		if score < vs.option.scoreThreshold {
 			continue
 		}
-		doc, _, err := vs.option.docBuilder(hit.Source_)
+		doc, _, err := vs.docBuilder(hit.Source_)
 		if err != nil {
 			log.Errorf("elasticsearch parse search result: %v", err)
 			continue
@@ -557,7 +525,7 @@ func (vs *VectorStore) buildCountQuery(filter map[string]any) *types.SearchReque
 			termQuery.Value = value
 			mustClause := types.NewQuery()
 			mustClause.Term = map[string]types.TermQuery{
-				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
+				fmt.Sprintf("%s.%s", vs.option.metadataFieldName, key): *termQuery,
 			}
 			boolQuery.Must = append(boolQuery.Must, *mustClause)
 		}
@@ -620,7 +588,7 @@ func (vs *VectorStore) deleteByFilter(ctx context.Context, config *vectorstore.D
 		termQuery.Value = value
 		mustClause := types.NewQuery()
 		mustClause.Term = map[string]types.TermQuery{
-			fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
+			fmt.Sprintf("%s.%s", vs.option.metadataFieldName, key): *termQuery,
 		}
 		boolQuery.Must = append(boolQuery.Must, *mustClause)
 	}
@@ -677,37 +645,15 @@ func (vs *VectorStore) queryMetadataBatch(
 	metadataQuery.Size = &limit
 	metadataQuery.From = &offset
 
-	// Only return id and metadata fields
-	includes := []string{vs.option.idFieldName, defaultFieldMetadata}
-	sourceFilter := types.NewSourceFilter()
-	sourceFilter.Includes = includes
-	metadataQuery.Source_ = sourceFilter
-
-	// Build query with filters
-	if len(docIDs) > 0 || len(filters) > 0 {
-		boolQuery := types.NewBoolQuery()
-
-		// Add document ID filters
-		if len(docIDs) > 0 {
-			idsQuery := types.NewIdsQuery()
-			idsQuery.Values = docIDs
-			mustClause := types.NewQuery()
-			mustClause.Ids = idsQuery
-			boolQuery.Must = append(boolQuery.Must, *mustClause)
-		}
-
-		// Add metadata filters
-		for key, value := range filters {
-			termQuery := types.NewTermQuery()
-			termQuery.Value = value
-			mustClause := types.NewQuery()
-			mustClause.Term = map[string]types.TermQuery{
-				fmt.Sprintf("%s.%s", defaultFieldMetadata, key): *termQuery,
-			}
-			boolQuery.Must = append(boolQuery.Must, *mustClause)
-		}
-
-		metadataQuery.Query = &types.Query{Bool: boolQuery}
+	finalQuery, err := vs.buildFilterQuery(&vectorstore.SearchFilter{
+		IDs:      docIDs,
+		Metadata: filters,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if finalQuery != nil {
+		metadataQuery.Query = finalQuery.QueryCaster()
 	}
 
 	data, err := vs.search(ctx, vs.option.indexName, metadataQuery)
@@ -726,18 +672,16 @@ func (vs *VectorStore) queryMetadataBatch(
 			continue
 		}
 
-		var source esDocument
-		if err := json.Unmarshal(hit.Source_, &source); err != nil {
+		doc, _, err := vs.docBuilder(hit.Source_)
+		if err != nil {
+			log.Warnf("elasticsearch doc builder failed: %v", err)
 			continue // Skip invalid documents
 		}
-
-		metadata := make(map[string]any)
-		if source.Metadata != nil {
-			metadata = source.Metadata
+		if doc == nil || len(doc.Metadata) == 0 {
+			continue
 		}
-
 		result[*hit.Id_] = vectorstore.DocumentMetadata{
-			Metadata: metadata,
+			Metadata: doc.Metadata,
 		}
 	}
 

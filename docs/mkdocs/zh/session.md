@@ -11,7 +11,7 @@ tRPC-Agent-Go 框架提供了强大的会话（Session）管理功能，用于�
 - **事件追踪**：完整记录会话中的所有交互事件
 - **多级存储**：支持应用级、用户级和会话级数据存储
 - **并发安全**：内置读写锁保证并发访问安全
-- **自动管理**：在Runner中指定Session Service后，即可自动处理会话的创建、加载和更新
+- **自动管理**：在 Runner 中指定 Session Service 后，即可自动处理会话的创建、加载和更新
 
 ## 核心概念
 
@@ -37,7 +37,7 @@ Application (应用)
 
 ## 使用示例
 
-### 集成Session Service
+### 集成 Session Service
 
 使用 `runner.WithSessionService` 可以为 Agent 运行器提供完整的会话管理能力，如果未指定，则默认使用基于内存的会话管理。Runner 会自动处理会话的创建、加载和更新，用户无需额外操作，也不用关心内部细节：
 
@@ -91,7 +91,7 @@ import (
     "fmt"
     "log"
     "time"
-    
+
     "trpc.group/trpc-go/trpc-agent-go/session"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
     "trpc.group/trpc-go/trpc-agent-go/event"
@@ -100,19 +100,19 @@ import (
 func main() {
     // 创建内存会话服务
     sessionService := inmemory.NewSessionService()
-    
+
     // 创建会话
     key := session.Key{
         AppName:   "my-agent",
         UserID:    "user123",
         SessionID: "", // 空字符串会自动生成 UUID
     }
-    
+
     initialState := session.StateMap{
         "language": []byte("zh-CN"),
         "theme":    []byte("dark"),
     }
-    
+
     createdSession, err := sessionService.CreateSession(
         context.Background(),
         key,
@@ -121,7 +121,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    
+
     fmt.Printf("Created session: %s\n", createdSession.ID)
 }
 ```
@@ -131,8 +131,8 @@ func main() {
 ```go
 // GetSession 通过会话键获取指定会话
 func (s *SessionService) GetSession(
-    ctx context.Context, 
-    key session.Key, 
+    ctx context.Context,
+    key session.Key,
     options ...session.Option,
 ) (*Session, error)
 ```
@@ -160,7 +160,7 @@ session, err := sessionService.GetSession(ctx, session.Key{
 })
 
 // 获取最近 10 个事件的会话
-session, err := sessionService.GetSession(ctx, key, 
+session, err := sessionService.GetSession(ctx, key,
     session.WithEventNum(10))
 
 // 获取指定时间后的事件
@@ -173,8 +173,8 @@ session, err := sessionService.GetSession(ctx, key,
 ```go
 // DeleteSession 删除指定会话
 func (s *SessionService) DeleteSession(
-    ctx context.Context, 
-    key session.Key, 
+    ctx context.Context,
+    key session.Key,
     options ...session.Option,
 ) error
 ```
@@ -192,7 +192,7 @@ func (s *SessionService) DeleteSession(
 ```go
 // 删除指定会话
 err := sessionService.DeleteSession(ctx, session.Key{
-    AppName:   "my-agent", 
+    AppName:   "my-agent",
     UserID:    "user123",
     SessionID: "session-id-123",
 })
@@ -240,7 +240,7 @@ retrievedSession, err = sessionService.GetSession(
     context.Background(),
     session.Key{
         AppName:   "my-agent",
-        UserID:    "user123", 
+        UserID:    "user123",
         SessionID: retrievedSession.ID,
     },
 )
@@ -284,7 +284,7 @@ sessionService := inmemory.NewSessionService(
 // - 每个会话最多存储 500 个事件，超出时自动淘汰最老的事件
 // - 会话数据在 30 分钟无活动后自动过期
 // - 应用级状态在 24 小时后过期
-// - 用户级状态在 7 天后过期  
+// - 用户级状态在 7 天后过期
 // - 每 10 分钟执行一次清理操作，移除过期数据
 ```
 
@@ -332,7 +332,7 @@ sessionService, err := redis.NewService(
 
 **完整配置示例：**
 
-```go
+````go
 sessionService, err := redis.NewService(
     redis.WithRedisClientURL("redis://localhost:6379/0"),
     redis.WithSessionEventLimit(1000),
@@ -360,11 +360,11 @@ sessionService, err := redis.NewService()
 // - 所有数据永不过期（TTL 为 0）
 // - 需要通过 storage.RegisterRedisInstance 预先注册 Redis 实例
 // - 适用于需要持久化但不需要自动过期的场景
-```
+````
 
 #### 配置复用
 
-如果你有多个组件需要用到redis，可以配置一个redis实例，然后在多个组件中复用配置。
+如果你有多个组件需要用到 redis，可以配置一个 redis 实例，然后在多个组件中复用配置。
 
 ```go
     redisURL := fmt.Sprintf("redis://%s", "127.0.0.1:6379")
@@ -378,7 +378,7 @@ sessionService, err := redis.NewService()
 # 应用数据
 appdata:{appName} -> Hash {key: value}
 
-# 用户数据  
+# 用户数据
 userdata:{appName}:{userID} -> Hash {key: value}
 
 # 会话数据
@@ -388,8 +388,480 @@ session:{appName}:{userID} -> Hash {sessionID: SessionData(JSON)}
 events:{appName}:{userID}:{sessionID} -> SortedSet {score: timestamp, value: Event(JSON)}
 ```
 
+## 会话摘要
+
+### 概述
+
+随着对话的持续增长，维护完整的事件历史可能会占用大量内存，并可能超出 LLM 的上下文窗口限制。会话摘要功能使用 LLM 自动将历史对话压缩为简洁的摘要，在保留重要上下文的同时显著降低内存占用和 token 消耗。
+
+**核心特性：**
+
+- **自动触发**：根据事件数量、token 数量或时间阈值自动生成摘要
+- **增量处理**：只处理自上次摘要以来的新事件，避免重复计算
+- **LLM 驱动**：使用任何配置的 LLM 模型生成高质量、上下文感知的摘要
+- **非破坏性**：原始事件完整保留，摘要单独存储
+- **异步处理**：后台异步执行，不阻塞对话流程
+- **灵活配置**：支持自定义触发条件、提示词和字数限制
+
+### 基础配置
+
+#### 步骤 1：创建摘要器
+
+使用 LLM 模型创建摘要器并配置触发条件：
+
+```go
+import (
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+// 创建用于摘要的 LLM 模型
+summaryModel, err := openai.NewModel(
+    openai.WithAPIKey("your-api-key"),
+    openai.WithModelName("gpt-4"),
+)
+if err != nil {
+    panic(err)
+}
+
+// 创建摘要器并配置触发条件
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithChecksAny(                     // 任一条件满足即触发
+        summary.CheckEventThreshold(20),       // 20 个事件后触发
+        summary.CheckTokenThreshold(4000),     // 4000 个 token 后触发
+        summary.CheckTimeThreshold(5*time.Minute), // 5 分钟无活动后触发
+    ),
+    summary.WithMaxSummaryWords(200),          // 限制摘要在 200 字以内
+)
+```
+
+#### 步骤 2：配置会话服务
+
+将摘要器集成到会话服务（内存或 Redis）：
+
+```go
+import (
+    "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/redis"
+)
+
+// 内存存储（开发/测试）
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSummarizer(summarizer),
+    inmemory.WithAsyncSummaryNum(2),                // 2 个异步 worker
+    inmemory.WithSummaryQueueSize(100),             // 队列大小 100
+    inmemory.WithSummaryJobTimeout(30*time.Second), // 单个任务超时 30 秒
+)
+
+// Redis 存储（生产环境）
+sessionService, err := redis.NewService(
+    redis.WithRedisClientURL("redis://localhost:6379"),
+    redis.WithSummarizer(summarizer),
+    redis.WithAsyncSummaryNum(4),           // 4 个异步 worker
+    redis.WithSummaryQueueSize(200),        // 队列大小 200
+)
+```
+
+#### 步骤 3：配置 Agent 和 Runner
+
+创建 Agent 并配置摘要注入行为：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+// 创建 Agent（配置摘要注入行为）
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),   // 启用摘要注入
+    llmagent.WithMaxHistoryRuns(10),        // 配合使用（见下方说明）
+)
+
+// 创建 Runner
+r := runner.NewRunner(
+    "my-agent",
+    llmAgent,
+    runner.WithSessionService(sessionService),
+)
+
+// 运行对话 - 摘要将自动管理
+eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
+```
+
+完成以上配置后，摘要功能即可自动运行。
+
+### 摘要触发机制
+
+#### 自动触发（推荐）
+
+**Runner 自动触发：** 在每次对话完成后，Runner 会自动检查触发条件，满足条件时在后台异步生成摘要，无需手动干预。
+
+**触发时机：**
+
+- 事件数量达到阈值（`WithEventThreshold`）
+- Token 数量达到阈值（`WithTokenThreshold`）
+- 距上次事件超过指定时间（`WithTimeThreshold`）
+- 满足自定义组合条件（`WithChecksAny` / `WithChecksAll`）
+
+#### 手动触发
+
+某些场景下，你可能需要手动触发摘要：
+
+```go
+// 异步摘要（推荐）- 后台处理，不阻塞
+err := sessionService.EnqueueSummaryJob(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents, // 对完整会话生成摘要
+    false,                               // force=false，遵守触发条件
+)
+
+// 同步摘要 - 立即处理，会阻塞当前操作
+err := sessionService.CreateSessionSummary(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    false, // force=false，遵守触发条件
+)
+
+// 异步强制摘要 - 忽略触发条件，强制生成
+err := sessionService.EnqueueSummaryJob(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    true, // force=true，绕过所有触发条件检查
+)
+
+// 同步强制摘要 - 立即强制生成
+err := sessionService.CreateSessionSummary(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    true, // force=true，绕过所有触发条件检查
+)
+```
+
+**API 说明：**
+
+- **`EnqueueSummaryJob`**：异步摘要（推荐）
+
+  - 后台处理，不阻塞当前操作
+  - 失败时自动回退到同步处理
+  - 适合生产环境
+
+- **`CreateSessionSummary`**：同步摘要
+  - 立即处理，会阻塞当前操作
+  - 直接返回处理结果
+  - 适合调试或需要立即获取结果的场景
+
+**参数说明：**
+
+- **filterKey**：`session.SummaryFilterKeyAllContents` 表示对完整会话生成摘要
+- **force 参数**：
+  - `false`：遵守配置的触发条件（事件数、token 数、时间阈值等），只有满足条件才生成摘要
+  - `true`：强制生成摘要，完全忽略所有触发条件检查，无论会话状态如何都会执行
+
+**使用场景：**
+
+| 场景         | API                    | force   | 说明                         |
+| ------------ | ---------------------- | ------- | ---------------------------- |
+| 正常自动摘要 | 由 Runner 自动调用     | `false` | 满足触发条件时自动生成       |
+| 会话结束     | `EnqueueSummaryJob`    | `true`  | 强制生成最终完整摘要         |
+| 用户请求查看 | `CreateSessionSummary` | `true`  | 立即生成并返回               |
+| 定时批量处理 | `EnqueueSummaryJob`    | `false` | 批量检查并处理符合条件的会话 |
+| 调试测试     | `CreateSessionSummary` | `true`  | 立即执行，方便验证           |
+
+### 上下文注入机制
+
+框架提供两种模式来管理发送给 LLM 的对话上下文：
+
+#### 模式 1：启用摘要注入（推荐）
+
+```go
+llmagent.WithAddSessionSummary(true)
+```
+
+**工作方式：**
+
+- 摘要作为系统消息自动前置到 LLM 输入
+- 包含摘要时间点之后的**所有增量事件**（不截断）
+- 保证完整上下文：浓缩历史 + 完整新对话
+- **`WithMaxHistoryRuns` 参数被忽略**
+
+**上下文结构：**
+
+```
+┌─────────────────────────────────────┐
+│ 系统提示词                            │
+├─────────────────────────────────────┤
+│ 会话摘要（system message）            │ ← 历史对话的浓缩版本
+├─────────────────────────────────────┤
+│ 事件 1（摘要时间点之后）                │ ┐
+│ 事件 2                               │ │
+│ 事件 3                               │ │ 摘要后的所有新对话
+│ ...                                 │ │ （完整保留，不截断）
+│ 事件 N（当前消息）                     │ ┘
+└─────────────────────────────────────┘
+```
+
+**适用场景：** 长期运行的会话，需要保持完整历史上下文同时控制 token 消耗。
+
+#### 模式 2：不使用摘要
+
+```go
+llmagent.WithAddSessionSummary(false)
+llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
+```
+
+**工作方式：**
+
+- 不添加摘要消息
+- 只包含最近 `MaxHistoryRuns` 轮对话
+- `MaxHistoryRuns=0` 时不限制，包含所有历史
+
+**上下文结构：**
+
+```
+┌─────────────────────────────────────┐
+│ 系统提示词                            │
+├─────────────────────────────────────┤
+│ 事件 N-k+1                           │ ┐
+│ 事件 N-k+2                           │ │ 最近 k 轮对话
+│ ...                                 │ │ (MaxHistoryRuns=k)
+│ 事件 N（当前消息）                     │ ┘
+└─────────────────────────────────────┘
+```
+
+**适用场景：** 短会话、测试环境，或需要精确控制上下文窗口大小。
+
+#### 模式选择建议
+
+| 场景                   | 推荐配置                                         | 说明                       |
+| ---------------------- | ------------------------------------------------ | -------------------------- |
+| 长期会话（客服、助手） | `AddSessionSummary=true`                         | 保持完整上下文，优化 token |
+| 短期会话（单次咨询）   | `AddSessionSummary=false`<br>`MaxHistoryRuns=10` | 简单直接，无需摘要开销     |
+| 调试测试               | `AddSessionSummary=false`<br>`MaxHistoryRuns=5`  | 快速验证，减少干扰         |
+| 高并发场景             | `AddSessionSummary=true`<br>增加 worker 数量     | 异步处理，不影响响应速度   |
+
+### 高级配置
+
+#### 摘要器选项
+
+使用以下选项配置摘要器行为：
+
+**触发条件：**
+
+- **`WithEventThreshold(eventCount int)`**：当事件数量超过阈值时触发摘要。示例：`WithEventThreshold(20)` 在 20 个事件后触发。
+- **`WithTokenThreshold(tokenCount int)`**：当总 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在 4000 个 token 后触发。
+- **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
+
+**组合条件：**
+
+- **`WithChecksAll(checks ...Checker)`**：要求所有条件都满足（AND 逻辑）。使用 `Check*` 函数（不是 `With*`）。示例：
+  ```go
+  summary.WithChecksAll(
+      summary.CheckEventThreshold(10),
+      summary.CheckTokenThreshold(2000),
+  )
+  ```
+- **`WithChecksAny(checks ...Checker)`**：任何条件满足即触发（OR 逻辑）。使用 `Check*` 函数（不是 `With*`）。示例：
+  ```go
+  summary.WithChecksAny(
+      summary.CheckEventThreshold(50),
+      summary.CheckTimeThreshold(10*time.Minute),
+  )
+  ```
+
+**注意：**在 `WithChecksAll` 和 `WithChecksAny` 中使用 `Check*` 函数（如 `CheckEventThreshold`）。将 `With*` 函数（如 `WithEventThreshold`）作为 `NewSummarizer` 的直接选项使用。`Check*` 函数创建检查器实例，而 `With*` 函数是选项设置器。
+
+**摘要生成：**
+
+- **`WithMaxSummaryWords(maxWords int)`**：限制摘要的最大字数。该限制会包含在提示词中以指导模型生成。示例：`WithMaxSummaryWords(150)` 请求在 150 字以内的摘要。
+- **`WithPrompt(prompt string)`**：提供自定义摘要提示词。提示词必须包含占位符 `{conversation_text}`，它会被对话内容替换。可选包含 `{max_summary_words}` 用于字数限制指令。
+
+**自定义提示词示例：**
+
+```go
+customPrompt := `分析以下对话并提供简洁的摘要，重点关注关键决策、行动项和重要上下文。
+请控制在 {max_summary_words} 字以内。
+
+<conversation>
+{conversation_text}
+</conversation>
+
+摘要：`
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithPrompt(customPrompt),
+    summary.WithMaxSummaryWords(100),
+    summary.WithEventThreshold(15),
+)
+```
+
+#### 会话服务选项
+
+在会话服务中配置异步摘要处理：
+
+- **`WithSummarizer(s summary.SessionSummarizer)`**：将摘要器注入到会话服务中。
+- **`WithAsyncSummaryNum(num int)`**：设置用于摘要处理的异步 worker goroutine 数量。默认为 2。更多 worker 允许更高并发但消耗更多资源。
+- **`WithSummaryQueueSize(size int)`**：设置摘要任务队列的大小。默认为 100。更大的队列允许更多待处理任务但消耗更多内存。
+- **`WithSummaryJobTimeout(timeout time.Duration)`** _（仅内存模式）_：设置处理单个摘要任务的超时时间。默认为 30 秒。
+
+### 手动触发摘要
+
+可以使用会话服务 API 手动触发摘要：
+
+```go
+// 同步摘要
+err := sessionService.CreateSessionSummary(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents, // 完整会话摘要。
+    false,                                // force=false，遵守触发条件。
+)
+
+// 异步摘要（推荐）
+err := sessionService.EnqueueSummaryJob(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    false, // force=false。
+)
+
+// 强制摘要，不考虑触发条件
+err := sessionService.EnqueueSummaryJob(
+    ctx,
+    sess,
+    session.SummaryFilterKeyAllContents,
+    true, // force=true，绕过触发条件。
+)
+```
+
+### 获取摘要
+
+从会话中获取最新的摘要文本：
+
+```go
+summaryText, found := sessionService.GetSessionSummaryText(ctx, sess)
+if found {
+    fmt.Printf("摘要：%s\n", summaryText)
+}
+```
+
+### 工作原理
+
+1. **增量处理**：摘要器跟踪每个会话的上次摘要时间。在后续运行中，它只处理上次摘要后发生的事件。
+
+2. **增量摘要**：新事件与先前的摘要（作为系统事件前置）组合，生成一个既包含旧上下文又包含新信息的更新摘要。
+
+3. **触发条件评估**：在生成摘要之前，摘要器会评估配置的触发条件（事件计数、token 计数、时间阈值）。如果条件未满足且 `force=false`，则跳过摘要。
+
+4. **异步 Worker**：摘要任务使用基于哈希的分发策略分配到多个 worker goroutine。这确保同一会话的任务按顺序处理，而不同会话可以并行处理。
+
+5. **回退机制**：如果异步入队失败（队列已满、上下文取消或 worker 未初始化），系统会自动回退到同步处理。
+
+### 最佳实践
+
+1. **选择合适的阈值**：根据 LLM 的上下文窗口和对话模式设置事件/token 阈值。对于 GPT-4（8K 上下文），考虑使用 `WithTokenThreshold(4000)` 为响应留出空间。
+
+2. **使用异步处理**：在生产环境中始终使用 `EnqueueSummaryJob` 而不是 `CreateSessionSummary`，以避免阻塞对话流程。
+
+3. **监控队列大小**：如果频繁看到"queue is full"警告，请增加 `WithSummaryQueueSize` 或 `WithAsyncSummaryNum`。
+
+4. **自定义提示词**：根据应用需求定制摘要提示词。例如，如果你正在构建客户支持 Agent，应关注关键问题和解决方案。
+
+5. **平衡字数限制**：设置 `WithMaxSummaryWords` 以在保留上下文和减少 token 使用之间取得平衡。典型值范围为 100-300 字。
+
+6. **测试触发条件**：尝试不同的 `WithChecksAny` 和 `WithChecksAll` 组合，找到摘要频率和成本之间的最佳平衡。
+
+### 性能考虑
+
+- **LLM 成本**：每次摘要生成都会调用 LLM。监控触发条件以平衡成本和上下文保留。
+- **内存使用**：摘要与事件一起存储。配置适当的 TTL 以管理长时间运行会话中的内存。
+- **异步 Worker**：更多 worker 会提高吞吐量但消耗更多资源。从 2-4 个 worker 开始，根据负载进行扩展。
+- **队列容量**：根据预期的并发量和摘要生成时间调整队列大小。
+
+### 完整示例
+
+以下是演示所有组件如何协同工作的完整示例：
+
+```go
+package main
+
+import (
+    "context"
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 创建用于聊天和摘要的 LLM 模型
+    llm, _ := openai.NewModel(
+        openai.WithAPIKey("your-api-key"),
+        openai.WithModelName("gpt-4"),
+    )
+
+    // 创建带灵活触发条件的摘要器
+    summarizer := summary.NewSummarizer(
+        llm,
+        summary.WithMaxSummaryWords(200),
+        summary.WithChecksAny(
+            summary.CheckEventThreshold(20),
+            summary.CheckTokenThreshold(4000),
+            summary.CheckTimeThreshold(5*time.Minute),
+        ),
+    )
+
+    // 创建带摘要器的会话服务
+    sessionService := inmemory.NewSessionService(
+        inmemory.WithSummarizer(summarizer),
+        inmemory.WithAsyncSummaryNum(2),
+        inmemory.WithSummaryQueueSize(100),
+        inmemory.WithSummaryJobTimeout(30*time.Second),
+    )
+
+    // 创建启用摘要注入的 agent
+    agent := llmagent.New(
+        "my-agent",
+        llmagent.WithModel(llm),
+        llmagent.WithAddSessionSummary(true),
+        llmagent.WithMaxHistoryRuns(10),
+    )
+
+    // 创建 runner
+    r := runner.NewRunner("my-app", agent,
+        runner.WithSessionService(sessionService))
+
+    // 运行对话 - 摘要会自动管理
+    userMsg := model.NewUserMessage("跟我讲讲 AI")
+    eventChan, _ := r.Run(ctx, "user123", "session456", userMsg)
+
+    // 消费事件
+    for event := range eventChan {
+        // 处理事件...
+    }
+}
+```
+
 ## 参考资源
 
-- [参考示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [会话示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [摘要示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 
-通过合理使用会话管理功能，你可以构建有状态的智能 Agent，为用户提供连续、个性化的交互体验。
+通过合理使用会话管理功能，结合会话摘要机制，你可以构建有状态的智能 Agent，在保持对话上下文的同时高效管理内存，为用户提供连续、个性化的交互体验，同时确保系统长期运行的可持续性。

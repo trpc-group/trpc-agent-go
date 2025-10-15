@@ -20,11 +20,11 @@ The transfer system enables intelligent task delegation across multiple speciali
 └─────────┬───────────┘
           │ transfer_to_agent()
           ▼
-┌─────────────────────┬─────────────────────┬─────────────────────┐
-│   Math Agent        │   Weather Agent     │  Research Agent     │
-│   🧮                │   🌤️                │  🔍                 │
-│   - calculate tool  │   - get_weather     │   - search tool     │
-└─────────────────────┴─────────────────────┴─────────────────────┘
+┌─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┐
+│   Math Agent        │   Weather Agent     │  Research Agent     │   Time Agent        │
+│   🧮                │   🌤️                 │  🔍                 │   ⏰                │
+│   - calculate tool  │   - get_weather     │   - search tool     │   - time_diff tool  │
+└─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┘
 ```
 
 ## Sub-Agents
@@ -49,6 +49,13 @@ The transfer system enables intelligent task delegation across multiple speciali
 - **Tools**: `search` - finds information on topics
 - **Specialization**: Comprehensive research and structured answers
 - **Temperature**: 0.7 (creative)
+
+### Time Agent (`time-agent`)
+
+- **Purpose**: Time calculations and duration analysis
+- **Tools**: `calculate_time_diff` - calculates time differences between timestamps
+- **Specialization**: Precise time calculations and duration breakdowns
+- **Temperature**: 0.4 (balanced precision)
 
 ## Building and Running
 
@@ -138,6 +145,27 @@ Based on current research, here are key renewable energy trends:
 4. Renewable energy costs have decreased by 85% since 2010
 ```
 
+### Time Calculation Transfer
+
+```
+You: Calculate time difference between 2023-01-01T00:00:00Z and 2023-01-02T12:30:45Z
+
+🎯 Coordinator: This is a time calculation request - I'll transfer to our time specialist.
+🔄 Initiating transfer...
+🔄 Transfer Event: Transferring control to agent: time-agent
+⏰ Time Specialist: I'll calculate the time difference between these timestamps.
+🔧 ⏰ executing tools:
+   • calculate_time_diff ({"startTime":"2023-01-01T00:00:00Z","endTime":"2023-01-02T12:30:45Z"})
+   ✅ Tool completed
+
+Time difference calculation:
+- Start Time: 2023-01-01T00:00:00Z
+- End Time: 2023-01-02T12:30:45Z
+- Duration: 36h30m45s
+- Total Hours: 36.51
+- Days: 1, Hours: 12, Minutes: 30, Seconds: 45
+```
+
 ## Key Features
 
 ### Intelligent Delegation
@@ -152,6 +180,7 @@ Based on current research, here are key renewable energy trends:
 - 🧮 Math Agent responses
 - 🌤️ Weather Agent responses
 - 🔍 Research Agent responses
+- ⏰ Time Agent responses
 - 🔄 Transfer events and tool executions
 
 ### Seamless Context Passing
@@ -253,6 +282,8 @@ if event.Object == model.ObjectTypeTransfer {
 2. Add to sub-agents list
 3. Update coordinator instructions
 4. Add display formatting
+
+The time agent demonstrates this pattern with its `calculate_time_diff` tool for precise time calculations.
 
 ### Custom Tools
 

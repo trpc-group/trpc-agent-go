@@ -18,28 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch"
 )
 
+// DocBuilderFunc is a function that builds a document from hit source.
 type DocBuilderFunc func(hitSource json.RawMessage) (*document.Document, []float64, error)
-
-func defaultDocBuilder(hitSource json.RawMessage) (*document.Document, []float64, error) {
-	// Parse the _source field using our unified esDocument struct.
-	var source esDocument
-	if err := json.Unmarshal(hitSource, &source); err != nil {
-		return nil, nil, err
-	}
-	// Create document.
-	doc := &document.Document{
-		ID:        source.ID,
-		Name:      source.Name,
-		Content:   source.Content,
-		CreatedAt: source.CreatedAt,
-		UpdatedAt: source.UpdatedAt,
-	}
-	// Extract metadata.
-	if source.Metadata != nil {
-		doc.Metadata = source.Metadata
-	}
-	return doc, source.Embedding, nil
-}
 
 // options holds Elasticsearch vectorstore configuration.
 type options struct {
@@ -83,6 +63,12 @@ type options struct {
 	contentFieldName string
 	// embeddingFieldName is the Elasticsearch field name for embedding.
 	embeddingFieldName string
+	// metadataFieldName is the Elasticsearch field name for metadata.
+	metadataFieldName string
+	// createdAtFieldName is the Elasticsearch field name for createdAt.
+	createdAtFieldName string
+	// updatedAtFieldName is the Elasticsearch field name for updatedAt.
+	updatedAtFieldName string
 	// extraOptions allows passing builder-specific extras to the storage client.
 	extraOptions []any
 	// docBuilder is the function to build document from hit source.
@@ -108,7 +94,9 @@ var defaultOptions = options{
 	nameFieldName:      "name",
 	contentFieldName:   "content",
 	embeddingFieldName: "embedding",
-	docBuilder:         defaultDocBuilder,
+	metadataFieldName:  "metadata",
+	createdAtFieldName: "created_at",
+	updatedAtFieldName: "updated_at",
 }
 
 // Option represents a functional option for configuring VectorStore.
@@ -201,6 +189,9 @@ func WithScoreThreshold(threshold float64) Option {
 // WithMaxResults sets the maximum number of search results.
 func WithMaxResults(maxResults int) Option {
 	return func(o *options) {
+		if maxResults <= 0 {
+			maxResults = defaultMaxResults
+		}
 		o.maxResults = maxResults
 	}
 }
@@ -251,6 +242,27 @@ func WithContentField(field string) Option {
 func WithEmbeddingField(field string) Option {
 	return func(o *options) {
 		o.embeddingFieldName = field
+	}
+}
+
+// WithMetadataField sets the Elasticsearch field name for metadata.
+func WithMetadataField(field string) Option {
+	return func(o *options) {
+		o.metadataFieldName = field
+	}
+}
+
+// WithCreatedAtField sets the Elasticsearch field name for createdAt.
+func WithCreatedAtField(field string) Option {
+	return func(o *options) {
+		o.createdAtFieldName = field
+	}
+}
+
+// WithUpdatedAtField sets the Elasticsearch field name for updatedAt.
+func WithUpdatedAtField(field string) Option {
+	return func(o *options) {
+		o.updatedAtFieldName = field
 	}
 }
 

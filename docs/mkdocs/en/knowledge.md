@@ -143,6 +143,98 @@ func main() {
 }
 ```
 
+### Manual Search Example
+FilterCondition currently only supports Elasticsearch and TCVector
+
+```go
+
+package main
+
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    vectorelasticsearch "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+)
+
+// Create Elasticsearch vector store with multi-version support (v7, v8, v9)
+esVS, err := vectorelasticsearch.New(
+    vectorelasticsearch.WithAddresses([]string{"http://localhost:9200"}),
+    vectorelasticsearch.WithUsername(os.Getenv("ELASTICSEARCH_USERNAME")),
+    vectorelasticsearch.WithPassword(os.Getenv("ELASTICSEARCH_PASSWORD")),
+    vectorelasticsearch.WithAPIKey(os.Getenv("ELASTICSEARCH_API_KEY")),
+    vectorelasticsearch.WithIndexName(getEnvOrDefault("ELASTICSEARCH_INDEX_NAME", "trpc_agent_documents")),
+    vectorelasticsearch.WithMaxRetries(3),
+    // Version options: "v7", "v8", "v9" (default "v9")
+    vectorelasticsearch.WithVersion("v9"),
+    // Optional custom method to build documents for retrieval. Falls back to the default if not provided.
+    vectorelasticsearch.WithDocBuilder(docBuilder),
+)
+if err != nil {
+    // Handle error.
+}
+
+// OpenAI Embedder configuration.
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"), // Embedding model, can also be set via OPENAI_EMBEDDING_MODEL environment variable.
+)
+
+kb := knowledge.New(
+    knowledge.WithVectorStore(esVS),
+    knowledge.WithEmbedder(embedder),
+)
+
+filterCondition := &searchfilter.UniversalFilterCondition{
+    Operator: searchfilter.OperatorAnd,
+    Value: []*searchfilter.UniversalFilterCondition{
+        {
+            Field: "tag",
+            Operator: searchfilter.OperatorEqual,
+            Value: "tag",
+        },
+        {
+            Field: "age",
+            Operator: searchfilter.OperatorGreaterThanOrEqual,
+            Value: 18,
+        },
+        {
+            Field: "create_time",
+            Operator: searchfilter.OperatorBetween,
+            Value: []string{"2024-10-11 12:11:00", "2025-10-11 12:11:00"},
+        },
+        {
+            Operator: searchfilter.OperatorOr,
+            Value: []*searchfilter.UniversalFilterCondition{
+                {
+                    Field: "login_time",
+                    Operator: searchfilter.OperatorLessThanOrEqual,
+                    Value: "2025-01-11 12:11:00",
+                },
+                {
+                    Field: "status",
+                    Operator: searchfilter.OperatorEqual,
+                    Value: "logout",
+                },
+            },
+        },
+    },
+}
+
+req := &knowledge.SearchRequest{
+    Query: "any text"
+    MaxResults: 5,
+    MinScore: 0.7,
+    SearchFilter: &knowledge.SearchFilter{
+        DocumentIDs: []string{"id1","id2"},
+        Metadata: map[string]any{
+            "title": "title test",
+        },
+        FilterCondition: filterCondition,
+    }
+}
+searchResult, err := kb.Search(ctx, req)
+```
+
 ## Core Concepts
 
 The [knowledge module](https://github.com/trpc-group/trpc-agent-go/tree/main/knowledge) is the knowledge management core of the tRPC-Agent-Go framework, providing complete RAG capabilities. The module adopts a modular design, supporting multiple document sources, vector storage backends, and embedding models.
@@ -165,6 +257,9 @@ knowledge/
 │   ├── embedder.go      # Embedder interface definition.
 │   ├── openai/          # OpenAI embedding model.
 │   └── local/           # Local embedding model.
+├── reranker/             # reranker layer.
+│   ├── reranker.go      # Reranker interface definition.
+│   ├── topk.go          # return topk result.
 ├── document/             # Document representation.
 │   └── document.go      # Document structure definition.
 ├── query/                # Query enhancer.
@@ -331,6 +426,26 @@ embedder := openaiembedder.New(
 // Pass to Knowledge.
 kb := knowledge.New(
     knowledge.WithEmbedder(embedder),
+)
+```
+
+### Reranker
+
+Reranker is responsible for the precise ranking of search results
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
+)
+
+rerank := reranker.NewTopKReranker(
+    // Specify the number of results to be returned after precision sorting. 
+    // If not set, all results will be returned by default
+    reranker.WithK(1),
+)
+
+kb := knowledge.New(
+    knowledge.WithReranker(rerank),
 )
 ```
 

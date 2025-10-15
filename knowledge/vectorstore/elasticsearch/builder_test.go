@@ -21,8 +21,10 @@ func TestBuildVectorSearchQuery(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults: 20,
+			maxResults:      20,
+			vectorDimension: 3,
 		},
+		filterConverter: &esConverter{},
 	}
 
 	query := &vectorstore.SearchQuery{
@@ -43,6 +45,7 @@ func TestBuildKeywordSearchQuery(t *testing.T) {
 		option: options{
 			maxResults: 15,
 		},
+		filterConverter: &esConverter{},
 	}
 
 	query := &vectorstore.SearchQuery{
@@ -61,8 +64,10 @@ func TestBuildHybridSearchQuery(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults: 25,
+			maxResults:      25,
+			vectorDimension: 3,
 		},
+		filterConverter: &esConverter{},
 	}
 
 	query := &vectorstore.SearchQuery{
@@ -79,14 +84,20 @@ func TestBuildHybridSearchQuery(t *testing.T) {
 }
 
 func TestBuildFilterQuery(t *testing.T) {
-	vs := &VectorStore{}
+	vs := &VectorStore{
+		option: options{
+			idFieldName: "id",
+		},
+		filterConverter: &esConverter{},
+	}
 
 	// Test with ID filter
 	filter := &vectorstore.SearchFilter{
 		IDs: []string{"doc1", "doc2"},
 	}
 
-	result := vs.buildFilterQuery(filter)
+	result, err := vs.buildFilterQuery(filter)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Test with metadata filter
@@ -97,17 +108,24 @@ func TestBuildFilterQuery(t *testing.T) {
 		},
 	}
 
-	result = vs.buildFilterQuery(filter)
+	result, err = vs.buildFilterQuery(filter)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 
 	// Test with empty filter
 	filter = &vectorstore.SearchFilter{}
-	result = vs.buildFilterQuery(filter)
+	result, err = vs.buildFilterQuery(filter)
+	require.NoError(t, err)
 	assert.Nil(t, result)
 }
 
 func TestBuildFilterQueryWithBothFilters(t *testing.T) {
-	vs := &VectorStore{}
+	vs := &VectorStore{
+		filterConverter: &esConverter{},
+		option: options{
+			idFieldName: "id",
+		},
+	}
 
 	filter := &vectorstore.SearchFilter{
 		IDs: []string{"doc1", "doc2"},
@@ -116,7 +134,8 @@ func TestBuildFilterQueryWithBothFilters(t *testing.T) {
 		},
 	}
 
-	result := vs.buildFilterQuery(filter)
+	result, err := vs.buildFilterQuery(filter)
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
 
@@ -124,8 +143,11 @@ func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
 	// Create a mock VectorStore with options
 	vs := &VectorStore{
 		option: options{
-			maxResults: 30,
+			maxResults:      30,
+			idFieldName:     "id",
+			vectorDimension: 3,
 		},
+		filterConverter: &esConverter{},
 	}
 
 	query := &vectorstore.SearchQuery{
@@ -152,7 +174,10 @@ func TestBuildHybridSearchQueryWithFilter(t *testing.T) {
 }
 
 func TestBuildVectorSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
-	vs := &VectorStore{option: options{maxResults: 10}}
+	vs := &VectorStore{
+		option:          options{maxResults: 10, vectorDimension: 2},
+		filterConverter: &esConverter{},
+	}
 	query := &vectorstore.SearchQuery{
 		Vector:     []float64{0.1, 0.2},
 		SearchMode: vectorstore.SearchModeVector,
@@ -165,7 +190,10 @@ func TestBuildVectorSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
 }
 
 func TestBuildKeywordSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
-	vs := &VectorStore{option: options{maxResults: 10}}
+	vs := &VectorStore{
+		option:          options{maxResults: 10},
+		filterConverter: &esConverter{},
+	}
 	query := &vectorstore.SearchQuery{
 		Query:      "hello",
 		SearchMode: vectorstore.SearchModeKeyword,
@@ -178,7 +206,10 @@ func TestBuildKeywordSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
 }
 
 func TestBuildHybridSearchQuery_WithEmptyFilter_NoPostFilter(t *testing.T) {
-	vs := &VectorStore{option: options{maxResults: 10}}
+	vs := &VectorStore{
+		option:          options{maxResults: 10, vectorDimension: 2},
+		filterConverter: &esConverter{},
+	}
 	query := &vectorstore.SearchQuery{
 		Vector:     []float64{0.1, 0.2},
 		Query:      "hello",

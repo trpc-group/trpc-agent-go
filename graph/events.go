@@ -189,6 +189,14 @@ type NodeExecutionMetadata struct {
 	ModelInput string `json:"modelInput,omitempty"`
 	// StepNumber is the Pregel step number.
 	StepNumber int `json:"stepNumber,omitempty"`
+	// Attempt is the 1-based attempt number for this node execution.
+	Attempt int `json:"attempt,omitempty"`
+	// MaxAttempts is the maximum allowed attempts when retrying is enabled.
+	MaxAttempts int `json:"maxAttempts,omitempty"`
+	// NextDelay is the planned delay before the next retry attempt.
+	NextDelay time.Duration `json:"nextDelay,omitempty"`
+	// Retrying indicates whether a retry will be performed after this error.
+	Retrying bool `json:"retrying,omitempty"`
 }
 
 // ToolExecutionMetadata contains metadata about tool execution.
@@ -437,6 +445,11 @@ type NodeEventOptions struct {
 	ModelName    string
 	ModelInput   string
 	Error        string
+	// Retry metadata (optional)
+	Attempt     int
+	MaxAttempts int
+	NextDelay   time.Duration
+	Retrying    bool
 }
 
 // NodeEventOption is a function that configures node event options.
@@ -568,6 +581,34 @@ func WithNodeEventModelInput(modelInput string) NodeEventOption {
 func WithNodeEventError(errMsg string) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.Error = errMsg
+	}
+}
+
+// WithNodeEventAttempt sets the current attempt number (1-based).
+func WithNodeEventAttempt(attempt int) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.Attempt = attempt
+	}
+}
+
+// WithNodeEventMaxAttempts sets the maximum attempts.
+func WithNodeEventMaxAttempts(maxAttempts int) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.MaxAttempts = maxAttempts
+	}
+}
+
+// WithNodeEventNextDelay sets the planned next delay before retry.
+func WithNodeEventNextDelay(delay time.Duration) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.NextDelay = delay
+	}
+}
+
+// WithNodeEventRetrying indicates whether a retry will be performed.
+func WithNodeEventRetrying(retrying bool) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.Retrying = retrying
 	}
 }
 
@@ -952,14 +993,16 @@ func NewNodeStartEvent(opts ...NodeEventOption) *event.Event {
 	}
 
 	metadata := NodeExecutionMetadata{
-		NodeID:     options.NodeID,
-		NodeType:   options.NodeType,
-		Phase:      ExecutionPhaseStart,
-		StartTime:  options.StartTime,
-		InputKeys:  options.InputKeys,
-		ModelName:  options.ModelName,
-		ModelInput: options.ModelInput,
-		StepNumber: options.StepNumber,
+		NodeID:      options.NodeID,
+		NodeType:    options.NodeType,
+		Phase:       ExecutionPhaseStart,
+		StartTime:   options.StartTime,
+		InputKeys:   options.InputKeys,
+		ModelName:   options.ModelName,
+		ModelInput:  options.ModelInput,
+		StepNumber:  options.StepNumber,
+		Attempt:     options.Attempt,
+		MaxAttempts: options.MaxAttempts,
 	}
 	return NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
@@ -975,16 +1018,18 @@ func NewNodeCompleteEvent(opts ...NodeEventOption) *event.Event {
 	}
 
 	metadata := NodeExecutionMetadata{
-		NodeID:     options.NodeID,
-		NodeType:   options.NodeType,
-		Phase:      ExecutionPhaseComplete,
-		StartTime:  options.StartTime,
-		EndTime:    options.EndTime,
-		Duration:   options.EndTime.Sub(options.StartTime),
-		OutputKeys: options.OutputKeys,
-		ToolCalls:  options.ToolCalls,
-		ModelName:  options.ModelName,
-		StepNumber: options.StepNumber,
+		NodeID:      options.NodeID,
+		NodeType:    options.NodeType,
+		Phase:       ExecutionPhaseComplete,
+		StartTime:   options.StartTime,
+		EndTime:     options.EndTime,
+		Duration:    options.EndTime.Sub(options.StartTime),
+		OutputKeys:  options.OutputKeys,
+		ToolCalls:   options.ToolCalls,
+		ModelName:   options.ModelName,
+		StepNumber:  options.StepNumber,
+		Attempt:     options.Attempt,
+		MaxAttempts: options.MaxAttempts,
 	}
 	return NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
@@ -1000,14 +1045,18 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 	}
 
 	metadata := NodeExecutionMetadata{
-		NodeID:     options.NodeID,
-		NodeType:   options.NodeType,
-		Phase:      ExecutionPhaseError,
-		StartTime:  options.StartTime,
-		EndTime:    options.EndTime,
-		Duration:   options.EndTime.Sub(options.StartTime),
-		Error:      options.Error,
-		StepNumber: options.StepNumber,
+		NodeID:      options.NodeID,
+		NodeType:    options.NodeType,
+		Phase:       ExecutionPhaseError,
+		StartTime:   options.StartTime,
+		EndTime:     options.EndTime,
+		Duration:    options.EndTime.Sub(options.StartTime),
+		Error:       options.Error,
+		StepNumber:  options.StepNumber,
+		Attempt:     options.Attempt,
+		MaxAttempts: options.MaxAttempts,
+		NextDelay:   options.NextDelay,
+		Retrying:    options.Retrying,
 	}
 	graphEvent := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
@@ -1145,8 +1194,19 @@ func NewPregelErrorEvent(opts ...PregelEventOption) *event.Event {
 		Duration:   options.EndTime.Sub(options.StartTime),
 		Error:      options.Error,
 	}
-	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
+	// Build base graph event with metadata.
+	ge := NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))
+	// Mirror error to Event.Error for easier consumption by clients that
+	// only check event.Error, while keeping object as graph.pregel.step
+	// for compatibility with existing consumers.
+	if options.Error != "" {
+		ge.Response.Error = &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: options.Error,
+		}
+	}
+	return ge
 }
 
 // NewPregelInterruptEvent creates a new Pregel interrupt event.
@@ -1275,12 +1335,7 @@ func serializeFinalState(e *event.Event, state State) {
 	for key, value := range state {
 		// Skip internal/ephemeral keys that are not JSON-serializable or can race
 		// due to concurrent updates (e.g., execution context and callbacks).
-		if key == MetadataKeyNode || key == MetadataKeyPregel || key == MetadataKeyChannel ||
-			key == MetadataKeyState || key == MetadataKeyCompletion ||
-			key == StateKeyExecContext || key == StateKeyParentAgent ||
-			key == StateKeyToolCallbacks || key == StateKeyModelCallbacks ||
-			key == StateKeyAgentCallbacks || key == StateKeyCurrentNodeID ||
-			key == StateKeySession {
+		if isInternalStateKey(key) {
 			continue
 		}
 		// Marshal a deep-copied snapshot to avoid racing on shared references.

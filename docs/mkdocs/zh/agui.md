@@ -41,16 +41,6 @@ Runner 全面的使用方法参见 [runner](./runner.md)。
 
 ![copilotkit](../assets/img/agui/copilotkit.png)
 
-## 依赖说明
-
-由于 AG-UI 官方仓库尚未合并 Golang SDK 的 PR，我们已经 fork 并修复了相关 BUG。使用时，需要在 go.mod 中添加以下 replace 语句：
-
-```go
-replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go trpc-temp-fix
-```
-
-完成后，执行 `go mod tidy` 以更新依赖。
-
 ## 进阶用法
 
 ### 自定义通信协议
@@ -135,6 +125,12 @@ factory := func(input *adapter.RunAgentInput) translator.Translator {
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+例如，在使用 React Planner 时，如果希望为不同标签应用不同的自定义事件，可以通过实现自定义 Translator 来实现，效果如下图所示。
+
+![copilotkit-react](../assets/img/agui/copilotkit-react.png)
+
+完整的代码示例可以参考 [examples/agui/server/react](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react)。
 
 ### 自定义 `UserIDResolver`
 

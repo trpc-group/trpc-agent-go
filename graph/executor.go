@@ -61,6 +61,9 @@ type Executor struct {
 	checkpointSaveTimeout time.Duration
 	checkpointSaver       CheckpointSaver
 	checkpointManager     *CheckpointManager
+	// defaultRetry holds executor-level retry policies used when a node
+	// does not have explicit retryPolicies configured.
+	defaultRetry []RetryPolicy
 }
 
 // ExecutorOption is a function that configures an Executor.
@@ -81,6 +84,8 @@ type ExecutorOptions struct {
 	CheckpointSaveTimeout time.Duration
 	// CheckpointSaver is the checkpoint saver for persisting graph state.
 	CheckpointSaver CheckpointSaver
+	// DefaultRetryPolicies are applied to nodes without explicit policies.
+	DefaultRetryPolicies []RetryPolicy
 }
 
 // WithChannelBufferSize sets the buffer size for event channels.
@@ -125,6 +130,17 @@ func WithCheckpointSaveTimeout(timeout time.Duration) ExecutorOption {
 	}
 }
 
+// WithDefaultRetryPolicy sets executor-level retry policies used by nodes
+// that do not define their own. Policies are evaluated in order.
+func WithDefaultRetryPolicy(policies ...RetryPolicy) ExecutorOption {
+	return func(opts *ExecutorOptions) {
+		if len(policies) == 0 {
+			return
+		}
+		opts.DefaultRetryPolicies = append(opts.DefaultRetryPolicies, policies...)
+	}
+}
+
 // NewExecutor creates a new graph executor.
 func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 	if err := graph.validate(); err != nil {
@@ -154,6 +170,7 @@ func NewExecutor(graph *Graph, opts ...ExecutorOption) (*Executor, error) {
 		nodeTimeout:           nodeTimeout,
 		checkpointSaveTimeout: options.CheckpointSaveTimeout,
 		checkpointSaver:       options.CheckpointSaver,
+		defaultRetry:          append([]RetryPolicy(nil), options.DefaultRetryPolicies...),
 	}
 	// Create checkpoint manager if saver is provided.
 	if options.CheckpointSaver != nil {
@@ -1182,12 +1199,24 @@ func (e *Executor) executeSingleTask(
 	t *Task,
 	step int,
 ) error {
-	nodeCtx, nodeCancel := e.newNodeContext(ctx)
-	defer nodeCancel()
-	// Get node type and emit start event.
+	// Get node type and determine retry policies for metadata.
 	nodeType := e.getNodeType(t.NodeID)
 	nodeStart := time.Now()
-	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart)
+	var nodePolicies []RetryPolicy
+	if node, ok := e.graph.Node(t.NodeID); ok && node != nil && len(node.retryPolicies) > 0 {
+		nodePolicies = node.retryPolicies
+	} else if len(e.defaultRetry) > 0 {
+		nodePolicies = e.defaultRetry
+	}
+	// Best-effort max attempts hint for start event (first policy wins).
+	maxAttempts := 0
+	if len(nodePolicies) > 0 {
+		if nodePolicies[0].MaxAttempts > 0 {
+			maxAttempts = nodePolicies[0].MaxAttempts
+		}
+	}
+	e.emitNodeStartEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart,
+		WithNodeEventAttempt(1), WithNodeEventMaxAttempts(maxAttempts))
 
 	// Create callback context.
 	callbackCtx := e.newNodeCallbackContext(execCtx, t.NodeID, nodeType, step, nodeStart)
@@ -1216,7 +1245,6 @@ func (e *Executor) executeSingleTask(
 	// Optional: attempt cache lookup based on sanitized task input.
 	var (
 		result   any
-		err      error
 		cacheHit bool
 	)
 
@@ -1226,7 +1254,7 @@ func (e *Executor) executeSingleTask(
 			if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
 				ns := buildCacheNamespace(t.NodeID)
 				if cached, ok := c.Get(ns, string(keyBytes)); ok {
-					// Cache hit: skip node execution and callbacks; use cached result.
+					// Cache hit: skip node execution; use cached result.
 					result = cached
 					cacheHit = true
 				}
@@ -1234,30 +1262,8 @@ func (e *Executor) executeSingleTask(
 		}
 	}
 
-	if !cacheHit {
-		// Execute the node function on cache miss.
-		result, err = e.executeNodeFunction(nodeCtx, execCtx, t)
-		if err != nil {
-			// Check if this is an interrupt error
-			if IsInterruptError(err) {
-				// For interrupt errors, we need to set the node ID and task ID
-				if interrupt, ok := GetInterruptError(err); ok {
-					interrupt.NodeID = t.NodeID
-					interrupt.TaskID = t.NodeID // Use NodeID as TaskID for now
-					interrupt.Step = step
-				}
-				return err // Return interrupt error directly without wrapping
-			}
-
-			// Run on node error callbacks.
-			if mergedCallbacks != nil {
-				mergedCallbacks.RunOnNodeError(ctx, callbackCtx, stateCopy, err)
-			}
-			e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, err)
-			return fmt.Errorf("node %s execution failed: %w", t.NodeID, err)
-		}
-
-		// Run after node callbacks.
+	if cacheHit {
+		// Run after node callbacks on cache hit.
 		if res, err := e.runAfterCallbacks(
 			ctx, invocation, mergedCallbacks, callbackCtx, stateCopy, result,
 			execCtx, t.NodeID, nodeType, step,
@@ -1267,38 +1273,257 @@ func (e *Executor) executeSingleTask(
 			result = res
 		}
 
-		// Store into cache if configured
-		if c := e.graph.Cache(); c != nil {
-			if pol := e.getEffectiveCachePolicy(t.NodeID); pol != nil && pol.KeyFunc != nil {
-				sanitized := sanitizeForCacheKey(t.Input)
-				if keyBytes, kerr := pol.KeyFunc(sanitized); kerr == nil {
-					ns := buildCacheNamespace(t.NodeID)
-					c.Set(ns, string(keyBytes), result, pol.TTL)
-				}
+		// Handle result and process channel writes.
+		routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+		if herr != nil {
+			return herr
+		}
+
+		// Update versions seen for this node after successful execution.
+		e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
+
+		// Process conditional edges after node execution.
+		if !routed {
+			if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
+				return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 			}
 		}
+
+		// Emit node completion event with cache-hit metadata.
+		e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, true)
+		return nil
+	}
+
+	// Package execution context into a struct to reduce parameter count.
+	nodeCtx := &nodeExecutionContext{
+		nodeType:        nodeType,
+		nodeStart:       nodeStart,
+		nodePolicies:    nodePolicies,
+		callbackCtx:     callbackCtx,
+		stateCopy:       stateCopy,
+		mergedCallbacks: mergedCallbacks,
+	}
+
+	// Execute with retry logic (emits completion event downstream on success).
+	return e.executeTaskWithRetry(ctx, invocation, execCtx, t, step, nodeCtx)
+}
+
+// nodeExecutionContext holds node execution related state.
+type nodeExecutionContext struct {
+	nodeType        NodeType
+	nodeStart       time.Time
+	nodePolicies    []RetryPolicy
+	callbackCtx     *NodeCallbackContext
+	stateCopy       State
+	mergedCallbacks *NodeCallbacks
+}
+
+// executeTaskWithRetry executes the task with retry logic.
+func (e *Executor) executeTaskWithRetry(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+	nodeCtx *nodeExecutionContext,
+) error {
+	attempt := 1
+	startWall := time.Now()
+	// Track total elapsed for optional policy.MaxElapsedTime evaluation.
+	var totalStart time.Time
+	if len(nodeCtx.nodePolicies) > 0 {
+		totalStart = time.Now()
+	}
+
+	for {
+		// Execute single attempt.
+		result, err := e.executeSingleAttempt(ctx, execCtx, t)
+		if err == nil {
+			// Handle successful execution.
+			return e.finalizeSuccessfulExecution(ctx, invocation, execCtx, t, result, step, nodeCtx)
+		}
+
+		// Check if should retry.
+		retryCtx := &retryContext{
+			attempt:    attempt,
+			totalStart: totalStart,
+			err:        err,
+		}
+		shouldRetry, retryErr := e.evaluateRetryDecision(ctx, invocation, execCtx, t, step, nodeCtx, retryCtx)
+		if !shouldRetry {
+			return retryErr
+		}
+
+		attempt++
+		_ = startWall // reserved for future metrics
+	}
+}
+
+// executeSingleAttempt executes a single attempt of the node function.
+func (e *Executor) executeSingleAttempt(ctx context.Context, execCtx *ExecutionContext, t *Task) (any, error) {
+	nodeCtx, nodeCancel := e.newNodeContext(ctx)
+	defer nodeCancel()
+	return e.executeNodeFunction(nodeCtx, execCtx, t)
+}
+
+// finalizeSuccessfulExecution handles all post-execution steps after successful node execution.
+func (e *Executor) finalizeSuccessfulExecution(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	result any,
+	step int,
+	nodeCtx *nodeExecutionContext,
+) error {
+	// Run after node callbacks on success.
+	if res, aerr := e.runAfterCallbacks(
+		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx, nodeCtx.stateCopy, result,
+		execCtx, t.NodeID, nodeCtx.nodeType, step,
+	); aerr != nil {
+		return aerr
+	} else if res != nil {
+		result = res
 	}
 
 	// Handle result and process channel writes.
-	routed, err := e.handleNodeResult(ctx, invocation, execCtx, t, result)
-	if err != nil {
-		return err
+	routed, herr := e.handleNodeResult(ctx, invocation, execCtx, t, result)
+	if herr != nil {
+		return herr
 	}
 
 	// Update versions seen for this node after successful execution.
 	e.updateVersionsSeen(execCtx, t.NodeID, t.Triggers)
 
 	// Process conditional edges after node execution.
-	// We need to skip intermediate nodes after routed.
 	if !routed {
-		if err := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); err != nil {
-			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
+		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t.NodeID, step); perr != nil {
+			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
 		}
 	}
-	// Emit node completion event.
-	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeType, step, nodeStart, cacheHit)
 
+	// Emit node completion event for the overall node run (no cache hit).
+	e.emitNodeCompleteEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, nodeCtx.nodeStart, false)
 	return nil
+}
+
+// retryContext holds retry evaluation state.
+type retryContext struct {
+	attempt    int
+	totalStart time.Time
+	err        error
+}
+
+// evaluateRetryDecision determines if a retry should occur and handles error reporting.
+func (e *Executor) evaluateRetryDecision(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	t *Task,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+) (bool, error) {
+	// Interrupt errors should not be retried.
+	if IsInterruptError(retryCtx.err) {
+		if interrupt, ok := GetInterruptError(retryCtx.err); ok {
+			interrupt.NodeID = t.NodeID
+			interrupt.TaskID = t.NodeID
+			interrupt.Step = step
+		}
+		return false, retryCtx.err
+	}
+
+	// Run on-node-error callbacks for observability (both intermediate and final).
+	if nodeCtx.mergedCallbacks != nil {
+		nodeCtx.mergedCallbacks.RunOnNodeError(ctx, nodeCtx.callbackCtx, nodeCtx.stateCopy, retryCtx.err)
+	}
+
+	// Evaluate retry policy.
+	matched, pol, maxAttempts := e.selectRetryPolicy(retryCtx.err, nodeCtx.nodePolicies)
+	if !matched {
+		// No retry policy matched -> emit error and exit.
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, t.NodeID, nodeCtx.nodeType, step, retryCtx.err)
+		return false, fmt.Errorf("node %s execution failed: %w", t.NodeID, retryCtx.err)
+	}
+
+	// Check if retry budget is exhausted.
+	if shouldStop, stopErr := e.checkRetryBudget(ctx, invocation, execCtx, t.NodeID, step, nodeCtx, retryCtx, pol, maxAttempts); shouldStop {
+		return false, stopErr
+	}
+
+	// Emit error event with retrying metadata and wait.
+	return e.waitBeforeRetry(ctx, invocation, execCtx, t.NodeID, step, nodeCtx, retryCtx, pol, maxAttempts)
+}
+
+// checkRetryBudget checks if retry attempts or time budget is exhausted.
+func (e *Executor) checkRetryBudget(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+	pol RetryPolicy,
+	maxAttempts int,
+) (bool, error) {
+	// Check attempt budget.
+	if retryCtx.attempt >= maxAttempts {
+		e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+			WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+		return true, fmt.Errorf("node %s execution failed after %d attempts: %w", nodeID, retryCtx.attempt, retryCtx.err)
+	}
+
+	// Check elapsed time budget.
+	if pol.MaxElapsedTime > 0 && !retryCtx.totalStart.IsZero() {
+		if time.Since(retryCtx.totalStart) >= pol.MaxElapsedTime {
+			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			return true, fmt.Errorf("node %s retry budget exhausted (elapsed): %w", nodeID, retryCtx.err)
+		}
+	}
+
+	return false, nil
+}
+
+// waitBeforeRetry handles the delay before retry and deadline checking.
+func (e *Executor) waitBeforeRetry(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	execCtx *ExecutionContext,
+	nodeID string,
+	step int,
+	nodeCtx *nodeExecutionContext,
+	retryCtx *retryContext,
+	pol RetryPolicy,
+	maxAttempts int,
+) (bool, error) {
+	// Compute delay and clamp to parent context deadline if present.
+	delay := pol.NextDelay(retryCtx.attempt)
+	if deadline, ok := ctx.Deadline(); ok {
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+				WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventRetrying(false))
+			return false, fmt.Errorf("node %s execution failed: step deadline exceeded before retry: %w", nodeID, retryCtx.err)
+		}
+		if delay > remain {
+			delay = remain
+		}
+	}
+
+	// Emit error event with retrying metadata.
+	e.emitNodeErrorEvent(ctx, invocation, execCtx, nodeID, nodeCtx.nodeType, step, retryCtx.err,
+		WithNodeEventAttempt(retryCtx.attempt), WithNodeEventMaxAttempts(maxAttempts), WithNodeEventNextDelay(delay), WithNodeEventRetrying(true))
+
+	// Sleep or abort if context canceled.
+	select {
+	case <-ctx.Done():
+		return false, fmt.Errorf("node %s execution canceled before retry: %w", nodeID, ctx.Err())
+	case <-time.After(delay):
+		return true, nil
+	}
 }
 
 // getNodeType retrieves the node type for a given node ID.
@@ -1534,6 +1759,7 @@ func (e *Executor) emitNodeStartEvent(
 	nodeType NodeType,
 	step int,
 	startTime time.Time,
+	extra ...NodeEventOption,
 ) {
 	if execCtx.EventChan == nil {
 		return
@@ -1554,7 +1780,8 @@ func (e *Executor) emitNodeStartEvent(
 
 	execCtx.stateMutex.RUnlock()
 
-	startEvent := NewNodeStartEvent(
+	// Build event with optional extra metadata (e.g., retries)
+	opts := []NodeEventOption{
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
@@ -1562,7 +1789,11 @@ func (e *Executor) emitNodeStartEvent(
 		WithNodeEventStartTime(startTime),
 		WithNodeEventInputKeys(inputKeys),
 		WithNodeEventModelInput(modelInput),
-	)
+	}
+	if len(extra) > 0 {
+		opts = append(opts, extra...)
+	}
+	startEvent := NewNodeStartEvent(opts...)
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, startEvent)
 }
 
@@ -1632,18 +1863,23 @@ func (e *Executor) emitNodeErrorEvent(
 	nodeType NodeType,
 	step int,
 	err error,
+	extra ...NodeEventOption,
 ) {
 	if execCtx.EventChan == nil {
 		return
 	}
 
-	errorEvent := NewNodeErrorEvent(
+	opts := []NodeEventOption{
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
 		WithNodeEventStepNumber(step),
 		WithNodeEventError(err.Error()),
-	)
+	}
+	if len(extra) > 0 {
+		opts = append(opts, extra...)
+	}
+	errorEvent := NewNodeErrorEvent(opts...)
 	agent.EmitEvent(ctx, invocation, execCtx.EventChan, errorEvent)
 }
 
@@ -1977,6 +2213,22 @@ func (e *Executor) getUpdatedChannels() []string {
 		}
 	}
 	return updated
+}
+
+// selectRetryPolicy selects the first matching retry policy for the given error.
+// Returns whether a match was found, the chosen policy, and its MaxAttempts
+// (falling back to 1 when unspecified or invalid).
+func (e *Executor) selectRetryPolicy(err error, policies []RetryPolicy) (bool, RetryPolicy, int) {
+	for _, p := range policies {
+		if p.ShouldRetry(err) {
+			maxA := p.MaxAttempts
+			if maxA <= 0 {
+				maxA = 1
+			}
+			return true, p, maxA
+		}
+	}
+	return false, RetryPolicy{}, 0
 }
 
 // getUpdatedChannelsInStep returns a list of channels updated in the current step.
