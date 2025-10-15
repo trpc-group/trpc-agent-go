@@ -19,7 +19,7 @@ import (
 
 type esDocument map[string]json.RawMessage
 
-func (es esDocument) getString(key string) string {
+func (es esDocument) stringField(key string) string {
 	value, ok := es[key]
 	if !ok {
 		return ""
@@ -32,7 +32,7 @@ func (es esDocument) getString(key string) string {
 	return str
 }
 
-func (es esDocument) getMetadata(key string) map[string]any {
+func (es esDocument) mapField(key string) map[string]any {
 	value, ok := es[key]
 	if !ok {
 		return nil
@@ -45,7 +45,7 @@ func (es esDocument) getMetadata(key string) map[string]any {
 	return m
 }
 
-func (es esDocument) getEmbedding(key string) []float64 {
+func (es esDocument) sliceField(key string) []float64 {
 	value, ok := es[key]
 	if !ok {
 		return nil
@@ -58,7 +58,7 @@ func (es esDocument) getEmbedding(key string) []float64 {
 	return embedding
 }
 
-func (es esDocument) getTime(key string) time.Time {
+func (es esDocument) timeField(key string) time.Time {
 	value, ok := es[key]
 	if !ok {
 		return time.Time{}
@@ -82,12 +82,12 @@ func (vs *VectorStore) docBuilder(hitSource json.RawMessage) (*document.Document
 	}
 	// Create document.
 	doc := &document.Document{
-		ID:        source.getString(vs.option.idFieldName),
-		Name:      source.getString(vs.option.nameFieldName),
-		Content:   source.getString(vs.option.contentFieldName),
-		Metadata:  source.getMetadata(vs.option.metadataFieldName),
-		CreatedAt: source.getTime(vs.option.createdAtFieldName),
-		UpdatedAt: source.getTime(vs.option.updatedAtFieldName),
+		ID:        source.stringField(vs.option.idFieldName),
+		Name:      source.stringField(vs.option.nameFieldName),
+		Content:   source.stringField(vs.option.contentFieldName),
+		Metadata:  source.mapField(vs.option.metadataFieldName),
+		CreatedAt: source.timeField(vs.option.createdAtFieldName),
+		UpdatedAt: source.timeField(vs.option.updatedAtFieldName),
 	}
-	return doc, source.getEmbedding(vs.option.embeddingFieldName), nil
+	return doc, source.sliceField(vs.option.embeddingFieldName), nil
 }
