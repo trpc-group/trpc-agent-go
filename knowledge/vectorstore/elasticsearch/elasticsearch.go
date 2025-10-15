@@ -228,8 +228,8 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 }
 
 // indexDocument indexes a document.
-func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, updateDoc map[string]any) error {
-	documentBytes, err := json.Marshal(updateDoc)
+func (vs *VectorStore) indexDocument(ctx context.Context, indexName, id string, document map[string]any) error {
+	documentBytes, err := json.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("elasticsearch marshal index document: %w", err)
 	}
