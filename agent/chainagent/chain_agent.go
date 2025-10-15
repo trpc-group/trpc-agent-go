@@ -194,6 +194,7 @@ func (a *ChainAgent) executeSubAgents(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) *event.Event {
+	var fullRespEvent *event.Event
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
@@ -217,6 +218,9 @@ func (a *ChainAgent) executeSubAgents(
 
 		// Forward all events from the sub-agent.
 		for subEvent := range subEventChan {
+			if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
+				fullRespEvent = subEvent
+			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return nil
 			}
@@ -227,7 +231,7 @@ func (a *ChainAgent) executeSubAgents(
 			return nil
 		}
 	}
-	return nil
+	return fullRespEvent
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.
