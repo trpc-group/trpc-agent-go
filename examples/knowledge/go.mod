@@ -1,4 +1,4 @@
-module github.com/trpc-agent-go/examples/knowledge
+module trpc.group/trpc-go/trpc-agent-go/examples/knowledge
 
 go 1.24.1
 
@@ -12,6 +12,7 @@ replace (
 )
 
 require (
+	github.com/tencent/vectordatabase-sdk-go v1.8.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.0.0-20250917031858-f0ddbd5b2cb4
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini v0.0.0-20250917031858-f0ddbd5b2cb4
@@ -55,7 +56,6 @@ require (
 	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
