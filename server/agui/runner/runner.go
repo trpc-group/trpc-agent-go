@@ -64,51 +64,50 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 
 func (r *runner) run(ctx context.Context, runAgentInput *adapter.RunAgentInput, events chan<- aguievents.Event) {
 	defer close(events)
+	runID := runAgentInput.RunID
 	translator := r.translatorFactory(runAgentInput)
-	events <- aguievents.NewRunStartedEvent(runAgentInput.ThreadID, runAgentInput.RunID)
+	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(runAgentInput.ThreadID, runID), runID) {
+		return
+	}
 	if len(runAgentInput.Messages) == 0 {
-		events <- aguievents.NewRunErrorEvent("no messages provided", aguievents.WithRunID(runAgentInput.RunID))
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("no messages provided", aguievents.WithRunID(runID)), runID)
 		return
 	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
-		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err),
-			aguievents.WithRunID(runAgentInput.RunID))
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("resolve user ID: %v", err),
+			aguievents.WithRunID(runID)), runID)
 		return
 	}
 	userMessage := runAgentInput.Messages[len(runAgentInput.Messages)-1]
 	if userMessage.Role != model.RoleUser {
-		events <- aguievents.NewRunErrorEvent("last message is not a user message",
-			aguievents.WithRunID(runAgentInput.RunID))
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("last message is not a user message",
+			aguievents.WithRunID(runID)), runID)
 		return
 	}
 	ch, err := r.runner.Run(ctx, userID, runAgentInput.ThreadID, userMessage)
 	if err != nil {
-		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
-			aguievents.WithRunID(runAgentInput.RunID))
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
+			aguievents.WithRunID(runID)), runID)
 		return
 	}
 	for event := range ch {
 		customEvent, err := r.handleBeforeTranslate(ctx, event)
 		if err != nil {
-			events <- aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
-				aguievents.WithRunID(runAgentInput.RunID))
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
+				aguievents.WithRunID(runID)), runID)
 			return
 		}
 		aguiEvents, err := translator.Translate(customEvent)
 		if err != nil {
-			events <- aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
-				aguievents.WithRunID(runAgentInput.RunID))
+			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
+				aguievents.WithRunID(runID)), runID)
 			return
 		}
 		for _, aguiEvent := range aguiEvents {
-			customEvent, err := r.handleAfterTranslate(ctx, aguiEvent)
-			if err != nil {
-				events <- aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
-					aguievents.WithRunID(runAgentInput.RunID))
+			if !r.emitEvent(ctx, events, aguiEvent, runID) {
 				return
 			}
-			events <- customEvent
 		}
 	}
 }
@@ -139,4 +138,16 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 		return customEvent, nil
 	}
 	return event, nil
+}
+
+func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
+	runID string) bool {
+	customEvent, err := r.handleAfterTranslate(ctx, event)
+	if err != nil {
+		events <- aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
+			aguievents.WithRunID(runID))
+		return false
+	}
+	events <- customEvent
+	return true
 }
