@@ -163,7 +163,7 @@ func (c *pgVectorConverter) buildBetweenCondition(cond *searchfilter.UniversalFi
 	}
 
 	return &condConvertResult{
-		cond: "" + cond.Field + " >= $%d AND " + cond.Field + " <= $%d",
+		cond: cond.Field + " >= $%d AND " + cond.Field + " <= $%d",
 		args: []any{value.Index(0).Interface(), value.Index(1).Interface()},
 	}, nil
 }
