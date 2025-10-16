@@ -13,6 +13,7 @@ package inmemory
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -75,6 +76,10 @@ func (c *inmemoryConverter) convertCondition(cond *searchfilter.UniversalFilterC
 		return c.buildComparisonCondition(cond)
 	case searchfilter.OperatorIn, searchfilter.OperatorNotIn:
 		return c.buildInCondition(cond)
+	case searchfilter.OperatorBetween:
+		return c.buildBetweenCondition(cond)
+	case searchfilter.OperatorLike, searchfilter.OperatorNotLike:
+		return c.buildLikeCondition(cond)
 	default:
 		return nil, fmt.Errorf("unsupported operation: %s", cond.Operator)
 	}
@@ -126,10 +131,10 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 	if !isValidField(cond.Field) {
 		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
 	}
-	if reflect.TypeOf(cond.Value).Kind() != reflect.Slice {
+	s := reflect.ValueOf(cond.Value)
+	if s.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("in operator requires an array of values")
 	}
-	s := reflect.ValueOf(cond.Value)
 	itemNum := s.Len()
 	if itemNum <= 0 {
 		return nil, fmt.Errorf("in operator requires an array with at least one value")
@@ -142,12 +147,98 @@ func (c *inmemoryConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 			return false
 		}
 
+		var found bool
 		for i := 0; i < itemNum; i++ {
 			if reflect.DeepEqual(docValue, s.Index(i).Interface()) {
-				return true
+				found = true
+				break
 			}
 		}
-		return false
+
+		// in condition is true if any value is found
+		if cond.Operator == searchfilter.OperatorIn {
+			return found
+		}
+
+		// not in condition is true if no value is found
+		return !found
+	}
+	return condFunc, nil
+}
+
+func (c *inmemoryConverter) buildBetweenCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
+	if !isValidField(cond.Field) {
+		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
+	}
+	value := reflect.ValueOf(cond.Value)
+	if value.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
+	}
+	if value.Len() != 2 {
+		return nil, fmt.Errorf("between operator value must be a slice with two elements: %v", cond.Value)
+	}
+
+	var condFuncs []comparisonFunc
+	for i := 0; i < 2; i++ {
+		op := searchfilter.OperatorGreaterThanOrEqual
+		if i == 1 {
+			op = searchfilter.OperatorLessThanOrEqual
+		}
+		fn, err := c.convertCondition(&searchfilter.UniversalFilterCondition{
+			Field:    cond.Field,
+			Operator: op,
+			Value:    value.Index(i).Interface(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if fn != nil {
+			condFuncs = append(condFuncs, fn)
+		}
+	}
+
+	condFunc := func(doc *document.Document) bool {
+		for _, fn := range condFuncs {
+			if !fn(doc) {
+				return false
+			}
+		}
+		return true
+	}
+	return condFunc, nil
+}
+
+func (c *inmemoryConverter) buildLikeCondition(cond *searchfilter.UniversalFilterCondition) (comparisonFunc, error) {
+	if !isValidField(cond.Field) {
+		return nil, fmt.Errorf(`field name only be in ["id", "name", "content", "created_at", "updated_at", "metadata.*"]: %s`, cond.Field)
+	}
+	pattern, ok := cond.Value.(string)
+	if !ok {
+		return nil, fmt.Errorf("like operator requires a string pattern")
+	}
+	regexPattern := likePatternToRegex(pattern)
+
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regex pattern converted from LIKE: %s, error: %v", pattern, err)
+	}
+
+	condFunc := func(doc *document.Document) bool {
+		docValue, ok := fieldValue(doc, cond.Field)
+		if !ok {
+			log.Errorf("field %s not found in document", cond.Field)
+			return false
+		}
+		docStr, ok := docValue.(string)
+		if !ok {
+			log.Errorf("like operator requires string document field value: %v", docValue)
+			return false
+		}
+		matched := re.MatchString(docStr)
+		if cond.Operator == searchfilter.OperatorLike {
+			return matched
+		}
+		return !matched
 	}
 	return condFunc, nil
 }
@@ -348,4 +439,25 @@ func fieldValue(doc *document.Document, field string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func likePatternToRegex(regexPattern string) string {
+	options := map[string]bool{
+		"caseInsensitive": false,
+		"exactMatch":      true,
+	}
+
+	regexPattern = regexp.QuoteMeta(regexPattern)
+	regexPattern = strings.ReplaceAll(regexPattern, `%`, ".*")
+	regexPattern = strings.ReplaceAll(regexPattern, `_`, ".")
+
+	modifiers := ""
+	if options["caseInsensitive"] {
+		modifiers = "(?i)"
+	}
+
+	if options["exactMatch"] {
+		return modifiers + "^" + regexPattern + "$"
+	}
+	return modifiers + regexPattern
 }

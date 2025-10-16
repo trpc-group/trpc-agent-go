@@ -1408,6 +1408,20 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 			wantNil: false,
 		},
 		{
+			name: "valid between operator",
+			cond: &searchfilter.UniversalFilterCondition{
+				Operator: searchfilter.OperatorBetween,
+				Field:    "metadata.score",
+				Value:    []any{3, 5},
+			},
+			docChecks: []docCheck{
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 4}}, want: true},
+				{doc: &document.Document{Metadata: map[string]any{"lang": "en", "score": 2}}, want: false},
+			},
+			wantErr: false,
+			wantNil: false,
+		},
+		{
 			name: "valid in operator",
 			cond: &searchfilter.UniversalFilterCondition{
 				Operator: searchfilter.OperatorIn,
@@ -1461,6 +1475,321 @@ func Test_inmemoryConverter_Convert(t *testing.T) {
 				if condResult != dc.want {
 					t.Errorf("comparison function for doc %+v = %v, want %v", dc.doc, condResult, dc.want)
 				}
+			}
+		})
+	}
+}
+
+func TestInmemoryConverter_buildBetweenCondition(t *testing.T) {
+	tests := []struct {
+		name       string
+		cond       *searchfilter.UniversalFilterCondition
+		doc        *document.Document
+		wantErr    bool
+		wantErrMsg string
+		wantResult bool
+	}{
+		{
+			name: "between 10 and 20",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{10, 20},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    false,
+			wantResult: true,
+		},
+		{
+			name: "invalid field",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid_field",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{1, 2},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    true,
+			wantErrMsg: `field name only be in`,
+		},
+		{
+			name: "not a slice",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    123,
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    true,
+			wantErrMsg: "between operator value must be a slice with two elements",
+		},
+		{
+			name: "one element in slice",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []int{1},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    true,
+			wantErrMsg: "between operator value must be a slice with two elements",
+		},
+		{
+			name: "invalid type in slice",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorBetween,
+				Value:    []string{"a", "b"},
+			},
+			doc:        &document.Document{Metadata: map[string]any{"id": 15}},
+			wantErr:    false,
+			wantResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := &inmemoryConverter{}
+
+			gotFunc, err := mc.buildBetweenCondition(tt.cond)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("buildBetweenCondition() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expect error, but is nil")
+				} else if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("buildBetweenCondition() err = %v, want contains %v", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+
+			if gotFunc(tt.doc) != tt.wantResult {
+				t.Errorf("buildBetweenCondition() result = %v, want %v", gotFunc(tt.doc), tt.wantResult)
+			}
+		})
+	}
+}
+
+func TestLikePatternToRegex(t *testing.T) {
+	tests := []struct {
+		pattern string
+		want    string
+	}{
+		{"test", "^test$"},
+		{"test%", "^test.*$"},
+		{"%test", "^.*test$"},
+		{"%test%", "^.*test.*$"},
+		{"test_", "^test.$"},
+		{"_test", "^.test$"},
+		{"100%", "^100.*$"},
+		{"100%_complete", "^100.*.complete$"},
+		{"special.chars", "^special\\.chars$"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			got := likePatternToRegex(tt.pattern)
+			if got != tt.want {
+				t.Errorf("likePatternToRegex(%q) = %q, want %q", tt.pattern, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildLikeCondition(t *testing.T) {
+	converter := &inmemoryConverter{}
+
+	tests := []struct {
+		name        string
+		cond        *searchfilter.UniversalFilterCondition
+		doc         *document.Document
+		wantErr     bool
+		errContains string
+		expected    bool
+	}{
+		{
+			name: "invalid field",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "invalid_field",
+				Operator: searchfilter.OperatorLike,
+				Value:    "test%",
+			},
+			wantErr:     true,
+			errContains: "field name only be in",
+		},
+		{
+			name: "value is not string",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    123,
+			},
+			wantErr:     true,
+			errContains: "like operator requires a string pattern",
+		},
+		{
+			name: "like pattern is just %",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    "John%",
+			},
+			doc: &document.Document{
+				Name: "John Doe",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+		{
+			name: "like pattern is just % in middle",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    "J%n%",
+			},
+			doc: &document.Document{
+				Name: "John Doe",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+		{
+			name: "like pattern",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    "J_hn",
+			},
+			doc: &document.Document{
+				Name: "John",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+		{
+			name: "like not pattern",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorLike,
+				Value:    "Jane%",
+			},
+			doc: &document.Document{
+				Name: "John Doe",
+			},
+			wantErr:  false,
+			expected: false,
+		},
+		{
+			name: "like empty string",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "content",
+				Operator: searchfilter.OperatorLike,
+				Value:    "",
+			},
+			doc: &document.Document{
+				Content: "",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+
+		{
+			name: "not like pattern",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorNotLike,
+				Value:    "John%",
+			},
+			doc: &document.Document{
+				Name: "John Doe",
+			},
+			wantErr:  false,
+			expected: false,
+		},
+		{
+			name: "not like pattern matches",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "name",
+				Operator: searchfilter.OperatorNotLike,
+				Value:    "Jane%",
+			},
+			doc: &document.Document{
+				Name: "John Doe",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+		{
+			name: "field not exist",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "nonexistent_field",
+				Operator: searchfilter.OperatorLike,
+				Value:    "test",
+			},
+			doc: &document.Document{
+				Name: "test",
+			},
+			wantErr:     true,
+			errContains: "field name only be in",
+		},
+		{
+			name: "like pattern with integer field value",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "metadata.id",
+				Operator: searchfilter.OperatorLike,
+				Value:    "123%",
+			},
+			doc: &document.Document{
+				Metadata: map[string]any{
+					"id": 123,
+				},
+			},
+			wantErr:  false,
+			expected: false,
+		},
+		{
+			name: "like pattern with string field value containing special regex chars",
+			cond: &searchfilter.UniversalFilterCondition{
+				Field:    "content",
+				Operator: searchfilter.OperatorLike,
+				Value:    "100%_complete",
+			},
+			doc: &document.Document{
+				Content: "100%_complete",
+			},
+			wantErr:  false,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			condFunc, err := converter.buildLikeCondition(tt.cond)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("buildLikeCondition() expect error, but is nil")
+				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("buildLikeCondition() err = %v, want contains = %v", err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("buildLikeCondition() err = %v", err)
+				return
+			}
+
+			if condFunc == nil {
+				t.Error("buildLikeCondition() condFunc is nil")
+				return
+			}
+
+			result := condFunc(tt.doc)
+			if result != tt.expected {
+				t.Errorf("result = %v, expect = %v, test data: field=%v, operator=%v, cond value=%v, doc=%v",
+					result, tt.expected, tt.cond.Field, tt.cond.Operator, tt.cond.Value, tt.doc)
 			}
 		})
 	}
