@@ -155,3 +155,49 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
 ```
+
+### Event Translation Callback
+
+AG-UI provides an event translation callback mechanism, allowing custom logic to be inserted before and after the event translation process.
+
+- `translator.BeforeTranslateCallback`: Triggered before the internal event is translated into an AG-UI event. The return value convention:
+  - Return `(customEvent, nil)`: Use `customEvent` as the input event for translation.
+  - Return `(nil, nil)`: Retain the current event and continue with the subsequent callbacks. If all callbacks return `nil`, the original event will be used.
+  - Return an error: Terminates the current execution, and the client will receive a `RunError`.
+- `translator.AfterTranslateCallback`: Triggered after the AG-UI event translation is completed and just before it is sent to the client. The return value convention:
+  - Return `(customEvent, nil)`: Use `customEvent` as the final event to be sent to the client.
+  - Return `(nil, nil)`: Retain the current event and continue with the subsequent callbacks. If all callbacks return `nil`, the original event will be sent.
+  - Return an error: Terminates the current execution, and the client will receive a `RunError`.
+
+Usage Example:
+
+```go
+import (
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
+)
+
+callbacks := translator.NewCallbacks().
+    RegisterBeforeTranslate(func(ctx context.Context, event *event.Event) (*event.Event, error) {
+        // Logic to execute before event translation
+        return nil, nil
+    }).
+    RegisterAfterTranslate(func(ctx context.Context, event aguievents.Event) (aguievents.Event, error) {
+        // Logic to execute after event translation
+        if msg, ok := event.(*aguievents.TextMessageContentEvent); ok {
+            // Modify the message content in the event
+            return aguievents.NewTextMessageContentEvent(msg.MessageID, msg.Delta+" [via callback]"), nil
+        }
+        return nil, nil
+    })
+
+server, err := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslateCallbacks(callbacks)))
+```
+
+Event translation callbacks can be used in various scenarios, such as:
+
+- Custom Event Handling: Modify event data or add additional business logic during the translation process.
+- Monitoring and Reporting: Insert monitoring and reporting logic before and after event translation. A full example of integrating with Langfuse observability platform can be found at [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse).
