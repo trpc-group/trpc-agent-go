@@ -64,6 +64,10 @@ func (c *SimpleTokenCounter) CountTokens(_ context.Context, message Message) (in
 		}
 	}
 
+	// Total should be at least 1 if message is not empty.
+	if len(message.Content) > 0 {
+		return max(total, 1), nil
+	}
 	return total, nil
 }
 
@@ -507,6 +511,11 @@ func buildPreservedOnlyResult(messages []Message, preservedHead, preservedTail i
 	if preservedHead > 0 {
 		result = append(result, messages[:preservedHead]...)
 	}
+	// Ensure preservedHead + preservedTail doesn't exceed total message count.
+	if preservedTail > len(messages)-preservedHead {
+		preservedTail = len(messages) - preservedHead
+	}
+
 	if preservedTail > 0 {
 		result = append(result, messages[len(messages)-preservedTail:]...)
 	}

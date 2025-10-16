@@ -27,6 +27,202 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 	assert.Greater(t, n, 0)
 }
 
+// TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
+func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
+	counter := NewSimpleTokenCounter(1000)
+	ctx := context.Background()
+
+	t.Run("empty message returns 0", func(t *testing.T) {
+		msg := Message{
+			Role:    RoleUser,
+			Content: "", // empty content
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 0, result) // len(message.Content) == 0, return total directly
+	})
+
+	t.Run("basic content ensures minimum 1 token", func(t *testing.T) {
+		msg := Message{
+			Role:    RoleUser,
+			Content: "Hi", // 2 runes / 4 = 0 tokens, but max(0, 1) = 1
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // max(0, 1) = 1
+	})
+
+	t.Run("content with reasoning content", func(t *testing.T) {
+		msg := Message{
+			Role:             RoleAssistant,
+			Content:          "Answer",                     // 6 runes / 4 = 1 token
+			ReasoningContent: "Let me think about this...", // 26 runes / 4 = 6 tokens
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 7, result) // max(1 + 6, 1) = 7
+	})
+
+	t.Run("empty reasoning content is ignored", func(t *testing.T) {
+		msg := Message{
+			Role:             RoleAssistant,
+			Content:          "Answer", // 6 runes / 4 = 1 token
+			ReasoningContent: "",       // empty, should be ignored
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // max(1, 1) = 1
+	})
+
+	t.Run("content with text parts", func(t *testing.T) {
+		textPart1 := "First text part"  // 15 runes / 4 = 3 tokens
+		textPart2 := "Second text part" // 16 runes / 4 = 4 tokens
+		msg := Message{
+			Role:    RoleUser,
+			Content: "Main content", // 12 runes / 4 = 3 tokens
+			ContentParts: []ContentPart{
+				{
+					Type: ContentTypeText,
+					Text: &textPart1,
+				},
+				{
+					Type: ContentTypeText,
+					Text: &textPart2,
+				},
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 10, result) // max(3 + 3 + 4, 1) = 10
+	})
+
+	t.Run("content parts with nil text are ignored", func(t *testing.T) {
+		validText := "Valid text" // 10 runes / 4 = 2 tokens
+		msg := Message{
+			Role:    RoleUser,
+			Content: "Main content", // 12 runes / 4 = 3 tokens
+			ContentParts: []ContentPart{
+				{
+					Type: ContentTypeText,
+					Text: &validText,
+				},
+				{
+					Type: ContentTypeImage, // no text field
+					Text: nil,
+				},
+				{
+					Type: ContentTypeText,
+					Text: nil, // nil text, should be ignored
+				},
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 5, result) // max(3 + 2, 1) = 5
+	})
+
+	t.Run("content parts with non-text types", func(t *testing.T) {
+		msg := Message{
+			Role:    RoleUser,
+			Content: "Main content", // 12 runes / 4 = 3 tokens
+			ContentParts: []ContentPart{
+				{
+					Type: ContentTypeImage,
+					// no Text field for image type
+				},
+				{
+					Type: ContentTypeAudio,
+					// no Text field for audio type
+				},
+				{
+					Type: ContentTypeFile,
+					// no Text field for file type
+				},
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 3, result) // max(3, 1) = 3
+	})
+
+	t.Run("empty content with reasoning and text parts", func(t *testing.T) {
+		textPart := "Text part" // 9 runes / 4 = 2 tokens
+		msg := Message{
+			Role:             RoleAssistant,
+			Content:          "",               // empty content
+			ReasoningContent: "Some reasoning", // 14 runes / 4 = 3 tokens
+			ContentParts: []ContentPart{
+				{
+					Type: ContentTypeText,
+					Text: &textPart,
+				},
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 5, result) // len(Content) == 0, so return total directly: 0 + 3 + 2 = 5
+	})
+
+	t.Run("unicode characters", func(t *testing.T) {
+		msg := Message{
+			Role:    RoleUser,
+			Content: "你好世界", // 4 Chinese characters = 4 runes / 4 = 1 token
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // max(1, 1) = 1
+	})
+
+	t.Run("all features combined", func(t *testing.T) {
+		textPart1 := "Additional info" // 15 runes / 4 = 3 tokens
+		textPart2 := "More details"    // 12 runes / 4 = 3 tokens
+		msg := Message{
+			Role:             RoleAssistant,
+			Content:          "Main answer",      // 11 runes / 4 = 2 tokens
+			ReasoningContent: "Thinking process", // 16 runes / 4 = 4 tokens
+			ContentParts: []ContentPart{
+				{
+					Type: ContentTypeText,
+					Text: &textPart1,
+				},
+				{
+					Type: ContentTypeImage,
+					Text: nil, // should be ignored
+				},
+				{
+					Type: ContentTypeText,
+					Text: &textPart2,
+				},
+			},
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 12, result) // max(2 + 4 + 3 + 3, 1) = 12
+	})
+
+	t.Run("empty content parts slice", func(t *testing.T) {
+		msg := Message{
+			Role:         RoleUser,
+			Content:      "Test",          // 4 runes / 4 = 1 token
+			ContentParts: []ContentPart{}, // empty slice
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // max(1, 1) = 1
+	})
+
+	t.Run("nil content parts slice", func(t *testing.T) {
+		msg := Message{
+			Role:         RoleUser,
+			Content:      "Test", // 4 runes / 4 = 1 token
+			ContentParts: nil,    // nil slice
+		}
+		result, err := counter.CountTokens(ctx, msg)
+		require.NoError(t, err)
+		assert.Equal(t, 1, result) // max(1, 1) = 1
+	})
+}
+
 func TestSimpleTokenCounter_CountTokensRange(t *testing.T) {
 	counter := NewSimpleTokenCounter(100)
 	msgs := []Message{
