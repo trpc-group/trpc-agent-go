@@ -1,9 +1,10 @@
 module trpc.group/trpc-go/trpc-agent-go/examples
 
-go 1.21
+go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
@@ -20,13 +21,17 @@ require (
 	go.opentelemetry.io/otel/trace v1.29.0
 	go.uber.org/zap v1.27.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.4-0.20250904070130-981d83483333
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v0.2.2
+	trpc.group/trpc-go/trpc-agent-go/evaluation v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.2.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.5
 )
 
 require (
+	cloud.google.com/go v0.116.0 // indirect
+	cloud.google.com/go/auth v0.9.3 // indirect
+	cloud.google.com/go/compute/metadata v0.5.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -39,8 +44,13 @@ require (
 	github.com/go-openapi/swag v0.22.8 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.3 // indirect
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/s2a-go v0.1.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.4 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
@@ -65,6 +75,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric v0.42.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v0.42.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v0.42.0 // indirect
@@ -80,9 +91,10 @@ require (
 	golang.org/x/oauth2 v0.26.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
-	google.golang.org/grpc v1.65.0 // indirect
+	google.golang.org/genai v1.29.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240903143218-8af14fe29dc1 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
+	google.golang.org/grpc v1.66.2 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
