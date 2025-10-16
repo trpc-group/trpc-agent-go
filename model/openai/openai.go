@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	openai "github.com/openai/openai-go"
@@ -199,9 +200,11 @@ type Model struct {
 	batchMetadata              map[string]string
 	batchBaseURL               string
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
-	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
-	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	tokenCounterOnce           sync.Once               // sync.Once for lazy initialization of tokenCounter.
+	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
+	tailoringStrategyOnce      sync.Once               // sync.Once for lazy initialization of tailoringStrategy.
+	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 }
 
 // ChatRequestCallbackFunc is the function type for the chat request callback.
@@ -569,15 +572,23 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine token counter using priority: user config > default.
 	tokenCounter := m.tokenCounter
 	if tokenCounter == nil {
-		tokenCounter = model.NewSimpleTokenCounter()
-		m.tokenCounter = tokenCounter // Cache for reuse in subsequent requests.
+		m.tokenCounterOnce.Do(func() {
+			if m.tokenCounter == nil {
+				m.tokenCounter = model.NewSimpleTokenCounter()
+			}
+		})
+		tokenCounter = m.tokenCounter
 	}
 
 	// Determine tailoring strategy using priority: user config > default.
 	tailoringStrategy := m.tailoringStrategy
 	if tailoringStrategy == nil {
-		tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
-		m.tailoringStrategy = tailoringStrategy // Cache for reuse in subsequent requests.
+		m.tailoringStrategyOnce.Do(func() {
+			if m.tailoringStrategy == nil {
+				m.tailoringStrategy = model.NewMiddleOutStrategy(tokenCounter)
+			}
+		})
+		tailoringStrategy = m.tailoringStrategy
 	}
 
 	// Apply token tailoring.
