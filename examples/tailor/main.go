@@ -47,13 +47,10 @@ func main() {
 		opts = append(opts, openai.WithMaxInputTokens(*flagMaxInputTokens))
 	}
 
-	if *flagCounter != "simple" {
-		counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
-		opts = append(opts, openai.WithTokenCounter(counter))
-	}
+	counter := buildCounter(strings.ToLower(*flagCounter), *flagModel)
+	opts = append(opts, openai.WithTokenCounter(counter))
 
 	if *flagStrategy != "middle" {
-		counter := buildCounter(strings.ToLower(*flagCounter), *flagModel, *flagMaxInputTokens)
 		strategy := buildStrategy(counter, strings.ToLower(*flagStrategy))
 		opts = append(opts, openai.WithTailoringStrategy(strategy))
 	}
@@ -112,17 +109,17 @@ func buildStrategy(counter model.TokenCounter, strategyName string) model.Tailor
 	}
 }
 
-func buildCounter(name string, modelName string, maxTokens int) model.TokenCounter {
+func buildCounter(name string, modelName string) model.TokenCounter {
 	switch name {
 	case "tiktoken":
-		c, err := tiktoken.New(modelName, maxTokens)
+		c, err := tiktoken.New(modelName)
 		if err == nil {
 			return c
 		}
 		log.Warn("tiktoken counter init failed, falling back to simple", err)
 		fallthrough
 	default:
-		return model.NewSimpleTokenCounter(maxTokens)
+		return model.NewSimpleTokenCounter()
 	}
 }
 
@@ -161,7 +158,7 @@ func processTurn(ctx context.Context, m *openai.Model, messages *[]model.Message
 	before := len(*messages)
 
 	// Calculate token count before tailoring.
-	counter := model.NewSimpleTokenCounter(1000000)
+	counter := model.NewSimpleTokenCounter()
 	tokensBefore, _ := counter.CountTokensRange(ctx, *messages, 0, len(*messages))
 
 	req := &model.Request{

@@ -554,9 +554,7 @@ counter := model.NewSimpleTokenCounter(maxInputTokens)
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
 
-tkCounter, err := tiktoken.NewTokenCounter(
-    tiktoken.WithModelName("gpt-4o-mini"),
-)
+tkCounter, err := tiktoken.New("gpt-4o")
 if err != nil {
     // 处理错误
 }

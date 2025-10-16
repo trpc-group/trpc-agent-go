@@ -23,8 +23,7 @@ import (
 // It uses a tokenizer.Codec to encode message text and counts tokens as the
 // length of the returned token slice.
 type Counter struct {
-	encoding  tokenizer.Codec
-	MaxTokens int
+	encoding tokenizer.Codec
 }
 
 // New creates a tiktoken-based counter.
@@ -32,11 +31,10 @@ type Counter struct {
 // Parameters:
 //   - modelName: OpenAI model name (e.g., "gpt-4o"). The tokenizer is chosen with tokenizer.ForModel.
 //     If the model is not supported, falls back to cl100k_base.
-//   - maxTokens: maximum prompt tokens allowed; used by RemainingTokens.
 //
 // Returns:
 // - *Counter on success; error if codec initialization fails.
-func New(modelName string, maxTokens int) (*Counter, error) {
+func New(modelName string) (*Counter, error) {
 	enc, err := tokenizer.ForModel(tokenizer.Model(modelName))
 	if err != nil {
 		// Fallback to cl100k_base for broad compatibility.
@@ -45,7 +43,7 @@ func New(modelName string, maxTokens int) (*Counter, error) {
 			return nil, fmt.Errorf("failed to get fallback tokenizer: %w", err)
 		}
 	}
-	return &Counter{encoding: enc, MaxTokens: maxTokens}, nil
+	return &Counter{encoding: enc}, nil
 }
 
 // CountTokens returns the token count for a single message using tiktoken-go.

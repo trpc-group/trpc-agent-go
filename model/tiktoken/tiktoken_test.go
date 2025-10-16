@@ -18,7 +18,7 @@ import (
 )
 
 func TestTiktokenCounter_CountTokens(t *testing.T) {
-	counter, err := New("gpt-4o", 4000)
+	counter, err := New("gpt-4o")
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
@@ -29,7 +29,7 @@ func TestTiktokenCounter_CountTokens(t *testing.T) {
 }
 
 func TestTiktokenCounter_ModelFallback(t *testing.T) {
-	counter, err := New("unknown-model-name-xyz", 3000)
+	counter, err := New("unknown-model-name-xyz")
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
@@ -40,7 +40,7 @@ func TestTiktokenCounter_ModelFallback(t *testing.T) {
 }
 
 func TestTiktokenCounter_ContentPartsAndReasoning(t *testing.T) {
-	counter, err := New("gpt-4", 5000)
+	counter, err := New("gpt-4")
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}
@@ -57,7 +57,7 @@ func TestTiktokenCounter_ContentPartsAndReasoning(t *testing.T) {
 }
 
 func TestTiktokenCounter_EmptyMessage(t *testing.T) {
-	counter, err := New("gpt-4o", 100)
+	counter, err := New("gpt-4o")
 	if err != nil {
 		t.Skip("tiktoken-go not available: ", err)
 	}

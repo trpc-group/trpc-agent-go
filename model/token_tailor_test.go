@@ -19,7 +19,7 @@ import (
 )
 
 func TestSimpleTokenCounter_CountTokens(t *testing.T) {
-	counter := NewSimpleTokenCounter(100)
+	counter := NewSimpleTokenCounter()
 	msg := NewSystemMessage("You are a helpful assistant.")
 
 	n, err := counter.CountTokens(context.Background(), msg)
@@ -29,7 +29,7 @@ func TestSimpleTokenCounter_CountTokens(t *testing.T) {
 
 // TestSimpleTokenCounter_CountTokens_DetailedCoverage tests all code paths in CountTokens function
 func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	ctx := context.Background()
 
 	t.Run("empty message returns 0", func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestSimpleTokenCounter_CountTokens_DetailedCoverage(t *testing.T) {
 }
 
 func TestSimpleTokenCounter_CountTokensRange(t *testing.T) {
-	counter := NewSimpleTokenCounter(100)
+	counter := NewSimpleTokenCounter()
 	msgs := []Message{
 		NewSystemMessage("You are a helpful assistant."),
 		NewUserMessage("Hello"),
@@ -256,7 +256,7 @@ func TestMiddleOutStrategy_TailorMessages(t *testing.T) {
 	// Insert a tool result at head to verify post-trim removal.
 	msgs = append([]Message{{Role: RoleTool, Content: "tool result"}}, msgs...)
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter)
 
 	tailored, err := s.TailorMessages(context.Background(), msgs, 200)
@@ -279,7 +279,7 @@ func TestMiddleOutStrategy_PreserveSystemAndLastTurn(t *testing.T) {
 		NewUserMessage("Question 5"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter) // Always preserves system and last turn
 
 	tailored, err := s.TailorMessages(context.Background(), msgs, 50)
@@ -313,7 +313,7 @@ func TestMiddleOutStrategy_MiddleOutLogic(t *testing.T) {
 		NewUserMessage("Question 6"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	s := NewMiddleOutStrategy(counter)
 
 	tailored, err := s.TailorMessages(context.Background(), msgs, 30)
@@ -348,7 +348,7 @@ func TestHeadOutStrategy_PreserveOptions(t *testing.T) {
 		NewUserMessage(repeat("b", 200)),
 		NewUserMessage("tail"),
 	}
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 
 	// Always preserves system message and last turn.
 	s := NewHeadOutStrategy(counter)
@@ -376,7 +376,7 @@ func TestTailOutStrategy_PreserveOptions(t *testing.T) {
 		NewUserMessage(repeat("b", 200)),
 		NewUserMessage("tail"),
 	}
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 
 	// Always preserves system message and last turn.
 	s := NewTailOutStrategy(counter)
@@ -411,7 +411,7 @@ func TestStrategyComparison(t *testing.T) {
 		NewUserMessage("What is LLM?"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	maxTokens := 200 // Strict limit to force trimming
 
 	// Test HeadOut strategy: should remove from head, keep tail
@@ -510,7 +510,7 @@ func TestHeadOutStrategy_RemovesFromHead(t *testing.T) {
 		NewUserMessage("What is LLM?"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewHeadOutStrategy(counter)
 	maxTokens := 200
 
@@ -551,7 +551,7 @@ func TestTailOutStrategy_RemovesFromTail(t *testing.T) {
 		NewUserMessage("What is LLM?"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewTailOutStrategy(counter)
 	maxTokens := 200
 
@@ -761,7 +761,7 @@ func truncateContent(s string, max int) string {
 // TestRoleToolRemoval tests that all strategies properly remove leading RoleTool messages.
 func TestRoleToolRemoval(t *testing.T) {
 	// Create a counter for testing.
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 
 	// Create messages with a leading tool message followed by user messages.
 	messages := []Message{
@@ -946,7 +946,7 @@ func TestMiddleOutStrategy_RemovesFromMiddle(t *testing.T) {
 		NewUserMessage("What is LLM?"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewMiddleOutStrategy(counter)
 	maxTokens := 200
 
@@ -988,7 +988,7 @@ func TestStrategyBehavior_DifferentResults(t *testing.T) {
 		NewUserMessage("What is LLM?"),
 	}
 
-	counter := NewSimpleTokenCounter(1000)
+	counter := NewSimpleTokenCounter()
 	maxTokens := 200
 
 	// Test all strategies
@@ -1038,7 +1038,7 @@ func repeat(s string, n int) string {
 // Benchmark tests to verify time complexity improvements.
 
 func BenchmarkTokenCounter_CountTokens(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	msg := NewUserMessage("This is a test message with some content to count tokens for.")
 
 	b.ResetTimer()
@@ -1051,7 +1051,7 @@ func BenchmarkTokenCounter_CountTokens(b *testing.B) {
 }
 
 func BenchmarkMiddleOutStrategy_SmallMessages(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewMiddleOutStrategy(counter)
 
 	// Create 10 messages
@@ -1070,7 +1070,7 @@ func BenchmarkMiddleOutStrategy_SmallMessages(b *testing.B) {
 }
 
 func BenchmarkMiddleOutStrategy_MediumMessages(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewMiddleOutStrategy(counter)
 
 	// Create 100 messages
@@ -1089,7 +1089,7 @@ func BenchmarkMiddleOutStrategy_MediumMessages(b *testing.B) {
 }
 
 func BenchmarkMiddleOutStrategy_LargeMessages(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewMiddleOutStrategy(counter)
 
 	// Create 1000 messages
@@ -1108,7 +1108,7 @@ func BenchmarkMiddleOutStrategy_LargeMessages(b *testing.B) {
 }
 
 func BenchmarkHeadOutStrategy_LargeMessages(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewHeadOutStrategy(counter)
 
 	// Create 1000 messages
@@ -1127,7 +1127,7 @@ func BenchmarkHeadOutStrategy_LargeMessages(b *testing.B) {
 }
 
 func BenchmarkTailOutStrategy_LargeMessages(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 	strategy := NewTailOutStrategy(counter)
 
 	// Create 1000 messages
@@ -1147,7 +1147,7 @@ func BenchmarkTailOutStrategy_LargeMessages(b *testing.B) {
 
 // Benchmark comparison: old O(n²) vs new O(n) approach
 func BenchmarkTokenTailoring_PerformanceComparison(b *testing.B) {
-	counter := NewSimpleTokenCounter(10000)
+	counter := NewSimpleTokenCounter()
 
 	// Test with different message counts
 	messageCounts := []int{10, 50, 100, 500, 1000}

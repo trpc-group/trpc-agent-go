@@ -36,13 +36,11 @@ type TailoringStrategy interface {
 
 // SimpleTokenCounter provides a very rough token estimation based on rune length.
 // Heuristic: approximately one token per four UTF-8 runes for text content fields.
-type SimpleTokenCounter struct {
-	maxTokens int
-}
+type SimpleTokenCounter struct{}
 
 // NewSimpleTokenCounter creates a SimpleTokenCounter with a max token budget.
-func NewSimpleTokenCounter(maxTokens int) *SimpleTokenCounter {
-	return &SimpleTokenCounter{maxTokens: maxTokens}
+func NewSimpleTokenCounter() *SimpleTokenCounter {
+	return &SimpleTokenCounter{}
 }
 
 // CountTokens estimates tokens for a single message.

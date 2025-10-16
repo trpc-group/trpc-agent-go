@@ -480,7 +480,7 @@ func New(name string, opts ...Option) *Model {
 	// These are best-effort defaults; user-provided counter/strategy always take priority.
 	if o.MaxInputTokens > 0 {
 		if o.TokenCounter == nil {
-			o.TokenCounter = model.NewSimpleTokenCounter(o.MaxInputTokens)
+			o.TokenCounter = model.NewSimpleTokenCounter()
 		}
 		if o.TailoringStrategy == nil {
 			o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
@@ -569,7 +569,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine token counter using priority: user config > default.
 	tokenCounter := m.tokenCounter
 	if tokenCounter == nil {
-		tokenCounter = model.NewSimpleTokenCounter(maxInputTokens)
+		tokenCounter = model.NewSimpleTokenCounter()
 		m.tokenCounter = tokenCounter // Cache for reuse in subsequent requests.
 	}
 

@@ -296,7 +296,7 @@ Accurate token counting using OpenAI's tokenizer:
 import "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
 
 // Create tiktoken counter
-tkCounter, err := tiktoken.NewTokenCounter(tiktoken.WithModelName(modelName))
+tkCounter, err := tiktoken.New("gpt-4o")
 if err != nil {
     // fallback to simple counter
 }
