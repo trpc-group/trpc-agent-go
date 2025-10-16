@@ -93,7 +93,7 @@ func (c *pgVectorConverter) buildInCondition(cond *searchfilter.UniversalFilterC
 func (c *pgVectorConverter) buildLogicalCondition(cond *searchfilter.UniversalFilterCondition) (*condConvertResult, error) {
 	conds, ok := cond.Value.([]*searchfilter.UniversalFilterCondition)
 	if !ok {
-		return nil, fmt.Errorf("invalid logical condition: %v", cond.Value)
+		return nil, fmt.Errorf("invalid logical condition: value must be of type []*searchfilter.UniversalFilterCondition: %v", cond.Value)
 	}
 	var condResult *condConvertResult
 	for _, child := range conds {
